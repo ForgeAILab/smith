@@ -18,10 +18,13 @@ smith-config = { workspace = true }
 smith-host = { workspace = true }
 smith-tools = { workspace = true }
 async-trait = { workspace = true }
+chacha20poly1305 = { workspace = true }
 dirs = { workspace = true }
 futures-core = { workspace = true }
 futures-util = { workspace = true }
+keyring = { workspace = true }
 reqwest = { workspace = true }
+rustix = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
@@ -29,6 +32,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 agent-runtime-testkit = { workspace = true }

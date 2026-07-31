@@ -9,14 +9,19 @@
 //! is what `shell` with `rg` is for, once the user has approved it.
 
 use agent_runtime_core::error::RuntimeError;
-use agent_runtime_core::tool::{InvocationContext, Tool, ToolEffects, ToolOutcome};
+use agent_runtime_core::security::PermissionSet;
+use agent_runtime_core::tool::{
+    InvocationContext, PreparationContext, PreparedToolCall, Tool, ToolCallDisplay, ToolEffects,
+    ToolOutcome, ToolSpec,
+};
+use agent_runtime_registry::Permission;
 use async_trait::async_trait;
 use ignore::WalkBuilder;
 use serde_json::{Value, json};
 
 use crate::support::{
     check_stop, display_path, invalid, looks_binary, optional_bool, optional_str, optional_usize,
-    require_str, resolve,
+    prepare_path_argument, require_str, resolve,
 };
 
 /// How many matches a search returns when the caller does not say.
@@ -35,56 +40,73 @@ pub struct SearchTool;
 
 #[async_trait]
 impl Tool for SearchTool {
-    fn name(&self) -> &str {
-        "search"
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::new(
+            "search",
+            "Search project text files for a literal substring. Returns \
+             `path:line: text` matches. Not a regular expression: the pattern is \
+             matched verbatim.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Literal text to find. Not a regular expression."
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Directory or file to search. Defaults to the project root."
+                    },
+                    "extension": {
+                        "type": "string",
+                        "description": "Restrict to files with this extension, e.g. `rs`."
+                    },
+                    "case_sensitive": {
+                        "type": "boolean",
+                        "description": "Defaults to false."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Maximum matches to return. Defaults to 100."
+                    }
+                },
+                "required": ["pattern"],
+                "additionalProperties": false
+            }),
+            ToolEffects::read_only(),
+        )
+        .with_permission_upper_bound(PermissionSet::single(Permission::FsRead))
     }
 
-    fn description(&self) -> &str {
-        "Search project text files for a literal substring. Returns \
-         `path:line: text` matches. Not a regular expression: the pattern is \
-         matched verbatim."
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "pattern": {
-                    "type": "string",
-                    "description": "Literal text to find. Not a regular expression."
-                },
-                "path": {
-                    "type": "string",
-                    "description": "Directory or file to search. Defaults to the project root."
-                },
-                "extension": {
-                    "type": "string",
-                    "description": "Restrict to files with this extension, e.g. `rs`."
-                },
-                "case_sensitive": {
-                    "type": "boolean",
-                    "description": "Defaults to false."
-                },
-                "limit": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": "Maximum matches to return. Defaults to 100."
-                }
-            },
-            "required": ["pattern"],
-            "additionalProperties": false
-        })
-    }
-
-    fn effects(&self) -> ToolEffects {
-        ToolEffects::read_only()
+    async fn prepare(
+        &self,
+        mut arguments: Value,
+        ctx: &PreparationContext,
+    ) -> Result<PreparedToolCall, RuntimeError> {
+        let pattern = require_str(&arguments, "pattern")?.to_owned();
+        if pattern.is_empty() {
+            return Err(invalid("`pattern` must not be empty"));
+        }
+        let path = prepare_path_argument(&mut arguments, "path", Some("."), ctx)?;
+        Ok(PreparedToolCall::new(
+            ctx.call_id.clone(),
+            "search",
+            arguments,
+            PermissionSet::single(Permission::FsRead),
+            path.resource,
+            ToolEffects::read_only(),
+            ToolCallDisplay::new(format!("Search {}", path.display))
+                .with_detail(format!("Find literal {pattern:?}")),
+        ))
     }
 
     async fn invoke(
         &self,
-        arguments: Value,
+        prepared: PreparedToolCall,
         ctx: &InvocationContext,
     ) -> Result<ToolOutcome, RuntimeError> {
+        let arguments = prepared.into_arguments();
         let pattern = require_str(&arguments, "pattern")?;
         if pattern.is_empty() {
             return Err(invalid("`pattern` must not be empty"));
@@ -183,7 +205,7 @@ impl Tool for SearchTool {
                 "files_searched": files_searched,
                 "truncated": truncated,
             }),
-            content: vec![agent_runtime_core::content::ContentPart::text(rendered)],
+            content: vec![agent_runtime_core::content::ContentPart::text(rendered)].into(),
             is_error: false,
         })
     }

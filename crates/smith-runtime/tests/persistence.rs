@@ -14,12 +14,12 @@ use agent_runtime_core::clock::Timestamp;
 use agent_runtime_core::content::Message;
 use agent_runtime_core::error::ErrorKind;
 use agent_runtime_core::event::{EventEnvelope, RuntimeEvent};
-use agent_runtime_core::ids::{EventId, SessionId, ToolCallId, TurnId};
+use agent_runtime_core::ids::{AttemptId, EventId, RequestId, SessionId, ToolCallId, TurnId};
 use agent_runtime_core::manifest::{CapabilityResolution, ModelResolution, RunManifest};
 use agent_runtime_core::observer::EventObserver;
 use agent_runtime_core::provider::ModelId;
 use agent_runtime_core::store::{
-    SessionIdentityState, SessionSnapshot, SessionStore, TurnManifest,
+    SessionIdentityState, SessionSnapshot, SessionStore, TurnManifest, VersionedSessionState,
 };
 use agent_runtime_core::usage::{
     CounterKind, Provenance, UsageDelta, UsageLedger, UsageRecord, UsageSource,
@@ -98,6 +98,7 @@ fn populated_snapshot(id: &SessionId) -> SessionSnapshot {
             TurnManifest::new(TurnId::new("turn-1"), manifest("acme-small")),
             TurnManifest::new(TurnId::new("turn-2"), manifest("acme-large")),
         ],
+        extension_state: BTreeMap::new(),
         updated: Timestamp(1_700_000_000_000),
     }
 }
@@ -129,6 +130,118 @@ async fn a_saved_snapshot_round_trips_with_identity_counters_usage_and_manifests
         loaded.manifests[1].manifest.model.model,
         ModelId::new("acme-large")
     );
+    assert!(loaded.extension_state.is_empty());
+}
+
+#[tokio::test]
+async fn ordinary_json_omits_sensitive_extension_state_but_preserves_explicitly_safe_state() {
+    let (_directory, store) = store();
+    let id = SessionId::new("s-extension-state");
+    let secret = "private-memory-value-27cf";
+    let mut original = populated_snapshot(&id);
+    original.extension_state.insert(
+        "smith.todo".into(),
+        VersionedSessionState::new(
+            RegistryRevision::new("todo-state-1"),
+            serde_json::json!({"completed": 2}),
+        )
+        .redaction_safe(),
+    );
+    original.extension_state.insert(
+        "smith.memory".into(),
+        VersionedSessionState::new(
+            RegistryRevision::new("memory-state-1"),
+            serde_json::json!({"content": secret}),
+        ),
+    );
+
+    store.save(&original).await.expect("the snapshot saves");
+
+    let path = store.paths().snapshot(&id).expect("a snapshot path");
+    let bytes = tokio::fs::read(path).await.expect("snapshot bytes");
+    let text = String::from_utf8(bytes).expect("snapshot JSON");
+    assert!(!text.contains(secret), "{text}");
+    assert!(!text.contains("smith.memory"), "{text}");
+    assert!(text.contains("smith.todo"), "{text}");
+
+    let loaded = store
+        .load(&id)
+        .await
+        .expect("the snapshot loads")
+        .expect("a snapshot exists");
+    assert_eq!(
+        loaded
+            .extension_state
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["smith.todo"]
+    );
+    assert_eq!(
+        loaded.extension_state["smith.todo"].value,
+        serde_json::json!({"completed": 2})
+    );
+}
+
+#[tokio::test]
+async fn ordinary_json_load_does_not_reintroduce_legacy_sensitive_extension_state() {
+    let (_directory, store) = store();
+    let id = SessionId::new("s-legacy-sensitive-state");
+    store
+        .save(&populated_snapshot(&id))
+        .await
+        .expect("a seed snapshot");
+    let path = store.paths().snapshot(&id).expect("a snapshot path");
+    let bytes = tokio::fs::read(&path).await.expect("snapshot bytes");
+    let mut stored: serde_json::Value = serde_json::from_slice(&bytes).expect("snapshot JSON");
+    stored["snapshot"]["extension_state"] = serde_json::json!({
+        "legacy.memory": {
+            "revision": "memory-state-0",
+            "sensitivity": "sensitive",
+            "value": {"content": "legacy-private-memory-a41e"}
+        },
+        "legacy.todo": {
+            "revision": "todo-state-0",
+            "sensitivity": "redaction_safe",
+            "value": {"pending": 1}
+        }
+    });
+    tokio::fs::write(
+        &path,
+        serde_json::to_vec(&stored).expect("rewritten snapshot JSON"),
+    )
+    .await
+    .expect("a legacy record");
+
+    let loaded = store
+        .load(&id)
+        .await
+        .expect("the snapshot loads")
+        .expect("a snapshot exists");
+    assert!(!loaded.extension_state.contains_key("legacy.memory"));
+    assert_eq!(
+        loaded.extension_state["legacy.todo"].value,
+        serde_json::json!({"pending": 1})
+    );
+}
+
+#[tokio::test]
+async fn session_snapshot_v1_compatibility_fixture_is_stable() {
+    let (_directory, store) = store();
+    let id = SessionId::new("session-fixture");
+    store
+        .save(&populated_snapshot(&id))
+        .await
+        .expect("the snapshot saves");
+    let path = store.paths().snapshot(&id).expect("a snapshot path");
+    let actual: serde_json::Value =
+        serde_json::from_slice(&tokio::fs::read(path).await.expect("snapshot fixture bytes"))
+            .expect("serialized snapshot JSON");
+    let expected: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/session-snapshot-v1.json"))
+            .expect("valid compatibility fixture");
+
+    assert_eq!(actual, expected);
 }
 
 #[tokio::test]
@@ -294,6 +407,8 @@ fn text(seq: u64, body: &str) -> EventEnvelope {
     envelope(
         seq,
         RuntimeEvent::TextDelta {
+            request: RequestId::new("request-journal"),
+            attempt: AttemptId::new("attempt-journal"),
             text: body.to_owned(),
         },
     )

@@ -7,15 +7,17 @@
 //! not render a terminal or choose an output format, so `smith` and `smith -p`
 //! cannot drift in their persistence behavior.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
-use agent_runtime::runtime::{SessionHandle, StartSession};
+use agent_runtime::runtime::{CheckpointRecoveryPolicy, SessionHandle, StartSession};
+use agent_runtime_core::checkpoint::{TurnCheckpoint, TurnState};
 use agent_runtime_core::content::{ContentPart, Message};
 use agent_runtime_core::error::{ErrorKind, RuntimeError};
 use agent_runtime_core::event::EventEnvelope;
 use agent_runtime_core::event::RuntimeEvent;
-use agent_runtime_core::ids::{SessionId, ToolCallId};
+use agent_runtime_core::ids::{ChildId, InteractionRequestId, SessionId, ToolCallId, TurnId};
 use agent_runtime_core::observer::EventObserver;
 use agent_runtime_core::store::{SessionSnapshot, SessionStore};
 use async_trait::async_trait;
@@ -23,9 +25,16 @@ use smith_config::model::ApprovalMode;
 use smith_config::resolve::{Layer, ResolvedConfig, Source};
 use smith_tools::{ToolCallDisplay, project_tool_call_display};
 
+use crate::artifact::SmithArtifactStore;
+use crate::checkpoint::{CheckpointBarrier, CheckpointKeyProvider, SmithCheckpointSetup};
 use crate::factory::{FactoryError, RuntimeRequest, SmithRuntime};
-use crate::journal::{DefaultRedactor, EventJournal, JournalConfig, JournalStats, Redactor};
+use crate::journal::{
+    DefaultRedactor, EphemeralWorkInterruption, EventJournal, JournalConfig, JournalRecord,
+    JournalRecovery, JournalStats, Redactor, read_journal, reconcile_nonterminal_journal,
+};
+use crate::private_storage::{PrivateFileLock, try_acquire_private_lock};
 use crate::session::{FileSessionStore, ProjectId, SessionListing, SessionPaths};
+use crate::summary::SmithSemanticSummaryConfig;
 
 /// A request to start one standard Smith-hosted session.
 #[derive(Debug)]
@@ -38,16 +47,24 @@ pub struct HostSessionRequest {
     pub session_id: Option<SessionId>,
     /// Bounds for the canonical event journal.
     pub journal: JournalConfig,
+    /// Protected-key provider. `None` selects the operating-system credential
+    /// service; deterministic tests inject a provider so they never access the
+    /// developer's keychain.
+    pub checkpoint_keys: Option<Arc<dyn CheckpointKeyProvider>>,
 }
 
 impl HostSessionRequest {
     /// Creates a request for a fresh session rooted at `project_root`.
-    pub fn new(runtime: RuntimeRequest, project_root: impl Into<PathBuf>) -> Self {
+    pub fn new(mut runtime: RuntimeRequest, project_root: impl Into<PathBuf>) -> Self {
+        if runtime.config.persistence.enabled.value && runtime.semantic_summary.is_none() {
+            runtime.semantic_summary = Some(SmithSemanticSummaryConfig::standard());
+        }
         Self {
             runtime,
             project_root: project_root.into(),
             session_id: None,
             journal: JournalConfig::default(),
+            checkpoint_keys: None,
         }
     }
 
@@ -55,6 +72,13 @@ impl HostSessionRequest {
     #[must_use]
     pub fn resume(mut self, session_id: SessionId) -> Self {
         self.session_id = Some(session_id);
+        self
+    }
+
+    /// Uses an injected protected-key provider.
+    #[must_use]
+    pub fn checkpoint_keys(mut self, provider: Arc<dyn CheckpointKeyProvider>) -> Self {
+        self.checkpoint_keys = Some(provider);
         self
     }
 }
@@ -67,6 +91,35 @@ pub struct HostSession {
     journal: Option<Arc<EventJournal>>,
     paths: Option<SessionPaths>,
     changes: Arc<smith_tools::ChangeRecorder>,
+    lifecycle_lease: Mutex<Option<PrivateFileLock>>,
+    restored_interaction: Option<RestoredInteraction>,
+    recovered_ephemeral_work: Option<EphemeralWorkInterruption>,
+}
+
+/// Redaction-safe identity of an exact pending interaction restored from a
+/// protected checkpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoredInteraction {
+    request_id: InteractionRequestId,
+    turn_id: TurnId,
+    question_count: usize,
+}
+
+impl RestoredInteraction {
+    /// Exact interaction request identity.
+    pub fn request_id(&self) -> &InteractionRequestId {
+        &self.request_id
+    }
+
+    /// Turn that owns the pending interaction.
+    pub fn turn_id(&self) -> &TurnId {
+        &self.turn_id
+    }
+
+    /// Number of questions, without exposing prompt or answer content.
+    pub fn question_count(&self) -> usize {
+        self.question_count
+    }
 }
 
 impl HostSession {
@@ -90,6 +143,18 @@ impl HostSession {
         &self.changes
     }
 
+    /// Exact pending interaction restored from the protected checkpoint, when
+    /// startup resumed before the host had accepted a response.
+    pub fn restored_interaction(&self) -> Option<&RestoredInteraction> {
+        self.restored_interaction.as_ref()
+    }
+
+    /// Process-owned work found unresolved and explicitly interrupted during
+    /// this resume.
+    pub fn recovered_ephemeral_work(&self) -> Option<&EphemeralWorkInterruption> {
+        self.recovered_ephemeral_work.as_ref()
+    }
+
     /// Resolves a protected live event to reviewed display metadata.
     ///
     /// Agent Runtime appends the canonical assistant tool call before emitting
@@ -110,6 +175,10 @@ impl HostSession {
             Some(journal) => journal.shutdown().await.map(Some),
             None => Ok(None),
         };
+        self.lifecycle_lease
+            .lock()
+            .expect("session lifecycle lease poisoned")
+            .take();
         session?;
         journal
     }
@@ -186,6 +255,7 @@ pub enum HostSessionError {
 /// cannot leave an empty session journal behind.
 pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostSessionError> {
     let config = request.runtime.config.clone();
+    let surface = request.runtime.surface;
     reject_project_granted_authority(&config, &request.project_root)?;
     reject_project_controlled_persistence(&config, &request.project_root)?;
     let persistence = config.persistence.enabled.value;
@@ -206,29 +276,41 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         request.runtime.persistence_redactor = Some(persistence_redactor.clone());
     }
 
-    let (paths, journal_slot) = if persistence {
+    let mut resume_snapshot_exists = false;
+    let (paths, journal_slot, checkpoint_barrier) = if persistence {
         let paths = paths(&config, &request.project_root)?;
+        if request.runtime.artifact_store.is_none() {
+            request.runtime.artifact_store = Some(Arc::new(SmithArtifactStore::new(paths.clone())));
+        }
         let store = Arc::new(RedactingSessionStore::new(
             FileSessionStore::new(paths.clone()),
             persistence_redactor.clone(),
         ));
-        if request.session_id.is_some() && store.load(&session_id).await?.is_none() {
-            return Err(HostSessionError::SessionNotFound {
-                session: session_id,
-            });
+        if request.session_id.is_some() {
+            resume_snapshot_exists = store.load(&session_id).await?.is_some();
         }
         request.runtime.session_store = Some(store);
+        if request.runtime.checkpoint_store.is_none() && request.runtime.checkpoint_setup.is_none()
+        {
+            request.runtime.checkpoint_setup = Some(match request.checkpoint_keys.clone() {
+                Some(provider) => SmithCheckpointSetup::with_provider(paths.clone(), provider),
+                None => SmithCheckpointSetup::platform(paths.clone()),
+            });
+        }
 
-        let slot = if config.persistence.journal_events.value {
+        let (slot, barrier) = if config.persistence.journal_events.value {
             let slot = Arc::new(DeferredObserver::default());
             request.runtime.observers.push(slot.clone());
-            Some(slot)
+            let barrier = Arc::new(JournalCheckpointBarrier::default());
+            request.runtime.checkpoint_barrier =
+                Some(barrier.clone() as Arc<dyn CheckpointBarrier>);
+            (Some(slot), Some(barrier))
         } else {
-            None
+            (None, None)
         };
-        (Some(paths), slot)
+        (Some(paths), slot, barrier)
     } else {
-        (None, None)
+        (None, None, None)
     };
 
     let change_journal = paths
@@ -244,8 +326,120 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
 
     let runtime = crate::factory::build(request.runtime).await?;
 
-    let journal = match (&paths, journal_slot) {
-        (Some(paths), Some(slot)) => {
+    // Probe existence before creating the lifecycle lock file. The reads are
+    // atomic and side-effect free; an arbitrary missing resume id must not
+    // leave a user-state directory or lock artifact behind.
+    let checkpoint_probe = if request.session_id.is_some() {
+        match runtime.checkpoint_store() {
+            Some(store) => store.load_latest(&session_id).await?,
+            None => None,
+        }
+    } else {
+        None
+    };
+    if request.session_id.is_some() && !resume_snapshot_exists && checkpoint_probe.is_none() {
+        return Err(HostSessionError::SessionNotFound {
+            session: session_id,
+        });
+    }
+
+    let lifecycle_lease = match &paths {
+        Some(paths) => {
+            let path = paths.lifecycle_lock(&session_id)?;
+            Some(try_acquire_private_lock(&path).await?)
+        }
+        None => None,
+    };
+
+    // The prior owner may have advanced after the existence probe but before
+    // releasing its lifecycle lease. Reload both durable records under our
+    // lease and reconcile only against this fresh checkpoint watermark.
+    let checkpoint = if request.session_id.is_some() {
+        resume_snapshot_exists = match &paths {
+            Some(paths) => FileSessionStore::new(paths.clone())
+                .load(&session_id)
+                .await?
+                .is_some(),
+            None => false,
+        };
+        let checkpoint = match runtime.checkpoint_store() {
+            Some(store) => store.load_latest(&session_id).await?,
+            None => None,
+        };
+        if !resume_snapshot_exists && checkpoint.is_none() {
+            return Err(HostSessionError::SessionNotFound {
+                session: session_id,
+            });
+        }
+        checkpoint
+    } else {
+        None
+    };
+
+    let mut resume_identity_floor = None;
+    let mut recovered_ephemeral_work = None;
+    let restored_interaction = checkpoint.as_ref().and_then(|checkpoint| {
+        if let TurnState::AwaitingInteraction {
+            request,
+            response: None,
+            ..
+        } = &checkpoint.state
+        {
+            Some(RestoredInteraction {
+                request_id: request.id().clone(),
+                turn_id: checkpoint.turn.clone(),
+                question_count: request.questionnaire_payload().questions().len(),
+            })
+        } else {
+            None
+        }
+    });
+    let journal = match (&paths, journal_slot, checkpoint_barrier) {
+        (Some(paths), Some(slot), Some(barrier)) => {
+            let journal_path = paths.journal(&session_id)?;
+            if request.session_id.is_some() {
+                let recovery = read_journal(&journal_path).await?;
+                recovered_ephemeral_work = unresolved_ephemeral_work(&recovery);
+                match checkpoint.as_ref() {
+                    Some(checkpoint) if !matches!(checkpoint.state, TurnState::Terminal { .. }) => {
+                        let reconciled = reconcile_nonterminal_journal(
+                            &journal_path,
+                            checkpoint.watermark.event_sequence,
+                        )
+                        .await?;
+                        if reconciled.retained_gap {
+                            tracing::warn!(
+                                session = %session_id,
+                                "the retained journal prefix contains an explicit gap; exact presentation replay is unavailable"
+                            );
+                        }
+                        resume_identity_floor = Some(reconciled.identity_floor);
+                        if reconciled.truncated_records > 0 {
+                            tracing::info!(
+                                session = %session_id,
+                                records = reconciled.truncated_records,
+                                boundary = checkpoint.watermark.event_sequence,
+                                "discarded presentation-only journal tail before checkpoint resume"
+                            );
+                        }
+                    }
+                    _ => {
+                        if recovery.records.iter().any(|line| {
+                            matches!(
+                                line.record,
+                                crate::journal::JournalRecord::Dropped { .. }
+                                    | crate::journal::JournalRecord::Oversized { .. }
+                            )
+                        }) {
+                            tracing::warn!(
+                                session = %session_id,
+                                "the journal contains an explicit gap; exact presentation replay is unavailable"
+                            );
+                        }
+                        resume_identity_floor = Some(recovery.identity_floor());
+                    }
+                };
+            }
             let journal = Arc::new(
                 EventJournal::for_session(
                     paths,
@@ -255,17 +449,30 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
                 )
                 .await?,
             );
+            if let Some(interruption) = recovered_ephemeral_work.clone() {
+                journal.record_ephemeral_interruption(interruption).await?;
+            }
+            barrier.install(journal.clone())?;
             slot.install(journal.clone())?;
             Some(journal)
         }
-        _ => None,
+        (None, None, None) | (Some(_), None, None) => None,
+        _ => {
+            return Err(RuntimeError::config(
+                "journal observer, checkpoint barrier, and session paths must be configured together",
+            )
+            .into());
+        }
     };
 
-    let session = match runtime
-        .runtime()
-        .start_session(StartSession::new().with_id(session_id))
-        .await
-    {
+    let mut start = StartSession::new().with_id(session_id);
+    if let Some(floor) = resume_identity_floor {
+        start = start.with_resume_identity_floor(floor);
+    }
+    if surface == crate::factory::HostSurface::Headless && restored_interaction.is_some() {
+        start = start.with_checkpoint_recovery(CheckpointRecoveryPolicy::DeferPendingInteraction);
+    }
+    let session = match runtime.runtime().start_session(start).await {
         Ok(session) => session,
         Err(error) => {
             if let Some(journal) = &journal {
@@ -288,7 +495,98 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         journal,
         paths,
         changes,
+        lifecycle_lease: Mutex::new(lifecycle_lease),
+        restored_interaction,
+        recovered_ephemeral_work,
     })
+}
+
+/// Finds process-owned child and monitor work whose latest journal lifecycle
+/// has no terminal resolution. Recovery markers participate so a later resume
+/// never reports the same interrupted work twice.
+///
+/// Monitor start/stop records are metadata-only lifecycle seams. This scanner
+/// never creates or restarts monitor execution.
+fn unresolved_ephemeral_work(recovery: &JournalRecovery) -> Option<EphemeralWorkInterruption> {
+    let mut children = BTreeSet::<ChildId>::new();
+    let mut monitors = BTreeSet::<String>::new();
+    for line in &recovery.records {
+        match &line.record {
+            JournalRecord::Event { event } => match &event.payload {
+                RuntimeEvent::ChildSpawned { child, .. } => {
+                    children.insert(child.clone());
+                }
+                // Completed and needs-input children remain live coordinator
+                // entries that can accept a follow-up. Their in-memory state
+                // is lost across process exit, so only truly terminal
+                // lifecycle events resolve ephemeral work.
+                RuntimeEvent::ChildStopped { child, .. }
+                | RuntimeEvent::ChildFailed { child, .. } => {
+                    children.remove(child);
+                }
+                _ => {}
+            },
+            JournalRecord::EphemeralWorkInterrupted { interruption } => {
+                for child in &interruption.children {
+                    children.remove(child);
+                }
+                for monitor in &interruption.monitors {
+                    monitors.remove(monitor);
+                }
+            }
+            JournalRecord::MonitorStarted { monitor } => {
+                monitors.insert(monitor.clone());
+            }
+            JournalRecord::MonitorStopped { monitor } => {
+                monitors.remove(monitor);
+            }
+            JournalRecord::Oversized { .. } | JournalRecord::Dropped { .. } => {}
+        }
+    }
+    let interruption = EphemeralWorkInterruption::process_exit(children, monitors);
+    (!interruption.is_empty()).then_some(interruption)
+}
+
+/// Connects the checkpoint wrapper built during factory preflight to the
+/// journal opened immediately before session start.
+#[derive(Debug, Default)]
+struct JournalCheckpointBarrier {
+    journal: RwLock<Option<Arc<EventJournal>>>,
+}
+
+impl JournalCheckpointBarrier {
+    fn install(&self, journal: Arc<EventJournal>) -> Result<(), RuntimeError> {
+        let mut target = self
+            .journal
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if target.is_some() {
+            return Err(RuntimeError::conflict(
+                "checkpoint journal barrier was already installed",
+            ));
+        }
+        *target = Some(journal);
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl CheckpointBarrier for JournalCheckpointBarrier {
+    async fn before_checkpoint(&self, checkpoint: &TurnCheckpoint) -> Result<(), RuntimeError> {
+        let journal = self
+            .journal
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .ok_or_else(|| {
+                RuntimeError::internal(
+                    "checkpoint journal barrier is unavailable before session start",
+                )
+            })?;
+        journal
+            .flush_before(checkpoint.watermark.event_sequence)
+            .await
+    }
 }
 
 #[derive(Debug)]
@@ -525,8 +823,26 @@ impl EventObserver for DeferredObserver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::journal::JournalLine;
+    use agent_runtime_core::cancel::CancelReason;
     use agent_runtime_core::content::ToolCall;
+    use agent_runtime_core::delegation::WorkspacePolicy;
+    use agent_runtime_core::ids::{EventId, QuestionId};
+    use agent_runtime_core::interaction::InteractionSensitivity;
     use serde_json::json;
+
+    fn journal_event(seq: u64, payload: RuntimeEvent) -> JournalLine {
+        JournalLine::new(JournalRecord::Event {
+            event: EventEnvelope::new(
+                seq,
+                EventId::new(format!("evt-{seq}")),
+                SessionId::new("session-recovery"),
+                None,
+                agent_runtime_core::clock::Timestamp(seq),
+                payload,
+            ),
+        })
+    }
 
     #[test]
     fn canonical_tool_calls_are_resolved_by_stable_id_without_exposing_arguments() {
@@ -551,5 +867,113 @@ mod tests {
         assert_eq!(display.invocation(), "Shell(crates/smith-cli)");
         assert!(!display.invocation().contains("TOP_SECRET_COMMAND"));
         assert!(tool_call_display_from_history(&history, &ToolCallId::new("missing")).is_none());
+    }
+
+    #[test]
+    fn only_terminal_children_are_removed_from_ephemeral_recovery() {
+        let child = ChildId::new("child-1");
+        let spawned = RuntimeEvent::ChildSpawned {
+            child: child.clone(),
+            workspace: WorkspacePolicy::ReadOnlyView,
+            max_turns: 1,
+            max_tokens: None,
+            deadline_ms: None,
+        };
+        let resolutions = [
+            (
+                RuntimeEvent::ChildCompleted {
+                    child: child.clone(),
+                    result: "done".to_owned(),
+                },
+                true,
+            ),
+            (
+                RuntimeEvent::ChildStopped {
+                    child: child.clone(),
+                    reason: CancelReason::Shutdown,
+                },
+                false,
+            ),
+            (
+                RuntimeEvent::ChildFailed {
+                    child: child.clone(),
+                    error: RuntimeError::internal("failed"),
+                },
+                false,
+            ),
+            (
+                RuntimeEvent::ChildNeedsInput {
+                    child: child.clone(),
+                    child_session: SessionId::new("child-session"),
+                    turn: TurnId::new("turn-1"),
+                    call: ToolCallId::new("call-1"),
+                    request: InteractionRequestId::new("interaction-1"),
+                    question_ids: vec![QuestionId::new("question-1")],
+                    sensitivity: InteractionSensitivity::Sensitive,
+                },
+                true,
+            ),
+        ];
+
+        for (index, (resolution, remains_ephemeral)) in resolutions.into_iter().enumerate() {
+            let recovery = JournalRecovery {
+                records: vec![
+                    journal_event(0, spawned.clone()),
+                    journal_event(u64::try_from(index).unwrap_or(0) + 1, resolution),
+                ],
+                truncated_tail: None,
+            };
+            let interruption = unresolved_ephemeral_work(&recovery);
+            if remains_ephemeral {
+                assert_eq!(
+                    interruption
+                        .expect("a follow-up-capable child remains ephemeral")
+                        .children
+                        .as_slice(),
+                    std::slice::from_ref(&child)
+                );
+            } else {
+                assert!(
+                    interruption.is_none(),
+                    "a terminal child was treated as live"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn monitor_lifecycle_and_prior_interruption_are_reconciled_exactly_once() {
+        let running = "monitor:build".to_owned();
+        let stopped = "monitor:lint".to_owned();
+        let recovery = JournalRecovery {
+            records: vec![
+                JournalLine::new(JournalRecord::MonitorStarted {
+                    monitor: running.clone(),
+                }),
+                JournalLine::new(JournalRecord::MonitorStarted {
+                    monitor: stopped.clone(),
+                }),
+                JournalLine::new(JournalRecord::MonitorStopped { monitor: stopped }),
+            ],
+            truncated_tail: None,
+        };
+        let interruption = unresolved_ephemeral_work(&recovery)
+            .expect("the unresolved monitor is interrupted on recovery");
+        assert_eq!(
+            interruption.monitors.as_slice(),
+            std::slice::from_ref(&running)
+        );
+        assert!(interruption.children.is_empty());
+
+        let mut reconciled = recovery;
+        reconciled
+            .records
+            .push(JournalLine::new(JournalRecord::EphemeralWorkInterrupted {
+                interruption,
+            }));
+        assert!(
+            unresolved_ephemeral_work(&reconciled).is_none(),
+            "the persisted recovery marker must prevent duplicate interruption"
+        );
     }
 }

@@ -11,14 +11,23 @@
 //! sessions, and a future Forge adapter — composes a runtime through this
 //! crate. Presentation may differ between hosts; runtime policy may not.
 
+pub mod abilities;
+pub mod artifact;
+mod authority;
 pub mod catalog;
+pub mod checkpoint;
 pub mod delegation;
 pub mod factory;
 pub mod host;
 pub mod journal;
+pub mod memory;
 pub mod model_catalog;
+mod private_storage;
+pub mod prompt;
 pub mod response;
 pub mod session;
+pub mod skills;
+pub mod summary;
 pub mod transport;
 
 /// Structured direct-child spawn outcome exposed through Smith's composition

@@ -5,6 +5,7 @@
 //! product needs. This crate supplies Smith's half of that contract:
 //!
 //! - [`approval`] — the interactive approval gate a terminal user answers.
+//! - [`interaction`] — authority-free questionnaire presentation.
 //! - [`workspace`] — the project-root write boundary.
 //!
 //! The dependency is one-way by design: Smith depends on the runtime; the
@@ -12,6 +13,7 @@
 
 pub mod approval;
 pub mod changes;
+pub mod interaction;
 pub mod workspace;
 
 pub use approval::{
@@ -19,4 +21,8 @@ pub use approval::{
     PromptScope,
 };
 pub use changes::{AppliedRevert, ChangeView, GitChanges, RevertPreview};
+pub use interaction::{
+    HeadlessInteraction, InteractionNotice, InteractionPrompt, InteractionRequests,
+    InteractionRequired, InteractiveInteraction, SensitiveValueSink,
+};
 pub use workspace::ProjectWorkspace;

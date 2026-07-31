@@ -17,7 +17,9 @@
 use std::path::PathBuf;
 
 use agent_runtime_core::error::{ErrorKind, RuntimeError};
-use agent_runtime_core::tool::InvocationContext;
+use agent_runtime_core::security::SecurityResource;
+use agent_runtime_core::tool::{InvocationContext, PreparationContext};
+use agent_runtime_core::workspace::Workspace;
 use serde_json::Value;
 
 /// The largest file a read-shaped tool will load, regardless of output limits.
@@ -33,6 +35,90 @@ const SNIFF_BYTES: usize = 8192;
 /// rather than in whichever tool forgot to check.
 pub fn resolve(ctx: &InvocationContext, path: &str) -> Result<PathBuf, RuntimeError> {
     ctx.workspace.resolve(path).map(PathBuf::from)
+}
+
+/// One workspace path canonicalized before authorization or approval.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedPath {
+    /// Canonical host path used as the immutable tool argument.
+    pub canonical: String,
+    /// Structural filesystem resource relative to the workspace mount.
+    pub resource: SecurityResource,
+    /// Project-relative path suitable for bounded human-facing metadata.
+    pub display: String,
+}
+
+/// Canonicalizes one filesystem argument and replaces it in `arguments`.
+///
+/// The model may supply a relative path, an absolute in-workspace path, or no
+/// path when the tool defines a root default. Preparation resolves that once,
+/// stores the canonical path in the immutable arguments, and derives the
+/// structurally equivalent security resource. Invocation resolves the
+/// canonical value again only as a fail-closed workspace/TOCTOU check.
+pub fn prepare_path_argument(
+    arguments: &mut Value,
+    key: &str,
+    default: Option<&str>,
+    ctx: &PreparationContext,
+) -> Result<PreparedPath, RuntimeError> {
+    let raw = match arguments.get(key) {
+        Some(value) => value
+            .as_str()
+            .ok_or_else(|| invalid(format!("`{key}` must be a string")))?
+            .to_owned(),
+        None => default
+            .ok_or_else(|| invalid(format!("`{key}` is required and must be a string")))?
+            .to_owned(),
+    };
+    let prepared = prepare_workspace_path(ctx.workspace.as_ref(), &raw)?;
+    let object = arguments
+        .as_object_mut()
+        .ok_or_else(|| invalid("tool arguments must be a JSON object"))?;
+    object.insert(key.to_owned(), Value::String(prepared.canonical.clone()));
+    Ok(prepared)
+}
+
+fn prepare_workspace_path(
+    workspace: &dyn Workspace,
+    raw: &str,
+) -> Result<PreparedPath, RuntimeError> {
+    let canonical = workspace.resolve(raw)?;
+    let root = std::path::Path::new(workspace.root());
+    let path = std::path::Path::new(&canonical);
+    let relative = path.strip_prefix(root).map_err(|_| {
+        RuntimeError::new(
+            ErrorKind::Workspace,
+            format!(
+                "prepared path `{canonical}` is outside `{}`",
+                root.display()
+            ),
+        )
+    })?;
+    let mut segments = Vec::new();
+    for component in relative.components() {
+        match component {
+            std::path::Component::Normal(segment) => {
+                segments.push(segment.to_string_lossy().into_owned());
+            }
+            std::path::Component::CurDir => {}
+            _ => {
+                return Err(RuntimeError::new(
+                    ErrorKind::Workspace,
+                    format!("prepared path `{canonical}` is not structurally canonical"),
+                ));
+            }
+        }
+    }
+    let display = if segments.is_empty() {
+        ".".to_owned()
+    } else {
+        segments.join("/")
+    };
+    Ok(PreparedPath {
+        canonical,
+        resource: SecurityResource::filesystem(workspace.root(), segments),
+        display,
+    })
 }
 
 /// Reads a required string argument.

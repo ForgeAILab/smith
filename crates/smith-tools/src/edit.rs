@@ -10,18 +10,28 @@
 //! An ambiguous match is refused rather than resolved by picking the first,
 //! because "the first occurrence" is rarely the one the model meant.
 //!
-//! Writes go through a temporary file and a rename, so an interrupted edit
-//! leaves the original intact instead of a half-written source file.
+//! Replacements go through a temporary file and a rename, so an interrupted
+//! edit leaves the original intact instead of a half-written source file.
+//! Smith's authority contract treats that randomized sibling as an internal,
+//! non-durable implementation detail of the logical exact-target write: it is
+//! never model-selectable and must be removed on both success and failure.
+//! New files instead use an atomic `create_new` open on the prepared target so
+//! a concurrent creator can never be overwritten.
 
 use agent_runtime_core::error::RuntimeError;
-use agent_runtime_core::tool::{InvocationContext, Tool, ToolEffects, ToolOutcome};
+use agent_runtime_core::tool::{
+    InvocationContext, PreparationContext, PreparedToolCall, Tool, ToolCallDisplay, ToolEffects,
+    ToolOutcome, ToolSpec,
+};
+use agent_runtime_registry::Permission;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
 use crate::support::{
-    MAX_READ_BYTES, display_path, invalid, optional_bool, read_bounded, require_str, resolve,
+    MAX_READ_BYTES, display_path, invalid, optional_bool, prepare_path_argument, read_bounded,
+    require_str, resolve,
 };
 
 /// Applies an exact-match edit to a project file.
@@ -30,53 +40,102 @@ pub struct EditTool;
 
 #[async_trait]
 impl Tool for EditTool {
-    fn name(&self) -> &str {
-        "edit"
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::new(
+            "edit",
+            "Edit a project file by replacing an exact string. `old_string` must \
+             appear exactly once unless `replace_all` is set. To create a new file, \
+             pass an empty `old_string`.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the file, relative to the project root."
+                    },
+                    "old_string": {
+                        "type": "string",
+                        "description": "Exact text to replace, including indentation. Empty creates a new file."
+                    },
+                    "new_string": {
+                        "type": "string",
+                        "description": "Replacement text."
+                    },
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": "Replace every occurrence instead of requiring exactly one."
+                    }
+                },
+                "required": ["path", "old_string", "new_string"],
+                "additionalProperties": false
+            }),
+            ToolEffects::read_only().with_write("project:files"),
+        )
+        .with_permission_upper_bound(
+            [
+                Permission::FsRead,
+                Permission::FsWrite,
+                Permission::FsCreate,
+            ]
+            .into_iter()
+            .collect(),
+        )
     }
 
-    fn description(&self) -> &str {
-        "Edit a project file by replacing an exact string. `old_string` must \
-         appear exactly once unless `replace_all` is set. To create a new file, \
-         pass an empty `old_string`."
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to the file, relative to the project root."
-                },
-                "old_string": {
-                    "type": "string",
-                    "description": "Exact text to replace, including indentation. Empty creates a new file."
-                },
-                "new_string": {
-                    "type": "string",
-                    "description": "Replacement text."
-                },
-                "replace_all": {
-                    "type": "boolean",
-                    "description": "Replace every occurrence instead of requiring exactly one."
-                }
-            },
-            "required": ["path", "old_string", "new_string"],
-            "additionalProperties": false
-        })
-    }
-
-    fn effects(&self) -> ToolEffects {
-        // The scope is the tool, not the path: effects are declared statically,
-        // before arguments exist. The workspace enforces the actual boundary.
-        ToolEffects::read_only().with_write("project:files")
+    async fn prepare(
+        &self,
+        mut arguments: Value,
+        ctx: &PreparationContext,
+    ) -> Result<PreparedToolCall, RuntimeError> {
+        let old_string = require_str(&arguments, "old_string")?.to_owned();
+        let new_string = require_str(&arguments, "new_string")?.to_owned();
+        if old_string == new_string {
+            return Err(invalid(
+                "`old_string` and `new_string` are identical; the edit would do nothing",
+            ));
+        }
+        let path = prepare_path_argument(&mut arguments, "path", None, ctx)?;
+        let creating = old_string.is_empty();
+        if creating {
+            ensure_existing_parent(std::path::Path::new(&path.canonical), &path.display).await?;
+        }
+        arguments
+            .as_object_mut()
+            .ok_or_else(|| invalid("tool arguments must be a JSON object"))?
+            .entry("replace_all")
+            .or_insert(Value::Bool(false));
+        let permissions = if creating {
+            [Permission::FsCreate, Permission::FsWrite]
+                .into_iter()
+                .collect()
+        } else {
+            [Permission::FsRead, Permission::FsWrite]
+                .into_iter()
+                .collect()
+        };
+        let effects = if creating {
+            ToolEffects::new(Vec::new()).with_write(path.canonical.clone())
+        } else {
+            ToolEffects::read_only().with_write(path.canonical.clone())
+        };
+        let action = if creating { "Create" } else { "Edit" };
+        Ok(PreparedToolCall::new(
+            ctx.call_id.clone(),
+            "edit",
+            arguments,
+            permissions,
+            path.resource,
+            effects,
+            ToolCallDisplay::new(format!("{action} {}", path.display)),
+        ))
     }
 
     async fn invoke(
         &self,
-        arguments: Value,
+        prepared: PreparedToolCall,
         ctx: &InvocationContext,
     ) -> Result<ToolOutcome, RuntimeError> {
+        let arguments = prepared.into_arguments();
         let raw_path = require_str(&arguments, "path")?;
         let path = resolve(ctx, raw_path)?;
         let old_string = require_str(&arguments, "old_string")?;
@@ -92,23 +151,15 @@ impl Tool for EditTool {
 
         // Creating a file.
         if old_string.is_empty() {
-            if tokio::fs::try_exists(&path).await.unwrap_or(false) {
-                return Ok(ToolOutcome::error(format!(
-                    "`{shown}` already exists; pass the text to replace in `old_string`"
-                )));
-            }
-            if let Some(parent) = path.parent() {
-                tokio::fs::create_dir_all(parent)
-                    .await
-                    .map_err(|err| invalid(format!("cannot create `{shown}`: {err}")))?;
-            }
-            write_atomically(&path, new_string).await?;
+            ensure_existing_parent(&path, &shown).await?;
+            write_new(&path, new_string).await?;
             return Ok(ToolOutcome {
                 value: json!({"path": shown, "created": true, "replacements": 1}),
                 content: vec![agent_runtime_core::content::ContentPart::text(format!(
                     "created `{shown}` ({} lines)",
                     new_string.lines().count()
-                ))],
+                ))]
+                .into(),
                 is_error: false,
             });
         }
@@ -151,17 +202,72 @@ impl Tool for EditTool {
             content: vec![agent_runtime_core::content::ContentPart::text(format!(
                 "edited `{shown}` ({} replacement(s))",
                 if replace_all { occurrences } else { 1 }
-            ))],
+            ))]
+            .into(),
             is_error: false,
         })
     }
+}
+
+async fn write_new(path: &std::path::Path, contents: &str) -> Result<(), RuntimeError> {
+    let mut file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .await
+        .map_err(|err| {
+            if err.kind() == std::io::ErrorKind::AlreadyExists {
+                invalid(format!(
+                    "cannot create `{}`: it already exists",
+                    path.display()
+                ))
+            } else {
+                invalid(format!("cannot create `{}`: {err}", path.display()))
+            }
+        })?;
+    if let Err(err) = async {
+        file.write_all(contents.as_bytes()).await?;
+        file.sync_all().await
+    }
+    .await
+    {
+        drop(file);
+        let _ = tokio::fs::remove_file(path).await;
+        return Err(invalid(format!(
+            "cannot create `{}`: {err}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+async fn ensure_existing_parent(path: &std::path::Path, shown: &str) -> Result<(), RuntimeError> {
+    let parent = path.parent().ok_or_else(|| {
+        invalid(format!(
+            "cannot create `{shown}`: the target has no parent directory"
+        ))
+    })?;
+    let metadata = tokio::fs::metadata(parent).await.map_err(|err| {
+        invalid(format!(
+            "cannot create `{shown}`: its parent directory must already exist ({err})"
+        ))
+    })?;
+    if !metadata.is_dir() {
+        return Err(invalid(format!(
+            "cannot create `{shown}`: its parent is not a directory"
+        )));
+    }
+    Ok(())
 }
 
 /// Writes via a sibling temporary file and a rename.
 ///
 /// The rename is atomic within a filesystem, so a reader either sees the old
 /// file or the new one — never a truncated one. The temporary lives beside the
-/// target rather than in `/tmp` so the rename cannot cross a filesystem.
+/// target rather than in `/tmp` so the rename cannot cross a filesystem. It is
+/// a trusted implementation detail of the prepared exact-target write, not a
+/// separately selectable resource, and this function owns cleanup on every
+/// recoverable exit path.
 async fn write_atomically(path: &std::path::Path, contents: &str) -> Result<(), RuntimeError> {
     let parent = path.parent().ok_or_else(|| {
         invalid(format!(
@@ -288,8 +394,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_empty_old_string_creates_a_file_and_its_parents() {
+    async fn an_empty_old_string_creates_a_file_in_an_existing_directory() {
         let (dir, ctx) = project();
+        std::fs::create_dir_all(dir.path().join("src/new")).unwrap();
 
         let outcome = EditTool
             .invoke(
@@ -307,23 +414,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn creating_a_file_never_silently_creates_unprepared_parent_directories() {
+        let (dir, ctx) = project();
+
+        let err = EditTool
+            .invoke(
+                json!({"path": "missing/nested/new.rs", "old_string": "", "new_string": "x\n"}),
+                &ctx,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            err.message.contains("parent directory must already exist"),
+            "{err:?}"
+        );
+        assert!(
+            !dir.path().join("missing").exists(),
+            "an exact-file invocation created an unprepared ancestor"
+        );
+    }
+
+    #[tokio::test]
     async fn creating_over_an_existing_file_is_refused() {
         let (dir, ctx) = project();
         std::fs::write(dir.path().join("a.rs"), SOURCE).unwrap();
 
-        let outcome = EditTool
+        let err = EditTool
             .invoke(
                 json!({"path": "a.rs", "old_string": "", "new_string": "replaced"}),
                 &ctx,
             )
             .await
-            .unwrap();
+            .unwrap_err();
 
-        assert!(outcome.is_error);
-        assert!(text_of(&outcome).contains("already exists"));
+        assert!(err.message.contains("already exists"), "{err:?}");
         assert_eq!(
             std::fs::read_to_string(dir.path().join("a.rs")).unwrap(),
             SOURCE
+        );
+    }
+
+    #[tokio::test]
+    async fn a_concurrent_creator_is_never_overwritten_after_preparation() {
+        let (dir, ctx) = project();
+        let preparation = PreparationContext {
+            session: ctx.session.clone(),
+            turn: ctx.turn.clone(),
+            call_id: ctx.call_id.clone(),
+            request: ctx.request.clone(),
+            workspace: ctx.workspace.clone(),
+            clock: ctx.clock.clone(),
+            cancel: ctx.cancel.clone(),
+            deadline: ctx.deadline,
+        };
+        let prepared = Tool::prepare(
+            &EditTool,
+            json!({"path": "raced.rs", "old_string": "", "new_string": "smith\n"}),
+            &preparation,
+        )
+        .await
+        .expect("the absent target prepares");
+
+        std::fs::write(dir.path().join("raced.rs"), "other process\n")
+            .expect("a competing creator wins the race");
+        let err = Tool::invoke(&EditTool, prepared, &ctx)
+            .await
+            .expect_err("create-only invocation must fail closed");
+
+        assert!(err.message.contains("already exists"), "{err:?}");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("raced.rs")).unwrap(),
+            "other process\n",
+            "the create-only invocation overwrote a concurrent creator"
         );
     }
 
@@ -376,6 +539,32 @@ mod tests {
         assert!(leftovers.is_empty(), "a temporary file was left behind");
     }
 
+    #[tokio::test]
+    async fn no_temporary_file_survives_a_failed_atomic_replace() {
+        let (dir, _ctx) = project();
+        let destination = dir.path().join("occupied");
+        std::fs::create_dir(&destination).unwrap();
+        std::fs::write(destination.join("keep"), "unchanged").unwrap();
+
+        let err = write_atomically(&destination, "replacement")
+            .await
+            .expect_err("renaming a file over a non-empty directory must fail");
+        assert!(err.message.contains("cannot replace"), "{err:?}");
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains("smith-edit-"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "a failed atomic replacement left a sibling temporary behind"
+        );
+        assert_eq!(
+            std::fs::read_to_string(destination.join("keep")).unwrap(),
+            "unchanged"
+        );
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn a_preexisting_temp_symlink_cannot_escape_the_workspace() {
@@ -414,7 +603,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_tool_declares_a_write_effect_so_approval_applies() {
-        assert!(EditTool.effects().mutates());
-        assert!(!EditTool.effects().is_read_only());
+        assert!(EditTool.spec().effects.mutates());
+        assert!(!EditTool.spec().effects.is_read_only());
     }
 }

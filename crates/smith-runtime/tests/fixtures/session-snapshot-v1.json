@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "listing": {
+    "schema_version": 1,
+    "turn_count": 4,
+    "provider": "acme",
+    "model": "acme-large",
+    "user_preview": "explain the retry policy"
+  },
+  "snapshot": {
+    "id": "session-fixture",
+    "history": [
+      {
+        "role": "system",
+        "content": [
+          {
+            "type": "text",
+            "text": "you are smith"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "explain the retry policy"
+          }
+        ]
+      }
+    ],
+    "usage": [
+      {
+        "source": "provider_attempt",
+        "provenance": {
+          "attempt": "a-1",
+          "failed": true
+        },
+        "delta": {
+          "input_uncached": 1200
+        }
+      },
+      {
+        "source": "tool_loop",
+        "provenance": {
+          "tool_call": "call-7",
+          "failed": false
+        },
+        "delta": {
+          "input_cached": 900,
+          "output": 64,
+          "reasoning": 32
+        }
+      }
+    ],
+    "identity": {
+      "turn": 4,
+      "request": 9,
+      "attempt": 11,
+      "event": 137,
+      "tool_call": 6,
+      "event_seq": 138
+    },
+    "manifests": [
+      {
+        "turn": "turn-1",
+        "manifest": {
+          "schema_version": 1,
+          "registry_snapshot": "6fc35e7e6e659baf34011101992612b5",
+          "scoped_view": "69e03704d2757277b806e9990b810800",
+          "model": {
+            "provider": "acme",
+            "model": "acme-small",
+            "profile_fingerprint": "b5f80608904ff78df17d66379a07d016",
+            "field_provenance": {}
+          },
+          "capability_resolution": {
+            "resolver_revision": "resolver-1"
+          },
+          "context_fingerprint": "417d0fa0ed4ff78db12ba37c298a411c",
+          "cache_plan_fingerprint": "32b0ef9104918c551d4cc526b941e7e3",
+          "policy_revisions": {}
+        }
+      },
+      {
+        "turn": "turn-2",
+        "manifest": {
+          "schema_version": 1,
+          "registry_snapshot": "6fc35e7e6e659baf34011101992612b5",
+          "scoped_view": "69e03704d2757277b806e9990b810800",
+          "model": {
+            "provider": "acme",
+            "model": "acme-large",
+            "profile_fingerprint": "b5f80608904ff78df17d66379a07d016",
+            "field_provenance": {}
+          },
+          "capability_resolution": {
+            "resolver_revision": "resolver-1"
+          },
+          "context_fingerprint": "417d0fa0ed4ff78db12ba37c298a411c",
+          "cache_plan_fingerprint": "32b0ef9104918c551d4cc526b941e7e3",
+          "policy_revisions": {}
+        }
+      }
+    ],
+    "updated": 1700000000000
+  }
+}

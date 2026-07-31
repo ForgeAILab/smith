@@ -61,18 +61,25 @@ Regions, top to bottom:
 Typing `/` opens command completion as a compact bottom-pane list directly
 beneath the composer, following the same selected-row grammar as Codex. Modal
 overlays are reserved for consequential interaction: approval, provider-spend
-confirmation, undo/revert confirmation, and exit confirmation. They are
-centered, max 72 columns wide and 60% of height, and drawn over the transcript.
-Read-only command information never opens a modal; it appends to the
-transcript. Only one interactive surface exists at a time; a second request
-replaces the first rather than stacking.
+confirmation, agent-originated questionnaires, undo/revert confirmation, and
+exit confirmation. They are centered, max 72 columns wide and 60% of height,
+and drawn over the transcript. Read-only command information never opens a
+modal; it appends to the transcript. Only one interactive surface is visible
+at a time. Runtime-originated approvals and questionnaires wait in a stable
+FIFO prompt queue; a new prompt never supersedes, implicitly denies, or drops
+an older one. The footer names the visible prompt and remaining queue count.
 
 ### Narrow and short terminals
 
 - Below 60 columns the footer keeps the provider/model and drops path, then
   secondary state.
+- Consequential overlays below 60 columns use the full safe width, put the
+  title and exact target first, wrap permissions and material arguments, and
+  keep decision controls on their own final lines. Bounded detail remains
+  scrollable rather than clipped.
 - Below 10 rows or 40 columns Smith renders only `terminal too small (need
   40×10)` — a half-rendered coding surface is worse than an honest refusal.
+  An open prompt remains queued and unanswered while the terminal is too small.
 
 ### Setup before the coding surface
 
@@ -117,7 +124,7 @@ Role markers, one per transcript block:
 | `│` | Wrapped command continuation |
 | `■` | Error or interrupted operation |
 | `⚠` | Warning or degraded state |
-| `?` | Approval request |
+| `?` | Approval or questionnaire awaiting an explicit answer |
 
 The first line of a block owns its marker. Continuation lines use a two-column
 hanging indent, so wrapped content never looks like a new event. The `•` itself
@@ -191,10 +198,18 @@ hint row.
 | `PageUp` / `PageDown` / `Home` / `End` | Scroll transcript or jump to either edge |
 | `Ctrl+L` | Jump to newest and re-enable follow |
 | `y` / `n` / `a` | Approval: allow once / deny / allow for session |
+| `Up` / `Down` or `1`–`9` | Questionnaire: move to or stage a labelled choice |
+| `Space` | Questionnaire: select the highlighted choice; never submit |
+| `Tab` / `Shift+Tab` | Questionnaire: move between answer and explicit actions |
 
 Approval keys are deliberately *not* `Enter`-defaulted. An approval modal has
 no default action, because a stray `Enter` from the composer must never grant a
-shell command.
+shell command. A questionnaire also opens with no implicit answer or action.
+`Enter` in its choice list only stages the highlighted choice; submission
+requires moving to the explicit `Submit` action. `Decline` returns a typed
+decline, while `Esc` cancels the interaction under the active turn's
+cancellation policy. Free-form input reuses composer editing inside the
+overlay and is not sent as a new user turn.
 
 Typing `/` at the start of a composer draft opens a filtered completion menu.
 Each result has a command name, one-line description, and argument hint.
@@ -342,6 +357,47 @@ An unchanged untracked file selected for removal is first moved to bounded
 session recovery storage. Smith does not use broad `git reset`, `git checkout`,
 or a first-release `revert all` action.
 
+### Prepared approvals and questionnaires
+
+An approval is a view of one immutable prepared action, not a reconstruction
+from raw tool arguments. Its title is the first rendered text. The body shows,
+in this order:
+
+```text
+tool + exact canonical target
+bounded material arguments or reviewed patch
+typed permissions
+broad-authority warning, when applicable
+preparation fingerprint
+deadline
+```
+
+`y`, `a`, and `n` answer exactly that fingerprint. Edited arguments are never
+approved in place; they must be prepared and authorized again as a new action.
+Parallel actions retain a deterministic order and queue count, and each gets
+one explicit decision or terminal cancellation. A restored action is labelled
+`restored pending approval` and keeps its original request identity.
+
+Questionnaires are a separate interaction type and never use approval
+responders. The overlay is a short wizard of one to three labelled questions,
+with one question visible at a time. Each step provides bounded choices,
+optional free-form input when declared, progress such as `question 2 of 3`,
+and explicit `Submit`, `Decline`, and `Cancel` actions. Answers are staged until
+the final submit and grant no permission or remembered authority. Sensitive
+free-form drafts render as masks; after submission their exact values remain
+available to the live turn and protected checkpoint but are registered for
+literal removal from default snapshots and journals. A restored questionnaire
+is labelled `restored pending question`, retains its request identity, starts
+with no fabricated UI answer, and may be answered exactly once.
+
+Prompt deadlines are displayed as absolute local time plus bounded remaining
+duration. Expiry closes the prompt with a visible `timed out` outcome; it never
+selects a default, grants authority, or fabricates an answer. Shutdown and
+turn cancellation drain the queue by resolving every responder exactly once.
+Direct agent questionnaires are root-session-only by default. A child that
+needs input reports an attributed `needs input` result through its parent
+instead of opening a competing overlay.
+
 **Scroll follow.** The transcript follows new output until the user scrolls up,
 then stops and shows `▼ following paused` in the hint row. `Ctrl+L`, `End`, or
 sending a message resumes it. Streaming never yanks the viewport away from
@@ -349,19 +405,47 @@ someone reading.
 
 ## 6. Streaming and motion
 
-- Text deltas append to the last assistant block. The block is re-wrapped only
-  from the last hard newline, so earlier lines never reflow.
+- Provider text and reasoning deltas enter speculative buffers keyed by
+  `(request, attempt)`, never the committed transcript directly. The active
+  attempt renders with a textual `draft` marker as well as dim styling.
+- An explicit attempt-commit event appends that attempt to the assistant block.
+  An explicit discard removes its raw text and may append one bounded
+  `retrying after failed attempt` diagnostic. Usage from the discarded attempt
+  remains available to status and diagnostics.
+- Within a speculative or committed block, text is re-wrapped only from the
+  last hard newline, so earlier lines never reflow.
 - Render is coalesced at **30 fps max**, driven by a redraw flag rather than
   per-delta. A fast provider stream must not spend the frame budget on
   redundant frames.
 - Runtime event sequence gaps render as an error block that names the missing
   range and points to the persisted journal as canonical. A lagging live
   subscriber must never make dropped output look like a complete transcript.
+- Journal replay feeds the same pure reducer as the live path. It reconstructs
+  the same committed transcript, tool state, capability/todo status, and
+  visible-output result; speculative output with no commit never becomes
+  canonical merely because a process stopped. Exact pending approval and
+  questionnaire overlays are restored from the protected checkpoint, not
+  fabricated from the deliberately redacted journal. Process-exit recovery
+  markers use the same metadata-only notice projection in live and replayed
+  state.
 - The only animation is the single-cell spinner on the transcript's working
   row while a turn is active: `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` at 100 ms.
 - **Reduced motion.** With `NO_MOTION=1`, `--no-motion`, or `TERM=dumb`, the
   spinner becomes a static `●` and the elapsed timer updates once per second.
   Nothing else in Smith animates, so this is the whole contract.
+
+### Headless projection
+
+The non-interactive surface shares the same committed event semantics. Text
+mode writes only the final assistant answer to stdout and sends concise
+lifecycle/authority evidence to stderr. JSON emits one schema-v2 result;
+stream JSON emits ordered versioned runtime events through shutdown and that
+result last. Both machine modes project attempt commits/discards, the frozen
+activation epoch, public-or-counts-only todo state, artifact references,
+recovery metadata, prepared approval evidence, and interaction-required state.
+They never expose raw approval arguments, sensitive todo items, questionnaire
+content, or artifact bodies. No-TTY approval/question paths terminate with
+stable non-success results rather than reading stdin or waiting indefinitely.
 
 ## 7. Status honesty
 
@@ -400,10 +484,13 @@ raw event arguments. Resumed transcripts derive the same projection from
 canonical history, so live and replayed rows disclose the same reviewed
 metadata.
 
-The approval modal is the deliberate exception: it receives the exact bounded
-invocation through the separate approval channel because the user cannot make
-an informed safety decision from key names alone. Edit calls render the
-existing bounded line diff; other calls render their bounded arguments.
+The approval modal is the deliberate exception: it receives the runtime's
+immutable prepared action through the separate approval channel because the
+user cannot make an informed safety decision from key names alone. Edit calls
+render the existing bounded line diff; other calls render their bounded
+material arguments, exact resource, typed permission set, broad-authority
+warning, deadline, and preparation fingerprint. Questionnaire content arrives
+through an independent interaction channel and cannot approve a tool.
 
 ## 8. Background work
 
@@ -417,6 +504,19 @@ mechanism for child results sent to the parent model. It is not a visible or
 focusable TUI region. `/agent` provides child list, status, and result detail
 on demand.
 
+A todo update is a bounded inline `plan` notice and optional local detail, not
+a permanent pane. Public items show their stable id/status/text; sensitive
+plans show aggregate counts only, even if an invalid replay payload attempts to
+attach text. Oversized tool output appears as a bounded preview plus an opaque
+artifact reference. Artifact bodies remain in user state and are fetched only
+through authorized, paginated reads.
+
+On resume, unresolved child and process-owned monitor identities appear once as
+`recovery · … interrupted … not restarted`. The notice never implies that a
+process was recreated. Child artifacts remain child-owned until the
+safe-boundary coordinator explicitly transfers a bounded copy and records
+lineage.
+
 ## 9. Accessibility
 
 - **Screen readers.** Every modal announces its title as the first rendered
@@ -425,9 +525,13 @@ on demand.
 - **Contrast.** Because Smith uses named ANSI colors, contrast is the terminal
   theme's responsibility. Smith's obligation is to never encode meaning in
   color alone (§4) and never rely on dim text for anything a user must act on.
-- **No time-limited input.** No prompt, including approvals, expires on a timer
-  in the interactive TUI. Headless `-p` fails closed instead of waiting, which
-  is a different surface with a different contract.
+- **No silent time-limited choice.** Runtime safety deadlines are named in the
+  prompt and produce an explicit `timed out` result. Expiry never activates a
+  default answer or approval. Headless `-p` fails closed with a versioned
+  non-success result instead of waiting on stdin.
+- **Prompt restoration.** Restored approvals and questionnaires announce
+  `restored pending …` after the title, preserve the original request identity,
+  and expose the same keyboard hints as a live prompt.
 - **Resize.** Every layout is recomputed from scratch on resize; nothing caches
   a wrapped line across a width change.
 

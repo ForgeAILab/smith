@@ -75,7 +75,7 @@ mod tests {
     #[test]
     fn the_built_in_set_has_unique_stable_names() {
         let tools = all();
-        let names: Vec<&str> = tools.iter().map(|tool| tool.name()).collect();
+        let names: Vec<String> = tools.iter().map(|tool| tool.spec().name).collect();
         assert_eq!(names, ["read", "list", "search", "edit", "shell"]);
 
         let mut sorted = names.clone();
@@ -87,10 +87,11 @@ mod tests {
     #[test]
     fn the_read_only_set_declares_no_mutating_effects() {
         for tool in read_only() {
+            let spec = tool.spec();
             assert!(
-                tool.effects().is_read_only(),
+                spec.effects.is_read_only(),
                 "`{}` is in the read-only set but declares effects",
-                tool.name()
+                spec.name
             );
         }
     }
@@ -100,12 +101,13 @@ mod tests {
         // A mutating tool that forgot to declare its effects would bypass the
         // approval gate entirely, so this is a safety check, not a style one.
         for tool in all() {
-            let mutating = matches!(tool.name(), "edit" | "shell");
+            let spec = tool.spec();
+            let mutating = matches!(spec.name.as_str(), "edit" | "shell");
             assert_eq!(
-                tool.effects().mutates(),
+                spec.effects.mutates(),
                 mutating,
                 "`{}` declares the wrong effects",
-                tool.name()
+                spec.name
             );
         }
     }
@@ -113,17 +115,18 @@ mod tests {
     #[test]
     fn every_tool_advertises_a_usable_object_schema() {
         for tool in all() {
-            let schema = tool.input_schema();
-            assert_eq!(schema["type"], "object", "`{}`", tool.name());
+            let spec = tool.spec();
+            let schema = spec.input_schema;
+            assert_eq!(schema["type"], "object", "`{}`", spec.name);
             assert!(
                 schema["properties"].is_object(),
                 "`{}` has no properties",
-                tool.name()
+                spec.name
             );
             assert!(
-                !tool.description().is_empty(),
+                !spec.description.is_empty(),
                 "`{}` has no description",
-                tool.name()
+                spec.name
             );
         }
     }

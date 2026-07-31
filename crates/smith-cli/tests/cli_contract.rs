@@ -144,11 +144,20 @@ fn json_mode_runs_through_config_and_returns_a_resumable_identity() {
     );
     assert!(first.stderr.is_empty(), "{:?}", first.stderr);
     let result = json(&first);
-    assert_eq!(result["schema_version"], 1);
+    assert_eq!(result["schema_version"], 2);
     assert_eq!(result["type"], "result");
     assert_eq!(result["status"], "ok");
     assert_eq!(result["provider"], "local");
     assert_eq!(result["model"], "example-model");
+    let activated = result["lifecycle"]["activation"]["capabilities"]
+        .as_array()
+        .expect("a frozen activation projection");
+    assert!(!activated.is_empty());
+    assert!(activated.iter().all(|id| {
+        id.as_str().is_some_and(|id| {
+            !id.contains("edit") && !id.contains("shell") && !id.contains("write_todos")
+        })
+    }));
     assert!(
         result["output"]
             .as_str()

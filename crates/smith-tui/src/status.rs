@@ -103,6 +103,10 @@ fn compact_tokens(value: u64) -> String {
 /// request. It contains metrics only; raw context content has no field here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextPlanStatus {
+    /// Immutable context-plan fingerprint.
+    pub fingerprint: String,
+    /// Provider cache-plan fingerprint paired with this context.
+    pub cache_fingerprint: String,
     /// Counted input tokens in the assembled request.
     pub input_tokens: u32,
     /// The enforced input ceiling after reserves and model limits.
@@ -118,26 +122,44 @@ pub struct ContextPlanStatus {
     pub confidence: EstimationConfidence,
 }
 
+/// Borrowed fields from one canonical context-planning event.
+#[derive(Debug, Clone, Copy)]
+pub struct ContextPlanUpdate<'a> {
+    /// Immutable context-plan fingerprint.
+    pub fingerprint: &'a str,
+    /// Provider cache-plan fingerprint paired with this context.
+    pub cache_fingerprint: &'a str,
+    /// Counted input tokens in the assembled request.
+    pub input_tokens: u32,
+    /// The enforced input ceiling after reserves and model limits.
+    pub input_budget_tokens: u32,
+    /// Output and reasoning tokens held out of the input budget.
+    pub reserved_tokens: u32,
+    /// Number of bounded plan segments.
+    pub segment_count: u32,
+    /// Token totals by canonical segment kind.
+    pub totals: &'a BTreeMap<SegmentKind, u32>,
+    /// Whether the plan used an authoritative tokenizer or a fallback
+    /// estimator.
+    pub confidence: EstimationConfidence,
+}
+
 impl ContextPlanStatus {
     /// Builds display state from a canonical planning event.
-    pub fn new(
-        input_tokens: u32,
-        input_budget_tokens: u32,
-        reserved_tokens: u32,
-        segment_count: u32,
-        totals: &BTreeMap<SegmentKind, u32>,
-        confidence: EstimationConfidence,
-    ) -> Self {
+    pub fn from_update(update: ContextPlanUpdate<'_>) -> Self {
         Self {
-            input_tokens,
-            input_budget_tokens,
-            reserved_tokens,
-            segment_count,
-            totals: totals
+            fingerprint: update.fingerprint.to_owned(),
+            cache_fingerprint: update.cache_fingerprint.to_owned(),
+            input_tokens: update.input_tokens,
+            input_budget_tokens: update.input_budget_tokens,
+            reserved_tokens: update.reserved_tokens,
+            segment_count: update.segment_count,
+            totals: update
+                .totals
                 .iter()
                 .map(|(kind, tokens)| (kind.as_str().to_owned(), *tokens))
                 .collect(),
-            confidence,
+            confidence: update.confidence,
         }
     }
 
@@ -187,6 +209,23 @@ impl ContextPlanStatus {
         };
         format!("{prefix}{}% ctx", self.percent_left())
     }
+}
+
+/// Bounded provenance for the latest live ability lifecycle.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CapabilityStatus {
+    /// Sealed registry snapshot fingerprint and total entry count.
+    pub registry: Option<(String, u32)>,
+    /// Policy-scoped view fingerprint and visible entry count.
+    pub view: Option<(String, u32)>,
+    /// Resolver revision and latest ranked candidate identities.
+    pub retrieval: Option<(String, Vec<String>)>,
+    /// Latest activation epoch and its ordered capability identities.
+    pub activation: Option<(u32, Vec<String>)>,
+    /// Number of context compactions observed in this session.
+    pub compactions: u32,
+    /// Total tokens reclaimed by observed compactions.
+    pub reclaimed_tokens: u64,
 }
 
 /// What the agent is doing right now.
@@ -244,6 +283,8 @@ pub struct Status {
     pub context: TokenCount,
     /// Latest enforced request plan, when at least one turn was planned.
     pub context_plan: Option<ContextPlanStatus>,
+    /// Latest registry/view/retrieval/activation lifecycle provenance.
+    pub capabilities: CapabilityStatus,
     /// Cache tokens read, when the provider reports cache evidence.
     pub cache_read: Option<u64>,
     /// What the agent is doing.
@@ -261,6 +302,7 @@ impl Status {
             project: project.into(),
             context: TokenCount::UNKNOWN,
             context_plan: None,
+            capabilities: CapabilityStatus::default(),
             cache_read: None,
             activity: Activity::Idle,
             usage_reported: false,
@@ -293,23 +335,41 @@ impl Status {
 
     /// Records the latest canonical context plan without retaining any
     /// segment content.
-    pub fn record_context_plan(
+    pub fn record_context_plan(&mut self, update: ContextPlanUpdate<'_>) {
+        self.context_plan = Some(ContextPlanStatus::from_update(update));
+    }
+
+    /// Records one sealed ability registry snapshot.
+    pub fn record_registry(&mut self, fingerprint: impl Into<String>, entries: u32) {
+        self.capabilities.registry = Some((fingerprint.into(), entries));
+    }
+
+    /// Records the current policy-scoped ability view.
+    pub fn record_scoped_view(&mut self, fingerprint: impl Into<String>, visible: u32) {
+        self.capabilities.view = Some((fingerprint.into(), visible));
+    }
+
+    /// Records bounded retrieval identities without retaining query text.
+    pub fn record_retrieval(
         &mut self,
-        input_tokens: u32,
-        input_budget_tokens: u32,
-        reserved_tokens: u32,
-        segment_count: u32,
-        totals: &BTreeMap<SegmentKind, u32>,
-        confidence: EstimationConfidence,
+        resolver_revision: impl Into<String>,
+        candidates: Vec<String>,
     ) {
-        self.context_plan = Some(ContextPlanStatus::new(
-            input_tokens,
-            input_budget_tokens,
-            reserved_tokens,
-            segment_count,
-            totals,
-            confidence,
-        ));
+        self.capabilities.retrieval = Some((resolver_revision.into(), candidates));
+    }
+
+    /// Records the latest frozen activation epoch.
+    pub fn record_activation(&mut self, epoch: u32, capabilities: Vec<String>) {
+        self.capabilities.activation = Some((epoch, capabilities));
+    }
+
+    /// Records context compaction totals.
+    pub fn record_compaction(&mut self, reclaimed_tokens: u32) {
+        self.capabilities.compactions = self.capabilities.compactions.saturating_add(1);
+        self.capabilities.reclaimed_tokens = self
+            .capabilities
+            .reclaimed_tokens
+            .saturating_add(u64::from(reclaimed_tokens));
     }
 
     /// Switches provider or model, resetting everything the new provider has
@@ -456,14 +516,16 @@ mod tests {
             (SegmentKind::new("tool_schema"), 500),
         ]);
         let mut status = Status::new("gpt-5.3", "~/work/api");
-        status.record_context_plan(
-            2_500,
-            10_000,
-            2_000,
-            2,
-            &totals,
-            EstimationConfidence::Exact,
-        );
+        status.record_context_plan(ContextPlanUpdate {
+            fingerprint: "context-exact",
+            cache_fingerprint: "cache-exact",
+            input_tokens: 2_500,
+            input_budget_tokens: 10_000,
+            reserved_tokens: 2_000,
+            segment_count: 2,
+            totals: &totals,
+            confidence: EstimationConfidence::Exact,
+        });
 
         let plan = status.context_plan.as_ref().expect("a plan");
         assert_eq!(plan.remaining_tokens(), 7_500);
@@ -472,14 +534,16 @@ mod tests {
         assert_eq!(plan.render_footer(), "75% ctx");
         assert_eq!(plan.totals["history"], 2_000);
 
-        status.record_context_plan(
-            2_500,
-            10_000,
-            2_000,
-            2,
-            &totals,
-            EstimationConfidence::Estimated,
-        );
+        status.record_context_plan(ContextPlanUpdate {
+            fingerprint: "context-estimated",
+            cache_fingerprint: "cache-estimated",
+            input_tokens: 2_500,
+            input_budget_tokens: 10_000,
+            reserved_tokens: 2_000,
+            segment_count: 2,
+            totals: &totals,
+            confidence: EstimationConfidence::Estimated,
+        });
         let estimated = status.context_plan.as_ref().expect("estimated plan");
         assert_eq!(estimated.render_input(), "~2.5k");
         assert_eq!(estimated.render_footer(), "~75% ctx");
@@ -488,14 +552,17 @@ mod tests {
     #[test]
     fn switching_models_clears_a_plan_that_no_longer_applies() {
         let mut status = Status::new("gpt-5.3", "~/work/api");
-        status.record_context_plan(
-            100,
-            1_000,
-            100,
-            1,
-            &BTreeMap::from([(SegmentKind::new("history"), 100)]),
-            EstimationConfidence::Exact,
-        );
+        let totals = BTreeMap::from([(SegmentKind::new("history"), 100)]);
+        status.record_context_plan(ContextPlanUpdate {
+            fingerprint: "context-before-switch",
+            cache_fingerprint: "cache-before-switch",
+            input_tokens: 100,
+            input_budget_tokens: 1_000,
+            reserved_tokens: 100,
+            segment_count: 1,
+            totals: &totals,
+            confidence: EstimationConfidence::Exact,
+        });
         assert_eq!(status.render_context_footer(), "90% ctx");
 
         status.switch_model(Some("anthropic".into()), "claude-opus-5");

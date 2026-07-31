@@ -12,12 +12,103 @@ use agent_runtime::prelude::*;
 use agent_runtime::provider::fake::{ScriptedStream, tool_call_fragments, usage_event};
 use agent_runtime::runtime::{RuntimeBuilder, StartSession};
 use agent_runtime_core::approval::{AllowAll, DenyAll};
+use agent_runtime_core::cancel::Cancellation;
 use agent_runtime_core::content::ContentPart;
 use agent_runtime_core::error::ErrorKind;
+use agent_runtime_core::grant::{
+    GrantConstraints, SecurityCheck, SecurityCheckId, SecurityCheckMode, SecurityCheckOutcome,
+    SecurityCheckRevision,
+};
 use agent_runtime_core::provider::{Capabilities, FinishReason, ProviderStreamEvent};
+use agent_runtime_core::security::{AuthorizationRequest, PermissionSet, SecurityResource};
+use agent_runtime_core::workspace::Workspace;
+use agent_runtime_registry::Permission;
 use agent_runtime_testkit::scenarios::fake_model_profile;
+use async_trait::async_trait;
 use smith_host::approval::{InteractiveApproval, PromptScope};
 use smith_host::workspace::ProjectWorkspace;
+
+#[derive(Debug)]
+struct ProjectToolAuthority {
+    id: SecurityCheckId,
+    revision: SecurityCheckRevision,
+    mount: String,
+    coverage: PermissionSet,
+}
+
+impl ProjectToolAuthority {
+    fn new(mount: impl Into<String>) -> Self {
+        Self {
+            id: SecurityCheckId::new("smith-tools-integration-authority"),
+            revision: SecurityCheckRevision::new("v1"),
+            mount: mount.into(),
+            coverage: [
+                Permission::FsRead,
+                Permission::FsWrite,
+                Permission::FsCreate,
+                Permission::FsDelete,
+                Permission::ProcessSpawn,
+                Permission::NetHttp,
+                Permission::DataEgress,
+            ]
+            .into_iter()
+            .collect(),
+        }
+    }
+}
+
+#[async_trait]
+impl SecurityCheck for ProjectToolAuthority {
+    fn id(&self) -> &SecurityCheckId {
+        &self.id
+    }
+
+    fn revision(&self) -> &SecurityCheckRevision {
+        &self.revision
+    }
+
+    fn declared_coverage(&self) -> Option<PermissionSet> {
+        Some(self.coverage.clone())
+    }
+
+    async fn evaluate(
+        &self,
+        request: &AuthorizationRequest,
+        _cancel: &Cancellation,
+    ) -> SecurityCheckOutcome {
+        let filesystem_authority = request.requested.iter().any(|permission| {
+            matches!(
+                permission,
+                Permission::FsRead
+                    | Permission::FsWrite
+                    | Permission::FsCreate
+                    | Permission::FsDelete
+            )
+        });
+        if filesystem_authority
+            && !matches!(
+                &request.resource,
+                SecurityResource::Filesystem { mount, .. } if mount == &self.mount
+            )
+        {
+            return SecurityCheckOutcome::Deny {
+                code: agent_runtime_core::grant::DecisionCode::other(
+                    "test.workspace_resource_mismatch",
+                ),
+            };
+        }
+
+        if request.requested.len() == 1 && request.requested.contains(&Permission::FsRead) {
+            SecurityCheckOutcome::Allow {
+                constraints: GrantConstraints::unconstrained(),
+            }
+        } else {
+            SecurityCheckOutcome::RequireApproval {
+                constraints: GrantConstraints::unconstrained(),
+            }
+        }
+    }
+}
 
 /// A provider that requests one tool call, then replies with text.
 fn provider(tool: &str, arguments: &str) -> FakeProvider {
@@ -67,12 +158,20 @@ fn build(
     provider: Arc<FakeProvider>,
     approval: Arc<dyn ApprovalPolicy>,
 ) -> Runtime {
+    let workspace = Arc::new(ProjectWorkspace::new(root).expect("a workspace"));
+    let authority = Arc::new(ProjectToolAuthority::new(workspace.root()));
+    let coverage = authority.coverage.clone();
     RuntimeBuilder::new(ModelId::new("fake"))
         .model_profile(fake_model_profile())
         .provider(provider)
-        .legacy_approval_authority()
+        .security_check(
+            authority,
+            SecurityCheckMode::Authoritative,
+            coverage,
+            agent_runtime_core::check_set::ActionClass::new("smith-built-in-tools"),
+        )
         .approval(approval)
-        .workspace(Arc::new(ProjectWorkspace::new(root).expect("a workspace")))
+        .workspace(workspace)
         .tools(smith_tools::all())
         .build()
         .expect("a runtime")
@@ -112,7 +211,10 @@ async fn a_read_only_tool_runs_without_asking_for_approval() {
         .await
         .expect("a session");
 
-    session.run(UserInput::text("read the retry policy")).await;
+    session
+        .run(UserInput::text("read the retry policy"))
+        .await
+        .expect("the turn runs");
 
     let results = tool_results(&session);
     assert_eq!(results.len(), 1, "expected one tool result");
@@ -139,7 +241,10 @@ async fn a_mutating_tool_is_blocked_when_approval_denies() {
         .await
         .expect("a session");
 
-    session.run(UserInput::text("break the retry")).await;
+    session
+        .run(UserInput::text("break the retry"))
+        .await
+        .expect("the turn runs");
 
     assert_eq!(
         std::fs::read_to_string(dir.path().join("src/retry.rs")).unwrap(),
@@ -148,10 +253,11 @@ async fn a_mutating_tool_is_blocked_when_approval_denies() {
     );
     let results = tool_results(&session);
     assert!(
-        results
-            .iter()
-            .any(|text| text.to_lowercase().contains("den")),
-        "the model must be told it was denied: {results:?}"
+        results.iter().any(|text| {
+            let text = text.to_lowercase();
+            text.contains("approval") && text.contains("declined")
+        }),
+        "the model must receive the runtime's approval denial: {results:?}"
     );
 }
 
@@ -171,7 +277,10 @@ async fn a_mutating_tool_runs_once_the_user_allows_it() {
         .await
         .expect("a session");
 
-    session.run(UserInput::text("add jitter")).await;
+    session
+        .run(UserInput::text("add jitter"))
+        .await
+        .expect("the turn runs");
 
     assert_eq!(
         std::fs::read_to_string(dir.path().join("src/retry.rs")).unwrap(),
@@ -180,9 +289,42 @@ async fn a_mutating_tool_runs_once_the_user_allows_it() {
 }
 
 #[tokio::test]
+async fn a_create_invocation_runs_through_preparation_authorization_and_execution() {
+    let dir = project();
+    let runtime = build(
+        dir.path(),
+        Arc::new(provider(
+            "edit",
+            r#"{"path":"src/generated.rs","old_string":"","new_string":"pub fn generated() {}\\n"}"#,
+        )),
+        Arc::new(AllowAll),
+    );
+    let session = runtime
+        .start_session(StartSession::new())
+        .await
+        .expect("a session");
+
+    session
+        .run(UserInput::text("create the generated module"))
+        .await
+        .expect("the turn runs");
+
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("src/generated.rs")).unwrap(),
+        "pub fn generated() {}\\n"
+    );
+}
+
+#[tokio::test]
 async fn the_interactive_gate_carries_the_users_answer_to_the_tool() {
     let dir = project();
     let (approval, mut requests) = InteractiveApproval::new(4);
+    let root = std::fs::canonicalize(dir.path()).expect("a canonical project root");
+    let expected_path = root.join("src/retry.rs").to_string_lossy().into_owned();
+    let expected_resource = SecurityResource::filesystem(
+        root.to_string_lossy(),
+        vec!["src".into(), "retry.rs".into()],
+    );
 
     // Stand in for the TUI: answer the prompt the way a user pressing `y` would.
     let surface = tokio::spawn(async move {
@@ -191,7 +333,8 @@ async fn the_interactive_gate_carries_the_users_answer_to_the_tool() {
             .expect("a prompt arrived")
             .expect("a prompt");
         assert_eq!(prompt.tool(), "edit");
-        assert_eq!(prompt.request.arguments["path"], "src/retry.rs");
+        assert_eq!(prompt.prepared().arguments()["path"], expected_path);
+        assert_eq!(prompt.prepared().resource(), &expected_resource);
         prompt.allow(PromptScope::Once);
     });
 
@@ -208,12 +351,81 @@ async fn the_interactive_gate_carries_the_users_answer_to_the_tool() {
         .await
         .expect("a session");
 
-    session.run(UserInput::text("rename the call")).await;
+    session
+        .run(UserInput::text("rename the call"))
+        .await
+        .expect("the turn runs");
     surface.await.unwrap();
 
     assert_eq!(
         std::fs::read_to_string(dir.path().join("src/retry.rs")).unwrap(),
         "pub fn retry() {\n    retry_now();\n}\n"
+    );
+}
+
+#[tokio::test]
+async fn shell_reaches_approval_with_broad_workspace_authority_before_execution() {
+    let dir = project();
+    let root = std::fs::canonicalize(dir.path()).expect("a canonical project root");
+    let root_string = root.to_string_lossy().into_owned();
+    let (approval, mut requests) = InteractiveApproval::new(4);
+    let surface = tokio::spawn(async move {
+        let prompt = tokio::time::timeout(Duration::from_secs(5), requests.recv())
+            .await
+            .expect("a shell prompt arrived")
+            .expect("a shell prompt");
+        assert_eq!(prompt.tool(), "shell");
+        assert_eq!(
+            prompt.prepared().resource(),
+            &SecurityResource::filesystem(root_string.clone(), Vec::new())
+        );
+        assert_eq!(
+            prompt.prepared().required_permissions(),
+            &[
+                Permission::FsRead,
+                Permission::FsWrite,
+                Permission::FsCreate,
+                Permission::FsDelete,
+                Permission::ProcessSpawn,
+                Permission::NetHttp,
+                Permission::DataEgress,
+            ]
+            .into_iter()
+            .collect::<PermissionSet>()
+        );
+        assert_eq!(
+            prompt
+                .prepared()
+                .effects()
+                .write_scopes()
+                .map(|scope| scope.as_str())
+                .collect::<Vec<_>>(),
+            [root_string.as_str()]
+        );
+        prompt.deny("shell authority was reviewed and declined");
+    });
+    let runtime = build(
+        dir.path(),
+        Arc::new(provider(
+            "shell",
+            r#"{"command":"printf unauthorized > shell-ran.txt","cwd":"src"}"#,
+        )),
+        Arc::new(approval),
+    );
+    let session = runtime
+        .start_session(StartSession::new())
+        .await
+        .expect("a session");
+
+    session
+        .run(UserInput::text("run a command"))
+        .await
+        .expect("the turn runs");
+    surface.await.expect("the approval surface completes");
+
+    assert!(
+        !dir.path().join("src/shell-ran.txt").exists(),
+        "the shell ran before its broad authority was approved"
     );
 }
 
@@ -232,7 +444,10 @@ async fn a_path_outside_the_project_fails_even_when_approved() {
         .await
         .expect("a session");
 
-    session.run(UserInput::text("read the password file")).await;
+    session
+        .run(UserInput::text("read the password file"))
+        .await
+        .expect("the turn runs");
 
     let results = tool_results(&session);
     assert!(
@@ -257,7 +472,10 @@ async fn every_built_in_tool_is_advertised_to_the_model() {
         .await
         .expect("a session");
 
-    session.run(UserInput::text("hello")).await;
+    session
+        .run(UserInput::text("hello"))
+        .await
+        .expect("the turn runs");
 
     let request = fake.requests().pop().expect("a provider request");
     let advertised: Vec<&str> = request.tools.iter().map(|t| t.name.as_str()).collect();

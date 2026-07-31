@@ -1,0 +1,24 @@
+{
+  "schema_version": 2,
+  "type": "result",
+  "status": "interaction_required",
+  "session_id": "session-fixture",
+  "turn_id": "turn-fixture",
+  "provider": "fixture-provider",
+  "model": "fixture-model",
+  "output": "",
+  "usage": {
+    "current_turn": {},
+    "session": {},
+    "current_turn_provenance": "unknown",
+    "session_provenance": "unknown"
+  },
+  "lifecycle": {
+    "attempts_committed": 0,
+    "attempts_discarded": 0
+  },
+  "interaction_required": {
+    "request_id": "interaction-fixture",
+    "question_count": 2
+  }
+}

@@ -4,8 +4,12 @@ use std::sync::Arc;
 
 use agent_runtime_core::cancel::Cancellation;
 use agent_runtime_core::clock::{Deadline, SystemClock};
-use agent_runtime_core::ids::{RequestId, ToolCallId};
-use agent_runtime_core::tool::{InvocationContext, ToolOutcome};
+use agent_runtime_core::error::RuntimeError;
+use agent_runtime_core::ids::{RequestId, SessionId, ToolCallId, TurnId};
+use agent_runtime_core::tool::{
+    InvocationContext, PreparationContext, Tool, ToolContent, ToolOutcome,
+};
+use serde_json::Value;
 use smith_host::workspace::ProjectWorkspace;
 
 /// A temporary project directory and a context bounded to it.
@@ -22,6 +26,8 @@ pub(crate) fn project() -> (tempfile::TempDir, InvocationContext) {
 /// An invocation context rooted at `root`.
 pub(crate) fn context(root: &std::path::Path) -> InvocationContext {
     InvocationContext {
+        session: SessionId::new("session-1"),
+        turn: Some(TurnId::new("turn-1")),
         call_id: ToolCallId::new("call-1"),
         request: RequestId::new("request-1"),
         workspace: Arc::new(ProjectWorkspace::new(root).expect("a workspace")),
@@ -34,8 +40,11 @@ pub(crate) fn context(root: &std::path::Path) -> InvocationContext {
 
 /// The concatenated text content of an outcome.
 pub(crate) fn text_of(outcome: &ToolOutcome) -> String {
-    outcome
-        .content
+    let parts = match &outcome.content {
+        ToolContent::Inline(parts) => parts,
+        ToolContent::Artifact { preview, .. } => preview,
+    };
+    parts
         .iter()
         .filter_map(|part| match part {
             agent_runtime_core::content::ContentPart::Text { text } => Some(text.as_str()),
@@ -44,3 +53,42 @@ pub(crate) fn text_of(outcome: &ToolOutcome) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+async fn invoke<T: Tool>(
+    tool: &T,
+    arguments: Value,
+    ctx: &InvocationContext,
+) -> Result<ToolOutcome, RuntimeError> {
+    let preparation = PreparationContext {
+        session: ctx.session.clone(),
+        turn: ctx.turn.clone(),
+        call_id: ctx.call_id.clone(),
+        request: ctx.request.clone(),
+        workspace: ctx.workspace.clone(),
+        clock: ctx.clock.clone(),
+        cancel: ctx.cancel.clone(),
+        deadline: ctx.deadline,
+    };
+    let prepared = tool.prepare(arguments, &preparation).await?;
+    tool.invoke(prepared, ctx).await
+}
+
+macro_rules! test_invoke {
+    ($tool:ty) => {
+        impl $tool {
+            pub(crate) async fn invoke(
+                &self,
+                arguments: Value,
+                ctx: &InvocationContext,
+            ) -> Result<ToolOutcome, RuntimeError> {
+                invoke(self, arguments, ctx).await
+            }
+        }
+    };
+}
+
+test_invoke!(crate::ReadTool);
+test_invoke!(crate::ListTool);
+test_invoke!(crate::SearchTool);
+test_invoke!(crate::EditTool);
+test_invoke!(crate::ShellTool);

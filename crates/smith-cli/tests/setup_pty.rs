@@ -108,11 +108,21 @@ impl Fixture {
     }
 
     fn run_expect(&self, smith_args: &str, interaction: &str) -> Option<Output> {
+        self.run_expect_sized(smith_args, interaction, 32, 100)
+    }
+
+    fn run_expect_sized(
+        &self,
+        smith_args: &str,
+        interaction: &str,
+        rows: u16,
+        columns: u16,
+    ) -> Option<Output> {
         if !std::path::Path::new("/usr/bin/expect").is_file() {
             return None;
         }
         let shell = format!(
-            "stty rows 32 cols 100; before=$(stty -g); \
+            "stty rows {rows} cols {columns}; before=$(stty -g); \
              \"$TUI_TEST_BIN\" {smith_args}; code=$?; \
              after=$(stty -g); if [ \"$before\" = \"$after\" ]; then \
              echo TERMINAL_RESTORED; else echo TERMINAL_DAMAGED; fi; exit \"$code\""
@@ -595,6 +605,50 @@ expect {
     );
     assert!(screen.contains("local/example-model"), "{screen}");
     assert!(screen.contains("TERMINAL_RESTORED"), "{screen}");
+}
+
+#[test]
+fn deterministic_host_renders_in_real_narrow_normal_and_wide_terminals() {
+    for (rows, columns) in [(14, 44), (24, 74), (32, 120)] {
+        let fixture = Fixture::new();
+        fixture.configure_fake();
+        let interaction = r#"
+expect {
+    -exact "Ask Smith to do anything" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+send -- "/quit\r"
+expect {
+    -exact "TERMINAL_RESTORED" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+"#;
+        let Some(output) =
+            fixture.run_expect_sized("--no-color --no-motion", interaction, rows, columns)
+        else {
+            return;
+        };
+        let screen = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{columns}×{rows}\nscreen: {screen}\nstderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            screen.contains("local/example-model"),
+            "{columns}×{rows} omitted model identity:\n{screen}"
+        );
+        assert!(
+            !screen.contains("terminal too small"),
+            "{columns}×{rows} incorrectly refused a supported viewport:\n{screen}"
+        );
+        assert!(
+            screen.contains("TERMINAL_RESTORED") && !screen.contains("TERMINAL_DAMAGED"),
+            "{columns}×{rows} did not restore terminal state:\n{screen}"
+        );
+    }
 }
 
 #[test]

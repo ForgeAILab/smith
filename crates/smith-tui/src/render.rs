@@ -4,7 +4,12 @@
 //! mutates state or caches across frames, which is what makes resize correct by
 //! construction: every wrap is recomputed at the new width.
 
-use agent_runtime_core::approval::ApprovalRequest;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use agent_runtime_core::clock::Deadline;
+use agent_runtime_core::security::SecurityResource;
+use agent_runtime_core::tool::PreparedToolCall;
+use agent_runtime_registry::Permission;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -16,6 +21,7 @@ use crate::app::{App, Overlay};
 use crate::commands;
 use crate::diff::{Change, EditReview};
 use crate::picker::{ResourcePicker, draw_resource_picker};
+use crate::questionnaire::{QuestionnaireFocus, QuestionnaireState};
 use crate::status::{Activity, render_elapsed};
 use crate::theme::{Theme, Tone, glyph};
 #[cfg(test)]
@@ -105,6 +111,9 @@ fn draw_surface(
         Some(Overlay::Approval { prompt, review }) => {
             draw_approval(frame, area, prompt, review.as_ref(), theme);
         }
+        Some(Overlay::Questionnaire { state }) => {
+            draw_questionnaire(frame, area, state, theme);
+        }
         Some(Overlay::Palette { .. }) => {}
         Some(Overlay::ResourcePicker { picker, .. }) => {
             draw_resource_picker(frame, resource_picker_area(area, picker), picker, theme);
@@ -118,8 +127,18 @@ fn draw_surface(
         Some(Overlay::ReviewConfirm { content, .. }) => {
             draw_review_confirm(frame, area, content, theme);
         }
-        Some(Overlay::ExitConfirm { approval }) => {
-            draw_exit_confirm(frame, area, app, approval.is_some(), theme);
+        Some(Overlay::ExitConfirm {
+            approval,
+            questionnaire,
+        }) => {
+            draw_exit_confirm(
+                frame,
+                area,
+                app,
+                approval.is_some(),
+                questionnaire.is_some(),
+                theme,
+            );
         }
         None => {}
     }
@@ -355,6 +374,13 @@ fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<'static>> {
         }
     }
 
+    if let Some(text) = app.speculative_text() {
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
+        lines.extend(render_speculative_lines(text, theme));
+    }
+
     if matches!(
         app.status.activity,
         Activity::Working | Activity::Interrupting
@@ -386,6 +412,27 @@ fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<'static>> {
     }
 
     lines
+}
+
+fn render_speculative_lines(text: &str, theme: Theme) -> Vec<Line<'static>> {
+    text.lines()
+        .enumerate()
+        .map(|(index, raw)| {
+            let mut spans = vec![Span::styled(
+                if index == 0 {
+                    format!("{} ", glyph::BULLET)
+                } else {
+                    "  ".to_owned()
+                },
+                theme.style(Tone::Dim),
+            )];
+            if index == 0 {
+                spans.push(Span::styled("draft · ", theme.style(Tone::Warning)));
+            }
+            spans.push(Span::styled(raw.to_owned(), theme.style(Tone::Reasoning)));
+            Line::from(spans)
+        })
+        .collect()
 }
 
 fn safe_tool_name(name: &str) -> String {
@@ -912,25 +959,49 @@ fn draw_hint(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
         ));
     }
     if let Some(hint) = match &app.overlay {
-        Some(Overlay::Approval { .. }) => Some("y allow once · a allow for session · n deny"),
-        Some(Overlay::Palette { .. }) => Some("tab complete · ↑↓ select · enter run · esc close"),
-        Some(Overlay::ResourcePicker { .. }) => {
-            Some("type to filter · ↑↓ choose · enter confirm · esc cancel")
+        Some(Overlay::Approval { .. }) => {
+            let waiting = app.pending_approval_count().saturating_sub(1);
+            Some(if waiting == 0 {
+                "y allow once · a allow for session · n deny".to_owned()
+            } else {
+                format!("y allow once · a allow for session · n deny · {waiting} queued")
+            })
         }
-        Some(Overlay::UndoConfirm { .. }) => Some("y apply undo · n/esc cancel"),
-        Some(Overlay::RevertConfirm { .. }) => Some("y apply revert · n/esc cancel"),
-        Some(Overlay::ReviewConfirm { .. }) => Some("y start review · n/esc cancel"),
-        Some(Overlay::ExitConfirm { .. }) => Some("y quit · n keep working"),
+        Some(Overlay::Questionnaire { state }) => {
+            let queued = app.pending_questionnaire_count().saturating_sub(1);
+            let answer = if state.question().choices.is_empty() {
+                "type answer".to_owned()
+            } else if state.question().allows_free_form {
+                "↑↓ choose · space stage · type other".to_owned()
+            } else {
+                "↑↓ choose · space stage".to_owned()
+            };
+            Some(if queued == 0 {
+                format!("{answer} · tab actions · esc cancel")
+            } else {
+                format!("{answer} · tab actions · esc cancel · {queued} queued")
+            })
+        }
+        Some(Overlay::Palette { .. }) => {
+            Some("tab complete · ↑↓ select · enter run · esc close".to_owned())
+        }
+        Some(Overlay::ResourcePicker { .. }) => {
+            Some("type to filter · ↑↓ choose · enter confirm · esc cancel".to_owned())
+        }
+        Some(Overlay::UndoConfirm { .. }) => Some("y apply undo · n/esc cancel".to_owned()),
+        Some(Overlay::RevertConfirm { .. }) => Some("y apply revert · n/esc cancel".to_owned()),
+        Some(Overlay::ReviewConfirm { .. }) => Some("y start review · n/esc cancel".to_owned()),
+        Some(Overlay::ExitConfirm { .. }) => Some("y quit · n keep working".to_owned()),
         None => None,
     } {
         if spans.len() > 1 {
             push_segment(
                 &mut spans,
                 theme,
-                Span::styled(hint.to_owned(), theme.style(Tone::Dim)),
+                Span::styled(hint, theme.style(Tone::Dim)),
             );
         } else {
-            spans.push(Span::styled(hint.to_owned(), theme.style(Tone::Dim)));
+            spans.push(Span::styled(hint, theme.style(Tone::Dim)));
         }
     } else {
         let model = match &app.status.provider {
@@ -999,32 +1070,35 @@ fn draw_approval(
     review: Option<&EditReview>,
     theme: Theme,
 ) {
-    let request = &prompt.request;
+    let prepared = prompt.prepared();
 
-    // The title is the first rendered text so a screen reader announces what is
-    // being asked before the detail (`DESIGN.md` §9).
-    let mut head = vec![Line::from(Span::styled(
-        format!("{} approval required", glyph::APPROVAL),
-        theme.style(Tone::Heading),
-    ))];
-
-    // The tool and its target share a line so that the one fact a user cannot
-    // answer without survives the tightest terminal.
-    let mut identity = vec![
-        Span::styled("tool  ", theme.style(Tone::Dim)),
-        Span::raw(request.tool.clone()),
+    // The exact prepared target is the first rendered text so a screen reader
+    // and the tightest supported terminal retain the facts a user cannot
+    // answer without (`DESIGN.md` §9).
+    let identity = vec![
+        Span::styled(
+            format!("{} approval required  ", glyph::APPROVAL),
+            theme.style(Tone::Heading),
+        ),
+        Span::styled(
+            security_resource_text(prepared.resource()),
+            theme.style(Tone::Danger),
+        ),
     ];
-    if let Some(review) = review {
-        identity.push(Span::styled(
-            format!("  {}  ", glyph::SEPARATOR),
-            theme.style(Tone::Dim),
-        ));
-        // The file is the destructive target, and reads as one.
-        identity.push(Span::styled(review.path.clone(), theme.style(Tone::Danger)));
-    }
-    head.push(Line::from(identity));
+    let mut head = vec![Line::from(identity)];
+    head.push(Line::from(vec![
+        Span::styled(prepared.tool().to_owned(), theme.style(Tone::Dim)),
+        Span::styled(format!("  {}  ", glyph::SEPARATOR), theme.style(Tone::Dim)),
+        Span::raw(prepared.display().title.clone()),
+    ]));
 
     let mut detail = Vec::new();
+    if let Some(display_detail) = &prepared.display().detail {
+        detail.push(Line::from(vec![
+            Span::styled("action  ", theme.style(Tone::Dim)),
+            Span::raw(display_detail.clone()),
+        ]));
+    }
     if let Some(review) = review {
         detail.push(Line::from(vec![
             Span::styled("change  ", theme.style(Tone::Dim)),
@@ -1032,25 +1106,36 @@ fn draw_approval(
         ]));
     }
 
-    let scopes = request.write_scopes();
-    if !scopes.is_empty() {
+    let permissions = prepared
+        .required_permissions()
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if !permissions.is_empty() {
         detail.push(Line::from(vec![
-            Span::styled("writes  ", theme.style(Tone::Dim)),
-            Span::styled(
-                scopes
-                    .iter()
-                    .map(|scope| format!("{scope:?}"))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                theme.style(Tone::Danger),
-            ),
+            Span::styled("permissions  ", theme.style(Tone::Dim)),
+            Span::styled(permissions.join(", "), theme.style(Tone::Danger)),
         ]));
     }
+    if let Some(warning) = authority_warning(prepared) {
+        detail.push(Line::from(Span::styled(
+            format!("{} {warning}", glyph::WARNING),
+            theme.style(Tone::Warning),
+        )));
+    }
+    detail.push(Line::from(vec![
+        Span::styled("deadline  ", theme.style(Tone::Dim)),
+        Span::raw(deadline_text(prompt.deadline())),
+    ]));
+    detail.push(Line::from(vec![
+        Span::styled("fingerprint  ", theme.style(Tone::Dim)),
+        Span::raw(prepared.fingerprint().as_str().to_owned()),
+    ]));
     detail.push(Line::default());
 
     let (body, elided) = match review {
         Some(review) => review_lines(review, theme),
-        None => argument_lines(request, theme),
+        None => argument_lines(prepared.arguments(), theme),
     };
 
     let content = ModalContent {
@@ -1077,6 +1162,264 @@ fn draw_approval(
         theme,
         Tone::Danger,
     );
+}
+
+fn draw_questionnaire(frame: &mut Frame<'_>, area: Rect, state: &QuestionnaireState, theme: Theme) {
+    let form = state.form();
+    let question = state.question();
+    let mut head = vec![Line::from(vec![
+        Span::styled(
+            format!("{} answer required  ", glyph::APPROVAL),
+            theme.style(Tone::Heading),
+        ),
+        Span::styled(question.header.clone(), theme.style(Tone::Heading)),
+    ])];
+    head.extend(
+        wrap_text(&question.prompt, usize::from(MIN_WIDTH.saturating_sub(4)))
+            .into_iter()
+            .map(Line::from),
+    );
+
+    let mut detail = vec![Line::from(Span::styled(
+        format!(
+            "question {} of {}",
+            state.current_index() + 1,
+            form.questions.len()
+        ),
+        theme.style(Tone::Accent),
+    ))];
+    if form.restored {
+        detail.push(Line::from(Span::styled(
+            "restored pending question",
+            theme.style(Tone::Warning),
+        )));
+    }
+    if let Some(error) = state.error() {
+        detail.push(Line::from(Span::styled(
+            format!("{} {error}", glyph::ERROR),
+            theme.style(Tone::Danger),
+        )));
+    }
+    detail.extend([
+        Line::from(vec![
+            Span::styled("deadline  ", theme.style(Tone::Dim)),
+            Span::raw(deadline_text(form.deadline)),
+        ]),
+        Line::default(),
+    ]);
+
+    let mut body = Vec::new();
+    for (index, choice) in question.choices.iter().enumerate() {
+        let staged = state.staged_choice() == Some(choice.id.as_str());
+        let cursor = state.focus() == QuestionnaireFocus::Answer && state.choice_cursor() == index;
+        body.push(Line::from(vec![
+            Span::styled(
+                if cursor { "› " } else { "  " },
+                theme.style(if cursor { Tone::Accent } else { Tone::Dim }),
+            ),
+            Span::styled(
+                if staged { "[x] " } else { "[ ] " },
+                theme.style(if staged { Tone::Success } else { Tone::Dim }),
+            ),
+            Span::styled(
+                format!("{} {}", index + 1, choice.label),
+                theme.style(if cursor { Tone::Accent } else { Tone::Default }),
+            ),
+        ]));
+        if let Some(description) = &choice.description {
+            body.push(Line::from(Span::styled(
+                format!("      {description}"),
+                theme.style(Tone::Dim),
+            )));
+        }
+    }
+    if question.allows_free_form {
+        let draft = state.displayed_draft();
+        let value = if draft.is_empty() {
+            "type another answer".to_owned()
+        } else if question.sensitive {
+            format!("{draft} (masked)")
+        } else {
+            draft
+        };
+        body.push(Line::from(vec![
+            Span::styled("  other  ", theme.style(Tone::Dim)),
+            Span::styled(
+                value,
+                theme.style(if state.focus() == QuestionnaireFocus::Answer {
+                    Tone::Accent
+                } else {
+                    Tone::Default
+                }),
+            ),
+        ]));
+    }
+
+    let mut controls = Vec::new();
+    if state.current_index() > 0 {
+        controls.push((QuestionnaireFocus::Back, "Back"));
+    }
+    if state.current_index() + 1 < form.questions.len() {
+        controls.push((QuestionnaireFocus::Next, "Next"));
+    }
+    controls.extend([
+        (QuestionnaireFocus::Submit, "Submit"),
+        (QuestionnaireFocus::Decline, "Decline"),
+    ]);
+    let mut action_spans = vec![Span::styled("tab actions  ", theme.style(Tone::Dim))];
+    for (index, (focus, label)) in controls.into_iter().enumerate() {
+        if index > 0 {
+            action_spans.push(Span::styled("  ", theme.style(Tone::Dim)));
+        }
+        action_spans.push(Span::styled(
+            format!("[{label}]"),
+            if state.focus() == focus {
+                theme
+                    .style(Tone::Accent)
+                    .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+            } else {
+                theme.style(Tone::Dim)
+            },
+        ));
+    }
+    let foot = vec![
+        Line::from(action_spans),
+        Line::from(vec![
+            Span::styled("enter", theme.style(Tone::Success)),
+            Span::styled(" activate   ", theme.style(Tone::Dim)),
+            Span::styled("esc", theme.style(Tone::Danger)),
+            Span::styled(" cancel", theme.style(Tone::Dim)),
+        ]),
+    ];
+
+    let content = ModalContent {
+        head,
+        detail,
+        body,
+        elided: 0,
+        foot,
+    };
+    draw_modal(
+        frame,
+        area,
+        "questionnaire",
+        content.fit(area, theme),
+        theme,
+        Tone::Accent,
+    );
+}
+
+fn security_resource_text(resource: &SecurityResource) -> String {
+    match resource {
+        SecurityResource::Filesystem { mount, segments } => {
+            if segments.is_empty() {
+                mount.clone()
+            } else {
+                format!("{}/{}", mount.trim_end_matches('/'), segments.join("/"))
+            }
+        }
+        SecurityResource::Network {
+            origin,
+            method,
+            segments,
+        } => {
+            let target = if segments.is_empty() {
+                origin.clone()
+            } else {
+                format!("{}/{}", origin.trim_end_matches('/'), segments.join("/"))
+            };
+            match (method.is_empty(), target.is_empty()) {
+                (true, true) => "unrestricted network endpoint".to_owned(),
+                (true, false) => target,
+                (false, true) => format!("{method} unrestricted network endpoint"),
+                (false, false) => format!("{method} {target}"),
+            }
+        }
+        SecurityResource::Credential { reference } => {
+            format!("credential:{reference}")
+        }
+        SecurityResource::Other { kind, id } => format!("{kind}:{id}"),
+    }
+}
+
+fn authority_warning(prepared: &PreparedToolCall) -> Option<String> {
+    let permissions = prepared.required_permissions();
+    let mut capabilities = Vec::new();
+    if permissions.contains(&Permission::ProcessSpawn) {
+        capabilities.push("process execution");
+    }
+    if permissions.contains(&Permission::FsDelete) {
+        capabilities.push("file deletion");
+    }
+    if matches!(
+        prepared.resource(),
+        SecurityResource::Filesystem { segments, .. } if segments.is_empty()
+    ) && (permissions.contains(&Permission::FsWrite)
+        || permissions.contains(&Permission::FsCreate)
+        || permissions.contains(&Permission::FsDelete))
+    {
+        capabilities.push("workspace-root mutation");
+    }
+    if permissions.contains(&Permission::CredentialUse) {
+        capabilities.push("credential use");
+    }
+    if permissions.contains(&Permission::DataEgress) {
+        capabilities.push("data egress");
+    }
+    if permissions.contains(&Permission::NetHttp) {
+        capabilities.push("outbound network access");
+    }
+    if permissions
+        .iter()
+        .any(|permission| matches!(permission, Permission::Other(_)))
+    {
+        capabilities.push("host-defined authority");
+    }
+    (!capabilities.is_empty()).then(|| format!("authority warning: {}", capabilities.join(", ")))
+}
+
+fn deadline_text(deadline: Deadline) -> String {
+    let Some(expires) = deadline.instant() else {
+        return "no deadline".to_owned();
+    };
+    let millis = expires.as_millis();
+    let local = time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(millis) * 1_000_000)
+        .map(|instant| {
+            instant
+                .to_offset(time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC))
+        })
+        .ok();
+    let absolute = local.map_or_else(
+        || format!("{millis}ms since epoch"),
+        |instant| {
+            format!(
+                "{:04}-{:02}-{:02} {:02}:{:02}:{:02} {}",
+                instant.year(),
+                u8::from(instant.month()),
+                instant.day(),
+                instant.hour(),
+                instant.minute(),
+                instant.second(),
+                instant.offset()
+            )
+        },
+    );
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0);
+    let remaining = millis.saturating_sub(now);
+    let status = if remaining == 0 {
+        "expired".to_owned()
+    } else {
+        let seconds = remaining.saturating_add(999) / 1_000;
+        if seconds < 120 {
+            format!("{seconds}s remaining")
+        } else {
+            format!("{}m remaining", seconds.saturating_add(59) / 60)
+        }
+    };
+    format!("{absolute} · {status}")
 }
 
 /// The diff body: one row per change, each marked with a sign as well as a
@@ -1111,9 +1454,9 @@ fn review_lines(review: &EditReview, theme: Theme) -> (Vec<Line<'static>>, usize
 /// The fallback body: the raw arguments, exactly as before this modal learned
 /// to read edits. Anything that is not a reviewable edit lands here, because a
 /// diff that lies about what will change is worse than no diff.
-fn argument_lines(request: &ApprovalRequest, theme: Theme) -> (Vec<Line<'static>>, usize) {
-    let arguments = serde_json::to_string_pretty(&request.arguments)
-        .unwrap_or_else(|_| request.arguments.to_string());
+fn argument_lines(arguments: &serde_json::Value, theme: Theme) -> (Vec<Line<'static>>, usize) {
+    let arguments =
+        serde_json::to_string_pretty(arguments).unwrap_or_else(|_| arguments.to_string());
     let lines: Vec<Line<'static>> = arguments
         .lines()
         .take(MAX_BODY_LINES)
@@ -1322,6 +1665,7 @@ fn draw_exit_confirm(
     area: Rect,
     app: &App,
     pending_approval: bool,
+    pending_questionnaire: bool,
     theme: Theme,
 ) {
     let mut lines = vec![
@@ -1336,6 +1680,9 @@ fn draw_exit_confirm(
     }
     if pending_approval {
         lines.push(Line::from(Span::raw("· an approval is pending")));
+    }
+    if pending_questionnaire {
+        lines.push(Line::from(Span::raw("· a questionnaire is pending")));
     }
     lines.push(Line::default());
     lines.push(Line::from(vec![
@@ -1399,13 +1746,16 @@ fn draw_modal(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_runtime_core::clock::Timestamp;
+    use agent_runtime_core::approval::{ApprovalOrigin, ApprovalPolicy, ApprovalRequest};
+    use agent_runtime_core::clock::{Deadline, SystemClock, Timestamp};
     use agent_runtime_core::content::{ContentPart, Message, ToolCall, ToolResultBlock};
     use agent_runtime_core::event::{
         EstimationConfidence, EventEnvelope, RuntimeEvent, TurnFinish,
     };
-    use agent_runtime_core::ids::{EventId, SessionId, ToolCallId};
+    use agent_runtime_core::ids::{AttemptId, EventId, RequestId, SessionId, ToolCallId};
     use agent_runtime_core::manifest::SegmentKind;
+    use agent_runtime_core::security::{PermissionSet, SecurityResource};
+    use agent_runtime_core::tool::{PreparedToolCall, ToolCallDisplay, ToolEffects};
     use agent_runtime_core::usage::{
         CounterKind, Provenance, UsageDelta, UsageRecord, UsageSource,
     };
@@ -1415,6 +1765,7 @@ mod tests {
     use ratatui::style::Color;
 
     use crate::app::Notification;
+    use crate::questionnaire::{QuestionnaireChoice, QuestionnaireForm, QuestionnaireQuestion};
 
     fn render(app: &App, width: u16, height: u16, theme: Theme) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("a test terminal");
@@ -1468,7 +1819,13 @@ mod tests {
         app.transcript.push_user("explain the retry policy");
         app.apply(&event(RuntimeEvent::TurnStarted));
         app.apply(&event(RuntimeEvent::TextDelta {
+            request: RequestId::new("request-1"),
+            attempt: AttemptId::new("attempt-1"),
             text: "The retry policy classifies failures.".into(),
+        }));
+        app.apply(&event(RuntimeEvent::ProviderAttemptOutputCommitted {
+            request: RequestId::new("request-1"),
+            attempt: AttemptId::new("attempt-1"),
         }));
         app.apply(&event(RuntimeEvent::ToolCallRequested {
             call: ToolCallId::new("c1"),
@@ -1670,6 +2027,32 @@ mod tests {
             !answered.contains("private draft that resembles the answer"),
             "{answered}"
         );
+    }
+
+    #[test]
+    fn speculative_text_is_labelled_draft_until_the_attempt_commits() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        app.apply(&event(RuntimeEvent::TextDelta {
+            request: RequestId::new("request-draft"),
+            attempt: AttemptId::new("attempt-draft"),
+            text: "tentative answer".into(),
+        }));
+
+        let speculative = render(&app, 74, 12, Theme::new());
+        assert!(
+            speculative.contains("draft · tentative answer"),
+            "{speculative}"
+        );
+        assert!(app.transcript.is_empty());
+
+        app.apply(&event(RuntimeEvent::ProviderAttemptOutputCommitted {
+            request: RequestId::new("request-draft"),
+            attempt: AttemptId::new("attempt-draft"),
+        }));
+        let committed = render(&app, 74, 12, Theme::new());
+        assert!(committed.contains("tentative answer"), "{committed}");
+        assert!(!committed.contains("draft ·"), "{committed}");
     }
 
     #[test]
@@ -2070,21 +2453,47 @@ mod tests {
         tool: &str,
         arguments: serde_json::Value,
     ) -> smith_host::approval::ApprovalPrompt {
-        use agent_runtime_core::approval::ApprovalPolicy;
-        use agent_runtime_core::tool::ToolEffects;
         use smith_host::approval::InteractiveApproval;
 
         let (policy, mut requests) = InteractiveApproval::new(1);
         let tool = tool.to_owned();
         tokio::spawn(async move {
-            let _ = policy
-                .decide(&ApprovalRequest {
-                    call_id: ToolCallId::new("c1"),
-                    tool,
-                    arguments,
-                    effects: ToolEffects::read_only().with_write("/repo"),
+            let effects = if tool == "shell" {
+                ToolEffects::read_only()
+                    .with_write("/repo")
+                    .with_spawn()
+                    .with_network()
+            } else {
+                ToolEffects::read_only().with_write("/repo")
+            };
+            let (permissions, _) = effects.authorization_request(&tool, "/repo");
+            let segments = arguments
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .map(|path| {
+                    path.split('/')
+                        .filter(|segment| !segment.is_empty())
+                        .map(str::to_owned)
+                        .collect()
                 })
-                .await;
+                .unwrap_or_default();
+            let request = ApprovalRequest::new(
+                PreparedToolCall::new(
+                    ToolCallId::new("c1"),
+                    &tool,
+                    arguments,
+                    permissions,
+                    SecurityResource::filesystem("/repo", segments),
+                    effects,
+                    ToolCallDisplay::new(format!("Run {tool}")),
+                ),
+                Deadline::after(&SystemClock, 60_000),
+                ApprovalOrigin::new(
+                    agent_runtime_core::ids::SessionId::new("session-1"),
+                    agent_runtime_core::ids::RequestId::new("request-1"),
+                ),
+            );
+            let _ = policy.decide(&request).await;
         });
         requests.recv().await.expect("a prompt")
     }
@@ -2114,8 +2523,40 @@ mod tests {
 
         insta_like(
             &screen,
-            &["approval required", "shell", "rm -rf build", "y allow once"],
+            &[
+                "approval required",
+                "shell",
+                "rm -rf build",
+                "process execution",
+                "deadline",
+                "fingerprint",
+                "y allow once",
+            ],
         );
+    }
+
+    #[test]
+    fn approval_warnings_follow_typed_authority_not_only_scheduler_effects() {
+        let prepared = PreparedToolCall::new(
+            ToolCallId::new("sensitive-call"),
+            "broker",
+            serde_json::json!({"reference": "provider"}),
+            [
+                Permission::CredentialUse,
+                Permission::DataEgress,
+                Permission::FsDelete,
+            ]
+            .into_iter()
+            .collect::<PermissionSet>(),
+            SecurityResource::credential("provider"),
+            ToolEffects::new(Vec::new()),
+            ToolCallDisplay::new("Use a protected broker"),
+        );
+
+        let warning = authority_warning(&prepared).expect("sensitive authority warning");
+        assert!(warning.contains("credential use"), "{warning}");
+        assert!(warning.contains("data egress"), "{warning}");
+        assert!(warning.contains("file deletion"), "{warning}");
     }
 
     #[tokio::test]
@@ -2242,6 +2683,62 @@ mod tests {
                 "{width}×{height} overflowed the viewport:\n{screen}"
             );
         }
+    }
+
+    #[test]
+    fn questionnaire_is_answerable_when_narrow_and_masks_sensitive_drafts() {
+        let mut app = conversation();
+        let form = QuestionnaireForm::new(
+            "interaction-1",
+            vec![
+                QuestionnaireQuestion::new(
+                    "token",
+                    "Credential",
+                    "Which secret token should be used?",
+                    vec![QuestionnaireChoice::new("configured", "Configured token")],
+                )
+                .with_free_form(true),
+            ],
+            Deadline::never(),
+        )
+        .expect("valid questionnaire")
+        .restored(true);
+        app.present_questionnaire(form);
+        for character in "supersecret".chars() {
+            app.on_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+        }
+
+        let normal = render(&app, 74, 24, Theme::new().without_color());
+        insta_like(
+            &normal,
+            &[
+                "answer required",
+                "Which secret token should be used?",
+                "restored pending question",
+                "(masked)",
+                "[Submit]",
+                "esc cancel",
+            ],
+        );
+        assert!(!normal.contains("supersecret"), "{normal}");
+
+        let narrow = render(&app, MIN_WIDTH, MIN_HEIGHT, Theme::new().without_color());
+        insta_like(
+            &narrow,
+            &[
+                "answer required",
+                "Which secret token should be used?",
+                "Submit",
+                "cancel",
+            ],
+        );
+        assert!(!narrow.contains("supersecret"), "{narrow}");
+        assert!(
+            narrow
+                .lines()
+                .all(|line| line.width() <= usize::from(MIN_WIDTH)),
+            "{narrow}"
+        );
     }
 
     /// Asserts every expected fragment appears, reporting the whole screen on

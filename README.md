@@ -16,8 +16,8 @@ itself, which the runtime deliberately ships as traits only:
 | Crate | Owns |
 | --- | --- |
 | `smith-config` | Layered configuration, provenance, credential references, and project trust |
-| `smith-host` | The interactive approval gate and the project workspace boundary |
-| `smith-runtime` | The single runtime factory, production HTTP transport, snapshots, and event journal |
+| `smith-host` | Prepared approval/question brokers and the project workspace boundary |
+| `smith-runtime` | The single runtime factory, harness policy, checkpoints, artifacts, snapshots, and event journal |
 | `smith-tools` | The coding tools: `read`, `list`, `search`, `edit`, `shell` |
 | `smith-tui` | Transcript, status, composer, theme, key map, and rendering |
 | `smith-cli` | The `smith` binary, terminal host loop, and headless output contracts |
@@ -25,14 +25,25 @@ itself, which the runtime deliberately ships as traits only:
 ### Tools
 
 Every path resolves through the session's workspace, so containment is enforced
-in one place rather than re-implemented per tool. `edit` and `shell` declare
-write and process-spawn effects, which is what routes them through approval;
-the read-only three run without asking. Reads, listings, searches, and command
-output are all bounded — a tool that can return unbounded text can exhaust a
-context window in one call.
+in one place rather than re-implemented per tool. Each invocation is prepared
+before approval: argument validation and canonical resource resolution produce
+the exact permissions, target, deadline, display, and fingerprint that are
+authorized and then executed. `edit` requests authority for its canonical file;
+`shell` conservatively declares broad workspace, process, and network authority.
+The read-only three run without asking. Reads, listings, searches, and command
+output are bounded. Oversized output is stored in the session-private artifact
+store and represented to the model by a bounded preview plus a retrievable
+reference.
 
 `shell` puts each command in its own process group and signals the group, so a
 build script's background watcher does not outlive the invocation.
+
+Smith's root surface also composes `ask_user`, `write_todos`, and depth-one
+delegation through Agent Runtime's ability registry. Initial activation is
+intent-scoped: a read-only request does not advertise mutation merely because
+`edit` and `shell` are registered. Trusted skills, bounded memory, todo state,
+artifact offloading, and semantic summarization contribute through the same
+session-scoped harness pipeline.
 
 ## Running it
 
@@ -221,8 +232,9 @@ validated bound catalog. Smith refuses to guess missing limits.
 The ignored `smith-cli` live test exercises the installed process, production
 HTTP transport, streaming adapter, real `read` tool, continuation request,
 provider-reported usage, clean shutdown, and credential redaction. It disables
-persistence, allows no retries, permits two tool rounds, caps each provider
-response at 2,048 tokens, and has a 150-second outer deadline.
+persistence, allows no retries, explicitly auto-approves the isolated temporary
+workspace, permits two tool rounds, caps each provider response at 2,048 tokens,
+and has a 150-second outer deadline.
 
 For a Z.AI Coding Plan account, export the API key as
 `SMITH_LIVE_API_KEY` through a secret-safe shell or credential tool, then run:
@@ -233,7 +245,7 @@ SMITH_LIVE_MODEL=glm-4.7 \
 SMITH_LIVE_CONTEXT_TOKENS=200000 \
 SMITH_LIVE_MAX_INPUT_TOKENS=196000 \
 SMITH_LIVE_MAX_OUTPUT_TOKENS=131072 \
-cargo test -p smith-cli --test live_provider -- --ignored --nocapture
+cargo test --all-features -p smith-cli --test live_provider -- --ignored --nocapture
 ```
 
 The key is never written to project configuration. Unset
@@ -250,18 +262,30 @@ smith -p "inspect" --output-format stream-json
 smith -p "continue" --resume session-...
 ```
 
-`json` emits one versioned result. `stream-json` emits versioned runtime events
-followed by that result. With the default `approval.mode = "ask"`, an
-unattended mutation is denied and exits with status 4; explicitly choose
-`--approval allow-all` only in an already trusted automation boundary.
+`json` emits one schema-v2 result. `stream-json` emits versioned runtime events
+followed by that result. Results project attempt commits/discards, the frozen
+activation epoch, todo counts/items when public, artifact references, recovery
+metadata, prepared approval authority, and interaction-required state. A
+forced live questionnaire—or a protected pending question on resume—returns
+`interaction_required` with exit status 5 and never reads prompt stdin; resume
+the same session interactively to answer the exact request. With the default
+`approval.mode = "ask"`, an unattended mutation is denied and exits with status
+4; explicitly choose `--approval allow-all` only in an already trusted
+automation boundary. See [`docs/headless-protocol.md`](docs/headless-protocol.md)
+for the complete stdout, schema, redaction, and exit contract.
 Repository-controlled config cannot set `allow-all` or `auto_approve` merely
 by being opened; those authority-bearing choices must come from user config or
 an explicit command-line policy. It likewise cannot redirect or disable
 user-scoped snapshots and journals.
 
 Snapshots and redacted canonical event journals live under
-`~/.smith/sessions/<project-id>/`. Both the TUI and `smith -p` use the same
-factory and session lifecycle.
+`~/.smith/sessions/<project-id>/`. Exact in-flight state uses a separately
+encrypted, authenticated checkpoint; artifacts are owner-only and
+session-authorized. Completed turns save immediately. On restart, unresolved
+children and process-owned monitor markers are reported interrupted and are
+never silently restarted. Both the TUI and `smith -p` use the same factory and
+session lifecycle. See
+[`docs/persistence-recovery.md`](docs/persistence-recovery.md).
 
 ## Design
 
@@ -273,14 +297,17 @@ number from looking like a reported one. Code comments reference its sections.
 gates, runtime co-development boundary, and deliberately deferred work.
 [`docs/ci.md`](docs/ci.md) documents the fail-closed local and hosted release
 gates and the exact Agent Runtime source they require.
+[`docs/configuration.md`](docs/configuration.md) is the typed configuration
+reference, and [`docs/security.md`](docs/security.md) records Smith's threat
+model and trust boundaries.
 
 ## Specification
 
-The active catalog change lives under
-[`docs/spec/changes/add-provider-model-catalogs-2026-07-28/`](docs/spec/changes/add-provider-model-catalogs-2026-07-28/).
-Its approved proposal and implementation checklist define Models.dev
-validation, endpoint bindings, offline cache behavior, augmented inventory,
-and frozen picker/runtime provenance.
+The active harness integration change lives under
+[`docs/spec/changes/integrate-stable-session-harness-2026-07-31/`](docs/spec/changes/integrate-stable-session-harness-2026-07-31/).
+Its approved proposal and implementation checklist define the session-scoped
+turn pipeline, prepared authority, protected recovery, capability activation,
+and standard Smith harness components.
 
 The installable package is expected to be `smith-cli`, exposing the `smith`
 binary. Registry names must be rechecked immediately before publication.

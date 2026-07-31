@@ -6,10 +6,15 @@
 //! what makes the renderer testable against a fake terminal and the key map
 //! testable with no terminal at all.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::{Duration, Instant};
 
-use agent_runtime_core::event::{ChildPhase, EventEnvelope, RuntimeEvent, TurnFinish};
+use agent_runtime_core::clock::SystemClock;
+use agent_runtime_core::event::{
+    ChildPhase, EventEnvelope, PlanItemProjection, PlanItemStatus, PlanSensitivity, RuntimeEvent,
+    TurnFinish,
+};
+use agent_runtime_core::ids::{AttemptId, RequestId};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use smith_host::approval::{ApprovalPrompt, PromptScope};
 use smith_tools::ToolCallDisplay;
@@ -18,7 +23,8 @@ use crate::commands::{self, CommandAction};
 use crate::composer::Composer;
 use crate::diff::EditReview;
 use crate::picker::{PickerOutcome, ResourceEntry, ResourcePicker};
-use crate::status::{Activity, Status, render_elapsed};
+use crate::questionnaire::{QuestionnaireForm, QuestionnaireResolution, QuestionnaireState};
+use crate::status::{Activity, ContextPlanUpdate, Status, render_elapsed};
 use crate::transcript::{LocalResultState, ToolStatus, Transcript};
 
 /// How long a second `Ctrl+C` still counts as a force-quit.
@@ -120,6 +126,11 @@ pub enum Overlay {
         /// parse. `None` sends the modal back to rendering raw arguments.
         review: Option<EditReview>,
     },
+    /// An authority-free runtime interaction is waiting for an answer.
+    Questionnaire {
+        /// Pure staged-answer and keyboard state.
+        state: QuestionnaireState,
+    },
     /// Select a session or immutable runtime configuration.
     Palette {
         /// Selected filtered result.
@@ -164,7 +175,17 @@ pub enum Overlay {
         /// An approval hidden by the confirmation and restored if the user
         /// cancels exit.
         approval: Option<(Box<ApprovalPrompt>, Option<EditReview>)>,
+        /// A questionnaire hidden by the confirmation and restored if the
+        /// user cancels exit.
+        questionnaire: Option<QuestionnaireState>,
     },
+}
+
+/// A runtime-originated prompt waiting behind the visible overlay.
+#[derive(Debug)]
+enum PendingPrompt {
+    Approval(Box<ApprovalPrompt>, Option<EditReview>),
+    Questionnaire(QuestionnaireState),
 }
 
 /// One background notification.
@@ -190,6 +211,110 @@ pub struct ChildSummary {
     pub detail: Option<String>,
 }
 
+/// Latest durable todo-plan projection.
+///
+/// Smith deliberately treats bounded plan text as public working state: it is
+/// rendered inline and may be reconstructed from the redacted journal. A
+/// sensitive runtime projection retains counts only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanSummary {
+    /// Monotonic plan revision.
+    pub revision: u64,
+    /// Whether bounded item text may be displayed.
+    pub sensitivity: PlanSensitivity,
+    /// Aggregate counts keyed by the stable runtime status spelling.
+    pub counts: BTreeMap<String, u32>,
+    /// Public bounded items, absent for a sensitive plan.
+    pub items: Option<Vec<PlanItemProjection>>,
+}
+
+impl PlanSummary {
+    fn render_inline(&self) -> String {
+        let count = |status: &str| self.counts.get(status).copied().unwrap_or_default();
+        let mut text = format!(
+            "revision {} · {} active · {} pending · {} done · {} cancelled",
+            self.revision,
+            count("in_progress"),
+            count("pending"),
+            count("completed"),
+            count("cancelled"),
+        );
+        if self.sensitivity == PlanSensitivity::Public
+            && let Some(items) = &self.items
+        {
+            for item in items {
+                let marker = match item.status {
+                    PlanItemStatus::Pending => "[ ]",
+                    PlanItemStatus::InProgress => "[>]",
+                    PlanItemStatus::Completed => "[x]",
+                    PlanItemStatus::Cancelled => "[-]",
+                };
+                let id = one_line(&item.id);
+                let item_text = one_line(&item.text);
+                text.push_str(&format!("\n{marker} {id} — {item_text}"));
+            }
+        }
+        text
+    }
+}
+
+/// One provider attempt's speculative presentation identity.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct AttemptOutputKey {
+    request: RequestId,
+    attempt: AttemptId,
+}
+
+impl AttemptOutputKey {
+    fn new(request: &RequestId, attempt: &AttemptId) -> Self {
+        Self {
+            request: request.clone(),
+            attempt: attempt.clone(),
+        }
+    }
+}
+
+/// A delta retained outside the canonical transcript until an explicit commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SpeculativeChunk {
+    Text(String),
+    Reasoning { text: String, redacted: bool },
+}
+
+/// Buffered output for one in-flight provider attempt.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct SpeculativeAttempt {
+    chunks: Vec<SpeculativeChunk>,
+    visible_text: String,
+}
+
+impl SpeculativeAttempt {
+    fn push_text(&mut self, text: &str) {
+        self.visible_text.push_str(text);
+        if let Some(SpeculativeChunk::Text(previous)) = self.chunks.last_mut() {
+            previous.push_str(text);
+        } else {
+            self.chunks.push(SpeculativeChunk::Text(text.to_owned()));
+        }
+    }
+
+    fn push_reasoning(&mut self, text: &str, redacted: bool) {
+        if let Some(SpeculativeChunk::Reasoning {
+            text: previous,
+            redacted: previous_redacted,
+        }) = self.chunks.last_mut()
+            && *previous_redacted == redacted
+        {
+            previous.push_str(text);
+        } else {
+            self.chunks.push(SpeculativeChunk::Reasoning {
+                text: text.to_owned(),
+                redacted,
+            });
+        }
+    }
+}
+
 /// The whole client's state.
 #[derive(Debug)]
 pub struct App {
@@ -201,8 +326,15 @@ pub struct App {
     pub composer: Composer,
     /// The current overlay, if any.
     pub overlay: Option<Overlay>,
+    /// Runtime prompts waiting behind the one visible overlay, in exact
+    /// cross-type arrival order.
+    pending_prompts: VecDeque<PendingPrompt>,
+    /// Questionnaire outcomes the host adapter has not consumed yet.
+    questionnaire_resolutions: VecDeque<(String, QuestionnaireResolution)>,
     /// Latest child states, keyed by stable child id.
     pub children: BTreeMap<String, ChildSummary>,
+    /// Latest durable todo plan, projected without a permanent pane.
+    pub plan: Option<PlanSummary>,
     /// Bounded local choices supplied by the host.
     pub resources: RuntimeResources,
     /// Whether the transcript follows new output.
@@ -218,6 +350,9 @@ pub struct App {
     turn_started_at: Option<Instant>,
     last_ctrl_c: Option<Instant>,
     last_event_seq: Option<u64>,
+    speculative_attempts: BTreeMap<AttemptOutputKey, SpeculativeAttempt>,
+    speculative_order: Vec<AttemptOutputKey>,
+    finalized_attempts: BTreeSet<AttemptOutputKey>,
 }
 
 impl App {
@@ -228,7 +363,10 @@ impl App {
             status: Status::new(model, project),
             composer: Composer::new(),
             overlay: None,
+            pending_prompts: VecDeque::new(),
+            questionnaire_resolutions: VecDeque::new(),
             children: BTreeMap::new(),
+            plan: None,
             resources: RuntimeResources::default(),
             following: true,
             scroll_back: 0,
@@ -238,6 +376,9 @@ impl App {
             turn_started_at: None,
             last_ctrl_c: None,
             last_event_seq: None,
+            speculative_attempts: BTreeMap::new(),
+            speculative_order: Vec::new(),
+            finalized_attempts: BTreeSet::new(),
         }
     }
 
@@ -257,20 +398,94 @@ impl App {
     /// Whether anything would be lost by quitting now.
     pub fn has_live_work(&self) -> bool {
         self.is_busy()
+            || !self.pending_prompts.is_empty()
             || matches!(
                 self.overlay,
-                Some(Overlay::Approval { .. }) | Some(Overlay::ExitConfirm { approval: Some(_) })
+                Some(Overlay::Approval { .. })
+                    | Some(Overlay::Questionnaire { .. })
+                    | Some(Overlay::ExitConfirm {
+                        approval: Some(_),
+                        ..
+                    })
+                    | Some(Overlay::ExitConfirm {
+                        questionnaire: Some(_),
+                        ..
+                    })
             )
+    }
+
+    /// Number of approval prompts still awaiting one decision each.
+    pub fn pending_approval_count(&self) -> usize {
+        let visible = usize::from(matches!(
+            self.overlay,
+            Some(Overlay::Approval { .. })
+                | Some(Overlay::ExitConfirm {
+                    approval: Some(_),
+                    ..
+                })
+        ));
+        visible.saturating_add(
+            self.pending_prompts
+                .iter()
+                .filter(|prompt| matches!(prompt, PendingPrompt::Approval(..)))
+                .count(),
+        )
+    }
+
+    /// Number of questionnaire requests awaiting one terminal answer each.
+    pub fn pending_questionnaire_count(&self) -> usize {
+        let visible = usize::from(matches!(
+            self.overlay,
+            Some(Overlay::Questionnaire { .. })
+                | Some(Overlay::ExitConfirm {
+                    questionnaire: Some(_),
+                    ..
+                })
+        ));
+        visible.saturating_add(
+            self.pending_prompts
+                .iter()
+                .filter(|prompt| matches!(prompt, PendingPrompt::Questionnaire(_)))
+                .count(),
+        )
+    }
+
+    /// Takes the next questionnaire result for the host interaction adapter.
+    ///
+    /// Every visible or queued request contributes at most one result. Taking
+    /// removes it, so a host loop cannot answer one runtime responder twice.
+    pub fn take_questionnaire_resolution(&mut self) -> Option<(String, QuestionnaireResolution)> {
+        self.questionnaire_resolutions.pop_front()
     }
 
     /// Advances the animation clock.
     pub fn tick(&mut self) {
         self.tick = self.tick.wrapping_add(1);
+        self.expire_prompts();
     }
 
     /// Monotonic elapsed time for the active turn.
     pub fn turn_elapsed(&self) -> Option<Duration> {
         self.turn_started_at.map(|started| started.elapsed())
+    }
+
+    /// Visible text from the newest live provider attempt.
+    ///
+    /// This is presentation-only speculative state. It is never returned from
+    /// [`Transcript::blocks`] and therefore cannot become canonical history or
+    /// journal-replayed output without an explicit runtime commit event.
+    pub fn speculative_text(&self) -> Option<&str> {
+        self.speculative_order.iter().rev().find_map(|key| {
+            self.speculative_attempts
+                .get(key)
+                .map(|attempt| attempt.visible_text.as_str())
+                .filter(|text| !text.is_empty())
+        })
+    }
+
+    /// Number of provider attempts with output awaiting an explicit terminal.
+    pub fn speculative_attempt_count(&self) -> usize {
+        self.speculative_attempts.len()
     }
 
     /// Renders a background notification inline without stealing composer
@@ -287,9 +502,144 @@ impl App {
         );
     }
 
+    /// Projects metadata-only process-exit reconciliation into the transcript.
+    ///
+    /// Child and monitor identities remain in the protected recovery record;
+    /// the UI only needs deterministic counts and the explicit fact that
+    /// process-owned work was not restarted.
+    pub fn present_recovered_ephemeral_work(
+        &mut self,
+        interrupted_children: usize,
+        interrupted_monitors: usize,
+    ) {
+        let mut work = Vec::new();
+        if interrupted_children > 0 {
+            work.push(format!(
+                "{interrupted_children} prior {}",
+                if interrupted_children == 1 {
+                    "child"
+                } else {
+                    "children"
+                }
+            ));
+        }
+        if interrupted_monitors > 0 {
+            work.push(format!(
+                "{interrupted_monitors} prior {}",
+                if interrupted_monitors == 1 {
+                    "monitor"
+                } else {
+                    "monitors"
+                }
+            ));
+        }
+        if work.is_empty() {
+            return;
+        }
+        self.transcript.push_notice(
+            "recovery",
+            format!(
+                "{} interrupted when the prior Smith process exited · not restarted",
+                work.join(" and ")
+            ),
+        );
+    }
+
     /// Enriches a protected live tool event with a reviewed local projection.
     pub fn set_tool_display(&mut self, call_id: &str, display: ToolCallDisplay) {
         self.transcript.set_tool_display(call_id, display);
+    }
+
+    fn begin_speculative_attempt(&mut self, request: &RequestId, attempt: &AttemptId) {
+        let key = AttemptOutputKey::new(request, attempt);
+        if self.finalized_attempts.contains(&key) {
+            self.transcript.push_error(format!(
+                "provider attempt {} for request {} restarted after its output terminal",
+                attempt, request
+            ));
+            return;
+        }
+        if !self.speculative_attempts.contains_key(&key) {
+            self.speculative_order.push(key.clone());
+            self.speculative_attempts
+                .insert(key, SpeculativeAttempt::default());
+        }
+    }
+
+    fn buffer_speculative_text(&mut self, request: &RequestId, attempt: &AttemptId, text: &str) {
+        self.begin_speculative_attempt(request, attempt);
+        let key = AttemptOutputKey::new(request, attempt);
+        if let Some(output) = self.speculative_attempts.get_mut(&key) {
+            output.push_text(text);
+        }
+    }
+
+    fn buffer_speculative_reasoning(
+        &mut self,
+        request: &RequestId,
+        attempt: &AttemptId,
+        text: &str,
+        redacted: bool,
+    ) {
+        self.begin_speculative_attempt(request, attempt);
+        let key = AttemptOutputKey::new(request, attempt);
+        if let Some(output) = self.speculative_attempts.get_mut(&key) {
+            output.push_reasoning(text, redacted);
+        }
+    }
+
+    fn finish_speculative_attempt(
+        &mut self,
+        request: &RequestId,
+        attempt: &AttemptId,
+        commit: bool,
+    ) {
+        let key = AttemptOutputKey::new(request, attempt);
+        let Some(output) = self.speculative_attempts.remove(&key) else {
+            if !self.finalized_attempts.contains(&key) {
+                self.transcript.push_error(format!(
+                    "provider attempt {} for request {} ended without a start",
+                    attempt, request
+                ));
+                self.finalized_attempts.insert(key);
+            }
+            return;
+        };
+        self.speculative_order.retain(|candidate| candidate != &key);
+        if !self.finalized_attempts.insert(key) {
+            return;
+        }
+
+        if commit {
+            for chunk in output.chunks {
+                match chunk {
+                    SpeculativeChunk::Text(text) => self.transcript.push_text_delta(&text),
+                    SpeculativeChunk::Reasoning { text, redacted } => {
+                        self.transcript.push_reasoning_delta(&text, redacted);
+                    }
+                }
+            }
+        } else if !output.chunks.is_empty() {
+            self.transcript.push_notice(
+                "retry",
+                format!("discarded speculative output from provider attempt {attempt}"),
+            );
+        }
+    }
+
+    fn discard_orphaned_speculative_output(&mut self, boundary: &str) {
+        let orphaned = self.speculative_attempts.len();
+        if orphaned == 0 {
+            return;
+        }
+        self.speculative_attempts.clear();
+        self.speculative_order.clear();
+        self.transcript.push_notice(
+            "integrity",
+            format!(
+                "discarded {orphaned} unterminated speculative provider attempt(s) at {boundary}"
+            ),
+        );
     }
 
     /// Folds one runtime event into state.
@@ -309,11 +659,19 @@ impl App {
         match &envelope.payload {
             RuntimeEvent::SessionStarted => {
                 self.status.activity = Activity::Idle;
+                self.status.capabilities = Default::default();
+                self.status.context_plan = None;
+                self.plan = None;
                 self.turn_started_at = None;
+                self.speculative_attempts.clear();
+                self.speculative_order.clear();
+                self.finalized_attempts.clear();
             }
             RuntimeEvent::TurnStarted => {
+                self.discard_orphaned_speculative_output("next turn start");
                 self.status.activity = Activity::Working;
                 self.turn_started_at = Some(Instant::now());
+                self.finalized_attempts.clear();
             }
             RuntimeEvent::ModelProfileResolved {
                 provider, model, ..
@@ -332,11 +690,72 @@ impl App {
                         .switch_model(Some(provider.clone()), model.as_str());
                 }
             }
-            RuntimeEvent::TextDelta { text } => {
-                self.transcript.push_text_delta(text);
+            RuntimeEvent::RegistrySnapshotSealed { snapshot, entries } => {
+                self.status.record_registry(snapshot.as_str(), *entries);
             }
-            RuntimeEvent::ReasoningDelta { text, redacted } => {
-                self.transcript.push_reasoning_delta(text, *redacted);
+            RuntimeEvent::ScopedViewDerived {
+                view,
+                visible_entries,
+                ..
+            } => {
+                self.status
+                    .record_scoped_view(view.as_str(), *visible_entries);
+            }
+            RuntimeEvent::CapabilityRetrievalPerformed {
+                resolver_revision,
+                candidates,
+                ..
+            } => {
+                self.status.record_retrieval(
+                    resolver_revision.as_str(),
+                    candidates
+                        .iter()
+                        .take(16)
+                        .map(ToString::to_string)
+                        .collect(),
+                );
+            }
+            RuntimeEvent::CapabilitiesActivated { epoch, activation } => {
+                let capabilities = activation
+                    .iter()
+                    .take(16)
+                    .map(|capability| capability.id.to_string())
+                    .collect::<Vec<_>>();
+                self.status.record_activation(*epoch, capabilities.clone());
+                self.transcript.push_notice(
+                    "capabilities",
+                    if capabilities.is_empty() {
+                        format!("activation epoch {epoch} has no optional capabilities")
+                    } else {
+                        format!("activation epoch {epoch}: {}", capabilities.join(", "))
+                    },
+                );
+            }
+            RuntimeEvent::ProviderAttemptStarted {
+                request, attempt, ..
+            } => {
+                self.begin_speculative_attempt(request, attempt);
+            }
+            RuntimeEvent::TextDelta {
+                request,
+                attempt,
+                text,
+            } => {
+                self.buffer_speculative_text(request, attempt, text);
+            }
+            RuntimeEvent::ReasoningDelta {
+                request,
+                attempt,
+                text,
+                redacted,
+            } => {
+                self.buffer_speculative_reasoning(request, attempt, text, *redacted);
+            }
+            RuntimeEvent::ProviderAttemptOutputCommitted { request, attempt } => {
+                self.finish_speculative_attempt(request, attempt, true);
+            }
+            RuntimeEvent::ProviderAttemptOutputDiscarded { request, attempt } => {
+                self.finish_speculative_attempt(request, attempt, false);
             }
             RuntimeEvent::ToolCallRequested {
                 call,
@@ -361,6 +780,8 @@ impl App {
                 self.transcript.complete_tool_call(call.as_str(), status);
             }
             RuntimeEvent::ContextPlanned {
+                context,
+                cache_plan,
                 segment_count,
                 totals,
                 input_tokens,
@@ -369,14 +790,52 @@ impl App {
                 confidence,
                 ..
             } => {
-                self.status.record_context_plan(
-                    *input_tokens,
-                    *input_budget_tokens,
-                    *reserved_tokens,
-                    *segment_count,
+                self.status.record_context_plan(ContextPlanUpdate {
+                    fingerprint: context.as_str(),
+                    cache_fingerprint: cache_plan.as_str(),
+                    input_tokens: *input_tokens,
+                    input_budget_tokens: *input_budget_tokens,
+                    reserved_tokens: *reserved_tokens,
+                    segment_count: *segment_count,
                     totals,
-                    *confidence,
+                    confidence: *confidence,
+                });
+            }
+            RuntimeEvent::ContextCompacted {
+                reclaimed_tokens,
+                evicted,
+                summaries,
+                ..
+            } => {
+                self.status.record_compaction(*reclaimed_tokens);
+                self.transcript.push_notice(
+                    "context",
+                    format!(
+                        "compacted context · reclaimed {reclaimed_tokens} tokens · \
+                         {} evicted · {} summaries",
+                        evicted.len(),
+                        summaries.len()
+                    ),
                 );
+            }
+            RuntimeEvent::PlanUpdated {
+                revision,
+                sensitivity,
+                counts,
+                items,
+            } => {
+                let plan = PlanSummary {
+                    revision: *revision,
+                    sensitivity: *sensitivity,
+                    counts: counts.clone(),
+                    items: if *sensitivity == PlanSensitivity::Public {
+                        items.clone()
+                    } else {
+                        None
+                    },
+                };
+                self.transcript.push_notice("plan", plan.render_inline());
+                self.plan = Some(plan);
             }
             RuntimeEvent::Usage { record } => {
                 self.status.record_usage(&record.delta);
@@ -399,6 +858,12 @@ impl App {
                 finish,
                 visible_output,
             } => {
+                self.cancel_pending_prompts();
+                // A valid v5 stream has already committed or discarded every
+                // attempt. A gap, corrupt journal, or incompatible producer
+                // must fail closed: orphan text cannot become visible while
+                // idle or leak into the next turn.
+                self.discard_orphaned_speculative_output("turn completion");
                 let elapsed = self.turn_started_at.take().map(|started| started.elapsed());
                 self.transcript.close_open();
                 self.status.activity = Activity::Idle;
@@ -425,6 +890,20 @@ impl App {
                                 |elapsed| {
                                     format!(
                                         "stopped after {} at the {limit:?} limit",
+                                        render_elapsed(elapsed)
+                                    )
+                                },
+                            ),
+                        );
+                    }
+                    TurnFinish::NeedsInput { request } => {
+                        self.transcript.push_notice(
+                            "turn",
+                            elapsed.map_or_else(
+                                || format!("waiting for parent input · request {request}"),
+                                |elapsed| {
+                                    format!(
+                                        "waiting for parent input after {} · request {request}",
                                         render_elapsed(elapsed)
                                     )
                                 },
@@ -508,6 +987,33 @@ impl App {
                 // bare "finished a turn" would.
                 ChildPhase::TurnFinished => {}
             },
+            RuntimeEvent::ChildNeedsInput {
+                child,
+                request,
+                question_ids,
+                sensitivity,
+                ..
+            } => {
+                let question_count = question_ids.len();
+                let detail = format!(
+                    "{question_count} {} · {} · request {request}",
+                    if question_count == 1 {
+                        "question"
+                    } else {
+                        "questions"
+                    },
+                    describe_interaction_sensitivity(sensitivity),
+                );
+                self.children.insert(
+                    child.to_string(),
+                    ChildSummary {
+                        state: "needs input".to_owned(),
+                        detail: Some(detail.clone()),
+                    },
+                );
+                self.transcript
+                    .push_notice("sub-agent", format!("{child} needs input · {detail}"));
+            }
             RuntimeEvent::ChildCompleted { child, result } => {
                 let mut summary: String = result.chars().take(200).collect();
                 if summary.chars().count() < result.chars().count() {
@@ -550,6 +1056,8 @@ impl App {
                     .push_error(format!("sub-agent {child} failed: {}", error.message));
             }
             RuntimeEvent::SessionShutdown => {
+                self.cancel_pending_prompts();
+                self.discard_orphaned_speculative_output("session shutdown");
                 self.transcript.close_open();
                 self.status.activity = Activity::Ended;
                 self.turn_started_at = None;
@@ -562,24 +1070,189 @@ impl App {
 
     /// Presents an approval request.
     ///
-    /// A pending overlay is answered — denied — rather than dropped silently,
-    /// so a request never disappears without the model learning its fate.
-    ///
     /// The diff is derived here rather than in the renderer: the arguments
     /// cannot change while the modal is open, and the redraw budget is 30 fps
     /// (`DESIGN.md` §6), so paying for it once per request is the whole cost.
     pub fn present_approval(&mut self, prompt: ApprovalPrompt) {
-        if let Some(Overlay::Approval {
-            prompt: previous, ..
-        }) = self.overlay.take()
-        {
-            previous.deny("superseded by another approval request");
+        if prompt.deadline().is_expired(&SystemClock) {
+            prompt.time_out();
+            self.transcript.push_notice(
+                "approval",
+                "approval timed out before it could be presented",
+            );
+            return;
         }
-        let review = EditReview::from_call(prompt.tool(), &prompt.request.arguments);
-        self.overlay = Some(Overlay::Approval {
-            prompt: Box::new(prompt),
-            review,
+        let review = EditReview::from_call(prompt.tool(), prompt.prepared().arguments());
+        let approval = PendingPrompt::Approval(Box::new(prompt), review);
+        if self.overlay.is_none() {
+            self.show_prompt(approval);
+        } else {
+            self.pending_prompts.push_back(approval);
+        }
+    }
+
+    /// Presents one authority-free questionnaire.
+    pub fn present_questionnaire(&mut self, form: QuestionnaireForm) {
+        let request_id = form.request_id.clone();
+        if form.deadline.is_expired(&SystemClock) {
+            self.questionnaire_resolutions
+                .push_back((request_id, QuestionnaireResolution::TimedOut));
+            self.transcript.push_notice(
+                "questionnaire",
+                "question timed out before it could be presented",
+            );
+            return;
+        }
+        let prompt = PendingPrompt::Questionnaire(QuestionnaireState::new(form));
+        if self.overlay.is_none() {
+            self.show_prompt(prompt);
+        } else {
+            self.pending_prompts.push_back(prompt);
+        }
+    }
+
+    /// Removes a runtime-closed questionnaire without manufacturing a second
+    /// host response.
+    ///
+    /// The runtime calls its interaction broker's synchronous close hook when
+    /// cancellation or its deadline wins, including when the broker future
+    /// was dropped. The host adapter projects that close here so a visible or
+    /// queued overlay cannot outlive the owning turn.
+    pub fn dismiss_questionnaire(&mut self, request_id: &str) {
+        self.overlay = match self.overlay.take() {
+            Some(Overlay::Questionnaire { state }) if state.form().request_id == request_id => None,
+            Some(Overlay::ExitConfirm {
+                approval,
+                questionnaire: Some(state),
+            }) if state.form().request_id == request_id => Some(Overlay::ExitConfirm {
+                approval,
+                questionnaire: None,
+            }),
+            other => other,
+        };
+        self.pending_prompts.retain(|prompt| {
+            !matches!(
+                prompt,
+                PendingPrompt::Questionnaire(state)
+                    if state.form().request_id == request_id
+            )
         });
+        self.present_next_prompt();
+    }
+
+    fn show_prompt(&mut self, prompt: PendingPrompt) {
+        self.overlay = Some(match prompt {
+            PendingPrompt::Approval(prompt, review) => Overlay::Approval { prompt, review },
+            PendingPrompt::Questionnaire(state) => Overlay::Questionnaire { state },
+        });
+    }
+
+    fn present_next_prompt(&mut self) {
+        if self.overlay.is_some() {
+            return;
+        }
+        if let Some(prompt) = self.pending_prompts.pop_front() {
+            self.show_prompt(prompt);
+        }
+    }
+
+    fn expire_prompts(&mut self) {
+        let mut expired_approvals = 0_usize;
+        let mut expired_questions = 0_usize;
+        self.overlay = match self.overlay.take() {
+            Some(Overlay::Approval { prompt, review }) => {
+                if prompt.deadline().is_expired(&SystemClock) {
+                    prompt.time_out();
+                    expired_approvals += 1;
+                    None
+                } else {
+                    Some(Overlay::Approval { prompt, review })
+                }
+            }
+            Some(Overlay::Questionnaire { state }) => {
+                if state.form().deadline.is_expired(&SystemClock) {
+                    self.resolve_questionnaire(state, QuestionnaireResolution::TimedOut);
+                    expired_questions += 1;
+                    None
+                } else {
+                    Some(Overlay::Questionnaire { state })
+                }
+            }
+            Some(Overlay::ExitConfirm {
+                approval: Some((prompt, review)),
+                questionnaire,
+            }) => {
+                if prompt.deadline().is_expired(&SystemClock) {
+                    prompt.time_out();
+                    expired_approvals += 1;
+                    Some(Overlay::ExitConfirm {
+                        approval: None,
+                        questionnaire,
+                    })
+                } else {
+                    Some(Overlay::ExitConfirm {
+                        approval: Some((prompt, review)),
+                        questionnaire,
+                    })
+                }
+            }
+            Some(Overlay::ExitConfirm {
+                approval,
+                questionnaire: Some(state),
+            }) => {
+                if state.form().deadline.is_expired(&SystemClock) {
+                    self.resolve_questionnaire(state, QuestionnaireResolution::TimedOut);
+                    expired_questions += 1;
+                    Some(Overlay::ExitConfirm {
+                        approval,
+                        questionnaire: None,
+                    })
+                } else {
+                    Some(Overlay::ExitConfirm {
+                        approval,
+                        questionnaire: Some(state),
+                    })
+                }
+            }
+            other => other,
+        };
+
+        let mut waiting = VecDeque::with_capacity(self.pending_prompts.len());
+        while let Some(prompt) = self.pending_prompts.pop_front() {
+            match prompt {
+                PendingPrompt::Approval(prompt, review) => {
+                    if prompt.deadline().is_expired(&SystemClock) {
+                        prompt.time_out();
+                        expired_approvals += 1;
+                    } else {
+                        waiting.push_back(PendingPrompt::Approval(prompt, review));
+                    }
+                }
+                PendingPrompt::Questionnaire(state) => {
+                    if state.form().deadline.is_expired(&SystemClock) {
+                        self.resolve_questionnaire(state, QuestionnaireResolution::TimedOut);
+                        expired_questions += 1;
+                    } else {
+                        waiting.push_back(PendingPrompt::Questionnaire(state));
+                    }
+                }
+            }
+        }
+        self.pending_prompts = waiting;
+
+        if expired_approvals > 0 {
+            self.transcript.push_notice(
+                "approval",
+                format!("timed out {expired_approvals} pending approval request(s)"),
+            );
+        }
+        if expired_questions > 0 {
+            self.transcript.push_notice(
+                "questionnaire",
+                format!("timed out {expired_questions} pending question request(s)"),
+            );
+        }
+        self.present_next_prompt();
     }
 
     fn answer_approval(&mut self, allow: Option<PromptScope>) {
@@ -603,10 +1276,36 @@ impl App {
                     .complete_tool_call_by_name(&tool, ToolStatus::Denied);
             }
         }
+        self.present_next_prompt();
+    }
+
+    fn resolve_questionnaire(
+        &mut self,
+        state: QuestionnaireState,
+        resolution: QuestionnaireResolution,
+    ) {
+        let request_id = state.form().request_id.clone();
+        let notice = match &resolution {
+            QuestionnaireResolution::Submitted(_) => "submitted",
+            QuestionnaireResolution::Declined => "declined",
+            QuestionnaireResolution::Cancelled => "cancelled",
+            QuestionnaireResolution::TimedOut => "timed out",
+        };
+        self.questionnaire_resolutions
+            .push_back((request_id, resolution));
+        self.transcript.push_notice("questionnaire", notice);
     }
 
     /// Handles a key press, returning an action for the host loop.
     pub fn on_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let action = self.reduce_key(key);
+        if !matches!(action, Some(Action::Quit | Action::Reconfigure(_))) {
+            self.present_next_prompt();
+        }
+        action
+    }
+
+    fn reduce_key(&mut self, key: KeyEvent) -> Option<Action> {
         // Terminals that report both press and release would otherwise act on
         // every keystroke twice.
         if key.kind == KeyEventKind::Release {
@@ -621,6 +1320,7 @@ impl App {
 
         match &self.overlay {
             Some(Overlay::Approval { .. }) => return self.on_approval_key(key),
+            Some(Overlay::Questionnaire { .. }) => return self.on_questionnaire_key(key),
             Some(Overlay::Palette { .. }) => return self.on_palette_key(key),
             Some(Overlay::ResourcePicker { .. }) => {
                 return self.on_resource_picker_key(key);
@@ -724,27 +1424,55 @@ impl App {
             .is_some_and(|previous| now.duration_since(previous) < FORCE_QUIT_WINDOW);
 
         if forced || !self.has_live_work() {
-            self.deny_pending_approval("Smith is exiting");
+            self.cancel_pending_prompts();
             self.should_quit = true;
             return Some(Action::Quit);
         }
 
         self.last_ctrl_c = Some(now);
-        let approval = match self.overlay.take() {
-            Some(Overlay::Approval { prompt, review }) => Some((prompt, review)),
-            _ => None,
+        let (approval, questionnaire) = match self.overlay.take() {
+            Some(Overlay::Approval { prompt, review }) => (Some((prompt, review)), None),
+            Some(Overlay::Questionnaire { state }) => (None, Some(state)),
+            _ => (None, None),
         };
-        self.overlay = Some(Overlay::ExitConfirm { approval });
+        self.overlay = Some(Overlay::ExitConfirm {
+            approval,
+            questionnaire,
+        });
         None
     }
 
-    fn deny_pending_approval(&mut self, reason: &str) {
-        match self.overlay.take() {
-            Some(Overlay::Approval { prompt, .. }) => prompt.deny(reason),
+    fn cancel_pending_prompts(&mut self) {
+        self.overlay = match self.overlay.take() {
+            Some(Overlay::Approval { prompt, .. }) => {
+                prompt.cancel();
+                None
+            }
+            Some(Overlay::Questionnaire { state }) => {
+                self.resolve_questionnaire(state, QuestionnaireResolution::Cancelled);
+                None
+            }
             Some(Overlay::ExitConfirm {
-                approval: Some((prompt, _)),
-            }) => prompt.deny(reason),
-            _ => {}
+                approval,
+                questionnaire,
+            }) => {
+                if let Some((prompt, _)) = approval {
+                    prompt.cancel();
+                }
+                if let Some(state) = questionnaire {
+                    self.resolve_questionnaire(state, QuestionnaireResolution::Cancelled);
+                }
+                None
+            }
+            other => other,
+        };
+        while let Some(prompt) = self.pending_prompts.pop_front() {
+            match prompt {
+                PendingPrompt::Approval(prompt, _) => prompt.cancel(),
+                PendingPrompt::Questionnaire(state) => {
+                    self.resolve_questionnaire(state, QuestionnaireResolution::Cancelled);
+                }
+            }
         }
     }
 
@@ -767,6 +1495,20 @@ impl App {
             KeyCode::Char('a') => self.answer_approval(Some(PromptScope::Session)),
             KeyCode::Char('n') | KeyCode::Esc => self.answer_approval(None),
             _ => {}
+        }
+        None
+    }
+
+    fn on_questionnaire_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let resolution = match &mut self.overlay {
+            Some(Overlay::Questionnaire { state }) => state.on_key(key),
+            _ => None,
+        };
+        if let Some(resolution) = resolution
+            && let Some(Overlay::Questionnaire { state }) = self.overlay.take()
+        {
+            self.resolve_questionnaire(state, resolution);
+            self.present_next_prompt();
         }
         None
     }
@@ -973,16 +1715,24 @@ impl App {
     fn on_exit_confirm_key(&mut self, key: KeyEvent) -> Option<Action> {
         match key.code {
             KeyCode::Char('y') => {
-                self.deny_pending_approval("Smith is exiting");
+                self.cancel_pending_prompts();
                 self.should_quit = true;
                 Some(Action::Quit)
             }
             KeyCode::Char('n') | KeyCode::Esc => {
-                let prior = match self.overlay.take() {
-                    Some(Overlay::ExitConfirm { approval }) => approval,
+                let (approval, questionnaire) = match self.overlay.take() {
+                    Some(Overlay::ExitConfirm {
+                        approval,
+                        questionnaire,
+                    }) => (approval, questionnaire),
+                    _ => (None, None),
+                };
+                self.overlay = match (approval, questionnaire) {
+                    (Some((prompt, review)), None) => Some(Overlay::Approval { prompt, review }),
+                    (None, Some(state)) => Some(Overlay::Questionnaire { state }),
                     _ => None,
                 };
-                self.overlay = prior.map(|(prompt, review)| Overlay::Approval { prompt, review });
+                self.present_next_prompt();
                 None
             }
             _ => None,
@@ -1432,6 +2182,10 @@ fn model_pair(providers: &[ResourceEntry], id: &str) -> Option<(String, String)>
     (!provider.is_empty() && !model.is_empty()).then(|| (provider.to_owned(), model.to_owned()))
 }
 
+fn one_line(value: &str) -> String {
+    value.replace(['\r', '\n'], " ")
+}
+
 /// Finished copy for a child's declared workspace posture.
 fn describe_workspace(workspace: &agent_runtime_core::delegation::WorkspacePolicy) -> String {
     use agent_runtime_core::delegation::WorkspacePolicy;
@@ -1455,24 +2209,42 @@ fn describe_cancel_reason(reason: &agent_runtime_core::cancel::CancelReason) -> 
     }
 }
 
+/// Stable user-facing label for a child request's content-handling posture.
+fn describe_interaction_sensitivity(
+    sensitivity: &agent_runtime_core::interaction::InteractionSensitivity,
+) -> &'static str {
+    use agent_runtime_core::interaction::InteractionSensitivity;
+    match sensitivity {
+        InteractionSensitivity::Public => "public",
+        InteractionSensitivity::Sensitive => "sensitive",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_runtime_core::approval::{ApprovalPolicy, ApprovalRequest};
+    use agent_runtime_core::approval::{
+        ApprovalDecision, ApprovalOrigin, ApprovalPolicy, ApprovalRequest,
+    };
     use agent_runtime_core::cancel::CancelReason;
-    use agent_runtime_core::clock::Timestamp;
+    use agent_runtime_core::clock::{Deadline, Timestamp};
     use agent_runtime_core::delegation::WorkspacePolicy;
     use agent_runtime_core::error::RuntimeError;
     use agent_runtime_core::event::EstimationConfidence;
-    use agent_runtime_core::ids::{ChildId, EventId, SessionId, ToolCallId};
-    use agent_runtime_core::manifest::SegmentKind;
+    use agent_runtime_core::ids::{
+        AttemptId, ChildId, EventId, InteractionRequestId, QuestionId, RequestId, SessionId,
+        ToolCallId, TurnId,
+    };
+    use agent_runtime_core::interaction::InteractionSensitivity;
+    use agent_runtime_core::manifest::{ActivatedCapability, SegmentKind};
     use agent_runtime_core::provider::ModelId;
-    use agent_runtime_core::tool::ToolEffects;
+    use agent_runtime_core::tool::{PreparedToolCall, ToolCallDisplay, ToolEffects};
     use agent_runtime_core::usage::{
         CounterKind, Provenance, UsageDelta, UsageRecord, UsageSource,
     };
     use smith_host::approval::InteractiveApproval;
 
+    use crate::questionnaire::{QuestionnaireChoice, QuestionnaireQuestion};
     use crate::transcript::Block;
 
     fn fingerprint(seed: &str) -> agent_runtime_registry::Fingerprint {
@@ -1514,12 +2286,51 @@ mod tests {
         )
     }
 
+    fn text_delta(text: &str) -> RuntimeEvent {
+        RuntimeEvent::TextDelta {
+            request: RequestId::new("request-fixture"),
+            attempt: AttemptId::new("attempt-fixture"),
+            text: text.to_owned(),
+        }
+    }
+
+    fn commit_output() -> RuntimeEvent {
+        RuntimeEvent::ProviderAttemptOutputCommitted {
+            request: RequestId::new("request-fixture"),
+            attempt: AttemptId::new("attempt-fixture"),
+        }
+    }
+
+    fn discard_output() -> RuntimeEvent {
+        RuntimeEvent::ProviderAttemptOutputDiscarded {
+            request: RequestId::new("request-fixture"),
+            attempt: AttemptId::new("attempt-fixture"),
+        }
+    }
+
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
     fn ctrl(ch: char) -> KeyEvent {
         KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL)
+    }
+
+    fn questionnaire_form(request_id: &str, deadline: Deadline) -> QuestionnaireForm {
+        QuestionnaireForm::new(
+            request_id,
+            vec![QuestionnaireQuestion::new(
+                "direction",
+                "Direction",
+                "Which direction should Smith take?",
+                vec![
+                    QuestionnaireChoice::new("minimal", "Minimal"),
+                    QuestionnaireChoice::new("complete", "Complete"),
+                ],
+            )],
+            deadline,
+        )
+        .expect("valid questionnaire fixture")
     }
 
     fn type_text(app: &mut App, text: &str) {
@@ -1533,24 +2344,48 @@ mod tests {
     }
 
     async fn prompt_with(tool: &str, arguments: serde_json::Value) -> ApprovalPrompt {
+        pending_prompt_with(tool, arguments).await.0
+    }
+
+    async fn pending_prompt_with(
+        tool: &str,
+        arguments: serde_json::Value,
+    ) -> (ApprovalPrompt, tokio::task::JoinHandle<ApprovalDecision>) {
+        pending_prompt_with_deadline(tool, arguments, Deadline::never()).await
+    }
+
+    async fn pending_prompt_with_deadline(
+        tool: &str,
+        arguments: serde_json::Value,
+        deadline: Deadline,
+    ) -> (ApprovalPrompt, tokio::task::JoinHandle<ApprovalDecision>) {
         // The simplest way to obtain a real prompt is to drive the policy the
         // runtime would call.
         let (policy, mut requests) = InteractiveApproval::new(1);
         let tool = tool.to_owned();
-        tokio::spawn(async move {
-            let request = ApprovalRequest {
-                call_id: ToolCallId::new("c1"),
-                tool,
-                arguments,
-                effects: ToolEffects::read_only().with_write("/repo"),
-            };
-            let _ = policy.decide(&request).await;
+        let decision = tokio::spawn(async move {
+            let effects = ToolEffects::read_only().with_write("/repo");
+            let (permissions, resource) = effects.authorization_request(&tool, "/repo");
+            let request = ApprovalRequest::new(
+                PreparedToolCall::new(
+                    ToolCallId::new("c1"),
+                    &tool,
+                    arguments,
+                    permissions,
+                    resource,
+                    effects,
+                    ToolCallDisplay::new(format!("Run {tool}")),
+                ),
+                deadline,
+                ApprovalOrigin::new(
+                    agent_runtime_core::ids::SessionId::new("session-1"),
+                    RequestId::new("request-1"),
+                ),
+            );
+            policy.decide(&request).await
         });
-        loop {
-            if let Some(prompt) = requests.recv().await {
-                return prompt;
-            }
-        }
+        let prompt = requests.recv().await.expect("an approval prompt");
+        (prompt, decision)
     }
 
     #[test]
@@ -1935,7 +2770,10 @@ mod tests {
         assert_eq!(app.on_key(ctrl('c')), None);
         assert!(matches!(
             app.overlay,
-            Some(Overlay::ExitConfirm { approval: Some(_) })
+            Some(Overlay::ExitConfirm {
+                approval: Some(_),
+                ..
+            })
         ));
         assert_eq!(app.on_key(key(KeyCode::Char('n'))), None);
         assert!(matches!(app.overlay, Some(Overlay::Approval { .. })));
@@ -1988,15 +2826,271 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_second_request_supersedes_rather_than_stacks() {
+    async fn parallel_approval_requests_are_presented_in_fifo_order() {
         let mut app = app();
-        app.present_approval(prompt("shell").await);
-        app.present_approval(prompt("patch").await);
+        let (shell, shell_decision) =
+            pending_prompt_with("shell", serde_json::json!({"command": "build"})).await;
+        let (patch, patch_decision) =
+            pending_prompt_with("patch", serde_json::json!({"path": "src/lib.rs"})).await;
+        app.present_approval(shell);
+        app.present_approval(patch);
 
         match &app.overlay {
-            Some(Overlay::Approval { prompt, .. }) => assert_eq!(prompt.tool(), "patch"),
-            other => panic!("expected the newer approval, got {other:?}"),
+            Some(Overlay::Approval { prompt, .. }) => assert_eq!(prompt.tool(), "shell"),
+            other => panic!("expected the first approval, got {other:?}"),
         }
+        assert_eq!(app.pending_approval_count(), 2);
+
+        app.on_key(key(KeyCode::Char('n')));
+        match &app.overlay {
+            Some(Overlay::Approval { prompt, .. }) => assert_eq!(prompt.tool(), "patch"),
+            other => panic!("expected the queued approval, got {other:?}"),
+        }
+        assert_eq!(app.pending_approval_count(), 1);
+
+        app.on_key(key(KeyCode::Char('y')));
+        assert!(app.overlay.is_none());
+        assert_eq!(app.pending_approval_count(), 0);
+        assert!(matches!(
+            shell_decision.await.expect("shell decision"),
+            ApprovalDecision::Deny { .. }
+        ));
+        assert_eq!(
+            patch_decision.await.expect("patch decision"),
+            ApprovalDecision::Allow
+        );
+    }
+
+    #[test]
+    fn questionnaire_requires_explicit_submit_and_resolves_once() {
+        let mut app = app();
+        app.present_questionnaire(questionnaire_form("question-1", Deadline::never()));
+
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert!(
+            app.take_questionnaire_resolution().is_none(),
+            "Enter on an answer stages it; it must not submit the form"
+        );
+        assert!(matches!(app.overlay, Some(Overlay::Questionnaire { .. })));
+
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        let (request_id, resolution) = app
+            .take_questionnaire_resolution()
+            .expect("explicit Submit resolves the request");
+        assert_eq!(request_id, "question-1");
+        assert!(matches!(resolution, QuestionnaireResolution::Submitted(_)));
+        assert!(app.take_questionnaire_resolution().is_none());
+        assert!(app.overlay.is_none());
+    }
+
+    #[tokio::test]
+    async fn questionnaire_and_approval_prompts_share_one_fifo() {
+        let mut approval_first = app();
+        let (approval, decision) =
+            pending_prompt_with("shell", serde_json::json!({"command": "build"})).await;
+        approval_first.present_approval(approval);
+        approval_first
+            .present_questionnaire(questionnaire_form("queued-question", Deadline::never()));
+        approval_first.on_key(key(KeyCode::Char('n')));
+        assert!(matches!(
+            approval_first.overlay,
+            Some(Overlay::Questionnaire { .. })
+        ));
+        assert!(matches!(
+            decision.await.expect("approval decision"),
+            ApprovalDecision::Deny { .. }
+        ));
+
+        let mut question_first = app();
+        let (approval, decision) =
+            pending_prompt_with("edit", serde_json::json!({"path": "src/lib.rs"})).await;
+        question_first
+            .present_questionnaire(questionnaire_form("first-question", Deadline::never()));
+        question_first.present_approval(approval);
+        question_first.on_key(key(KeyCode::Tab));
+        question_first.on_key(key(KeyCode::Tab));
+        question_first.on_key(key(KeyCode::Enter));
+        assert!(matches!(
+            question_first.overlay,
+            Some(Overlay::Approval { .. })
+        ));
+        assert!(matches!(
+            question_first.take_questionnaire_resolution(),
+            Some((
+                request_id,
+                QuestionnaireResolution::Declined
+            )) if request_id == "first-question"
+        ));
+        question_first.on_key(key(KeyCode::Char('n')));
+        assert!(matches!(
+            decision.await.expect("approval decision"),
+            ApprovalDecision::Deny { .. }
+        ));
+    }
+
+    #[test]
+    fn forced_exit_cancels_visible_and_queued_questionnaires_exactly_once() {
+        let mut app = app();
+        app.present_questionnaire(questionnaire_form("visible", Deadline::never()));
+        app.present_questionnaire(questionnaire_form("queued", Deadline::never()).restored(true));
+
+        assert_eq!(app.on_key(ctrl('c')), None);
+        assert!(matches!(
+            app.overlay,
+            Some(Overlay::ExitConfirm {
+                questionnaire: Some(_),
+                ..
+            })
+        ));
+        assert_eq!(app.on_key(ctrl('c')), Some(Action::Quit));
+
+        for expected in ["visible", "queued"] {
+            assert!(matches!(
+                app.take_questionnaire_resolution(),
+                Some((request_id, QuestionnaireResolution::Cancelled))
+                    if request_id == expected
+            ));
+        }
+        assert!(app.take_questionnaire_resolution().is_none());
+        assert!(app.overlay.is_none());
+    }
+
+    #[tokio::test]
+    async fn questionnaire_deadlines_remove_queued_requests_without_answering_them() {
+        let mut app = app();
+        app.present_questionnaire(questionnaire_form("visible", Deadline::never()));
+        app.present_questionnaire(questionnaire_form(
+            "expired",
+            Deadline::after(&SystemClock, 1),
+        ));
+        tokio::time::sleep(Duration::from_millis(5)).await;
+
+        app.tick();
+
+        assert!(matches!(
+            app.take_questionnaire_resolution(),
+            Some((request_id, QuestionnaireResolution::TimedOut))
+                if request_id == "expired"
+        ));
+        assert!(matches!(app.overlay, Some(Overlay::Questionnaire { .. })));
+        app.on_key(key(KeyCode::Esc));
+        assert!(matches!(
+            app.take_questionnaire_resolution(),
+            Some((request_id, QuestionnaireResolution::Cancelled))
+                if request_id == "visible"
+        ));
+        assert!(app.take_questionnaire_resolution().is_none());
+    }
+
+    #[test]
+    fn session_shutdown_cancels_every_questionnaire_responder_once() {
+        let mut app = app();
+        app.present_questionnaire(questionnaire_form("visible", Deadline::never()));
+        app.present_questionnaire(questionnaire_form("queued", Deadline::never()));
+
+        app.apply(&event(RuntimeEvent::SessionShutdown));
+
+        for expected in ["visible", "queued"] {
+            assert!(matches!(
+                app.take_questionnaire_resolution(),
+                Some((request_id, QuestionnaireResolution::Cancelled))
+                    if request_id == expected
+            ));
+        }
+        assert!(app.take_questionnaire_resolution().is_none());
+        assert!(app.overlay.is_none());
+    }
+
+    #[test]
+    fn runtime_close_removes_visible_or_queued_questionnaires_idempotently() {
+        let mut app = app();
+        app.present_questionnaire(questionnaire_form("visible", Deadline::never()));
+        app.present_questionnaire(questionnaire_form("queued", Deadline::never()));
+
+        app.dismiss_questionnaire("visible");
+        assert!(matches!(
+            &app.overlay,
+            Some(Overlay::Questionnaire { state })
+                if state.form().request_id == "queued"
+        ));
+        app.dismiss_questionnaire("visible");
+        assert!(app.take_questionnaire_resolution().is_none());
+
+        app.dismiss_questionnaire("queued");
+        app.dismiss_questionnaire("queued");
+        assert!(app.overlay.is_none());
+        assert_eq!(app.pending_questionnaire_count(), 0);
+        assert!(app.take_questionnaire_resolution().is_none());
+    }
+
+    #[tokio::test]
+    async fn terminal_exit_cancels_visible_and_queued_approval_responders() {
+        let mut app = app();
+        let (shell, shell_decision) =
+            pending_prompt_with("shell", serde_json::json!({"command": "build"})).await;
+        let (patch, patch_decision) =
+            pending_prompt_with("patch", serde_json::json!({"path": "src/lib.rs"})).await;
+        app.present_approval(shell);
+        app.present_approval(patch);
+
+        assert_eq!(app.on_key(ctrl('c')), None);
+        assert_eq!(app.on_key(ctrl('c')), Some(Action::Quit));
+
+        assert_eq!(
+            shell_decision.await.expect("shell cancellation"),
+            ApprovalDecision::Cancelled
+        );
+        assert_eq!(
+            patch_decision.await.expect("patch cancellation"),
+            ApprovalDecision::Cancelled
+        );
+    }
+
+    #[tokio::test]
+    async fn approval_deadlines_close_the_prompt_without_selecting_a_default() {
+        let mut app = app();
+        let (prompt, decision) = pending_prompt_with_deadline(
+            "shell",
+            serde_json::json!({"command": "build"}),
+            Deadline::after(&SystemClock, 1),
+        )
+        .await;
+        app.present_approval(prompt);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+
+        app.tick();
+
+        assert!(app.overlay.is_none());
+        assert_eq!(
+            decision.await.expect("timeout decision"),
+            ApprovalDecision::TimedOut
+        );
+        assert!(app.transcript.blocks().iter().any(|block| matches!(
+            block,
+            Block::Notice { source, text }
+                if source == "approval" && text.contains("timed out")
+        )));
+    }
+
+    #[tokio::test]
+    async fn a_prompt_delivered_before_turn_started_is_not_mistaken_for_stale_work() {
+        let mut app = app();
+        let (prompt, decision) =
+            pending_prompt_with("shell", serde_json::json!({"command": "build"})).await;
+        app.present_approval(prompt);
+
+        // Runtime events and approval prompts use independent channels. The
+        // host loop may receive the prompt first even though TurnStarted was
+        // emitted first on the event stream.
+        app.apply(&event(RuntimeEvent::TurnStarted));
+
+        assert!(matches!(app.overlay, Some(Overlay::Approval { .. })));
+        app.on_key(key(KeyCode::Char('y')));
+        assert_eq!(
+            decision.await.expect("approval decision"),
+            ApprovalDecision::Allow
+        );
     }
 
     #[tokio::test]
@@ -2037,12 +3131,11 @@ mod tests {
     fn streaming_text_lands_in_the_transcript_with_usage_in_the_header() {
         let mut app = app();
         app.apply(&event(RuntimeEvent::TurnStarted));
-        app.apply(&event(RuntimeEvent::TextDelta {
-            text: "The retry ".into(),
-        }));
-        app.apply(&event(RuntimeEvent::TextDelta {
-            text: "policy".into(),
-        }));
+        app.apply(&event(text_delta("The retry ")));
+        app.apply(&event(text_delta("policy")));
+        assert_eq!(app.speculative_text(), Some("The retry policy"));
+        assert!(app.transcript.is_empty());
+        app.apply(&event(commit_output()));
         app.apply(&event(RuntimeEvent::Usage {
             record: UsageRecord {
                 source: UsageSource::ProviderAttempt,
@@ -2110,9 +3203,8 @@ mod tests {
     fn an_interrupted_turn_says_so() {
         let mut app = app();
         app.apply(&event(RuntimeEvent::TurnStarted));
-        app.apply(&event(RuntimeEvent::TextDelta {
-            text: "partial".into(),
-        }));
+        app.apply(&event(text_delta("partial")));
+        app.apply(&event(discard_output()));
         app.apply(&event(RuntimeEvent::TurnCompleted {
             finish: TurnFinish::Cancelled {
                 reason: CancelReason::UserRequested,
@@ -2185,6 +3277,406 @@ mod tests {
             "{:?}",
             app.transcript.blocks()
         );
+    }
+
+    #[test]
+    fn reducer_event_v4_pre_attempt_scoping_fixture_is_frozen() {
+        // This is deliberately JSON evidence rather than a current
+        // `EventEnvelope` decode test. Event schema v4 streamed text without a
+        // request/attempt identity, so it cannot safely reconstruct
+        // speculative output after the v5 migration. A separate v5 fixture
+        // exercises the current reducer contract.
+        let fixture = include_str!("../tests/fixtures/reducer-events-v4-pre-attempt-scoping.json");
+        let events: serde_json::Value =
+            serde_json::from_str(fixture).expect("valid reducer fixture");
+        let events = events.as_array().expect("an event array");
+
+        assert_eq!(events.len(), 5);
+        assert!(events.iter().all(|event| event["schema_version"] == 4));
+        let delta = &events[2]["payload"];
+        assert_eq!(delta["event"], "text_delta");
+        assert_eq!(delta["text"], "fixture answer");
+        assert!(delta.get("request").is_none());
+        assert!(delta.get("attempt").is_none());
+        assert!(
+            serde_json::from_str::<Vec<EventEnvelope>>(fixture).is_err(),
+            "v5 must reject unattributed v4 deltas instead of synthesizing attempt identity"
+        );
+    }
+
+    #[test]
+    fn reducer_event_v5_fixture_commits_only_the_successful_attempt() {
+        let events: Vec<EventEnvelope> = serde_json::from_str(include_str!(
+            "../tests/fixtures/reducer-events-v5-attempt-scoped.json"
+        ))
+        .expect("valid v5 reducer fixture");
+        let mut app = app();
+        for event in &events {
+            app.apply(event);
+        }
+
+        assert_eq!(app.status.activity, Activity::Idle);
+        assert_eq!(app.status.context.render(), "30");
+        assert_eq!(app.speculative_attempt_count(), 0);
+        assert!(app.transcript.blocks().iter().any(|block| matches!(
+            block,
+            Block::Assistant { text, open: false } if text == "fixture answer"
+        )));
+        assert!(app.transcript.blocks().iter().any(|block| matches!(
+            block,
+            Block::Notice { source, text }
+                if source == "retry" && text.contains("attempt-failed")
+        )));
+        assert!(app.transcript.blocks().iter().any(|block| matches!(
+            block,
+            Block::Tool {
+                call_id,
+                status: ToolStatus::Ok,
+                ..
+            } if call_id == "call-fixture"
+        )));
+        assert!(
+            !format!("{:?}", app.transcript.blocks()).contains("discarded prefix"),
+            "failed speculative output entered the committed transcript"
+        );
+    }
+
+    #[test]
+    fn live_reducer_and_journal_replay_produce_equivalent_ui_state() {
+        use agent_runtime_core::interaction::InteractionOutcomeKind;
+        use agent_runtime_core::provider::FinishReason;
+
+        let session = SessionId::new("replay-session");
+        let ordinary_turn = TurnId::new("turn-ordinary");
+        let harness_turn = TurnId::new("turn-harness");
+        let ordinary_request = RequestId::new("request-ordinary");
+        let ordinary_attempt = AttemptId::new("attempt-ordinary");
+        let retry_request = RequestId::new("request-retry");
+        let failed_attempt = AttemptId::new("attempt-failed");
+        let successful_attempt = AttemptId::new("attempt-successful");
+        let final_request = RequestId::new("request-final");
+        let final_attempt = AttemptId::new("attempt-final");
+        let edit_call = ToolCallId::new("call-approved-edit");
+        let question_call = ToolCallId::new("call-question");
+        let question_request = InteractionRequestId::new("interaction-direction");
+        let events = vec![
+            (None, RuntimeEvent::SessionStarted),
+            (
+                None,
+                RuntimeEvent::CapabilitiesActivated {
+                    epoch: 1,
+                    activation: vec![
+                        ActivatedCapability::new(
+                            agent_runtime_registry::RegistryId::tool("read"),
+                            agent_runtime_registry::RegistryRevision::new("read-1"),
+                        ),
+                        ActivatedCapability::new(
+                            agent_runtime_registry::RegistryId::tool("edit"),
+                            agent_runtime_registry::RegistryRevision::new("edit-1"),
+                        ),
+                    ],
+                },
+            ),
+            (Some(ordinary_turn.clone()), RuntimeEvent::TurnStarted),
+            (
+                Some(ordinary_turn.clone()),
+                RuntimeEvent::ProviderAttemptStarted {
+                    request: ordinary_request.clone(),
+                    attempt: ordinary_attempt.clone(),
+                    index: 0,
+                    model: "fixture-model".to_owned(),
+                },
+            ),
+            (
+                Some(ordinary_turn.clone()),
+                RuntimeEvent::TextDelta {
+                    request: ordinary_request.clone(),
+                    attempt: ordinary_attempt.clone(),
+                    text: "ordinary committed answer".to_owned(),
+                },
+            ),
+            (
+                Some(ordinary_turn.clone()),
+                RuntimeEvent::ProviderAttemptOutputCommitted {
+                    request: ordinary_request,
+                    attempt: ordinary_attempt.clone(),
+                },
+            ),
+            (
+                Some(ordinary_turn.clone()),
+                RuntimeEvent::ProviderAttemptFinished {
+                    attempt: ordinary_attempt,
+                    finish: FinishReason::Stop,
+                    retryable: false,
+                },
+            ),
+            (
+                Some(ordinary_turn),
+                RuntimeEvent::TurnCompleted {
+                    finish: TurnFinish::Completed,
+                    visible_output: true,
+                },
+            ),
+            (Some(harness_turn.clone()), RuntimeEvent::TurnStarted),
+            (
+                Some(harness_turn.clone()),
+                RuntimeEvent::ProviderAttemptStarted {
+                    request: retry_request.clone(),
+                    attempt: failed_attempt.clone(),
+                    index: 0,
+                    model: "fixture-model".to_owned(),
+                },
+            ),
+            (
+                Some(harness_turn.clone()),
+                RuntimeEvent::TextDelta {
+                    request: retry_request.clone(),
+                    attempt: failed_attempt.clone(),
+                    text: "discarded speculative prefix".to_owned(),
+                },
+            ),
+            (
+                Some(harness_turn.clone()),
+                RuntimeEvent::ProviderAttemptOutputDiscarded {
+                    request: retry_request.clone(),
+                    attempt: failed_attempt.clone(),
+                },
+            ),
+            (
+                Some(harness_turn.clone()),
+                RuntimeEvent::ProviderAttemptFinished {
+                    attempt: failed_attempt,
+                    finish: FinishReason::Error,
+                    retryable: true,
+                },
+            ),
+            (
+                Some(harness_turn.clone()),
+                RuntimeEvent::ProviderAttemptStarted {
+                    request: retry_request.clone(),
+                    attempt: successful_attempt.clone(),
+                    index: 1,
+                    model: "fixture-model".to_owned(),
+                },
+            ),
+            (
+                Some(harness_turn.clone()),
+                RuntimeEvent::TextDelta {
+                    request: retry_request.clone(),
+                    attempt: successful_attempt.clone(),
+                    text: "retry committed answer".to_owned(),
+                },
+            ),
+            (
+                Some(harness_turn.clone()),
+                RuntimeEvent::ProviderAttemptOutputCommitted {
+                    request: retry_request,
+                    attempt: successful_attempt.clone(),
+                },
+            ),
+            (
+                Some(harness_turn.clone()),
+                RuntimeEvent::ProviderAttemptFinished {
+                    attempt: successful_attempt,
+                    finish: FinishReason::ToolCalls,
+                    retryable: false,
+                },
+            ),
+            (
+                Some(harness_turn.clone()),
+                RuntimeEvent::ToolCallRequested {
+                    call: edit_call.clone(),
+                    name: "edit".to_owned(),
+                    argument_keys: vec![
+                        "new_string".to_owned(),
+                        "old_string".to_owned(),
+                        "path".to_owned(),
+                    ],
+                    argument_fingerprint: fingerprint("approved-edit"),
+                    arguments: None,
+                },
+            ),
+            (
+                Some(harness_turn.clone()),
+                RuntimeEvent::ToolCallCompleted {
+                    call: edit_call,
+                    name: "edit".to_owned(),
+                    is_error: false,
+                },
+            ),
+            (
+                Some(harness_turn.clone()),
+                RuntimeEvent::ToolCallRequested {
+                    call: question_call.clone(),
+                    name: "ask_user".to_owned(),
+                    argument_keys: vec!["questions".to_owned()],
+                    argument_fingerprint: fingerprint("question"),
+                    arguments: None,
+                },
+            ),
+            (
+                Some(harness_turn.clone()),
+                RuntimeEvent::InteractionRequested {
+                    request: question_request.clone(),
+                    call: question_call.clone(),
+                    question_count: 1,
+                    sensitivity: InteractionSensitivity::Sensitive,
+                },
+            ),
+            (
+                Some(harness_turn.clone()),
+                RuntimeEvent::InteractionResolved {
+                    request: question_request,
+                    call: question_call.clone(),
+                    outcome: InteractionOutcomeKind::Answered,
+                },
+            ),
+            (
+                Some(harness_turn.clone()),
+                RuntimeEvent::ToolCallCompleted {
+                    call: question_call,
+                    name: "ask_user".to_owned(),
+                    is_error: false,
+                },
+            ),
+            (
+                Some(harness_turn.clone()),
+                RuntimeEvent::PlanUpdated {
+                    revision: 2,
+                    sensitivity: PlanSensitivity::Public,
+                    counts: BTreeMap::from([
+                        ("cancelled".to_owned(), 0),
+                        ("completed".to_owned(), 1),
+                        ("in_progress".to_owned(), 1),
+                        ("pending".to_owned(), 0),
+                    ]),
+                    items: Some(vec![
+                        PlanItemProjection {
+                            id: "inspect".to_owned(),
+                            text: "Inspect state".to_owned(),
+                            status: PlanItemStatus::Completed,
+                        },
+                        PlanItemProjection {
+                            id: "verify".to_owned(),
+                            text: "Verify replay".to_owned(),
+                            status: PlanItemStatus::InProgress,
+                        },
+                    ]),
+                },
+            ),
+            (
+                Some(harness_turn.clone()),
+                RuntimeEvent::ProviderAttemptStarted {
+                    request: final_request.clone(),
+                    attempt: final_attempt.clone(),
+                    index: 0,
+                    model: "fixture-model".to_owned(),
+                },
+            ),
+            (
+                Some(harness_turn.clone()),
+                RuntimeEvent::TextDelta {
+                    request: final_request.clone(),
+                    attempt: final_attempt.clone(),
+                    text: "tools and question completed".to_owned(),
+                },
+            ),
+            (
+                Some(harness_turn.clone()),
+                RuntimeEvent::ProviderAttemptOutputCommitted {
+                    request: final_request,
+                    attempt: final_attempt.clone(),
+                },
+            ),
+            (
+                Some(harness_turn.clone()),
+                RuntimeEvent::ProviderAttemptFinished {
+                    attempt: final_attempt,
+                    finish: FinishReason::Stop,
+                    retryable: false,
+                },
+            ),
+            (
+                Some(harness_turn),
+                RuntimeEvent::TurnCompleted {
+                    finish: TurnFinish::Completed,
+                    visible_output: true,
+                },
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(seq, (turn, payload))| {
+            EventEnvelope::new(
+                u64::try_from(seq).expect("fixture sequence"),
+                EventId::new(format!("event-{seq}")),
+                session.clone(),
+                turn,
+                Timestamp::ZERO,
+                payload,
+            )
+        })
+        .collect::<Vec<_>>();
+        let journal_bytes = serde_json::to_vec(&events).expect("serializable journal events");
+        let replayed_events: Vec<EventEnvelope> =
+            serde_json::from_slice(&journal_bytes).expect("replayable journal events");
+
+        let mut live = app();
+        live.present_recovered_ephemeral_work(1, 1);
+        for event in &events {
+            live.apply(event);
+        }
+        let mut replayed = app();
+        replayed.present_recovered_ephemeral_work(1, 1);
+        for event in &replayed_events {
+            replayed.apply(event);
+        }
+
+        assert_eq!(live.transcript.blocks(), replayed.transcript.blocks());
+        assert_eq!(live.status.activity, replayed.status.activity);
+        assert_eq!(live.status.context, replayed.status.context);
+        assert_eq!(live.status.context_plan, replayed.status.context_plan);
+        assert_eq!(live.status.cache_read, replayed.status.cache_read);
+        assert_eq!(live.status.capabilities, replayed.status.capabilities);
+        assert_eq!(live.plan, replayed.plan);
+        assert_eq!(live.children, replayed.children);
+        assert_eq!(live.pending_approval_count(), 0);
+        assert_eq!(replayed.pending_approval_count(), 0);
+        assert_eq!(live.pending_questionnaire_count(), 0);
+        assert_eq!(replayed.pending_questionnaire_count(), 0);
+        assert_eq!(live.speculative_attempt_count(), 0);
+        assert_eq!(replayed.speculative_attempt_count(), 0);
+        let rendered = format!("{:?}", live.transcript.blocks());
+        assert!(rendered.contains("ordinary committed answer"));
+        assert!(rendered.contains("retry committed answer"));
+        assert!(rendered.contains("call-approved-edit"));
+        assert!(rendered.contains("call-question"));
+        assert!(rendered.contains("not restarted"));
+        assert!(
+            !rendered.contains("discarded speculative prefix"),
+            "failed attempt output entered the committed transcript"
+        );
+    }
+
+    #[test]
+    fn unterminated_speculative_output_is_discarded_at_the_turn_boundary() {
+        let mut app = app();
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        app.apply(&event(text_delta("orphaned draft")));
+        assert_eq!(app.speculative_attempt_count(), 1);
+
+        app.apply(&event(RuntimeEvent::TurnCompleted {
+            finish: TurnFinish::Failed,
+            visible_output: false,
+        }));
+
+        assert_eq!(app.speculative_attempt_count(), 0);
+        assert!(app.transcript.blocks().iter().any(|block| matches!(
+            block,
+            Block::Notice { source, text }
+                if source == "integrity" && text.contains("unterminated")
+        )));
+        assert!(!format!("{:?}", app.transcript.blocks()).contains("orphaned draft"));
     }
 
     #[test]
@@ -2330,12 +3822,161 @@ mod tests {
         }));
 
         let plan = app.status.context_plan.expect("context plan");
+        assert_eq!(plan.fingerprint, fingerprint("context").as_str());
+        assert_eq!(plan.cache_fingerprint, fingerprint("cache").as_str());
         assert_eq!(plan.input_tokens, 2_000);
         assert_eq!(plan.input_budget_tokens, 10_000);
         assert_eq!(plan.reserved_tokens, 2_000);
         assert_eq!(plan.segment_count, 2);
         assert_eq!(plan.totals["history"], 1_500);
         assert_eq!(plan.render_footer(), "~80% ctx");
+    }
+
+    #[test]
+    fn capability_lifecycle_becomes_bounded_status_and_a_concise_notice() {
+        let mut app = app();
+        let snapshot = fingerprint("registry");
+        let view = fingerprint("view");
+        app.apply(&event(RuntimeEvent::RegistrySnapshotSealed {
+            snapshot: snapshot.clone(),
+            entries: 6,
+        }));
+        app.apply(&event(RuntimeEvent::ScopedViewDerived {
+            snapshot,
+            view: view.clone(),
+            visible_entries: 4,
+        }));
+        app.apply(&event(RuntimeEvent::CapabilityRetrievalPerformed {
+            resolver_revision: agent_runtime_registry::RegistryRevision::new("resolver-1"),
+            index_revision: None,
+            candidates: vec![
+                agent_runtime_registry::RegistryId::tool("read"),
+                agent_runtime_registry::RegistryId::tool("search"),
+            ],
+        }));
+        app.apply(&event(RuntimeEvent::CapabilitiesActivated {
+            epoch: 2,
+            activation: vec![
+                ActivatedCapability::new(
+                    agent_runtime_registry::RegistryId::tool("read"),
+                    agent_runtime_registry::RegistryRevision::new("read-1"),
+                ),
+                ActivatedCapability::new(
+                    agent_runtime_registry::RegistryId::tool("search"),
+                    agent_runtime_registry::RegistryRevision::new("search-1"),
+                ),
+            ],
+        }));
+
+        assert_eq!(
+            app.status.capabilities.registry,
+            Some((fingerprint("registry").as_str().to_owned(), 6))
+        );
+        assert_eq!(
+            app.status.capabilities.view,
+            Some((view.as_str().to_owned(), 4))
+        );
+        assert_eq!(
+            app.status.capabilities.retrieval,
+            Some((
+                "resolver-1".to_owned(),
+                vec!["tool:read".to_owned(), "tool:search".to_owned()]
+            ))
+        );
+        assert_eq!(
+            app.status.capabilities.activation,
+            Some((2, vec!["tool:read".to_owned(), "tool:search".to_owned()]))
+        );
+        assert!(app.transcript.blocks().iter().any(|block| {
+            matches!(
+                block,
+                Block::Notice { source, text }
+                    if source == "capabilities"
+                        && text == "activation epoch 2: tool:read, tool:search"
+            )
+        }));
+    }
+
+    #[test]
+    fn public_todo_updates_render_inline_and_replay_the_same_state() {
+        let update = event(RuntimeEvent::PlanUpdated {
+            revision: 3,
+            sensitivity: PlanSensitivity::Public,
+            counts: BTreeMap::from([
+                ("cancelled".to_owned(), 0),
+                ("completed".to_owned(), 1),
+                ("in_progress".to_owned(), 1),
+                ("pending".to_owned(), 1),
+            ]),
+            items: Some(vec![
+                PlanItemProjection {
+                    id: "inspect".to_owned(),
+                    text: "Inspect\nrelevant code".to_owned(),
+                    status: PlanItemStatus::Completed,
+                },
+                PlanItemProjection {
+                    id: "change".to_owned(),
+                    text: "Implement the change".to_owned(),
+                    status: PlanItemStatus::InProgress,
+                },
+                PlanItemProjection {
+                    id: "verify".to_owned(),
+                    text: "Run focused tests".to_owned(),
+                    status: PlanItemStatus::Pending,
+                },
+            ]),
+        });
+        let mut live = app();
+        live.apply(&update);
+        let mut replayed = app();
+        replayed.apply(&update);
+
+        assert_eq!(live.plan, replayed.plan);
+        assert_eq!(live.transcript.blocks(), replayed.transcript.blocks());
+        assert!(live.transcript.blocks().iter().any(|block| matches!(
+            block,
+            Block::Notice { source, text }
+                if source == "plan"
+                    && text == "revision 3 · 1 active · 1 pending · 1 done · 0 cancelled\n\
+                               [x] inspect — Inspect relevant code\n\
+                               [>] change — Implement the change\n\
+                               [ ] verify — Run focused tests"
+        )));
+    }
+
+    #[test]
+    fn sensitive_todo_update_displays_counts_without_item_text() {
+        const PROTECTED_ITEM: &str = "PROTECTED PLAN CONTENT";
+        let mut app = app();
+        app.apply(&event(RuntimeEvent::PlanUpdated {
+            revision: 1,
+            sensitivity: PlanSensitivity::Sensitive,
+            counts: BTreeMap::from([
+                ("cancelled".to_owned(), 1),
+                ("completed".to_owned(), 0),
+                ("in_progress".to_owned(), 0),
+                ("pending".to_owned(), 2),
+            ]),
+            items: Some(vec![PlanItemProjection {
+                id: "protected".to_owned(),
+                text: PROTECTED_ITEM.to_owned(),
+                status: PlanItemStatus::Pending,
+            }]),
+        }));
+
+        let plan = app.plan.as_ref().expect("latest plan");
+        assert_eq!(plan.sensitivity, PlanSensitivity::Sensitive);
+        assert!(
+            plan.items.is_none(),
+            "sensitive item text survived the reducer seam"
+        );
+        assert!(app.transcript.blocks().iter().any(|block| matches!(
+            block,
+            Block::Notice { source, text }
+                if source == "plan"
+                    && text == "revision 1 · 0 active · 2 pending · 0 done · 1 cancelled"
+        )));
+        assert!(!format!("{:?}", app.transcript.blocks()).contains(PROTECTED_ITEM));
     }
 
     #[test]
@@ -2414,6 +4055,46 @@ mod tests {
         assert_eq!(app.children[child.as_str()].state, "completed");
         assert!(app.transcript.blocks().iter().any(|block| {
             matches!(block, Block::Notice { text, .. } if text.contains("No findings"))
+        }));
+    }
+
+    #[test]
+    fn child_needs_input_is_metadata_only_and_does_not_open_a_questionnaire() {
+        let mut app = app();
+        let child = ChildId::new("child-ask");
+        app.apply(&event(RuntimeEvent::ChildNeedsInput {
+            child: child.clone(),
+            child_session: SessionId::new("child-session"),
+            turn: TurnId::new("child-turn"),
+            call: ToolCallId::new("ask-call"),
+            request: InteractionRequestId::new("child-request"),
+            question_ids: vec![
+                QuestionId::new("question-one"),
+                QuestionId::new("question-two"),
+            ],
+            sensitivity: InteractionSensitivity::Sensitive,
+        }));
+
+        let summary = &app.children[child.as_str()];
+        assert_eq!(summary.state, "needs input");
+        assert!(
+            summary
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("2 questions"))
+        );
+        assert!(
+            app.overlay.is_none(),
+            "a child request must not seize the root questionnaire overlay"
+        );
+        assert!(app.transcript.blocks().iter().any(|block| {
+            matches!(
+                block,
+                Block::Notice { source, text }
+                    if source == "sub-agent"
+                        && text.contains("child-request")
+                        && text.contains("2 questions")
+            )
         }));
     }
 

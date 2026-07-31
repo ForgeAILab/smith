@@ -4,3 +4,7 @@ Cargo.lock.bak
 
 # Local tooling caches — not part of the project
 .codegraph/
+
+# Local sibling-checkout dependency patches. Committed manifests stay pinned to
+# the reviewed Git revision above rather than a developer-specific filesystem.
+.cargo/config.toml

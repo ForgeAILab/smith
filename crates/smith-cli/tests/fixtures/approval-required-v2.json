@@ -1,0 +1,45 @@
+{
+  "schema_version": 2,
+  "type": "result",
+  "status": "approval_required",
+  "session_id": "session-fixture",
+  "turn_id": "turn-fixture",
+  "provider": "fixture-provider",
+  "model": "fixture-model",
+  "output": "",
+  "usage": {
+    "current_turn": {},
+    "session": {},
+    "current_turn_provenance": "unknown",
+    "session_provenance": "unknown"
+  },
+  "lifecycle": {
+    "attempts_committed": 0,
+    "attempts_discarded": 0
+  },
+  "approval_required": {
+    "call_id": "call-fixture",
+    "tool": "edit",
+    "argument_keys": [
+      "new_string",
+      "old_string",
+      "path"
+    ],
+    "mutates": true,
+    "requires_authorization": true,
+    "permissions": [
+      "fs.write"
+    ],
+    "resource": {
+      "resource_kind": "filesystem",
+      "mount": "/repo",
+      "segments": [
+        "src",
+        "lib.rs"
+      ]
+    },
+    "authority_warnings": [],
+    "deadline_at_ms": 1750000000000,
+    "preparation_fingerprint": "0123456789abcdef0123456789abcdef"
+  }
+}

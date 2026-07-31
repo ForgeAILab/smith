@@ -61,14 +61,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use agent_runtime_core::clock::Timestamp;
 use agent_runtime_core::error::{ErrorKind, RuntimeError};
 use agent_runtime_core::event::EventEnvelope;
-use agent_runtime_core::ids::{EventId, SessionId, TurnId};
+use agent_runtime_core::ids::{ChildId, EventId, SessionId, TurnId};
 use agent_runtime_core::observer::EventObserver;
-use agent_runtime_core::store::Secret;
+use agent_runtime_core::store::{Secret, SessionIdentityState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::private_storage::write_private_atomically;
 use crate::session::SessionPaths;
 
 /// The schema version stamped on every journal line.
@@ -76,6 +77,15 @@ use crate::session::SessionPaths;
 /// Present on markers as well as events so a reader can identify what it is
 /// parsing from the first field, without inferring it from the file name.
 pub const JOURNAL_SCHEMA_VERSION: u32 = 1;
+
+/// Schema for Smith-owned ephemeral-work recovery markers.
+pub const EPHEMERAL_INTERRUPTION_SCHEMA_VERSION: u32 = 1;
+/// Maximum length of one metadata-only monitor identity.
+pub const MAX_MONITOR_ID_CHARS: usize = 128;
+/// Maximum length of one metadata-only child identity in recovery markers.
+pub const MAX_EPHEMERAL_CHILD_ID_CHARS: usize = 128;
+/// Defensive bound on process-owned identities in one recovery marker.
+pub const MAX_INTERRUPTED_WORK_IDS: usize = 1_024;
 
 /// The replacement written in place of a redacted value.
 const REDACTED: &str = "[redacted]";
@@ -130,10 +140,9 @@ impl JournalLine {
 
 /// What a journal line can be.
 ///
-/// Only [`JournalRecord::Event`] carries runtime history; the other two are
-/// markers describing something the journal could not record faithfully. They
-/// are distinguishable by the `record` tag so a reader can never mistake a
-/// marker for a shared runtime event.
+/// Only [`JournalRecord::Event`] carries runtime history; every other record is
+/// an explicitly tagged Smith marker. A reader can therefore never mistake
+/// recovery reconciliation or an observability gap for a shared runtime event.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "record", rename_all = "snake_case")]
 pub enum JournalRecord {
@@ -173,6 +182,76 @@ pub enum JournalRecord {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         before_seq: Option<u64>,
     },
+    /// A prior process owned ephemeral work that cannot survive resume.
+    ///
+    /// This is Smith orchestration metadata, not a fabricated runtime child
+    /// event. Child/question content has no field here.
+    EphemeralWorkInterrupted {
+        /// Independently versioned Smith marker payload.
+        interruption: EphemeralWorkInterruption,
+    },
+    /// A process-owned monitor identity became live.
+    ///
+    /// This is metadata only. It does not imply that Smith Runtime implements
+    /// monitor execution; the future executor calls this lifecycle seam.
+    MonitorStarted {
+        /// Stable process-owned monitor identity.
+        monitor: String,
+    },
+    /// A process-owned monitor identity reached an orderly terminal boundary.
+    MonitorStopped {
+        /// Stable process-owned monitor identity.
+        monitor: String,
+    },
+}
+
+/// Why recovered ephemeral work was ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EphemeralInterruptionReason {
+    /// The prior Smith process exited without a terminal work record.
+    ProcessExit,
+}
+
+/// Metadata-only reconciliation of process-owned work found during resume.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EphemeralWorkInterruption {
+    /// Independent payload schema.
+    pub schema_version: u32,
+    /// Why the prior work cannot continue.
+    pub reason: EphemeralInterruptionReason,
+    /// Child identities in deterministic order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<ChildId>,
+    /// Monitor identities in deterministic order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub monitors: Vec<String>,
+}
+
+impl EphemeralWorkInterruption {
+    /// Builds a deterministic process-exit marker.
+    pub fn process_exit(
+        children: impl IntoIterator<Item = ChildId>,
+        monitors: impl IntoIterator<Item = String>,
+    ) -> Self {
+        let mut children = children.into_iter().collect::<Vec<_>>();
+        children.sort();
+        children.dedup();
+        let mut monitors = monitors.into_iter().collect::<Vec<_>>();
+        monitors.sort();
+        monitors.dedup();
+        Self {
+            schema_version: EPHEMERAL_INTERRUPTION_SCHEMA_VERSION,
+            reason: EphemeralInterruptionReason::ProcessExit,
+            children,
+            monitors,
+        }
+    }
+
+    /// Whether the marker has no work identities.
+    pub fn is_empty(&self) -> bool {
+        self.children.is_empty() && self.monitors.is_empty()
+    }
 }
 
 /// What one journal run wrote.
@@ -264,6 +343,16 @@ impl DefaultRedactor {
         self.register_value(secret.expose().to_owned());
     }
 
+    /// Registers an exact sensitive task value without classifying it as a
+    /// credential.
+    ///
+    /// Interactive questionnaire answers use this path before the value enters
+    /// canonical live history. Clones share the registry, so event and session
+    /// persistence apply the same literal redaction.
+    pub fn register_sensitive_value(&self, value: &str) {
+        self.register_value(value.to_owned());
+    }
+
     fn register_value(&self, secret: String) {
         if !secret.is_empty() {
             let mut secrets = self
@@ -305,6 +394,12 @@ impl DefaultRedactor {
             }
             _ => {}
         }
+    }
+}
+
+impl smith_host::SensitiveValueSink for DefaultRedactor {
+    fn register_sensitive_value(&self, value: &str) {
+        Self::register_sensitive_value(self, value);
     }
 }
 
@@ -357,8 +452,18 @@ fn is_sensitive_key(key: &str) -> bool {
 enum JournalCommand {
     /// Append one event. Boxed to keep the queued item small.
     Record(Box<EventEnvelope>),
+    /// Append and durably sync one Smith-owned marker.
+    Marker {
+        record: Box<JournalRecord>,
+        reply: oneshot::Sender<Result<(), RuntimeError>>,
+    },
     /// Sync everything written so far, then acknowledge.
-    Flush(oneshot::Sender<Result<(), RuntimeError>>),
+    Flush {
+        /// The next event sequence at a checkpoint boundary. `None` is an
+        /// ordinary presentation-only flush.
+        before_seq: Option<u64>,
+        reply: oneshot::Sender<Result<(), RuntimeError>>,
+    },
     /// Sync, stop, and report.
     Shutdown(oneshot::Sender<Result<JournalStats, RuntimeError>>),
 }
@@ -368,6 +473,7 @@ enum JournalCommand {
 pub struct EventJournal {
     commands: mpsc::Sender<JournalCommand>,
     dropped: Arc<AtomicU64>,
+    failure: Arc<Mutex<Option<RuntimeError>>>,
     recovered_tail: Option<TruncatedTail>,
     /// Cached so a second `shutdown` reports the same result instead of
     /// failing against a closed channel.
@@ -417,11 +523,13 @@ impl EventJournal {
 
         let (commands, receiver) = mpsc::channel(config.queue_capacity);
         let dropped = Arc::new(AtomicU64::new(0));
+        let failure = Arc::new(Mutex::new(None));
         let writer = Writer {
             file,
             config,
             redactor,
             dropped: Arc::clone(&dropped),
+            failure: Arc::clone(&failure),
             stats: JournalStats::default(),
         };
         tokio::spawn(writer.run(receiver));
@@ -429,6 +537,7 @@ impl EventJournal {
         Ok(Self {
             commands,
             dropped,
+            failure,
             recovered_tail,
             finished: Mutex::new(None),
         })
@@ -459,12 +568,98 @@ impl EventJournal {
         self.dropped.load(Ordering::Relaxed)
     }
 
+    /// The first append or sync failure observed by the writer.
+    ///
+    /// Failures are sticky: a later successful filesystem operation cannot
+    /// make a checkpoint barrier believe earlier events reached durable
+    /// storage.
+    pub fn failure(&self) -> Option<RuntimeError> {
+        self.failure
+            .lock()
+            .expect("journal failure state poisoned")
+            .clone()
+    }
+
+    /// Appends and syncs one metadata-only ephemeral-work recovery marker.
+    pub async fn record_ephemeral_interruption(
+        &self,
+        interruption: EphemeralWorkInterruption,
+    ) -> Result<(), RuntimeError> {
+        validate_ephemeral_interruption(&interruption)?;
+        if interruption.is_empty() {
+            return Ok(());
+        }
+        let (reply, response) = oneshot::channel();
+        self.commands
+            .send(JournalCommand::Marker {
+                record: Box::new(JournalRecord::EphemeralWorkInterrupted { interruption }),
+                reply,
+            })
+            .await
+            .map_err(|_| closed())?;
+        response.await.map_err(|_| closed())?
+    }
+
+    /// Appends and syncs one metadata-only monitor-start marker.
+    ///
+    /// This method deliberately does not start a task. It is the durable
+    /// identity boundary a future monitor executor must call after accepting
+    /// process-owned work.
+    pub async fn record_monitor_started(
+        &self,
+        monitor: impl Into<String>,
+    ) -> Result<(), RuntimeError> {
+        let monitor = validate_monitor_id(monitor.into())?;
+        self.record_marker(JournalRecord::MonitorStarted { monitor })
+            .await
+    }
+
+    /// Appends and syncs one metadata-only monitor-stop marker.
+    ///
+    /// Calling this before process exit prevents recovery from reporting the
+    /// monitor as interrupted.
+    pub async fn record_monitor_stopped(
+        &self,
+        monitor: impl Into<String>,
+    ) -> Result<(), RuntimeError> {
+        let monitor = validate_monitor_id(monitor.into())?;
+        self.record_marker(JournalRecord::MonitorStopped { monitor })
+            .await
+    }
+
+    async fn record_marker(&self, record: JournalRecord) -> Result<(), RuntimeError> {
+        let (reply, response) = oneshot::channel();
+        self.commands
+            .send(JournalCommand::Marker {
+                record: Box::new(record),
+                reply,
+            })
+            .await
+            .map_err(|_| closed())?;
+        response.await.map_err(|_| closed())?
+    }
+
     /// Waits until every record queued before this call has been written and
     /// synced.
     pub async fn flush(&self) -> Result<(), RuntimeError> {
+        self.flush_at(None).await
+    }
+
+    /// Flushes through an exact checkpoint watermark.
+    ///
+    /// If observer backpressure dropped records since the last append, the
+    /// persisted marker names `event_sequence` as the first sequence after
+    /// those losses. Nonterminal reconciliation can then retain the gap as
+    /// part of the checkpoint prefix instead of mistaking it for an unordered
+    /// shutdown tail.
+    pub async fn flush_before(&self, event_sequence: u64) -> Result<(), RuntimeError> {
+        self.flush_at(Some(event_sequence)).await
+    }
+
+    async fn flush_at(&self, before_seq: Option<u64>) -> Result<(), RuntimeError> {
         let (reply, response) = oneshot::channel();
         self.commands
-            .send(JournalCommand::Flush(reply))
+            .send(JournalCommand::Flush { before_seq, reply })
             .await
             .map_err(|_| closed())?;
         response.await.map_err(|_| closed())?
@@ -519,6 +714,7 @@ struct Writer {
     config: JournalConfig,
     redactor: Arc<dyn Redactor>,
     dropped: Arc<AtomicU64>,
+    failure: Arc<Mutex<Option<RuntimeError>>>,
     stats: JournalStats,
 }
 
@@ -528,17 +724,28 @@ impl Writer {
             match command {
                 JournalCommand::Record(event) => {
                     if let Err(err) = self.append(*event).await {
+                        self.remember_failure(&err);
                         // A failing disk must not wedge the runtime: keep
                         // draining so `observe` never blocks, and report the
                         // failure where an operator will see it.
                         tracing::error!(%err, "journal record was not written");
                     }
                 }
-                JournalCommand::Flush(reply) => {
-                    let _ = reply.send(self.sync().await);
+                JournalCommand::Marker { record, reply } => {
+                    let result = match self.append_marker(*record).await {
+                        Ok(()) => self.sync(None).await,
+                        Err(error) => Err(error),
+                    };
+                    if let Err(error) = &result {
+                        self.remember_failure(error);
+                    }
+                    let _ = reply.send(result);
+                }
+                JournalCommand::Flush { before_seq, reply } => {
+                    let _ = reply.send(self.sync(before_seq).await);
                 }
                 JournalCommand::Shutdown(reply) => {
-                    let result = self.sync().await.map(|()| self.stats);
+                    let result = self.sync(None).await.map(|()| self.stats);
                     let _ = reply.send(result);
                     return;
                 }
@@ -581,6 +788,21 @@ impl Writer {
         Ok(())
     }
 
+    async fn append_marker(&mut self, record: JournalRecord) -> Result<(), RuntimeError> {
+        self.account_for_drops(None).await?;
+        let rendered = self.render(record)?;
+        if rendered.len() > self.config.max_record_bytes {
+            return Err(RuntimeError::new(
+                ErrorKind::Limit,
+                format!(
+                    "Smith journal marker exceeded the {} byte record bound",
+                    self.config.max_record_bytes
+                ),
+            ));
+        }
+        self.write_line(rendered).await
+    }
+
     async fn account_for_drops(&mut self, before_seq: Option<u64>) -> Result<(), RuntimeError> {
         let count = self.dropped.swap(0, Ordering::Relaxed);
         if count == 0 {
@@ -618,16 +840,34 @@ impl Writer {
         })
     }
 
-    async fn sync(&mut self) -> Result<(), RuntimeError> {
+    async fn sync(&mut self, before_seq: Option<u64>) -> Result<(), RuntimeError> {
         // Drops observed with nothing after them still belong in the file:
         // otherwise a burst at the very end of a session would vanish.
-        self.account_for_drops(None).await?;
-        self.file.flush().await.map_err(|err| {
+        if let Err(error) = self.account_for_drops(before_seq).await {
+            self.remember_failure(&error);
+        }
+        if let Err(error) = self.file.flush().await.map_err(|err| {
             RuntimeError::new(ErrorKind::Internal, format!("journal flush failed: {err}"))
-        })?;
-        self.file.sync_data().await.map_err(|err| {
+        }) {
+            self.remember_failure(&error);
+        }
+        if let Err(error) = self.file.sync_data().await.map_err(|err| {
             RuntimeError::new(ErrorKind::Internal, format!("journal sync failed: {err}"))
-        })
+        }) {
+            self.remember_failure(&error);
+        }
+        self.failure
+            .lock()
+            .expect("journal failure state poisoned")
+            .clone()
+            .map_or(Ok(()), Err)
+    }
+
+    fn remember_failure(&self, error: &RuntimeError) {
+        let mut failure = self.failure.lock().expect("journal failure state poisoned");
+        if failure.is_none() {
+            *failure = Some(error.clone());
+        }
     }
 }
 
@@ -679,6 +919,255 @@ impl JournalRecovery {
             })
             .collect()
     }
+
+    /// Derives a monotonic runtime identity floor from every complete record.
+    ///
+    /// Marker identities participate where available, so an oversized event
+    /// still prevents reuse of its sequence and event id. Dropped markers
+    /// deliberately cannot recreate identities that were never persisted.
+    pub fn identity_floor(&self) -> SessionIdentityState {
+        identity_floor(self.records.iter())
+    }
+}
+
+/// Result of reconciling a nonterminal checkpoint with its journal.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct JournalReconciliation {
+    /// Identity counters derived from the retained durable prefix.
+    pub identity_floor: SessionIdentityState,
+    /// Number of complete records at or after the checkpoint watermark that
+    /// were removed before runtime resume.
+    pub truncated_records: usize,
+    /// Whether the retained prefix contains an explicit dropped/oversized gap.
+    pub retained_gap: bool,
+}
+
+/// Rewrites a nonterminal session journal to the exact checkpoint boundary.
+///
+/// Events with sequence `>= event_sequence` are presentation-only tail: the
+/// resumed turn will emit its canonical continuation again. Keeping that tail
+/// would duplicate commit/terminal events in replay. Terminal checkpoints do
+/// not use this function because their later `TurnCompleted` event is valid.
+pub async fn reconcile_nonterminal_journal(
+    path: impl AsRef<Path>,
+    event_sequence: u64,
+) -> Result<JournalReconciliation, RuntimeError> {
+    let path = path.as_ref();
+    let recovery = read_journal(path).await?;
+    let original_len = recovery.records.len();
+    let mut retained = Vec::with_capacity(original_len);
+    for line in recovery.records {
+        let keep = match &line.record {
+            JournalRecord::Event { event } => event.seq < event_sequence,
+            JournalRecord::Oversized { seq, .. } => *seq < event_sequence,
+            JournalRecord::Dropped {
+                before_seq: Some(seq),
+                ..
+            } => *seq <= event_sequence,
+            // An end-of-stream drop marker has no ordering identity. It could
+            // describe the discarded tail, so a nonterminal resume cannot
+            // safely retain it as part of the exact prefix.
+            JournalRecord::Dropped {
+                before_seq: None, ..
+            } => false,
+            JournalRecord::EphemeralWorkInterrupted { .. } => true,
+            JournalRecord::MonitorStarted { .. } | JournalRecord::MonitorStopped { .. } => true,
+        };
+        if keep {
+            retained.push(line);
+        }
+    }
+
+    let reconciliation = JournalReconciliation {
+        identity_floor: identity_floor(retained.iter()),
+        truncated_records: original_len.saturating_sub(retained.len()),
+        retained_gap: retained.iter().any(|line| {
+            matches!(
+                line.record,
+                JournalRecord::Dropped { .. } | JournalRecord::Oversized { .. }
+            )
+        }),
+    };
+
+    if reconciliation.truncated_records > 0 || recovery.truncated_tail.is_some() {
+        let mut bytes = Vec::new();
+        for line in &retained {
+            serde_json::to_writer(&mut bytes, line).map_err(|error| {
+                RuntimeError::new(
+                    ErrorKind::Serialization,
+                    format!("journal prefix could not be serialized: {error}"),
+                )
+            })?;
+            bytes.push(b'\n');
+        }
+        write_private_atomically(path, &bytes).await?;
+    }
+    Ok(reconciliation)
+}
+
+fn identity_floor<'a>(records: impl IntoIterator<Item = &'a JournalLine>) -> SessionIdentityState {
+    let mut floor = SessionIdentityState::default();
+    for line in records {
+        match &line.record {
+            JournalRecord::Event { event } => {
+                floor.event_seq = floor.event_seq.max(event.seq.saturating_add(1));
+                floor.event = floor.event.max(id_number(event.id.as_str(), "evt-"));
+                if let Some(turn) = &event.turn {
+                    floor.turn = floor.turn.max(id_number(turn.as_str(), "turn-"));
+                }
+                match &event.payload {
+                    agent_runtime_core::event::RuntimeEvent::ProviderAttemptStarted {
+                        request,
+                        attempt,
+                        ..
+                    }
+                    | agent_runtime_core::event::RuntimeEvent::TextDelta {
+                        request, attempt, ..
+                    }
+                    | agent_runtime_core::event::RuntimeEvent::ReasoningDelta {
+                        request,
+                        attempt,
+                        ..
+                    }
+                    | agent_runtime_core::event::RuntimeEvent::ProviderAttemptOutputCommitted {
+                        request,
+                        attempt,
+                    }
+                    | agent_runtime_core::event::RuntimeEvent::ProviderAttemptOutputDiscarded {
+                        request,
+                        attempt,
+                    } => {
+                        floor.request = floor.request.max(id_number(request.as_str(), "req-"));
+                        floor.attempt = floor.attempt.max(id_number(attempt.as_str(), "att-"));
+                    }
+                    agent_runtime_core::event::RuntimeEvent::ProviderAttemptFinished {
+                        attempt,
+                        ..
+                    } => {
+                        floor.attempt = floor.attempt.max(id_number(attempt.as_str(), "att-"));
+                    }
+                    agent_runtime_core::event::RuntimeEvent::ToolCallRequested { call, .. }
+                    | agent_runtime_core::event::RuntimeEvent::ToolCallCompleted { call, .. } => {
+                        floor.tool_call = floor.tool_call.max(id_number(call.as_str(), "call-"));
+                    }
+                    _ => {}
+                }
+            }
+            JournalRecord::Oversized { seq, id, turn, .. } => {
+                floor.event_seq = floor.event_seq.max(seq.saturating_add(1));
+                floor.event = floor.event.max(id_number(id.as_str(), "evt-"));
+                if let Some(turn) = turn {
+                    floor.turn = floor.turn.max(id_number(turn.as_str(), "turn-"));
+                }
+            }
+            JournalRecord::Dropped {
+                before_seq: Some(seq),
+                ..
+            } => {
+                floor.event_seq = floor.event_seq.max(*seq);
+            }
+            JournalRecord::Dropped {
+                before_seq: None, ..
+            } => {}
+            JournalRecord::EphemeralWorkInterrupted { .. } => {}
+            JournalRecord::MonitorStarted { .. } | JournalRecord::MonitorStopped { .. } => {}
+        }
+    }
+    floor
+}
+
+fn validate_monitor_id(monitor: String) -> Result<String, RuntimeError> {
+    validate_ephemeral_id("monitor", &monitor, MAX_MONITOR_ID_CHARS)?;
+    Ok(monitor)
+}
+
+fn validate_journal_line(line: &JournalLine) -> Result<(), RuntimeError> {
+    if line.schema_version != JOURNAL_SCHEMA_VERSION {
+        return Err(RuntimeError::new(
+            ErrorKind::Serialization,
+            format!("unsupported journal schema version {}", line.schema_version),
+        ));
+    }
+    match &line.record {
+        JournalRecord::EphemeralWorkInterrupted { interruption } => {
+            validate_ephemeral_interruption(interruption)
+        }
+        JournalRecord::MonitorStarted { monitor } | JournalRecord::MonitorStopped { monitor } => {
+            validate_ephemeral_id("monitor", monitor, MAX_MONITOR_ID_CHARS)
+        }
+        JournalRecord::Event { .. }
+        | JournalRecord::Oversized { .. }
+        | JournalRecord::Dropped { .. } => Ok(()),
+    }
+}
+
+fn validate_ephemeral_interruption(
+    interruption: &EphemeralWorkInterruption,
+) -> Result<(), RuntimeError> {
+    if interruption.schema_version != EPHEMERAL_INTERRUPTION_SCHEMA_VERSION {
+        return Err(RuntimeError::new(
+            ErrorKind::Serialization,
+            format!(
+                "unsupported ephemeral interruption marker schema {}",
+                interruption.schema_version
+            ),
+        ));
+    }
+    if interruption
+        .children
+        .len()
+        .saturating_add(interruption.monitors.len())
+        > MAX_INTERRUPTED_WORK_IDS
+    {
+        return Err(RuntimeError::new(
+            ErrorKind::Serialization,
+            format!(
+                "ephemeral interruption marker exceeds the {MAX_INTERRUPTED_WORK_IDS}-identity bound"
+            ),
+        ));
+    }
+    for child in &interruption.children {
+        validate_ephemeral_id("child", child.as_str(), MAX_EPHEMERAL_CHILD_ID_CHARS)?;
+    }
+    for monitor in &interruption.monitors {
+        validate_ephemeral_id("monitor", monitor, MAX_MONITOR_ID_CHARS)?;
+    }
+    if !strictly_sorted(&interruption.children) || !strictly_sorted(&interruption.monitors) {
+        return Err(RuntimeError::new(
+            ErrorKind::Serialization,
+            "ephemeral interruption identities must be sorted and unique",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_ephemeral_id(label: &str, value: &str, max_chars: usize) -> Result<(), RuntimeError> {
+    let chars = value.chars().count();
+    if chars == 0
+        || chars > max_chars
+        || value.trim() != value
+        || !value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "._:-".contains(character))
+    {
+        return Err(RuntimeError::new(
+            ErrorKind::Serialization,
+            format!(
+                "{label} id must contain 1..={max_chars} ASCII letters, digits, `.`, `_`, `:`, or `-`"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn strictly_sorted<T: Ord>(values: &[T]) -> bool {
+    values.windows(2).all(|pair| pair[0] < pair[1])
+}
+
+fn id_number(id: &str, prefix: &str) -> u64 {
+    id.strip_prefix(prefix)
+        .and_then(|number| number.parse().ok())
+        .unwrap_or(0)
 }
 
 /// Reads every complete record from a journal, reporting an incomplete tail.
@@ -720,6 +1209,16 @@ pub async fn read_journal(path: impl AsRef<Path>) -> Result<JournalRecovery, Run
                         format!(
                             "journal `{}` line {line_number} is not a readable record: {err}",
                             path.display()
+                        ),
+                    )
+                })?;
+                validate_journal_line(&parsed).map_err(|error| {
+                    RuntimeError::new(
+                        ErrorKind::Serialization,
+                        format!(
+                            "journal `{}` line {line_number} failed validation: {}",
+                            path.display(),
+                            error.message
                         ),
                     )
                 })?;
@@ -797,6 +1296,8 @@ async fn repair_incomplete_tail(path: &Path) -> Result<Option<TruncatedTail>, Ru
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_runtime_core::event::RuntimeEvent;
+    use agent_runtime_core::ids::{AttemptId, RequestId};
 
     #[test]
     fn credential_shaped_keys_are_replaced_by_value() {
@@ -860,5 +1361,221 @@ mod tests {
         assert_eq!(json["schema_version"], JOURNAL_SCHEMA_VERSION);
         assert_eq!(json["record"], "dropped");
         assert_eq!(json["count"], 3);
+    }
+
+    #[tokio::test]
+    async fn monitor_lifecycle_markers_are_metadata_only_validated_and_durable() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("session.jsonl");
+        let journal = EventJournal::open(&path, JournalConfig::default(), Arc::new(KeepEverything))
+            .await
+            .unwrap();
+
+        journal
+            .record_monitor_started("monitor:build-1")
+            .await
+            .unwrap();
+        journal
+            .record_monitor_stopped("monitor:build-1")
+            .await
+            .unwrap();
+        let error = journal
+            .record_monitor_started("monitor id contains task content")
+            .await
+            .expect_err("free text is not a monitor identity");
+        assert_eq!(error.kind, ErrorKind::Serialization);
+        journal.shutdown().await.unwrap();
+
+        let recovery = read_journal(path).await.unwrap();
+        assert_eq!(
+            recovery
+                .records
+                .iter()
+                .map(|line| line.record.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                JournalRecord::MonitorStarted {
+                    monitor: "monitor:build-1".into(),
+                },
+                JournalRecord::MonitorStopped {
+                    monitor: "monitor:build-1".into(),
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn journal_reads_reject_unsupported_or_unvalidated_marker_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("session.jsonl");
+        let cases = [
+            (
+                serde_json::json!({
+                    "schema_version": JOURNAL_SCHEMA_VERSION + 1,
+                    "record": "dropped",
+                    "count": 1
+                }),
+                "unsupported journal schema version",
+            ),
+            (
+                serde_json::json!({
+                    "schema_version": JOURNAL_SCHEMA_VERSION,
+                    "record": "ephemeral_work_interrupted",
+                    "interruption": {
+                        "schema_version": EPHEMERAL_INTERRUPTION_SCHEMA_VERSION + 1,
+                        "reason": "process_exit"
+                    }
+                }),
+                "unsupported ephemeral interruption marker schema",
+            ),
+            (
+                serde_json::json!({
+                    "schema_version": JOURNAL_SCHEMA_VERSION,
+                    "record": "monitor_started",
+                    "monitor": "monitor id with spaces"
+                }),
+                "monitor id must contain",
+            ),
+            (
+                serde_json::json!({
+                    "schema_version": JOURNAL_SCHEMA_VERSION,
+                    "record": "ephemeral_work_interrupted",
+                    "interruption": {
+                        "schema_version": EPHEMERAL_INTERRUPTION_SCHEMA_VERSION,
+                        "reason": "process_exit",
+                        "children": ["child-2", "child-1"],
+                        "monitors": ["monitor:build", "monitor:build"]
+                    }
+                }),
+                "sorted and unique",
+            ),
+        ];
+
+        for (record, expected) in cases {
+            tokio::fs::write(&path, format!("{record}\n"))
+                .await
+                .unwrap();
+            let error = read_journal(&path)
+                .await
+                .expect_err("unvalidated persisted metadata must fail closed");
+            assert_eq!(error.kind, ErrorKind::Serialization);
+            assert!(error.message.contains(expected), "{error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn nonterminal_reconciliation_keeps_only_the_strict_watermark_prefix() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("session.jsonl");
+        let session = SessionId::new("session-1");
+        let retained = EventEnvelope::new(
+            3,
+            EventId::new("evt-4"),
+            session.clone(),
+            Some(TurnId::new("turn-2")),
+            Timestamp::ZERO,
+            RuntimeEvent::ProviderAttemptOutputCommitted {
+                request: RequestId::new("req-5"),
+                attempt: AttemptId::new("att-6"),
+            },
+        );
+        let discarded = EventEnvelope::new(
+            4,
+            EventId::new("evt-5"),
+            session,
+            Some(TurnId::new("turn-2")),
+            Timestamp::ZERO,
+            RuntimeEvent::TurnCompleted {
+                finish: agent_runtime_core::event::TurnFinish::Completed,
+                visible_output: true,
+            },
+        );
+        let records = [
+            JournalLine::new(JournalRecord::Dropped {
+                count: 1,
+                before_seq: Some(3),
+            }),
+            JournalLine::new(JournalRecord::Event { event: retained }),
+            JournalLine::new(JournalRecord::Event { event: discarded }),
+            JournalLine::new(JournalRecord::Dropped {
+                count: 2,
+                before_seq: None,
+            }),
+        ];
+        let mut bytes = Vec::new();
+        for line in records {
+            serde_json::to_writer(&mut bytes, &line).unwrap();
+            bytes.push(b'\n');
+        }
+        write_private_atomically(&path, &bytes).await.unwrap();
+
+        let reconciled = reconcile_nonterminal_journal(&path, 4).await.unwrap();
+
+        assert_eq!(reconciled.truncated_records, 2);
+        assert!(reconciled.retained_gap);
+        assert_eq!(reconciled.identity_floor.event_seq, 4);
+        assert_eq!(reconciled.identity_floor.event, 4);
+        assert_eq!(reconciled.identity_floor.turn, 2);
+        assert_eq!(reconciled.identity_floor.request, 5);
+        assert_eq!(reconciled.identity_floor.attempt, 6);
+        let recovered = read_journal(&path).await.unwrap();
+        assert_eq!(recovered.records.len(), 2);
+        assert_eq!(
+            recovered
+                .events()
+                .into_iter()
+                .map(|event| event.seq)
+                .collect::<Vec<_>>(),
+            vec![3]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_sticky_writer_failure_is_returned_by_every_flush() {
+        let root = tempfile::tempdir().unwrap();
+        let journal = EventJournal::open(
+            root.path().join("session.jsonl"),
+            JournalConfig::default(),
+            Arc::new(KeepEverything),
+        )
+        .await
+        .unwrap();
+        *journal.failure.lock().unwrap() =
+            Some(RuntimeError::internal("injected prior append failure"));
+
+        for _ in 0..2 {
+            let error = journal.flush().await.unwrap_err();
+            assert!(error.message.contains("injected prior append failure"));
+        }
+        assert!(journal.shutdown().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn checkpoint_flush_gives_queued_drops_an_exact_reconciliation_boundary() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("session.jsonl");
+        let journal = EventJournal::open(&path, JournalConfig::default(), Arc::new(KeepEverything))
+            .await
+            .unwrap();
+        journal.dropped.store(3, Ordering::Relaxed);
+
+        journal.flush_before(9).await.unwrap();
+        journal.shutdown().await.unwrap();
+
+        let before = read_journal(&path).await.unwrap();
+        assert!(before.records.iter().any(|line| {
+            matches!(
+                line.record,
+                JournalRecord::Dropped {
+                    count: 3,
+                    before_seq: Some(9)
+                }
+            )
+        }));
+        let reconciled = reconcile_nonterminal_journal(&path, 9).await.unwrap();
+        assert!(reconciled.retained_gap);
+        assert_eq!(reconciled.truncated_records, 0);
+        let after = read_journal(&path).await.unwrap();
+        assert_eq!(after.records, before.records);
     }
 }

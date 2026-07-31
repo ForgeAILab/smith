@@ -12,7 +12,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use agent_runtime_core::error::{ErrorKind, RuntimeError};
-use agent_runtime_core::tool::{InvocationContext, Tool, ToolEffects, ToolOutcome};
+use agent_runtime_core::tool::{
+    InvocationContext, PreparationContext, PreparedToolCall, Tool, ToolOutcome, ToolSpec,
+};
 use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::Value;
@@ -426,29 +428,29 @@ struct ObservedTool {
 
 #[async_trait]
 impl Tool for ObservedTool {
-    fn name(&self) -> &str {
-        self.inner.name()
+    fn spec(&self) -> ToolSpec {
+        self.inner.spec()
     }
 
-    fn description(&self) -> &str {
-        self.inner.description()
-    }
-
-    fn input_schema(&self) -> Value {
-        self.inner.input_schema()
-    }
-
-    fn effects(&self) -> ToolEffects {
-        self.inner.effects()
+    async fn prepare(
+        &self,
+        arguments: Value,
+        ctx: &PreparationContext,
+    ) -> Result<PreparedToolCall, RuntimeError> {
+        self.inner.prepare(arguments, ctx).await
     }
 
     async fn invoke(
         &self,
-        arguments: Value,
+        prepared: PreparedToolCall,
         ctx: &InvocationContext,
     ) -> Result<ToolOutcome, RuntimeError> {
-        let edit_path = if self.inner.name() == "edit" {
-            arguments
+        let tool = prepared.tool().to_owned();
+        let call_id = prepared.call_id().as_str().to_owned();
+        let mutates = prepared.effects().mutates();
+        let edit_path = if tool == "edit" {
+            prepared
+                .arguments()
                 .get("path")
                 .and_then(Value::as_str)
                 .and_then(|path| ctx.workspace.resolve(path).ok())
@@ -460,12 +462,12 @@ impl Tool for ObservedTool {
             Some(path) => bounded_image(path),
             None => Ok(None),
         };
-        let outcome = self.inner.invoke(arguments, ctx).await;
+        let outcome = self.inner.invoke(prepared, ctx).await;
         match (&outcome, edit_path, before) {
             (Ok(outcome), Some(path), Ok(before)) if !outcome.is_error => {
                 match bounded_image(&path) {
                     Ok(Some(after)) => self.recorder.record(ToolMutation::Exact(EditMutation {
-                        call_id: ctx.call_id.as_str().to_owned(),
+                        call_id: call_id.clone(),
                         path,
                         before_hash: hash(before.as_deref()),
                         after_hash: hash(Some(&after)),
@@ -474,22 +476,20 @@ impl Tool for ObservedTool {
                         recovery_path: None,
                     })),
                     _ => self.recorder.record(ToolMutation::Ambiguous {
-                        call_id: ctx.call_id.as_str().to_owned(),
-                        tool: self.inner.name().to_owned(),
+                        call_id: call_id.clone(),
+                        tool: tool.clone(),
                     }),
                 }
             }
-            (_, Some(_), Err(_)) if self.inner.name() == "edit" => {
+            (_, Some(_), Err(_)) if tool == "edit" => {
                 self.recorder.record(ToolMutation::Ambiguous {
-                    call_id: ctx.call_id.as_str().to_owned(),
-                    tool: self.inner.name().to_owned(),
+                    call_id: call_id.clone(),
+                    tool: tool.clone(),
                 });
             }
-            (_, _, _) if self.inner.effects().mutates() && self.inner.name() != "edit" => {
-                self.recorder.record(ToolMutation::Ambiguous {
-                    call_id: ctx.call_id.as_str().to_owned(),
-                    tool: self.inner.name().to_owned(),
-                });
+            (_, _, _) if mutates && tool != "edit" => {
+                self.recorder
+                    .record(ToolMutation::Ambiguous { call_id, tool });
             }
             _ => {}
         }

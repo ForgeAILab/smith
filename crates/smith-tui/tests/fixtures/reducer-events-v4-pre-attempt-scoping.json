@@ -1,0 +1,70 @@
+[
+  {
+    "schema_version": 4,
+    "seq": 0,
+    "id": "event-0",
+    "session": "session-fixture",
+    "timestamp": 100,
+    "payload": {
+      "event": "session_started"
+    }
+  },
+  {
+    "schema_version": 4,
+    "seq": 1,
+    "id": "event-1",
+    "session": "session-fixture",
+    "turn": "turn-fixture",
+    "timestamp": 101,
+    "payload": {
+      "event": "turn_started"
+    }
+  },
+  {
+    "schema_version": 4,
+    "seq": 2,
+    "id": "event-2",
+    "session": "session-fixture",
+    "turn": "turn-fixture",
+    "timestamp": 102,
+    "payload": {
+      "event": "text_delta",
+      "text": "fixture answer"
+    }
+  },
+  {
+    "schema_version": 4,
+    "seq": 3,
+    "id": "event-3",
+    "session": "session-fixture",
+    "turn": "turn-fixture",
+    "timestamp": 103,
+    "payload": {
+      "event": "usage",
+      "record": {
+        "source": "provider_attempt",
+        "provenance": {
+          "request": "request-fixture",
+          "attempt": "attempt-fixture",
+          "failed": false
+        },
+        "delta": {
+          "input_uncached": 12,
+          "output": 2
+        }
+      }
+    }
+  },
+  {
+    "schema_version": 4,
+    "seq": 4,
+    "id": "event-4",
+    "session": "session-fixture",
+    "turn": "turn-fixture",
+    "timestamp": 104,
+    "payload": {
+      "event": "turn_completed",
+      "finish": "completed"
+    }
+  }
+]

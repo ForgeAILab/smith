@@ -6,12 +6,18 @@
 //! "fix line 40" needs to have seen line 40 labelled as such.
 
 use agent_runtime_core::error::RuntimeError;
-use agent_runtime_core::tool::{InvocationContext, Tool, ToolEffects, ToolOutcome};
+use agent_runtime_core::security::PermissionSet;
+use agent_runtime_core::tool::{
+    InvocationContext, PreparationContext, PreparedToolCall, Tool, ToolCallDisplay, ToolEffects,
+    ToolOutcome, ToolSpec,
+};
+use agent_runtime_registry::Permission;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use crate::support::{
-    MAX_READ_BYTES, display_path, invalid, optional_usize, read_bounded, require_str, resolve,
+    MAX_READ_BYTES, display_path, invalid, optional_usize, prepare_path_argument, read_bounded,
+    require_str, resolve,
 };
 
 /// How many lines a read returns when the caller does not say.
@@ -23,48 +29,60 @@ pub struct ReadTool;
 
 #[async_trait]
 impl Tool for ReadTool {
-    fn name(&self) -> &str {
-        "read"
-    }
-
-    fn description(&self) -> &str {
-        "Read a text file from the project. Returns line-numbered content. \
-         Use `offset` and `limit` to read part of a large file."
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to the file, relative to the project root."
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::new(
+            "read",
+            "Read a text file from the project. Returns line-numbered content. \
+             Use `offset` and `limit` to read part of a large file.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the file, relative to the project root."
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "First line to return, 1-based. Defaults to 1."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Maximum lines to return. Defaults to 2000."
+                    }
                 },
-                "offset": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": "First line to return, 1-based. Defaults to 1."
-                },
-                "limit": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": "Maximum lines to return. Defaults to 2000."
-                }
-            },
-            "required": ["path"],
-            "additionalProperties": false
-        })
+                "required": ["path"],
+                "additionalProperties": false
+            }),
+            ToolEffects::read_only(),
+        )
+        .with_permission_upper_bound(PermissionSet::single(Permission::FsRead))
     }
 
-    fn effects(&self) -> ToolEffects {
-        ToolEffects::read_only()
+    async fn prepare(
+        &self,
+        mut arguments: Value,
+        ctx: &PreparationContext,
+    ) -> Result<PreparedToolCall, RuntimeError> {
+        let path = prepare_path_argument(&mut arguments, "path", None, ctx)?;
+        Ok(PreparedToolCall::new(
+            ctx.call_id.clone(),
+            "read",
+            arguments,
+            PermissionSet::single(Permission::FsRead),
+            path.resource,
+            ToolEffects::read_only(),
+            ToolCallDisplay::new(format!("Read {}", path.display)),
+        ))
     }
 
     async fn invoke(
         &self,
-        arguments: Value,
+        prepared: PreparedToolCall,
         ctx: &InvocationContext,
     ) -> Result<ToolOutcome, RuntimeError> {
+        let arguments = prepared.into_arguments();
         let raw_path = require_str(&arguments, "path")?;
         let path = resolve(ctx, raw_path)?;
 
@@ -115,7 +133,7 @@ impl Tool for ReadTool {
                 "lines": total,
                 "shown": [offset, end],
             }),
-            content: vec![agent_runtime_core::content::ContentPart::text(rendered)],
+            content: vec![agent_runtime_core::content::ContentPart::text(rendered)].into(),
             is_error: false,
         })
     }

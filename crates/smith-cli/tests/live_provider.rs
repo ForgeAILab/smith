@@ -118,7 +118,14 @@ tool_output_limit_bytes = 16384
     let mut command = Command::new(env!("CARGO_BIN_EXE_smith"));
     command
         .current_dir(project.path())
-        .args(["-p", prompt, "--output-format", "stream-json"])
+        .args([
+            "-p",
+            prompt,
+            "--output-format",
+            "stream-json",
+            "--approval",
+            "allow-all",
+        ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

@@ -23,41 +23,59 @@
 
 use std::sync::{Arc, OnceLock};
 
+use agent_runtime::ability::Ability;
+use agent_runtime::ability::activation::{ActivationContext, FailClosedPolicy};
 use agent_runtime::agent::config::LoopConfig;
-use agent_runtime::context::ContextPolicy;
+use agent_runtime::capability::{ActivationBudget, CapabilityResolver};
+use agent_runtime::context::{ContextBudget, ContextPolicy};
 use agent_runtime::delegation::{
-    ChildRuntimeFactory, ChildState, ChildStatus, DELEGATION_PERMISSION, DelegationConfig,
-    DelegationCoordinator, DelegationLimits, SpawnOutcome,
+    ChildRuntimeFactory, ChildState, ChildStatus, ChildTaskOutcome, DELEGATION_PERMISSION,
+    DelegationConfig, DelegationCoordinator, DelegationLimits, SpawnOutcome,
 };
-use agent_runtime::registry::{Permission, RegistryRevision};
+use agent_runtime::harness::{
+    ArtifactOffloader, ArtifactReadTool, MemoryContributor, QuestionnaireTool,
+    SemanticSummaryCoordinator, TodoComponent, WriteTodosTool,
+};
+use agent_runtime::hub::{ScopeIdentity, ScopeInputs};
+use agent_runtime::registry::{Permission, RegistryRevision, RegistrySource};
 use agent_runtime::runtime::{InjectedContent, RuntimeBuilder, SessionHandle};
 use agent_runtime_core::approval::ApprovalPolicy;
+use agent_runtime_core::artifact::ArtifactStore;
 use agent_runtime_core::cancel::Cancellation;
 use agent_runtime_core::catalog::ResolvedModelProfile;
+use agent_runtime_core::check_set::ActionClass;
 use agent_runtime_core::clock::Clock;
 use agent_runtime_core::content::UserInput;
 use agent_runtime_core::delegation::{
     ChildLimits, ChildModelSelection, ChildSpec, ToolViewScope, WorkspacePolicy,
 };
 use agent_runtime_core::error::{ErrorKind, RuntimeError};
-use agent_runtime_core::event::RuntimeEvent;
 use agent_runtime_core::grant::{
-    GrantConstraints, SecurityCheck, SecurityCheckId, SecurityCheckOutcome, SecurityCheckRevision,
+    GrantConstraints, SecurityCheck, SecurityCheckId, SecurityCheckMode, SecurityCheckOutcome,
+    SecurityCheckRevision,
 };
 use agent_runtime_core::provider::{ModelId, Provider};
-use agent_runtime_core::security::{AuthorizationRequest, PermissionSet};
-use agent_runtime_core::tool::{InvocationContext, Tool, ToolEffects, ToolOutcome};
+use agent_runtime_core::security::{AuthorizationRequest, PermissionSet, SecurityResource};
+use agent_runtime_core::tool::{
+    InvocationContext, PreparationContext, PreparedToolCall, Tool, ToolCallDisplay, ToolEffects,
+    ToolOutcome, ToolSpec,
+};
 use agent_runtime_core::workspace::Workspace;
 use async_trait::async_trait;
-use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use smith_host::ProjectWorkspace;
 
+use crate::abilities::{INTERACTION_READY_CONFIG, seal_tool_abilities};
+use crate::authority::SmithToolAuthority;
 use crate::factory::CACHE_CAPABILITY_REVISION;
+use crate::prompt::SmithPromptContributor;
 
 /// The model-facing delegation tool's name — Smith product policy.
 pub const AGENT_TOOL_NAME: &str = "agent";
+
+/// Schema of Smith's model-facing delegated task outcome envelope.
+const CHILD_TASK_OUTCOME_SCHEMA_VERSION: u32 = 1;
 
 /// The default cap on tasks (spawn plus follow-ups) per child.
 pub const DEFAULT_CHILD_MAX_TURNS: u32 = 4;
@@ -150,12 +168,21 @@ pub struct SmithChildFactory {
     pub(crate) profile: ResolvedModelProfile,
     pub(crate) context_policy: ContextPolicy,
     pub(crate) loop_config: LoopConfig,
+    pub(crate) prompt_contributor: SmithPromptContributor,
     pub(crate) approval: Arc<dyn ApprovalPolicy>,
     pub(crate) workspace: Arc<dyn Workspace>,
     pub(crate) clock: Arc<dyn Clock>,
+    pub(crate) artifact_store: Option<Arc<dyn ArtifactStore>>,
+    pub(crate) skills: Vec<Arc<dyn Ability>>,
+    pub(crate) memory: Option<MemoryContributor>,
+    pub(crate) semantic_summary: Option<Arc<SemanticSummaryCoordinator>>,
 }
 
 impl ChildRuntimeFactory for SmithChildFactory {
+    fn artifact_store(&self) -> Option<Arc<dyn ArtifactStore>> {
+        self.artifact_store.clone()
+    }
+
     fn child_builder(&self, spec: &ChildSpec) -> Result<RuntimeBuilder, RuntimeError> {
         // The parent chose this run's provider and model through the one
         // factory path. A child may inherit them or restate them; routing a
@@ -191,8 +218,35 @@ impl ChildRuntimeFactory for SmithChildFactory {
 
         let mut loop_config = self.loop_config.clone();
         loop_config.model = self.model.clone();
+        let tool_authority = Arc::new(SmithToolAuthority::new(workspace.root()));
+        let tool_coverage = tool_authority.coverage().clone();
 
-        Ok(RuntimeBuilder::new(self.model.clone())
+        let mut tools = smith_tools::all();
+        tools.push(Arc::new(QuestionnaireTool::new()));
+        tools.push(Arc::new(WriteTodosTool::new()));
+        if let Some(store) = self.artifact_store.clone() {
+            tools.push(Arc::new(ArtifactReadTool::new(store)));
+        }
+        let todo_component = Arc::new(TodoComponent::public());
+        let abilities = seal_tool_abilities(
+            tools
+                .iter()
+                .cloned()
+                .map(|tool| (tool, RegistrySource::BuiltIn)),
+        )
+        .map_err(|error| RuntimeError::conflict(error.to_string()))?;
+        let scope_inputs = ScopeInputs::new().with_identity(
+            ScopeIdentity::new()
+                .with_workspace(workspace.root())
+                .with_agent("child"),
+        );
+        let activation_budget = ActivationBudget::new(
+            ContextBudget::from_limits(&self.profile.limits, &self.context_policy)
+                .capability_budget,
+            8,
+        );
+
+        let mut builder = RuntimeBuilder::new(self.model.clone())
             .provider(self.provider.clone())
             .provider_name(self.provider_name.clone())
             .model_profile(self.profile.clone())
@@ -202,11 +256,49 @@ impl ChildRuntimeFactory for SmithChildFactory {
                 RegistryRevision::new(CACHE_CAPABILITY_REVISION),
                 self.provider_kind.clone(),
             ))
-            .legacy_approval_authority()
+            .security_check(
+                tool_authority,
+                SecurityCheckMode::Authoritative,
+                tool_coverage,
+                ActionClass::new("smith-built-in-tools"),
+            )
             .approval(self.approval.clone())
             .workspace(workspace)
-            .tools(smith_tools::all())
-            .clock(self.clock.clone()))
+            .tools(tools)
+            .live_ability_routing()
+            .scope_inputs(scope_inputs)
+            .capability_resolver(Arc::new(CapabilityResolver::new()))
+            .activation_policy(Arc::new(FailClosedPolicy))
+            // This readiness fact denotes the coordinator-owned
+            // ReturnToParent route. It does not install or borrow the root
+            // UI broker; the runtime flips the concrete disposition only
+            // after applying the child's narrowed tool view.
+            .activation_context(
+                ActivationContext::new().with_ready_config([INTERACTION_READY_CONFIG]),
+            )
+            .activation_budget(activation_budget)
+            .context_contributor(Arc::new(self.prompt_contributor.clone()))
+            .context_contributor(todo_component.clone())
+            .tool_output_processor(todo_component)
+            .clock(self.clock.clone());
+        if let Some(contributor) = self.memory.clone() {
+            builder = builder.context_contributor(Arc::new(contributor));
+        }
+        if let Some(coordinator) = self.semantic_summary.clone() {
+            builder = builder
+                .history_projector(coordinator.clone())
+                .turn_commit_hook(coordinator);
+        }
+        if let Some(store) = self.artifact_store.clone() {
+            builder = builder.tool_output_processor(Arc::new(ArtifactOffloader::new(store)));
+        }
+        for descriptor in abilities.descriptors() {
+            builder = builder.tool_ability_descriptor(descriptor);
+        }
+        for skill in self.skills.iter().cloned() {
+            builder = builder.ability(skill);
+        }
+        Ok(builder)
     }
 }
 
@@ -229,9 +321,10 @@ impl SmithDelegation {
 /// routes child results into its safe-boundary inbox.
 ///
 /// Presentation is untouched: hosts render the attributed child lifecycle
-/// events from the parent stream themselves. What this wires is model-facing:
-/// a completed child's final result is injected must-deliver, so the parent
-/// model receives it at the next provider/tool boundary and never mid-stream.
+/// events from the parent stream themselves. Model-facing task outcomes use
+/// the coordinator's separate lossless queue and are injected must-deliver, so
+/// the parent receives them at the next provider/tool boundary and never
+/// depends on a bounded observability subscriber.
 pub fn wire_delegation(
     session: &SessionHandle,
     delegation: &SmithDelegation,
@@ -247,43 +340,81 @@ pub fn wire_delegation(
             ..DelegationConfig::default()
         },
     )?;
+    let outcome_coordinator = coordinator.clone();
     delegation
         .slot
         .set(coordinator)
         .map_err(|_| RuntimeError::new(ErrorKind::Conflict, "delegation is already wired"))?;
 
-    let session = session.clone();
-    let mut events = session.subscribe();
+    // Exact returned interactions use the coordinator's protected lossless
+    // channel. The parent event broadcast is presentation metadata and can
+    // legitimately lag when its bounded buffer is under pressure.
+    let outcome_session = session.clone();
     tokio::spawn(async move {
-        while let Some(envelope) = events.next().await {
-            match envelope.payload {
-                RuntimeEvent::ChildCompleted { child, result } => {
-                    let text = if result.is_empty() {
-                        format!("Sub-agent {child} completed with no visible answer.")
-                    } else {
-                        format!("Sub-agent {child} completed:\n{result}")
-                    };
-                    let _ = session.inject(InjectedContent::text(text).must_deliver());
-                }
-                RuntimeEvent::ChildFailed { child, error } => {
-                    let _ = session.inject(InjectedContent::text(format!(
-                        "Sub-agent {child} failed: {error}"
-                    )));
-                }
-                RuntimeEvent::SessionShutdown => break,
-                _ => {}
+        while let Ok(outcomes) = outcome_coordinator.wait_ready_task_outcomes().await {
+            for outcome in outcomes {
+                let (key, text) = child_task_delivery(&outcome);
+                let _ = outcome_session
+                    .inject(InjectedContent::text(text).must_deliver().ordered_by(key));
             }
         }
     });
     Ok(())
 }
 
+/// Builds one typed safe-boundary delivery from the protected coordinator
+/// outcome. Events remain presentation metadata and are never parsed here.
+fn child_task_delivery(outcome: &ChildTaskOutcome) -> (String, String) {
+    match outcome {
+        ChildTaskOutcome::Completed { child, result } => (
+            format!("{child}/completed"),
+            json!({
+                "schema_version": CHILD_TASK_OUTCOME_SCHEMA_VERSION,
+                "type": "child_task_outcome",
+                "child_id": child,
+                "outcome": {
+                    "kind": "completed",
+                    "result": {
+                        "text": result.text,
+                        "artifacts": result.artifacts,
+                    },
+                },
+            })
+            .to_string(),
+        ),
+        ChildTaskOutcome::NeedsInput { .. } => {
+            let projection = outcome
+                .model_projection()
+                .expect("needs-input outcomes always have a bounded model projection");
+            let key = format!("{}/{}", projection.child, projection.request);
+            let text = json!({
+                "schema_version": CHILD_TASK_OUTCOME_SCHEMA_VERSION,
+                "type": "child_task_outcome",
+                "child_id": projection.child,
+                "outcome": {
+                    "kind": "needs_input",
+                    "informational": true,
+                    "next_action": {
+                        "ask": "decide whether to invoke root ask_user",
+                        "return": "send the answer to this child with agent follow_up"
+                    },
+                    "needs_input": projection,
+                },
+            })
+            .to_string();
+            (key, text)
+        }
+    }
+}
+
 /// The model-facing delegation tool.
 ///
-/// Declares no effects: the authority-bearing decision happens inside the
-/// coordinator through the composed authorization path (covered by
-/// [`DelegationAuthority`]), so declaring effects here would route one spawn
-/// through approval twice.
+/// Declares no invocation effects because the authority-bearing decision
+/// happens inside the coordinator through the composed authorization path
+/// (covered by [`DelegationAuthority`]), so declaring effects here would route
+/// one spawn through approval twice. Its specification still advertises the
+/// conservative delegation permission upper bound so capability routing never
+/// mistakes this host-defined authority for a risk-free tool.
 #[derive(Debug)]
 pub struct AgentTool {
     slot: Arc<OnceLock<DelegationCoordinator>>,
@@ -369,73 +500,161 @@ fn status_json(status: &ChildStatus) -> Value {
     })
 }
 
+fn task_outcome_json(outcome: &ChildTaskOutcome) -> Value {
+    match outcome {
+        ChildTaskOutcome::Completed { child, result } => json!({
+            "child_id": child.as_str(),
+            "state": "idle",
+            "result": {
+                "text": result.text,
+                "artifacts": result.artifacts,
+            },
+        }),
+        ChildTaskOutcome::NeedsInput { child, .. } => json!({
+            "child_id": child.as_str(),
+            "state": "needs_input",
+            "informational": true,
+            "needs_input": outcome
+                .model_projection()
+                .expect("needs-input outcome has a model projection"),
+            "next_action": {
+                "ask": "decide whether to invoke root ask_user",
+                "return": "send the answer with agent follow_up"
+            },
+        }),
+    }
+}
+
 #[async_trait]
 impl Tool for AgentTool {
-    fn name(&self) -> &str {
-        AGENT_TOOL_NAME
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::new(
+            AGENT_TOOL_NAME,
+            "Delegate a task to a sub-agent. Actions: spawn (start a child with a task; \
+             read-only tools unless tools=\"all\"), list, wait (block until a child finishes), \
+             result, follow_up (send another task to a child), stop. A completed child's \
+             result is also delivered to you automatically at the next safe point. A child's \
+             needs_input result is informational and does not open user interface; decide \
+             whether to call root ask_user, then send the answer with an explicit follow_up.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["spawn", "list", "wait", "result", "follow_up", "stop"],
+                        "description": "The delegation operation."
+                    },
+                    "task": {
+                        "type": "string",
+                        "description": "The task text (spawn and follow_up)."
+                    },
+                    "child_id": {
+                        "type": "string",
+                        "description": "The child to address (wait, result, follow_up, stop)."
+                    },
+                    "tools": {
+                        "type": "string",
+                        "enum": ["read_only", "all"],
+                        "description": "The child's tool scope (spawn). Defaults to read_only."
+                    },
+                    "workspace": {
+                        "description": "The child's workspace policy (spawn): \"shared\", \
+                                        \"read_only\", or {\"directory\": {\"path\": \"…\"}}. \
+                                        Defaults to read_only."
+                    },
+                    "max_turns": {
+                        "type": "integer",
+                        "description": "Tasks the child may run in total. Defaults to 4."
+                    },
+                    "max_tokens": {
+                        "type": "integer",
+                        "description": "Optional total token budget for the child."
+                    },
+                    "deadline_ms": {
+                        "type": "integer",
+                        "description": "Optional lifetime deadline in milliseconds."
+                    }
+                },
+                "required": ["action"],
+                "additionalProperties": false
+            }),
+            ToolEffects::new(Vec::new()),
+        )
+        .with_permission_upper_bound(PermissionSet::single(Permission::other(
+            DELEGATION_PERMISSION.to_owned(),
+        )))
     }
 
-    fn description(&self) -> &str {
-        "Delegate a task to a sub-agent. Actions: spawn (start a child with a task; \
-         read-only tools unless tools=\"all\"), list, wait (block until a child finishes), \
-         result, follow_up (send another task to a child), stop. A completed child's \
-         result is also delivered to you automatically at the next safe point."
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": ["spawn", "list", "wait", "result", "follow_up", "stop"],
-                    "description": "The delegation operation."
-                },
-                "task": {
-                    "type": "string",
-                    "description": "The task text (spawn and follow_up)."
-                },
-                "child_id": {
-                    "type": "string",
-                    "description": "The child to address (wait, result, follow_up, stop)."
-                },
-                "tools": {
-                    "type": "string",
-                    "enum": ["read_only", "all"],
-                    "description": "The child's tool scope (spawn). Defaults to read_only."
-                },
-                "workspace": {
-                    "description": "The child's workspace policy (spawn): \"shared\", \
-                                    \"read_only\", or {\"directory\": {\"path\": \"…\"}}. \
-                                    Defaults to read_only."
-                },
-                "max_turns": {
-                    "type": "integer",
-                    "description": "Tasks the child may run in total. Defaults to 4."
-                },
-                "max_tokens": {
-                    "type": "integer",
-                    "description": "Optional total token budget for the child."
-                },
-                "deadline_ms": {
-                    "type": "integer",
-                    "description": "Optional lifetime deadline in milliseconds."
-                }
-            },
-            "required": ["action"],
-            "additionalProperties": false
-        })
-    }
-
-    fn effects(&self) -> ToolEffects {
-        ToolEffects::read_only()
+    async fn prepare(
+        &self,
+        mut arguments: Value,
+        ctx: &PreparationContext,
+    ) -> Result<PreparedToolCall, RuntimeError> {
+        let action: AgentAction = serde_json::from_value(arguments.clone()).map_err(|err| {
+            RuntimeError::new(ErrorKind::Tool, format!("unusable agent arguments: {err}"))
+        })?;
+        let (resource_id, title, detail) = match &action {
+            AgentAction::Spawn {
+                task,
+                workspace: Some(WorkspaceArg::Directory { path }),
+                ..
+            } => {
+                let canonical = ctx.workspace.resolve(path)?;
+                let value = arguments
+                    .pointer_mut("/workspace/directory/path")
+                    .ok_or_else(|| {
+                        RuntimeError::new(
+                            ErrorKind::Tool,
+                            "agent workspace directory could not be canonicalized",
+                        )
+                    })?;
+                *value = Value::String(canonical);
+                ("spawn".to_owned(), "Spawn sub-agent", Some(task.clone()))
+            }
+            AgentAction::Spawn { task, .. } => {
+                ("spawn".to_owned(), "Spawn sub-agent", Some(task.clone()))
+            }
+            AgentAction::List => ("list".to_owned(), "List sub-agents", None),
+            AgentAction::Wait { child_id } => (
+                child_id.clone(),
+                "Wait for sub-agent",
+                Some(child_id.clone()),
+            ),
+            AgentAction::Result { child_id } => (
+                child_id.clone(),
+                "Read sub-agent result",
+                Some(child_id.clone()),
+            ),
+            AgentAction::FollowUp { child_id, task } => (
+                child_id.clone(),
+                "Send sub-agent follow-up",
+                Some(format!("{child_id}: {task}")),
+            ),
+            AgentAction::Stop { child_id } => {
+                (child_id.clone(), "Stop sub-agent", Some(child_id.clone()))
+            }
+        };
+        let mut display = ToolCallDisplay::new(title);
+        if let Some(detail) = detail {
+            display = display.with_detail(detail);
+        }
+        Ok(PreparedToolCall::new(
+            ctx.call_id.clone(),
+            AGENT_TOOL_NAME,
+            arguments,
+            PermissionSet::new(),
+            SecurityResource::other("delegation", resource_id),
+            ToolEffects::new(Vec::new()),
+            display,
+        ))
     }
 
     async fn invoke(
         &self,
-        arguments: Value,
+        prepared: PreparedToolCall,
         _ctx: &InvocationContext,
     ) -> Result<ToolOutcome, RuntimeError> {
+        let arguments = prepared.into_arguments();
         let action: AgentAction = serde_json::from_value(arguments).map_err(|err| {
             RuntimeError::new(ErrorKind::Tool, format!("unusable agent arguments: {err}"))
         })?;
@@ -493,18 +712,23 @@ impl Tool for AgentTool {
                 Ok(ToolOutcome::json(json!({ "children": children })))
             }
             AgentAction::Wait { child_id } => {
-                let status = coordinator
-                    .wait(&agent_runtime_core::ids::ChildId::new(child_id))
+                let outcome = coordinator
+                    .wait_task_outcome(&agent_runtime_core::ids::ChildId::new(child_id))
                     .await;
-                match status {
-                    Ok(status) => Ok(ToolOutcome::json(status_json(&status))),
+                match outcome {
+                    Ok(outcome) => Ok(ToolOutcome::json(task_outcome_json(&outcome))),
                     Err(err) => Ok(ToolOutcome::error(err.message)),
                 }
             }
             AgentAction::Result { child_id } => {
-                let status = coordinator.status(&agent_runtime_core::ids::ChildId::new(child_id));
-                match status {
-                    Ok(status) => Ok(ToolOutcome::json(status_json(&status))),
+                let outcome = coordinator
+                    .task_outcome(&agent_runtime_core::ids::ChildId::new(child_id.clone()));
+                match outcome {
+                    Ok(Some(outcome)) => Ok(ToolOutcome::json(task_outcome_json(&outcome))),
+                    Ok(None) => Ok(ToolOutcome::json(json!({
+                        "child_id": child_id,
+                        "state": "running",
+                    }))),
                     Err(err) => Ok(ToolOutcome::error(err.message)),
                 }
             }

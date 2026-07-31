@@ -16,7 +16,8 @@
 
 use std::sync::{Arc, Condvar, Mutex};
 
-use agent_runtime::provider::fake::{FakeProvider, ScriptedStream};
+use agent_runtime::ability::Skill;
+use agent_runtime::provider::fake::{FakeProvider, ScriptedStream, tool_call_fragments};
 use agent_runtime::runtime::StartSession;
 use agent_runtime_core::catalog::{
     CatalogSource, ModelLimits, ModelRecord, ProfileField, StaticSource,
@@ -29,15 +30,19 @@ use agent_runtime_core::provider::{
     Capabilities, FinishReason, ModelId, Provider, ProviderStreamEvent,
 };
 use agent_runtime_core::store::Secret;
-use agent_runtime_core::tool::{InvocationContext, Tool, ToolEffects, ToolOutcome};
+use agent_runtime_core::tool::{InvocationContext, PreparedToolCall, Tool, ToolOutcome, ToolSpec};
 use agent_runtime_testkit::{MemoryWorkspace, RecordingObserver};
 use async_trait::async_trait;
+use sha2::{Digest, Sha256};
 use smith_config::catalog::CatalogSnapshot;
 use smith_config::credential::{CredentialResolver, Environment, Keychain, KeychainError};
 use smith_config::resolve::{Layer, ResolveRequest, ResolvedConfig, resolve};
+use smith_config::trust::TrustStatus;
 use smith_runtime::factory::{self, FactoryError, HostSurface, RuntimeRequest};
 use smith_runtime::journal::{DefaultRedactor, EventJournal, JournalConfig, Redactor};
+use smith_runtime::memory::{SmithMemoryRecord, SmithMemorySource};
 use smith_runtime::model_catalog::{EMBEDDED_MODELS_DEV_SEED, runtime_catalog_source};
+use smith_runtime::skills::SmithSkillSources;
 
 /// A resolvable configuration using the deterministic provider.
 const FAKE_CONFIG: &str = r#"
@@ -71,8 +76,8 @@ model = "example-model"
 kind = "fake"
 
 [models."local/example-model"]
-context_tokens = 500
-max_input_tokens = 500
+context_tokens = 1000
+max_input_tokens = 1000
 max_output_tokens = 100
 
 [context]
@@ -180,25 +185,13 @@ struct PanicsIfRegistered;
 
 #[async_trait]
 impl Tool for PanicsIfRegistered {
-    fn name(&self) -> &str {
+    fn spec(&self) -> ToolSpec {
         panic!("setup preflight attempted to construct a tool registry")
-    }
-
-    fn description(&self) -> &str {
-        "never registered"
-    }
-
-    fn input_schema(&self) -> serde_json::Value {
-        serde_json::json!({"type": "object"})
-    }
-
-    fn effects(&self) -> ToolEffects {
-        ToolEffects::read_only()
     }
 
     async fn invoke(
         &self,
-        _arguments: serde_json::Value,
+        _prepared: PreparedToolCall,
         _ctx: &InvocationContext,
     ) -> Result<ToolOutcome, RuntimeError> {
         unreachable!("the preflight does not run tools")
@@ -244,6 +237,159 @@ fn request(fixture: &Fixture, surface: HostSurface) -> RuntimeRequest {
         workspace: Some(Arc::new(MemoryWorkspace::new("/repo"))),
         ..RuntimeRequest::new(fixture.config(), surface)
     }
+}
+
+#[tokio::test]
+async fn trusted_workspace_skill_loads_only_after_factory_descriptor_resolution() {
+    const BODY: &[u8] = b"TRUSTED_SKILL_BODY_MARKER: inspect unsafe boundaries first.";
+
+    let fixture = Fixture::new(FAKE_CONFIG);
+    let skill_path = fixture.project.path().join(".smith/review.SKILL.md");
+    let provider = Arc::new(FakeProvider::text_reply("reviewed"));
+    let mut runtime = request(&fixture, HostSurface::Headless);
+    runtime.provider = Some(provider.clone());
+    runtime.skills = SmithSkillSources::new().with_workspace(
+        Skill::from_verified_file(
+            "rust-review",
+            "Review Rust implementation boundaries",
+            &skill_path,
+            Sha256::digest(BODY).into(),
+        ),
+        TrustStatus::Trusted,
+    );
+
+    let smith = factory::build(runtime)
+        .await
+        .expect("descriptor resolution succeeds before the file exists");
+    assert!(
+        !skill_path.exists(),
+        "factory eagerly opened the skill body"
+    );
+    assert_eq!(smith.policy().skills, ["rust-review"]);
+    assert!(smith.skill_index().iter().all(|entry| entry.activatable));
+
+    std::fs::write(&skill_path, BODY).expect("publish reviewed bytes after descriptor indexing");
+    let session = smith
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .expect("a session");
+    session
+        .run(UserInput::text(
+            "Use the rust-review skill to review this Rust implementation.",
+        ))
+        .await
+        .expect("the trusted skill turn runs");
+    session.shutdown().await.expect("clean shutdown");
+
+    let wire = serde_json::to_string(&provider.requests()[0].messages).unwrap();
+    assert!(wire.contains("TRUSTED_SKILL_BODY_MARKER"), "{wire}");
+}
+
+#[tokio::test]
+async fn untrusted_workspace_skill_is_indexed_but_never_activates_or_shadows_user_skill() {
+    let fixture = Fixture::new(FAKE_CONFIG);
+    let provider = Arc::new(FakeProvider::text_reply("reviewed"));
+    let mut runtime = request(&fixture, HostSurface::Headless);
+    runtime.provider = Some(provider.clone());
+    runtime.skills = SmithSkillSources::new()
+        .with_user(Skill::inline(
+            "rust-review",
+            "Review Rust implementation boundaries",
+            "USER_SKILL_BODY_MARKER",
+        ))
+        .with_workspace(
+            Skill::inline(
+                "rust-review",
+                "Review Rust implementation boundaries",
+                "UNTRUSTED_WORKSPACE_BODY_MARKER",
+            ),
+            TrustStatus::Untrusted,
+        );
+
+    let smith = factory::build(runtime).await.expect("a runtime");
+    assert_eq!(smith.policy().skills, ["rust-review"]);
+    assert!(smith.skill_index().iter().any(|entry| {
+        entry.layer == smith_runtime::skills::SmithSkillLayer::Workspace && !entry.activatable
+    }));
+    let session = smith
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .expect("a session");
+    session
+        .run(UserInput::text(
+            "Use the rust-review skill to review this Rust implementation.",
+        ))
+        .await
+        .expect("the trusted lower source remains usable");
+    session.shutdown().await.expect("clean shutdown");
+
+    let wire = serde_json::to_string(&provider.requests()[0].messages).unwrap();
+    assert!(wire.contains("USER_SKILL_BODY_MARKER"), "{wire}");
+    assert!(!wire.contains("UNTRUSTED_WORKSPACE_BODY_MARKER"), "{wire}");
+}
+
+#[tokio::test]
+async fn smith_memory_is_relevant_sensitive_manifested_and_not_canonical_history() {
+    const MEMORY: &str = "MEMORY_CONTEXT_MARKER: prefer deterministic fixtures.";
+
+    let fixture = Fixture::new(FAKE_CONFIG);
+    let provider = Arc::new(FakeProvider::text_reply("understood"));
+    let source = Arc::new(
+        SmithMemorySource::new(vec![
+            SmithMemoryRecord::new(
+                "test-preference",
+                MEMORY,
+                agent_runtime::context::Sensitivity::Sensitive,
+            )
+            .with_priority(1)
+            .with_keywords(["deterministic", "fixtures"]),
+        ])
+        .unwrap(),
+    );
+    let mut runtime = request(&fixture, HostSurface::Headless);
+    runtime.provider = Some(provider.clone());
+    runtime.memory = Some(source);
+    let smith = factory::build(runtime).await.expect("a runtime");
+    assert!(smith.policy().memory_revision.is_some());
+    let session = smith
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .expect("a session");
+    session
+        .run(UserInput::text(
+            "Explain how the deterministic fixtures should be verified.",
+        ))
+        .await
+        .expect("the memory-backed turn runs");
+
+    let wire = serde_json::to_string(&provider.requests()[0].messages).unwrap();
+    assert!(wire.contains("MEMORY_CONTEXT_MARKER"), "{wire}");
+    let snapshot = session.snapshot();
+    assert!(
+        snapshot
+            .history
+            .iter()
+            .all(|message| !message.joined_text().contains("MEMORY_CONTEXT_MARKER")),
+        "memory was copied into canonical conversation history"
+    );
+    let segment = snapshot
+        .manifests
+        .last()
+        .expect("turn manifest")
+        .manifest
+        .segments
+        .iter()
+        .find(|segment| segment.id.as_str() == "harness:memory:smith:test-preference")
+        .expect("memory segment");
+    assert_eq!(
+        segment.sensitivity,
+        agent_runtime_core::manifest::SegmentSensitivity::Sensitive
+    );
+    assert!(segment.tokens > 0);
+    session.shutdown().await.expect("clean shutdown");
 }
 
 /// An environment that answers from a fixed value, so no test reads the real
@@ -337,11 +483,39 @@ async fn a_resolved_fake_configuration_builds_a_runtime_and_runs_a_turn() {
         policy.model_profile.limits,
         ModelLimits::new(128_000, 124_000, 4_096)
     );
-    assert_eq!(policy.system_prompt, factory::INSTRUCTIONS);
+    assert_eq!(
+        policy.system_prompt,
+        smith_runtime::prompt::legacy_system_prompt(
+            &smith_runtime::prompt::DynamicPromptContext::default()
+        )
+    );
     assert_eq!(
         policy.tools,
-        ["read", "list", "search", "edit", "shell", "agent"],
-        "a root surface registers the delegation tool after the built-ins"
+        [
+            "read",
+            "list",
+            "search",
+            "edit",
+            "shell",
+            "ask_user",
+            "write_todos",
+            "agent"
+        ],
+        "a root surface registers the standard questionnaire, todo, and delegation tools"
+    );
+    assert_eq!(
+        smith.abilities().names(),
+        [
+            "read",
+            "list",
+            "search",
+            "edit",
+            "shell",
+            "ask_user",
+            "write_todos",
+            "agent"
+        ],
+        "the one factory seals every executable tool as one descriptor-first ability"
     );
     // The built-in defaults, mapped: two retries is three attempts, and the
     // reserve falls back to the model's own declared ceiling.
@@ -355,7 +529,10 @@ async fn a_resolved_fake_configuration_builds_a_runtime_and_runs_a_turn() {
         .start_session(StartSession::new())
         .await
         .expect("a session");
-    session.run(UserInput::text("hello")).await;
+    session
+        .run(UserInput::text("hello"))
+        .await
+        .expect("the turn runs");
     assert!(
         session
             .history()
@@ -366,6 +543,263 @@ async fn a_resolved_fake_configuration_builds_a_runtime_and_runs_a_turn() {
     session.shutdown().await.expect("a clean shutdown");
 }
 
+async fn provider_tool_names_for(fixture: &Fixture, user_input: &str) -> Vec<String> {
+    let provider = Arc::new(FakeProvider::text_reply("done"));
+    let request = RuntimeRequest {
+        provider: Some(provider.clone() as Arc<dyn Provider>),
+        ..request(fixture, HostSurface::Headless)
+    };
+    let smith = factory::build(request).await.expect("a runtime");
+    let session = smith
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .expect("a session");
+    session
+        .run(UserInput::text(user_input))
+        .await
+        .expect("the turn runs");
+    session.shutdown().await.expect("a clean shutdown");
+
+    provider.requests()[0]
+        .tools
+        .iter()
+        .map(|schema| schema.name.clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn live_routing_advertises_only_a_read_subset_for_read_only_intent() {
+    let fixture = Fixture::new(FAKE_CONFIG);
+    let names = provider_tool_names_for(
+        &fixture,
+        "inspect and explain the Rust source files in this repository",
+    )
+    .await;
+
+    assert!(
+        names
+            .iter()
+            .any(|name| matches!(name.as_str(), "read" | "list" | "search")),
+        "no read capability reached the provider: {names:?}"
+    );
+    assert!(
+        names.iter().all(|name| matches!(
+            name.as_str(),
+            "read" | "list" | "search" | "registry.search"
+        )),
+        "read-only intent received an unrelated or authoritative tool: {names:?}"
+    );
+}
+
+#[tokio::test]
+async fn explicit_read_tool_routing_does_not_substitute_edit() {
+    let fixture = Fixture::new(FAKE_CONFIG);
+    let names = provider_tool_names_for(
+        &fixture,
+        "Use the read tool to inspect live-proof.txt, then tell me in one concise sentence what value the file contains.",
+    )
+    .await;
+
+    assert!(names.iter().any(|name| name == "read"), "{names:?}");
+    assert!(
+        names
+            .iter()
+            .all(|name| matches!(name.as_str(), "read" | "registry.search")),
+        "explicit read intent received another capability: {names:?}"
+    );
+}
+
+#[tokio::test]
+async fn live_routing_advertises_exact_edit_without_broad_shell_or_delegation() {
+    let fixture = Fixture::new(FAKE_CONFIG);
+    let names = provider_tool_names_for(
+        &fixture,
+        "edit the Rust file and replace the incorrect function",
+    )
+    .await;
+
+    assert!(names.iter().any(|name| name == "edit"), "{names:?}");
+    assert!(
+        names
+            .iter()
+            .all(|name| matches!(name.as_str(), "edit" | "registry.search")),
+        "ordinary editing intent received a broader tool surface: {names:?}"
+    );
+}
+
+#[tokio::test]
+async fn protected_registry_search_stages_edit_only_for_the_next_provider_boundary() {
+    let fixture = Fixture::new(FAKE_CONFIG);
+    let mut search = tool_call_fragments(
+        0,
+        "capability-search-1",
+        "registry.search",
+        r#"{"query":"edit the Rust file and replace the incorrect function"}"#,
+    );
+    search.push(ProviderStreamEvent::Finish {
+        reason: FinishReason::ToolCalls,
+    });
+    let provider = Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        vec![
+            ScriptedStream::new(search),
+            ScriptedStream::new(vec![
+                ProviderStreamEvent::TextDelta {
+                    text: "ready to edit".to_owned(),
+                },
+                ProviderStreamEvent::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ]),
+        ],
+    ));
+    let request = RuntimeRequest {
+        provider: Some(provider.clone() as Arc<dyn Provider>),
+        ..request(&fixture, HostSurface::Headless)
+    };
+    let smith = factory::build(request).await.expect("a runtime");
+    let session = smith
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .expect("a session");
+    session
+        .run(UserInput::text("handle the next requested operation"))
+        .await
+        .expect("the search tool loop completes");
+    session.shutdown().await.expect("a clean shutdown");
+
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    let first = requests[0]
+        .tools
+        .iter()
+        .map(|schema| schema.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(first, ["registry.search"]);
+    let second = requests[1]
+        .tools
+        .iter()
+        .map(|schema| schema.name.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        second.contains(&"edit"),
+        "the staged mutation ability missed the next safe boundary: {second:?}"
+    );
+    assert!(
+        second
+            .iter()
+            .all(|name| matches!(*name, "edit" | "registry.search")),
+        "capability search staged a broader surface than requested: {second:?}"
+    );
+}
+
+#[tokio::test]
+async fn live_factory_emits_registry_view_retrieval_activation_and_context_lifecycle() {
+    let fixture = Fixture::new(FAKE_CONFIG);
+    let provider = Arc::new(FakeProvider::text_reply("done"));
+    let recorder = RecordingObserver::shared();
+    let request = RuntimeRequest {
+        provider: Some(provider as Arc<dyn Provider>),
+        observers: vec![recorder.clone() as Arc<dyn EventObserver>],
+        ..request(&fixture, HostSurface::Headless)
+    };
+    let smith = factory::build(request).await.expect("a runtime");
+    let session = smith
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .expect("a session");
+    session
+        .run(UserInput::text("inspect and explain this repository"))
+        .await
+        .expect("the turn runs");
+    session.shutdown().await.expect("a clean shutdown");
+
+    let events = recorder.payloads();
+    for (name, present) in [
+        (
+            "registry snapshot",
+            events
+                .iter()
+                .any(|event| matches!(event, RuntimeEvent::RegistrySnapshotSealed { .. })),
+        ),
+        (
+            "scoped view",
+            events
+                .iter()
+                .any(|event| matches!(event, RuntimeEvent::ScopedViewDerived { .. })),
+        ),
+        (
+            "capability retrieval",
+            events
+                .iter()
+                .any(|event| matches!(event, RuntimeEvent::CapabilityRetrievalPerformed { .. })),
+        ),
+        (
+            "activation epoch",
+            events
+                .iter()
+                .any(|event| matches!(event, RuntimeEvent::CapabilitiesActivated { .. })),
+        ),
+        (
+            "context plan",
+            events
+                .iter()
+                .any(|event| matches!(event, RuntimeEvent::ContextPlanned { .. })),
+        ),
+    ] {
+        assert!(present, "the live factory emitted no {name}: {events:?}");
+    }
+}
+
+#[tokio::test]
+async fn provider_planning_records_every_versioned_smith_prompt_fragment() {
+    let fixture = Fixture::new(FAKE_CONFIG);
+    let provider = Arc::new(FakeProvider::text_reply("done"));
+    let request = RuntimeRequest {
+        provider: Some(provider.clone() as Arc<dyn Provider>),
+        ..request(&fixture, HostSurface::Headless)
+    };
+    let smith = factory::build(request).await.expect("a runtime");
+    let session = smith
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .expect("a session");
+    session
+        .run(UserInput::text("explain this project"))
+        .await
+        .expect("the turn runs");
+
+    let expected = smith_runtime::prompt::stable_fragments();
+    let snapshot = session.snapshot();
+    let manifest = snapshot.manifests.last().expect("a run manifest");
+    let smith_segments = manifest
+        .manifest
+        .segments
+        .iter()
+        .filter(|segment| segment.id.as_str().starts_with("smith.prompt."))
+        .collect::<Vec<_>>();
+    assert_eq!(smith_segments.len(), expected.len());
+    for (record, fragment) in smith_segments.iter().zip(expected) {
+        assert_eq!(record.id.as_str(), fragment.id.as_str());
+        assert_eq!(record.content_hash, fragment.content_hash());
+    }
+
+    let wire_text = provider.requests()[0]
+        .messages
+        .iter()
+        .map(|message| message.joined_text())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(wire_text.contains("understand the request"));
+    assert!(wire_text.contains("committed successful tool result"));
+    session.shutdown().await.expect("a clean shutdown");
+}
+
 #[tokio::test]
 async fn the_shared_factory_compacts_optional_history_before_an_over_budget_turn() {
     let fixture = Fixture::new(COMPACTION_CONFIG);
@@ -373,7 +807,7 @@ async fn the_shared_factory_compacts_optional_history_before_an_over_budget_turn
         .map(|turn| {
             ScriptedStream::new(vec![
                 ProviderStreamEvent::TextDelta {
-                    text: format!("answer-{turn}:{}", "a".repeat(480)),
+                    text: format!("answer-{turn}:{}", "a".repeat(800)),
                 },
                 ProviderStreamEvent::Finish {
                     reason: FinishReason::Stop,
@@ -396,8 +830,8 @@ async fn the_shared_factory_compacts_optional_history_before_an_over_budget_turn
     };
     let smith = factory::build(request).await.expect("a runtime");
 
-    assert_eq!(smith.policy().compaction_policy.high_watermark, 340);
-    assert_eq!(smith.policy().compaction_policy.low_watermark, 240);
+    assert_eq!(smith.policy().compaction_policy.high_watermark, 765);
+    assert_eq!(smith.policy().compaction_policy.low_watermark, 540);
 
     let session = smith
         .runtime()
@@ -406,8 +840,9 @@ async fn the_shared_factory_compacts_optional_history_before_an_over_budget_turn
         .expect("a session");
     for turn in 0..3 {
         session
-            .run(UserInput::text(format!("turn-{turn}:{}", "u".repeat(480))))
-            .await;
+            .run(UserInput::text(format!("turn-{turn}:{}", "u".repeat(800))))
+            .await
+            .expect("the turn runs");
     }
 
     assert_eq!(
@@ -429,20 +864,33 @@ async fn the_shared_factory_compacts_optional_history_before_an_over_budget_turn
         })
         .next_back()
         .expect("a context plan");
-    assert_eq!(last_plan.1, 400);
+    assert_eq!(last_plan.1, 900);
     assert!(
-        last_plan.0 <= smith.policy().compaction_policy.low_watermark,
-        "the compacted request used {} tokens instead of reaching the {}-token target",
+        last_plan.0 <= smith.policy().compaction_policy.high_watermark,
+        "the compacted request used {} tokens and remained above the {}-token pressure boundary",
         last_plan.0,
-        smith.policy().compaction_policy.low_watermark
+        smith.policy().compaction_policy.high_watermark
+    );
+    let compacted = recorder
+        .payloads()
+        .into_iter()
+        .filter_map(|event| match event {
+            RuntimeEvent::ContextCompacted {
+                reclaimed_tokens,
+                summaries,
+                ..
+            } => Some((reclaimed_tokens, summaries)),
+            _ => None,
+        })
+        .next_back()
+        .expect("a structural compaction event");
+    assert!(
+        compacted.0 > 0,
+        "structural compaction did not reclaim input tokens"
     );
     assert!(
-        last_plan
-            .2
-            .iter()
-            .any(|(kind, tokens)| kind.as_str() == "summary" && *tokens > 0),
-        "the compacted plan did not carry a summary: {:?}",
-        last_plan.2
+        compacted.1.is_empty() && last_plan.2.keys().all(|kind| kind.as_str() != "summary"),
+        "the deterministic structural compactor fabricated a semantic summary"
     );
 
     session.shutdown().await.expect("a clean shutdown");
@@ -612,7 +1060,10 @@ async fn a_resolved_secret_reaches_no_event_snapshot_journal_or_error() {
         .start_session(StartSession::new())
         .await
         .expect("a session");
-    session.run(UserInput::text("hello")).await;
+    session
+        .run(UserInput::text("hello"))
+        .await
+        .expect("the turn runs");
     let snapshot = serde_json::to_string(&session.snapshot()).expect("a serialized snapshot");
     session.shutdown().await.expect("a clean shutdown");
     let stats = journal.shutdown().await.expect("a flushed journal");
@@ -685,7 +1136,10 @@ async fn an_inline_user_key_bypasses_resolvers_and_reaches_no_runtime_surface() 
         .start_session(StartSession::new())
         .await
         .expect("a session");
-    session.run(UserInput::text("hello")).await;
+    session
+        .run(UserInput::text("hello"))
+        .await
+        .expect("the turn runs");
     let snapshot = serde_json::to_string(&session.snapshot()).expect("a serialized snapshot");
     session.shutdown().await.expect("a clean shutdown");
     journal.shutdown().await.expect("a flushed journal");
@@ -740,7 +1194,10 @@ async fn the_same_factory_gives_a_terminal_and_a_headless_run_the_same_policy() 
             .start_session(StartSession::new())
             .await
             .expect("a session");
-        session.run(UserInput::text("hello")).await;
+        session
+            .run(UserInput::text("hello"))
+            .await
+            .expect("the turn runs");
         transcripts.push(
             session
                 .history()

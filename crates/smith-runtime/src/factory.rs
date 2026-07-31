@@ -51,20 +51,31 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use agent_runtime::ability::SealedAbilities;
+use agent_runtime::ability::activation::{ActivationContext, FailClosedPolicy};
 use agent_runtime::agent::config::{DowngradePolicy, LoopConfig};
+use agent_runtime::capability::{ActivationBudget, CapabilityResolver};
 use agent_runtime::context::{
-    CompactionPolicy, ContextBudget, ContextPolicy, ProviderCacheCapability, SemanticCompactor,
+    CompactionPolicy, ContextBudget, ContextPolicy, ProviderCacheCapability, StructuralCompactor,
 };
+use agent_runtime::harness::{
+    ArtifactOffloader, ArtifactReadTool, MemoryContributor, MemorySource, QuestionnaireTool,
+    SemanticSummaryCoordinator, SummaryModel, TodoComponent, WriteTodosTool,
+};
+use agent_runtime::hub::{ScopeIdentity, ScopeInputs};
 use agent_runtime::provider::fake::FakeProvider;
 use agent_runtime::provider::openai::{OpenAiConfig, OpenAiProvider};
 use agent_runtime::provider::retry::RetryPolicy;
 use agent_runtime::registry::RegistryRevision;
 use agent_runtime::runtime::{Runtime, RuntimeBuilder};
 use agent_runtime_core::approval::{AllowAll, ApprovalPolicy, DenyAll};
+use agent_runtime_core::artifact::ArtifactStore;
 use agent_runtime_core::catalog::{ModelCatalogSource, ModelProfileError, ResolvedModelProfile};
 use agent_runtime_core::catalog::{ModelLimits, ModelRecord};
+use agent_runtime_core::checkpoint::{CHECKPOINT_SCHEMA_VERSION, CheckpointStore};
 use agent_runtime_core::clock::{Clock, SystemClock};
 use agent_runtime_core::error::RuntimeError;
+use agent_runtime_core::interaction::{InteractionBroker, InteractionReadiness};
 use agent_runtime_core::observer::EventObserver;
 use agent_runtime_core::provider::{ModelId, Provider, ProviderError};
 use agent_runtime_core::store::{Secret, SecretStore, SessionStore};
@@ -82,20 +93,19 @@ use smith_config::setup::trusted_model;
 use agent_runtime_core::check_set::ActionClass;
 use agent_runtime_core::grant::SecurityCheckMode;
 
+use crate::abilities::{INTERACTION_READY_CONFIG, seal_tool_abilities};
+use crate::authority::SmithToolAuthority;
 use crate::catalog::{CatalogLayers, ProfileResolution};
+use crate::checkpoint::{BarrierCheckpointStore, CheckpointBarrier, SmithCheckpointSetup};
 use crate::delegation::{AgentTool, DelegationAuthority, SmithChildFactory, SmithDelegation};
 use crate::journal::DefaultRedactor;
+use crate::memory::SmithMemorySource;
+use crate::prompt::{DynamicPromptContext, SmithPromptContributor, render_fragments};
+use crate::skills::{SkillIndexEntry, SmithSkillSources};
+use crate::summary::{
+    SemanticSummaryRuntimePolicy, SmithProviderSummaryModel, SmithSemanticSummaryConfig,
+};
 use crate::transport::{ReqwestTransport, TransportConfig};
-
-/// The instructions Smith gives the model.
-///
-/// Product policy, which is why it lives in Smith rather than in the neutral
-/// runtime — and why it lives in the factory rather than in each host: one
-/// composition path implies one default prompt. A host that needs different
-/// wording, such as a child agent with a narrower brief, overrides it through
-/// [`RuntimeRequest::system_prompt`].
-pub const INSTRUCTIONS: &str =
-    "You are Smith, a terminal coding assistant. Be concise and concrete.";
 
 /// The reply the deterministic development provider gives.
 ///
@@ -156,6 +166,26 @@ pub enum HostSurface {
     Embedded,
 }
 
+/// Whether this composition can durably resume exact in-flight work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MidTurnDurability {
+    /// An authenticated protected checkpoint store is installed.
+    Available,
+    /// Exact state is not stored; redacted completed-turn snapshots may still
+    /// be available according to persistence policy.
+    Unavailable,
+}
+
+impl MidTurnDurability {
+    /// Stable status spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
 impl HostSurface {
     /// A stable lowercase slug.
     pub fn as_str(self) -> &'static str {
@@ -187,7 +217,8 @@ pub struct RuntimeRequest {
     pub config: ResolvedConfig,
     /// Which presentation is composing this runtime.
     pub surface: HostSurface,
-    /// The product instructions, or [`INSTRUCTIONS`] when absent.
+    /// A complete product-instruction override. When absent, Smith's versioned
+    /// prompt sections are composed through [`crate::prompt`].
     pub system_prompt: Option<String>,
     /// The workspace boundary tools resolve paths through. Required: the shared
     /// runtime would otherwise fall back to denying everything silently.
@@ -195,17 +226,40 @@ pub struct RuntimeRequest {
     /// The approval surface. Required when `approval.mode` is `ask`, since a
     /// question with nobody to answer it is a hang or a silent denial.
     pub approval: Option<Arc<dyn ApprovalPolicy>>,
+    /// Authority-free task interaction surface. The questionnaire tool is
+    /// installed for root runtimes, but its schema is advertised only while
+    /// this broker reports readiness.
+    pub interaction: Option<Arc<dyn InteractionBroker>>,
     /// Tools registered in addition to Smith's built-ins.
     pub tools: Vec<Arc<dyn Tool>>,
     /// Optional host-owned recorder wrapped around built-in mutating tools.
     pub change_recorder: Option<Arc<smith_tools::ChangeRecorder>>,
+    /// Smith-owned, descriptor-first skill sources.
+    pub skills: SmithSkillSources,
+    /// Optional Smith-owned bounded memory policy and records.
+    pub memory: Option<Arc<SmithMemorySource>>,
+    /// Optional semantic-summary policy. Standard persistent hosts install
+    /// Smith's default; direct embedders opt in explicitly.
+    pub semantic_summary: Option<SmithSemanticSummaryConfig>,
     /// Whether [`smith_tools::all`] is registered. A read-only child view sets
     /// this to `false` and supplies its own narrower set.
     pub built_in_tools: bool,
     /// Where session snapshots are persisted.
     pub session_store: Option<Arc<dyn SessionStore>>,
+    /// An already-initialized exact turn checkpoint store.
+    pub checkpoint_store: Option<Arc<dyn CheckpointStore>>,
+    /// Deferred Smith protected-store setup. This runs only after ordinary
+    /// factory preflight has resolved the provider and credential.
+    pub checkpoint_setup: Option<SmithCheckpointSetup>,
+    /// Optional host-owned durability boundary ordered before each protected
+    /// checkpoint publication.
+    pub checkpoint_barrier: Option<Arc<dyn CheckpointBarrier>>,
     /// The secret store exposed to the runtime, for hosts that need one.
     pub secret_store: Option<Arc<dyn SecretStore>>,
+    /// Session-private artifact storage. When present, Smith registers the
+    /// bounded reader and offloads oversized exact tool outcomes before the
+    /// runtime applies its model-facing bound.
+    pub artifact_store: Option<Arc<dyn ArtifactStore>>,
     /// Canonical event observers, such as the JSON Lines journal.
     pub observers: Vec<Arc<dyn EventObserver>>,
     /// The shared persistence redactor. A standard Smith host injects this
@@ -241,11 +295,19 @@ impl RuntimeRequest {
             system_prompt: None,
             workspace: None,
             approval: None,
+            interaction: None,
             tools: Vec::new(),
             change_recorder: None,
+            skills: SmithSkillSources::new(),
+            memory: None,
+            semantic_summary: None,
             built_in_tools: true,
             session_store: None,
+            checkpoint_store: None,
+            checkpoint_setup: None,
+            checkpoint_barrier: None,
             secret_store: None,
+            artifact_store: None,
             observers: Vec::new(),
             persistence_redactor: None,
             clock: None,
@@ -302,10 +364,18 @@ pub struct RuntimePolicy {
     pub max_output_tokens: Option<u32>,
     /// The registered tool names, in registration order.
     pub tools: Vec<String>,
+    /// Resolved activatable skill names in deterministic order.
+    pub skills: Vec<String>,
+    /// Installed memory source revision.
+    pub memory_revision: Option<RegistryRevision>,
+    /// Semantic-summary model, purpose, spend, and retention policy.
+    pub semantic_summary: Option<SemanticSummaryRuntimePolicy>,
     /// The runtime's event broadcast buffer.
     pub event_buffer: usize,
     /// The bounded-shutdown grace period, in milliseconds.
     pub shutdown_timeout_ms: u64,
+    /// Whether exact protected mid-turn recovery was successfully installed.
+    pub mid_turn_durability: MidTurnDurability,
 }
 
 /// A built runtime, the policy it was built from, and the surface that asked.
@@ -314,6 +384,10 @@ pub struct SmithRuntime {
     runtime: Runtime,
     policy: Arc<RuntimePolicy>,
     profile: Arc<ProfileResolution>,
+    abilities: Arc<SealedAbilities>,
+    skill_index: Arc<[SkillIndexEntry]>,
+    checkpoint_store: Option<Arc<dyn CheckpointStore>>,
+    artifact_store: Option<Arc<dyn ArtifactStore>>,
     surface: HostSurface,
     delegation: Option<SmithDelegation>,
 }
@@ -333,6 +407,28 @@ impl SmithRuntime {
     /// offered a limit, for configuration diagnostics.
     pub fn profile(&self) -> &ProfileResolution {
         &self.profile
+    }
+
+    /// The sealed descriptor-first view of every tool this composition owns.
+    pub fn abilities(&self) -> &SealedAbilities {
+        &self.abilities
+    }
+
+    /// Bounded Smith source index, including workspace metadata refused by
+    /// trust policy.
+    pub fn skill_index(&self) -> &[SkillIndexEntry] {
+        &self.skill_index
+    }
+
+    /// The initialized exact checkpoint store, when protected durability is
+    /// available for this composition.
+    pub fn checkpoint_store(&self) -> Option<&Arc<dyn CheckpointStore>> {
+        self.checkpoint_store.as_ref()
+    }
+
+    /// Protected artifact storage installed for this composition.
+    pub fn artifact_store(&self) -> Option<&Arc<dyn ArtifactStore>> {
+        self.artifact_store.as_ref()
     }
 
     /// Which presentation composed this runtime.
@@ -359,6 +455,10 @@ impl SmithRuntime {
 /// failures from types that redact themselves.
 #[derive(Debug, thiserror::Error)]
 pub enum FactoryError {
+    /// Two tools attempted to register the same stable ability name.
+    #[error("Smith could not seal its ability catalog: {0}")]
+    AbilityRegistry(#[source] agent_runtime::registry::NameConflict),
+
     /// The configured adapter kind is not one the pinned runtime ships.
     #[error(
         "provider `{provider}` selects the `{kind}` adapter, which this build of Agent Runtime \
@@ -525,8 +625,27 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         profile,
         context_policy,
         compaction_policy,
-        loop_config,
+        mut loop_config,
     } = prepare_factory_inputs(&request).await?;
+    let prompt_contributor = match request.system_prompt.clone() {
+        Some(prompt) => SmithPromptContributor::override_prompt(prompt),
+        None => SmithPromptContributor::new(&DynamicPromptContext::default()),
+    };
+    let resolved_skills = request.skills.resolve().map_err(FactoryError::Runtime)?;
+    let memory_contributor = request
+        .memory
+        .clone()
+        .map(|source| {
+            let source: Arc<dyn MemorySource> = source;
+            MemoryContributor::new(source)
+        })
+        .transpose()
+        .map_err(FactoryError::Runtime)?;
+    let rendered_system_prompt = render_fragments(prompt_contributor.fragments());
+    // Product instructions enter the immutable context plan as independently
+    // versioned fragments. Leaving this compatibility field populated would
+    // send a second, unbudgeted copy through the legacy planner path.
+    loop_config.system_prompt = None;
     let config = &request.config;
     if let (Some(secret), Some(redactor)) = (&secret, &request.persistence_redactor) {
         redactor.register_secret(secret);
@@ -558,7 +677,57 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         .clock
         .clone()
         .unwrap_or_else(|| Arc::new(SystemClock));
+    let semantic_summary = match request.semantic_summary.clone() {
+        Some(config) => {
+            config.validate().map_err(FactoryError::Runtime)?;
+            let store = request.artifact_store.clone().ok_or_else(|| {
+                FactoryError::Runtime(RuntimeError::config(
+                    "semantic summaries require a protected artifact store for originals",
+                ))
+            })?;
+            let summary_model: Arc<dyn SummaryModel> = match config.model.clone() {
+                Some(model) => model,
+                None => Arc::new(
+                    SmithProviderSummaryModel::new(
+                        provider.clone(),
+                        provider_name.clone(),
+                        model.clone(),
+                        clock.clone(),
+                        config.max_output_tokens,
+                        config.timeout_ms,
+                    )
+                    .map_err(FactoryError::Runtime)?,
+                ),
+            };
+            let policy = SemanticSummaryRuntimePolicy {
+                purpose: agent_runtime::harness::SEMANTIC_SUMMARY_PURPOSE.into(),
+                model: summary_model.id().to_owned(),
+                revision: config.policy.revision.clone(),
+                trigger_turns: config.policy.trigger_turns,
+                retain_turns: config.policy.retain_turns,
+                max_usage_tokens: config.policy.max_usage_tokens,
+                retention: config.policy.retention,
+            };
+            let coordinator = Arc::new(
+                SemanticSummaryCoordinator::new(store, summary_model, config.policy)
+                    .map_err(FactoryError::Runtime)?,
+            );
+            Some((coordinator, policy))
+        }
+        None => None,
+    };
     let mut tools = tools(&request);
+    // Smith treats plan text as deliberate user-visible working state: the
+    // bounded public projection may enter the redacted journal and powers the
+    // transcript's compact inline plan block. It never grants tool authority.
+    let todo_component = Arc::new(TodoComponent::public());
+    let built_in_count = tools.len().saturating_sub(request.tools.len());
+    let mut ability_sources =
+        vec![agent_runtime::registry::RegistrySource::BuiltIn; built_in_count];
+    ability_sources.extend(std::iter::repeat_n(
+        agent_runtime::registry::RegistrySource::Host,
+        request.tools.len(),
+    ));
 
     // Root surfaces get the model-facing `agent` tool and, below, the
     // authoritative coverage and child factory behind it. A child runtime
@@ -570,7 +739,46 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         let slot: Arc<std::sync::OnceLock<agent_runtime::delegation::DelegationCoordinator>> =
             Arc::new(std::sync::OnceLock::new());
         tools.push(Arc::new(AgentTool::new(slot.clone())) as Arc<dyn Tool>);
+        ability_sources.push(agent_runtime::registry::RegistrySource::BuiltIn);
         Some(slot)
+    };
+    let abilities = seal_tool_abilities(tools.iter().cloned().zip(ability_sources))
+        .map_err(FactoryError::AbilityRegistry)?;
+    if request.checkpoint_store.is_some() && request.checkpoint_setup.is_some() {
+        return Err(FactoryError::Runtime(RuntimeError::config(
+            "checkpoint_store and checkpoint_setup cannot both be supplied",
+        )));
+    }
+    let checkpoint_store = match (
+        request.checkpoint_store.clone(),
+        request.checkpoint_setup.as_ref(),
+    ) {
+        (Some(store), None) => Some(store),
+        (None, Some(setup)) => match setup.initialize().await {
+            Ok(store) => Some(store),
+            Err(error) => {
+                tracing::warn!(
+                    schema_version = CHECKPOINT_SCHEMA_VERSION,
+                    %error,
+                    "exact mid-turn durability is unavailable; completed-turn persistence remains enabled"
+                );
+                None
+            }
+        },
+        (None, None) => None,
+        (Some(_), Some(_)) => unreachable!("conflicting checkpoint inputs returned above"),
+    };
+    let checkpoint_store = match (checkpoint_store, request.checkpoint_barrier.clone()) {
+        (Some(store), Some(barrier)) => {
+            Some(Arc::new(BarrierCheckpointStore::new(store, barrier)) as Arc<dyn CheckpointStore>)
+        }
+        (store, None) => store,
+        (None, Some(_)) => None,
+    };
+    let mid_turn_durability = if checkpoint_store.is_some() {
+        MidTurnDurability::Available
+    } else {
+        MidTurnDurability::Unavailable
     };
 
     let policy = RuntimePolicy {
@@ -587,17 +795,53 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         model_profile: profile.profile.clone(),
         context_policy: context_policy.clone(),
         compaction_policy: compaction_policy.clone(),
-        system_prompt: loop_config.system_prompt.clone().unwrap_or_default(),
+        system_prompt: rendered_system_prompt,
         max_attempts: loop_config.retry.max_attempts,
         max_tool_steps: loop_config.max_tool_steps,
         turn_time_limit_ms: loop_config.turn_time_limit_ms,
         output_limit: loop_config.output_limit,
         max_output_tokens: loop_config.max_output_tokens,
-        tools: tools.iter().map(|tool| tool.name().to_owned()).collect(),
+        tools: tools.iter().map(|tool| tool.spec().name).collect(),
+        skills: resolved_skills
+            .abilities()
+            .iter()
+            .map(|ability| ability.name().to_owned())
+            .collect(),
+        memory_revision: request.memory.as_ref().map(|source| source.revision()),
+        semantic_summary: semantic_summary.as_ref().map(|(_, policy)| policy.clone()),
         event_buffer: request.event_buffer,
         shutdown_timeout_ms: request.shutdown_timeout_ms,
+        mid_turn_durability,
     };
 
+    let tool_authority = Arc::new(SmithToolAuthority::new(workspace.root()));
+    let tool_coverage = tool_authority.coverage().clone();
+    let interaction_ready = !matches!(request.surface, HostSurface::Child)
+        && request
+            .interaction
+            .as_ref()
+            .is_some_and(|broker| broker.readiness() == InteractionReadiness::Ready);
+    let activation_context = if interaction_ready {
+        ActivationContext::new().with_ready_config([INTERACTION_READY_CONFIG])
+    } else {
+        ActivationContext::new()
+    };
+    let scope_inputs = ScopeInputs::new().with_identity(
+        ScopeIdentity::new()
+            .with_workspace(workspace.root())
+            // Terminal/headless/embedded are projections over one Smith
+            // agent policy and must derive the same canonical view. Only a
+            // delegated child has a distinct execution identity.
+            .with_agent(if matches!(request.surface, HostSurface::Child) {
+                "smith-child"
+            } else {
+                "smith"
+            }),
+    );
+    let activation_budget = ActivationBudget::new(
+        ContextBudget::from_limits(&profile.profile.limits, &context_policy).capability_budget,
+        8,
+    );
     let mut builder = RuntimeBuilder::new(model.clone())
         .provider(provider.clone())
         .provider_name(provider_name.clone())
@@ -607,26 +851,51 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         .model_profile(profile.profile.clone())
         .loop_config(loop_config.clone())
         .context_policy(context_policy.clone())
-        .compactor(SemanticCompactor::new(compaction_policy))
+        .compactor(StructuralCompactor::new(compaction_policy))
         // Declared explicitly so the shared planner records Smith's answer
         // rather than its own "unspecified" placeholder in plan fingerprints.
         .cache_capability(ProviderCacheCapability::none(
             RegistryRevision::new(CACHE_CAPABILITY_REVISION),
             provider_kind.clone(),
         ))
-        // Agent Runtime's composed authorization is now live for tool
-        // invocation. Smith deliberately takes the shipped compatibility
-        // authority here: it requires the same interactive/headless approval
-        // for write, process, and network effects that Smith already exposes,
-        // while broader Smith-owned security policy remains a coordinated
-        // follow-up as the upstream boundary lands.
-        .legacy_approval_authority()
+        .security_check(
+            tool_authority,
+            SecurityCheckMode::Authoritative,
+            tool_coverage,
+            ActionClass::new("smith-built-in-tools"),
+        )
         .approval(approval.clone())
         .workspace(workspace.clone())
         .tools(tools)
+        .live_ability_routing()
+        .scope_inputs(scope_inputs)
+        .capability_resolver(Arc::new(CapabilityResolver::new()))
+        .activation_policy(Arc::new(FailClosedPolicy))
+        .activation_context(activation_context)
+        .activation_budget(activation_budget)
+        .context_contributor(Arc::new(prompt_contributor.clone()))
+        .context_contributor(todo_component.clone())
+        .tool_output_processor(todo_component)
         .clock(clock.clone())
         .event_buffer(request.event_buffer)
         .shutdown_timeout_ms(request.shutdown_timeout_ms);
+    if let Some(contributor) = memory_contributor.clone() {
+        builder = builder.context_contributor(Arc::new(contributor));
+    }
+    if let Some((coordinator, _)) = &semantic_summary {
+        builder = builder
+            .history_projector(coordinator.clone())
+            .turn_commit_hook(coordinator.clone());
+    }
+    for descriptor in abilities.descriptors() {
+        builder = builder.tool_ability_descriptor(descriptor);
+    }
+    for skill in resolved_skills.abilities().iter().cloned() {
+        builder = builder.ability(skill);
+    }
+    if let Some(interaction) = request.interaction.clone() {
+        builder = builder.interaction_broker(interaction);
+    }
     if delegation_slot.is_some() {
         let authority = Arc::new(DelegationAuthority::new());
         let coverage = authority.coverage().clone();
@@ -640,8 +909,17 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
     if let Some(store) = request.session_store.clone() {
         builder = builder.session_store(store);
     }
+    if let Some(store) = checkpoint_store.clone() {
+        builder = builder.checkpoint_store(store);
+    }
     if let Some(store) = request.secret_store.clone() {
         builder = builder.secret_store(store);
+    }
+    if let Some(store) = request.artifact_store.clone() {
+        let offloader = ArtifactOffloader::new(store)
+            .with_threshold_bytes(loop_config.output_limit)
+            .map_err(FactoryError::Runtime)?;
+        builder = builder.tool_output_processor(Arc::new(offloader));
     }
     for observer in request.observers.iter().cloned() {
         builder = builder.observer(observer);
@@ -657,9 +935,16 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
             profile: profile.profile.clone(),
             context_policy,
             loop_config,
+            prompt_contributor,
             approval,
             workspace,
             clock,
+            artifact_store: request.artifact_store.clone(),
+            skills: resolved_skills.abilities().to_vec(),
+            memory: memory_contributor,
+            semantic_summary: semantic_summary
+                .as_ref()
+                .map(|(coordinator, _)| coordinator.clone()),
         }),
         slot,
     });
@@ -667,6 +952,10 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         runtime,
         policy: Arc::new(policy),
         profile: Arc::new(profile),
+        abilities: Arc::new(abilities),
+        skill_index: Arc::from(resolved_skills.index().to_vec().into_boxed_slice()),
+        checkpoint_store,
+        artifact_store: request.artifact_store,
         surface: request.surface,
         delegation,
     })
@@ -943,7 +1232,7 @@ impl ApprovalPolicy for AutoApprove {
         &self,
         request: &agent_runtime_core::approval::ApprovalRequest,
     ) -> agent_runtime_core::approval::ApprovalDecision {
-        if self.tools.contains(&request.tool) {
+        if self.tools.contains(request.prepared().tool()) {
             agent_runtime_core::approval::ApprovalDecision::Allow
         } else {
             self.fallback.decide(request).await
@@ -1062,12 +1351,10 @@ fn policy_revision(
 fn loop_config(request: &RuntimeRequest, model: &ModelId) -> LoopConfig {
     let config = &request.config;
     let mut loop_config = LoopConfig::new(model.clone());
-    loop_config.system_prompt = Some(
-        request
-            .system_prompt
-            .clone()
-            .unwrap_or_else(|| INSTRUCTIONS.to_owned()),
-    );
+    // Smith installs product instructions through `SmithPromptContributor` so
+    // every section remains independently positioned, fingerprinted, and
+    // budgeted. The legacy field stays empty to prevent a duplicate copy.
+    loop_config.system_prompt = None;
     loop_config.max_tool_steps = config.limits.max_tool_steps.value;
     loop_config.retry = RetryPolicy {
         // Configuration counts retries *after* the first attempt; the shared
@@ -1098,6 +1385,13 @@ fn tools(request: &RuntimeRequest) -> Vec<Arc<dyn Tool>> {
     } else {
         Vec::new()
     };
+    if !matches!(request.surface, HostSurface::Child) {
+        tools.push(Arc::new(QuestionnaireTool::new()));
+    }
+    if let Some(store) = request.artifact_store.clone() {
+        tools.push(Arc::new(ArtifactReadTool::new(store)));
+    }
+    tools.push(Arc::new(WriteTodosTool::new()));
     tools.extend(request.tools.iter().map(Arc::clone));
     tools
 }
@@ -1106,10 +1400,11 @@ fn tools(request: &RuntimeRequest) -> Vec<Arc<dyn Tool>> {
 mod tests {
     use super::*;
 
-    use agent_runtime_core::approval::ApprovalRequest;
+    use agent_runtime_core::approval::{ApprovalOrigin, ApprovalRequest};
     use agent_runtime_core::catalog::ModelLimits;
+    use agent_runtime_core::clock::Deadline;
     use agent_runtime_core::ids::ToolCallId;
-    use agent_runtime_core::tool::ToolEffects;
+    use agent_runtime_core::tool::{PreparedToolCall, ToolCallDisplay, ToolEffects};
     use smith_config::resolve::{ResolvedContext, Source, Sourced};
     use smith_host::HeadlessApproval;
 
@@ -1327,11 +1622,25 @@ mod tests {
         let mut request = RuntimeRequest::new(config, HostSurface::Headless);
         request.approval = Some(fallback.clone());
         let policy = approval(&request).expect("a composed policy");
-        let call = |tool: &str| ApprovalRequest {
-            call_id: ToolCallId::new(format!("call-{tool}")),
-            tool: tool.to_owned(),
-            arguments: serde_json::json!({"path": "file.txt"}),
-            effects: ToolEffects::read_only().with_write("project:files"),
+        let call = |tool: &str| {
+            let effects = ToolEffects::read_only().with_write("project:files");
+            let (permissions, resource) = effects.authorization_request(tool, "project");
+            ApprovalRequest::new(
+                PreparedToolCall::new(
+                    ToolCallId::new(format!("call-{tool}")),
+                    tool,
+                    serde_json::json!({"path": "file.txt"}),
+                    permissions,
+                    resource,
+                    effects,
+                    ToolCallDisplay::new(format!("Run {tool}")),
+                ),
+                Deadline::never(),
+                ApprovalOrigin::new(
+                    agent_runtime_core::ids::SessionId::new("session-1"),
+                    agent_runtime_core::ids::RequestId::new("request-1"),
+                ),
+            )
         };
 
         assert!(policy.decide(&call("edit")).await.is_allowed());

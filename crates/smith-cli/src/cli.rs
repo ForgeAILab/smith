@@ -258,7 +258,7 @@ fn parse_setup(mut args: VecDeque<OsString>) -> Result<Command, ParseError> {
                 ParseError::new("`smith setup credential` requires `--provider <NAME>`")
             })?,
         },
-        other if provider.is_some() => {
+        _ if provider.is_some() => {
             return Err(ParseError::new(
                 "`--provider` applies only to `smith setup add-model` or `smith setup credential`",
             ));

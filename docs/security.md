@@ -1,0 +1,152 @@
+# Security threat model
+
+Smith is a local coding agent that combines untrusted repository content,
+remote model output, user credentials, filesystem/process tools, persistence,
+and optional child sessions. Its central security rule is that text is not
+authority: repository instructions, model output, skill front matter, tool
+arguments, and questionnaire answers cannot grant a permission.
+
+## Trust boundaries
+
+| Boundary | Smith's posture |
+| --- | --- |
+| Repository/workspace | Untrusted input until host policy says otherwise |
+| User configuration | May select credentials, persistence, and automation authority when owner-only |
+| Remote provider | Receives the planned model context; output is untrusted |
+| Runtime registry | Sealed, deterministic descriptors and activation epochs |
+| Approval UI | Exact immutable prepared action; the only interactive authority decision |
+| Questionnaire UI | Task information only; never authority |
+| Session snapshot/journal | Owner-only and redacted, but not a secret store |
+| Protected checkpoint | Encrypted/authenticated exact in-flight state |
+| Artifact store | Owner-only content plus runtime-enforced session ownership |
+| Child session | Depth-one, scoped tool view, separate artifact ownership |
+
+## Authorization and tool execution
+
+All executable tools pass through Agent Runtime's central executor. The
+sequence is validation, canonical preparation, concrete permission/resource
+calculation, authorization, optional approval, and execution of that exact
+prepared action. Privileged composition fails closed without an authoritative
+security check.
+
+Filesystem resources are canonical workspace-relative segments, not unchecked
+string prefixes. Traversal, symlink escape, and out-of-workspace paths are
+refused. Reads request read authority; edit preparation identifies its exact
+file and read/write set. Shell cannot be safely narrowed from command text, so
+it declares broad workspace mutation, process execution, and network authority.
+Every shell invocation gets a process group, deadline, bounded output, and
+group cancellation.
+
+An approval shows the exact resource, material arguments or patch, typed
+permissions, broad-authority warnings, fingerprint, and deadline. `y`/`a`
+authorize only the immutable prepared evidence. Any argument edit requires
+preparation and authorization again. Approval queues are FIFO and every
+responder resolves exactly once on decision, timeout, cancellation, or
+shutdown.
+
+Headless `ask` cannot wait for a user and exits 4 with redaction-safe prepared
+metadata. `allow-all` is appropriate only inside an already isolated and
+trusted automation boundary.
+
+## Repository and configuration attacks
+
+Smith does not execute configuration, derive authority from repository text,
+or treat a repository as trusted because it was opened. Project-controlled
+files cannot:
+
+- set `approval.mode = "allow-all"` or nonempty `auto_approve`;
+- disable or redirect user session persistence;
+- store an inline API key;
+- redirect the provider through authorization-bearing headers.
+
+Project skills are indexed with provenance but activate only under explicit
+workspace trust. Untrusted skills cannot shadow a user skill. Skill metadata
+and bodies are bounded and revision-pinned; front matter cannot promote its own
+trust class.
+
+Capability activation is derived from current intent, trust, host readiness,
+and policy. Registered mutation tools are not advertised for a read-only
+request merely because they exist. Descriptor permission upper bounds are
+checked against each prepared invocation and fail closed on expansion.
+
+## Credentials and secret handling
+
+Preferred credentials are opaque Keychain/Secret Service or environment
+references. Plaintext `api_key` is an explicit no-prompt user-config option
+only; the file must be a regular, non-symlinked, current-user-owned mode-0600
+file. Setup masks input, renders `[redacted]`, and atomically restores config
+and credential state on failed preflight.
+
+Resolved secret types do not implement revealing display/debug/serialization.
+Authorization-bearing header configuration is refused. Known secret literals
+are registered with the persistence redactor. Events, default JSONL journals,
+ordinary snapshots, errors, setup review, and headless machine output are
+tested for non-disclosure.
+
+Redaction is defense in depth, not permission to put secrets in observability.
+Low-entropy argument fingerprints can confirm a guess and are correlation
+metadata, not cryptographic secrecy.
+
+## Persistence and recovery attacks
+
+Ordinary snapshots and journals are owner-only/redacted but may contain
+conversation content. Exact pending actions and sensitive answers belong only
+in the protected checkpoint, encrypted with XChaCha20-Poly1305 and
+authenticated to project/session/turn identity. Corruption, wrong key, moved
+records, unsupported schema, and key-service failure share a non-oracular
+diagnostic.
+
+Journal overflow and oversized records leave explicit markers; sequence gaps
+are never silently replayed as complete history. Checkpoint watermarks are
+published only after the prior journal prefix is synced. Cross-process
+lifecycle and writer leases prevent concurrent session owners from racing
+state.
+
+Artifacts are content-integrity checked and authorized by requesting session;
+an opaque reference is not a bearer token. Child-to-parent transfer performs an
+explicit bounded copy with source lineage. Semantic summaries store exact
+source groups first and use a separate tool-free model purpose and usage
+ledger.
+
+Unresolved children and process monitor markers are interrupted on restart,
+not re-executed. Smith does not claim recovery for arbitrary shell side
+effects.
+
+## Provider and prompt-injection risks
+
+The selected provider sees the planned instructions, activated skills/memory,
+conversation, tool schemas, bounded results, and any user content sent to it.
+Do not send data to a provider whose retention and access policy you do not
+accept.
+
+Provider output is untrusted. It can request tools but cannot bypass schema
+validation, capability activation, authorization, approval, workspace
+containment, deadlines, or output bounds. Failed attempt output remains
+speculative until a commit event and is discarded on retry.
+
+Questionnaire answers resume task reasoning but grant no permission or
+remembered approval. Child agents inherit a scoped tool view, capacity and
+deadline limits, no nested delegation, and root-only direct questionnaire
+readiness by default.
+
+## Residual risks and deployment responsibilities
+
+- An approved shell can run arbitrary workspace programs, read data available
+  to the Smith process, and access the network. Use OS/container sandboxing
+  when that authority is too broad.
+- Another process running as the same OS user may read ordinary session files
+  and plaintext user-config credentials.
+- A compromised provider or credential service is outside Smith's process
+  boundary.
+- Redaction cannot remove an unknown secret that was never classified or
+  registered.
+- Owner-only files do not protect against host compromise, backups, or an
+  administrator.
+- Smith currently has no general network broker or fully isolated process
+  backend; approval and workspace policy do not substitute for one.
+- Monitor reconciliation exists, but Smith does not infer or restart a monitor
+  executor from persisted metadata.
+
+For storage details, see
+[`persistence-recovery.md`](persistence-recovery.md). For unattended authority
+and redaction, see [`headless-protocol.md`](headless-protocol.md).

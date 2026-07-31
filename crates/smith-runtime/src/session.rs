@@ -1,13 +1,13 @@
 //! Where a Smith session lives on disk.
 //!
-//! Agent Runtime owns the canonical [`SessionSnapshot`]; Smith owns only two
-//! questions a neutral runtime cannot answer: *where* a snapshot is kept, and
-//! *how* a half-written one is prevented from ever being observed. This module
-//! answers both and nothing else — it does not reinterpret, summarize, or
-//! re-key the snapshot's contents, because a second message vocabulary is
-//! exactly what the shared runtime exists to prevent.
+//! Agent Runtime owns the canonical [`SessionSnapshot`]; Smith owns three
+//! questions a neutral runtime cannot answer: *where* a snapshot is kept,
+//! *how* a half-written one is prevented from ever being observed, and *which
+//! component state may enter this ordinary JSON store*. This module answers
+//! those host-policy questions without introducing a second message
+//! vocabulary or rewriting canonical conversation content.
 //!
-//! Three decisions are worth stating, because each one is a failure mode that
+//! Four decisions are worth stating, because each one is a failure mode that
 //! only shows up after a crash or a version skew:
 //!
 //! - **The root is injectable.** `~/.smith/sessions/<project-id>/` is the
@@ -25,22 +25,27 @@
 //!   this store. A future record then fails with "this build cannot read
 //!   version N" instead of silently deserializing into a snapshot missing
 //!   whatever that version added.
+//! - **Component state is classified.** Ordinary JSON snapshots retain only
+//!   records explicitly marked `RedactionSafe`. Sensitive namespaces are
+//!   omitted both while saving and while loading a legacy/tampered record.
+//!   Exact sensitive state belongs in Smith's authenticated checkpoint store,
+//!   never this plaintext persistence layer.
 //!
 //! Resume wiring and rebuilding a snapshot from a crashed journal are
 //! deliberately not here; they are separate tasks that build on this contract.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use agent_runtime_core::clock::Timestamp;
 use agent_runtime_core::content::Role;
 use agent_runtime_core::error::{ErrorKind, RuntimeError};
 use agent_runtime_core::ids::SessionId;
 use agent_runtime_core::metadata::Metadata;
-use agent_runtime_core::store::{SessionSnapshot, SessionStore};
+use agent_runtime_core::store::{SessionSnapshot, SessionStateSensitivity, SessionStore};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncWriteExt;
+
+use crate::private_storage::{ensure_private_directory, read_private, write_private_atomically};
 
 /// The on-disk schema version of a persisted snapshot record.
 ///
@@ -55,6 +60,11 @@ pub const LISTING_SCHEMA_VERSION: u32 = 1;
 /// The file extension of a persisted snapshot, and the marker [`FileSessionStore::list`]
 /// enumerates by.
 const SNAPSHOT_SUFFIX: &str = ".snapshot.json";
+
+/// The protected latest-turn checkpoint for one session.
+const CHECKPOINT_SUFFIX: &str = ".checkpoint.bin";
+const CHECKPOINT_LOCK_SUFFIX: &str = ".checkpoint.lock";
+const SESSION_LIFECYCLE_LOCK_SUFFIX: &str = ".session.lock";
 
 /// The directory the default root lives under, relative to the user's home.
 const DEFAULT_STATE_DIR: &str = ".smith";
@@ -117,6 +127,7 @@ fn safe_component(value: &str, what: &str) -> Result<(), RuntimeError> {
 #[derive(Debug, Clone)]
 pub struct SessionPaths {
     directory: PathBuf,
+    project: ProjectId,
 }
 
 impl SessionPaths {
@@ -137,6 +148,7 @@ impl SessionPaths {
     pub fn from_sessions_dir(sessions_dir: impl AsRef<Path>, project: &ProjectId) -> Self {
         Self {
             directory: sessions_dir.as_ref().join(project.as_str()),
+            project: project.clone(),
         }
     }
 
@@ -160,12 +172,42 @@ impl SessionPaths {
         &self.directory
     }
 
+    /// Stable project identity bound into protected records.
+    pub fn project(&self) -> &ProjectId {
+        &self.project
+    }
+
     /// The snapshot file for `session`.
     pub fn snapshot(&self, session: &SessionId) -> Result<PathBuf, RuntimeError> {
         safe_component(session.as_str(), "session id")?;
         Ok(self
             .directory
             .join(format!("{}{SNAPSHOT_SUFFIX}", session.as_str())))
+    }
+
+    /// The protected latest-turn checkpoint for `session`.
+    pub fn checkpoint(&self, session: &SessionId) -> Result<PathBuf, RuntimeError> {
+        safe_component(session.as_str(), "session id")?;
+        Ok(self
+            .directory
+            .join(format!("{}{CHECKPOINT_SUFFIX}", session.as_str())))
+    }
+
+    /// Cross-process writer lease for `session`'s protected checkpoint.
+    pub(crate) fn checkpoint_lock(&self, session: &SessionId) -> Result<PathBuf, RuntimeError> {
+        safe_component(session.as_str(), "session id")?;
+        Ok(self
+            .directory
+            .join(format!("{}{CHECKPOINT_LOCK_SUFFIX}", session.as_str())))
+    }
+
+    /// Cross-process lifecycle lease held while one host owns `session`.
+    pub(crate) fn lifecycle_lock(&self, session: &SessionId) -> Result<PathBuf, RuntimeError> {
+        safe_component(session.as_str(), "session id")?;
+        Ok(self.directory.join(format!(
+            "{}{SESSION_LIFECYCLE_LOCK_SUFFIX}",
+            session.as_str()
+        )))
     }
 
     /// The event-journal file for `session`.
@@ -182,16 +224,18 @@ impl SessionPaths {
             .join(format!("{}.changes.jsonl", session.as_str())))
     }
 
+    /// Owner-only store for session-attributed artifacts in this project.
+    ///
+    /// Artifacts are not workspace files. The store keeps owner metadata
+    /// inside this user-state directory and authorizes every read against the
+    /// runtime-owned session identity.
+    pub fn artifacts_directory(&self) -> PathBuf {
+        self.directory.join(".artifacts")
+    }
+
     /// Creates the session directory if it does not exist yet.
     pub async fn ensure_directory(&self) -> Result<(), RuntimeError> {
-        tokio::fs::create_dir_all(&self.directory)
-            .await
-            .map_err(|err| {
-                io_error(format!(
-                    "cannot create session directory `{}`: {err}",
-                    self.directory.display()
-                ))
-            })
+        ensure_private_directory(&self.directory).await
     }
 }
 
@@ -317,10 +361,11 @@ impl FileSessionStore {
                 continue;
             };
 
-            let bytes = match tokio::fs::read(&path).await {
-                Ok(bytes) => bytes,
-                Err(err) => {
-                    tracing::warn!(path = %path.display(), %err, "skipping unreadable snapshot");
+            let bytes = match read_private(&path).await {
+                Ok(Some(bytes)) => bytes,
+                Ok(None) => continue,
+                Err(error) => {
+                    tracing::warn!(path = %path.display(), %error, "skipping unreadable snapshot");
                     continue;
                 }
             };
@@ -375,12 +420,8 @@ impl FileSessionStore {
 impl SessionStore for FileSessionStore {
     async fn load(&self, id: &SessionId) -> Result<Option<SessionSnapshot>, RuntimeError> {
         let path = self.paths.snapshot(id)?;
-        let bytes = match tokio::fs::read(&path).await {
-            Ok(bytes) => bytes,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(err) => {
-                return Err(io_error(format!("cannot read session `{id}`: {err}")));
-            }
+        let Some(bytes) = read_private(&path).await? else {
+            return Ok(None);
         };
 
         // The version gate runs before the payload parse. Reversing the order
@@ -413,33 +454,48 @@ impl SessionStore for FileSessionStore {
             ));
         }
 
-        let stored: StoredSnapshot = serde_json::from_slice(&bytes).map_err(|err| {
+        let mut stored: StoredSnapshot = serde_json::from_slice(&bytes).map_err(|err| {
             RuntimeError::new(
                 ErrorKind::Serialization,
                 format!("session `{id}` could not be parsed: {err}"),
             )
         })?;
+        retain_redaction_safe_extension_state(&mut stored.snapshot);
         Ok(Some(stored.snapshot))
     }
 
     async fn save(&self, snapshot: &SessionSnapshot) -> Result<(), RuntimeError> {
         let path = self.paths.snapshot(&snapshot.id)?;
         self.paths.ensure_directory().await?;
+        let mut snapshot = snapshot.clone();
+        retain_redaction_safe_extension_state(&mut snapshot);
+        let session_id = snapshot.id.clone();
 
         let stored = StoredSnapshot {
             schema_version: SNAPSHOT_SCHEMA_VERSION,
-            listing: Some(listing_metadata(snapshot)),
-            snapshot: snapshot.clone(),
+            listing: Some(listing_metadata(&snapshot)),
+            snapshot,
         };
         let bytes = serde_json::to_vec(&stored).map_err(|err| {
             RuntimeError::new(
                 ErrorKind::Serialization,
-                format!("session `{}` could not be serialized: {err}", snapshot.id),
+                format!("session `{session_id}` could not be serialized: {err}"),
             )
         })?;
 
-        write_atomically(&path, &bytes).await
+        write_private_atomically(&path, &bytes).await
     }
+}
+
+/// Enforces the confidentiality boundary of Smith's ordinary JSON store.
+///
+/// Omitting a namespace is intentional: a placeholder value could be mistaken
+/// for valid resumable component state. The authenticated checkpoint retains
+/// the exact snapshot separately when mid-turn durability is available.
+fn retain_redaction_safe_extension_state(snapshot: &mut SessionSnapshot) {
+    snapshot
+        .extension_state
+        .retain(|_, state| state.sensitivity == SessionStateSensitivity::RedactionSafe);
 }
 
 fn listing_metadata(snapshot: &SessionSnapshot) -> StoredListingMetadata {
@@ -475,62 +531,6 @@ fn single_line(text: &str) -> String {
         bounded.push('…');
     }
     bounded
-}
-
-/// Distinguishes concurrent writers to the same session.
-static TEMPORARY_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-/// Writes `bytes` to `path` through a sibling temporary file and a rename.
-///
-/// The temporary lives in the destination directory, never in `/tmp`, so the
-/// rename cannot cross a filesystem and degrade into a copy — which would
-/// reintroduce exactly the torn write this function exists to prevent. The
-/// data is fsynced before the rename so a crash immediately afterwards cannot
-/// leave the renamed file containing unflushed garbage.
-async fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), RuntimeError> {
-    let directory = path.parent().ok_or_else(|| {
-        io_error(format!(
-            "`{}` has no parent directory to write into",
-            path.display()
-        ))
-    })?;
-    let temporary = directory.join(format!(
-        ".{}.{}.{}.tmp",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("session"),
-        std::process::id(),
-        TEMPORARY_COUNTER.fetch_add(1, Ordering::Relaxed)
-    ));
-
-    let write = async {
-        let mut file = tokio::fs::File::create(&temporary).await?;
-        file.write_all(bytes).await?;
-        file.sync_all().await
-    };
-    if let Err(err) = write.await {
-        let _ = tokio::fs::remove_file(&temporary).await;
-        return Err(io_error(format!(
-            "cannot write `{}`: {err}",
-            path.display()
-        )));
-    }
-
-    if let Err(err) = tokio::fs::rename(&temporary, path).await {
-        let _ = tokio::fs::remove_file(&temporary).await;
-        return Err(io_error(format!(
-            "cannot replace `{}`: {err}",
-            path.display()
-        )));
-    }
-
-    // Fsyncing the directory is what makes the *rename* durable, not just the
-    // file contents. It is best-effort: not every filesystem supports it, and
-    // a failure here does not make the already-renamed file wrong.
-    if let Ok(handle) = tokio::fs::File::open(directory).await {
-        let _ = handle.sync_all().await;
-    }
-    Ok(())
 }
 
 /// Filesystem failures carry no runtime classification of their own, so they

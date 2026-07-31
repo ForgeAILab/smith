@@ -24,6 +24,7 @@ pub mod commands;
 pub mod composer;
 pub mod diff;
 pub mod picker;
+pub mod questionnaire;
 pub mod render;
 pub mod setup;
 pub mod status;
@@ -37,11 +38,16 @@ pub use commands::{COMMANDS, CommandAction, CommandSpec};
 pub use composer::Composer;
 pub use diff::{Change, EditReview, diff_lines};
 pub use picker::{PickerOutcome, ResourceEntry, ResourcePicker, draw_resource_picker};
+pub use questionnaire::{
+    QuestionnaireAnswer, QuestionnaireAnswerValue, QuestionnaireChoice, QuestionnaireFocus,
+    QuestionnaireForm, QuestionnaireQuestion, QuestionnaireResolution, QuestionnaireState,
+    QuestionnaireValidationError,
+};
 pub use render::{draw, draw_synced};
 pub use setup::{
     SetupApp, SetupCredential, SetupEffect, SetupMode, SetupModelLimits, SetupSubmission,
     draw_setup,
 };
-pub use status::{Activity, Confidence, ContextPlanStatus, Status, TokenCount};
+pub use status::{Activity, Confidence, ContextPlanStatus, ContextPlanUpdate, Status, TokenCount};
 pub use theme::{Theme, Tone};
 pub use transcript::{Block, LocalResultState, ToolStatus, Transcript};

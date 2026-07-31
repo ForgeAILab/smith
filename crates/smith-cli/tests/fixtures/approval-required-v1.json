@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "type": "result",
+  "status": "approval_required",
+  "session_id": "session-fixture",
+  "turn_id": "turn-fixture",
+  "provider": "fixture-provider",
+  "model": "fixture-model",
+  "output": "",
+  "usage": {
+    "current_turn": {},
+    "session": {},
+    "current_turn_provenance": "unknown",
+    "session_provenance": "unknown"
+  },
+  "approval_required": {
+    "call_id": "call-fixture",
+    "tool": "edit",
+    "argument_keys": [
+      "new_string",
+      "old_string",
+      "path"
+    ],
+    "mutates": true,
+    "requires_authorization": true
+  }
+}

@@ -15,13 +15,20 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use agent_runtime_core::error::{ErrorKind, RuntimeError};
-use agent_runtime_core::tool::{InvocationContext, Tool, ToolEffects, ToolOutcome};
+use agent_runtime_core::security::{PermissionSet, SecurityResource};
+use agent_runtime_core::tool::{
+    InvocationContext, PreparationContext, PreparedToolCall, Tool, ToolCallDisplay, ToolEffects,
+    ToolOutcome, ToolSpec,
+};
+use agent_runtime_registry::Permission;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
-use crate::support::{invalid, optional_str, optional_usize, require_str, resolve};
+use crate::support::{
+    invalid, optional_str, optional_usize, prepare_path_argument, require_str, resolve,
+};
 
 /// The default time a command may run.
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
@@ -29,9 +36,12 @@ const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 /// The longest timeout a caller may request.
 const MAX_TIMEOUT_MS: u64 = 600_000;
 
-/// The most output bytes retained. Beyond this the head is kept: a compiler's
-/// first error is what matters, and the thousandth is noise.
-const MAX_OUTPUT_BYTES: usize = 128 * 1024;
+/// Hard process-output capture boundary.
+///
+/// Ordinary model-facing output is bounded later by Agent Runtime. Standard
+/// Smith hosts first offload results above 64 KiB into their protected
+/// artifact store, so this larger limit is solely a memory/resource guard.
+const MAX_CAPTURE_BYTES: usize = 8 * 1024 * 1024;
 
 /// How long a signalled process group gets to exit before it is killed.
 const GRACE: Duration = Duration::from_millis(500);
@@ -42,51 +52,79 @@ pub struct ShellTool;
 
 #[async_trait]
 impl Tool for ShellTool {
-    fn name(&self) -> &str {
-        "shell"
-    }
-
-    fn description(&self) -> &str {
-        "Run a shell command in the project root. Returns combined stdout and \
-         stderr with the exit status. Commands are killed at the timeout, along \
-         with any processes they spawned."
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "command": {
-                    "type": "string",
-                    "description": "The command line to run, interpreted by `sh -c`."
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::new(
+            "shell",
+            "Run a shell command in the project root. Returns combined stdout and \
+             stderr with the exit status. Commands are killed at the timeout, along \
+             with any processes they spawned.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The command line to run, interpreted by `sh -c`."
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Working directory, relative to the project root. Defaults to the root."
+                    },
+                    "timeout_ms": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Time limit in milliseconds. Defaults to 120000, maximum 600000."
+                    }
                 },
-                "cwd": {
-                    "type": "string",
-                    "description": "Working directory, relative to the project root. Defaults to the root."
-                },
-                "timeout_ms": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": "Time limit in milliseconds. Defaults to 120000, maximum 600000."
-                }
-            },
-            "required": ["command"],
-            "additionalProperties": false
-        })
+                "required": ["command"],
+                "additionalProperties": false
+            }),
+            ToolEffects::read_only()
+                .with_write("project:files")
+                .with_spawn()
+                .with_network(),
+        )
+        .with_permission_upper_bound(shell_permissions())
     }
 
-    fn effects(&self) -> ToolEffects {
-        ToolEffects::read_only()
-            .with_write("project:files")
+    async fn prepare(
+        &self,
+        mut arguments: Value,
+        ctx: &PreparationContext,
+    ) -> Result<PreparedToolCall, RuntimeError> {
+        let command = require_str(&arguments, "command")?.to_owned();
+        if command.trim().is_empty() {
+            return Err(invalid("`command` must not be empty"));
+        }
+        let cwd = prepare_path_argument(&mut arguments, "cwd", Some("."), ctx)?;
+        let timeout_ms = optional_usize(&arguments, "timeout_ms")
+            .map_or(DEFAULT_TIMEOUT_MS, |ms| (ms as u64).min(MAX_TIMEOUT_MS))
+            .max(1);
+        arguments
+            .as_object_mut()
+            .ok_or_else(|| invalid("tool arguments must be a JSON object"))?
+            .insert("timeout_ms".to_owned(), Value::from(timeout_ms));
+        let effects = ToolEffects::read_only()
+            .with_write(ctx.workspace.root())
             .with_spawn()
-            .with_network()
+            .with_network();
+        Ok(PreparedToolCall::new(
+            ctx.call_id.clone(),
+            "shell",
+            arguments,
+            shell_permissions(),
+            SecurityResource::filesystem(ctx.workspace.root(), Vec::new()),
+            effects,
+            ToolCallDisplay::new(format!("Run shell command in {}", cwd.display))
+                .with_detail(command),
+        ))
     }
 
     async fn invoke(
         &self,
-        arguments: Value,
+        prepared: PreparedToolCall,
         ctx: &InvocationContext,
     ) -> Result<ToolOutcome, RuntimeError> {
+        let arguments = prepared.into_arguments();
         let command = require_str(&arguments, "command")?;
         if command.trim().is_empty() {
             return Err(invalid("`command` must not be empty"));
@@ -125,7 +163,7 @@ impl Tool for ShellTool {
             let mut output = String::new();
             let mut truncated = false;
             while let Some(line) = lines_rx.recv().await {
-                if output.len() + line.len() + 1 > MAX_OUTPUT_BYTES {
+                if output.len() + line.len() + 1 > MAX_CAPTURE_BYTES {
                     truncated = true;
                     continue;
                 }
@@ -165,7 +203,8 @@ impl Tool for ShellTool {
                 content: vec![agent_runtime_core::content::ContentPart::text(format!(
                     "{}\n[killed after {timeout_ms}ms, with its process group]",
                     render(&output, truncated)
-                ))],
+                ))]
+                .into(),
                 is_error: true,
             }),
             Outcome::Exited(status) => {
@@ -191,12 +230,26 @@ impl Tool for ShellTool {
                         "timed_out": false,
                         "truncated": truncated,
                     }),
-                    content: vec![agent_runtime_core::content::ContentPart::text(rendered)],
+                    content: vec![agent_runtime_core::content::ContentPart::text(rendered)].into(),
                     is_error: !success,
                 })
             }
         }
     }
+}
+
+fn shell_permissions() -> PermissionSet {
+    [
+        Permission::FsRead,
+        Permission::FsWrite,
+        Permission::FsCreate,
+        Permission::FsDelete,
+        Permission::ProcessSpawn,
+        Permission::NetHttp,
+        Permission::DataEgress,
+    ]
+    .into_iter()
+    .collect()
 }
 
 enum Outcome {
@@ -212,7 +265,7 @@ fn render(output: &str, truncated: bool) -> String {
         output.trim_end().to_owned()
     };
     if truncated {
-        format!("{body}\n[output truncated at {MAX_OUTPUT_BYTES} bytes]")
+        format!("{body}\n[output truncated at {MAX_CAPTURE_BYTES} bytes]")
     } else {
         body
     }
@@ -425,16 +478,32 @@ mod tests {
     #[tokio::test]
     async fn flooding_output_is_truncated_rather_than_unbounded() {
         let (_dir, ctx) = project();
+        let bytes = MAX_CAPTURE_BYTES + 1024 * 1024;
         let outcome = ShellTool
             .invoke(
-                json!({"command": "for i in $(seq 1 200000); do echo 'a line of output'; done"}),
+                json!({"command": format!("yes 'a line of output' | head -c {bytes}")}),
                 &ctx,
             )
             .await
             .unwrap();
 
         assert_eq!(outcome.value["truncated"], true);
-        assert!(text_of(&outcome).len() < MAX_OUTPUT_BYTES * 2);
+        assert!(text_of(&outcome).len() < MAX_CAPTURE_BYTES * 2);
+    }
+
+    #[tokio::test]
+    async fn output_above_the_old_128k_cutoff_remains_exact_for_the_offloader() {
+        let (_dir, ctx) = project();
+        let outcome = ShellTool
+            .invoke(
+                json!({"command": "yes 'recoverable output' | head -c 262144"}),
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.value["truncated"], false);
+        assert!(text_of(&outcome).len() > 128 * 1024);
     }
 
     #[tokio::test]
@@ -460,7 +529,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_tool_declares_spawn_and_write_effects() {
-        let effects = ShellTool.effects();
+        let effects = ShellTool.spec().effects;
         assert!(effects.spawns_process());
         assert!(effects.mutates());
     }

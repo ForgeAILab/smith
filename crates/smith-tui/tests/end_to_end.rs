@@ -86,7 +86,10 @@ async fn a_typed_message_reaches_the_model_and_its_reply_reaches_the_screen() {
     let Some(Action::Send(text)) = action else {
         panic!("expected a send action, got {action:?}");
     };
-    session.run(UserInput::text(text)).await;
+    session
+        .run(UserInput::text(text))
+        .await
+        .expect("the turn runs");
 
     // Drain everything the turn produced into the client.
     drain(&mut events, &mut app).await;
@@ -118,7 +121,10 @@ async fn usage_reported_by_the_runtime_reaches_the_header() {
         "before any turn, context is unknown rather than zero"
     );
 
-    session.run(UserInput::text("hi")).await;
+    session
+        .run(UserInput::text("hi"))
+        .await
+        .expect("the turn runs");
     drain(&mut events, &mut app).await;
 
     // Whatever the fake reports, the client must not still be claiming
@@ -140,7 +146,10 @@ async fn the_client_returns_to_idle_after_a_turn_completes() {
     let mut events = session.subscribe();
     let mut app = App::new("fake", "~/work/api");
 
-    session.run(UserInput::text("hi")).await;
+    session
+        .run(UserInput::text("hi"))
+        .await
+        .expect("the turn runs");
     drain(&mut events, &mut app).await;
 
     assert!(!app.is_busy(), "the client is stuck in a working state");

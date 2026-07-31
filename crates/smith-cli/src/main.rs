@@ -7,6 +7,7 @@
 
 mod cli;
 mod headless;
+mod interaction;
 mod setup;
 mod terminal;
 
@@ -36,16 +37,19 @@ use smith_config::inventory::{
 use smith_config::model::ApprovalMode;
 use smith_config::resolve::{ConfigReadiness, Resolution, ResolveRequest, inspect, resolve};
 use smith_host::{
-    ApprovalPrompt, ApprovalRequests, GitChanges, HeadlessApproval, InteractiveApproval,
-    ProjectWorkspace,
+    ApprovalPrompt, ApprovalRequests, GitChanges, HeadlessApproval, HeadlessInteraction,
+    InteractionRequests, InteractiveApproval, InteractiveInteraction, ProjectWorkspace,
 };
 use smith_runtime::SpawnOutcome;
 use smith_runtime::factory::{AVAILABLE_ADAPTER_KINDS, HostSurface, RuntimePolicy, RuntimeRequest};
 use smith_runtime::host::{HostSession, HostSessionRequest};
+use smith_runtime::journal::DefaultRedactor;
 use smith_runtime::model_catalog::{CatalogLoader, runtime_catalog_source};
 use smith_runtime::session::{SNAPSHOT_SCHEMA_VERSION, SessionListing};
 use smith_tui::app::{Action, App, PaletteCommand};
 use smith_tui::commands::CommandAction;
+#[cfg(test)]
+use smith_tui::status::ContextPlanUpdate;
 use smith_tui::status::{Status, TokenCount};
 use smith_tui::theme::{Theme, glyph};
 use smith_tui::{
@@ -177,6 +181,7 @@ async fn run_command(mut args: RunArgs) -> Result<u8> {
                 prompt,
                 args.output,
                 started.headless_approval.as_deref(),
+                started.headless_interaction.as_deref(),
             )
             .await
             .map(|outcome| outcome.exit_code)
@@ -189,6 +194,8 @@ struct StartedHost {
     host: HostSession,
     approvals: Option<ApprovalRequests>,
     headless_approval: Option<Arc<HeadlessApproval>>,
+    interactions: Option<InteractionRequests>,
+    headless_interaction: Option<Arc<HeadlessInteraction>>,
     project: PathBuf,
     inventory: SelectionInventory,
     sessions: Vec<SessionListing>,
@@ -240,6 +247,8 @@ async fn start_host(
         credentials: Some(CredentialResolver::new(&resolution.layout.user_dir)),
         ..RuntimeRequest::new(resolution.config.clone(), surface)
     };
+    let persistence_redactor = DefaultRedactor::new();
+    runtime.persistence_redactor = Some(persistence_redactor.clone());
     if let Some(source) = runtime_catalog_source(
         &catalog,
         &resolution.config.provider.name.value,
@@ -267,6 +276,20 @@ async fn start_host(
             headless_approval = Some(approval);
         }
     }
+    let (interactions, headless_interaction) = match surface {
+        HostSurface::Terminal => {
+            let (broker, requests) =
+                InteractiveInteraction::with_sensitive_value_sink(Arc::new(persistence_redactor));
+            runtime.interaction = Some(Arc::new(broker));
+            (Some(requests), None)
+        }
+        HostSurface::Headless => {
+            let broker = Arc::new(HeadlessInteraction::new());
+            runtime.interaction = Some(broker.clone());
+            (None, Some(broker))
+        }
+        HostSurface::Child | HostSurface::Embedded => (None, None),
+    };
 
     let mut request = HostSessionRequest::new(runtime, &project);
     if let Some(session) = resume {
@@ -285,6 +308,8 @@ async fn start_host(
         host,
         approvals,
         headless_approval,
+        interactions,
+        headless_interaction,
         project,
         inventory,
         sessions,
@@ -299,6 +324,7 @@ async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
         let StartedHost {
             host,
             approvals,
+            interactions,
             project,
             inventory,
             sessions,
@@ -315,11 +341,14 @@ async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
         match run_interactive(
             &host,
             approvals,
+            interactions,
             &project,
             inventory,
             sessions,
-            args.no_color,
-            args.no_motion,
+            PresentationOptions {
+                no_color: args.no_color,
+                no_motion: args.no_motion,
+            },
         )
         .await?
         {
@@ -384,14 +413,19 @@ enum InteractiveExit {
     Reconfigure(PaletteCommand),
 }
 
+struct PresentationOptions {
+    no_color: bool,
+    no_motion: bool,
+}
+
 async fn run_interactive(
     host: &HostSession,
     approvals: Option<ApprovalRequests>,
+    interactions: Option<InteractionRequests>,
     project: &std::path::Path,
     inventory: SelectionInventory,
     sessions: Vec<SessionListing>,
-    no_color: bool,
-    no_motion: bool,
+    presentation: PresentationOptions,
 ) -> Result<InteractiveExit> {
     let policy = host.runtime().policy();
     let snapshot = host.session().snapshot();
@@ -407,6 +441,12 @@ async fn run_interactive(
         host.session().id().as_str(),
     ));
     app.transcript.replace_from_history(&snapshot.history);
+    if let Some(interruption) = host.recovered_ephemeral_work() {
+        app.present_recovered_ephemeral_work(
+            interruption.children.len(),
+            interruption.monitors.len(),
+        );
+    }
     let usage = snapshot.usage.total();
     if !usage.is_empty() {
         app.status.record_usage(&usage);
@@ -440,13 +480,22 @@ async fn run_interactive(
         }
     };
     let mut theme = Theme::from_env();
-    if no_color {
+    if presentation.no_color {
         theme = theme.without_color();
     }
-    if no_motion {
+    if presentation.no_motion {
         theme = theme.without_motion();
     }
-    let run_result = run_tui(&mut terminal, app, host, project, approvals, theme).await;
+    let run_result = run_tui(
+        &mut terminal,
+        app,
+        host,
+        project,
+        approvals,
+        interactions,
+        theme,
+    )
+    .await;
     let restore_result = terminal.restore().context("restoring the terminal");
     let shutdown_result = host
         .shutdown()
@@ -465,6 +514,7 @@ async fn run_tui(
     host: &HostSession,
     project: &std::path::Path,
     mut approvals: Option<ApprovalRequests>,
+    interactions: Option<InteractionRequests>,
     theme: Theme,
 ) -> Result<InteractiveExit> {
     let session = host.session();
@@ -474,6 +524,11 @@ async fn run_tui(
     let mut frame = tokio::time::interval(FRAME);
     let (local_tx, mut local_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut last_change_turn = host.changes().latest().map(|set| set.turn);
+    let mut interactions = interaction::InteractionSurface::new(
+        interactions,
+        host.restored_interaction()
+            .map(|restored| restored.request_id().as_str().to_owned()),
+    );
     let mut dirty = true;
 
     let exit = loop {
@@ -486,10 +541,20 @@ async fn run_tui(
                     TermEvent::Key(key) => {
                         match app.on_key(key) {
                             Some(Action::Send(text)) => {
-                                session.send(UserInput::text(text));
+                                if let Err(error) = session.send(UserInput::text(text)) {
+                                    app.transcript.push_error(format!(
+                                        "turn submission was rejected: {error}"
+                                    ));
+                                }
                             }
                             Some(Action::Interrupt) => {
-                                session.cancel(CancelReason::UserRequested);
+                                if let Err(error) = session
+                                    .interrupt_current_turn(CancelReason::UserRequested)
+                                {
+                                    app.transcript.push_error(format!(
+                                        "turn interruption failed: {error}"
+                                    ));
+                                }
                             }
                             Some(Action::Quit) => break InteractiveExit::Quit,
                             Some(Action::Reconfigure(command)) => {
@@ -583,6 +648,16 @@ async fn run_tui(
                 }
             }
 
+            notice = interactions.next_notice() => {
+                match notice {
+                    Some(notice) => {
+                        interactions.apply_notice(&mut app, notice);
+                        dirty = true;
+                    }
+                    None => interactions.close_receiver(),
+                }
+            }
+
             envelope = events.next() => {
                 match envelope {
                     Some(envelope) => {
@@ -645,6 +720,7 @@ async fn run_tui(
             }
         }
 
+        interactions.drain_answers(&mut app);
         if app.should_quit {
             break InteractiveExit::Quit;
         }
@@ -692,16 +768,19 @@ async fn handle_local_command(
                 },
             );
             let context = render_context_status(&app.status, policy);
+            let harness = render_harness_status(&app.status);
             app.show_local_result(
                 "status",
                 format!(
                     "session: {}\nprovider: {}\nmodel: {}\npermission: {:?}\n\
-                     {context}\nproject: {}\nGit: {}\n\
+                     protected mid-turn recovery: {}\n\
+                     {harness}\n{context}\nproject: {}\nGit: {}\n\
                      children: {}\nchange attribution: {}",
                     host.session().id(),
                     policy.provider_name,
                     policy.model,
                     policy.approval_mode,
+                    policy.mid_turn_durability.as_str(),
                     project.display(),
                     git,
                     child_count,
@@ -834,6 +913,55 @@ async fn handle_local_command(
             unreachable!("the reducer handles this command before host dispatch")
         }
     }
+}
+
+fn render_harness_status(status: &Status) -> String {
+    let capabilities = &status.capabilities;
+    let mut lines = Vec::new();
+    match &capabilities.registry {
+        Some((fingerprint, entries)) => {
+            lines.push(format!(
+                "registry snapshot: {fingerprint} · {entries} entries"
+            ));
+        }
+        None => lines.push("registry snapshot: waiting for live lifecycle".to_owned()),
+    }
+    if let Some((fingerprint, visible)) = &capabilities.view {
+        lines.push(format!(
+            "scoped capability view: {fingerprint} · {visible} visible"
+        ));
+    }
+    if let Some((revision, candidates)) = &capabilities.retrieval {
+        let candidates = if candidates.is_empty() {
+            "(none)".to_owned()
+        } else {
+            candidates.join(", ")
+        };
+        lines.push(format!(
+            "latest capability retrieval: {revision} · {candidates}"
+        ));
+    }
+    if let Some((epoch, active)) = &capabilities.activation {
+        let active = if active.is_empty() {
+            "(none)".to_owned()
+        } else {
+            active.join(", ")
+        };
+        lines.push(format!("activation epoch: {epoch} · {active}"));
+    }
+    if let Some(plan) = &status.context_plan {
+        lines.push(format!(
+            "context provenance: {} · cache {}",
+            plan.fingerprint, plan.cache_fingerprint
+        ));
+    }
+    if capabilities.compactions > 0 {
+        lines.push(format!(
+            "context compaction: {} run(s) · {} tokens reclaimed",
+            capabilities.compactions, capabilities.reclaimed_tokens
+        ));
+    }
+    lines.join("\n")
 }
 
 fn render_context_status(status: &Status, policy: &RuntimePolicy) -> String {
@@ -1619,7 +1747,19 @@ fn abbreviate(path: &str, home: &str) -> String {
 mod tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use smith_runtime::checkpoint::{
+        CheckpointKey, CheckpointKeyProvider, CheckpointProtectionError,
+    };
     use smith_tui::{Block, LocalResultState};
+
+    #[derive(Debug)]
+    struct TestCheckpointKeys;
+
+    impl CheckpointKeyProvider for TestCheckpointKeys {
+        fn load_or_create(&self) -> Result<CheckpointKey, CheckpointProtectionError> {
+            Ok(CheckpointKey::new([0x52; 32]))
+        }
+    }
 
     const LOCAL_COMMAND_CONFIG: &str = r#"
 default_profile = "dev"
@@ -1783,6 +1923,49 @@ output_reserve = 4096
         assert_eq!(unknown.glyph, glyph::CONTEXT_OTHER);
     }
 
+    #[test]
+    fn harness_status_names_registry_view_activation_and_context_provenance() {
+        let mut status = Status::new("example-model", "/project");
+        status.record_registry("registry-fingerprint", 6);
+        status.record_scoped_view("view-fingerprint", 4);
+        status.record_retrieval("resolver-1", vec!["tool:read".into(), "tool:search".into()]);
+        status.record_activation(1, vec!["tool:read".into()]);
+        let totals = std::collections::BTreeMap::new();
+        status.record_context_plan(ContextPlanUpdate {
+            fingerprint: "context-fingerprint",
+            cache_fingerprint: "cache-fingerprint",
+            input_tokens: 100,
+            input_budget_tokens: 1_000,
+            reserved_tokens: 100,
+            segment_count: 1,
+            totals: &totals,
+            confidence: EstimationConfidence::Exact,
+        });
+        status.record_compaction(250);
+
+        let rendered = render_harness_status(&status);
+        assert!(
+            rendered.contains("registry snapshot: registry-fingerprint · 6 entries"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("scoped capability view: view-fingerprint · 4 visible"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("activation epoch: 1 · tool:read"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("context provenance: context-fingerprint · cache cache-fingerprint"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("context compaction: 1 run(s) · 250 tokens reclaimed"),
+            "{rendered}"
+        );
+    }
+
     #[tokio::test]
     async fn informational_commands_append_inline_without_provider_history() {
         let home = tempfile::tempdir().expect("home");
@@ -1803,9 +1986,12 @@ output_reserve = 4096
             approval: Some(Arc::new(agent_runtime_core::approval::DenyAll)),
             ..RuntimeRequest::new(config, HostSurface::Terminal)
         };
-        let host = smith_runtime::host::start(HostSessionRequest::new(runtime, project.path()))
-            .await
-            .expect("host");
+        let host = smith_runtime::host::start(
+            HostSessionRequest::new(runtime, project.path())
+                .checkpoint_keys(Arc::new(TestCheckpointKeys)),
+        )
+        .await
+        .expect("host");
         let history_before = host.session().history().len();
         let mut app = App::new("example-model", project.path().display().to_string());
 
@@ -1846,23 +2032,26 @@ output_reserve = 4096
             "{before_context}"
         );
 
-        app.status.record_context_plan(
-            2_000,
-            123_904,
-            4_096,
-            2,
-            &std::collections::BTreeMap::from([
-                (
-                    agent_runtime_core::manifest::SegmentKind::new("history"),
-                    1_500,
-                ),
-                (
-                    agent_runtime_core::manifest::SegmentKind::new("tool_schema"),
-                    500,
-                ),
-            ]),
-            EstimationConfidence::Estimated,
-        );
+        let totals = std::collections::BTreeMap::from([
+            (
+                agent_runtime_core::manifest::SegmentKind::new("history"),
+                1_500,
+            ),
+            (
+                agent_runtime_core::manifest::SegmentKind::new("tool_schema"),
+                500,
+            ),
+        ]);
+        app.status.record_context_plan(ContextPlanUpdate {
+            fingerprint: "context-test",
+            cache_fingerprint: "cache-test",
+            input_tokens: 2_000,
+            input_budget_tokens: 123_904,
+            reserved_tokens: 4_096,
+            segment_count: 2,
+            totals: &totals,
+            confidence: EstimationConfidence::Estimated,
+        });
         let planned = render_context_status(&app.status, host.runtime().policy());
         assert!(planned.contains("~98% input left"), "{planned}");
         assert!(planned.contains("~2k used / 123.9k budget"), "{planned}");
@@ -1972,23 +2161,26 @@ output_reserve = 4096
             "{context_content}"
         );
 
-        app.status.record_context_plan(
-            1_200,
-            123_904,
-            4_096,
-            2,
-            &std::collections::BTreeMap::from([
-                (
-                    agent_runtime_core::manifest::SegmentKind::new("summary"),
-                    600,
-                ),
-                (
-                    agent_runtime_core::manifest::SegmentKind::new("user_input"),
-                    600,
-                ),
-            ]),
-            EstimationConfidence::Estimated,
-        );
+        let totals = std::collections::BTreeMap::from([
+            (
+                agent_runtime_core::manifest::SegmentKind::new("summary"),
+                600,
+            ),
+            (
+                agent_runtime_core::manifest::SegmentKind::new("user_input"),
+                600,
+            ),
+        ]);
+        app.status.record_context_plan(ContextPlanUpdate {
+            fingerprint: "context-summary",
+            cache_fingerprint: "cache-summary",
+            input_tokens: 1_200,
+            input_budget_tokens: 123_904,
+            reserved_tokens: 4_096,
+            segment_count: 2,
+            totals: &totals,
+            confidence: EstimationConfidence::Estimated,
+        });
         let compacted = render_context_status(&app.status, host.runtime().policy());
         assert!(
             compacted.contains("compaction: applied · ~600 summary · 74.3k recovery target"),

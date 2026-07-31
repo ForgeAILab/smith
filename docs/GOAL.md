@@ -18,11 +18,14 @@ and failures visible instead of guessing.
 - The OpenAI-compatible adapter streams text, fragmented tool calls, usage, and
   failures through the shared runtime vocabulary.
 - `read`, `list`, `search`, `edit`, and `shell` are bounded and workspace
-  confined. Authority-bearing calls are approved interactively or fail closed
-  headlessly; protected argument values do not enter ordinary events or
+  confined. Root sessions compose task questions, todos, and depth-one
+  delegation through the ability registry. Authority-bearing calls prepare an
+  exact resource/permission set, are approved interactively or fail closed
+  headlessly, and keep protected argument values out of ordinary events and
   machine output.
 - Sessions create, list, save, and resume with canonical history, identity,
-  usage, manifests, and ordered redacted event journals.
+  usage, manifests, ordered redacted event journals, separately protected
+  in-flight checkpoints, and session-authorized artifacts.
 - `smith` and `smith -p` select the same project/profile/provider/model and
   produce equivalent runtime behavior. Headless text, JSON, and JSON Lines
   contracts have stable exit semantics.
@@ -48,22 +51,26 @@ Implemented:
 - one configuration-to-runtime factory and one shared session host;
 - credential-at-construction and pre-terminal failure boundaries;
 - production streaming HTTP/OpenAI-compatible composition;
-- bounded coding tools and redaction-safe interactive/headless approvals;
-- snapshot/journal persistence with explicit create/list/resume;
+- session-scoped capability activation, versioned prompt sections, todos,
+  trusted skills, bounded memory, artifact offloading, semantic summaries, and
+  safe-boundary child delivery;
+- invocation-specific prepared authority plus separate interactive approval
+  and questionnaire channels;
+- completed-turn snapshots, ordered redacted journals, protected checkpoint
+  recovery, and explicit create/list/resume;
 - TUI history restoration, provider/model/profile switching at an idle
   save/rebuild/resume boundary, and provenance-aware usage/context status;
-- `smith -p` argument/stdin prompts, selection flags, text/JSON/JSONL output,
-  and structured approval-required status;
-- explicit use of Agent Runtime's `legacy_approval_authority()` migration aid
-  now that composed authorization is live for tool invocation, preserving
-  Smith's mandatory approval gate without claiming unfinished upstream
-  enforcement.
+- attempt-scoped speculative TUI reduction with live/journal replay
+  equivalence;
+- `smith -p` argument/stdin prompts, selection flags, schema-v2
+  text/JSON/JSONL projections, and structured approval/interaction-required
+  status.
 
 The remaining release gates are an immutable upstream runtime reference,
 execution of the configured macOS/Linux release workflow against that
-reference, and the still-open release-critical checklist items in the approved
-change under
-`docs/spec/changes/add-smith-agent-harness-2026-07-23/`.
+reference, platform visual/dependency evidence, and the still-open release
+checklist items in
+`docs/spec/changes/integrate-stable-session-harness-2026-07-31/`.
 
 ## Latest compatibility evidence
 
@@ -97,7 +104,8 @@ Smith can package or publish.
 
 ## Deliberately deferred
 
-Monitors, direct-child UX, extension/MCP hosting, prompt-cache keepalive, and
-Forge integration stay out of this release goal. They should build on the
-released runtime capability/delegation contracts rather than create temporary
-Smith-local mechanisms.
+A concrete monitor executor, nested agents, extension/MCP hosting,
+prompt-cache keepalive, Forge integration, and a bidirectional headless
+interaction protocol stay out of this release goal. They should build on the
+released runtime capability/delegation/security contracts rather than create
+temporary Smith-local mechanisms.

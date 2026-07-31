@@ -8,13 +8,19 @@
 use std::collections::BTreeSet;
 
 use agent_runtime_core::error::RuntimeError;
-use agent_runtime_core::tool::{InvocationContext, Tool, ToolEffects, ToolOutcome};
+use agent_runtime_core::security::PermissionSet;
+use agent_runtime_core::tool::{
+    InvocationContext, PreparationContext, PreparedToolCall, Tool, ToolCallDisplay, ToolEffects,
+    ToolOutcome, ToolSpec,
+};
+use agent_runtime_registry::Permission;
 use async_trait::async_trait;
 use ignore::WalkBuilder;
 use serde_json::{Value, json};
 
 use crate::support::{
-    check_stop, display_path, optional_bool, optional_str, optional_usize, resolve,
+    check_stop, display_path, optional_bool, optional_str, optional_usize, prepare_path_argument,
+    resolve,
 };
 
 /// How many entries a listing returns when the caller does not say.
@@ -26,51 +32,63 @@ pub struct ListTool;
 
 #[async_trait]
 impl Tool for ListTool {
-    fn name(&self) -> &str {
-        "list"
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::new(
+            "list",
+            "List files and directories in the project. Set `recursive` to walk the \
+             tree. Ignored paths (.git, target, node_modules, .gitignore entries) \
+             are skipped unless `all` is set.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Directory to list, relative to the project root. Defaults to the root."
+                    },
+                    "recursive": {
+                        "type": "boolean",
+                        "description": "Walk subdirectories. Defaults to false."
+                    },
+                    "all": {
+                        "type": "boolean",
+                        "description": "Include ignored and hidden entries. Defaults to false."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Maximum entries to return. Defaults to 500."
+                    }
+                },
+                "additionalProperties": false
+            }),
+            ToolEffects::read_only(),
+        )
+        .with_permission_upper_bound(PermissionSet::single(Permission::FsRead))
     }
 
-    fn description(&self) -> &str {
-        "List files and directories in the project. Set `recursive` to walk the \
-         tree. Ignored paths (.git, target, node_modules, .gitignore entries) \
-         are skipped unless `all` is set."
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Directory to list, relative to the project root. Defaults to the root."
-                },
-                "recursive": {
-                    "type": "boolean",
-                    "description": "Walk subdirectories. Defaults to false."
-                },
-                "all": {
-                    "type": "boolean",
-                    "description": "Include ignored and hidden entries. Defaults to false."
-                },
-                "limit": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": "Maximum entries to return. Defaults to 500."
-                }
-            },
-            "additionalProperties": false
-        })
-    }
-
-    fn effects(&self) -> ToolEffects {
-        ToolEffects::read_only()
+    async fn prepare(
+        &self,
+        mut arguments: Value,
+        ctx: &PreparationContext,
+    ) -> Result<PreparedToolCall, RuntimeError> {
+        let path = prepare_path_argument(&mut arguments, "path", Some("."), ctx)?;
+        Ok(PreparedToolCall::new(
+            ctx.call_id.clone(),
+            "list",
+            arguments,
+            PermissionSet::single(Permission::FsRead),
+            path.resource,
+            ToolEffects::read_only(),
+            ToolCallDisplay::new(format!("List {}", path.display)),
+        ))
     }
 
     async fn invoke(
         &self,
-        arguments: Value,
+        prepared: PreparedToolCall,
         ctx: &InvocationContext,
     ) -> Result<ToolOutcome, RuntimeError> {
+        let arguments = prepared.into_arguments();
         let root = resolve(ctx, optional_str(&arguments, "path").unwrap_or("."))?;
         let recursive = optional_bool(&arguments, "recursive").unwrap_or(false);
         let all = optional_bool(&arguments, "all").unwrap_or(false);
@@ -139,7 +157,7 @@ impl Tool for ListTool {
                 "entries": total,
                 "truncated": truncated,
             }),
-            content: vec![agent_runtime_core::content::ContentPart::text(rendered)],
+            content: vec![agent_runtime_core::content::ContentPart::text(rendered)].into(),
             is_error: false,
         })
     }

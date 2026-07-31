@@ -7,19 +7,43 @@
 
 use std::sync::Arc;
 
-use agent_runtime::provider::fake::{FakeProvider, ScriptedStream, tool_call_fragments};
-use agent_runtime_core::approval::AllowAll;
+use agent_runtime::provider::fake::{
+    FakeProvider, ScriptedStream, tool_call_fragments, usage_event,
+};
+use agent_runtime::registry::RegistryRevision;
+use agent_runtime_core::approval::{AllowAll, DenyAll};
+use agent_runtime_core::artifact::{
+    ArtifactId, ArtifactRead, ArtifactRef, MAX_ARTIFACT_READ_BYTES,
+};
+use agent_runtime_core::cancel::CancelReason;
+use agent_runtime_core::checkpoint::{CheckpointStore, TurnCheckpoint, TurnState};
+use agent_runtime_core::clock::{Deadline, Timestamp};
 use agent_runtime_core::content::UserInput;
-use agent_runtime_core::event::{RuntimeEvent, canonical_payloads};
-use agent_runtime_core::ids::SessionId;
-use agent_runtime_core::provider::{Capabilities, FinishReason, Provider, ProviderStreamEvent};
+use agent_runtime_core::delegation::WorkspacePolicy;
+use agent_runtime_core::event::{EventEnvelope, RuntimeEvent, TurnFinish, canonical_payloads};
+use agent_runtime_core::ids::{
+    ChildId, ChoiceId, EventId, InteractionRequestId, QuestionId, SessionId, ToolCallId, TurnId,
+};
+use agent_runtime_core::interaction::{InteractionSensitivity, QuestionAnswer};
+use agent_runtime_core::provider::{
+    Capabilities, FinishReason, Provider, ProviderError, ProviderErrorKind, ProviderStreamEvent,
+};
+use agent_runtime_core::store::{
+    SessionIdentityState, SessionSnapshot, SessionStateSensitivity, SessionStore,
+    VersionedSessionState,
+};
+use agent_runtime_core::usage::{CounterKind, UsageLedger, UsageSource};
 use agent_runtime_testkit::RecordingObserver;
 use futures_util::StreamExt;
 use smith_config::resolve::{Overrides, ResolveRequest, ResolvedConfig, resolve};
-use smith_host::ProjectWorkspace;
-use smith_runtime::factory::{HostSurface, RuntimeRequest};
+use smith_host::{InteractionNotice, InteractiveInteraction, ProjectWorkspace};
+use smith_runtime::checkpoint::{
+    CheckpointKey, CheckpointKeyProvider, CheckpointProtectionError, SmithCheckpointStore,
+};
+use smith_runtime::factory::{HostSurface, MidTurnDurability, RuntimeRequest};
 use smith_runtime::host::{HostSessionError, HostSessionRequest, list, start};
-use smith_runtime::journal::{DefaultRedactor, read_journal};
+use smith_runtime::journal::{DefaultRedactor, JournalLine, JournalRecord, read_journal};
+use smith_runtime::session::FileSessionStore;
 
 const CONFIG: &str = r#"
 default_profile = "dev"
@@ -70,6 +94,830 @@ struct Fixture {
     project: tempfile::TempDir,
 }
 
+#[derive(Debug)]
+struct TestCheckpointKeys;
+
+impl CheckpointKeyProvider for TestCheckpointKeys {
+    fn load_or_create(&self) -> Result<CheckpointKey, CheckpointProtectionError> {
+        Ok(CheckpointKey::new([0x51; 32]))
+    }
+}
+
+#[derive(Debug)]
+struct UnavailableCheckpointKeys;
+
+impl CheckpointKeyProvider for UnavailableCheckpointKeys {
+    fn load_or_create(&self) -> Result<CheckpointKey, CheckpointProtectionError> {
+        Err(CheckpointProtectionError::unavailable())
+    }
+}
+
+fn test_checkpoint_keys() -> Arc<dyn CheckpointKeyProvider> {
+    Arc::new(TestCheckpointKeys)
+}
+
+#[tokio::test]
+async fn protected_checkpoint_availability_is_explicit_and_encrypted() {
+    let fixture = Fixture::new();
+    let host = start(fixture.request(HostSurface::Headless))
+        .await
+        .expect("a hosted session");
+    assert_eq!(
+        host.runtime().policy().mid_turn_durability,
+        MidTurnDurability::Available
+    );
+    let session_id = host.session().id().clone();
+    host.session()
+        .run(UserInput::text("checkpoint secret marker"))
+        .await
+        .expect("the turn runs");
+    let checkpoint = host
+        .paths()
+        .unwrap()
+        .checkpoint(&session_id)
+        .expect("checkpoint path");
+    let bytes = tokio::fs::read(checkpoint)
+        .await
+        .expect("encrypted checkpoint");
+    assert!(
+        !bytes
+            .windows("checkpoint secret marker".len())
+            .any(|window| { window == b"checkpoint secret marker" })
+    );
+    host.shutdown().await.expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn unavailable_checkpoint_key_keeps_completed_turn_persistence_honest() {
+    let fixture = Fixture::new();
+    let mut request = fixture.request(HostSurface::Headless);
+    request.checkpoint_keys = Some(Arc::new(UnavailableCheckpointKeys));
+    let host = start(request)
+        .await
+        .expect("completed-turn persistence remains");
+    assert_eq!(
+        host.runtime().policy().mid_turn_durability,
+        MidTurnDurability::Unavailable
+    );
+    let session_id = host.session().id().clone();
+    host.session()
+        .run(UserInput::text("completed turn"))
+        .await
+        .expect("a turn without false checkpoint durability");
+    let paths = host.paths().unwrap().clone();
+    host.shutdown().await.expect("clean shutdown");
+    assert!(paths.snapshot(&session_id).unwrap().is_file());
+    assert!(!paths.checkpoint(&session_id).unwrap().exists());
+}
+
+#[tokio::test]
+async fn oversized_shell_output_is_recoverable_from_the_session_artifact_store() {
+    let fixture = Fixture::with_config(&format!(
+        "{CONFIG}\n[limits]\ntool_output_limit_bytes = 1024\n"
+    ));
+    // Larger than the configured inline/offload threshold but deliberately
+    // smaller than ArtifactOffloader's default, proving the resolved Smith
+    // policy is wired into the live processor rather than merely documented.
+    let command = "yes 'recoverable artifact line' | head -c 4096";
+    let mut shell = tool_call_fragments(
+        0,
+        "large-shell-call",
+        "shell",
+        &serde_json::json!({ "command": command }).to_string(),
+    );
+    shell.push(ProviderStreamEvent::Finish {
+        reason: FinishReason::ToolCalls,
+    });
+    let provider = Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        vec![
+            ScriptedStream::new(shell),
+            ScriptedStream::new(vec![
+                ProviderStreamEvent::TextDelta {
+                    text: "the output is available as an artifact".into(),
+                },
+                ProviderStreamEvent::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ]),
+        ],
+    ));
+    let mut request = fixture.request(HostSurface::Headless);
+    request.runtime.provider = Some(provider.clone());
+    let host = start(request).await.expect("a hosted session");
+    assert!(
+        host.runtime()
+            .policy()
+            .tools
+            .iter()
+            .any(|tool| tool == "artifact.read"),
+        "the standard protected store did not register its reader"
+    );
+
+    host.session()
+        .run(UserInput::text(
+            "Use shell to produce the large diagnostic output.",
+        ))
+        .await
+        .expect("the shell turn completes");
+
+    let requests = provider.requests();
+    let second_request = &requests[1];
+    let wire =
+        serde_json::to_string(&second_request.messages).expect("serializable provider messages");
+    let marker = wire.split("[artifact id=").nth(1).unwrap_or_else(|| {
+        panic!(
+            "a model-facing artifact reference; first tools {:?}; wire chars {}",
+            requests[0]
+                .tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            wire.chars().count(),
+        )
+    });
+    let id = marker
+        .split_whitespace()
+        .next()
+        .expect("artifact id in marker");
+    assert!(
+        !wire.contains("[output truncated at 131072 bytes]"),
+        "Smith's former shell truncation ran before artifact offloading"
+    );
+
+    let store = host
+        .runtime()
+        .artifact_store()
+        .expect("the protected Smith artifact store");
+    let id = ArtifactId::new(id).expect("a bounded artifact id");
+    let mut offset = 0;
+    let mut exact = Vec::new();
+    loop {
+        let chunk = store
+            .read(ArtifactRead {
+                session: host.session().id().clone(),
+                id: id.clone(),
+                offset,
+                limit: MAX_ARTIFACT_READ_BYTES,
+            })
+            .await
+            .expect("an owner-authorized artifact page");
+        exact.extend_from_slice(&chunk.bytes);
+        let Some(next) = chunk.next_offset else {
+            break;
+        };
+        assert!(next > offset, "pagination must advance");
+        offset = next;
+    }
+    let exact = String::from_utf8(exact).expect("serialized text tool outcome");
+    assert!(exact.contains("recoverable artifact line"));
+    assert!(exact.contains(r#""truncated":false"#));
+    assert!(exact.len() > 1024);
+    assert!(
+        exact.len() < 64 * 1024,
+        "the fixture must remain below the offloader's default threshold"
+    );
+
+    host.shutdown().await.expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn persistent_sessions_use_recoverable_semantic_summaries_with_disjoint_usage() {
+    let fixture = Fixture::new();
+    let main = |index: usize| {
+        ScriptedStream::new(vec![
+            ProviderStreamEvent::TextDelta {
+                text: format!("answer {index}"),
+            },
+            ProviderStreamEvent::Finish {
+                reason: FinishReason::Stop,
+            },
+        ])
+    };
+    let summary = |text: &str, input: u64, output: u64| {
+        ScriptedStream::new(vec![
+            ProviderStreamEvent::TextDelta { text: text.into() },
+            usage_event(input, output),
+            ProviderStreamEvent::Finish {
+                reason: FinishReason::Stop,
+            },
+        ])
+    };
+    let provider = Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        vec![
+            main(0),
+            main(1),
+            main(2),
+            main(3),
+            main(4),
+            main(5),
+            summary("SUMMARY_ONE", 40, 5),
+            main(6),
+            summary("SUMMARY_TWO", 50, 6),
+        ],
+    ));
+    let mut request = fixture.request(HostSurface::Headless);
+    request.runtime.provider = Some(provider.clone());
+    let host = start(request).await.expect("a hosted session");
+    let summary_policy = host
+        .runtime()
+        .policy()
+        .semantic_summary
+        .as_ref()
+        .expect("persistent hosts enable the standard summary policy");
+    assert_eq!(summary_policy.purpose, "context.semantic_summary");
+    assert_eq!(summary_policy.trigger_turns, 6);
+    assert_eq!(summary_policy.retain_turns, 2);
+
+    for index in 0..7 {
+        host.session()
+            .run(UserInput::text(format!("request {index}")))
+            .await
+            .unwrap_or_else(|error| panic!("turn {index} failed: {error}"));
+    }
+
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 9);
+    let first_summary = &requests[6];
+    assert!(first_summary.tools.is_empty());
+    assert_eq!(
+        first_summary.tool_choice,
+        agent_runtime_core::provider::ToolChoice::None
+    );
+    assert_eq!(first_summary.max_output_tokens, Some(2_048));
+    let first_summary_wire =
+        serde_json::to_string(&first_summary.messages).expect("first summary request");
+    assert!(first_summary_wire.contains("context.semantic_summary"));
+    assert!(first_summary_wire.contains("request 0"));
+    assert!(first_summary_wire.contains("answer 3"));
+    assert!(
+        !first_summary_wire.contains("request 4"),
+        "the retained exact suffix must stay out of summary input"
+    );
+
+    let projected_wire =
+        serde_json::to_string(&requests[7].messages).expect("projected main request");
+    assert!(projected_wire.contains("SUMMARY_ONE"));
+    assert!(projected_wire.contains("request 4"));
+    assert!(projected_wire.contains("answer 5"));
+    assert!(projected_wire.contains("request 6"));
+    assert!(
+        !projected_wire.contains("request 0"),
+        "the covered prefix must not coexist with its summary"
+    );
+
+    let second_summary_wire =
+        serde_json::to_string(&requests[8].messages).expect("second summary request");
+    assert!(second_summary_wire.contains("request 0"));
+    assert!(second_summary_wire.contains("answer 4"));
+    assert!(
+        !second_summary_wire.contains("SUMMARY_ONE"),
+        "semantic work must summarize canonical originals, not a prior projection"
+    );
+
+    let snapshot = host.session().snapshot();
+    let state = snapshot
+        .extension_state
+        .get("harness.semantic_summary")
+        .expect("protected summary state");
+    assert_eq!(state.sensitivity, SessionStateSensitivity::Sensitive);
+    assert_eq!(state.value["purpose"], "context.semantic_summary");
+    assert_eq!(state.value["summary"], "SUMMARY_TWO");
+    assert_eq!(state.value["omit_prefix"], 10);
+    assert_eq!(
+        snapshot
+            .usage
+            .records()
+            .iter()
+            .filter(|record| record.source == UsageSource::SemanticSummary)
+            .count(),
+        2
+    );
+    assert_eq!(
+        snapshot
+            .usage
+            .total_for(UsageSource::SemanticSummary)
+            .get(CounterKind::InputUncached),
+        90
+    );
+    assert_eq!(
+        snapshot
+            .usage
+            .total_for(UsageSource::SemanticSummary)
+            .get(CounterKind::Output),
+        11
+    );
+    assert_eq!(snapshot.manifests.len(), 7);
+    assert_eq!(snapshot.manifests[6].manifest.summaries.len(), 1);
+    assert_eq!(
+        snapshot.manifests[6].manifest.summaries[0]
+            .covered
+            .iter()
+            .map(|segment| segment.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "history:0",
+            "history:1",
+            "history:2",
+            "history:3",
+            "history:4",
+            "history:5",
+            "history:6",
+            "history:7",
+        ]
+    );
+
+    let source: ArtifactRef = serde_json::from_value(state.value["source_artifact"].clone())
+        .expect("typed source artifact");
+    assert_eq!(source.provenance.session, *host.session().id());
+    assert_eq!(source.provenance.purpose, "context.semantic_summary");
+    let store = host
+        .runtime()
+        .artifact_store()
+        .expect("the protected original store");
+    let mut offset = 0;
+    let mut original = Vec::new();
+    loop {
+        let page = store
+            .read(ArtifactRead {
+                session: host.session().id().clone(),
+                id: source.id.clone(),
+                offset,
+                limit: MAX_ARTIFACT_READ_BYTES,
+            })
+            .await
+            .expect("a protected original page");
+        original.extend_from_slice(&page.bytes);
+        let Some(next) = page.next_offset else {
+            break;
+        };
+        offset = next;
+    }
+    let original: Vec<agent_runtime_core::content::Message> =
+        serde_json::from_slice(&original).expect("recoverable canonical originals");
+    assert_eq!(original.len(), 10);
+    assert_eq!(original[0].joined_text(), "request 0");
+    assert_eq!(original[9].joined_text(), "answer 4");
+
+    host.shutdown().await.expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn a_failed_semantic_summary_preserves_the_structural_history_plan() {
+    let fixture = Fixture::new();
+    let main = |index: usize| {
+        ScriptedStream::new(vec![
+            ProviderStreamEvent::TextDelta {
+                text: format!("answer {index}"),
+            },
+            ProviderStreamEvent::Finish {
+                reason: FinishReason::Stop,
+            },
+        ])
+    };
+    let failed_summary = || {
+        ScriptedStream::new(vec![ProviderStreamEvent::Error {
+            error: ProviderError::new(ProviderErrorKind::Server, "summary unavailable"),
+        }])
+    };
+    let provider = Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        vec![
+            main(0),
+            main(1),
+            main(2),
+            main(3),
+            main(4),
+            main(5),
+            failed_summary(),
+            main(6),
+            failed_summary(),
+        ],
+    ));
+    let observer = RecordingObserver::shared();
+    let mut request = fixture.request(HostSurface::Headless);
+    request.runtime.provider = Some(provider.clone());
+    request.runtime.observers.push(observer.clone());
+    let host = start(request).await.expect("a hosted session");
+
+    for index in 0..7 {
+        host.session()
+            .run(UserInput::text(format!("request {index}")))
+            .await
+            .unwrap_or_else(|error| panic!("turn {index} failed: {error}"));
+    }
+
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 9);
+    let seventh_main = serde_json::to_string(&requests[7].messages).expect("seventh main request");
+    assert!(seventh_main.contains("request 0"));
+    assert!(seventh_main.contains("answer 5"));
+    assert!(seventh_main.contains("request 6"));
+    assert!(
+        !seventh_main.contains("SUMMARY_"),
+        "failed summary output must never alter the deterministic structural plan"
+    );
+    assert!(
+        !host
+            .session()
+            .snapshot()
+            .extension_state
+            .contains_key("harness.semantic_summary")
+    );
+    let fallbacks = observer
+        .payloads()
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event,
+                RuntimeEvent::Downgrade { capability, detail }
+                    if capability == "semantic_summary"
+                        && detail == "summary_model_unavailable"
+            )
+        })
+        .count();
+    assert_eq!(fallbacks, 2);
+
+    host.shutdown().await.expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn todo_lifecycle_is_checkpointed_renderable_and_restored_as_context() {
+    let fixture = Fixture::new();
+    let write = |call: &str, items: serde_json::Value| {
+        let mut events = tool_call_fragments(
+            0,
+            call,
+            "write_todos",
+            &serde_json::json!({ "items": items }).to_string(),
+        );
+        events.push(ProviderStreamEvent::Finish {
+            reason: FinishReason::ToolCalls,
+        });
+        ScriptedStream::new(events)
+    };
+    let provider = Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        vec![
+            write(
+                "plan-1",
+                serde_json::json!([
+                    {"id":"inspect","text":"Inspect the implementation","status":"in_progress"},
+                    {"id":"change","text":"Implement the change","status":"pending"},
+                    {"id":"verify","text":"Run focused tests","status":"pending"}
+                ]),
+            ),
+            write(
+                "plan-2",
+                serde_json::json!([
+                    {"id":"inspect","text":"Inspect the implementation","status":"completed"},
+                    {"id":"change","text":"Implement the change","status":"completed"},
+                    {"id":"verify","text":"Run focused tests","status":"in_progress"}
+                ]),
+            ),
+            ScriptedStream::new(vec![
+                ProviderStreamEvent::TextDelta {
+                    text: "plan updated".into(),
+                },
+                ProviderStreamEvent::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ]),
+        ],
+    ));
+    let observer = RecordingObserver::shared();
+    let mut request = fixture.request(HostSurface::Headless);
+    request.runtime.provider = Some(provider.clone());
+    request.runtime.observers.push(observer.clone());
+    let host = start(request).await.expect("a hosted session");
+    assert!(
+        host.runtime()
+            .policy()
+            .tools
+            .iter()
+            .any(|tool| tool == "write_todos")
+    );
+
+    host.session()
+        .run(UserInput::text(
+            "Use write_todos to track this genuinely multi-step edit.",
+        ))
+        .await
+        .expect("the todo lifecycle completes");
+    let payloads = observer.payloads();
+    let plan_events = payloads
+        .iter()
+        .cloned()
+        .filter_map(|event| match event {
+            RuntimeEvent::PlanUpdated {
+                revision,
+                sensitivity,
+                counts,
+                items,
+            } => Some((revision, sensitivity, counts, items)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        plan_events.len(),
+        2,
+        "events: {payloads:?}; requests: {:?}",
+        provider.requests()
+    );
+    assert_eq!(plan_events[0].0, 1);
+    assert_eq!(plan_events[1].0, 2);
+    assert_eq!(
+        plan_events[1].1,
+        agent_runtime_core::event::PlanSensitivity::Public
+    );
+    assert_eq!(plan_events[1].2["in_progress"], 1);
+    assert_eq!(
+        plan_events[1].3.as_ref().expect("public item projection")[2].text,
+        "Run focused tests"
+    );
+
+    let snapshot = host.session().snapshot();
+    let state = snapshot
+        .extension_state
+        .get("harness.todo.state")
+        .expect("checkpointed todo state");
+    assert_eq!(state.sensitivity, SessionStateSensitivity::RedactionSafe);
+    assert_eq!(state.value["revision"], 2);
+    let session = host.session().id().clone();
+    host.shutdown().await.expect("clean shutdown");
+
+    let resumed_provider = Arc::new(FakeProvider::text_reply("resumed with plan"));
+    let mut resume = fixture
+        .request(HostSurface::Headless)
+        .resume(session.clone());
+    resume.runtime.provider = Some(resumed_provider.clone());
+    let resumed = start(resume).await.expect("the todo session resumes");
+    resumed
+        .session()
+        .run(UserInput::text("Continue the multi-step work."))
+        .await
+        .expect("the restored plan contributes to the next request");
+    let requests = resumed_provider.requests();
+    let wire = serde_json::to_string(&requests[0].messages).expect("provider messages");
+    assert!(wire.contains(r#"<todo_plan revision=\"2\">"#), "{wire}");
+    assert!(wire.contains("Run focused tests"), "{wire}");
+    resumed.shutdown().await.expect("clean resumed shutdown");
+}
+
+#[tokio::test]
+async fn terminal_resume_merges_protected_sensitive_state_over_the_plaintext_snapshot() {
+    const SECRET: &str = "protected-memory-state-8f31";
+
+    let fixture = Fixture::new();
+    let session = SessionId::new("session-terminal-extension-state");
+    let turn = TurnId::new("turn-1");
+    let input = UserInput::text("retain protected component state");
+    let paths = smith_runtime::host::paths(&fixture.config(), fixture.project.path()).unwrap();
+    let mut snapshot = SessionSnapshot {
+        id: session.clone(),
+        history: vec![input.clone().into_message()],
+        usage: UsageLedger::new(),
+        identity: SessionIdentityState {
+            turn: 1,
+            event: 10,
+            event_seq: 11,
+            ..SessionIdentityState::default()
+        },
+        manifests: Vec::new(),
+        extension_state: Default::default(),
+        updated: Timestamp(4),
+    };
+    snapshot.extension_state.insert(
+        "smith.todo".into(),
+        VersionedSessionState::new(
+            RegistryRevision::new("todo-state-1"),
+            serde_json::json!({"pending": 1}),
+        )
+        .redaction_safe(),
+    );
+    snapshot.extension_state.insert(
+        "smith.memory".into(),
+        VersionedSessionState::new(
+            RegistryRevision::new("memory-state-1"),
+            serde_json::json!({"content": SECRET}),
+        ),
+    );
+
+    let session_store = FileSessionStore::new(paths.clone());
+    session_store
+        .save(&snapshot)
+        .await
+        .expect("the ordinary snapshot saves");
+    let ordinary = session_store
+        .load(&session)
+        .await
+        .expect("the ordinary snapshot loads")
+        .expect("an ordinary snapshot exists");
+    assert!(ordinary.extension_state.contains_key("smith.todo"));
+    assert!(!ordinary.extension_state.contains_key("smith.memory"));
+    let ordinary_bytes = tokio::fs::read(paths.snapshot(&session).expect("ordinary snapshot path"))
+        .await
+        .expect("ordinary snapshot bytes");
+    assert!(
+        !ordinary_bytes
+            .windows(SECRET.len())
+            .any(|window| window == SECRET.as_bytes())
+    );
+
+    let checkpoint_store =
+        SmithCheckpointStore::initialize_with(paths.clone(), test_checkpoint_keys())
+            .await
+            .expect("a protected checkpoint store");
+    let accepted = TurnCheckpoint::accepted(
+        turn,
+        input,
+        snapshot.clone(),
+        0,
+        Deadline::never(),
+        1,
+        7,
+        Timestamp(1),
+    )
+    .expect("an accepted checkpoint");
+    checkpoint_store
+        .save(&accepted)
+        .await
+        .expect("accepted checkpoint");
+    let completing = accepted
+        .transition(
+            TurnState::Completing {
+                finish: TurnFinish::Completed,
+                visible_output: false,
+            },
+            snapshot.clone(),
+            8,
+            Timestamp(2),
+        )
+        .expect("a completing checkpoint");
+    checkpoint_store
+        .save(&completing)
+        .await
+        .expect("completing checkpoint");
+    let publishing = completing
+        .transition(
+            TurnState::PublishingTerminal {
+                finish: TurnFinish::Completed,
+                visible_output: false,
+            },
+            snapshot.clone(),
+            9,
+            Timestamp(3),
+        )
+        .expect("a publishing checkpoint");
+    checkpoint_store
+        .save(&publishing)
+        .await
+        .expect("publishing checkpoint");
+    let terminal = publishing
+        .transition(
+            TurnState::Terminal {
+                finish: TurnFinish::Completed,
+                visible_output: false,
+            },
+            snapshot,
+            10,
+            Timestamp(4),
+        )
+        .expect("a terminal checkpoint");
+    checkpoint_store
+        .save(&terminal)
+        .await
+        .expect("terminal checkpoint");
+
+    let resumed = start(
+        fixture
+            .request(HostSurface::Headless)
+            .resume(session.clone()),
+    )
+    .await
+    .expect("the terminal session resumes");
+    let restored = resumed.session().snapshot();
+    assert_eq!(
+        restored.extension_state["smith.memory"].value,
+        serde_json::json!({"content": SECRET})
+    );
+    assert_eq!(
+        restored.extension_state["smith.todo"].value,
+        serde_json::json!({"pending": 1})
+    );
+    resumed.shutdown().await.expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn a_checkpoint_only_first_turn_is_resumable_without_a_completed_snapshot() {
+    let fixture = Fixture::new();
+    let session = SessionId::new("session-first-turn-crash");
+    let turn = TurnId::new("turn-1");
+    let input = UserInput::text("resume the first accepted turn");
+    let paths = smith_runtime::host::paths(&fixture.config(), fixture.project.path()).unwrap();
+    let mut snapshot = SessionSnapshot {
+        id: session.clone(),
+        history: vec![input.clone().into_message()],
+        usage: UsageLedger::new(),
+        identity: SessionIdentityState {
+            turn: 1,
+            event: 7,
+            event_seq: 7,
+            ..SessionIdentityState::default()
+        },
+        manifests: Vec::new(),
+        extension_state: Default::default(),
+        updated: Timestamp::ZERO,
+    };
+    let checkpoint = TurnCheckpoint::accepted(
+        turn,
+        input,
+        snapshot.clone(),
+        0,
+        Deadline::never(),
+        1,
+        7,
+        Timestamp::ZERO,
+    )
+    .unwrap();
+    let checkpoint_store =
+        SmithCheckpointStore::initialize_with(paths.clone(), test_checkpoint_keys())
+            .await
+            .unwrap();
+    checkpoint_store.save(&checkpoint).await.unwrap();
+    assert!(
+        !paths.snapshot(&session).unwrap().exists(),
+        "the fixture must model a crash before the first completed snapshot"
+    );
+
+    let resumed = start(
+        fixture
+            .request(HostSurface::Headless)
+            .resume(session.clone()),
+    )
+    .await
+    .expect("the protected checkpoint proves the session exists");
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            snapshot = resumed.session().snapshot();
+            if snapshot
+                .history
+                .iter()
+                .any(|message| message.role == agent_runtime_core::content::Role::Assistant)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the accepted turn resumed");
+    resumed.shutdown().await.expect("clean shutdown");
+    assert!(paths.snapshot(&session).unwrap().is_file());
+}
+
+#[tokio::test]
+async fn only_one_host_can_own_a_persistent_session_lifecycle() {
+    let fixture = Fixture::new();
+    let first = start(fixture.request(HostSurface::Headless))
+        .await
+        .expect("the first host");
+    first
+        .session()
+        .run(UserInput::text("establish a resumable session"))
+        .await
+        .expect("a completed turn");
+    let session = first.session().id().clone();
+
+    let error = start(
+        fixture
+            .request(HostSurface::Headless)
+            .resume(session.clone()),
+    )
+    .await
+    .expect_err("a second active owner must fail instead of waiting");
+    assert!(
+        matches!(
+            error,
+            HostSessionError::Runtime(ref error)
+                if error.kind == agent_runtime_core::error::ErrorKind::Conflict
+                    && error.message.contains("already active")
+        ),
+        "{error}"
+    );
+
+    first.shutdown().await.expect("release the lifecycle lease");
+    let second = start(fixture.request(HostSurface::Headless).resume(session))
+        .await
+        .expect("the lease is recoverable after shutdown");
+    second.shutdown().await.expect("clean second shutdown");
+}
+
 impl Fixture {
     fn new() -> Self {
         Self::with_config(CONFIG)
@@ -107,6 +955,7 @@ impl Fixture {
             ..RuntimeRequest::new(config, surface)
         };
         HostSessionRequest::new(runtime, self.project.path())
+            .checkpoint_keys(test_checkpoint_keys())
     }
 }
 
@@ -151,6 +1000,269 @@ async fn project_configuration_cannot_silently_grant_tool_authority() {
 }
 
 #[tokio::test]
+async fn interrupting_one_turn_does_not_cancel_the_hosted_session() {
+    let fixture = Fixture::new();
+    let provider: Arc<dyn Provider> = Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        vec![
+            ScriptedStream::blocking(vec![ProviderStreamEvent::TextDelta {
+                text: "discarded partial answer".to_owned(),
+            }]),
+            ScriptedStream::new(vec![
+                ProviderStreamEvent::TextDelta {
+                    text: "later turn completed".to_owned(),
+                },
+                ProviderStreamEvent::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ]),
+        ],
+    ));
+    let mut request = fixture.request(HostSurface::Terminal);
+    request.runtime.provider = Some(provider);
+    let host = start(request).await.expect("a hosted session");
+    let session = host.session();
+    let mut events = session.subscribe();
+
+    let first = session
+        .send(UserInput::text("start blocking work"))
+        .expect("the first turn is accepted");
+    let first_id = first.id().clone();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while let Some(event) = events.next().await {
+            if event.turn.as_ref() == Some(&first_id)
+                && matches!(event.payload, RuntimeEvent::TextDelta { .. })
+            {
+                return;
+            }
+        }
+        panic!("the event stream ended before the first delta");
+    })
+    .await
+    .expect("the first attempt starts");
+
+    session
+        .interrupt_current_turn(CancelReason::UserRequested)
+        .expect("the active turn is interruptible");
+    tokio::time::timeout(std::time::Duration::from_secs(5), first.completed())
+        .await
+        .expect("the interrupted turn reaches a terminal boundary");
+
+    let first_finish = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while let Some(event) = events.next().await {
+            if event.turn.as_ref() == Some(&first_id)
+                && let RuntimeEvent::TurnCompleted { finish, .. } = event.payload
+            {
+                return finish;
+            }
+        }
+        panic!("the event stream ended before turn completion");
+    })
+    .await
+    .expect("the first turn emits its terminal event");
+    assert_eq!(
+        first_finish,
+        TurnFinish::Cancelled {
+            reason: CancelReason::UserRequested
+        }
+    );
+
+    let second = session
+        .run(UserInput::text("run after the interruption"))
+        .await
+        .expect("the same session accepts a later turn");
+    assert_ne!(second.id(), &first_id);
+    let history = session.history();
+    assert!(
+        history
+            .iter()
+            .any(|message| message.joined_text() == "later turn completed"),
+        "the later turn did not complete on the original session"
+    );
+    assert!(
+        history
+            .iter()
+            .all(|message| !message.joined_text().contains("discarded partial answer")),
+        "discarded speculative text entered canonical session history"
+    );
+
+    host.shutdown().await.expect("a clean shutdown");
+}
+
+#[tokio::test]
+async fn questionnaire_answer_resumes_the_same_turn_without_approval_authority() {
+    let fixture = Fixture::new();
+    let arguments = serde_json::json!({
+        "questions": [{
+            "id": "direction",
+            "header": "Direction",
+            "prompt": "Which implementation direction?",
+            "choices": [
+                {"id": "small", "label": "Small"},
+                {"id": "large", "label": "Large"}
+            ]
+        }],
+        "sensitivity": "public"
+    })
+    .to_string();
+    let mut question = tool_call_fragments(0, "question-call", "ask_user", &arguments);
+    question.push(ProviderStreamEvent::Finish {
+        reason: FinishReason::ToolCalls,
+    });
+    let provider = Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        vec![
+            ScriptedStream::new(question),
+            ScriptedStream::new(vec![
+                ProviderStreamEvent::TextDelta {
+                    text: "Implemented the small direction.".into(),
+                },
+                ProviderStreamEvent::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ]),
+        ],
+    ));
+    let (interaction, mut requests) = InteractiveInteraction::new();
+    let mut request = fixture.request(HostSurface::Terminal);
+    request.runtime.provider = Some(provider.clone());
+    request.runtime.approval = Some(Arc::new(DenyAll));
+    request.runtime.interaction = Some(Arc::new(interaction));
+    let host = start(request).await.expect("interactive host");
+
+    let run = host
+        .session()
+        .run(UserInput::text("ask then continue this turn"));
+    let answer = async {
+        let InteractionNotice::Present(prompt) =
+            requests.recv().await.expect("questionnaire presentation")
+        else {
+            panic!("expected a questionnaire presentation");
+        };
+        assert_eq!(prompt.request().origin().session(), host.session().id());
+        prompt
+            .answer(vec![QuestionAnswer::choice(
+                QuestionId::new("direction"),
+                ChoiceId::new("small"),
+            )])
+            .expect("typed answer accepted");
+    };
+    let (result, ()) = tokio::join!(run, answer);
+    result.expect("the same turn resumes after the answer");
+
+    assert_eq!(
+        provider.requests().len(),
+        2,
+        "answering created a second user turn or repeated the first provider request"
+    );
+    assert!(
+        host.session()
+            .history()
+            .iter()
+            .any(|message| { message.joined_text() == "Implemented the small direction." })
+    );
+    host.shutdown().await.expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn sensitive_questionnaire_answer_is_live_but_redacted_from_default_persistence() {
+    const SECRET: &str = "private-answer-never-in-default-persistence";
+    let fixture = Fixture::new();
+    let arguments = serde_json::json!({
+        "questions": [{
+            "id": "detail",
+            "header": "Detail",
+            "prompt": "Supply the private implementation detail",
+            "allow_free_form": true
+        }],
+        "sensitivity": "sensitive"
+    })
+    .to_string();
+    let mut question = tool_call_fragments(0, "sensitive-question-call", "ask_user", &arguments);
+    question.push(ProviderStreamEvent::Finish {
+        reason: FinishReason::ToolCalls,
+    });
+    let provider = Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        vec![
+            ScriptedStream::new(question),
+            ScriptedStream::new(vec![
+                ProviderStreamEvent::TextDelta {
+                    text: "Used the private detail without repeating it.".into(),
+                },
+                ProviderStreamEvent::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ]),
+        ],
+    ));
+    let redactor = DefaultRedactor::new();
+    let (interaction, mut requests) =
+        InteractiveInteraction::with_sensitive_value_sink(Arc::new(redactor.clone()));
+    let mut request = fixture.request(HostSurface::Terminal);
+    request.runtime.provider = Some(provider.clone());
+    request.runtime.approval = Some(Arc::new(DenyAll));
+    request.runtime.interaction = Some(Arc::new(interaction));
+    request.runtime.persistence_redactor = Some(redactor);
+    let host = start(request).await.expect("interactive host");
+    let session_id = host.session().id().clone();
+    let paths = host.paths().expect("persistent paths").clone();
+
+    let run = host
+        .session()
+        .run(UserInput::text("ask for the private detail"));
+    let answer = async {
+        let InteractionNotice::Present(prompt) =
+            requests.recv().await.expect("questionnaire presentation")
+        else {
+            panic!("expected a questionnaire presentation");
+        };
+        prompt
+            .answer(vec![QuestionAnswer::free_form(
+                agent_runtime_core::ids::QuestionId::new("detail"),
+                SECRET,
+            )])
+            .expect("typed answer accepted");
+    };
+    let (result, ()) = tokio::join!(run, answer);
+    result.expect("the same turn resumes after the sensitive answer");
+
+    assert!(
+        serde_json::to_string(&provider.requests()[1].messages)
+            .expect("serializable provider messages")
+            .contains(SECRET),
+        "the live continuation did not receive the exact answer"
+    );
+    let protected = std::fs::read(
+        paths
+            .checkpoint(&session_id)
+            .expect("protected checkpoint path"),
+    )
+    .expect("protected checkpoint");
+    assert!(
+        !protected
+            .windows(SECRET.len())
+            .any(|window| window == SECRET.as_bytes()),
+        "the protected checkpoint envelope exposed plaintext"
+    );
+    host.shutdown().await.expect("clean shutdown");
+
+    let snapshot = std::fs::read_to_string(paths.snapshot(&session_id).expect("snapshot path"))
+        .expect("redacted snapshot");
+    let journal = std::fs::read_to_string(paths.journal(&session_id).expect("journal path"))
+        .expect("redacted journal");
+    assert!(!snapshot.contains(SECRET), "snapshot leaked the answer");
+    assert!(!journal.contains(SECRET), "journal leaked the answer");
+    assert!(
+        snapshot.contains("[redacted]"),
+        "snapshot did not retain an explicit redaction marker"
+    );
+}
+
+#[tokio::test]
 async fn a_session_is_saved_listed_and_resumed_with_its_canonical_history() {
     let fixture = Fixture::new();
     let host = start(fixture.request(HostSurface::Terminal))
@@ -159,13 +1271,28 @@ async fn a_session_is_saved_listed_and_resumed_with_its_canonical_history() {
     let session_id = host.session().id().clone();
     let paths = host.paths().expect("persistent paths").clone();
 
-    host.session().run(UserInput::text("remember this")).await;
+    host.session()
+        .run(UserInput::text("remember this"))
+        .await
+        .expect("the turn runs");
+    host.session()
+        .run(UserInput::text("and preserve every manifest"))
+        .await
+        .expect("the second turn runs");
     assert!(
         host.session()
             .history()
             .iter()
             .any(|message| message.joined_text().contains("remember this")),
         "the canonical history did not retain the user input"
+    );
+    assert_eq!(host.session().snapshot().manifests.len(), 2);
+    assert!(
+        paths
+            .snapshot(&session_id)
+            .expect("snapshot path")
+            .is_file(),
+        "a completed turn must be persisted before orderly shutdown"
     );
     host.shutdown().await.expect("a clean first shutdown");
 
@@ -190,6 +1317,11 @@ async fn a_session_is_saved_listed_and_resumed_with_its_canonical_history() {
     .await
     .expect("a resumed hosted session");
     assert_eq!(resumed.session().id(), &session_id);
+    assert_eq!(
+        resumed.session().snapshot().manifests.len(),
+        2,
+        "resume discarded historical manifests"
+    );
     assert!(
         resumed
             .session()
@@ -198,7 +1330,28 @@ async fn a_session_is_saved_listed_and_resumed_with_its_canonical_history() {
             .any(|message| message.joined_text().contains("remember this")),
         "resume discarded the prior canonical history"
     );
+    resumed
+        .session()
+        .run(UserInput::text("append a third manifest"))
+        .await
+        .expect("the resumed turn runs");
+    assert_eq!(
+        resumed.session().snapshot().manifests.len(),
+        3,
+        "the resumed turn replaced historical manifests"
+    );
     resumed.shutdown().await.expect("a clean resumed shutdown");
+
+    let stored = FileSessionStore::new(paths.clone())
+        .load(&session_id)
+        .await
+        .expect("saved snapshot")
+        .expect("snapshot remains present");
+    assert_eq!(
+        stored.manifests.len(),
+        3,
+        "the resumed save lost historical manifests"
+    );
 
     let recovery = read_journal(paths.journal(&session_id).expect("journal path"))
         .await
@@ -211,6 +1364,182 @@ async fn a_session_is_saved_listed_and_resumed_with_its_canonical_history() {
         recovery.truncated_tail.is_none(),
         "ordered shutdown left a partial journal record"
     );
+}
+
+#[tokio::test]
+async fn resume_marks_unresolved_ephemeral_work_interrupted_without_restarting_it() {
+    let fixture = Fixture::new();
+    let first = start(fixture.request(HostSurface::Headless))
+        .await
+        .expect("a first host");
+    let session_id = first.session().id().clone();
+    let paths = first.paths().expect("persistent paths").clone();
+    first.shutdown().await.expect("persist the base session");
+
+    // Replace the orderly terminal tail with the state a crashed process
+    // would have left: a child was spawned and no task-resolution event was
+    // committed. The saved session/checkpoint remains the authoritative
+    // resumable root state.
+    let journal_path = paths.journal(&session_id).expect("journal path");
+    let recovery = read_journal(&journal_path)
+        .await
+        .expect("the first journal reads");
+    let mut records = recovery
+        .records
+        .into_iter()
+        .filter(|line| {
+            !matches!(
+                line.record,
+                JournalRecord::Event {
+                    event: EventEnvelope {
+                        payload: RuntimeEvent::SessionShutdown,
+                        ..
+                    }
+                }
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut next_seq = records
+        .iter()
+        .filter_map(|line| match &line.record {
+            JournalRecord::Event { event } => Some(event.seq),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
+    let spawned = |child: &ChildId| RuntimeEvent::ChildSpawned {
+        child: child.clone(),
+        workspace: WorkspacePolicy::ReadOnlyView,
+        max_turns: 2,
+        max_tokens: None,
+        deadline_ms: None,
+    };
+    let running = ChildId::new("child-running-before-crash");
+    let completed = ChildId::new("child-completed-before-crash");
+    let needs_input = ChildId::new("child-needs-input-before-crash");
+    let stopped = ChildId::new("child-stopped-before-crash");
+    let failed = ChildId::new("child-failed-before-crash");
+    {
+        let mut append = |payload| {
+            let seq = next_seq;
+            next_seq = next_seq.saturating_add(1);
+            records.push(JournalLine::new(JournalRecord::Event {
+                event: EventEnvelope::new(
+                    seq,
+                    EventId::new(format!("evt-before-crash-{seq}")),
+                    session_id.clone(),
+                    None,
+                    Timestamp(50),
+                    payload,
+                ),
+            }));
+        };
+        append(spawned(&running));
+        append(spawned(&completed));
+        append(RuntimeEvent::ChildCompleted {
+            child: completed.clone(),
+            result: "available for follow-up".to_owned(),
+        });
+        append(spawned(&needs_input));
+        append(RuntimeEvent::ChildNeedsInput {
+            child: needs_input.clone(),
+            child_session: SessionId::new("child-session-before-crash"),
+            turn: TurnId::new("child-turn-before-crash"),
+            call: ToolCallId::new("child-call-before-crash"),
+            request: InteractionRequestId::new("child-request-before-crash"),
+            question_ids: vec![QuestionId::new("child-question-before-crash")],
+            sensitivity: InteractionSensitivity::Sensitive,
+        });
+        append(spawned(&stopped));
+        append(RuntimeEvent::ChildStopped {
+            child: stopped,
+            reason: CancelReason::Shutdown,
+        });
+        append(spawned(&failed));
+        append(RuntimeEvent::ChildFailed {
+            child: failed,
+            error: agent_runtime_core::error::RuntimeError::internal("child failed"),
+        });
+    }
+    let running_monitor = "monitor:build-before-crash".to_owned();
+    let stopped_monitor = "monitor:lint-before-crash".to_owned();
+    records.push(JournalLine::new(JournalRecord::MonitorStarted {
+        monitor: running_monitor.clone(),
+    }));
+    records.push(JournalLine::new(JournalRecord::MonitorStarted {
+        monitor: stopped_monitor.clone(),
+    }));
+    records.push(JournalLine::new(JournalRecord::MonitorStopped {
+        monitor: stopped_monitor,
+    }));
+    let mut bytes = Vec::new();
+    for line in &records {
+        serde_json::to_writer(&mut bytes, line).expect("a serializable journal line");
+        bytes.push(b'\n');
+    }
+    tokio::fs::write(&journal_path, bytes)
+        .await
+        .expect("the crash fixture is installed");
+
+    let resumed = start(
+        fixture
+            .request(HostSurface::Headless)
+            .resume(session_id.clone()),
+    )
+    .await
+    .expect("the interrupted session resumes");
+    let interruption = resumed
+        .recovered_ephemeral_work()
+        .expect("an explicit interruption marker");
+    assert_eq!(
+        interruption.children,
+        [completed.clone(), needs_input.clone(), running.clone()]
+    );
+    assert_eq!(
+        interruption.monitors.as_slice(),
+        std::slice::from_ref(&running_monitor)
+    );
+    assert!(
+        resumed
+            .runtime()
+            .delegation()
+            .and_then(|delegation| delegation.coordinator())
+            .expect("a fresh coordinator")
+            .list()
+            .is_empty(),
+        "resume recreated an ephemeral child"
+    );
+    resumed
+        .shutdown()
+        .await
+        .expect("the resumed host shuts down");
+
+    let recovery = read_journal(&journal_path)
+        .await
+        .expect("the reconciled journal reads");
+    let markers = recovery
+        .records
+        .iter()
+        .filter_map(|line| match &line.record {
+            JournalRecord::EphemeralWorkInterrupted { interruption } => Some(interruption),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(markers.len(), 1);
+    assert_eq!(markers[0].children, [completed, needs_input, running]);
+    assert_eq!(markers[0].monitors, [running_monitor]);
+
+    // The marker participates in the next scan, so the same prior work is not
+    // reported or appended twice.
+    let resumed_again = start(fixture.request(HostSurface::Headless).resume(session_id))
+        .await
+        .expect("a second resume");
+    assert!(resumed_again.recovered_ephemeral_work().is_none());
+    resumed_again
+        .shutdown()
+        .await
+        .expect("the second resume shuts down");
 }
 
 #[tokio::test]
@@ -259,7 +1588,8 @@ async fn a_protected_live_event_resolves_its_safe_display_from_canonical_history
         .expect("journal path");
     let mut events = host.session().subscribe();
     host.session()
-        .send(UserInput::text("perform the reviewed edit"));
+        .send(UserInput::text("perform the reviewed edit"))
+        .expect("the turn is accepted");
 
     let invocation = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         let mut invocation = None;
@@ -301,7 +1631,10 @@ async fn an_edit_turn_is_attributed_and_undoable_through_the_host() {
     request.runtime.provider = Some(edit_provider());
     let host = start(request).await.expect("host");
 
-    host.session().run(UserInput::text("edit the file")).await;
+    host.session()
+        .run(UserInput::text("edit the file"))
+        .await
+        .expect("the turn runs");
     let set = host.changes().latest().expect("change set");
     assert!(set.is_fully_attributable());
     assert!(
@@ -332,7 +1665,10 @@ async fn registered_credentials_are_removed_from_persisted_history_and_events() 
     let paths = host.paths().expect("persistent paths").clone();
     let session_id = host.session().id().clone();
 
-    host.session().run(UserInput::text("hello")).await;
+    host.session()
+        .run(UserInput::text("hello"))
+        .await
+        .expect("the turn runs");
     host.shutdown().await.expect("a clean shutdown");
 
     let snapshot = std::fs::read_to_string(
@@ -357,10 +1693,13 @@ async fn registered_credentials_are_removed_from_persisted_history_and_events() 
 
     let mut resume = fixture.request(HostSurface::Headless);
     resume.runtime.persistence_redactor = Some(DefaultRedactor::new().with_secret(SECRET));
-    let resumed =
-        start(HostSessionRequest::new(resume.runtime, fixture.project.path()).resume(session_id))
-            .await
-            .expect("a redacted session still resumes");
+    let resumed = start(
+        HostSessionRequest::new(resume.runtime, fixture.project.path())
+            .checkpoint_keys(test_checkpoint_keys())
+            .resume(session_id),
+    )
+    .await
+    .expect("a redacted session still resumes");
     let history = resumed
         .session()
         .history()
@@ -408,7 +1747,11 @@ max_output_tokens = 2048
         .await
         .expect("the first runtime");
     let session_id = first.session().id().clone();
-    first.session().run(UserInput::text("first turn")).await;
+    first
+        .session()
+        .run(UserInput::text("first turn"))
+        .await
+        .expect("the first turn runs");
     first.shutdown().await.expect("the first runtime saved");
 
     let switched = resolve(
@@ -440,7 +1783,11 @@ max_output_tokens = 2048
         "the switch discarded canonical history"
     );
 
-    second.session().run(UserInput::text("second turn")).await;
+    second
+        .session()
+        .run(UserInput::text("second turn"))
+        .await
+        .expect("the second turn runs");
     let snapshot = second.session().snapshot();
     assert_eq!(
         snapshot
@@ -459,6 +1806,8 @@ max_output_tokens = 2048
 async fn resume_refuses_an_unknown_identity_instead_of_creating_it() {
     let fixture = Fixture::new();
     let missing = SessionId::new("session-does-not-exist");
+    let paths = smith_runtime::host::paths(&fixture.config(), fixture.project.path())
+        .expect("session paths");
 
     let error = start(
         fixture
@@ -481,6 +1830,11 @@ async fn resume_refuses_an_unknown_identity_instead_of_creating_it() {
             .is_empty(),
         "a failed resume left session state behind"
     );
+    assert!(
+        !paths.directory().exists(),
+        "a missing resume identity created `{}`",
+        paths.directory().display()
+    );
 }
 
 #[tokio::test]
@@ -494,7 +1848,10 @@ async fn terminal_and_headless_hosts_emit_the_same_canonical_turn() {
         request.runtime.observers.push(observer.clone());
         let host = start(request).await.expect("a hosted session");
         let policy = host.runtime().policy().clone();
-        host.session().run(UserInput::text("same input")).await;
+        host.session()
+            .run(UserInput::text("same input"))
+            .await
+            .expect("the turn runs");
         host.shutdown().await.expect("a clean shutdown");
         runs.push((policy, observer.events()));
     }

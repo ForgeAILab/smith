@@ -19,12 +19,13 @@ completed_at:
   code is original rather than copied from a donor repository.
 - [x] 0.3 Re-approve the revised proposal, ownership boundary, configuration
   mapping, staged provider scope, and runtime-integration delta.
-- [ ] 0.4 Replace committed sibling path dependencies with an exact released
-  semantic version or Git revision once Agent Runtime has a real remote and
-  release reference.
-- [ ] 0.5 Add a git-ignored, uncommitted Cargo `[patch]` workflow for sibling
-  runtime development and prove removing it restores the pinned source without
-  source edits.
+- [ ] 0.4 Tracked by
+  `integrate-stable-session-harness-2026-07-31` tasks 0.3 and 8.1: retain an
+  exact runtime revision in committed manifests and remove the local sibling
+  override only at the coordinated release gate.
+- [ ] 0.5 Tracked by
+  `integrate-stable-session-harness-2026-07-31` task 0.3: use a git-ignored,
+  uncommitted Cargo `[patch]` workflow for sibling runtime development.
 - [ ] 0.6 Recheck public package names immediately before publication; retain
   `smith` as the binary name.
 
@@ -145,18 +146,24 @@ completed_at:
   complete-record writes, bounded records, schema identity, and redaction.
 - [x] 4.3 Prove clean create/list/resume through explicit
   `StartSession::with_id` and rebuild the TUI transcript from shared history.
-- [ ] 4.4 Prove crash-tail recovery by replaying the complete journal into a
-  compatible snapshot or add a shared-runtime checkpoint hook before claiming
-  last-turn crash durability.
-- [ ] 4.5 Store large bounded sidecars by content hash only when the shared
-  canonical event/snapshot retains sufficient attribution.
-- [ ] 4.6 Mark formerly active Smith monitors/children interrupted on resume
-  without restarting them.
-- [ ] 4.7 Consume shared disjoint usage counters and attempt events unchanged;
-  add Smith price references and exact/estimated/unknown cost labels without
-  treating unknown as zero.
-- [ ] 4.8 Add replay fixtures for legacy snapshots, run manifests, provider
-  switches, incomplete JSONL tails, usage, and non-equivalent revision errors.
+- [ ] 4.4 Tracked by
+  `integrate-stable-session-harness-2026-07-31` tasks 4.2 through 4.7: durable
+  execution now uses protected shared-runtime checkpoints rather than guessed
+  reconstruction from the redacted journal.
+- [ ] 4.5 Tracked by
+  `integrate-stable-session-harness-2026-07-31` tasks 6.4 and 6.5: large
+  originals use the attributed session-private artifact contract.
+- [ ] 4.6 Tracked by
+  `integrate-stable-session-harness-2026-07-31` tasks 4.5 and 6.7: resume marks
+  prior ephemeral work interrupted and never restarts it automatically.
+- [ ] 4.7 Add Smith price references and exact/estimated/unknown cost labels
+  without treating unknown as zero. Consumption of shared disjoint attempt
+  events moved to `integrate-stable-session-harness-2026-07-31` tasks 2.1
+  through 2.3.
+- [ ] 4.8 Tracked by
+  `integrate-stable-session-harness-2026-07-31` tasks 4.7, 7.3, and 7.4:
+  recovery and live/replay equivalence fixtures are part of the coordinated
+  checkpoint migration.
 
 ## 5. Client Surfaces
 
@@ -174,8 +181,9 @@ completed_at:
   factory as the TUI.
 - [x] 5.7 Add versioned `json` and newline-delimited `stream-json`; reserve
   stdout for machine output and stderr for diagnostics/progress.
-- [ ] 5.8 Fail closed for headless approval and implement explicit
-  `error|wait|stop` background-exit policy.
+- [ ] 5.8 Implement explicit `error|wait|stop` background-exit policy.
+  Fail-closed headless approval/question behavior moved to
+  `integrate-stable-session-harness-2026-07-31` tasks 3.5 and 7.2.
 
 ## 6. Context Lifetime, Monitor, and Safe-Boundary Orchestration
 
@@ -191,9 +199,10 @@ completed_at:
   transcript exclusion, spend accounting, and no second rebuild after a miss.
 - [ ] 6.4 Implement command/WebSocket monitor sources, bounded spooling,
   process ownership, batching, flood protection, and terminal events.
-- [ ] 6.5 Implement a bounded Smith inbox that displays notifications
-  immediately but presents them to the model only through a new safe execution
-  phase, never by mutating an in-flight stream.
+- [ ] 6.5 Tracked by
+  `integrate-stable-session-harness-2026-07-31` tasks 2.4, 3.7, and 6.7:
+  interaction prompts and child results use bounded queues and parent safe
+  boundaries without mutating an in-flight stream.
 - [ ] 6.6 Add deterministic clock and opt-in, spend-capped live cache tests.
 
 ## 7. Direct Children and Extensions
@@ -216,8 +225,10 @@ completed_at:
   children on parent shutdown and never restarts them on resume).
 - [ ] 7.4 Specify and fixture the bounded framed-JSON extension protocol and
   optional asynchronous TypeScript host.
-- [ ] 7.5 Register tools, providers, skills, MCP, and other abilities through
-  shared runtime contracts/registries rather than Smith-local parallel traits.
+- [ ] 7.5 Tracked by
+  `integrate-stable-session-harness-2026-07-31` tasks 5.1 through 6.7 for
+  built-ins and standard harness components. MCP/subprocess sources remain a
+  separately approved follow-on.
 - [ ] 7.6 Apply project hash trust, declared grants, deterministic ordering,
   timeouts, crash isolation, and absent-Node behavior.
 
@@ -228,10 +239,11 @@ completed_at:
   runtime now enforces composed authorization for tool invocation, use its
   explicit compatibility authority and do not assume unfinished provider,
   activation, or sub-agent enforcement is live.
-- [ ] 8.2 After that upstream security change is approved, implemented, and
-  released, open a coordinated Smith migration for mandatory permissions,
-  authorization-before-approval, provider transport policy, and optional WASM
-  sandbox integration.
+- [ ] 8.2 Tracked by the approved coordinated
+  `integrate-stable-session-harness-2026-07-31` tasks 1.3 through 1.6 and
+  4.1 through 4.6 for prepared authority, approval ordering, and protected
+  execution state. Provider transport policy and optional WASM isolation
+  remain separate follow-ons.
 - [ ] 8.3 Add a Smith-owned embedding example and contract tests with injected
   provider, tools, approval, workspace, stores, configuration, and event
   consumers.
