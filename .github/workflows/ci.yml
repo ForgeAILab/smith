@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  smith:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux · Rust 1.88
+            os: ubuntu-24.04
+            rust: 1.88.0
+            dependency_policy: false
+          - name: macOS · Rust 1.88
+            os: macos-14
+            rust: 1.88.0
+            dependency_policy: false
+          - name: Linux · stable + dependency policy
+            os: ubuntu-24.04
+            rust: stable
+            dependency_policy: true
+
+    steps:
+      - name: Require an exact Agent Runtime source
+        shell: bash
+        env:
+          RUNTIME_REPOSITORY: ${{ vars.AGENT_RUNTIME_REPOSITORY }}
+          RUNTIME_REVISION: ${{ vars.AGENT_RUNTIME_REVISION }}
+        run: |
+          if [[ ! "${RUNTIME_REPOSITORY}" =~ ^[^/]+/[^/]+$ ]]; then
+            echo "::error::Set AGENT_RUNTIME_REPOSITORY to owner/repository."
+            exit 2
+          fi
+          if [[ ! "${RUNTIME_REVISION}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Set AGENT_RUNTIME_REVISION to an exact lowercase 40-character SHA."
+            exit 2
+          fi
+
+      - name: Check out Smith
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: tui
+          persist-credentials: false
+
+      - name: Check out Agent Runtime
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ${{ vars.AGENT_RUNTIME_REPOSITORY }}
+          ref: ${{ vars.AGENT_RUNTIME_REVISION }}
+          token: ${{ secrets.AGENT_RUNTIME_TOKEN || github.token }}
+          path: agent-runtime
+          persist-credentials: false
+
+      - name: Install Linux host dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libdbus-1-dev pkg-config
+
+      - name: Install Rust
+        shell: bash
+        env:
+          RUST_TOOLCHAIN: ${{ matrix.rust }}
+        run: |
+          rustup toolchain install "${RUST_TOOLCHAIN}" \
+            --profile minimal \
+            --component clippy,rustfmt
+          rustup default "${RUST_TOOLCHAIN}"
+
+      - name: Verify the runtime checkout
+        working-directory: agent-runtime
+        shell: bash
+        env:
+          RUNTIME_REVISION: ${{ vars.AGENT_RUNTIME_REVISION }}
+        run: |
+          actual_revision="$(git rev-parse HEAD)"
+          test "${actual_revision}" = "${RUNTIME_REVISION}"
+          test -z "$(git status --porcelain)"
+
+      - name: Run Smith and shared conformance gates
+        working-directory: tui
+        shell: bash
+        env:
+          SMITH_AGENT_RUNTIME_REVISION: ${{ vars.AGENT_RUNTIME_REVISION }}
+        run: bash scripts/ci.sh
+
+      - name: Install cargo-deny
+        if: matrix.dependency_policy
+        working-directory: tui
+        shell: bash
+        run: cargo install cargo-deny --version 0.20.2 --locked
+
+      - name: Check advisories, licenses, bans, and sources
+        if: matrix.dependency_policy
+        working-directory: tui
+        shell: bash
+        run: cargo deny --locked check all

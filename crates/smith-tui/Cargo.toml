@@ -1,0 +1,28 @@
+[package]
+name = "smith-tui"
+description = "The Smith terminal client: application state, key handling, and rendering over the shared agent runtime."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+agent-runtime-core = { workspace = true }
+agent-runtime-registry = { workspace = true }
+crossterm = { workspace = true }
+ratatui = { workspace = true }
+serde_json = { workspace = true }
+smith-host = { workspace = true }
+smith-tools = { workspace = true }
+unicode-width = "0.2"
+
+[dev-dependencies]
+agent-runtime = { workspace = true }
+agent-runtime-testkit = { workspace = true }
+futures-util = { workspace = true }
+tokio = { workspace = true }

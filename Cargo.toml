@@ -1,0 +1,69 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/smith-config",
+    "crates/smith-host",
+    "crates/smith-runtime",
+    "crates/smith-tools",
+    "crates/smith-tui",
+    "crates/smith-cli",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/smith-agent/smith"
+authors = ["Smith contributors"]
+
+[workspace.dependencies]
+smith-config = { path = "crates/smith-config", version = "0.0.1" }
+smith-host = { path = "crates/smith-host", version = "0.0.1" }
+smith-runtime = { path = "crates/smith-runtime", version = "0.0.1" }
+smith-tools = { path = "crates/smith-tools", version = "0.0.1" }
+smith-tui = { path = "crates/smith-tui", version = "0.0.1" }
+
+# The shared runtime. Smith depends on it one-way: the runtime never depends
+# back on Smith. Local co-development keeps the adjacent checkout, while the
+# exact package version prevents accidentally consuming a different published
+# API line. The consumer-conformance suite is the compatibility gate for source
+# changes within that line; release packaging replaces `path` with the tested
+# source revision.
+agent-runtime = { path = "../agent-runtime/crates/agent-runtime", version = "=0.1.0" }
+agent-runtime-core = { path = "../agent-runtime/crates/agent-runtime-core", version = "=0.1.0" }
+agent-runtime-registry = { path = "../agent-runtime/crates/agent-runtime-registry", version = "=0.1.0" }
+agent-runtime-testkit = { path = "../agent-runtime/crates/agent-runtime-testkit", version = "=0.1.0" }
+
+anyhow = "1"
+async-trait = "0.1"
+crossterm = { version = "0.29", features = ["event-stream"] }
+dirs = "6"
+futures-core = "0.3"
+futures-util = "0.3"
+keyring = { version = "3", default-features = false, features = ["apple-native", "sync-secret-service"] }
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29", "layout-cache", "underline-color"] }
+# The production HTTP transport. `rustls` keeps the TLS stack in Rust so the
+# workspace stays free of an OpenSSL build dependency.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "http2", "charset"] }
+rustix = { version = "1.1", features = ["process"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "process", "signal"] }
+tokio-util = { version = "0.7", features = ["io"] }
+toml = "0.9"
+toml_edit = "0.23"
+tracing = "0.1"
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

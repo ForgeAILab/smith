@@ -1,0 +1,22 @@
+[package]
+name = "smith-host"
+description = "Smith's host-policy layer over the shared agent runtime: interactive approval and the project workspace boundary."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+agent-runtime-core = { workspace = true }
+async-trait = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile = "3"

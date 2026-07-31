@@ -1,0 +1,791 @@
+//! The transcript model.
+//!
+//! The transcript is a list of [`Block`]s built by folding the runtime's event
+//! stream. It holds *what happened*, never how it is drawn — wrapping, width,
+//! and scrolling belong to the renderer, so a resize cannot corrupt history.
+//!
+//! Two behaviors matter more than they look:
+//!
+//! - **Text deltas append to the open assistant block** rather than creating a
+//!   block each. A provider that streams token-by-token would otherwise produce
+//!   thousands of blocks for one reply.
+//! - **Background notices never merge into an assistant block.** A monitor line
+//!   arriving mid-stream gets its own block, so the transcript stays a faithful
+//!   record of the conversation rather than a splice of unrelated output.
+
+use agent_runtime_core::content::{ContentPart, Message, Role};
+use serde_json::Value;
+use smith_tools::{ToolCallDisplay, project_tool_call_display};
+
+pub(crate) const MAX_LOCAL_RESULT_BYTES: usize = 512 * 1024;
+const MAX_LOCAL_RESULT_LINES: usize = 4_096;
+const MAX_LOCAL_RESULT_TITLE_CHARS: usize = 96;
+
+/// Semantic state of a local command result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalResultState {
+    /// Informational output.
+    Info,
+    /// A successful command with no matching data.
+    Empty,
+    /// A local command that could not produce its result.
+    Error,
+}
+
+/// How a tool call ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolStatus {
+    /// Requested, and still running.
+    Running,
+    /// Completed successfully.
+    Ok,
+    /// Completed with an error.
+    Failed,
+    /// Denied by the approval gate.
+    Denied,
+}
+
+impl ToolStatus {
+    /// The word rendered beside the tool row. Paired with color, never
+    /// replaced by it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Ok => "ok",
+            Self::Failed => "failed",
+            Self::Denied => "denied",
+        }
+    }
+}
+
+/// One addressable unit of transcript history.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Block {
+    /// A message the user sent.
+    User {
+        /// The message text.
+        text: String,
+    },
+    /// Model output. `open` marks the block currently receiving deltas.
+    Assistant {
+        /// The accumulated text.
+        text: String,
+        /// Whether more deltas may still arrive.
+        open: bool,
+    },
+    /// Model reasoning.
+    Reasoning {
+        /// The accumulated reasoning text.
+        text: String,
+        /// Whether the provider redacted it.
+        redacted: bool,
+        /// Whether more deltas may still arrive.
+        open: bool,
+    },
+    /// A tool call and its outcome.
+    Tool {
+        /// The tool-call id, used to match the completion event.
+        call_id: String,
+        /// The tool name.
+        name: String,
+        /// Reviewed built-in target metadata, when a safe projector exists.
+        display: Option<ToolCallDisplay>,
+        /// Value-free fallback derived from protected argument keys.
+        protected_summary: String,
+        /// The current status.
+        status: ToolStatus,
+    },
+    /// A structured error.
+    Error {
+        /// The redacted message.
+        message: String,
+    },
+    /// A background notification, or a runtime notice such as a provider
+    /// change.
+    Notice {
+        /// The source, e.g. a monitor name or `provider`.
+        source: String,
+        /// The notice text.
+        text: String,
+    },
+    /// Read-only host information shown locally and excluded from canonical
+    /// provider conversation history.
+    LocalResult {
+        /// Command or result title.
+        title: String,
+        /// Bounded display content.
+        content: String,
+        /// Text-visible result state.
+        state: LocalResultState,
+    },
+}
+
+/// The ordered transcript.
+#[derive(Debug, Clone, Default)]
+pub struct Transcript {
+    blocks: Vec<Block>,
+}
+
+impl Transcript {
+    /// An empty transcript.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The blocks, oldest first.
+    pub fn blocks(&self) -> &[Block] {
+        &self.blocks
+    }
+
+    /// The number of blocks.
+    pub fn len(&self) -> usize {
+        self.blocks.len()
+    }
+
+    /// Whether nothing has been recorded yet.
+    pub fn is_empty(&self) -> bool {
+        self.blocks.is_empty()
+    }
+
+    /// Appends a user message.
+    pub fn push_user(&mut self, text: impl Into<String>) {
+        self.close_open();
+        self.blocks.push(Block::User { text: text.into() });
+    }
+
+    /// Appends a notice, which never merges with adjacent blocks.
+    pub fn push_notice(&mut self, source: impl Into<String>, text: impl Into<String>) {
+        self.blocks.push(Block::Notice {
+            source: source.into(),
+            text: text.into(),
+        });
+    }
+
+    /// Appends an error.
+    pub fn push_error(&mut self, message: impl Into<String>) {
+        self.close_open();
+        self.blocks.push(Block::Error {
+            message: message.into(),
+        });
+    }
+
+    /// Appends bounded local command output without representing it as model
+    /// conversation history.
+    pub fn push_local_result(
+        &mut self,
+        title: impl Into<String>,
+        content: impl Into<String>,
+        state: LocalResultState,
+    ) {
+        self.close_open();
+        let title = title
+            .into()
+            .replace(['\r', '\n'], " ")
+            .chars()
+            .take(MAX_LOCAL_RESULT_TITLE_CHARS)
+            .collect();
+        let content = content.into();
+        let (content, state) = if content.trim().is_empty() {
+            ("No output.".to_owned(), LocalResultState::Empty)
+        } else {
+            (bound_local_result(content), state)
+        };
+        self.blocks.push(Block::LocalResult {
+            title,
+            content,
+            state,
+        });
+    }
+
+    /// Appends assistant text, extending the open assistant block if there is
+    /// one.
+    pub fn push_text_delta(&mut self, delta: &str) {
+        if let Some(Block::Assistant { text, open: true }) = self.blocks.last_mut() {
+            text.push_str(delta);
+            return;
+        }
+        self.close_open();
+        self.blocks.push(Block::Assistant {
+            text: delta.to_owned(),
+            open: true,
+        });
+    }
+
+    /// Appends reasoning text, extending the open reasoning block if there is
+    /// one and its redaction flag matches.
+    pub fn push_reasoning_delta(&mut self, delta: &str, delta_redacted: bool) {
+        if let Some(Block::Reasoning {
+            text,
+            redacted,
+            open: true,
+        }) = self.blocks.last_mut()
+            && *redacted == delta_redacted
+        {
+            text.push_str(delta);
+            return;
+        }
+        self.close_open();
+        self.blocks.push(Block::Reasoning {
+            text: delta.to_owned(),
+            redacted: delta_redacted,
+            open: true,
+        });
+    }
+
+    /// Records a requested tool call.
+    ///
+    /// Runtime events keep argument values protected by default. A caller with
+    /// trusted canonical arguments may supply them for the explicit built-in
+    /// projector; arbitrary values are never summarized generically.
+    pub fn push_tool_call(
+        &mut self,
+        call_id: impl Into<String>,
+        name: &str,
+        arguments: Option<&Value>,
+        argument_keys: &[String],
+    ) {
+        self.close_open();
+        self.blocks.push(Block::Tool {
+            call_id: call_id.into(),
+            name: name.to_owned(),
+            display: arguments.and_then(|arguments| project_tool_call_display(name, arguments)),
+            protected_summary: summarize_protected_arguments(argument_keys),
+            status: ToolStatus::Running,
+        });
+    }
+
+    /// Adds a reviewed local display projection to an existing live call.
+    ///
+    /// This is deliberately separate from [`RuntimeEvent`](agent_runtime_core::event::RuntimeEvent)
+    /// folding so protected event and journal payloads do not need to carry
+    /// argument values.
+    pub fn set_tool_display(&mut self, call_id: &str, display: ToolCallDisplay) {
+        for block in self.blocks.iter_mut().rev() {
+            if let Block::Tool {
+                call_id: id,
+                display: slot,
+                ..
+            } = block
+                && id == call_id
+            {
+                *slot = Some(display);
+                return;
+            }
+        }
+    }
+
+    /// Marks a tool call finished. Unknown ids are ignored rather than
+    /// fabricating a block for a call the transcript never saw.
+    pub fn complete_tool_call(&mut self, call_id: &str, status: ToolStatus) {
+        for block in self.blocks.iter_mut().rev() {
+            if let Block::Tool {
+                call_id: id,
+                status: slot,
+                ..
+            } = block
+                && id == call_id
+            {
+                *slot = status;
+                return;
+            }
+        }
+    }
+
+    /// Marks the most recent still-running call of `name` finished.
+    ///
+    /// The approval gate denies by tool name — it fires before the runtime
+    /// emits a completion — so the row cannot be matched by call id.
+    pub fn complete_tool_call_by_name(&mut self, name: &str, status: ToolStatus) {
+        for block in self.blocks.iter_mut().rev() {
+            if let Block::Tool {
+                name: candidate,
+                status: slot,
+                ..
+            } = block
+                && candidate == name
+                && *slot == ToolStatus::Running
+            {
+                *slot = status;
+                return;
+            }
+        }
+    }
+
+    /// Closes any block still receiving deltas. Called at turn boundaries so a
+    /// later delta starts a new block instead of extending a finished reply.
+    pub fn close_open(&mut self) {
+        for block in self.blocks.iter_mut().rev() {
+            if let Block::Assistant { open, .. } | Block::Reasoning { open, .. } = block {
+                *open = false;
+            }
+        }
+    }
+
+    /// Replaces the transcript with one rebuilt from canonical history.
+    ///
+    /// Used when resuming a session: history is the source of truth, and any
+    /// live-only blocks (notices, in-flight tools) are intentionally dropped.
+    pub fn replace_from_history(&mut self, history: &[Message]) {
+        self.blocks.clear();
+        for message in history {
+            match message.role {
+                Role::User => self.push_user(message.joined_text()),
+                Role::System => {}
+                Role::Assistant => {
+                    for part in &message.content {
+                        match part {
+                            ContentPart::Text { text } => {
+                                self.blocks.push(Block::Assistant {
+                                    text: text.clone(),
+                                    open: false,
+                                });
+                            }
+                            ContentPart::Reasoning { text, redacted, .. } => {
+                                self.blocks.push(Block::Reasoning {
+                                    text: text.clone(),
+                                    redacted: *redacted,
+                                    open: false,
+                                });
+                            }
+                            ContentPart::ToolCall(call) => {
+                                let argument_keys = argument_keys(&call.arguments);
+                                self.blocks.push(Block::Tool {
+                                    call_id: call.id.as_str().to_owned(),
+                                    name: call.name.clone(),
+                                    display: project_tool_call_display(&call.name, &call.arguments),
+                                    protected_summary: summarize_protected_arguments(
+                                        &argument_keys,
+                                    ),
+                                    // History records the call; the matching
+                                    // result below supplies the outcome.
+                                    status: ToolStatus::Running,
+                                });
+                            }
+                            // An assistant message does not carry results;
+                            // those arrive under the tool role below.
+                            ContentPart::Image { .. } | ContentPart::ToolResult(_) => {}
+                        }
+                    }
+                }
+                Role::Tool => {
+                    for part in &message.content {
+                        if let ContentPart::ToolResult(result) = part {
+                            let status = if result.is_error {
+                                ToolStatus::Failed
+                            } else {
+                                ToolStatus::Ok
+                            };
+                            self.complete_tool_call(result.call_id.as_str(), status);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn bound_local_result(content: String) -> String {
+    let mut bounded = String::with_capacity(content.len().min(MAX_LOCAL_RESULT_BYTES));
+    let mut lines = 1;
+    let mut truncated = false;
+    for character in content.chars() {
+        if bounded.len() + character.len_utf8() > MAX_LOCAL_RESULT_BYTES
+            || (character == '\n' && lines >= MAX_LOCAL_RESULT_LINES)
+        {
+            truncated = true;
+            break;
+        }
+        bounded.push(character);
+        if character == '\n' {
+            lines += 1;
+        }
+    }
+    if truncated {
+        if !bounded.ends_with('\n') {
+            bounded.push('\n');
+        }
+        bounded.push_str("[local result truncated at the display limit]");
+    }
+    bounded
+}
+
+/// A stable, value-free summary for the runtime's default redacted event.
+fn summarize_protected_arguments(argument_keys: &[String]) -> String {
+    if argument_keys.is_empty() {
+        "values protected".to_owned()
+    } else {
+        const MAX_KEYS: usize = 6;
+        let mut keys = argument_keys
+            .iter()
+            .take(MAX_KEYS)
+            .map(|key| {
+                let normalized = key
+                    .chars()
+                    .take(32)
+                    .map(|character| {
+                        if character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.')
+                        {
+                            character
+                        } else {
+                            '_'
+                        }
+                    })
+                    .collect::<String>();
+                if normalized.is_empty() {
+                    "?".to_owned()
+                } else {
+                    normalized
+                }
+            })
+            .collect::<Vec<_>>();
+        if argument_keys.len() > MAX_KEYS {
+            keys.push("…".to_owned());
+        }
+        format!("{} · values protected", keys.join(", "))
+    }
+}
+
+/// Extracts the same sorted top-level key view the runtime emits.
+fn argument_keys(arguments: &Value) -> Vec<String> {
+    let mut keys = arguments
+        .as_object()
+        .map(|map| map.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    keys.sort();
+    keys
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_runtime_core::content::{ToolCall, ToolResultBlock};
+    use agent_runtime_core::ids::ToolCallId;
+    use serde_json::json;
+
+    #[test]
+    fn streamed_deltas_accumulate_into_one_block() {
+        let mut transcript = Transcript::new();
+        for delta in ["The ", "retry ", "policy"] {
+            transcript.push_text_delta(delta);
+        }
+        assert_eq!(transcript.len(), 1);
+        assert_eq!(
+            transcript.blocks()[0],
+            Block::Assistant {
+                text: "The retry policy".into(),
+                open: true
+            }
+        );
+    }
+
+    #[test]
+    fn a_closed_block_does_not_absorb_the_next_reply() {
+        let mut transcript = Transcript::new();
+        transcript.push_text_delta("first");
+        transcript.close_open();
+        transcript.push_text_delta("second");
+        assert_eq!(transcript.len(), 2);
+    }
+
+    #[test]
+    fn a_notice_never_splices_into_a_streaming_reply() {
+        let mut transcript = Transcript::new();
+        transcript.push_text_delta("analyzing");
+        transcript.push_notice("monitor:build", "error[E0433]: failed to resolve");
+        transcript.push_text_delta(" the failure");
+
+        // The notice stands alone, and the reply resumes in a fresh block
+        // rather than having the monitor line spliced into its text.
+        assert_eq!(transcript.len(), 3);
+        assert!(matches!(
+            transcript.blocks()[0],
+            Block::Assistant { open: false, .. }
+        ));
+        assert!(matches!(transcript.blocks()[1], Block::Notice { .. }));
+        match &transcript.blocks()[2] {
+            Block::Assistant { text, .. } => assert_eq!(text, " the failure"),
+            other => panic!("expected an assistant block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn local_results_are_bounded_and_never_merge_with_model_output() {
+        let mut transcript = Transcript::new();
+        transcript.push_text_delta("answer");
+        transcript.push_local_result(
+            "diff\ninjected",
+            "x".repeat(MAX_LOCAL_RESULT_BYTES + 16),
+            LocalResultState::Info,
+        );
+        transcript.push_text_delta("next");
+
+        assert_eq!(transcript.len(), 3);
+        match &transcript.blocks()[1] {
+            Block::LocalResult { title, content, .. } => {
+                assert_eq!(title, "diff injected");
+                assert!(content.ends_with("[local result truncated at the display limit]"));
+            }
+            other => panic!("expected a local result, got {other:?}"),
+        }
+        assert!(matches!(
+            transcript.blocks()[2],
+            Block::Assistant { open: true, .. }
+        ));
+    }
+
+    #[test]
+    fn reasoning_and_text_occupy_separate_blocks() {
+        let mut transcript = Transcript::new();
+        transcript.push_reasoning_delta("considering", false);
+        transcript.push_text_delta("answer");
+        assert_eq!(transcript.len(), 2);
+        assert!(matches!(transcript.blocks()[0], Block::Reasoning { .. }));
+    }
+
+    #[test]
+    fn redacted_reasoning_starts_a_new_block() {
+        let mut transcript = Transcript::new();
+        transcript.push_reasoning_delta("visible", false);
+        transcript.push_reasoning_delta("hidden", true);
+        assert_eq!(transcript.len(), 2);
+    }
+
+    #[test]
+    fn a_completion_updates_the_matching_tool_row() {
+        let mut transcript = Transcript::new();
+        transcript.push_tool_call(
+            "c1",
+            "read",
+            Some(&json!({"path": "src/retry.rs"})),
+            &["path".into()],
+        );
+        transcript.push_tool_call(
+            "c2",
+            "shell",
+            Some(&json!({"command": "cargo test"})),
+            &["command".into()],
+        );
+        transcript.complete_tool_call("c1", ToolStatus::Ok);
+        transcript.complete_tool_call("c2", ToolStatus::Failed);
+
+        match &transcript.blocks()[0] {
+            Block::Tool {
+                display, status, ..
+            } => {
+                assert_eq!(
+                    display.as_ref().map(ToolCallDisplay::invocation),
+                    Some("Read(src/retry.rs)".to_owned())
+                );
+                assert_eq!(*status, ToolStatus::Ok);
+            }
+            other => panic!("expected a tool block, got {other:?}"),
+        }
+        match &transcript.blocks()[1] {
+            Block::Tool { status, .. } => assert_eq!(*status, ToolStatus::Failed),
+            other => panic!("expected a tool block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn completing_an_unknown_call_changes_nothing() {
+        let mut transcript = Transcript::new();
+        transcript.push_tool_call(
+            "c1",
+            "read",
+            Some(&json!({"path": "a.rs"})),
+            &["path".into()],
+        );
+        let before = transcript.blocks().to_vec();
+        transcript.complete_tool_call("nonexistent", ToolStatus::Ok);
+        assert_eq!(transcript.blocks(), before.as_slice());
+    }
+
+    #[test]
+    fn protected_arguments_show_keys_without_values() {
+        let mut transcript = Transcript::new();
+        transcript.push_tool_call("c1", "shell", None, &["command".into(), "cwd".into()]);
+
+        match &transcript.blocks()[0] {
+            Block::Tool {
+                display,
+                protected_summary,
+                ..
+            } => {
+                assert!(display.is_none());
+                assert_eq!(protected_summary, "command, cwd · values protected");
+                assert!(!protected_summary.contains("cargo test"));
+            }
+            other => panic!("expected a tool block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn even_explicit_event_arguments_use_only_the_reviewed_projector() {
+        let mut transcript = Transcript::new();
+        transcript.push_tool_call(
+            "c1",
+            "shell",
+            Some(&json!({
+                "command": "printf TOP_SECRET_COMMAND",
+                "cwd": "crates/smith-cli",
+                "unknown": "TOP_SECRET_UNKNOWN"
+            })),
+            &["command".into(), "cwd".into(), "unknown".into()],
+        );
+
+        let Block::Tool { display, .. } = &transcript.blocks()[0] else {
+            panic!("expected a tool block");
+        };
+        let invocation = display.as_ref().expect("safe projection").invocation();
+        assert_eq!(invocation, "Shell(crates/smith-cli)");
+        assert!(!invocation.contains("TOP_SECRET"));
+    }
+
+    #[test]
+    fn history_replay_reconstructs_calls_with_their_outcomes() {
+        let history = vec![
+            Message::user("read the retry policy"),
+            Message::assistant(vec![
+                ContentPart::text("Looking."),
+                ContentPart::ToolCall(ToolCall {
+                    id: ToolCallId::new("c1"),
+                    name: "read".into(),
+                    arguments: json!({"path": "src/retry.rs"}),
+                }),
+            ]),
+            Message::tool_result(ToolResultBlock {
+                call_id: ToolCallId::new("c1"),
+                name: "read".into(),
+                content: vec![ContentPart::text("fn retry() {}")],
+                is_error: false,
+            }),
+        ];
+
+        let mut transcript = Transcript::new();
+        transcript.push_notice("stale", "dropped on replay");
+        transcript.push_local_result("status", "model: old", LocalResultState::Info);
+        transcript.replace_from_history(&history);
+
+        assert_eq!(transcript.len(), 3);
+        assert!(matches!(transcript.blocks()[0], Block::User { .. }));
+        match &transcript.blocks()[2] {
+            Block::Tool {
+                status,
+                name,
+                display,
+                protected_summary,
+                ..
+            } => {
+                assert_eq!(name, "read");
+                assert_eq!(*status, ToolStatus::Ok);
+                assert_eq!(
+                    display.as_ref().map(ToolCallDisplay::invocation),
+                    Some("Read(src/retry.rs)".to_owned())
+                );
+                assert_eq!(protected_summary, "path · values protected");
+            }
+            other => panic!("expected a tool block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn live_enrichment_and_history_replay_have_built_in_and_unknown_parity() {
+        let cases = [
+            (
+                "read",
+                json!({"path": "src/lib.rs", "offset": 4, "limit": 2}),
+                Some("Read(src/lib.rs · lines 4–5)"),
+            ),
+            (
+                "list",
+                json!({"recursive": true}),
+                Some("List(. · recursive)"),
+            ),
+            (
+                "search",
+                json!({"pattern": "TOP_SECRET_PATTERN", "path": "crates"}),
+                Some("Search(crates)"),
+            ),
+            (
+                "edit",
+                json!({
+                    "path": "src/lib.rs",
+                    "old_string": "TOP_SECRET_OLD",
+                    "new_string": "TOP_SECRET_NEW"
+                }),
+                Some("Edit(src/lib.rs)"),
+            ),
+            (
+                "shell",
+                json!({"command": "printf TOP_SECRET_COMMAND", "cwd": "crates"}),
+                Some("Shell(crates)"),
+            ),
+            ("third_party", json!({"path": "TOP_SECRET_UNKNOWN"}), None),
+        ];
+
+        for (index, (name, arguments, expected)) in cases.into_iter().enumerate() {
+            let call_id = format!("call-{index}");
+            let keys = argument_keys(&arguments);
+            let mut live = Transcript::new();
+            live.push_tool_call(&call_id, name, None, &keys);
+            if let Some(display) = project_tool_call_display(name, &arguments) {
+                live.set_tool_display(&call_id, display);
+            }
+            live.complete_tool_call(&call_id, ToolStatus::Ok);
+
+            let history = vec![
+                Message::assistant(vec![ContentPart::ToolCall(ToolCall {
+                    id: ToolCallId::new(&call_id),
+                    name: name.to_owned(),
+                    arguments: arguments.clone(),
+                })]),
+                Message::tool_result(ToolResultBlock {
+                    call_id: ToolCallId::new(&call_id),
+                    name: name.to_owned(),
+                    content: vec![ContentPart::text("TOP_SECRET_RESULT")],
+                    is_error: false,
+                }),
+            ];
+            let mut replay = Transcript::new();
+            replay.replace_from_history(&history);
+
+            let (
+                Block::Tool {
+                    display: live_display,
+                    protected_summary: live_fallback,
+                    status: live_status,
+                    ..
+                },
+                Block::Tool {
+                    display: replay_display,
+                    protected_summary: replay_fallback,
+                    status: replay_status,
+                    ..
+                },
+            ) = (&live.blocks()[0], &replay.blocks()[0])
+            else {
+                panic!("expected matching tool blocks for {name}");
+            };
+            assert_eq!(live_display, replay_display, "{name}");
+            assert_eq!(live_fallback, replay_fallback, "{name}");
+            assert_eq!(live_status, replay_status, "{name}");
+            assert_eq!(
+                live_display.as_ref().map(ToolCallDisplay::invocation),
+                expected.map(str::to_owned),
+                "{name}"
+            );
+            if let Some(display) = live_display {
+                let invocation = display.invocation();
+                assert!(!invocation.contains("TOP_SECRET"), "{invocation}");
+            }
+        }
+    }
+
+    #[test]
+    fn system_messages_stay_out_of_the_transcript() {
+        let mut transcript = Transcript::new();
+        transcript.replace_from_history(&[Message::system("be concise"), Message::user("hi")]);
+        assert_eq!(transcript.len(), 1);
+        assert!(matches!(transcript.blocks()[0], Block::User { .. }));
+    }
+}

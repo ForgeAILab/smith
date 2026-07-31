@@ -1,0 +1,12 @@
+{
+  "change_id": "update-smith-interaction-model",
+  "change_ref": "update-smith-interaction-model-2026-07-27",
+  "created_at": "2026-07-27T04:52:54Z",
+  "updated_at": "2026-07-27T05:50:19Z",
+  "completed_at": "2026-07-27T05:50:19Z",
+  "status": "proposed",
+  "depends_on": [
+    "add-smith-agent-harness-2026-07-23",
+    "add-smith-slash-commands-2026-07-26"
+  ]
+}

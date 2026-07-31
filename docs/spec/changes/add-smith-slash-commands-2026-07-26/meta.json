@@ -1,0 +1,10 @@
+{
+  "change_id": "add-smith-slash-commands",
+  "change_ref": "add-smith-slash-commands-2026-07-26",
+  "created_at": "2026-07-27T02:57:00Z",
+  "updated_at": "2026-07-28T16:19:23Z",
+  "completed_at": "2026-07-28T16:19:23Z",
+  "status": "completed",
+  "depends_on": [],
+  "implementation_started_at": "2026-07-27T03:37:28Z"
+}

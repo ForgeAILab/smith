@@ -1,0 +1,6 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Local tooling caches — not part of the project
+.codegraph/

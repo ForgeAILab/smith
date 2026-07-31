@@ -1,0 +1,287 @@
+# Smith
+
+Smith is a terminal-first coding agent: a TUI and a non-interactive `-p` mode
+over a shared, provider-neutral agent runtime.
+
+## Where the code lives
+
+Smith consumes [`../agent-runtime`](../agent-runtime), which owns reusable
+**mechanism** — provider adapters, the direct provider/tool loop, versioned
+events, disjoint usage accounting, cancellation, and deterministic testing.
+The dependency is one-way: the runtime never depends on Smith.
+
+This repository owns Smith's **policy** — the parts a product must decide for
+itself, which the runtime deliberately ships as traits only:
+
+| Crate | Owns |
+| --- | --- |
+| `smith-config` | Layered configuration, provenance, credential references, and project trust |
+| `smith-host` | The interactive approval gate and the project workspace boundary |
+| `smith-runtime` | The single runtime factory, production HTTP transport, snapshots, and event journal |
+| `smith-tools` | The coding tools: `read`, `list`, `search`, `edit`, `shell` |
+| `smith-tui` | Transcript, status, composer, theme, key map, and rendering |
+| `smith-cli` | The `smith` binary, terminal host loop, and headless output contracts |
+
+### Tools
+
+Every path resolves through the session's workspace, so containment is enforced
+in one place rather than re-implemented per tool. `edit` and `shell` declare
+write and process-spawn effects, which is what routes them through approval;
+the read-only three run without asking. Reads, listings, searches, and command
+output are all bounded — a tool that can return unbounded text can exhaust a
+context window in one call.
+
+`shell` puts each command in its own process group and signals the group, so a
+build script's background watcher does not outlive the invocation.
+
+## Running it
+
+Smith requires Rust 1.88 or newer.
+
+```sh
+cargo run -p smith-cli --                         # interactive TUI
+cargo run -p smith-cli -- setup                   # guided provider/model setup
+cargo run -p smith-cli -- -p "explain this repo" # one headless turn
+cargo run -p smith-cli -- sessions list
+cargo run -p smith-cli -- config explain model
+cargo test --workspace
+cargo clippy --workspace --all-targets
+```
+
+Smith discovers the nearest `.smith/config.toml`, then layers user,
+project-local, profile, `SMITH_*`, and CLI settings.
+
+### First run and ongoing setup
+
+A plain interactive `smith` inspects configuration before entering raw terminal
+mode. A genuinely empty install opens guided setup; a partial or malformed
+configuration is reported as invalid and is never overwritten. Headless,
+piped, machine-output, session-list, and config-explain commands remain
+non-interactive and non-mutating.
+
+The first-run GLM path configures Z.AI's Coding Plan endpoint and `glm-4.7`,
+including Smith's versioned model limits and compatibility policy for providers
+that deliver a successful final answer only as reasoning content. Ongoing
+changes use the same reusable surface:
+
+```sh
+smith setup
+smith setup add-provider
+smith setup add-model
+smith setup add-model --provider openrouter
+smith setup credential --provider openrouter
+```
+
+The generic provider path asks for a stable provider name, OpenAI-compatible
+base URL, credential reference, exact model ID, explicit model limits, response
+behavior, and whether the new pair becomes the default. `add-model` adds a
+model beneath an existing provider without redeclaring that provider.
+
+API-key input is masked. Authentication offers three explicit storage models:
+
+- Keychain / Secret Service is the default and gives the strongest at-rest
+  protection, but the operating system may ask for access again—especially for
+  a locally rebuilt binary.
+- An environment reference such as `env:OPENROUTER_API_KEY` leaves storage to
+  the shell or an external secret manager. Smith stores only the variable name.
+- “Store in config (no prompts)” writes `api_key = "…"` only to the owner-only
+  user file `~/.smith/config.toml`. This is self-contained and avoids
+  credential-service prompts, but it is plaintext: other processes running as
+  the same OS user and backups can read it.
+
+The local-config choice is never an automatic fallback. Setup warns before
+accepting it, masks the input, renders `api_key = [redacted]` during review,
+and publishes the config through a mode-`0600` atomic replace. Project and
+project-local files cannot contain `api_key`; ordinary startup also refuses an
+inline-key user config that is a symlink, non-regular, owned by another user,
+or group/world accessible.
+
+Before committing, setup shows the secret-free change and exact destination,
+then performs a local factory preflight. A failed preflight restores the exact
+prior config bytes and any Keychain value it replaced. Runtime credential
+reads have a 30-second startup boundary, so a hidden or unanswered platform
+unlock prompt fails with an `env:<VAR>` recovery hint instead of hanging.
+`smith setup credential --provider <name>` changes only that existing
+provider's credential source; it does not rewrite its endpoint, models,
+limits, profiles, or default.
+
+Encrypted `file:` references are reserved for a future externally unlocked
+encrypted-store backend; Smith does not silently treat a plaintext file as
+encrypted storage. When rotating a key, revoke the old key at the provider,
+rerun credential setup (or carefully replace the user-only `api_key`), verify
+`chmod 600 ~/.smith/config.toml`, and account for retained backup copies.
+
+For local development, a minimal offline smoke configuration is:
+
+```toml
+default_profile = "dev"
+
+[profiles.dev]
+provider = "local"
+model = "example-model"
+
+[providers.local]
+kind = "fake"
+
+[models."local/example-model"]
+context_tokens = 128000
+max_input_tokens = 124000
+max_output_tokens = 4096
+```
+
+Inside the idle TUI, `Ctrl+P` opens the command palette. `/model`, `/provider`,
+`/profile`, and `/resume` need no argument: each opens a searchable local list
+with current and unavailable states. Explicit values remain validated
+shortcuts. Model rows are always provider-qualified, so selecting a model
+applies its provider/model pair atomically; selecting a provider with several
+models cascades into that provider's model list.
+
+`smith --resume` likewise opens a project-session picker before any host is
+constructed. `smith --resume <session-id>` remains the explicit form, while
+headless use without an ID is refused with a `smith sessions list` hint.
+Session rows include the full ID, updated time, turn count, provider/model, and
+a bounded preview when known.
+
+For runtime changes Smith restores the normal terminal, saves the current
+session, re-runs complete preflight through `smith-runtime`, and resumes the
+same identity. It never swaps an immutable runtime during a turn and the local
+pickers never contact a provider.
+
+### Provider model catalogs
+
+`/model` is not limited to model IDs copied into TOML. Smith ships a reviewed,
+generated Models.dev snapshot and augments configured providers only when an
+available OpenAI-compatible adapter has one of these exact normalized
+endpoints:
+
+| Configured endpoint | Catalog |
+| --- | --- |
+| `https://openrouter.ai/api/v1` | Models.dev `openrouter` |
+| `https://api.z.ai/api/coding/paas/v4` | Models.dev `zai-coding-plan` |
+
+The configured provider name remains authoritative. A provider named `router`
+at the OpenRouter endpoint therefore exposes choices such as
+`router/openai/gpt-5.2`; a provider merely named `openrouter` at another
+endpoint inherits nothing. Catalog data never creates a provider or imports
+Models.dev endpoint, package, environment, header, or credential settings.
+
+Startup uses a schema-validated last-good cache at
+`~/.smith/cache/models-dev-v1.json`, falling back to the embedded seed when the
+cache is absent, corrupt, truncated, oversized, or from the wrong origin. A
+stale snapshot schedules a bounded credential-free refresh from exactly
+`https://models.dev/api.json`; redirects, timeouts, bad status, responses over
+8 MiB, and invalid metadata leave the current snapshot untouched. Publication
+is atomic, and a successful refresh is visible only to a later host rebuild.
+Deleting the cache safely restores the embedded seed.
+
+Catalog rows show display name, provider-qualified ID, enforceable limits,
+capabilities, revision/age, and `advertised` provenance. Deprecated rows are
+omitted; entries without text output, tool calling, valid limits, or a usable
+input budget remain searchable but disabled with a reason. Advertisement is
+not entitlement—the provider can still reject a model for account, plan,
+region, or rollout reasons.
+
+Explicit `[models."<provider>/<model>"]` fields override catalog fields
+independently. Smith's embedded trusted GLM metadata remains above the cached
+catalog, and picker selection plus runtime preflight use the same frozen
+snapshot so a background refresh cannot change an active session underneath
+it.
+
+For a real endpoint, set the provider kind to `openai-compatible`, add its
+`base_url`, and choose exactly one credential source. A reference keeps the
+key outside the config:
+
+```toml
+[providers.remote]
+kind = "openai-compatible"
+base_url = "https://provider.example/v1"
+credential = "env:PROVIDER_API_KEY"
+
+[providers.remote.response]
+reasoning_only = "text" # only when this provider needs the compatibility policy
+```
+
+The explicit no-prompt user-config form is:
+
+```toml
+# ~/.smith/config.toml only; never a project .smith/config*.toml
+[providers.remote]
+kind = "openai-compatible"
+base_url = "https://provider.example/v1"
+api_key = "replace-with-the-provider-key"
+```
+
+The selected model must also resolve accurate `context_tokens`,
+`max_input_tokens`, and `max_output_tokens` from explicit
+`[models."<provider>/<model>"]` fields, trusted embedded metadata, or a
+validated bound catalog. Smith refuses to guess missing limits.
+
+### Live provider smoke test
+
+The ignored `smith-cli` live test exercises the installed process, production
+HTTP transport, streaming adapter, real `read` tool, continuation request,
+provider-reported usage, clean shutdown, and credential redaction. It disables
+persistence, allows no retries, permits two tool rounds, caps each provider
+response at 2,048 tokens, and has a 150-second outer deadline.
+
+For a Z.AI Coding Plan account, export the API key as
+`SMITH_LIVE_API_KEY` through a secret-safe shell or credential tool, then run:
+
+```sh
+SMITH_LIVE_BASE_URL=https://api.z.ai/api/coding/paas/v4 \
+SMITH_LIVE_MODEL=glm-4.7 \
+SMITH_LIVE_CONTEXT_TOKENS=200000 \
+SMITH_LIVE_MAX_INPUT_TOKENS=196000 \
+SMITH_LIVE_MAX_OUTPUT_TOKENS=131072 \
+cargo test -p smith-cli --test live_provider -- --ignored --nocapture
+```
+
+The key is never written to project configuration. Unset
+`SMITH_LIVE_API_KEY` after the run. Other OpenAI-compatible endpoints can use
+the same test with their documented model limits.
+
+Headless mode accepts a direct prompt or stdin and keeps machine stdout clean:
+
+```sh
+smith -p "review this change"
+printf '%s' "run the checks" | smith -p -
+smith -p "summarize" --output-format json
+smith -p "inspect" --output-format stream-json
+smith -p "continue" --resume session-...
+```
+
+`json` emits one versioned result. `stream-json` emits versioned runtime events
+followed by that result. With the default `approval.mode = "ask"`, an
+unattended mutation is denied and exits with status 4; explicitly choose
+`--approval allow-all` only in an already trusted automation boundary.
+Repository-controlled config cannot set `allow-all` or `auto_approve` merely
+by being opened; those authority-bearing choices must come from user config or
+an explicit command-line policy. It likewise cannot redirect or disable
+user-scoped snapshots and journals.
+
+Snapshots and redacted canonical event journals live under
+`~/.smith/sessions/<project-id>/`. Both the TUI and `smith -p` use the same
+factory and session lifecycle.
+
+## Design
+
+[`DESIGN.md`](DESIGN.md) is the visual and interaction contract for the TUI —
+layout, glyphs, color, focus, motion, and the rules that keep an estimated
+number from looking like a reported one. Code comments reference its sections.
+
+[`docs/GOAL.md`](docs/GOAL.md) defines the first release outcome, evidence
+gates, runtime co-development boundary, and deliberately deferred work.
+[`docs/ci.md`](docs/ci.md) documents the fail-closed local and hosted release
+gates and the exact Agent Runtime source they require.
+
+## Specification
+
+The active catalog change lives under
+[`docs/spec/changes/add-provider-model-catalogs-2026-07-28/`](docs/spec/changes/add-provider-model-catalogs-2026-07-28/).
+Its approved proposal and implementation checklist define Models.dev
+validation, endpoint bindings, offline cache behavior, augmented inventory,
+and frozen picker/runtime provenance.
+
+The installable package is expected to be `smith-cli`, exposing the `smith`
+binary. Registry names must be rechecked immediately before publication.
+Licensed `MIT OR Apache-2.0`.

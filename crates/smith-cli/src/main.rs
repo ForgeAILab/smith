@@ -1,0 +1,2014 @@
+//! The `smith` composition root.
+//!
+//! Both terminal and one-prompt runs resolve the same configuration, inject
+//! the same project/credential policy, and start through
+//! [`smith_runtime::host`]. Presentation begins only after that preflight and
+//! the session restore have succeeded.
+
+mod cli;
+mod headless;
+mod setup;
+mod terminal;
+
+use std::io::{IsTerminal, Read};
+use std::path::PathBuf;
+use std::process::ExitCode;
+use std::sync::Arc;
+use std::time::Duration;
+
+use agent_runtime_core::cancel::CancelReason;
+use agent_runtime_core::content::UserInput;
+use agent_runtime_core::delegation::{
+    ChildLimits, ChildModelSelection, ChildSpec, ToolViewScope, WorkspacePolicy,
+};
+use agent_runtime_core::event::{EstimationConfidence, RuntimeEvent};
+use agent_runtime_core::ids::SessionId;
+use agent_runtime_core::usage::CounterKind;
+use anyhow::{Context, Result};
+use cli::{Command, Prompt, RunArgs, Selection};
+use crossterm::event::{Event as TermEvent, EventStream};
+use futures_util::StreamExt;
+use ratatui::layout::Rect;
+use smith_config::credential::CredentialResolver;
+use smith_config::inventory::{
+    InventoryLimit, ModelLimitOrigin, SelectionInventory, local_inventory_with_catalog,
+};
+use smith_config::model::ApprovalMode;
+use smith_config::resolve::{ConfigReadiness, Resolution, ResolveRequest, inspect, resolve};
+use smith_host::{
+    ApprovalPrompt, ApprovalRequests, GitChanges, HeadlessApproval, InteractiveApproval,
+    ProjectWorkspace,
+};
+use smith_runtime::SpawnOutcome;
+use smith_runtime::factory::{AVAILABLE_ADAPTER_KINDS, HostSurface, RuntimePolicy, RuntimeRequest};
+use smith_runtime::host::{HostSession, HostSessionRequest};
+use smith_runtime::model_catalog::{CatalogLoader, runtime_catalog_source};
+use smith_runtime::session::{SNAPSHOT_SCHEMA_VERSION, SessionListing};
+use smith_tui::app::{Action, App, PaletteCommand};
+use smith_tui::commands::CommandAction;
+use smith_tui::status::{Status, TokenCount};
+use smith_tui::theme::{Theme, glyph};
+use smith_tui::{
+    PickerOutcome, ResourceEntry, ResourcePicker, RuntimeResources, draw_resource_picker,
+};
+
+/// The frame budget: `DESIGN.md` §6 caps redraws at 30 fps.
+const FRAME: Duration = Duration::from_millis(33);
+
+/// The spinner advances every 100 ms, independently of the frame rate.
+const SPINNER_TICK: Duration = Duration::from_millis(100);
+
+/// A piped prompt is bounded before it can consume process memory. The runtime
+/// applies the model-specific token budget later.
+const MAX_STDIN_PROMPT_BYTES: usize = 1024 * 1024;
+
+#[tokio::main]
+async fn main() -> ExitCode {
+    let command = match cli::parse(std::env::args_os().skip(1)) {
+        Ok(command) => command,
+        Err(error) => {
+            eprintln!("smith: {error}");
+            eprintln!("Try `smith --help` for usage.");
+            return ExitCode::from(2);
+        }
+    };
+
+    match execute(command).await {
+        Ok(code) => ExitCode::from(code),
+        Err(error) => {
+            eprintln!("smith: {error:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn execute(command: Command) -> Result<u8> {
+    match command {
+        Command::Help => {
+            print!("{}", cli::HELP);
+            Ok(0)
+        }
+        Command::Version => {
+            println!("smith {}", env!("CARGO_PKG_VERSION"));
+            Ok(0)
+        }
+        Command::ConfigExplain { key, selection } => {
+            explain_config(&key, &selection)?;
+            Ok(0)
+        }
+        Command::SessionsList { selection } => {
+            list_sessions(&selection).await?;
+            Ok(0)
+        }
+        Command::Setup(args) => {
+            setup::run_explicit(args).await?;
+            Ok(0)
+        }
+        Command::Run(args) => run_command(args).await,
+    }
+}
+
+async fn run_command(mut args: RunArgs) -> Result<u8> {
+    match inspect_selection(&args.selection)? {
+        ConfigReadiness::Ready(_) => {}
+        ConfigReadiness::Invalid(error) => {
+            return Err(anyhow::anyhow!("{error}")).context("resolving Smith configuration");
+        }
+        ConfigReadiness::Unconfigured(_) => {
+            let interactive = args.prompt.is_none()
+                && std::io::stdin().is_terminal()
+                && std::io::stdout().is_terminal()
+                && std::io::stderr().is_terminal();
+            if !interactive {
+                anyhow::bail!(
+                    "Smith has no configured provider/model. Run `smith setup` in an interactive \
+                     terminal, or supply a complete provider, model, and limits through config"
+                );
+            }
+            match setup::run_first_run(args.selection.clone(), args.no_color, args.no_motion)
+                .await?
+            {
+                setup::SetupOutcome::Cancelled => return Ok(0),
+                setup::SetupOutcome::Completed => {}
+            }
+        }
+    }
+
+    if args.resume_requested && args.resume.is_none() {
+        if args.prompt.is_some() {
+            anyhow::bail!(
+                "bare `--resume` needs an interactive terminal; use `smith sessions list` and \
+                 pass `--resume <SESSION_ID>` for a headless run"
+            );
+        }
+        if !std::io::stdin().is_terminal()
+            || !std::io::stdout().is_terminal()
+            || !std::io::stderr().is_terminal()
+        {
+            anyhow::bail!(
+                "bare `--resume` needs an interactive terminal; use `smith sessions list` or \
+                 pass `--resume <SESSION_ID>`"
+            );
+        }
+        args.resume =
+            match choose_resume_session(&args.selection, args.no_color, args.no_motion).await? {
+                Some(session) => Some(session),
+                None => return Ok(0),
+            };
+    }
+
+    let prompt = match args.prompt.take() {
+        Some(Prompt::Argument(prompt)) => Some(prompt),
+        Some(Prompt::Stdin) => Some(read_prompt(std::io::stdin().lock())?),
+        None => None,
+    };
+
+    match prompt {
+        Some(prompt) => {
+            let started = start_host(
+                &args.selection,
+                args.resume.as_deref(),
+                HostSurface::Headless,
+                None,
+            )
+            .await?;
+            headless::run(
+                &started.host,
+                prompt,
+                args.output,
+                started.headless_approval.as_deref(),
+            )
+            .await
+            .map(|outcome| outcome.exit_code)
+        }
+        None => run_interactive_command(args).await,
+    }
+}
+
+struct StartedHost {
+    host: HostSession,
+    approvals: Option<ApprovalRequests>,
+    headless_approval: Option<Arc<HeadlessApproval>>,
+    project: PathBuf,
+    inventory: SelectionInventory,
+    sessions: Vec<SessionListing>,
+    catalog: Arc<smith_config::catalog::CatalogSnapshot>,
+}
+
+async fn start_host(
+    selection: &Selection,
+    resume: Option<&str>,
+    surface: HostSurface,
+    frozen_catalog: Option<Arc<smith_config::catalog::CatalogSnapshot>>,
+) -> Result<StartedHost> {
+    let prepared = prepare(selection)?;
+    let project = prepared.project;
+    let resolution = prepared.resolution;
+    let catalog = match frozen_catalog {
+        Some(catalog) => catalog,
+        None => {
+            let loader = CatalogLoader::production(&resolution.layout.user_dir)
+                .map_err(|error| anyhow::anyhow!("{error}"))
+                .context("preparing the provider model catalog")?;
+            let allow_refresh = smith_config::catalog::catalog_provider_for(
+                &resolution.config.provider.kind.value,
+                resolution
+                    .config
+                    .provider
+                    .base_url
+                    .as_ref()
+                    .map(|value| value.value.as_str()),
+            )
+            .is_some();
+            loader
+                .prepare(allow_refresh)
+                .await
+                .map_err(|error| anyhow::anyhow!("{error}"))
+                .context("preparing the provider model catalog")?
+                .snapshot
+        }
+    };
+    let inventory =
+        local_inventory_with_catalog(&resolution, AVAILABLE_ADAPTER_KINDS, Some(&catalog))
+            .map_err(|error| anyhow::anyhow!("{error}"))
+            .context("building the local runtime inventory")?;
+    let workspace = ProjectWorkspace::new(&project)
+        .map_err(|error| anyhow::anyhow!("{error}"))
+        .context("rooting the project workspace")?;
+    let mut runtime = RuntimeRequest {
+        workspace: Some(Arc::new(workspace)),
+        credentials: Some(CredentialResolver::new(&resolution.layout.user_dir)),
+        ..RuntimeRequest::new(resolution.config.clone(), surface)
+    };
+    if let Some(source) = runtime_catalog_source(
+        &catalog,
+        &resolution.config.provider.name.value,
+        &resolution.config.provider.kind.value,
+        resolution
+            .config
+            .provider
+            .base_url
+            .as_ref()
+            .map(|value| value.value.as_str()),
+    ) {
+        runtime.catalog_sources.push(source);
+    }
+
+    let mut approvals = None;
+    let mut headless_approval = None;
+    if resolution.config.approval.mode.value == ApprovalMode::Ask {
+        if surface == HostSurface::Terminal {
+            let (approval, requests) = InteractiveApproval::new(8);
+            runtime.approval = Some(Arc::new(approval));
+            approvals = Some(requests);
+        } else {
+            let approval = Arc::new(HeadlessApproval::new());
+            runtime.approval = Some(approval.clone());
+            headless_approval = Some(approval);
+        }
+    }
+
+    let mut request = HostSessionRequest::new(runtime, &project);
+    if let Some(session) = resume {
+        request = request.resume(SessionId::new(session));
+    }
+    let host = smith_runtime::host::start(request)
+        .await
+        .map_err(|error| anyhow::anyhow!("{error}"))
+        .context("starting the Smith session")?;
+    let sessions = smith_runtime::host::list(&resolution.config, &project)
+        .await
+        .map_err(|error| anyhow::anyhow!("{error}"))
+        .context("listing project sessions")?;
+
+    Ok(StartedHost {
+        host,
+        approvals,
+        headless_approval,
+        project,
+        inventory,
+        sessions,
+        catalog,
+    })
+}
+
+async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
+    let mut resume = args.resume.take();
+    let mut frozen_catalog = None;
+    loop {
+        let StartedHost {
+            host,
+            approvals,
+            project,
+            inventory,
+            sessions,
+            catalog,
+            ..
+        } = start_host(
+            &args.selection,
+            resume.as_deref(),
+            HostSurface::Terminal,
+            frozen_catalog.clone(),
+        )
+        .await?;
+        let current_session = host.session().id().as_str().to_owned();
+        match run_interactive(
+            &host,
+            approvals,
+            &project,
+            inventory,
+            sessions,
+            args.no_color,
+            args.no_motion,
+        )
+        .await?
+        {
+            InteractiveExit::Quit => return Ok(0),
+            InteractiveExit::Reconfigure(command) => {
+                frozen_catalog = matches!(
+                    &command,
+                    PaletteCommand::Profile(_) | PaletteCommand::Model { .. }
+                )
+                .then_some(catalog);
+                apply_palette_command(&mut args.selection, &mut resume, current_session, command);
+            }
+        }
+    }
+}
+
+fn apply_palette_command(
+    selection: &mut Selection,
+    resume: &mut Option<String>,
+    current_session: String,
+    command: PaletteCommand,
+) {
+    match command {
+        PaletteCommand::NewSession => {
+            *resume = None;
+        }
+        PaletteCommand::Resume(session) => {
+            *resume = Some(session);
+        }
+        PaletteCommand::Profile(profile) => {
+            selection.profile = Some(profile);
+            selection.provider = None;
+            selection.model = None;
+            *resume = Some(current_session);
+        }
+        PaletteCommand::Model { provider, model } => {
+            selection.profile = None;
+            selection.provider = Some(provider);
+            selection.model = Some(model);
+            *resume = Some(current_session);
+        }
+    }
+}
+
+fn read_prompt(reader: impl Read) -> Result<String> {
+    let mut prompt = String::new();
+    reader
+        .take(u64::try_from(MAX_STDIN_PROMPT_BYTES + 1).unwrap_or(u64::MAX))
+        .read_to_string(&mut prompt)
+        .context("reading the UTF-8 prompt from stdin")?;
+    if prompt.len() > MAX_STDIN_PROMPT_BYTES {
+        anyhow::bail!("stdin prompt exceeds the {MAX_STDIN_PROMPT_BYTES} byte limit");
+    }
+    if prompt.trim().is_empty() {
+        anyhow::bail!("stdin did not contain a prompt");
+    }
+    Ok(prompt)
+}
+
+enum InteractiveExit {
+    Quit,
+    Reconfigure(PaletteCommand),
+}
+
+async fn run_interactive(
+    host: &HostSession,
+    approvals: Option<ApprovalRequests>,
+    project: &std::path::Path,
+    inventory: SelectionInventory,
+    sessions: Vec<SessionListing>,
+    no_color: bool,
+    no_motion: bool,
+) -> Result<InteractiveExit> {
+    let policy = host.runtime().policy();
+    let snapshot = host.session().snapshot();
+    let mut app = App::new(
+        policy.model.as_str(),
+        abbreviate_home(&project.to_string_lossy()),
+    );
+    app.status
+        .switch_model(Some(policy.provider_name.clone()), policy.model.as_str());
+    app.set_resources(runtime_resources(
+        inventory,
+        sessions,
+        host.session().id().as_str(),
+    ));
+    app.transcript.replace_from_history(&snapshot.history);
+    let usage = snapshot.usage.total();
+    if !usage.is_empty() {
+        app.status.record_usage(&usage);
+        let cache_read = usage.get(CounterKind::InputCached);
+        if cache_read > 0 {
+            app.status.record_cache(cache_read);
+        }
+    }
+    if let Some(previous) = snapshot.manifests.last().map(|entry| &entry.manifest.model)
+        && (previous.provider != policy.provider_name || previous.model != policy.model)
+    {
+        app.transcript.push_notice(
+            "provider",
+            format!(
+                "changed · {}/{} → {}/{} · prior cache not transferable",
+                previous.provider, previous.model, policy.provider_name, policy.model
+            ),
+        );
+        // The aggregate snapshot usage belongs to the prior provider/model.
+        // Keep its magnitude for context, but stop presenting it as a current
+        // provider report and clear cache evidence.
+        app.status
+            .switch_model(Some(policy.provider_name.clone()), policy.model.as_str());
+    }
+
+    let mut terminal = match terminal::enter() {
+        Ok(terminal) => terminal,
+        Err(error) => {
+            let _ = host.shutdown().await;
+            return Err(error).context("entering the alternate screen");
+        }
+    };
+    let mut theme = Theme::from_env();
+    if no_color {
+        theme = theme.without_color();
+    }
+    if no_motion {
+        theme = theme.without_motion();
+    }
+    let run_result = run_tui(&mut terminal, app, host, project, approvals, theme).await;
+    let restore_result = terminal.restore().context("restoring the terminal");
+    let shutdown_result = host
+        .shutdown()
+        .await
+        .map_err(|error| anyhow::anyhow!("{error}"))
+        .context("shutting the session down");
+
+    restore_result?;
+    shutdown_result?;
+    run_result
+}
+
+async fn run_tui(
+    terminal: &mut terminal::Terminal,
+    mut app: App,
+    host: &HostSession,
+    project: &std::path::Path,
+    mut approvals: Option<ApprovalRequests>,
+    theme: Theme,
+) -> Result<InteractiveExit> {
+    let session = host.session();
+    let mut events = session.subscribe();
+    let mut keys = EventStream::new();
+    let mut spinner = tokio::time::interval(SPINNER_TICK);
+    let mut frame = tokio::time::interval(FRAME);
+    let (local_tx, mut local_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut last_change_turn = host.changes().latest().map(|set| set.turn);
+    let mut dirty = true;
+
+    let exit = loop {
+        tokio::select! {
+            // Keyboard first: a provider flood must not starve cancellation.
+            biased;
+
+            Some(key) = keys.next() => {
+                match key.context("reading a terminal event")? {
+                    TermEvent::Key(key) => {
+                        match app.on_key(key) {
+                            Some(Action::Send(text)) => {
+                                session.send(UserInput::text(text));
+                            }
+                            Some(Action::Interrupt) => {
+                                session.cancel(CancelReason::UserRequested);
+                            }
+                            Some(Action::Quit) => break InteractiveExit::Quit,
+                            Some(Action::Reconfigure(command)) => {
+                                break InteractiveExit::Reconfigure(command);
+                            }
+                            Some(Action::Command(command)) => {
+                                handle_local_command(&mut app, host, project, command).await;
+                            }
+                            Some(Action::ApplyUndo) => match host.changes().undo_latest() {
+                                Ok(()) => app.transcript.push_notice(
+                                    "undo",
+                                    "last attributable Smith turn was restored",
+                                ),
+                                Err(error) => app.transcript.push_error(error.message),
+                            },
+                            Some(Action::CancelUndo) => {
+                                host.changes().record_undo_cancelled();
+                                app.transcript.push_notice("undo", "cancelled");
+                            }
+                            Some(Action::ApplyRevert { scope, fingerprint }) => {
+                                let recovery_dir = host.paths().map(|paths| {
+                                    paths
+                                        .directory()
+                                        .join("recovery")
+                                        .join(host.session().id().as_str())
+                                });
+                                match GitChanges::discover(project).and_then(|git| {
+                                    git.apply_revert(
+                                        &scope,
+                                        &fingerprint,
+                                        recovery_dir.as_deref(),
+                                    )
+                                }) {
+                                    Ok(applied) => {
+                                        host.changes().record_revert_event(
+                                            &scope,
+                                            &fingerprint,
+                                            "applied",
+                                        );
+                                        host.changes().record_recovery(
+                                            applied.path,
+                                            applied.before,
+                                            applied.after,
+                                            "revert",
+                                            applied.recovery_path,
+                                        );
+                                        app.transcript.push_notice(
+                                            "revert",
+                                            format!(
+                                                "`{scope}` reverted · recoverable with /undo"
+                                            ),
+                                        );
+                                    }
+                                    Err(error) => {
+                                        host.changes().record_revert_event(
+                                            &scope,
+                                            &fingerprint,
+                                            "failed",
+                                        );
+                                        app.transcript.push_error(error.message);
+                                    }
+                                }
+                            }
+                            Some(Action::CancelRevert { scope, fingerprint }) => {
+                                host.changes().record_revert_event(
+                                    &scope,
+                                    &fingerprint,
+                                    "cancelled",
+                                );
+                                app.transcript.push_notice("revert", "cancelled");
+                            }
+                            Some(Action::StartReview { scope }) => {
+                                start_review(host, project, scope, local_tx.clone());
+                            }
+                            None => {}
+                        }
+                        dirty = true;
+                    }
+                    TermEvent::Resize(_, _) => dirty = true,
+                    _ => {}
+                }
+            }
+
+            prompt = next_approval(&mut approvals) => {
+                match prompt {
+                    Some(prompt) => {
+                        app.present_approval(prompt);
+                        dirty = true;
+                    }
+                    None => approvals = None,
+                }
+            }
+
+            envelope = events.next() => {
+                match envelope {
+                    Some(envelope) => {
+                        let tool_display = match &envelope.payload {
+                            RuntimeEvent::ToolCallRequested { call, .. } => host
+                                .tool_call_display(call)
+                                .map(|display| (call.as_str().to_owned(), display)),
+                            _ => None,
+                        };
+                        if matches!(envelope.payload, RuntimeEvent::TurnCompleted { .. })
+                            && let Some(set) = host.changes().latest()
+                            && last_change_turn != Some(set.turn)
+                            && !set.undone
+                        {
+                                    last_change_turn = Some(set.turn);
+                                    let attribution = if set.is_fully_attributable() {
+                                        "undo available"
+                                    } else {
+                                        "contains ambiguous changes; use /diff"
+                                    };
+                                    app.transcript.push_notice(
+                                        "changes",
+                                        format!("Smith turn {} · {attribution}", set.turn),
+                                    );
+                        }
+                        app.apply(&envelope);
+                        if let Some((call_id, display)) = tool_display {
+                            app.set_tool_display(&call_id, display);
+                        }
+                        dirty = true;
+                    }
+                    None => break InteractiveExit::Quit,
+                }
+            }
+
+            outcome = local_rx.recv() => {
+                if let Some(outcome) = outcome {
+                    match outcome {
+                        LocalOutcome::Notice(text) => {
+                            app.transcript.push_notice("review", text);
+                        }
+                        LocalOutcome::Error(text) => app.transcript.push_error(text),
+                    }
+                    dirty = true;
+                }
+            }
+
+            _ = spinner.tick() => {
+                if app.is_busy() {
+                    app.tick();
+                    if theme.uses_motion() || app.tick.is_multiple_of(10) {
+                        dirty = true;
+                    }
+                }
+            }
+
+            _ = frame.tick(), if dirty => {
+                terminal.draw(|frame| smith_tui::draw_synced(frame, &mut app, theme))?;
+                dirty = false;
+            }
+        }
+
+        if app.should_quit {
+            break InteractiveExit::Quit;
+        }
+    };
+    Ok(exit)
+}
+
+async fn handle_local_command(
+    app: &mut App,
+    host: &HostSession,
+    project: &std::path::Path,
+    command: CommandAction,
+) {
+    match command {
+        CommandAction::Context => {
+            app.show_local_result(
+                "context",
+                render_context_view(&app.status, host.runtime().policy()),
+            );
+        }
+        CommandAction::Status => {
+            let policy = host.runtime().policy();
+            let git = GitChanges::discover(project)
+                .and_then(|git| git.status_summary())
+                .unwrap_or_else(|_| "unavailable (not a Git worktree)".to_owned());
+            let child_count = host
+                .runtime()
+                .delegation()
+                .and_then(|delegation| delegation.coordinator())
+                .map_or(0, |coordinator| coordinator.list().len());
+            let attribution = host.changes().latest().map_or_else(
+                || {
+                    if host.changes().has_historical_records() {
+                        "historical metadata only; not automatically undoable".to_owned()
+                    } else {
+                        "no attributable turn recorded".to_owned()
+                    }
+                },
+                |set| {
+                    if set.is_fully_attributable() && !set.undone {
+                        format!("Smith turn {} · undo available", set.turn)
+                    } else {
+                        format!("Smith turn {} · automatic undo unavailable", set.turn)
+                    }
+                },
+            );
+            let context = render_context_status(&app.status, policy);
+            app.show_local_result(
+                "status",
+                format!(
+                    "session: {}\nprovider: {}\nmodel: {}\npermission: {:?}\n\
+                     {context}\nproject: {}\nGit: {}\n\
+                     children: {}\nchange attribution: {}",
+                    host.session().id(),
+                    policy.provider_name,
+                    policy.model,
+                    policy.approval_mode,
+                    project.display(),
+                    git,
+                    child_count,
+                    attribution,
+                ),
+            );
+        }
+        CommandAction::Agent(selected) => {
+            let Some(coordinator) = host
+                .runtime()
+                .delegation()
+                .and_then(|delegation| delegation.coordinator())
+            else {
+                app.show_local_error(
+                    "agents",
+                    "Child delegation is unavailable for this session.",
+                );
+                return;
+            };
+            let children = coordinator.list();
+            if let Some(selected) = selected {
+                let Some(status) = children
+                    .iter()
+                    .find(|status| status.child.as_str() == selected)
+                else {
+                    app.show_local_error("agents", format!("No child named `{selected}`."));
+                    return;
+                };
+                app.show_local_result(
+                    "agent",
+                    format!(
+                        "child: {}\nstate: {:?}\nturns: {}/{}\nworkspace: {:?}\nresult: {}",
+                        status.child,
+                        status.state,
+                        status.turns_used,
+                        status.max_turns,
+                        status.workspace,
+                        status.last_result.as_deref().unwrap_or("not available"),
+                    ),
+                );
+            } else if children.is_empty() {
+                app.show_local_empty("agents", "No child agents in this session.");
+            } else {
+                app.show_local_result(
+                    "agents",
+                    children
+                        .iter()
+                        .map(|status| {
+                            format!(
+                                "{} · {:?} · {}/{} turns",
+                                status.child, status.state, status.turns_used, status.max_turns
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                );
+            }
+        }
+        CommandAction::Diff(scope) => {
+            if scope.as_deref() == Some("last-turn") {
+                match host.changes().undo_preview() {
+                    Ok(preview) => app.show_local_result("diff · last Smith turn", preview),
+                    Err(error) => app.show_local_error("diff · last Smith turn", error.message),
+                }
+            } else {
+                match GitChanges::discover(project).and_then(|git| git.inspect(scope.as_deref())) {
+                    Ok(view) if view.content == "No changes in this scope." => {
+                        app.show_local_empty(view.title, view.content);
+                    }
+                    Ok(view) => app.show_local_result(view.title, view.content),
+                    Err(error) => app.show_local_error("diff", error.message),
+                }
+            }
+        }
+        CommandAction::Review(scope) => {
+            let scope = scope.unwrap_or_else(|| "all".to_owned());
+            match GitChanges::discover(project)
+                .and_then(|git| git.inspect(Some(scope.as_str())))
+            {
+                Ok(view) if view.content == "No changes in this scope." => {
+                    app.transcript.push_notice("review", view.content);
+                }
+                Ok(view) => app.confirm_review(
+                    scope,
+                    format!(
+                        "scope: {}\nprovider-backed: yes\nworkspace authority: read-only\n\
+                         The reviewer can read, list, and search but cannot edit or run shell commands.\n\n{}",
+                        view.title, view.content
+                    ),
+                ),
+                Err(error) => app.transcript.push_error(error.message),
+            }
+        }
+        CommandAction::Undo => match host.changes().undo_preview() {
+            Ok(preview) => app.confirm_undo(preview),
+            Err(error) => app.transcript.push_error(error.message),
+        },
+        CommandAction::Revert(Some(scope)) => {
+            match GitChanges::discover(project).and_then(|git| git.preview_revert(&scope)) {
+                Ok(mut preview) => {
+                    let path = scope.split('#').next().unwrap_or(scope.as_str());
+                    if let Ok(canonical) = project.join(path).canonicalize()
+                        && host.changes().latest_owns_path(&canonical)
+                    {
+                        preview.content =
+                            preview
+                                .content
+                                .replacen("origin: unknown", "origin: Smith", 1);
+                    }
+                    host.changes().record_revert_event(
+                        &preview.scope,
+                        &preview.fingerprint,
+                        "previewed",
+                    );
+                    app.confirm_revert(preview.scope, preview.fingerprint, preview.content);
+                }
+                Err(error) => app.transcript.push_error(error.message),
+            }
+        }
+        CommandAction::Revert(None) => app
+            .transcript
+            .push_error("usage: /revert FILE or /revert FILE#HUNK; use /diff to choose a scope"),
+        CommandAction::Help
+        | CommandAction::NewSession
+        | CommandAction::Resume(_)
+        | CommandAction::Profile(_)
+        | CommandAction::Provider(_)
+        | CommandAction::Model(_)
+        | CommandAction::Quit => {
+            unreachable!("the reducer handles this command before host dispatch")
+        }
+    }
+}
+
+fn render_context_status(status: &Status, policy: &RuntimePolicy) -> String {
+    let limits = policy.model_profile.limits;
+    let declared_reserve = policy
+        .context_policy
+        .output_reserve
+        .saturating_add(policy.context_policy.reasoning_reserve);
+    let input_budget = limits.input_budget(declared_reserve);
+    let exact = |tokens: u32| TokenCount::reported(u64::from(tokens)).render();
+    let with_confidence = |tokens: u32, confidence: EstimationConfidence| match confidence {
+        EstimationConfidence::Exact => TokenCount::reported(u64::from(tokens)).render(),
+        EstimationConfidence::Estimated => TokenCount::estimated(u64::from(tokens)).render(),
+    };
+
+    let mut lines = Vec::new();
+    if let Some(plan) = &status.context_plan {
+        let percent_prefix = if plan.confidence == EstimationConfidence::Estimated {
+            "~"
+        } else {
+            ""
+        };
+        lines.push(format!(
+            "context window: {percent_prefix}{}% input left ({} used / {} budget)",
+            plan.percent_left(),
+            plan.render_input(),
+            exact(plan.input_budget_tokens),
+        ));
+        lines.push(format!(
+            "model window: {} total · {} reserved",
+            exact(limits.context_tokens),
+            exact(plan.reserved_tokens),
+        ));
+        lines.push(format!(
+            "context plan: {} · {} segments",
+            plan.confidence_label(),
+            plan.segment_count,
+        ));
+        for (kind, tokens) in &plan.totals {
+            lines.push(format!(
+                "  {}: {}",
+                kind.replace('_', " "),
+                with_confidence(*tokens, plan.confidence),
+            ));
+        }
+        let compaction_target = exact(policy.compaction_policy.low_watermark);
+        if let Some(summary_tokens) = plan.totals.get("summary").filter(|tokens| **tokens > 0) {
+            lines.push(format!(
+                "compaction: applied · {} summary · {} recovery target",
+                with_confidence(*summary_tokens, plan.confidence),
+                compaction_target,
+            ));
+        } else {
+            lines.push(format!(
+                "compaction: enabled on overflow · {compaction_target} recovery target"
+            ));
+        }
+    } else {
+        lines.push(format!(
+            "context window: not planned yet (? used / {} input budget)",
+            exact(input_budget),
+        ));
+        lines.push(format!(
+            "model window: {} total · {} reserved",
+            exact(limits.context_tokens),
+            exact(declared_reserve),
+        ));
+        lines.push("context plan: waiting for first turn".to_owned());
+        lines.push(format!(
+            "compaction: enabled on overflow · {} recovery target",
+            exact(policy.compaction_policy.low_watermark),
+        ));
+    }
+    lines.push(format!(
+        "provider input (session): {}",
+        status.context.render()
+    ));
+    lines.push(format!("cache read (session): {}", status.render_cache()));
+    lines.join("\n")
+}
+
+#[derive(Debug, Clone)]
+struct ContextDisplayCategory {
+    label: String,
+    glyph: &'static str,
+    tokens: u32,
+    rank: u8,
+}
+
+fn render_context_view(status: &Status, policy: &RuntimePolicy) -> String {
+    let limits = policy.model_profile.limits;
+    let declared_reserve = policy
+        .context_policy
+        .output_reserve
+        .saturating_add(policy.context_policy.reasoning_reserve);
+    let input_budget = limits.input_budget(declared_reserve);
+    let exact = |tokens: u32| TokenCount::reported(u64::from(tokens)).render();
+    let with_confidence = |tokens: u32, confidence: EstimationConfidence| match confidence {
+        EstimationConfidence::Exact => TokenCount::reported(u64::from(tokens)).render(),
+        EstimationConfidence::Estimated => TokenCount::estimated(u64::from(tokens)).render(),
+    };
+
+    let mut lines = vec!["Context usage".to_owned()];
+    if let Some(plan) = &status.context_plan {
+        let percent_prefix = if plan.confidence == EstimationConfidence::Estimated {
+            "~"
+        } else {
+            ""
+        };
+        lines.push(format!(
+            "{} · {} / {} input tokens · {percent_prefix}{}% left",
+            policy.model,
+            plan.render_input(),
+            exact(plan.input_budget_tokens),
+            plan.percent_left(),
+        ));
+        lines.push(String::new());
+
+        let mut categories = plan
+            .totals
+            .iter()
+            .filter(|(_, tokens)| **tokens > 0)
+            .map(|(kind, tokens)| context_display_category(kind, *tokens))
+            .collect::<Vec<_>>();
+        categories.sort_by(|left, right| {
+            left.rank
+                .cmp(&right.rank)
+                .then_with(|| left.label.cmp(&right.label))
+        });
+        let categorized = categories.iter().fold(0u32, |total, category| {
+            total.saturating_add(category.tokens)
+        });
+        if plan.input_tokens > categorized {
+            categories.push(ContextDisplayCategory {
+                label: "other context".to_owned(),
+                glyph: glyph::CONTEXT_OTHER,
+                tokens: plan.input_tokens - categorized,
+                rank: u8::MAX,
+            });
+        }
+        let free_tokens = plan.remaining_tokens();
+        let mut grid = categories
+            .iter()
+            .map(|category| (category.glyph, category.tokens))
+            .collect::<Vec<_>>();
+        grid.push((glyph::CONTEXT_FREE, free_tokens));
+        grid.push((glyph::CONTEXT_RESERVE, plan.reserved_tokens));
+        lines.extend(render_context_grid(&grid));
+        lines.push(String::new());
+        lines.push(match plan.confidence {
+            EstimationConfidence::Exact => "Exact usage by category".to_owned(),
+            EstimationConfidence::Estimated => "Estimated usage by category".to_owned(),
+        });
+        for category in &categories {
+            lines.push(format!(
+                "{} {}: {} ({})",
+                category.glyph,
+                category.label,
+                with_confidence(category.tokens, plan.confidence),
+                render_percent(category.tokens, plan.input_budget_tokens),
+            ));
+        }
+        lines.push(format!(
+            "{} free input: {} ({})",
+            glyph::CONTEXT_FREE,
+            with_confidence(free_tokens, plan.confidence),
+            render_percent(free_tokens, plan.input_budget_tokens),
+        ));
+        lines.push(format!(
+            "{} output/reasoning reserve: {} ({})",
+            glyph::CONTEXT_RESERVE,
+            exact(plan.reserved_tokens),
+            render_percent(
+                plan.reserved_tokens,
+                plan.input_budget_tokens
+                    .saturating_add(plan.reserved_tokens),
+            ),
+        ));
+        lines.push(format!(
+            "model window: {} total · {} input budget",
+            exact(limits.context_tokens),
+            exact(plan.input_budget_tokens),
+        ));
+        lines.push(format!(
+            "counting: {} · {} segments",
+            plan.confidence_label(),
+            plan.segment_count,
+        ));
+        let compaction_target = exact(policy.compaction_policy.low_watermark);
+        if let Some(summary_tokens) = plan.totals.get("summary").filter(|tokens| **tokens > 0) {
+            lines.push(format!(
+                "compaction: applied · {} summary · {} recovery target",
+                with_confidence(*summary_tokens, plan.confidence),
+                compaction_target,
+            ));
+        } else {
+            lines.push(format!(
+                "compaction: enabled on overflow · {compaction_target} recovery target"
+            ));
+        }
+    } else {
+        lines.push(format!(
+            "{} · usage unavailable until the first turn",
+            policy.model
+        ));
+        lines.push(String::new());
+        lines.extend(render_context_grid(&[
+            (glyph::CONTEXT_FREE, input_budget),
+            (glyph::CONTEXT_RESERVE, declared_reserve),
+        ]));
+        lines.push(String::new());
+        lines.push("Available capacity".to_owned());
+        lines.push(format!(
+            "{} free input: {}",
+            glyph::CONTEXT_FREE,
+            exact(input_budget),
+        ));
+        lines.push(format!(
+            "{} output/reasoning reserve: {}",
+            glyph::CONTEXT_RESERVE,
+            exact(declared_reserve),
+        ));
+        lines.push(format!(
+            "model window: {} total · {} input budget",
+            exact(limits.context_tokens),
+            exact(input_budget),
+        ));
+        lines.push("counting: waiting for first context plan".to_owned());
+        lines.push(format!(
+            "compaction: enabled on overflow · {} recovery target",
+            exact(policy.compaction_policy.low_watermark),
+        ));
+    }
+    lines.push(format!(
+        "provider input (session): {}",
+        status.context.render()
+    ));
+    lines.push(format!("cache read (session): {}", status.render_cache()));
+    lines.join("\n")
+}
+
+fn context_display_category(kind: &str, tokens: u32) -> ContextDisplayCategory {
+    let (label, glyph, rank) = match kind {
+        "system_instruction" => ("system instructions".to_owned(), glyph::CONTEXT_SYSTEM, 0),
+        "developer_instruction" => (
+            "developer instructions".to_owned(),
+            glyph::CONTEXT_SYSTEM,
+            1,
+        ),
+        "ability_instruction" => ("ability instructions".to_owned(), glyph::CONTEXT_SYSTEM, 2),
+        "tool_schema" => ("tool schemas".to_owned(), glyph::CONTEXT_TOOL, 3),
+        "memory" => ("memory".to_owned(), glyph::CONTEXT_HISTORY, 4),
+        "history" => ("history".to_owned(), glyph::CONTEXT_HISTORY, 5),
+        "tool_result" => ("tool results".to_owned(), glyph::CONTEXT_TOOL, 6),
+        "retrieval" => ("retrieved context".to_owned(), glyph::CONTEXT_HISTORY, 7),
+        "continuation" => ("continuation".to_owned(), glyph::CONTEXT_OTHER, 8),
+        "summary" => ("summary".to_owned(), glyph::CONTEXT_SUMMARY, 9),
+        "user_input" => ("user input".to_owned(), glyph::CONTEXT_INPUT, 10),
+        other => (other.replace('_', " "), glyph::CONTEXT_OTHER, u8::MAX - 1),
+    };
+    ContextDisplayCategory {
+        label,
+        glyph,
+        tokens,
+        rank,
+    }
+}
+
+fn render_percent(tokens: u32, total: u32) -> String {
+    if total == 0 {
+        return "0.0%".to_owned();
+    }
+    let tenths = u64::from(tokens)
+        .saturating_mul(1_000)
+        .checked_div(u64::from(total))
+        .unwrap_or(0);
+    format!("{}.{:01}%", tenths / 10, tenths % 10)
+}
+
+fn render_context_grid(entries: &[(&'static str, u32)]) -> Vec<String> {
+    const CELLS: usize = 50;
+    const COLUMNS: usize = 10;
+
+    let entries = entries
+        .iter()
+        .copied()
+        .filter(|(_, tokens)| *tokens > 0)
+        .collect::<Vec<_>>();
+    if entries.is_empty() {
+        return vec![format!("{} ", glyph::CONTEXT_FREE).repeat(COLUMNS); CELLS / COLUMNS];
+    }
+
+    let weight = entries.iter().fold(0u64, |total, (_, tokens)| {
+        total.saturating_add(u64::from(*tokens))
+    });
+    let remaining = CELLS.saturating_sub(entries.len());
+    let mut allocations = vec![1usize; entries.len()];
+    let mut remainders = Vec::with_capacity(entries.len());
+    let mut distributed = 0usize;
+    for (index, (_, tokens)) in entries.iter().enumerate() {
+        let numerator = (remaining as u64).saturating_mul(u64::from(*tokens));
+        let share = numerator.checked_div(weight).unwrap_or(0) as usize;
+        allocations[index] = allocations[index].saturating_add(share);
+        distributed = distributed.saturating_add(share);
+        remainders.push((index, numerator.checked_rem(weight).unwrap_or(0)));
+    }
+    remainders.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+    for (index, _) in remainders
+        .into_iter()
+        .take(remaining.saturating_sub(distributed))
+    {
+        allocations[index] = allocations[index].saturating_add(1);
+    }
+
+    let cells = entries
+        .iter()
+        .zip(allocations)
+        .flat_map(|((glyph, _), count)| std::iter::repeat_n(*glyph, count))
+        .take(CELLS)
+        .collect::<Vec<_>>();
+    cells.chunks(COLUMNS).map(|row| row.join(" ")).collect()
+}
+
+enum LocalOutcome {
+    Notice(String),
+    Error(String),
+}
+
+fn start_review(
+    host: &HostSession,
+    project: &std::path::Path,
+    scope: String,
+    outcomes: tokio::sync::mpsc::UnboundedSender<LocalOutcome>,
+) {
+    let Some(coordinator) = host
+        .runtime()
+        .delegation()
+        .and_then(|delegation| delegation.coordinator())
+        .cloned()
+    else {
+        let _ = outcomes.send(LocalOutcome::Error(
+            "read-only review is unavailable because delegation is not wired".to_owned(),
+        ));
+        return;
+    };
+    let view = match GitChanges::discover(project).and_then(|git| git.inspect(Some(scope.as_str())))
+    {
+        Ok(view) => view,
+        Err(error) => {
+            let _ = outcomes.send(LocalOutcome::Error(error.message));
+            return;
+        }
+    };
+    let task = format!(
+        "Review this bounded Git diff. Do not modify the workspace. Report only actionable \
+         findings, ordered by severity, with file and line evidence. If there are no findings, \
+         say so explicitly.\n\nScope: {}\n\n{}",
+        view.title, view.content
+    );
+    tokio::spawn(async move {
+        let outcome = coordinator
+            .spawn(ChildSpec {
+                task: UserInput::text(task),
+                model: ChildModelSelection::Inherit,
+                limits: ChildLimits::turns(1),
+                tools: ToolViewScope::ReadOnly,
+                workspace: WorkspacePolicy::ReadOnlyView,
+            })
+            .await;
+        let message = match outcome {
+            Ok(SpawnOutcome::Spawned { child, .. }) => {
+                LocalOutcome::Notice(format!("read-only reviewer {child} started"))
+            }
+            Ok(SpawnOutcome::Queued { child }) => {
+                LocalOutcome::Notice(format!("read-only reviewer {child} queued"))
+            }
+            Ok(SpawnOutcome::AtCapacity { running, limit }) => LocalOutcome::Error(format!(
+                "review did not start: {running} children are already running (limit {limit})"
+            )),
+            Err(error) => LocalOutcome::Error(format!("review did not start: {}", error.message)),
+        };
+        let _ = outcomes.send(message);
+    });
+}
+
+async fn next_approval(approvals: &mut Option<ApprovalRequests>) -> Option<ApprovalPrompt> {
+    match approvals {
+        Some(approvals) => approvals.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+struct Prepared {
+    resolution: Resolution,
+    project: PathBuf,
+}
+
+fn inspect_selection(selection: &Selection) -> Result<ConfigReadiness> {
+    let (_, request) = resolution_request(selection)?;
+    Ok(inspect(&request))
+}
+
+fn prepare(selection: &Selection) -> Result<Prepared> {
+    let (start, request) = resolution_request(selection)?;
+    let resolution = resolve(&request)
+        .map_err(|error| anyhow::anyhow!("{error}"))
+        .context("resolving Smith configuration")?;
+    let project = resolution.layout.project_root.clone().unwrap_or(start);
+    Ok(Prepared {
+        resolution,
+        project,
+    })
+}
+
+fn resolution_request(selection: &Selection) -> Result<(PathBuf, ResolveRequest)> {
+    let start = match &selection.project {
+        Some(project) => project.clone(),
+        None => std::env::current_dir().context("reading the current directory")?,
+    };
+    let start = start
+        .canonicalize()
+        .with_context(|| format!("resolving project path `{}`", start.display()))?;
+    if !start.is_dir() {
+        anyhow::bail!("project path `{}` is not a directory", start.display());
+    }
+
+    let request = ResolveRequest::new(&start)
+        .with_env(std::env::vars())
+        .with_cli(selection.overrides());
+    Ok((start, request))
+}
+
+fn explain_config(key: &str, selection: &Selection) -> Result<()> {
+    let prepared = prepare(selection)?;
+    let explanation = prepared
+        .resolution
+        .provenance
+        .explain(key)
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    println!("{} = {}", explanation.key, explanation.value);
+    println!("source: {}", explanation.source);
+    for entry in explanation.overridden {
+        println!("overrode: {} from {}", entry.value, entry.source);
+    }
+    Ok(())
+}
+
+fn runtime_resources(
+    inventory: SelectionInventory,
+    sessions: Vec<SessionListing>,
+    current_session: &str,
+) -> RuntimeResources {
+    let profiles = inventory
+        .profiles
+        .into_iter()
+        .map(|profile| {
+            let detail = profile
+                .pair()
+                .unwrap_or_else(|| "incomplete provider/model selection".to_owned());
+            let entry = ResourceEntry::new(profile.name.clone(), profile.name, detail)
+                .active(profile.active);
+            if profile.selectable {
+                entry
+            } else {
+                entry.disabled("profile does not resolve to a usable provider/model pair")
+            }
+        })
+        .collect();
+    let providers = inventory
+        .providers
+        .into_iter()
+        .map(|provider| {
+            let kind = provider.kind.as_deref().unwrap_or("missing adapter kind");
+            let detail = format!(
+                "{kind} · {} {}",
+                provider.model_count,
+                if provider.model_count == 1 {
+                    "model"
+                } else {
+                    "models"
+                }
+            );
+            let entry = ResourceEntry::new(provider.name.clone(), provider.name, detail)
+                .active(provider.active);
+            if provider.selectable {
+                entry
+            } else {
+                entry.disabled("adapter unavailable or no model with enforceable limits")
+            }
+        })
+        .collect();
+    let models = inventory
+        .models
+        .into_iter()
+        .map(|model| {
+            let id = model.id();
+            let profiles = if model.profiles.is_empty() {
+                String::new()
+            } else {
+                format!(" · profiles {}", model.profiles.join(","))
+            };
+            let capabilities = [
+                model
+                    .tool_call
+                    .is_some_and(|enabled| enabled)
+                    .then_some("tools"),
+                model
+                    .reasoning
+                    .is_some_and(|enabled| enabled)
+                    .then_some("reasoning"),
+                model
+                    .structured_output
+                    .is_some_and(|enabled| enabled)
+                    .then_some("structured"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+            let capabilities = if capabilities.is_empty() {
+                String::new()
+            } else {
+                format!(" · {}", capabilities.join("+"))
+            };
+            let provenance = match (
+                model.catalog_provider.as_deref(),
+                model.catalog_revision.as_deref(),
+                model.catalog_retrieved_at_ms,
+            ) {
+                (Some(provider), Some(revision), Some(retrieved)) => format!(
+                    " · models.dev/{provider} advertised · rev {} · {} old",
+                    bounded_text(revision, 12),
+                    catalog_age(retrieved)
+                ),
+                _ => String::new(),
+            };
+            let entry = ResourceEntry::new(
+                id.clone(),
+                model.label,
+                format!(
+                    "{id} · ctx {} · input {} · output {}{capabilities}{provenance}{profiles}",
+                    render_optional_inventory_limit(model.context_tokens.as_ref()),
+                    render_optional_inventory_limit(model.max_input_tokens.as_ref()),
+                    render_optional_inventory_limit(model.max_output_tokens.as_ref()),
+                ),
+            )
+            .active(model.active);
+            match model.disabled_reason {
+                Some(reason) => entry.disabled(reason),
+                None if model.selectable => entry,
+                None => entry.disabled("model is not locally selectable"),
+            }
+        })
+        .collect();
+
+    let session_entries = session_resource_entries(sessions, Some(current_session));
+
+    RuntimeResources {
+        models,
+        providers,
+        profiles,
+        sessions: session_entries,
+        current_session: Some(current_session.to_owned()),
+    }
+}
+
+fn session_resource_entries(
+    sessions: Vec<SessionListing>,
+    current: Option<&str>,
+) -> Vec<ResourceEntry> {
+    sessions
+        .into_iter()
+        .map(|session| {
+            let id = session.id.as_str().to_owned();
+            let active = current.is_some_and(|session| id == session);
+            let preview = session
+                .user_preview
+                .as_deref()
+                .map(|preview| bounded_text(preview, 64))
+                .unwrap_or_else(|| "No user preview".to_owned());
+            let turns = session
+                .turn_count
+                .map_or_else(|| "? turns".to_owned(), |count| format!("{count} turns"));
+            let pair = match (session.provider.as_deref(), session.model.as_deref()) {
+                (Some(provider), Some(model)) => format!("{provider}/{model}"),
+                _ => "unknown provider/model".to_owned(),
+            };
+            let updated = session.updated.map_or_else(
+                || "unknown update".to_owned(),
+                |updated| updated.to_string(),
+            );
+            let entry = ResourceEntry::new(
+                &id,
+                format!("{} · {preview}", short_session_id(&id)),
+                format!("{turns} · {pair} · {updated}"),
+            )
+            .active(active);
+            if session.schema_version == SNAPSHOT_SCHEMA_VERSION {
+                entry
+            } else {
+                entry.disabled(format!(
+                    "snapshot schema {} is newer than this build",
+                    session.schema_version
+                ))
+            }
+        })
+        .collect()
+}
+
+fn render_inventory_limit(limit: &InventoryLimit) -> String {
+    let provenance = match &limit.origin {
+        ModelLimitOrigin::Configured(source) => source.layer.label().to_owned(),
+        ModelLimitOrigin::Trusted { catalog, revision } => {
+            format!("{catalog} r{revision}")
+        }
+        ModelLimitOrigin::Catalog {
+            catalog,
+            revision: _,
+            retrieved_at_ms: _,
+        } => catalog.clone(),
+    };
+    format!("{} [{provenance}]", token_quantity(limit.value))
+}
+
+fn render_optional_inventory_limit(limit: Option<&InventoryLimit>) -> String {
+    limit.map_or_else(|| "unknown".to_owned(), render_inventory_limit)
+}
+
+fn catalog_age(retrieved_at_ms: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| {
+            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+        });
+    let seconds = now.saturating_sub(retrieved_at_ms) / 1_000;
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else if seconds < 60 * 60 {
+        format!("{}m", seconds / 60)
+    } else if seconds < 24 * 60 * 60 {
+        format!("{}h", seconds / (60 * 60))
+    } else {
+        format!("{}d", seconds / (24 * 60 * 60))
+    }
+}
+
+fn token_quantity(tokens: u32) -> String {
+    if tokens >= 1_000 && tokens.is_multiple_of(1_000) {
+        format!("{}k", tokens / 1_000)
+    } else {
+        tokens.to_string()
+    }
+}
+
+fn short_session_id(id: &str) -> String {
+    bounded_text(id, 12)
+}
+
+fn bounded_text(text: &str, max_chars: usize) -> String {
+    let mut chars = text.chars();
+    let head = chars.by_ref().take(max_chars).collect::<String>();
+    if chars.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
+
+async fn choose_resume_session(
+    selection: &Selection,
+    no_color: bool,
+    no_motion: bool,
+) -> Result<Option<String>> {
+    let prepared = prepare(selection)?;
+    let sessions = smith_runtime::host::list(&prepared.resolution.config, &prepared.project)
+        .await
+        .map_err(|error| anyhow::anyhow!("{error}"))
+        .context("listing project sessions")?;
+    let entries = session_resource_entries(sessions, None);
+    let mut picker = ResourcePicker::new(
+        "Resume session",
+        entries,
+        "Nothing to resume for this project · Esc to start without resuming",
+    );
+    let mut theme = Theme::from_env();
+    if no_color {
+        theme = theme.without_color();
+    }
+    if no_motion {
+        theme = theme.without_motion();
+    }
+
+    let mut terminal = terminal::enter().context("entering the resume picker")?;
+    let mut events = EventStream::new();
+    let result = async {
+        terminal.draw(|frame| {
+            let area = standalone_picker_area(frame.area(), picker.entries.len());
+            draw_resource_picker(frame, area, &picker, theme);
+        })?;
+        loop {
+            let Some(event) = events.next().await else {
+                return Ok(None);
+            };
+            match event.context("reading a terminal event")? {
+                TermEvent::Key(key) => match picker.on_key(key) {
+                    PickerOutcome::Pending => {}
+                    PickerOutcome::Cancelled => return Ok(None),
+                    PickerOutcome::Selected(session) => return Ok(Some(session)),
+                },
+                TermEvent::Resize(_, _) => {}
+                _ => continue,
+            }
+            terminal.draw(|frame| {
+                let area = standalone_picker_area(frame.area(), picker.entries.len());
+                draw_resource_picker(frame, area, &picker, theme);
+            })?;
+        }
+    }
+    .await;
+    let restore = terminal.restore().context("restoring the terminal");
+    restore?;
+    result
+}
+
+fn standalone_picker_area(area: Rect, entry_count: usize) -> Rect {
+    if area.width < 24 || area.height < 8 {
+        return area;
+    }
+    let width = area.width.saturating_sub(4).min(100);
+    let height = u16::try_from(entry_count.saturating_add(4))
+        .unwrap_or(u16::MAX)
+        .clamp(6, area.height.saturating_sub(2));
+    Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    )
+}
+
+async fn list_sessions(selection: &Selection) -> Result<()> {
+    let prepared = prepare(selection)?;
+    let sessions = smith_runtime::host::list(&prepared.resolution.config, &prepared.project)
+        .await
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    for session in sessions {
+        let updated = session.updated.map_or_else(
+            || "unknown-version".to_owned(),
+            |updated| updated.to_string(),
+        );
+        let turns = session
+            .turn_count
+            .map_or_else(|| "?".to_owned(), |turns| turns.to_string());
+        let provider = session.provider.as_deref().unwrap_or("?");
+        let model = session.model.as_deref().unwrap_or("?");
+        let preview = session.user_preview.as_deref().unwrap_or("no user preview");
+        println!(
+            "{}\t{updated}\t{turns}\t{provider}/{model}\t{}",
+            session.id.as_str(),
+            bounded_text(preview, 80)
+        );
+    }
+    Ok(())
+}
+
+/// Shortens a home-relative path to `~/…` for the header.
+fn abbreviate_home(path: &str) -> String {
+    match std::env::var_os("HOME") {
+        Some(home) => abbreviate(path, &home.to_string_lossy()),
+        None => path.to_owned(),
+    }
+}
+
+/// The pure half of [`abbreviate_home`].
+fn abbreviate(path: &str, home: &str) -> String {
+    match path.strip_prefix(home) {
+        Some("") => "~".to_owned(),
+        Some(rest) => format!("~{rest}"),
+        None => path.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use smith_tui::{Block, LocalResultState};
+
+    const LOCAL_COMMAND_CONFIG: &str = r#"
+default_profile = "dev"
+
+[profiles.dev]
+provider = "local"
+model = "example-model"
+
+[providers.local]
+kind = "fake"
+
+[models."local/example-model"]
+context_tokens = 128000
+max_input_tokens = 124000
+max_output_tokens = 4096
+"#;
+
+    #[test]
+    fn a_home_relative_path_is_abbreviated() {
+        let home = "/Users/example";
+        assert_eq!(abbreviate("/Users/example/work/api", home), "~/work/api");
+        assert_eq!(abbreviate("/Users/example", home), "~");
+        assert_eq!(abbreviate("/opt/other", home), "/opt/other");
+    }
+
+    #[test]
+    fn stdin_prompts_are_non_empty_utf8_and_bounded() {
+        assert_eq!(read_prompt(&b"hello"[..]).expect("a prompt"), "hello");
+        assert!(read_prompt(&b"   \n"[..]).is_err());
+        assert!(read_prompt(&[0xff][..]).is_err());
+        assert!(read_prompt(vec![b'x'; MAX_STDIN_PROMPT_BYTES + 1].as_slice()).is_err());
+    }
+
+    #[test]
+    fn palette_reconfiguration_preserves_or_replaces_the_intended_session() {
+        let mut selection = Selection {
+            profile: Some("old".into()),
+            provider: Some("explicit-provider".into()),
+            model: Some("explicit-model".into()),
+            ..Selection::default()
+        };
+        let mut resume = Some("older-session".into());
+
+        apply_palette_command(
+            &mut selection,
+            &mut resume,
+            "current-session".into(),
+            PaletteCommand::Profile("work".into()),
+        );
+        assert_eq!(selection.profile.as_deref(), Some("work"));
+        assert_eq!(selection.provider, None);
+        assert_eq!(selection.model, None);
+        assert_eq!(resume.as_deref(), Some("current-session"));
+
+        apply_palette_command(
+            &mut selection,
+            &mut resume,
+            "current-session".into(),
+            PaletteCommand::NewSession,
+        );
+        assert_eq!(resume, None);
+
+        apply_palette_command(
+            &mut selection,
+            &mut resume,
+            "ignored".into(),
+            PaletteCommand::Resume("selected-session".into()),
+        );
+        assert_eq!(resume.as_deref(), Some("selected-session"));
+    }
+
+    #[test]
+    fn catalog_inventory_becomes_searchable_resource_metadata_with_disabled_reasons() {
+        let home = tempfile::tempdir().expect("home");
+        let project = tempfile::tempdir().expect("project");
+        std::fs::create_dir_all(project.path().join(".smith")).expect("config directory");
+        std::fs::write(
+            project.path().join(".smith/config.toml"),
+            r#"
+default_profile = "router"
+[profiles.router]
+provider = "openrouter"
+model = "~openai/gpt-latest"
+[providers.openrouter]
+kind = "openai-compatible"
+base_url = "https://openrouter.ai/api/v1"
+credential = "env:OPENROUTER_API_KEY"
+[context]
+output_reserve = 4096
+"#,
+        )
+        .expect("config");
+        let resolution = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+            .expect("resolution");
+        let snapshot: smith_config::catalog::CatalogSnapshot =
+            serde_json::from_str(smith_runtime::model_catalog::EMBEDDED_MODELS_DEV_SEED)
+                .expect("embedded catalog");
+        let inventory =
+            local_inventory_with_catalog(&resolution, AVAILABLE_ADAPTER_KINDS, Some(&snapshot))
+                .expect("catalog inventory");
+        let selectable_count = inventory.providers[0].model_count;
+
+        let resources = runtime_resources(inventory, Vec::new(), "session");
+        assert_eq!(resources.models.len(), 339);
+        assert!(
+            resources.providers[0]
+                .detail
+                .contains(&format!("{selectable_count} models"))
+        );
+        let current = resources
+            .models
+            .iter()
+            .find(|entry| entry.id == "openrouter/~openai/gpt-latest")
+            .expect("nested catalog model");
+        assert_eq!(current.label, "OpenAI GPT Latest");
+        assert!(current.active);
+        assert!(current.detail.contains("tools"), "{}", current.detail);
+        assert!(current.detail.contains("advertised"), "{}", current.detail);
+        let incompatible = resources
+            .models
+            .iter()
+            .find(|entry| entry.id == "openrouter/mancer/weaver")
+            .expect("advertised incompatible model");
+        assert!(
+            incompatible
+                .disabled_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("tool"))
+        );
+    }
+
+    #[test]
+    fn the_production_cli_manifest_uses_the_full_facade_only_as_a_dev_dependency() {
+        let manifest = include_str!("../Cargo.toml");
+        let dependencies = manifest
+            .split("[dev-dependencies]")
+            .next()
+            .expect("a dependencies section");
+        assert!(
+            !dependencies
+                .lines()
+                .any(|line| line.trim_start().starts_with("agent-runtime =")),
+            "smith-cli must compose the full facade through smith-runtime"
+        );
+    }
+
+    #[test]
+    fn context_categories_name_tool_results_separately_from_user_input() {
+        let tool = context_display_category("tool_result", 4_200);
+        let user = context_display_category("user_input", 58);
+        assert_eq!(tool.label, "tool results");
+        assert_eq!(tool.glyph, glyph::CONTEXT_TOOL);
+        assert_eq!(tool.tokens, 4_200);
+        assert_eq!(user.label, "user input");
+        assert_eq!(user.glyph, glyph::CONTEXT_INPUT);
+        assert_eq!(user.tokens, 58);
+        assert!(tool.rank < user.rank);
+
+        let unknown = context_display_category("future_context_kind", 1);
+        assert_eq!(unknown.label, "future context kind");
+        assert_eq!(unknown.glyph, glyph::CONTEXT_OTHER);
+    }
+
+    #[tokio::test]
+    async fn informational_commands_append_inline_without_provider_history() {
+        let home = tempfile::tempdir().expect("home");
+        let project = tempfile::tempdir().expect("project");
+        std::fs::create_dir_all(project.path().join(".smith")).expect("config directory");
+        std::fs::write(
+            project.path().join(".smith/config.toml"),
+            LOCAL_COMMAND_CONFIG,
+        )
+        .expect("config");
+        let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+            .expect("resolution")
+            .config;
+        let runtime = RuntimeRequest {
+            workspace: Some(Arc::new(
+                ProjectWorkspace::new(project.path()).expect("workspace"),
+            )),
+            approval: Some(Arc::new(agent_runtime_core::approval::DenyAll)),
+            ..RuntimeRequest::new(config, HostSurface::Terminal)
+        };
+        let host = smith_runtime::host::start(HostSessionRequest::new(runtime, project.path()))
+            .await
+            .expect("host");
+        let history_before = host.session().history().len();
+        let mut app = App::new("example-model", project.path().display().to_string());
+
+        let before_plan = render_context_status(&app.status, host.runtime().policy());
+        assert!(before_plan.contains("not planned yet"), "{before_plan}");
+        assert!(
+            before_plan.contains("128k total · 4k reserved"),
+            "{before_plan}"
+        );
+        assert!(
+            before_plan.contains("compaction: enabled on overflow · 74.3k recovery target"),
+            "{before_plan}"
+        );
+        let before_context = render_context_view(&app.status, host.runtime().policy());
+        assert!(
+            before_context.contains("usage unavailable until the first turn"),
+            "{before_context}"
+        );
+        assert!(
+            before_context.contains("· free input: 123.9k"),
+            "{before_context}"
+        );
+        assert!(
+            before_context.contains("□ output/reasoning reserve: 4k"),
+            "{before_context}"
+        );
+        assert_eq!(
+            before_context
+                .lines()
+                .filter(|line| {
+                    !line.is_empty()
+                        && line
+                            .chars()
+                            .all(|character| matches!(character, '·' | '□' | ' '))
+                })
+                .count(),
+            5,
+            "{before_context}"
+        );
+
+        app.status.record_context_plan(
+            2_000,
+            123_904,
+            4_096,
+            2,
+            &std::collections::BTreeMap::from([
+                (
+                    agent_runtime_core::manifest::SegmentKind::new("history"),
+                    1_500,
+                ),
+                (
+                    agent_runtime_core::manifest::SegmentKind::new("tool_schema"),
+                    500,
+                ),
+            ]),
+            EstimationConfidence::Estimated,
+        );
+        let planned = render_context_status(&app.status, host.runtime().policy());
+        assert!(planned.contains("~98% input left"), "{planned}");
+        assert!(planned.contains("~2k used / 123.9k budget"), "{planned}");
+        assert!(planned.contains("provider input (session): ?"), "{planned}");
+        assert!(planned.contains("tool schema: ~500"), "{planned}");
+        assert!(
+            planned.contains("compaction: enabled on overflow · 74.3k recovery target"),
+            "{planned}"
+        );
+        let context = render_context_view(&app.status, host.runtime().policy());
+        assert!(
+            context.contains("example-model · ~2k / 123.9k input tokens · ~98% left"),
+            "{context}"
+        );
+        assert!(context.contains("◆ tool schemas: ~500"), "{context}");
+        assert!(context.contains("● history: ~1.5k"), "{context}");
+        assert!(
+            context.contains("counting: estimated · 2 segments"),
+            "{context}"
+        );
+
+        handle_local_command(&mut app, &host, project.path(), CommandAction::Status).await;
+        handle_local_command(&mut app, &host, project.path(), CommandAction::Context).await;
+        handle_local_command(&mut app, &host, project.path(), CommandAction::Agent(None)).await;
+        handle_local_command(&mut app, &host, project.path(), CommandAction::Diff(None)).await;
+
+        git(project.path(), &["init"]);
+        git(
+            project.path(),
+            &["config", "user.email", "smith@example.invalid"],
+        );
+        git(project.path(), &["config", "user.name", "Smith Test"]);
+        std::fs::write(project.path().join("tracked.txt"), "before\n").expect("tracked");
+        git(project.path(), &["add", "tracked.txt"]);
+        git(project.path(), &["commit", "-m", "initial"]);
+        std::fs::write(project.path().join("tracked.txt"), "after\n").expect("changed");
+        handle_local_command(
+            &mut app,
+            &host,
+            project.path(),
+            CommandAction::Diff(Some("unstaged".to_owned())),
+        )
+        .await;
+
+        for character in "/help".chars() {
+            app.on_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+        }
+        assert_eq!(
+            app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            None
+        );
+
+        let results = app
+            .transcript
+            .blocks()
+            .iter()
+            .filter_map(|block| match block {
+                Block::LocalResult { title, state, .. } => Some((title.as_str(), *state)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            results,
+            [
+                ("status", LocalResultState::Info),
+                ("context", LocalResultState::Info),
+                ("agents", LocalResultState::Empty),
+                ("diff", LocalResultState::Error),
+                ("diff · unstaged", LocalResultState::Info),
+                ("help", LocalResultState::Info),
+            ]
+        );
+        assert!(app.overlay.is_none(), "local output must not open a viewer");
+        assert_eq!(
+            host.session().history().len(),
+            history_before,
+            "local output became provider conversation history"
+        );
+        let status_content = app
+            .transcript
+            .blocks()
+            .iter()
+            .find_map(|block| match block {
+                Block::LocalResult { title, content, .. } if title == "status" => {
+                    Some(content.as_str())
+                }
+                _ => None,
+            })
+            .expect("status output");
+        assert!(
+            status_content.contains("~98% input left"),
+            "{status_content}"
+        );
+        let context_content = app
+            .transcript
+            .blocks()
+            .iter()
+            .find_map(|block| match block {
+                Block::LocalResult { title, content, .. } if title == "context" => {
+                    Some(content.as_str())
+                }
+                _ => None,
+            })
+            .expect("context output");
+        assert!(
+            context_content.contains("Estimated usage by category"),
+            "{context_content}"
+        );
+
+        app.status.record_context_plan(
+            1_200,
+            123_904,
+            4_096,
+            2,
+            &std::collections::BTreeMap::from([
+                (
+                    agent_runtime_core::manifest::SegmentKind::new("summary"),
+                    600,
+                ),
+                (
+                    agent_runtime_core::manifest::SegmentKind::new("user_input"),
+                    600,
+                ),
+            ]),
+            EstimationConfidence::Estimated,
+        );
+        let compacted = render_context_status(&app.status, host.runtime().policy());
+        assert!(
+            compacted.contains("compaction: applied · ~600 summary · 74.3k recovery target"),
+            "{compacted}"
+        );
+        host.shutdown().await.expect("shutdown");
+    }
+
+    fn git(project: &std::path::Path, arguments: &[&str]) {
+        let output = std::process::Command::new("git")
+            .args(arguments)
+            .current_dir(project)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .expect("git");
+        assert!(
+            output.status.success(),
+            "git {arguments:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}

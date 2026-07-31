@@ -1,0 +1,37 @@
+[package]
+name = "smith-runtime"
+description = "Smith's runtime composition: the production HTTP transport, session persistence, the canonical event journal, and the one factory every Smith host builds a runtime through."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+agent-runtime = { workspace = true }
+agent-runtime-core = { workspace = true }
+smith-config = { workspace = true }
+smith-host = { workspace = true }
+smith-tools = { workspace = true }
+async-trait = { workspace = true }
+dirs = { workspace = true }
+futures-core = { workspace = true }
+futures-util = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+agent-runtime-testkit = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+toml = { workspace = true }

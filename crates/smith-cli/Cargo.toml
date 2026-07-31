@@ -1,0 +1,36 @@
+[package]
+name = "smith-cli"
+description = "The `smith` binary: the interactive terminal client and non-interactive automation entry points."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "smith"
+path = "src/main.rs"
+
+[dependencies]
+agent-runtime-core = { workspace = true }
+anyhow = { workspace = true }
+crossterm = { workspace = true }
+futures-util = { workspace = true }
+ratatui = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+smith-config = { workspace = true }
+smith-host = { workspace = true }
+smith-runtime = { workspace = true }
+smith-tui = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+agent-runtime = { workspace = true }
+tempfile = { workspace = true }
+toml = { workspace = true }

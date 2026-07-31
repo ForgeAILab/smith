@@ -1,0 +1,33 @@
+[package]
+name = "smith-tools"
+description = "Smith's built-in coding tools: read, list, search, edit, and shell, bounded by the project workspace."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+agent-runtime-core = { workspace = true }
+async-trait = { workspace = true }
+ignore = "0.4"
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }
+
+# `killpg` through a safe wrapper, so the workspace keeps `unsafe_code = forbid`
+# while still stopping a whole process tree rather than only its root.
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", default-features = false, features = ["signal"] }
+
+[dev-dependencies]
+agent-runtime = { workspace = true }
+agent-runtime-testkit = { workspace = true }
+smith-host = { workspace = true }
+tempfile = "3"
