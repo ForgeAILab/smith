@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::{Duration, Instant};
 
-use agent_runtime_core::clock::SystemClock;
+use agent_runtime_core::clock::{SystemClock, Timestamp};
 #[cfg(test)]
 use agent_runtime_core::event::PlanItemStatus;
 use agent_runtime_core::event::{
@@ -27,7 +27,7 @@ use crate::diff::EditReview;
 use crate::picker::{PickerOutcome, ResourceEntry, ResourcePicker};
 use crate::questionnaire::{QuestionnaireForm, QuestionnaireResolution, QuestionnaireState};
 use crate::references::{ComposerReference, parse_references};
-use crate::status::{Activity, ContextPlanUpdate, Status, render_elapsed};
+use crate::status::{Activity, ContextPlanUpdate, Status, render_elapsed, render_terminal_elapsed};
 use crate::transcript::{LocalResultState, ToolStatus, Transcript};
 
 /// How long a second `Ctrl+C` still counts as the exit press.
@@ -411,6 +411,7 @@ pub struct App {
     /// Set once the host loop should exit.
     pub should_quit: bool,
     turn_started_at: Option<Instant>,
+    turn_started_timestamp: Option<Timestamp>,
     last_ctrl_c: Option<Instant>,
     last_event_seq: Option<u64>,
     speculative_attempts: BTreeMap<AttemptOutputKey, SpeculativeAttempt>,
@@ -440,6 +441,7 @@ impl App {
             tick: 0,
             should_quit: false,
             turn_started_at: None,
+            turn_started_timestamp: None,
             last_ctrl_c: None,
             last_event_seq: None,
             speculative_attempts: BTreeMap::new(),
@@ -774,6 +776,7 @@ impl App {
                 self.plan = None;
                 self.work = None;
                 self.turn_started_at = None;
+                self.turn_started_timestamp = None;
                 self.speculative_attempts.clear();
                 self.speculative_order.clear();
                 self.finalized_attempts.clear();
@@ -784,6 +787,8 @@ impl App {
                 self.plan = None;
                 self.work = Some(WorkSummary::default());
                 self.turn_started_at = Some(Instant::now());
+                self.turn_started_timestamp =
+                    (envelope.timestamp != Timestamp::ZERO).then_some(envelope.timestamp);
                 self.finalized_attempts.clear();
             }
             RuntimeEvent::ModelProfileResolved {
@@ -985,6 +990,13 @@ impl App {
                 // idle or leak into the next turn.
                 self.discard_orphaned_speculative_output("turn completion");
                 let elapsed = self.turn_started_at.take().map(|started| started.elapsed());
+                let terminal_elapsed = self.turn_started_timestamp.take().and_then(|started| {
+                    envelope
+                        .timestamp
+                        .as_millis()
+                        .checked_sub(started.as_millis())
+                        .map(Duration::from_millis)
+                });
                 self.transcript.close_open();
                 self.status.activity = Activity::Idle;
                 self.finish_work();
@@ -1031,10 +1043,17 @@ impl App {
                             ),
                         );
                     }
-                    // A successful terminal is state, not another transcript
-                    // message. The committed answer/tool rows and canonical
-                    // runtime event already carry the outcome.
-                    TurnFinish::Completed => {}
+                    TurnFinish::Completed => {
+                        self.transcript.push_notice(
+                            "turn",
+                            terminal_elapsed.map_or_else(
+                                || "completed".to_owned(),
+                                |elapsed| {
+                                    format!("completed in {}", render_terminal_elapsed(elapsed))
+                                },
+                            ),
+                        );
+                    }
                     TurnFinish::Failed => {
                         self.transcript.push_notice(
                             "turn",
@@ -1224,6 +1243,7 @@ impl App {
                 self.transcript.close_open();
                 self.status.activity = Activity::Ended;
                 self.turn_started_at = None;
+                self.turn_started_timestamp = None;
             }
             // Planning-lifecycle events carry diagnostics the basic TUI does not
             // surface yet; they are recorded by the session log regardless.
@@ -2865,12 +2885,16 @@ mod tests {
     }
 
     fn event(payload: RuntimeEvent) -> EventEnvelope {
+        event_at(Timestamp::ZERO, payload)
+    }
+
+    fn event_at(timestamp: Timestamp, payload: RuntimeEvent) -> EventEnvelope {
         EventEnvelope::new(
             0,
             EventId::new("e"),
             SessionId::new("s"),
             None,
-            Timestamp::ZERO,
+            timestamp,
             payload,
         )
     }
@@ -3437,7 +3461,7 @@ mod tests {
             } => {
                 assert_eq!(*status, ToolStatus::Denied);
                 assert!(display.is_none());
-                assert_eq!(protected_summary, "command · values protected");
+                assert_eq!(protected_summary, "command · details unavailable");
             }
             other => panic!("expected a tool block, got {other:?}"),
         }
@@ -3760,7 +3784,7 @@ mod tests {
             visible_output: true,
         }));
 
-        assert_eq!(app.transcript.len(), 1);
+        assert_eq!(app.transcript.len(), 2);
         assert_eq!(
             app.transcript.blocks()[0],
             Block::Assistant {
@@ -3768,11 +3792,12 @@ mod tests {
                 open: false
             }
         );
-        assert!(
-            !app.transcript
-                .blocks()
-                .iter()
-                .any(|block| matches!(block, Block::Notice { source, .. } if source == "turn"))
+        assert_eq!(
+            app.transcript.blocks()[1],
+            Block::Notice {
+                source: "turn".into(),
+                text: "completed".into(),
+            }
         );
         assert!(
             !app.transcript
@@ -3839,36 +3864,76 @@ mod tests {
     }
 
     #[test]
-    fn a_completed_turn_clears_its_monotonic_timer_without_a_notice() {
+    fn a_completed_turn_uses_canonical_duration_and_clears_live_timing() {
         let mut app = app();
-        app.apply(&event(RuntimeEvent::TurnStarted));
+        app.apply(&event_at(Timestamp(1_000), RuntimeEvent::TurnStarted));
         app.turn_started_at = Instant::now().checked_sub(Duration::from_secs(65));
         assert!(
             app.turn_elapsed()
                 .is_some_and(|elapsed| elapsed.as_secs() >= 65)
         );
 
-        app.apply(&event(RuntimeEvent::TurnCompleted {
-            finish: TurnFinish::Completed,
-            visible_output: true,
-        }));
+        app.apply(&event_at(
+            Timestamp(66_000),
+            RuntimeEvent::TurnCompleted {
+                finish: TurnFinish::Completed,
+                visible_output: true,
+            },
+        ));
 
         assert!(app.turn_elapsed().is_none());
-        assert!(app.transcript.is_empty());
+        assert_eq!(app.turn_started_timestamp, None);
+        assert_eq!(
+            app.transcript.blocks(),
+            &[Block::Notice {
+                source: "turn".into(),
+                text: "completed in 1m 05s".into(),
+            }]
+        );
     }
 
     #[test]
-    fn a_reasoning_only_success_returns_to_idle_without_a_notice() {
+    fn a_success_without_visible_text_keeps_an_honest_subsecond_notice() {
         let mut app = app();
-        app.apply(&event(RuntimeEvent::TurnStarted));
-        app.apply(&event(RuntimeEvent::TurnCompleted {
-            finish: TurnFinish::Completed,
-            visible_output: false,
-        }));
+        app.apply(&event_at(Timestamp(1_000), RuntimeEvent::TurnStarted));
+        app.apply(&event_at(
+            Timestamp(1_842),
+            RuntimeEvent::TurnCompleted {
+                finish: TurnFinish::Completed,
+                visible_output: false,
+            },
+        ));
 
         assert_eq!(app.status.activity, Activity::Idle);
         assert!(app.turn_elapsed().is_none());
-        assert!(app.transcript.is_empty());
+        let rendered = format!("{:?}", app.transcript.blocks());
+        assert!(rendered.contains("completed in 842ms"), "{rendered}");
+        assert!(!rendered.contains("reasoning only"), "{rendered}");
+    }
+
+    #[test]
+    fn unavailable_or_backward_canonical_timing_never_fabricates_duration() {
+        for (started, completed) in [
+            (Timestamp::ZERO, Timestamp(5_000)),
+            (Timestamp(7_000), Timestamp(6_000)),
+        ] {
+            let mut app = app();
+            app.apply(&event_at(started, RuntimeEvent::TurnStarted));
+            app.apply(&event_at(
+                completed,
+                RuntimeEvent::TurnCompleted {
+                    finish: TurnFinish::Completed,
+                    visible_output: true,
+                },
+            ));
+            assert_eq!(
+                app.transcript.blocks(),
+                &[Block::Notice {
+                    source: "turn".into(),
+                    text: "completed".into(),
+                }]
+            );
+        }
     }
 
     #[test]
@@ -4241,7 +4306,7 @@ mod tests {
                 EventId::new(format!("event-{seq}")),
                 session.clone(),
                 turn,
-                Timestamp::ZERO,
+                Timestamp(10_000 + u64::try_from(seq).expect("fixture time") * 100),
                 payload,
             )
         })
@@ -4281,7 +4346,7 @@ mod tests {
         assert!(rendered.contains("call-approved-edit"));
         assert!(rendered.contains("call-question"));
         assert!(rendered.contains("not restarted"));
-        assert!(!rendered.contains("completed in"));
+        assert!(rendered.contains("completed in"));
         assert!(!rendered.contains("reasoning only"));
         assert!(
             !rendered.contains("discarded speculative prefix"),

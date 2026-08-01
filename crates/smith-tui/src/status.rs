@@ -257,6 +257,20 @@ pub fn render_elapsed(duration: Duration) -> String {
     }
 }
 
+/// Renders canonical terminal duration with honest sub-second precision.
+pub fn render_terminal_elapsed(duration: Duration) -> String {
+    if duration < Duration::from_secs(1) {
+        let millis = duration.as_millis();
+        if millis == 0 {
+            "<1ms".to_owned()
+        } else {
+            format!("{millis}ms")
+        }
+    } else {
+        render_elapsed(duration)
+    }
+}
+
 impl Activity {
     /// The word shown beside the spinner. Paired with the glyph, never
     /// replaced by it.
@@ -428,6 +442,13 @@ mod tests {
         assert_eq!(render_elapsed(Duration::from_secs(59)), "59s");
         assert_eq!(render_elapsed(Duration::from_secs(65)), "1m 05s");
         assert_eq!(render_elapsed(Duration::from_secs(3_725)), "1h 02m 05s");
+    }
+
+    #[test]
+    fn terminal_elapsed_time_is_honest_below_one_second() {
+        assert_eq!(render_terminal_elapsed(Duration::ZERO), "<1ms");
+        assert_eq!(render_terminal_elapsed(Duration::from_millis(842)), "842ms");
+        assert_eq!(render_terminal_elapsed(Duration::from_secs(1)), "1s");
     }
 
     #[test]

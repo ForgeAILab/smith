@@ -15,7 +15,7 @@
 
 use agent_runtime_core::content::{ContentPart, Message, Role};
 use serde_json::Value;
-use smith_tools::{ToolCallDisplay, project_tool_call_display};
+use smith_tools::{ToolCallDisplay, has_tool_call_display_schema, project_tool_call_display};
 
 pub(crate) const MAX_LOCAL_RESULT_BYTES: usize = 512 * 1024;
 const MAX_LOCAL_RESULT_LINES: usize = 4_096;
@@ -234,8 +234,8 @@ impl Transcript {
 
     /// Records a requested tool call.
     ///
-    /// Runtime events keep argument values protected by default. A caller with
-    /// trusted canonical arguments may supply them for the explicit built-in
+    /// Runtime events keep argument values protected by default. A caller may
+    /// supply a credential-redacted canonical clone for the explicit built-in
     /// projector; arbitrary values are never summarized generically.
     pub fn push_tool_call(
         &mut self,
@@ -249,7 +249,7 @@ impl Transcript {
             call_id: call_id.into(),
             name: name.to_owned(),
             display: arguments.and_then(|arguments| project_tool_call_display(name, arguments)),
-            protected_summary: summarize_protected_arguments(argument_keys),
+            protected_summary: summarize_unavailable_arguments(name, argument_keys),
             status: ToolStatus::Running,
         });
     }
@@ -352,8 +352,13 @@ impl Transcript {
                                 self.blocks.push(Block::Tool {
                                     call_id: call.id.as_str().to_owned(),
                                     name: call.name.clone(),
-                                    display: project_tool_call_display(&call.name, &call.arguments),
-                                    protected_summary: summarize_protected_arguments(
+                                    // Canonical history is intentionally not
+                                    // projected here. The host supplies a
+                                    // credential-redacted display clone after
+                                    // rebuilding the transcript.
+                                    display: None,
+                                    protected_summary: summarize_unavailable_arguments(
+                                        &call.name,
                                         &argument_keys,
                                     ),
                                     // History records the call; the matching
@@ -409,10 +414,15 @@ fn bound_local_result(content: String) -> String {
     bounded
 }
 
-/// A stable, value-free summary for the runtime's default redacted event.
-fn summarize_protected_arguments(argument_keys: &[String]) -> String {
+/// A stable, value-free fallback when no reviewed projection is available.
+fn summarize_unavailable_arguments(name: &str, argument_keys: &[String]) -> String {
+    let reason = if has_tool_call_display_schema(name) {
+        "details unavailable"
+    } else {
+        "unknown schema"
+    };
     if argument_keys.is_empty() {
-        "values protected".to_owned()
+        reason.to_owned()
     } else {
         const MAX_KEYS: usize = 6;
         let mut keys = argument_keys
@@ -441,7 +451,7 @@ fn summarize_protected_arguments(argument_keys: &[String]) -> String {
         if argument_keys.len() > MAX_KEYS {
             keys.push("…".to_owned());
         }
-        format!("{} · values protected", keys.join(", "))
+        format!("{} · {reason}", keys.join(", "))
     }
 }
 
@@ -601,7 +611,7 @@ mod tests {
     }
 
     #[test]
-    fn protected_arguments_show_keys_without_values() {
+    fn unavailable_details_show_keys_and_an_honest_reason() {
         let mut transcript = Transcript::new();
         transcript.push_tool_call("c1", "shell", None, &["command".into(), "cwd".into()]);
 
@@ -612,7 +622,7 @@ mod tests {
                 ..
             } => {
                 assert!(display.is_none());
-                assert_eq!(protected_summary, "command, cwd · values protected");
+                assert_eq!(protected_summary, "command, cwd · details unavailable");
                 assert!(!protected_summary.contains("cargo test"));
             }
             other => panic!("expected a tool block, got {other:?}"),
@@ -620,15 +630,15 @@ mod tests {
     }
 
     #[test]
-    fn even_explicit_event_arguments_use_only_the_reviewed_projector() {
+    fn credential_redacted_arguments_use_only_the_reviewed_projector() {
         let mut transcript = Transcript::new();
         transcript.push_tool_call(
             "c1",
             "shell",
             Some(&json!({
-                "command": "printf TOP_SECRET_COMMAND",
+                "command": "printf [redacted]",
                 "cwd": "crates/smith-cli",
-                "unknown": "TOP_SECRET_UNKNOWN"
+                "unknown": "omitted"
             })),
             &["command".into(), "cwd".into(), "unknown".into()],
         );
@@ -637,8 +647,11 @@ mod tests {
             panic!("expected a tool block");
         };
         let invocation = display.as_ref().expect("safe projection").invocation();
-        assert_eq!(invocation, "Shell(crates/smith-cli)");
-        assert!(!invocation.contains("TOP_SECRET"));
+        assert_eq!(
+            invocation,
+            "Shell(printf [redacted] · cwd crates/smith-cli)"
+        );
+        assert!(!invocation.contains("omitted"));
     }
 
     #[test]
@@ -678,11 +691,8 @@ mod tests {
             } => {
                 assert_eq!(name, "read");
                 assert_eq!(*status, ToolStatus::Ok);
-                assert_eq!(
-                    display.as_ref().map(ToolCallDisplay::invocation),
-                    Some("Read(src/retry.rs)".to_owned())
-                );
-                assert_eq!(protected_summary, "path · values protected");
+                assert!(display.is_none());
+                assert_eq!(protected_summary, "path · details unavailable");
             }
             other => panic!("expected a tool block, got {other:?}"),
         }
@@ -694,7 +704,7 @@ mod tests {
             (
                 "read",
                 json!({"path": "src/lib.rs", "offset": 4, "limit": 2}),
-                Some("Read(src/lib.rs · lines 4–5)"),
+                Some("Read(src/lib.rs · offset 4 · limit 2)"),
             ),
             (
                 "list",
@@ -703,22 +713,22 @@ mod tests {
             ),
             (
                 "search",
-                json!({"pattern": "TOP_SECRET_PATTERN", "path": "crates"}),
-                Some("Search(crates)"),
+                json!({"pattern": "needle", "path": "crates"}),
+                Some("Search(\"needle\" · crates)"),
             ),
             (
                 "edit",
                 json!({
                     "path": "src/lib.rs",
-                    "old_string": "TOP_SECRET_OLD",
-                    "new_string": "TOP_SECRET_NEW"
+                    "old_string": "before",
+                    "new_string": "after"
                 }),
                 Some("Edit(src/lib.rs)"),
             ),
             (
                 "shell",
-                json!({"command": "printf TOP_SECRET_COMMAND", "cwd": "crates"}),
-                Some("Shell(crates)"),
+                json!({"command": "cargo test", "cwd": "crates"}),
+                Some("Shell(cargo test · cwd crates)"),
             ),
             ("third_party", json!({"path": "TOP_SECRET_UNKNOWN"}), None),
         ];
@@ -748,6 +758,9 @@ mod tests {
             ];
             let mut replay = Transcript::new();
             replay.replace_from_history(&history);
+            if let Some(display) = project_tool_call_display(name, &arguments) {
+                replay.set_tool_display(&call_id, display);
+            }
 
             let (
                 Block::Tool {
@@ -774,10 +787,6 @@ mod tests {
                 expected.map(str::to_owned),
                 "{name}"
             );
-            if let Some(display) = live_display {
-                let invocation = display.invocation();
-                assert!(!invocation.contains("TOP_SECRET"), "{invocation}");
-            }
         }
     }
 

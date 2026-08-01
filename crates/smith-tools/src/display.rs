@@ -2,12 +2,13 @@
 //!
 //! A tool's canonical arguments can contain arbitrary model-generated text.
 //! This module therefore does not summarize JSON generically: every displayed
-//! field is explicitly allowlisted beside the built-in tool schema that gives
-//! it meaning.
+//! field is explicitly selected beside the built-in tool schema that gives it
+//! meaning. Callers must credential-redact canonical arguments before passing
+//! them here.
 
 use serde_json::{Map, Value};
 
-const MAX_TARGET_CHARS: usize = 160;
+const MAX_VALUE_CHARS: usize = 160;
 
 /// A reviewed, bounded description of one built-in tool invocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,7 +24,7 @@ impl ToolCallDisplay {
         self.label
     }
 
-    /// Actionable local target, such as a path or working directory.
+    /// Primary operation input, such as a path, pattern, or command.
     pub fn target(&self) -> &str {
         &self.target
     }
@@ -58,19 +59,22 @@ pub fn project_tool_call_display(name: &str, arguments: &Value) -> Option<ToolCa
     }
 }
 
+/// Whether Smith owns a reviewed display schema for `name`.
+pub fn has_tool_call_display_schema(name: &str) -> bool {
+    matches!(name, "read" | "list" | "search" | "edit" | "shell")
+}
+
 fn project_read(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
     let target = required_target(arguments, "path")?;
     let offset = optional_positive_integer(arguments, "offset")?;
     let limit = optional_positive_integer(arguments, "limit")?;
-    let qualifiers = match (offset, limit) {
-        (Some(offset), Some(limit)) => vec![format!(
-            "lines {offset}–{}",
-            offset.saturating_add(limit.saturating_sub(1))
-        )],
-        (Some(offset), None) => vec![format!("from line {offset}")],
-        (None, Some(limit)) => vec![format!("first {limit} lines")],
-        (None, None) => Vec::new(),
-    };
+    let mut qualifiers = Vec::new();
+    if let Some(offset) = offset {
+        qualifiers.push(format!("offset {offset}"));
+    }
+    if let Some(limit) = limit {
+        qualifiers.push(format!("limit {limit}"));
+    }
     Some(display("Read", target, qualifiers))
 }
 
@@ -93,11 +97,16 @@ fn project_list(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
 }
 
 fn project_search(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
-    require_string_field(arguments, "pattern")?;
-    let target = optional_target(arguments, "path", ".")?;
+    let pattern = required_value(arguments, "pattern")?;
+    let target = serde_json::to_string(&pattern).ok()?;
+    let path = optional_target(arguments, "path", ".")?;
+    let extension = optional_value(arguments, "extension")?;
     let case_sensitive = optional_boolean(arguments, "case_sensitive")?;
     let limit = optional_positive_integer(arguments, "limit")?;
-    let mut qualifiers = Vec::new();
+    let mut qualifiers = vec![path];
+    if let Some(extension) = extension {
+        qualifiers.push(format!("extension {extension}"));
+    }
     if case_sensitive == Some(true) {
         qualifiers.push("case sensitive".to_owned());
     }
@@ -121,12 +130,13 @@ fn project_edit(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
 }
 
 fn project_shell(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
-    require_string_field(arguments, "command")?;
-    let target = optional_target(arguments, "cwd", ".")?;
+    let target = required_value(arguments, "command")?;
+    let cwd = optional_target(arguments, "cwd", ".")?;
     let timeout = optional_positive_integer(arguments, "timeout_ms")?;
-    let qualifiers = timeout
-        .map(|timeout| vec![format!("timeout {timeout} ms")])
-        .unwrap_or_default();
+    let mut qualifiers = vec![format!("cwd {cwd}")];
+    if let Some(timeout) = timeout {
+        qualifiers.push(format!("timeout {timeout}ms"));
+    }
     Some(display("Shell", target, qualifiers))
 }
 
@@ -139,14 +149,26 @@ fn display(label: &'static str, target: String, qualifiers: Vec<String>) -> Tool
 }
 
 fn required_target(arguments: &Map<String, Value>, key: &str) -> Option<String> {
-    normalize_target(require_string_field(arguments, key)?)
+    required_value(arguments, key)
 }
 
 fn optional_target(arguments: &Map<String, Value>, key: &str, default: &str) -> Option<String> {
     match arguments.get(key) {
-        Some(Value::String(value)) => normalize_target(value),
+        Some(Value::String(value)) => normalize_value(value),
         Some(_) => None,
-        None => normalize_target(default),
+        None => normalize_value(default),
+    }
+}
+
+fn required_value(arguments: &Map<String, Value>, key: &str) -> Option<String> {
+    normalize_value(require_string_field(arguments, key)?)
+}
+
+fn optional_value(arguments: &Map<String, Value>, key: &str) -> Option<Option<String>> {
+    match arguments.get(key) {
+        Some(Value::String(value)) => normalize_value(value).map(Some),
+        Some(_) => None,
+        None => Some(None),
     }
 }
 
@@ -170,8 +192,8 @@ fn optional_positive_integer(arguments: &Map<String, Value>, key: &str) -> Optio
     }
 }
 
-fn normalize_target(raw: &str) -> Option<String> {
-    let mut normalized = String::with_capacity(raw.len().min(MAX_TARGET_CHARS));
+fn normalize_value(raw: &str) -> Option<String> {
+    let mut normalized = String::with_capacity(raw.len().min(MAX_VALUE_CHARS));
     let mut chars = 0usize;
     let mut pending_space = false;
     let mut truncated = false;
@@ -182,7 +204,7 @@ fn normalize_target(raw: &str) -> Option<String> {
             continue;
         }
         if pending_space {
-            if chars == MAX_TARGET_CHARS {
+            if chars == MAX_VALUE_CHARS {
                 truncated = true;
                 break;
             }
@@ -190,7 +212,7 @@ fn normalize_target(raw: &str) -> Option<String> {
             chars += 1;
             pending_space = false;
         }
-        if chars == MAX_TARGET_CHARS {
+        if chars == MAX_VALUE_CHARS {
             truncated = true;
             break;
         }
@@ -206,7 +228,7 @@ fn normalize_target(raw: &str) -> Option<String> {
             normalized.pop();
             chars = chars.saturating_sub(1);
         }
-        if chars == MAX_TARGET_CHARS {
+        if chars == MAX_VALUE_CHARS {
             normalized.pop();
         }
         normalized.push('…');
@@ -243,7 +265,7 @@ mod tests {
                 "read",
                 json!({"path": "src/lib.rs", "offset": 10, "limit": 5})
             ),
-            "Read(src/lib.rs · lines 10–14)"
+            "Read(src/lib.rs · offset 10 · limit 5)"
         );
         assert_eq!(
             invocation(
@@ -263,7 +285,7 @@ mod tests {
                     "limit": 8
                 })
             ),
-            "Search(crates · case sensitive · limit 8)"
+            "Search(\"TOP_SECRET_PATTERN\" · crates · extension TOP_SECRET_EXTENSION · case sensitive · limit 8)"
         );
         assert_eq!(
             invocation(
@@ -286,7 +308,7 @@ mod tests {
                     "timeout_ms": 3000
                 })
             ),
-            "Shell(crates/smith-cli · timeout 3000 ms)"
+            "Shell(printf TOP_SECRET_COMMAND · cwd crates/smith-cli · timeout 3000ms)"
         );
     }
 
@@ -298,72 +320,80 @@ mod tests {
         );
         assert_eq!(
             invocation("search", json!({"pattern": "hidden"})),
-            "Search(.)"
+            "Search(\"hidden\" · .)"
         );
         assert_eq!(
             invocation("shell", json!({"command": "hidden"})),
-            "Shell(.)"
+            "Shell(hidden · cwd .)"
         );
     }
 
     #[test]
-    fn arbitrary_values_never_enter_the_projection() {
-        let secrets = [
-            "TOP_SECRET_PATTERN",
-            "TOP_SECRET_EXTENSION",
-            "TOP_SECRET_OLD",
-            "TOP_SECRET_NEW",
-            "TOP_SECRET_COMMAND",
-            "TOP_SECRET_RESULT",
-            "TOP_SECRET_UNKNOWN",
-        ];
-        let calls = [
-            invocation(
-                "search",
-                json!({
-                    "pattern": secrets[0],
-                    "extension": secrets[1],
-                    "result": secrets[5],
-                    "unknown": secrets[6]
-                }),
-            ),
-            invocation(
-                "edit",
-                json!({
-                    "path": "safe.rs",
-                    "old_string": secrets[2],
-                    "new_string": secrets[3],
-                    "result": secrets[5],
-                    "unknown": secrets[6]
-                }),
-            ),
-            invocation(
-                "shell",
-                json!({
-                    "command": secrets[4],
-                    "result": secrets[5],
-                    "unknown": secrets[6]
-                }),
-            ),
-        ];
+    fn ordinary_operation_values_enter_but_bulk_and_unknown_values_do_not() {
+        let search = invocation(
+            "search",
+            json!({
+                "pattern": "NEEDLE",
+                "extension": "rs",
+                "result": "TOP_SECRET_RESULT",
+                "unknown": "TOP_SECRET_UNKNOWN"
+            }),
+        );
+        assert!(search.contains("NEEDLE"));
+        assert!(search.contains("extension rs"));
+        assert!(!search.contains("TOP_SECRET_RESULT"));
+        assert!(!search.contains("TOP_SECRET_UNKNOWN"));
 
-        for call in calls {
-            for secret in secrets {
-                assert!(!call.contains(secret), "{secret} leaked through `{call}`");
-            }
-        }
+        let edit = invocation(
+            "edit",
+            json!({
+                "path": "safe.rs",
+                "old_string": "TOP_SECRET_OLD",
+                "new_string": "TOP_SECRET_NEW",
+                "result": "TOP_SECRET_RESULT",
+                "unknown": "TOP_SECRET_UNKNOWN"
+            }),
+        );
+        assert!(!edit.contains("TOP_SECRET_OLD"));
+        assert!(!edit.contains("TOP_SECRET_NEW"));
+        assert!(!edit.contains("TOP_SECRET_RESULT"));
+        assert!(!edit.contains("TOP_SECRET_UNKNOWN"));
+
+        let shell = invocation(
+            "shell",
+            json!({
+                "command": "printf ordinary",
+                "result": "TOP_SECRET_RESULT",
+                "unknown": "TOP_SECRET_UNKNOWN"
+            }),
+        );
+        assert!(shell.contains("printf ordinary"));
+        assert!(!shell.contains("TOP_SECRET_RESULT"));
+        assert!(!shell.contains("TOP_SECRET_UNKNOWN"));
+    }
+
+    #[test]
+    fn credential_redaction_markers_remain_explicit() {
+        assert_eq!(
+            invocation("search", json!({"pattern": "[redacted]"})),
+            "Search(\"[redacted]\" · .)"
+        );
+        assert_eq!(
+            invocation("shell", json!({"command": "curl -H [redacted]"})),
+            "Shell(curl -H [redacted] · cwd .)"
+        );
     }
 
     #[test]
     fn targets_are_one_line_control_free_and_bounded() {
         let raw = format!(
             "{}\nnext\t\u{1b}[31m\u{202e}tail",
-            "a".repeat(MAX_TARGET_CHARS * 2)
+            "a".repeat(MAX_VALUE_CHARS * 2)
         );
         let display =
             project_tool_call_display("read", &json!({"path": raw})).expect("path should project");
 
-        assert!(display.target().chars().count() <= MAX_TARGET_CHARS);
+        assert!(display.target().chars().count() <= MAX_VALUE_CHARS);
         assert!(display.target().ends_with('…'));
         assert!(
             !display
@@ -388,6 +418,8 @@ mod tests {
 
     #[test]
     fn malformed_or_unknown_calls_keep_the_caller_on_its_fallback_path() {
+        assert!(has_tool_call_display_schema("read"));
+        assert!(!has_tool_call_display_schema("third_party"));
         assert!(project_tool_call_display("third_party", &json!({"path": "safe"})).is_none());
         assert!(project_tool_call_display("read", &json!({"path": 42})).is_none());
         assert!(project_tool_call_display("list", &json!({"recursive": "yes"})).is_none());

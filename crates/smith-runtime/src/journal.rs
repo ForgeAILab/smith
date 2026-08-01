@@ -353,6 +353,16 @@ impl DefaultRedactor {
         self.register_value(value.to_owned());
     }
 
+    /// Returns a credential-redacted clone suitable for bounded local display.
+    ///
+    /// The canonical value remains untouched. Structural credential keys and
+    /// every exact registered literal use the same policy as persistence.
+    pub fn redacted_clone(&self, value: &Value) -> Value {
+        let mut redacted = value.clone();
+        self.scrub(&mut redacted);
+        redacted
+    }
+
     fn register_value(&self, secret: String) {
         if !secret.is_empty() {
             let mut secrets = self
@@ -1334,6 +1344,34 @@ mod tests {
             .with_secret("sk-live-abc")
             .redact(&mut line);
         assert_eq!(line["text"], "use [redacted] for auth");
+    }
+
+    #[test]
+    fn a_redacted_clone_preserves_operational_fields_and_canonical_arguments() {
+        let canonical = serde_json::json!({
+            "path": "src/main.rs",
+            "limit": 40,
+            "api_key": "sk-live-abc",
+            "command": "curl -H sk-live-abc https://example.test"
+        });
+        let redacted = DefaultRedactor::new()
+            .with_secret("sk-live-abc")
+            .redacted_clone(&canonical);
+
+        assert_eq!(redacted["path"], "src/main.rs");
+        assert_eq!(redacted["limit"], 40);
+        assert_eq!(redacted["api_key"], REDACTED);
+        assert_eq!(
+            redacted["command"],
+            "curl -H [redacted] https://example.test"
+        );
+        assert_eq!(canonical["api_key"], "sk-live-abc");
+        assert!(
+            canonical["command"]
+                .as_str()
+                .unwrap()
+                .contains("sk-live-abc")
+        );
     }
 
     #[test]

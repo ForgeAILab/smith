@@ -35,7 +35,7 @@ pub mod support;
 mod testing;
 
 pub use change::{ChangeRecorder, EditMutation, ToolMutation, TurnChangeSet, observed_tools};
-pub use display::{ToolCallDisplay, project_tool_call_display};
+pub use display::{ToolCallDisplay, has_tool_call_display_schema, project_tool_call_display};
 pub use edit::EditTool;
 pub use list::ListTool;
 pub use read::ReadTool;

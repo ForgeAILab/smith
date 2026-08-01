@@ -93,6 +93,7 @@ impl HostSessionRequest {
 pub struct HostSession {
     runtime: SmithRuntime,
     session: SessionHandle,
+    display_redactor: DefaultRedactor,
     journal: Option<Arc<EventJournal>>,
     paths: Option<SessionPaths>,
     changes: Arc<smith_tools::ChangeRecorder>,
@@ -183,7 +184,15 @@ impl HostSession {
     /// `ToolCallRequested`, so this lookup does not require raw arguments in
     /// the event or journal.
     pub fn tool_call_display(&self, call_id: &ToolCallId) -> Option<ToolCallDisplay> {
-        tool_call_display_from_history(&self.session.history(), call_id)
+        tool_call_display_from_history(&self.session.history(), call_id, &self.display_redactor)
+    }
+
+    /// Reviewed display projections for every canonical built-in tool call.
+    ///
+    /// Used when rebuilding a local transcript from resumed history. Unknown
+    /// tools and malformed calls remain on their honest fallback rows.
+    pub fn tool_call_displays(&self) -> Vec<(ToolCallId, ToolCallDisplay)> {
+        tool_call_displays_from_history(&self.session.history(), &self.display_redactor)
     }
 
     /// Shuts down the runtime first, then drains and syncs its journal.
@@ -218,6 +227,7 @@ impl HostSession {
 fn tool_call_display_from_history(
     history: &[Message],
     call_id: &ToolCallId,
+    redactor: &DefaultRedactor,
 ) -> Option<ToolCallDisplay> {
     history.iter().rev().find_map(|message| {
         message.content.iter().rev().find_map(|part| {
@@ -225,10 +235,31 @@ fn tool_call_display_from_history(
                 return None;
             };
             (call.id == *call_id)
-                .then(|| project_tool_call_display(&call.name, &call.arguments))
+                .then(|| {
+                    let arguments = redactor.redacted_clone(&call.arguments);
+                    project_tool_call_display(&call.name, &arguments)
+                })
                 .flatten()
         })
     })
+}
+
+fn tool_call_displays_from_history(
+    history: &[Message],
+    redactor: &DefaultRedactor,
+) -> Vec<(ToolCallId, ToolCallDisplay)> {
+    history
+        .iter()
+        .flat_map(|message| message.content.iter())
+        .filter_map(|part| {
+            let ContentPart::ToolCall(call) = part else {
+                return None;
+            };
+            let arguments = redactor.redacted_clone(&call.arguments);
+            project_tool_call_display(&call.name, &arguments)
+                .map(|display| (call.id.clone(), display))
+        })
+        .collect()
 }
 
 /// A standard-session startup failure.
@@ -307,9 +338,9 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         .persistence_redactor
         .clone()
         .unwrap_or_default();
-    if persistence {
-        request.runtime.persistence_redactor = Some(persistence_redactor.clone());
-    }
+    // The standard factory also registers provider credentials with this
+    // shared redactor, even when durable session persistence is disabled.
+    request.runtime.persistence_redactor = Some(persistence_redactor.clone());
 
     let mut resume_snapshot_exists = false;
     let (paths, journal_slot, checkpoint_barrier) = if persistence {
@@ -566,6 +597,7 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
     Ok(HostSession {
         runtime,
         session,
+        display_redactor: persistence_redactor,
         journal,
         paths,
         changes,
@@ -963,11 +995,37 @@ mod tests {
             }),
         ])];
 
-        let display = tool_call_display_from_history(&history, &ToolCallId::new("call-shell"))
-            .expect("matching canonical call");
-        assert_eq!(display.invocation(), "Shell(crates/smith-cli)");
+        let redactor = DefaultRedactor::new().with_secret("TOP_SECRET_COMMAND");
+        assert!(
+            tool_call_display_from_history(&[], &ToolCallId::new("call-shell"), &redactor)
+                .is_none(),
+            "request-time lookup can race canonical history visibility"
+        );
+        let display =
+            tool_call_display_from_history(&history, &ToolCallId::new("call-shell"), &redactor)
+                .expect("matching canonical call");
+        assert_eq!(
+            display.invocation(),
+            "Shell(printf [redacted] · cwd crates/smith-cli)"
+        );
         assert!(!display.invocation().contains("TOP_SECRET_COMMAND"));
-        assert!(tool_call_display_from_history(&history, &ToolCallId::new("missing")).is_none());
+        let ContentPart::ToolCall(canonical) = &history[0].content[1] else {
+            panic!("expected canonical tool call");
+        };
+        assert_eq!(canonical.arguments["command"], "printf TOP_SECRET_COMMAND");
+        let resumed = tool_call_displays_from_history(&history, &redactor);
+        assert_eq!(
+            resumed
+                .iter()
+                .find(|(call, _)| call.as_str() == "call-shell")
+                .map(|(_, display)| display),
+            Some(&display),
+            "completion retry and resume must converge on the same projection"
+        );
+        assert!(
+            tool_call_display_from_history(&history, &ToolCallId::new("missing"), &redactor)
+                .is_none()
+        );
     }
 
     #[test]

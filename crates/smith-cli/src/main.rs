@@ -474,6 +474,9 @@ async fn run_interactive(
         &agents,
     ));
     app.transcript.replace_from_history(&snapshot.history);
+    for (call, display) in host.tool_call_displays() {
+        app.set_tool_display(call.as_str(), display);
+    }
     if let Some(coordinator) = host
         .runtime()
         .delegation()
@@ -741,12 +744,7 @@ async fn run_tui(
             envelope = events.next() => {
                 match envelope {
                     Some(envelope) => {
-                        let tool_display = match &envelope.payload {
-                            RuntimeEvent::ToolCallRequested { call, .. } => host
-                                .tool_call_display(call)
-                                .map(|display| (call.as_str().to_owned(), display)),
-                            _ => None,
-                        };
+                        let tool_call = tool_call_for_display(&envelope.payload);
                         if matches!(envelope.payload, RuntimeEvent::TurnCompleted { .. })
                             && let Some(set) = host.changes().latest()
                             && last_change_turn != Some(set.turn)
@@ -764,8 +762,10 @@ async fn run_tui(
                                     );
                         }
                         app.apply(&envelope);
-                        if let Some((call_id, display)) = tool_display {
-                            app.set_tool_display(&call_id, display);
+                        if let Some(call) = tool_call
+                            && let Some(display) = host.tool_call_display(&call)
+                        {
+                            app.set_tool_display(call.as_str(), display);
                         }
                         dirty = true;
                     }
@@ -817,6 +817,14 @@ async fn run_tui(
         }
     };
     Ok(exit)
+}
+
+fn tool_call_for_display(event: &RuntimeEvent) -> Option<agent_runtime_core::ids::ToolCallId> {
+    match event {
+        RuntimeEvent::ToolCallRequested { call, .. }
+        | RuntimeEvent::ToolCallCompleted { call, .. } => Some(call.clone()),
+        _ => None,
+    }
 }
 
 async fn handle_local_command(
@@ -2430,6 +2438,30 @@ context_tokens = 128000
 max_input_tokens = 124000
 max_output_tokens = 4096
 "#;
+
+    #[test]
+    fn tool_display_enrichment_runs_at_request_and_completion_boundaries() {
+        let call = agent_runtime_core::ids::ToolCallId::new("call-display");
+        let requested = RuntimeEvent::ToolCallRequested {
+            call: call.clone(),
+            name: "read".to_owned(),
+            argument_keys: vec!["path".to_owned()],
+            argument_fingerprint: serde_json::from_value(serde_json::json!(
+                "0123456789abcdef0123456789abcdef"
+            ))
+            .expect("fingerprint"),
+            arguments: None,
+        };
+        let completed = RuntimeEvent::ToolCallCompleted {
+            call: call.clone(),
+            name: "read".to_owned(),
+            is_error: false,
+        };
+
+        assert_eq!(tool_call_for_display(&requested), Some(call.clone()));
+        assert_eq!(tool_call_for_display(&completed), Some(call));
+        assert!(tool_call_for_display(&RuntimeEvent::TurnStarted).is_none());
+    }
 
     #[test]
     fn runtime_timeline_uses_stable_ids_terminal_plan_and_redacted_gate_evidence() {

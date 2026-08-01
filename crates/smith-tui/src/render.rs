@@ -1990,12 +1990,16 @@ mod tests {
     }
 
     fn event(payload: RuntimeEvent) -> EventEnvelope {
+        event_at(Timestamp::ZERO, payload)
+    }
+
+    fn event_at(timestamp: Timestamp, payload: RuntimeEvent) -> EventEnvelope {
         EventEnvelope::new(
             0,
             EventId::new("e"),
             SessionId::new("s"),
             None,
-            Timestamp::ZERO,
+            timestamp,
             payload,
         )
     }
@@ -2163,7 +2167,7 @@ mod tests {
             "closed reasoning must not render as assistant prose: {lines:#?}"
         );
 
-        let tool = find_line("read(path · values protected)");
+        let tool = find_line("read(path · details unavailable)");
         assert_eq!(tool.spans[0].style.fg, Some(Color::Green));
         assert!(tool.spans[0].style.add_modifier.contains(Modifier::BOLD));
         assert!(tool.spans[1].style.add_modifier.contains(Modifier::BOLD));
@@ -2210,7 +2214,7 @@ mod tests {
             "{answered}"
         );
         assert!(!answered.contains("Working…"), "{answered}");
-        assert!(!answered.contains("turn · completed"), "{answered}");
+        assert!(answered.contains("turn · completed"), "{answered}");
         assert!(
             !answered.contains("private draft that resembles the answer"),
             "{answered}"
@@ -2218,25 +2222,31 @@ mod tests {
     }
 
     #[test]
-    fn successful_terminals_are_quiet_and_non_success_stays_visible_at_all_widths() {
+    fn successful_and_non_success_terminals_stay_visible_at_all_widths() {
         for (width, height) in [(44, 14), (74, 24), (120, 32)] {
             let theme = Theme::new().without_color().without_motion();
 
             let mut completed = App::new("gpt-5.3", "~/work/api");
-            completed.apply(&event(RuntimeEvent::TurnStarted));
+            completed.apply(&event_at(Timestamp(1_000), RuntimeEvent::TurnStarted));
             completed.transcript.push_text_delta("Committed answer.");
-            completed.apply(&event(RuntimeEvent::TurnCompleted {
-                finish: TurnFinish::Completed,
-                visible_output: true,
-            }));
+            completed.apply(&event_at(
+                Timestamp(1_842),
+                RuntimeEvent::TurnCompleted {
+                    finish: TurnFinish::Completed,
+                    visible_output: true,
+                },
+            ));
             let completed_screen = render(&completed, width, height, theme);
             assert!(
                 completed_screen.contains("Committed answer."),
                 "{width}x{height}: {completed_screen}"
             );
             assert!(
-                !completed_screen.contains("turn · completed")
-                    && !completed_screen.contains("reasoning only")
+                completed_screen.contains("turn · completed in 842ms"),
+                "{width}x{height}: {completed_screen}"
+            );
+            assert!(
+                !completed_screen.contains("reasoning only")
                     && !completed_screen.contains("Working…"),
                 "{width}x{height}: {completed_screen}"
             );
@@ -2253,6 +2263,125 @@ mod tests {
             assert!(
                 interrupted_screen.contains("interrupted"),
                 "{width}x{height}: {interrupted_screen}"
+            );
+        }
+    }
+
+    #[test]
+    fn tool_only_reasoning_only_and_fallback_states_render_at_all_widths() {
+        for (width, height) in [(44, 18), (74, 24), (120, 32)] {
+            let theme = Theme::new().without_color().without_motion();
+
+            let mut tool_only = App::new("gpt-5.3", "~/work/api");
+            tool_only.apply(&event_at(Timestamp(2_000), RuntimeEvent::TurnStarted));
+            tool_only.apply(&event(RuntimeEvent::ToolCallRequested {
+                call: ToolCallId::new("search-redacted"),
+                name: "search".to_owned(),
+                argument_keys: vec!["path".to_owned(), "pattern".to_owned()],
+                argument_fingerprint: agent_runtime_registry::Fingerprint::of("arguments"),
+                arguments: None,
+            }));
+            tool_only.set_tool_display(
+                "search-redacted",
+                smith_tools::project_tool_call_display(
+                    "search",
+                    &serde_json::json!({"pattern": "[redacted]", "path": "src"}),
+                )
+                .expect("reviewed search projection"),
+            );
+            tool_only.apply(&event(RuntimeEvent::ToolCallCompleted {
+                call: ToolCallId::new("search-redacted"),
+                name: "search".to_owned(),
+                is_error: false,
+            }));
+            tool_only.apply(&event_at(
+                Timestamp(2_842),
+                RuntimeEvent::TurnCompleted {
+                    finish: TurnFinish::Completed,
+                    visible_output: false,
+                },
+            ));
+            let tool_screen = render(&tool_only, width, height, theme);
+            assert!(
+                tool_screen.contains("Search("),
+                "{width}x{height}: {tool_screen}"
+            );
+            assert!(
+                tool_screen.contains("[redacted]"),
+                "{width}x{height}: {tool_screen}"
+            );
+            assert!(
+                tool_screen.contains(" · ok"),
+                "{width}x{height}: {tool_screen}"
+            );
+            assert!(
+                tool_screen.contains("turn · completed in 842ms"),
+                "{width}x{height}: {tool_screen}"
+            );
+
+            let mut reasoning_only = App::new("gpt-5.3", "~/work/api");
+            reasoning_only.apply(&event_at(Timestamp(3_000), RuntimeEvent::TurnStarted));
+            reasoning_only
+                .transcript
+                .push_reasoning_delta("private chain of thought", false);
+            reasoning_only.apply(&event_at(
+                Timestamp(3_842),
+                RuntimeEvent::TurnCompleted {
+                    finish: TurnFinish::Completed,
+                    visible_output: false,
+                },
+            ));
+            let reasoning_screen = render(&reasoning_only, width, height, theme);
+            assert!(
+                reasoning_screen.contains("turn · completed in 842ms"),
+                "{width}x{height}: {reasoning_screen}"
+            );
+            assert!(
+                !reasoning_screen.contains("reasoning only"),
+                "{reasoning_screen}"
+            );
+            assert!(
+                !reasoning_screen.contains("private chain of thought"),
+                "{reasoning_screen}"
+            );
+
+            let mut unavailable_duration = App::new("gpt-5.3", "~/work/api");
+            unavailable_duration.apply(&event(RuntimeEvent::TurnStarted));
+            unavailable_duration.apply(&event(RuntimeEvent::TurnCompleted {
+                finish: TurnFinish::Completed,
+                visible_output: false,
+            }));
+            let unavailable_screen = render(&unavailable_duration, width, height, theme);
+            assert!(
+                unavailable_screen.contains("turn · completed"),
+                "{unavailable_screen}"
+            );
+            assert!(
+                !unavailable_screen.contains("completed in"),
+                "{unavailable_screen}"
+            );
+
+            let mut fallback = App::new("gpt-5.3", "~/work/api");
+            fallback.apply(&event(RuntimeEvent::ToolCallRequested {
+                call: ToolCallId::new("third-party"),
+                name: "third_party".to_owned(),
+                argument_keys: vec!["path".to_owned()],
+                argument_fingerprint: agent_runtime_registry::Fingerprint::of("arguments"),
+                arguments: None,
+            }));
+            fallback.apply(&event(RuntimeEvent::ToolCallCompleted {
+                call: ToolCallId::new("third-party"),
+                name: "third_party".to_owned(),
+                is_error: false,
+            }));
+            let fallback_screen = render(&fallback, width, height, theme);
+            assert!(
+                fallback_screen.contains("unknown schema"),
+                "{fallback_screen}"
+            );
+            assert!(
+                !fallback_screen.contains("values protected"),
+                "{fallback_screen}"
             );
         }
     }
@@ -2377,7 +2506,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_tool_rows_never_render_arbitrary_arguments_or_results() {
+    fn compact_tool_rows_show_redacted_details_without_results_or_unknown_values() {
         let call_id = ToolCallId::new("search-1");
         let history = vec![
             Message::assistant(vec![ContentPart::ToolCall(ToolCall {
@@ -2398,28 +2527,34 @@ mod tests {
         ];
         let mut app = App::new("gpt-5.3", "~/work/api");
         app.transcript.replace_from_history(&history);
-        app.transcript.push_tool_call(
-            "unknown-1",
-            "third_party",
-            Some(&serde_json::json!({"path": "TOP_SECRET_UNKNOWN_TOOL"})),
-            &["path".to_owned()],
+        app.set_tool_display(
+            "search-1",
+            smith_tools::project_tool_call_display(
+                "search",
+                &serde_json::json!({
+                    "pattern": "[redacted]",
+                    "path": "src/\n\u{1b}[31m\u{202e}tests"
+                }),
+            )
+            .expect("reviewed search projection"),
         );
+        app.transcript
+            .push_tool_call("unknown-1", "third_party", None, &["path".to_owned()]);
         app.transcript
             .complete_tool_call("unknown-1", ToolStatus::Failed);
 
         let screen = render(&app, 74, 16, Theme::new().without_color());
         assert!(
-            screen.contains("• Search(src/ [31m tests) · ok"),
+            screen.contains("• Search(\"[redacted]\" · src/ [31m tests) · ok"),
             "{screen}"
         );
         assert!(
-            screen.contains("• third_party(path · values protected) · failed"),
+            screen.contains("• third_party(path · unknown schema) · failed"),
             "{screen}"
         );
         assert!(!screen.contains("TOP_SECRET_PATTERN"), "{screen}");
         assert!(!screen.contains("TOP_SECRET_UNKNOWN"), "{screen}");
         assert!(!screen.contains("TOP_SECRET_RESULT"), "{screen}");
-        assert!(!screen.contains("TOP_SECRET_UNKNOWN_TOOL"), "{screen}");
         assert!(!screen.contains('\u{1b}'), "{screen:?}");
         assert!(!screen.contains('\u{202e}'), "{screen:?}");
         assert!(!screen.contains(glyph::BRANCH), "{screen}");

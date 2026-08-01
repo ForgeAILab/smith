@@ -38,8 +38,9 @@ status-card structure, and compact footer.
 │                                                                        │
 │ • The retry policy classifies provider failures into three groups…     │  transcript
 │                                                                        │  (flex, scrolls)
-│ • Read(src/retry.rs) · ok                                              │
-│ • Shell(.) · ok                                                        │
+│ • Read(src/retry.rs · offset 1 · limit 200) · ok                       │
+│ • Shell(cargo test -p smith-tui · cwd .) · ok                          │
+│ • turn · completed in 12s                                              │
 │                                                                        │
 ├────────────────────────────────────────────────────────────────────────┤
 │   Todo                                                                 │
@@ -149,14 +150,17 @@ Reasoning is progress, not a second assistant reply. From `turn_started` until
 the turn ends, the transcript appends one animated, dim
 `Working… · 12s` row rather than rendering the provider's raw reasoning text.
 Its duration comes from a local monotonic clock. At the turn boundary the
-working row disappears. Success is transcript-silent: the committed answer or
-tool rows already carry the result, and a reasoning-only success simply
-returns to idle. Interrupted, limited, needs-input, and failed turns retain a
-quiet attributed notice with elapsed time when the live reducer measured one.
-Canonical session history and the journal retain the start/completion events,
-timestamps, and reasoning needed for model continuity, replay, timelines, and
-diagnostics; historical durations are not invented when replay has no local
-timing record.
+working row disappears and every successful terminal appends one quiet
+`turn · completed in …` notice. Its duration comes from the canonical
+millisecond interval between the turn's start and completion envelopes:
+sub-second turns use milliseconds (zero renders `<1ms`), longer turns use the
+compact second/minute/hour grammar, and an absent or backward interval omits
+the duration instead of substituting local reducer time. Absence of visible
+assistant text never adds a `reasoning only` diagnosis. Interrupted, limited,
+needs-input, and failed turns retain their attributed notice with live elapsed
+time when available. Canonical session history and the journal retain the
+start/completion events, timestamps, and reasoning needed for model
+continuity, replay, timelines, and diagnostics.
 
 ## 4. Color
 
@@ -570,12 +574,25 @@ the context segment falls back to `~` until the new provider reports usage.
 
 Canonical runtime events do not expose tool argument values by default. The
 interactive host resolves the matching canonical in-process call by ID and
-passes only a typed, tool-specific projection into the TUI. Built-in rows show
-an allowlisted local target plus bounded numeric or boolean qualifiers:
-`Read(src/retry.rs) · ok` or `List(. · recursive) · running`. Commands, search
-patterns, edit bodies, arbitrary values, and tool results stay hidden. Unknown
-tools or unresolved calls show a bounded `tool(keys · values protected)`
-fallback instead of guessing which value is safe.
+clones its arguments, applies the same credential-shaped-key and exact
+registered-secret redaction used by persistence, and passes only that redacted
+clone into a typed tool-specific TUI projector. Built-in rows show bounded
+ordinary operation inputs and targets: `Read(src/retry.rs · offset 4 · limit
+20) · ok`, `Search("TurnCompleted" · crates · extension rs · limit 20) · ok`,
+or `Shell(cargo test -p smith-tui · cwd . · timeout 30000ms) · running`.
+Credential, authorization, API-key, token, password, private-key, bearer, and
+secret fields plus registered exact literals render as `[redacted]`; ordinary
+paths, patterns, commands, flags, limits, and timeouts are not described as
+protected.
+
+The interactive host tries enrichment when a tool is requested and retries by
+the same stable call ID when its completion arrives, so a transient
+request-time history race cannot leave a completed known built-in on a generic
+fallback. Edit old/new bodies and tool results stay outside the compact row
+because they are bulk content available through diff, approval, artifact, and
+explicit detail surfaces—not because all argument values are secret. Unknown,
+malformed, or still-unresolved calls show bounded argument keys plus `unknown
+schema` or `details unavailable` instead of guessing values.
 
 The projection never changes the runtime event or journal and never enables
 raw event arguments. Resumed transcripts derive the same projection from

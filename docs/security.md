@@ -152,6 +152,22 @@ validation, capability activation, authorization, approval, workspace
 containment, deadlines, or output bounds. Failed attempt output remains
 speculative until a commit event and is discarded on retry.
 
+The local interactive transcript may resolve a Smith built-in tool call from
+canonical in-process history to explain what ran. Before display, the host
+clones the arguments and applies the same credential-shaped-key and registered
+exact-secret scrubbing used by persistence. The bounded typed projector may
+then show ordinary operational values such as paths, read windows, search
+patterns, commands, flags, and timeouts. API keys, authorization values,
+tokens, passwords, credentials, private keys, bearer values, secrets, and
+registered literals render only as `[redacted]`. Bulk edit bodies and tool
+results remain outside compact rows, and unknown tool schemas receive no
+guessed value projection.
+
+This local enrichment does not enable raw tool arguments in runtime events,
+journals, observability, headless text, JSON, or stream JSON. Request-time and
+completion-time lookup use the same stable call ID and redacted projector, so
+retrying presentation enrichment cannot change execution or disclosure policy.
+
 The `@file` and leading-`!` composer shortcuts are not alternate authority
 paths. Attachments execute the canonical exact prepared `read`; local shell
 executes the canonical prepared `shell` with its broad permission bound,
