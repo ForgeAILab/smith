@@ -1,7 +1,7 @@
 ---
 created_at: 2026-07-31T22:06:35Z
-updated_at: 2026-07-31T22:07:08Z
-completed_at:
+updated_at: 2026-08-01T00:44:17Z
+completed_at: 2026-08-01T00:44:17Z
 ---
 
 ## 0. Approval and baselines
@@ -87,13 +87,13 @@ completed_at:
 
 - [x] 6.1 Run fmt, warning-denied Clippy, workspace tests, Rust 1.88, diff
   hygiene, strict spec validation, cargo-deny, and cargo-audit.
-- [ ] 6.2 Run the disposable coding benchmark on Z.AI Coding Plan GLM-5.2 with
+- [x] 6.2 Run the disposable coding benchmark on Z.AI Coding Plan GLM-5.2 with
   todos, exact read/edit/shell, validation gates, same-model child review, and
   all terminal plan items; independently rerun public and adversarial tests.
-- [ ] 6.3 Run a no-Keychain durable live scenario that interrupts after a
+- [x] 6.3 Run a no-Keychain durable live scenario that interrupts after a
   checkpoint boundary, resumes without repeating provider/tool work, and
   verifies no credential-service access occurred.
 - [x] 6.4 Update `DESIGN.md`, configuration/setup reference, security threat
   model, persistence/recovery docs, command help, and benchmark notes.
-- [ ] 6.5 Reinstall the verified `smith` binary and record exact local evidence;
+- [x] 6.5 Reinstall the verified `smith` binary and record exact local evidence;
   leave hosted macOS/Linux release gates explicit if unavailable.

@@ -13,6 +13,7 @@ See the public API documentation and tests for the required behavior.
 directory, commits only the disposable copy, reproduces the failing baseline,
 and records Smith/model/reviewer/fixture provenance beside the project. With
 `--live`, the task requires todos, bounded inspection, exact editing, fmt/test/
-Clippy gates, and a same-model read-only child review. Public tests are rerun
-outside the agent result, and generated session or child metadata is rejected
-if it appears in the fixture checkout.
+Clippy gates, and a same-model read-only child review. Public behavior and
+adversarial validation/cycle tests are rerun outside the agent result, and
+generated session or child metadata is rejected if it appears in the fixture
+checkout.

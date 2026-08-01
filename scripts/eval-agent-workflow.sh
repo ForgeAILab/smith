@@ -65,7 +65,7 @@ git -C "${project_dir}" \
   -c user.email='smith-evaluation@invalid' \
   commit -q -m 'test fixture: broken stable scheduler'
 
-if cargo test --manifest-path "${project_dir}/Cargo.toml" \
+if (cd "${project_dir}" && cargo test) \
   >"${evidence_dir}/baseline-test.txt" 2>&1; then
   command printf '%s\n' 'fixture unexpectedly passed before Smith ran' >&2
   exit 1
@@ -93,16 +93,48 @@ SMITH_PERSISTENCE_ENABLED="${SMITH_PERSISTENCE_ENABLED:-false}" \
   --project "${project_dir}" \
   --profile "${profile}" \
   --approval allow-all \
-  --output-format json \
+  --output-format stream-json \
   --no-color \
   --no-motion \
-  >"${evidence_dir}/smith-result.json"
+  >"${evidence_dir}/smith-stream.jsonl"
 
-cargo fmt --manifest-path "${project_dir}/Cargo.toml" --all -- --check \
+tail -n 1 "${evidence_dir}/smith-stream.jsonl" \
+  >"${evidence_dir}/smith-result.json"
+jq -e '
+  .schema_version == 2
+  and .type == "result"
+  and .status == "ok"
+  and .lifecycle.plan.counts.pending == 0
+  and .lifecycle.plan.counts.in_progress == 0
+' "${evidence_dir}/smith-result.json" >/dev/null
+
+for tool in read edit shell agent write_todos; do
+  jq -se --arg tool "${tool}" '
+    [.[] | select(
+      .type == "runtime_event"
+      and .event.payload.event == "tool_call_completed"
+      and .event.payload.name == $tool
+      and .event.payload.is_error == false
+    )] | length > 0
+  ' "${evidence_dir}/smith-stream.jsonl" >/dev/null
+done
+jq -se '
+  ([.[] | select(
+      .type == "runtime_event"
+      and .event.payload.event == "child_spawned"
+    )] | length > 0)
+  and
+  ([.[] | select(
+      .type == "runtime_event"
+      and .event.payload.event == "child_completed"
+    )] | length > 0)
+' "${evidence_dir}/smith-stream.jsonl" >/dev/null
+
+(cd "${project_dir}" && cargo fmt --all -- --check) \
   >"${evidence_dir}/fmt.txt" 2>&1
-cargo test --manifest-path "${project_dir}/Cargo.toml" \
+(cd "${project_dir}" && cargo test) \
   >"${evidence_dir}/test.txt" 2>&1
-cargo clippy --manifest-path "${project_dir}/Cargo.toml" --all-targets -- -D warnings \
+(cd "${project_dir}" && cargo clippy --all-targets -- -D warnings) \
   >"${evidence_dir}/clippy.txt" 2>&1
 git -C "${project_dir}" diff --check
 git -C "${project_dir}" status --short >"${evidence_dir}/project-status.txt"

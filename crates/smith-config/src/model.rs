@@ -383,7 +383,7 @@ pub struct PersistenceSection {
     /// A 32-byte checkpoint key encoded as 64 hexadecimal characters.
     ///
     /// Accepted only from owner-only user configuration. Environment input
-    /// uses the corresponding `SMITH_PERSISTENCE_CHECKPOINT_KEY` setting.
+    /// uses the corresponding `SMITH_CHECKPOINT_KEY` setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkpoint_key: Option<ConfigSecret>,
     /// Optional protected credential reference for the checkpoint key.
