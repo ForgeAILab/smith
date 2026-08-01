@@ -44,12 +44,12 @@ use smith_host::{
     ApprovalPrompt, ApprovalRequests, GitChanges, HeadlessApproval, HeadlessInteraction,
     InteractionRequests, InteractiveApproval, InteractiveInteraction, ProjectWorkspace,
 };
-use smith_runtime::SpawnOutcome;
 use smith_runtime::factory::{AVAILABLE_ADAPTER_KINDS, HostSurface, RuntimePolicy, RuntimeRequest};
 use smith_runtime::host::{HostSession, HostSessionRequest};
 use smith_runtime::journal::DefaultRedactor;
 use smith_runtime::model_catalog::{CatalogLoader, runtime_catalog_source};
 use smith_runtime::session::{SNAPSHOT_SCHEMA_VERSION, SessionListing};
+use smith_runtime::{ChildDurability, ChildState, ChildStatus, SpawnOutcome};
 use smith_tui::app::{Action, App, PaletteCommand};
 use smith_tui::commands::CommandAction;
 #[cfg(test)]
@@ -474,6 +474,16 @@ async fn run_interactive(
         &agents,
     ));
     app.transcript.replace_from_history(&snapshot.history);
+    if let Some(coordinator) = host
+        .runtime()
+        .delegation()
+        .and_then(|delegation| delegation.coordinator())
+    {
+        for child in coordinator.list() {
+            let (state, detail) = child_summary_projection(&child);
+            app.restore_child(child.child.as_str(), state, Some(detail));
+        }
+    }
     if let Some(interruption) = host.recovered_ephemeral_work() {
         app.present_recovered_ephemeral_work(
             interruption.children.len(),
@@ -693,6 +703,12 @@ async fn run_tui(
                             Some(Action::StartAgent { preset, task }) => {
                                 start_agent(host, preset, task, local_tx.clone());
                             }
+                            Some(Action::FollowUpAgent { child_id, task }) => {
+                                follow_up_agent(host, child_id, task, local_tx.clone());
+                            }
+                            Some(Action::ResumeAgent { child_id }) => {
+                                resume_agent(host, child_id, local_tx.clone());
+                            }
                             None => {}
                         }
                         dirty = true;
@@ -849,8 +865,14 @@ async fn handle_local_command(
                         .filter(|child| !timeline.children.contains(&child.child))
                         .map(|child| {
                             format!(
-                                "child {} · {:?} · {}/{} turns",
-                                child.child, child.state, child.turns_used, child.max_turns
+                                "child {} · session {} · {:?} · {:?} · resumable {} · {}/{} turns",
+                                child.child,
+                                child.session,
+                                child.durability,
+                                child.state,
+                                child.resumable(),
+                                child.turns_used,
+                                child.max_turns,
                             )
                         }),
                 );
@@ -973,13 +995,20 @@ async fn handle_local_command(
                 app.show_local_result(
                     "agent",
                     format!(
-                        "child: {}\nstate: {:?}\nturns: {}/{}\nworkspace: {:?}\nresult: {}\n\nnavigation: /agent previous · /agent next · /agent parent",
+                        "child: {}\nchild session: {}\ndurability: {:?}\nstate: {:?}\nresumable: {}\nturns: {}/{}\ntokens: {}\nworkspace: {:?}\nincompatibility: {}\nresult: {}\n\ncontinue: @{} <new follow-up task>\nexact recovery: /agent resume {}\nnavigation: /agent previous · /agent next · /agent parent",
                         status.child,
+                        status.session,
+                        status.durability,
                         status.state,
+                        status.resumable(),
                         status.turns_used,
                         status.max_turns,
+                        status.tokens_used,
                         status.workspace,
+                        status.incompatibility.as_deref().unwrap_or("none"),
                         status.last_result.as_deref().unwrap_or("not available"),
+                        status.child,
+                        status.child,
                     ),
                 );
             } else if children.is_empty() {
@@ -991,14 +1020,28 @@ async fn handle_local_command(
                         .iter()
                         .map(|status| {
                             format!(
-                                "{} · {:?} · {}/{} turns",
-                                status.child, status.state, status.turns_used, status.max_turns
+                                "{} · {:?} · {:?} · resumable {} · {}/{} turns · {} tokens",
+                                status.child,
+                                status.durability,
+                                status.state,
+                                status.resumable(),
+                                status.turns_used,
+                                status.max_turns,
+                                status.tokens_used,
                             )
                         })
                         .collect::<Vec<_>>()
                         .join("\n"),
                 );
             }
+        }
+        CommandAction::AgentResume(child_id) => {
+            app.show_local_error(
+                "agents",
+                format!(
+                    "`/agent resume {child_id}` must be confirmed in the composer before it can run"
+                ),
+            );
         }
         CommandAction::Diff(scope) => {
             if scope.as_deref() == Some("last-turn") {
@@ -1680,6 +1723,33 @@ fn tool_result_text(block: &ToolResultBlock) -> String {
     }
 }
 
+fn child_summary_projection(status: &ChildStatus) -> (&'static str, String) {
+    let state = match &status.state {
+        ChildState::Running => "working",
+        ChildState::Idle => "idle",
+        ChildState::Interrupted { .. } => "interrupted",
+        ChildState::Stopped { .. } => "stopped",
+        ChildState::Failed => "failed",
+        ChildState::Expired => "expired",
+    };
+    let durability = match status.durability {
+        ChildDurability::Ephemeral => "ephemeral",
+        ChildDurability::Durable => "durable",
+    };
+    let mut detail = format!(
+        "{durability} · session {} · {}/{} turns · {} tokens",
+        status.session, status.turns_used, status.max_turns, status.tokens_used
+    );
+    if status.resumable() {
+        detail.push_str(" · resumable");
+    }
+    if let Some(reason) = &status.incompatibility {
+        detail.push_str(" · blocked: ");
+        detail.push_str(reason);
+    }
+    (state, detail)
+}
+
 fn start_agent(
     host: &HostSession,
     preset: String,
@@ -1722,6 +1792,66 @@ fn start_agent(
             Err(error) => {
                 LocalOutcome::Error(format!("{preset} child did not start: {}", error.message))
             }
+        };
+        let _ = outcomes.send(message);
+    });
+}
+
+fn follow_up_agent(
+    host: &HostSession,
+    child_id: String,
+    task: String,
+    outcomes: tokio::sync::mpsc::UnboundedSender<LocalOutcome>,
+) {
+    let Some(coordinator) = host
+        .runtime()
+        .delegation()
+        .and_then(|delegation| delegation.coordinator())
+        .cloned()
+    else {
+        let _ = outcomes.send(LocalOutcome::Error(
+            "child follow-up is unavailable because the coordinator is not wired".to_owned(),
+        ));
+        return;
+    };
+    tokio::spawn(async move {
+        let child = agent_runtime_core::ids::ChildId::new(child_id);
+        let message = match coordinator.follow_up(&child, UserInput::text(task)).await {
+            Ok(()) => LocalOutcome::Notice(format!(
+                "{child} follow-up started · same child session and prior history"
+            )),
+            Err(error) => LocalOutcome::Error(format!(
+                "{child} follow-up did not start: {}",
+                error.message
+            )),
+        };
+        let _ = outcomes.send(message);
+    });
+}
+
+fn resume_agent(
+    host: &HostSession,
+    child_id: String,
+    outcomes: tokio::sync::mpsc::UnboundedSender<LocalOutcome>,
+) {
+    let Some(coordinator) = host
+        .runtime()
+        .delegation()
+        .and_then(|delegation| delegation.coordinator())
+        .cloned()
+    else {
+        let _ = outcomes.send(LocalOutcome::Error(
+            "child resume is unavailable because the coordinator is not wired".to_owned(),
+        ));
+        return;
+    };
+    tokio::spawn(async move {
+        let child = agent_runtime_core::ids::ChildId::new(child_id);
+        let message = match coordinator.resume(&child).await {
+            Ok(()) => LocalOutcome::Notice(format!(
+                "{child} exact checkpoint resume started · no new child task"
+            )),
+            Err(error) => LocalOutcome::Error(format!("{child} did not resume: {}", error.message)),
         };
         let _ = outcomes.send(message);
     });

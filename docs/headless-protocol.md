@@ -53,7 +53,19 @@ Fields are additive within schema 2:
     "activation": {
       "epoch": 1,
       "capabilities": ["tool:read", "tool:search"]
-    }
+    },
+    "children": [
+      {
+        "child_id": "child-1",
+        "child_session_id": "session-child-1",
+        "durability": "durable",
+        "state": "idle",
+        "resumable": false,
+        "turns_used": 2,
+        "max_turns": 4,
+        "tokens_used": 1200
+      }
+    ]
   }
 }
 ```
@@ -87,6 +99,12 @@ even if a corrupt event attempts to attach items.
 retention, and producing provenance. The reference does not grant another
 session read authority.
 
+`lifecycle.children` is omitted when empty. It is a metadata-only snapshot of
+the parent coordinator at the result boundary: stable child/session IDs,
+durability, lifecycle state, exact-resume availability, cumulative turn/token
+usage, and a bounded incompatibility reason when blocked. It never includes a
+task, child history, raw result, tool arguments, or checkpoint content.
+
 `recovery` is metadata-only:
 
 ```json
@@ -108,7 +126,7 @@ Every nonterminal line is:
   "schema_version": 2,
   "type": "runtime_event",
   "event": {
-    "schema_version": 8,
+    "schema_version": 9,
     "seq": 12,
     "id": "event-...",
     "session": "session-...",

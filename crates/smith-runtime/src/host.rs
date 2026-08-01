@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
+use agent_runtime::delegation::ChildDurability;
 use agent_runtime::runtime::{CheckpointRecoveryPolicy, SessionHandle, StartSession};
 use agent_runtime_core::checkpoint::{TurnCheckpoint, TurnState};
 use agent_runtime_core::content::{ContentPart, Message};
@@ -190,6 +191,14 @@ impl HostSession {
     /// storage error cannot strand the writer task or silently lose events
     /// already accepted by its bounded queue.
     pub async fn shutdown(&self) -> Result<Option<JournalStats>, RuntimeError> {
+        let delegation = match self
+            .runtime
+            .delegation()
+            .and_then(|delegation| delegation.coordinator())
+        {
+            Some(coordinator) => coordinator.flush().await,
+            None => Ok(()),
+        };
         let session = self.session.shutdown().await;
         let journal = match &self.journal {
             Some(journal) => journal.shutdown().await.map(Some),
@@ -199,6 +208,7 @@ impl HostSession {
             .lock()
             .expect("session lifecycle lease poisoned")
             .take();
+        delegation?;
         session?;
         journal
     }
@@ -492,9 +502,6 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
                 )
                 .await?,
             );
-            if let Some(interruption) = recovered_ephemeral_work.clone() {
-                journal.record_ephemeral_interruption(interruption).await?;
-            }
             barrier.install(journal.clone())?;
             slot.install(journal.clone())?;
             Some(journal)
@@ -529,7 +536,26 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
     // exists: the `agent` tool starts answering, and completed child results
     // are routed into the session's safe-boundary inbox.
     if let Some(delegation) = runtime.delegation() {
-        crate::delegation::wire_delegation(&session, delegation)?;
+        crate::delegation::wire_delegation(&session, delegation).await?;
+        let durable_children = delegation
+            .coordinator()
+            .expect("a successfully wired delegation has a coordinator")
+            .list()
+            .into_iter()
+            .filter(|status| status.durability == ChildDurability::Durable)
+            .map(|status| status.child)
+            .collect::<BTreeSet<_>>();
+        if let Some(interruption) = &mut recovered_ephemeral_work {
+            interruption
+                .children
+                .retain(|child| !durable_children.contains(child));
+            if interruption.is_empty() {
+                recovered_ephemeral_work = None;
+            }
+        }
+    }
+    if let (Some(journal), Some(interruption)) = (&journal, recovered_ephemeral_work.clone()) {
+        journal.record_ephemeral_interruption(interruption).await?;
     }
 
     Ok(HostSession {

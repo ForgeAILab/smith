@@ -19,7 +19,9 @@ use agent_runtime_core::cancel::CancelReason;
 use agent_runtime_core::checkpoint::{CheckpointStore, TurnCheckpoint, TurnState};
 use agent_runtime_core::clock::{Deadline, Timestamp};
 use agent_runtime_core::content::UserInput;
-use agent_runtime_core::delegation::WorkspacePolicy;
+use agent_runtime_core::delegation::{
+    ChildLimits, ChildModelSelection, ChildSpec, ToolViewScope, WorkspacePolicy,
+};
 use agent_runtime_core::event::{EventEnvelope, RuntimeEvent, TurnFinish, canonical_payloads};
 use agent_runtime_core::ids::{
     ChildId, ChoiceId, EventId, InteractionRequestId, QuestionId, SessionId, ToolCallId, TurnId,
@@ -44,6 +46,7 @@ use smith_runtime::factory::{HostSurface, MidTurnDurability, RuntimeRequest};
 use smith_runtime::host::{HostSessionError, HostSessionRequest, list, start};
 use smith_runtime::journal::{DefaultRedactor, JournalLine, JournalRecord, read_journal};
 use smith_runtime::session::FileSessionStore;
+use smith_runtime::{ChildDurability, ChildState, SpawnOutcome};
 
 const CONFIG: &str = r#"
 default_profile = "dev"
@@ -231,6 +234,88 @@ async fn protected_checkpoint_availability_is_explicit_and_encrypted() {
             .any(|window| { window == b"checkpoint secret marker" })
     );
     host.shutdown().await.expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn configured_clear_checkpoint_key_makes_children_durable_without_keychain_fallback() {
+    const KEY: &str = "5151515151515151515151515151515151515151515151515151515151515151";
+    let home = tempfile::tempdir().expect("a user root");
+    let project = tempfile::tempdir().expect("a project root");
+    let config_dir = home.path().join(".smith");
+    std::fs::create_dir_all(&config_dir).expect("a user config directory");
+    let config_path = config_dir.join("config.toml");
+    std::fs::write(
+        &config_path,
+        format!("{CONFIG}\n[persistence]\nenabled = true\ncheckpoint_key = \"{KEY}\"\n"),
+    )
+    .expect("a private user config");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o600))
+            .expect("private config permissions");
+    }
+    let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+        .expect("the configured checkpoint key resolves")
+        .config;
+    let provider = Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        vec![ScriptedStream::new(vec![
+            ProviderStreamEvent::TextDelta {
+                text: "durable child".to_owned(),
+            },
+            ProviderStreamEvent::Finish {
+                reason: FinishReason::Stop,
+            },
+        ])],
+    ));
+    let runtime = RuntimeRequest {
+        provider: Some(provider),
+        workspace: Some(Arc::new(
+            ProjectWorkspace::new(project.path()).expect("a project workspace"),
+        )),
+        approval: Some(Arc::new(AllowAll)),
+        ..RuntimeRequest::new(config, HostSurface::Headless)
+    };
+    // Deliberately do not call HostSessionRequest::checkpoint_keys: startup
+    // must select the resolved inline key before considering the platform
+    // credential service.
+    let host = start(HostSessionRequest::new(runtime, project.path()))
+        .await
+        .expect("the configured non-prompt key initializes persistence");
+    assert_eq!(
+        host.runtime().policy().mid_turn_durability,
+        MidTurnDurability::Available
+    );
+    let coordinator = host
+        .runtime()
+        .delegation()
+        .and_then(|delegation| delegation.coordinator())
+        .expect("a delegation coordinator");
+    let child = match coordinator
+        .spawn(ChildSpec {
+            task: UserInput::text("verify configured child durability"),
+            model: ChildModelSelection::Inherit,
+            limits: ChildLimits::turns(1),
+            tools: ToolViewScope::ReadOnly,
+            workspace: WorkspacePolicy::ReadOnlyView,
+        })
+        .await
+        .expect("the child starts")
+    {
+        SpawnOutcome::Spawned { child, .. } => child,
+        other => panic!("expected a spawned child, got {other:?}"),
+    };
+    coordinator
+        .wait_task_outcome(&child)
+        .await
+        .expect("the child completes");
+    assert_eq!(
+        coordinator.status(&child).expect("child status").durability,
+        ChildDurability::Durable
+    );
+    host.shutdown().await.expect("the host shuts down");
 }
 
 #[tokio::test]
@@ -1464,6 +1549,127 @@ async fn a_session_is_saved_listed_and_resumed_with_its_canonical_history() {
         recovery.truncated_tail.is_none(),
         "ordered shutdown left a partial journal record"
     );
+}
+
+#[tokio::test]
+async fn durable_child_follow_up_survives_a_full_smith_host_restart() {
+    let fixture = Fixture::new();
+    let provider = Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        vec![
+            ScriptedStream::new(vec![
+                ProviderStreamEvent::TextDelta {
+                    text: "remembered parser constraints".to_owned(),
+                },
+                ProviderStreamEvent::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ]),
+            ScriptedStream::new(vec![
+                ProviderStreamEvent::TextDelta {
+                    text: "follow-up regression risk".to_owned(),
+                },
+                ProviderStreamEvent::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ]),
+        ],
+    ));
+    let mut first_request = fixture.request(HostSurface::Headless);
+    first_request.runtime.provider = Some(provider.clone());
+    let first = start(first_request).await.expect("the first Smith host");
+    let parent = first.session().id().clone();
+    let first_coordinator = first
+        .runtime()
+        .delegation()
+        .and_then(|delegation| delegation.coordinator())
+        .expect("the first coordinator");
+    let child = match first_coordinator
+        .spawn(ChildSpec {
+            task: UserInput::text("Inspect the parser and retain its important constraints."),
+            model: ChildModelSelection::Inherit,
+            limits: ChildLimits::turns(3),
+            tools: ToolViewScope::ReadOnly,
+            workspace: WorkspacePolicy::ReadOnlyView,
+        })
+        .await
+        .expect("the durable child starts")
+    {
+        SpawnOutcome::Spawned { child, .. } => child,
+        other => panic!("expected a spawned child, got {other:?}"),
+    };
+    first_coordinator
+        .wait_task_outcome(&child)
+        .await
+        .expect("the first task completes");
+    let before = first_coordinator
+        .status(&child)
+        .expect("first child status");
+    assert_eq!(before.durability, ChildDurability::Durable);
+    assert_eq!(before.state, ChildState::Idle);
+    first.shutdown().await.expect("the first host shuts down");
+
+    let mut resume_request = fixture
+        .request(HostSurface::Headless)
+        .resume(parent.clone());
+    resume_request.runtime.provider = Some(provider.clone());
+    let resumed = start(resume_request)
+        .await
+        .expect("the same Smith host session resumes");
+    assert!(
+        resumed.recovered_ephemeral_work().is_none(),
+        "a durable catalog child was mislabeled legacy ephemeral"
+    );
+    let resumed_coordinator = resumed
+        .runtime()
+        .delegation()
+        .and_then(|delegation| delegation.coordinator())
+        .expect("the resumed coordinator");
+    let recovered = resumed_coordinator
+        .status(&child)
+        .expect("the same child identity is retained");
+    assert_eq!(recovered.parent, parent);
+    assert_eq!(recovered.session, before.session);
+    assert_eq!(recovered.state, ChildState::Idle);
+
+    resumed_coordinator
+        .follow_up(
+            &child,
+            UserInput::text("Identify the highest-risk regression using that retained review."),
+        )
+        .await
+        .expect("the recovered child accepts a follow-up");
+    resumed_coordinator
+        .wait_task_outcome(&child)
+        .await
+        .expect("the follow-up completes");
+    let after = resumed_coordinator
+        .status(&child)
+        .expect("follow-up status");
+    assert_eq!(after.session, before.session);
+    assert_eq!(after.turns_used, 2);
+
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 2);
+    let follow_up_wire =
+        serde_json::to_string(&requests[1].messages).expect("follow-up provider request");
+    assert!(
+        follow_up_wire.contains("Inspect the parser"),
+        "{follow_up_wire}"
+    );
+    assert!(
+        follow_up_wire.contains("remembered parser constraints"),
+        "{follow_up_wire}"
+    );
+    assert!(
+        follow_up_wire.contains("highest-risk regression"),
+        "{follow_up_wire}"
+    );
+    resumed
+        .shutdown()
+        .await
+        .expect("the resumed host shuts down");
 }
 
 #[tokio::test]

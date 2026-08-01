@@ -45,6 +45,14 @@ intent-scoped: a read-only request does not advertise mutation merely because
 artifact offloading, and semantic summarization contribute through the same
 session-scoped harness pipeline.
 
+When ordinary session persistence and protected checkpoints are both
+available, delegated children are durable addressable sessions. `@child-1
+continue …` starts a confirmed follow-up on that same child's canonical
+history; `/agent resume child-1` separately confirms continuation of one safe
+interrupted checkpoint. Startup, `/agent`, `/timeline`, and headless status
+only inspect retained metadata and never spend provider tokens. Smith never
+turns a missing or incompatible child ID into an implicit new spawn.
+
 ## Running it
 
 Smith requires Rust 1.88 or newer.
@@ -153,7 +161,8 @@ max_output_tokens = 4096
 Inside the empty idle TUI, the footer identifies `build`, `plan`, or `review`
 beside provider/model and context confidence. `Tab` cycles modes only at that
 safe empty/idle boundary. `@` completes canonical workspace files and the
-read-only `explore`/`review` child presets; leading `!` runs the canonical
+read-only `explore`/`review` child presets, plus retained child IDs available
+for follow-up; leading `!` runs the canonical
 prepared local-shell path without a provider request. `@@` and `!!` are the
 literal escapes. `/details`, `/timeline`, and `/redo` expose bounded live work,
 canonical session evidence, and exact recovery locally.
@@ -170,6 +179,12 @@ constructed. `smith --resume <session-id>` remains the explicit form, while
 headless use without an ID is refused with a `smith sessions list` hint.
 Session rows include the full ID, updated time, turn count, provider/model, and
 a bounded preview when known.
+
+`/agent` lists retained child sessions with durability, child-session ID,
+state, cumulative turns/tokens, and bounded incompatibility. `/agent resume
+<child-id>` is intentionally explicit and has no Enter-default confirmation;
+it resumes the exact interrupted turn rather than consuming a new child task
+slot.
 
 For runtime changes Smith restores the normal terminal, saves the current
 session, re-runs complete preflight through `smith-runtime`, and resumes the

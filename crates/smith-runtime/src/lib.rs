@@ -32,7 +32,7 @@ pub mod transport;
 
 /// Structured direct-child spawn outcome exposed through Smith's composition
 /// boundary for host surfaces.
-pub use agent_runtime::delegation::SpawnOutcome;
+pub use agent_runtime::delegation::{ChildDurability, ChildState, ChildStatus, SpawnOutcome};
 /// The canonical session handle hosts drive after Smith has composed the
 /// shared runtime. Re-exporting it here keeps production entry points on the
 /// Smith composition boundary instead of depending on the full facade

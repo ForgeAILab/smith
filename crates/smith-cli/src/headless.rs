@@ -18,6 +18,7 @@ use serde::Serialize;
 use smith_host::{ApprovalRequired, HeadlessApproval, HeadlessInteraction, InteractionRequired};
 use smith_runtime::host::HostSession;
 use smith_runtime::journal::{EphemeralInterruptionReason, EphemeralWorkInterruption};
+use smith_runtime::{ChildDurability, ChildState};
 
 use crate::cli::OutputFormat;
 
@@ -128,6 +129,22 @@ struct LifecycleOutput {
     activation: Option<ActivationOutput>,
     #[serde(skip_serializing_if = "Option::is_none")]
     plan: Option<PlanOutput>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    children: Vec<ChildSessionOutput>,
+}
+
+#[derive(Debug, Serialize)]
+struct ChildSessionOutput {
+    child_id: String,
+    child_session_id: String,
+    durability: &'static str,
+    state: &'static str,
+    resumable: bool,
+    turns_used: u32,
+    max_turns: u32,
+    tokens_used: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    incompatibility: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -199,6 +216,40 @@ impl From<ApprovalRequired> for ApprovalOutput {
             preparation_fingerprint: required.preparation_fingerprint,
         }
     }
+}
+
+fn child_session_outputs(host: &HostSession) -> Vec<ChildSessionOutput> {
+    host.runtime()
+        .delegation()
+        .and_then(|delegation| delegation.coordinator())
+        .map(|coordinator| {
+            coordinator
+                .list()
+                .into_iter()
+                .map(|status| ChildSessionOutput {
+                    child_id: status.child.to_string(),
+                    child_session_id: status.session.to_string(),
+                    durability: match status.durability {
+                        ChildDurability::Ephemeral => "ephemeral",
+                        ChildDurability::Durable => "durable",
+                    },
+                    state: match &status.state {
+                        ChildState::Running => "running",
+                        ChildState::Idle => "idle",
+                        ChildState::Interrupted { .. } => "interrupted",
+                        ChildState::Stopped { .. } => "stopped",
+                        ChildState::Failed => "failed",
+                        ChildState::Expired => "expired",
+                    },
+                    resumable: status.resumable(),
+                    turns_used: status.turns_used,
+                    max_turns: status.max_turns,
+                    tokens_used: status.tokens_used,
+                    incompatibility: status.incompatibility,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Runs one turn, preserving canonical event order for stream JSON.
@@ -363,6 +414,8 @@ async fn run_with_io(
         .is_none()
         .then(|| "the runtime event stream ended before the turn completed".to_owned());
 
+    lifecycle.children = child_session_outputs(host);
+
     let shutdown_error = host.shutdown().await.err().map(|error| error.to_string());
 
     // SessionShutdown is queued before shutdown returns. Include it in the
@@ -501,6 +554,7 @@ async fn write_restored_interaction_required(
         },
         lifecycle: LifecycleOutput {
             activation: activation_output(session),
+            children: child_session_outputs(host),
             ..LifecycleOutput::default()
         },
         artifacts: Vec::new(),
@@ -568,6 +622,7 @@ async fn write_submission_failure(
         },
         lifecycle: LifecycleOutput {
             activation: activation_output(session),
+            children: child_session_outputs(host),
             ..LifecycleOutput::default()
         },
         artifacts: Vec::new(),
@@ -856,6 +911,33 @@ mod tests {
     }
 
     #[test]
+    fn machine_lifecycle_projects_durable_child_continuation_without_content() {
+        let lifecycle = LifecycleOutput {
+            children: vec![ChildSessionOutput {
+                child_id: "child-3".to_owned(),
+                child_session_id: "child-session-3".to_owned(),
+                durability: "durable",
+                state: "interrupted",
+                resumable: true,
+                turns_used: 1,
+                max_turns: 4,
+                tokens_used: 42,
+                incompatibility: None,
+            }],
+            ..LifecycleOutput::default()
+        };
+        let value = serde_json::to_value(lifecycle).expect("machine lifecycle serializes");
+        assert_eq!(value["children"][0]["child_id"], "child-3");
+        assert_eq!(value["children"][0]["child_session_id"], "child-session-3");
+        assert_eq!(value["children"][0]["durability"], "durable");
+        assert_eq!(value["children"][0]["resumable"], true);
+        assert!(
+            !value.to_string().contains("task"),
+            "child task content entered the machine status projection"
+        );
+    }
+
+    #[test]
     fn a_sequence_gap_is_a_failure_instead_of_silent_stream_loss() {
         let mut last = None;
         let mut error = None;
@@ -895,6 +977,7 @@ mod tests {
                     capabilities: vec!["tool:read".into()],
                 }),
                 plan: None,
+                children: Vec::new(),
             },
             artifacts: Vec::new(),
             approval_required: None,
@@ -1076,6 +1159,7 @@ mod tests {
                         reason: None,
                     }]),
                 }),
+                children: Vec::new(),
             },
             artifacts: vec![ArtifactRef {
                 id: ArtifactId::new("artifact-fixture").expect("valid artifact id"),

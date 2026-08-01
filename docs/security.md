@@ -118,9 +118,16 @@ explicit bounded copy with source lineage. Semantic summaries store exact
 source groups first and use a separate tool-free model purpose and usage
 ledger.
 
-Unresolved children and process monitor markers are interrupted on restart,
-not re-executed. Smith does not claim recovery for arbitrary shell side
-effects.
+Durable child records are parent-owned and policy-fingerprinted. Startup only
+reconciles metadata; it does not construct a provider or execute a tool.
+Follow-up reuses an idle child's canonical history, while exact resume requires
+a compatible safe checkpoint and explicit confirmation. Missing, corrupt,
+regressed, indeterminate-provider, or incompatible state fails closed without
+spawning a replacement. The parent's cross-process lifecycle lease and the
+runtime's one-coordinator lease prevent competing child continuations.
+Journal-only legacy children and process monitor markers are interrupted on
+restart, not re-executed. Smith does not claim recovery for arbitrary shell
+side effects.
 
 ## Provider and prompt-injection risks
 

@@ -133,6 +133,26 @@ fn draw_surface(
         Some(Overlay::AgentConfirm { content, .. }) => {
             draw_agent_confirm(frame, area, content, theme);
         }
+        Some(Overlay::AgentFollowUpConfirm { content, .. }) => {
+            draw_child_continuation_confirm(
+                frame,
+                area,
+                "existing child follow-up",
+                " start follow-up and spend provider tokens   ",
+                content,
+                theme,
+            );
+        }
+        Some(Overlay::AgentResumeConfirm { content, .. }) => {
+            draw_child_continuation_confirm(
+                frame,
+                area,
+                "resume interrupted child",
+                " resume exact checkpoint   ",
+                content,
+                theme,
+            );
+        }
         Some(Overlay::ExitConfirm {
             approval,
             questionnaire,
@@ -1011,6 +1031,12 @@ fn draw_hint(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
         Some(Overlay::AgentConfirm { .. }) => {
             Some("y start read-only child · n/esc cancel".to_owned())
         }
+        Some(Overlay::AgentFollowUpConfirm { .. }) => {
+            Some("y start follow-up turn · n/esc cancel".to_owned())
+        }
+        Some(Overlay::AgentResumeConfirm { .. }) => {
+            Some("y resume exact checkpoint · n/esc cancel".to_owned())
+        }
         Some(Overlay::ExitConfirm { .. }) => Some("y quit · n keep working".to_owned()),
         None => None,
     } {
@@ -1728,6 +1754,24 @@ fn draw_review_confirm(frame: &mut Frame<'_>, area: Rect, content: &str, theme: 
 }
 
 fn draw_agent_confirm(frame: &mut Frame<'_>, area: Rect, content: &str, theme: Theme) {
+    draw_child_continuation_confirm(
+        frame,
+        area,
+        "read-only child agent",
+        " start child and spend provider tokens   ",
+        content,
+        theme,
+    );
+}
+
+fn draw_child_continuation_confirm(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    title: &str,
+    action: &str,
+    content: &str,
+    theme: Theme,
+) {
     let mut lines = content
         .lines()
         .take(MAX_BODY_LINES.saturating_sub(2))
@@ -1736,21 +1780,11 @@ fn draw_agent_confirm(frame: &mut Frame<'_>, area: Rect, content: &str, theme: T
     lines.push(Line::default());
     lines.push(Line::from(vec![
         Span::styled("y", theme.style(Tone::Accent)),
-        Span::styled(
-            " start child and spend provider tokens   ",
-            theme.style(Tone::Dim),
-        ),
+        Span::styled(action.to_owned(), theme.style(Tone::Dim)),
         Span::styled("n/esc", theme.style(Tone::Success)),
         Span::styled(" cancel", theme.style(Tone::Dim)),
     ]));
-    draw_modal(
-        frame,
-        area,
-        "read-only child agent",
-        lines,
-        theme,
-        Tone::Accent,
-    );
+    draw_modal(frame, area, title, lines, theme, Tone::Accent);
 }
 
 fn draw_exit_confirm(
@@ -2619,6 +2653,42 @@ mod tests {
         let review_screen = render(&review, 74, 20, Theme::new().without_color());
         assert!(review_screen.contains("read-only review"));
         assert!(review_screen.contains("provider-backed: yes"));
+    }
+
+    #[test]
+    fn child_follow_up_and_resume_confirmations_are_clear_without_color_at_supported_sizes() {
+        for (width, height) in [(44, 16), (74, 20), (120, 28)] {
+            let mut follow_up = App::new("glm-5.2", "~/work/api");
+            follow_up.overlay = Some(Overlay::AgentFollowUpConfirm {
+                child_id: "child-1".to_owned(),
+                task: "check the parser".to_owned(),
+                content: "child: child-1\noperation: new follow-up turn\ncontinuity: reuse prior child history\nprovider spend: yes".to_owned(),
+            });
+            let follow_up_screen = render(&follow_up, width, height, Theme::new().without_color());
+            assert!(
+                follow_up_screen.contains("existing child follow-up"),
+                "{width}×{height}:\n{follow_up_screen}"
+            );
+            assert!(
+                follow_up_screen.contains("new follow-up"),
+                "{width}×{height}:\n{follow_up_screen}"
+            );
+
+            let mut resume = App::new("glm-5.2", "~/work/api");
+            resume.overlay = Some(Overlay::AgentResumeConfirm {
+                child_id: "child-1".to_owned(),
+                content: "child: child-1\noperation: continue exact interrupted checkpoint\nturn slot consumed: no\nside effects: committed work is not replayed".to_owned(),
+            });
+            let resume_screen = render(&resume, width, height, Theme::new().without_color());
+            assert!(
+                resume_screen.contains("resume interrupted child"),
+                "{width}×{height}:\n{resume_screen}"
+            );
+            assert!(
+                resume_screen.contains("exact interrupted"),
+                "{width}×{height}:\n{resume_screen}"
+            );
+        }
     }
 
     /// Drives the real approval policy to obtain a real prompt.

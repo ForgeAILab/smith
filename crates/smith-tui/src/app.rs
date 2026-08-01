@@ -13,7 +13,8 @@ use agent_runtime_core::clock::SystemClock;
 #[cfg(test)]
 use agent_runtime_core::event::PlanItemStatus;
 use agent_runtime_core::event::{
-    ChildPhase, EventEnvelope, PlanItemProjection, PlanSensitivity, RuntimeEvent, TurnFinish,
+    ChildPhase, ChildRecoveryState, EventEnvelope, PlanItemProjection, PlanSensitivity,
+    RuntimeEvent, TurnFinish,
 };
 use agent_runtime_core::ids::{AttemptId, RequestId};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -91,6 +92,18 @@ pub enum Action {
         preset: String,
         /// Bounded task supplied after the reference.
         task: String,
+    },
+    /// Start a new turn on one existing idle child session.
+    FollowUpAgent {
+        /// Stable existing child identity.
+        child_id: String,
+        /// Bounded new task.
+        task: String,
+    },
+    /// Continue one interrupted child's exact protected checkpoint.
+    ResumeAgent {
+        /// Stable existing child identity.
+        child_id: String,
     },
 }
 
@@ -217,6 +230,22 @@ pub enum Overlay {
         /// Exact bounded task.
         task: String,
         /// Inherited model, limits, and posture summary.
+        content: String,
+    },
+    /// Existing-child follow-up awaiting provider-spend confirmation.
+    AgentFollowUpConfirm {
+        /// Stable child identity.
+        child_id: String,
+        /// Exact bounded follow-up task.
+        task: String,
+        /// Continuity, scope, and spend summary.
+        content: String,
+    },
+    /// Exact interrupted-checkpoint continuation awaiting confirmation.
+    AgentResumeConfirm {
+        /// Stable child identity.
+        child_id: String,
+        /// Recovery and spend summary.
         content: String,
     },
     /// Exit was requested while work is live.
@@ -422,6 +451,26 @@ impl App {
     /// Replaces the local, credential-free picker inventory.
     pub fn set_resources(&mut self, resources: RuntimeResources) {
         self.resources = resources;
+    }
+
+    /// Seeds one already-persisted child before live event subscription.
+    ///
+    /// Recovery events may be journaled before a terminal client attaches;
+    /// this owner-supplied projection keeps inspection and `@child-id`
+    /// continuation available without replaying or parsing journal prose.
+    pub fn restore_child(
+        &mut self,
+        child_id: impl Into<String>,
+        state: impl Into<String>,
+        detail: Option<String>,
+    ) {
+        self.children.insert(
+            child_id.into(),
+            ChildSummary {
+                state: state.into(),
+                detail,
+            },
+        );
     }
 
     /// Whether a turn is in flight.
@@ -1107,12 +1156,73 @@ impl App {
                 );
             }
             RuntimeEvent::ChildProgress { child, phase } => match phase {
+                ChildPhase::Recovered {
+                    child_session,
+                    state,
+                    resumable,
+                } => {
+                    let state = match state {
+                        ChildRecoveryState::Idle => "idle",
+                        ChildRecoveryState::Interrupted => "interrupted",
+                        ChildRecoveryState::Blocked => "blocked",
+                        ChildRecoveryState::Expired => "expired",
+                        ChildRecoveryState::Terminal => "terminal",
+                    };
+                    let detail = format!(
+                        "durable · session {child_session}{}",
+                        if *resumable { " · resumable" } else { "" }
+                    );
+                    self.children.insert(
+                        child.to_string(),
+                        ChildSummary {
+                            state: state.to_owned(),
+                            detail: Some(detail.clone()),
+                        },
+                    );
+                    self.transcript
+                        .push_notice("sub-agent", format!("{child} recovered {state} · {detail}"));
+                }
                 ChildPhase::TurnStarted => {
                     if let Some(summary) = self.children.get_mut(&child.to_string()) {
                         summary.state = "working".to_owned();
                     }
                     self.transcript
                         .push_notice("sub-agent", format!("{child} is working"));
+                }
+                ChildPhase::ResumeStarted { child_session } => {
+                    self.children.insert(
+                        child.to_string(),
+                        ChildSummary {
+                            state: "resuming".to_owned(),
+                            detail: Some(format!("exact checkpoint · session {child_session}")),
+                        },
+                    );
+                    self.transcript.push_notice(
+                        "sub-agent",
+                        format!("{child} is resuming its exact checkpoint"),
+                    );
+                }
+                ChildPhase::Interrupted {
+                    child_session,
+                    resumable,
+                } => {
+                    let detail = format!(
+                        "durable · session {child_session}{}",
+                        if *resumable {
+                            " · exact resume available"
+                        } else {
+                            " · no compatible checkpoint"
+                        }
+                    );
+                    self.children.insert(
+                        child.to_string(),
+                        ChildSummary {
+                            state: "interrupted".to_owned(),
+                            detail: Some(detail.clone()),
+                        },
+                    );
+                    self.transcript
+                        .push_notice("sub-agent", format!("{child} interrupted · {detail}"));
                 }
                 ChildPhase::ToolCall { name } => {
                     if let Some(summary) = self.children.get_mut(&child.to_string()) {
@@ -1546,6 +1656,41 @@ impl App {
                     _ => None,
                 };
             }
+            Some(Overlay::AgentFollowUpConfirm { child_id, task, .. }) => {
+                return match key.code {
+                    KeyCode::Char('y') => {
+                        let action = Action::FollowUpAgent {
+                            child_id: child_id.clone(),
+                            task: task.clone(),
+                        };
+                        self.overlay = None;
+                        self.composer.clear();
+                        Some(action)
+                    }
+                    KeyCode::Char('n') | KeyCode::Esc => {
+                        self.overlay = None;
+                        None
+                    }
+                    _ => None,
+                };
+            }
+            Some(Overlay::AgentResumeConfirm { child_id, .. }) => {
+                return match key.code {
+                    KeyCode::Char('y') => {
+                        let action = Action::ResumeAgent {
+                            child_id: child_id.clone(),
+                        };
+                        self.overlay = None;
+                        self.composer.clear();
+                        Some(action)
+                    }
+                    KeyCode::Char('n') | KeyCode::Esc => {
+                        self.overlay = None;
+                        None
+                    }
+                    _ => None,
+                };
+            }
             Some(Overlay::ExitConfirm { .. }) => return self.on_exit_confirm_key(key),
             None => {}
         }
@@ -1781,16 +1926,31 @@ impl App {
                 "Nothing to resume for this project · use /new",
             ),
             ResourceTarget::Reference => {
-                let entries = self
+                let mut entries = self
                     .resources
                     .child_agents
                     .iter()
                     .chain(&self.resources.files)
                     .cloned()
-                    .collect();
+                    .collect::<Vec<_>>();
+                entries.extend(self.children.iter().map(|(child, summary)| {
+                    ResourceEntry::new(
+                        format!("agent:{child}"),
+                        format!("@{child}"),
+                        format!(
+                            "existing child · {}{}",
+                            summary.state,
+                            summary
+                                .detail
+                                .as_deref()
+                                .map(|detail| format!(" · {detail}"))
+                                .unwrap_or_default()
+                        ),
+                    )
+                }));
                 (
                     entries,
-                    "No matching file or child preset in the bounded local index",
+                    "No matching file, child preset, or existing child in the bounded local index",
                 )
             }
         };
@@ -2173,6 +2333,7 @@ impl App {
                     .iter()
                     .filter_map(|entry| entry.id.strip_prefix("agent:"))
                     .map(str::to_owned)
+                    .chain(self.children.keys().cloned())
                     .collect();
                 let parsed = match parse_references(&text, &files, &agents) {
                     Ok(parsed) => parsed,
@@ -2197,16 +2358,16 @@ impl App {
                         ComposerReference::File(_) => None,
                     })
                     .collect::<Vec<_>>();
-                if let Some(preset) = referenced_agents.first() {
+                if let Some(agent) = referenced_agents.first() {
                     let trimmed = parsed.text.trim_start();
-                    let plain = format!("@{preset}");
-                    let typed = format!("@agent:{preset}");
+                    let plain = format!("@{agent}");
+                    let typed = format!("@agent:{agent}");
                     let task = trimmed
                         .strip_prefix(&typed)
                         .or_else(|| trimmed.strip_prefix(&plain));
                     let Some(task) = task else {
                         self.transcript.push_error(
-                            "a child preset must be the first token, for example `@review inspect the diff`",
+                            "a child preset or existing child must be the first token, for example `@review inspect the diff` or `@child-1 check that edge case`",
                         );
                         return None;
                     };
@@ -2219,8 +2380,37 @@ impl App {
                     let task = task.trim();
                     if task.is_empty() {
                         self.transcript.push_error(format!(
-                            "`@{preset}` requires a bounded task after the preset name"
+                            "`@{agent}` requires a bounded task after the child identity"
                         ));
+                        return None;
+                    }
+                    if let Some(existing) = self.children.get(agent).cloned() {
+                        if !matches!(
+                            existing.state.as_str(),
+                            "idle" | "completed" | "needs input"
+                        ) {
+                            self.transcript.push_error(format!(
+                                "`{agent}` is {}; use `/agent {agent}` to inspect it{}",
+                                existing.state,
+                                if existing.state == "interrupted" {
+                                    " and `/agent resume <id>` for exact continuation"
+                                } else {
+                                    ""
+                                }
+                            ));
+                            return None;
+                        }
+                        let model = match &self.status.provider {
+                            Some(provider) => format!("{provider}/{}", self.status.model),
+                            None => self.status.model.clone(),
+                        };
+                        self.overlay = Some(Overlay::AgentFollowUpConfirm {
+                            child_id: agent.clone(),
+                            task: task.to_owned(),
+                            content: format!(
+                                "child: {agent}\noperation: new follow-up turn\ncontinuity: reuse prior child history and cumulative limits\nprovider/model: {model}\nprovider spend: yes\ncheckpoint replay: no"
+                            ),
+                        });
                         return None;
                     }
                     let model = match &self.status.provider {
@@ -2228,10 +2418,10 @@ impl App {
                         None => self.status.model.clone(),
                     };
                     self.overlay = Some(Overlay::AgentConfirm {
-                        preset: preset.clone(),
+                        preset: agent.clone(),
                         task: task.to_owned(),
                         content: format!(
-                            "preset: {preset}\nprovider/model: {model}\nworkspace: read-only\nturn limit: 1\nprovider spend: yes\nresult: bounded child summary"
+                            "preset: {agent}\nprovider/model: {model}\nworkspace: read-only\nturn limit: 1\nprovider spend: yes\nresult: bounded child summary"
                         ),
                     });
                     return None;
@@ -2319,7 +2509,7 @@ impl App {
                 CommandAction::Profile(_) => "profile",
                 CommandAction::Provider(_) => "provider",
                 CommandAction::Model(_) => "model",
-                CommandAction::Agent(_) => "agent",
+                CommandAction::Agent(_) | CommandAction::AgentResume(_) => "agent",
                 CommandAction::Diff(_) => "diff",
                 CommandAction::Review(_) => "review",
                 CommandAction::Undo => "undo",
@@ -2444,6 +2634,40 @@ impl App {
             CommandAction::Model(Some(name)) => {
                 self.composer.clear();
                 self.direct_model(&name, restore)
+            }
+            CommandAction::AgentResume(child_id) => {
+                if self.is_busy() {
+                    self.overlay = None;
+                    self.transcript.push_notice(
+                        "agent",
+                        "exact child resume requires an idle root turn; draft preserved",
+                    );
+                    return None;
+                }
+                self.composer.clear();
+                let Some(summary) = self.children.get(&child_id) else {
+                    self.transcript.push_error(format!(
+                        "No child named `{child_id}`; use `/agent` to list retained children."
+                    ));
+                    return None;
+                };
+                let resumable = summary.state == "interrupted"
+                    && summary.detail.as_deref().is_some_and(|detail| {
+                        detail.contains("resumable") || detail.contains("exact resume available")
+                    });
+                if !resumable {
+                    self.transcript.push_error(format!(
+                        "`{child_id}` has no compatible interrupted checkpoint; inspect it with `/agent {child_id}`"
+                    ));
+                    return None;
+                }
+                self.overlay = Some(Overlay::AgentResumeConfirm {
+                    child_id: child_id.clone(),
+                    content: format!(
+                        "child: {child_id}\noperation: continue exact interrupted checkpoint\nnew task: no\nturn slot consumed: no\nprovider spend: may continue\nside effects: committed work is not replayed"
+                    ),
+                });
+                None
             }
             local => {
                 self.composer.clear();
@@ -4299,6 +4523,65 @@ mod tests {
     }
 
     #[test]
+    fn existing_child_reference_confirms_a_follow_up_instead_of_spawning() {
+        let mut app = agent_first_app();
+        app.restore_child(
+            "child-1",
+            "idle",
+            Some("durable · session child-session-1 · 1/4 turns".to_owned()),
+        );
+        app.composer.replace("@child-1 check the parser edge case");
+
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert!(matches!(
+            app.overlay,
+            Some(Overlay::AgentFollowUpConfirm {
+                ref child_id,
+                ref task,
+                ref content,
+            }) if child_id == "child-1"
+                && task == "check the parser edge case"
+                && content.contains("new follow-up turn")
+                && content.contains("reuse prior child history")
+        ));
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert_eq!(
+            app.on_key(key(KeyCode::Char('y'))),
+            Some(Action::FollowUpAgent {
+                child_id: "child-1".to_owned(),
+                task: "check the parser edge case".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn interrupted_child_resume_is_explicit_and_has_no_enter_default() {
+        let mut app = agent_first_app();
+        app.restore_child(
+            "child-2",
+            "interrupted",
+            Some("durable · session child-session-2 · resumable".to_owned()),
+        );
+        app.composer.replace("/agent resume child-2");
+
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert!(matches!(
+            app.overlay,
+            Some(Overlay::AgentResumeConfirm { ref child_id, ref content })
+                if child_id == "child-2"
+                    && content.contains("exact interrupted checkpoint")
+                    && content.contains("turn slot consumed: no")
+        ));
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert_eq!(
+            app.on_key(key(KeyCode::Char('y'))),
+            Some(Action::ResumeAgent {
+                child_id: "child-2".to_owned(),
+            })
+        );
+    }
+
+    #[test]
     fn slash_and_ctrl_p_open_the_same_filtered_registry() {
         let mut slash = app();
         type_text(&mut slash, "/rev");
@@ -4603,6 +4886,71 @@ mod tests {
         assert!(app.transcript.blocks().iter().any(|block| {
             matches!(block, Block::Notice { text, .. } if text.contains("No findings"))
         }));
+    }
+
+    #[test]
+    fn durable_child_recovery_and_resume_replay_match_live_projection() {
+        let child = ChildId::new("child-9");
+        let session = SessionId::new("child-session-9");
+        let payloads = vec![
+            RuntimeEvent::ChildProgress {
+                child: child.clone(),
+                phase: ChildPhase::Recovered {
+                    child_session: session.clone(),
+                    state: ChildRecoveryState::Interrupted,
+                    resumable: true,
+                },
+            },
+            RuntimeEvent::ChildProgress {
+                child: child.clone(),
+                phase: ChildPhase::ResumeStarted {
+                    child_session: session.clone(),
+                },
+            },
+            RuntimeEvent::ChildProgress {
+                child: child.clone(),
+                phase: ChildPhase::Interrupted {
+                    child_session: session,
+                    resumable: false,
+                },
+            },
+        ];
+        let events = payloads
+            .into_iter()
+            .enumerate()
+            .map(|(sequence, payload)| {
+                EventEnvelope::new(
+                    u64::try_from(sequence).expect("bounded sequence"),
+                    EventId::new(format!("child-event-{sequence}")),
+                    SessionId::new("parent-session"),
+                    None,
+                    Timestamp::ZERO,
+                    payload,
+                )
+            })
+            .collect::<Vec<_>>();
+        let encoded = serde_json::to_vec(&events).expect("events serialize");
+        let replayed: Vec<EventEnvelope> =
+            serde_json::from_slice(&encoded).expect("events deserialize");
+
+        let mut live = app();
+        for event in &events {
+            live.apply(event);
+        }
+        let mut replay = app();
+        for event in &replayed {
+            replay.apply(event);
+        }
+
+        assert_eq!(live.children, replay.children);
+        assert_eq!(live.transcript.blocks(), replay.transcript.blocks());
+        assert_eq!(live.children[child.as_str()].state, "interrupted");
+        assert!(
+            live.children[child.as_str()]
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("no compatible checkpoint"))
+        );
     }
 
     #[test]

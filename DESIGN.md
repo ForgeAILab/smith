@@ -248,6 +248,13 @@ depth-one, read-only children. Their confirmation shows inherited
 provider/model, limits, workspace posture, expected result, and provider
 spend. They cannot delegate again or widen the root policy.
 
+Retained children appear as separate `@child-id` entries. Selecting one keeps
+the stable child/session identity and confirms a new follow-up turn with its
+cumulative limits and prior history. It is never interpreted as a preset or a
+spawn. Interrupted children instead expose `/agent resume <child-id>`, whose
+no-default confirmation names exact checkpoint continuation and does not
+consume another task slot.
+
 A first non-whitespace `!` performs one direct local shell action. It uses the
 same schema preparation, broad shell authority, approval, scheduler, deadline,
 cancellation, checkpoint, bounded output, and artifact-offload path as a
@@ -275,7 +282,7 @@ The initial command set is deliberately bounded:
 | `/profile [NAME]` | With no name, choose a configured profile; apply it while clearing narrower overrides. |
 | `/provider [NAME]` | With no name, choose a configured provider; cascade to its model choices when needed. |
 | `/model [PROVIDER/MODEL]` | With no pair, choose from provider-qualified models; apply provider and model atomically. |
-| `/agent [ID\|previous\|next\|parent]` | List children or temporarily inspect one while the root composer retains focus. |
+| `/agent [ID\|previous\|next\|parent\|resume ID]` | List/inspect children or explicitly resume one safe interrupted checkpoint while the root composer retains focus. |
 | `/diff [SCOPE]` | Inspect all, last-turn, staged, unstaged, untracked, file, or hunk changes. |
 | `/review [SCOPE]` | Confirm and launch a provider-backed read-only review. |
 | `/undo` | Preview the last fully attributable Smith turn and require explicit confirmation. |
@@ -557,11 +564,17 @@ attach text. Oversized tool output appears as a bounded preview plus an opaque
 artifact reference. Artifact bodies remain in user state and are fetched only
 through authorized, paginated reads.
 
-On resume, unresolved child and process-owned monitor identities appear once as
-`recovery · … interrupted … not restarted`. The notice never implies that a
-process was recreated. Child artifacts remain child-owned until the
-safe-boundary coordinator explicitly transfers a bounded copy and records
-lineage.
+On resume, Smith runs the coordinator's asynchronous recovery pass before it
+accepts commands. The pass reconciles a lagging parent catalog against each
+authoritative protected child checkpoint and reduces records into idle,
+interrupted/resumable, blocked, expired, or terminal state without constructing
+their provider.
+Recovered idle children remain available for `@child-id` follow-up; an exact
+interrupted checkpoint runs only after `/agent resume` confirmation. Historical
+journal-only children and unresolved process-owned monitor identities appear
+once as `legacy_ephemeral` / `process_exit` and are never fabricated into a
+live session. Child artifacts remain child-owned until the safe-boundary
+coordinator explicitly transfers a bounded copy and records lineage.
 
 ## 9. Accessibility
 

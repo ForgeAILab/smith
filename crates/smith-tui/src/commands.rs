@@ -27,6 +27,8 @@ pub enum CommandAction {
     Timeline,
     /// List children or inspect one child.
     Agent(Option<String>),
+    /// Explicitly continue one interrupted child's exact checkpoint.
+    AgentResume(String),
     /// Inspect a Git change scope.
     Diff(Option<String>),
     /// Review a change scope.
@@ -118,8 +120,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "agent",
-        argument_hint: "[ID]",
-        description: "list agents or inspect one",
+        argument_hint: "[ID|resume ID]",
+        description: "list, inspect, or resume an existing agent",
         requires_idle: false,
         advanced: false,
     },
@@ -208,6 +210,7 @@ pub fn parse(input: &str) -> Result<CommandAction, String> {
         return Err("select or enter a command".to_owned());
     };
     let argument = words.next().map(str::to_owned);
+    let second = words.next().map(str::to_owned);
     if words.next().is_some() {
         return Err(format!("`/{name}` accepts at most one value"));
     }
@@ -217,6 +220,14 @@ pub fn parse(input: &str) -> Result<CommandAction, String> {
 
     if spec.argument_hint.is_empty() && argument.is_some() {
         return Err(format!("`/{name}` takes no value"));
+    }
+
+    if name == "agent" && argument.as_deref() == Some("resume") {
+        let child = second.ok_or_else(|| "`/agent resume` requires a child ID".to_owned())?;
+        return Ok(CommandAction::AgentResume(child));
+    }
+    if second.is_some() {
+        return Err(format!("`/{name}` accepts at most one value"));
     }
 
     Ok(match name {
@@ -304,6 +315,15 @@ mod tests {
         );
         assert_eq!(parse("/context").expect("context"), CommandAction::Context);
         assert_eq!(parse("/model").expect("picker"), CommandAction::Model(None));
+        assert_eq!(
+            parse("/agent resume child-7").expect("child resume"),
+            CommandAction::AgentResume("child-7".into())
+        );
+        assert!(
+            parse("/agent resume")
+                .unwrap_err()
+                .contains("requires a child ID")
+        );
         assert!(parse("/missing").unwrap_err().contains("/help"));
     }
 }

@@ -792,6 +792,11 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         (None, None) => None,
         (Some(_), Some(_)) => unreachable!("conflicting checkpoint inputs returned above"),
     };
+    // Child sessions share the protected store itself, never the root
+    // journal barrier. The barrier is scoped to the root journal writer and
+    // would otherwise couple a child's exact checkpoints to unrelated root
+    // presentation durability.
+    let child_checkpoint_store = checkpoint_store.clone();
     let checkpoint_store = match (checkpoint_store, request.checkpoint_barrier.clone()) {
         (Some(store), Some(barrier)) => {
             Some(Arc::new(BarrierCheckpointStore::new(store, barrier)) as Arc<dyn CheckpointStore>)
@@ -967,6 +972,8 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
             workspace,
             clock,
             artifact_store: request.artifact_store.clone(),
+            session_store: request.session_store.clone(),
+            checkpoint_store: child_checkpoint_store,
             skills: resolved_skills.abilities().to_vec(),
             memory: memory_contributor,
             semantic_summary: semantic_summary

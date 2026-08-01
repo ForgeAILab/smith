@@ -29,21 +29,23 @@ use agent_runtime::agent::config::LoopConfig;
 use agent_runtime::capability::{ActivationBudget, CapabilityResolver};
 use agent_runtime::context::{ContextBudget, ContextPolicy};
 use agent_runtime::delegation::{
-    ChildRuntimeFactory, ChildState, ChildStatus, ChildTaskOutcome, DELEGATION_PERMISSION,
-    DelegationConfig, DelegationCoordinator, DelegationLimits, SpawnOutcome,
+    ChildDurability, ChildRuntimeFactory, ChildState, ChildStatus, ChildTaskOutcome,
+    DELEGATION_PERMISSION, DelegationConfig, DelegationCoordinator, DelegationLimits,
+    DurableChildSpec, SpawnOutcome,
 };
 use agent_runtime::harness::{
     ArtifactOffloader, ArtifactReadTool, MemoryContributor, QuestionnaireTool,
     SemanticSummaryCoordinator, TodoComponent, WriteTodosTool,
 };
 use agent_runtime::hub::{ScopeIdentity, ScopeInputs};
-use agent_runtime::registry::{Permission, RegistryRevision, RegistrySource};
+use agent_runtime::registry::{Fingerprint, Permission, RegistryRevision, RegistrySource};
 use agent_runtime::runtime::{InjectedContent, RuntimeBuilder, SessionHandle};
 use agent_runtime_core::approval::ApprovalPolicy;
 use agent_runtime_core::artifact::ArtifactStore;
 use agent_runtime_core::cancel::Cancellation;
 use agent_runtime_core::catalog::ResolvedModelProfile;
 use agent_runtime_core::check_set::ActionClass;
+use agent_runtime_core::checkpoint::CheckpointStore;
 use agent_runtime_core::clock::Clock;
 use agent_runtime_core::content::UserInput;
 use agent_runtime_core::delegation::{
@@ -56,6 +58,7 @@ use agent_runtime_core::grant::{
 };
 use agent_runtime_core::provider::{ModelId, Provider};
 use agent_runtime_core::security::{AuthorizationRequest, PermissionSet, SecurityResource};
+use agent_runtime_core::store::SessionStore;
 use agent_runtime_core::tool::{
     InvocationContext, PreparationContext, PreparedToolCall, Tool, ToolCallDisplay, ToolEffects,
     ToolOutcome, ToolSpec,
@@ -173,6 +176,8 @@ pub struct SmithChildFactory {
     pub(crate) workspace: Arc<dyn Workspace>,
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) artifact_store: Option<Arc<dyn ArtifactStore>>,
+    pub(crate) session_store: Option<Arc<dyn SessionStore>>,
+    pub(crate) checkpoint_store: Option<Arc<dyn CheckpointStore>>,
     pub(crate) skills: Vec<Arc<dyn Ability>>,
     pub(crate) memory: Option<MemoryContributor>,
     pub(crate) semantic_summary: Option<Arc<SemanticSummaryCoordinator>>,
@@ -183,6 +188,48 @@ pub struct SmithChildFactory {
 impl ChildRuntimeFactory for SmithChildFactory {
     fn artifact_store(&self) -> Option<Arc<dyn ArtifactStore>> {
         self.artifact_store.clone()
+    }
+
+    fn session_store(&self) -> Option<Arc<dyn SessionStore>> {
+        self.session_store.clone()
+    }
+
+    fn checkpoint_store(&self) -> Option<Arc<dyn CheckpointStore>> {
+        self.checkpoint_store.clone()
+    }
+
+    fn policy_fingerprint(&self, spec: &DurableChildSpec) -> Result<Fingerprint, RuntimeError> {
+        let prompt_revisions = self
+            .prompt_contributor
+            .fragments()
+            .iter()
+            .map(|fragment| format!("{}@{}", fragment.id, fragment.revision))
+            .collect::<Vec<_>>();
+        let skill_names = self
+            .skills
+            .iter()
+            .map(|ability| ability.name().to_owned())
+            .collect::<Vec<_>>();
+        let encoded = serde_json::to_vec(&json!({
+            "schema_version": 1,
+            "spec": spec,
+            "provider_name": self.provider_name,
+            "provider_kind": self.provider_kind,
+            "model": self.model,
+            "model_profile": self.profile,
+            "context_policy_revision": self.context_policy.revision,
+            "prompt_revisions": prompt_revisions,
+            "skill_names": skill_names,
+            "workspace_root": self.workspace.root(),
+            "read_only": self.read_only,
+        }))
+        .map_err(|error| {
+            RuntimeError::new(
+                ErrorKind::Serialization,
+                format!("Smith child policy could not be fingerprinted: {error}"),
+            )
+        })?;
+        Ok(Fingerprint::of(encoded))
     }
 
     fn child_builder(&self, spec: &ChildSpec) -> Result<RuntimeBuilder, RuntimeError> {
@@ -299,6 +346,12 @@ impl ChildRuntimeFactory for SmithChildFactory {
         if let Some(store) = self.artifact_store.clone() {
             builder = builder.tool_output_processor(Arc::new(ArtifactOffloader::new(store)));
         }
+        if let Some(store) = self.session_store.clone() {
+            builder = builder.session_store(store);
+        }
+        if let Some(store) = self.checkpoint_store.clone() {
+            builder = builder.checkpoint_store(store);
+        }
         for descriptor in abilities.descriptors() {
             builder = builder.tool_ability_descriptor(descriptor);
         }
@@ -332,7 +385,7 @@ impl SmithDelegation {
 /// the coordinator's separate lossless queue and are injected must-deliver, so
 /// the parent receives them at the next provider/tool boundary and never
 /// depends on a bounded observability subscriber.
-pub fn wire_delegation(
+pub async fn wire_delegation(
     session: &SessionHandle,
     delegation: &SmithDelegation,
 ) -> Result<(), RuntimeError> {
@@ -342,11 +395,13 @@ pub fn wire_delegation(
         DelegationConfig {
             limits: DelegationLimits {
                 max_running_children: DEFAULT_MAX_RUNNING_CHILDREN,
+                ..DelegationLimits::default()
             },
             delegation_tool_names: vec![AGENT_TOOL_NAME.to_owned()],
             ..DelegationConfig::default()
         },
     )?;
+    coordinator.recover().await?;
     let outcome_coordinator = coordinator.clone();
     delegation
         .slot
@@ -469,6 +524,8 @@ enum AgentAction {
     Result { child_id: String },
     /// Send a follow-up task to an idle child.
     FollowUp { child_id: String, task: String },
+    /// Resume the exact checkpoint of an interrupted durable child.
+    Resume { child_id: String },
     /// Stop a child.
     Stop { child_id: String },
 }
@@ -495,14 +552,24 @@ fn status_json(status: &ChildStatus) -> Value {
     let state = match &status.state {
         ChildState::Running => "running".to_owned(),
         ChildState::Idle => "idle".to_owned(),
+        ChildState::Interrupted { .. } => "interrupted".to_owned(),
         ChildState::Stopped { reason } => format!("stopped ({reason:?})"),
         ChildState::Failed => "failed".to_owned(),
+        ChildState::Expired => "expired".to_owned(),
     };
     json!({
         "child_id": status.child.as_str(),
+        "child_session_id": status.session.as_str(),
+        "durability": match status.durability {
+            ChildDurability::Ephemeral => "ephemeral",
+            ChildDurability::Durable => "durable",
+        },
         "state": state,
+        "resumable": status.resumable(),
         "turns_used": status.turns_used,
         "max_turns": status.max_turns,
+        "tokens_used": status.tokens_used,
+        "incompatibility": status.incompatibility,
         "result": status.last_result,
     })
 }
@@ -539,7 +606,8 @@ impl Tool for AgentTool {
             AGENT_TOOL_NAME,
             "Delegate a task to a sub-agent. Actions: spawn (start a child with a task; \
              read-only tools unless tools=\"all\"), list, wait (block until a child finishes), \
-             result, follow_up (send another task to a child), stop. A completed child's \
+             result, follow_up (start a new task on an idle child), resume (continue an exact \
+             interrupted checkpoint), stop. A completed child's \
              result is also delivered to you automatically at the next safe point. A child's \
              needs_input result is informational and does not open user interface; decide \
              whether to call root ask_user, then send the answer with an explicit follow_up.",
@@ -548,7 +616,7 @@ impl Tool for AgentTool {
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["spawn", "list", "wait", "result", "follow_up", "stop"],
+                        "enum": ["spawn", "list", "wait", "result", "follow_up", "resume", "stop"],
                         "description": "The delegation operation."
                     },
                     "task": {
@@ -557,7 +625,7 @@ impl Tool for AgentTool {
                     },
                     "child_id": {
                         "type": "string",
-                        "description": "The child to address (wait, result, follow_up, stop)."
+                        "description": "The child to address (wait, result, follow_up, resume, stop)."
                     },
                     "tools": {
                         "type": "string",
@@ -636,6 +704,11 @@ impl Tool for AgentTool {
                 child_id.clone(),
                 "Send sub-agent follow-up",
                 Some(format!("{child_id}: {task}")),
+            ),
+            AgentAction::Resume { child_id } => (
+                child_id.clone(),
+                "Resume interrupted sub-agent",
+                Some(format!("{child_id}: continue the exact saved checkpoint")),
             ),
             AgentAction::Stop { child_id } => {
                 (child_id.clone(), "Stop sub-agent", Some(child_id.clone()))
@@ -744,6 +817,16 @@ impl Tool for AgentTool {
                 match coordinator.follow_up(&child, UserInput::text(task)).await {
                     Ok(()) => Ok(ToolOutcome::json(json!({
                         "follow_up_sent": child.as_str(),
+                    }))),
+                    Err(err) => Ok(ToolOutcome::error(err.message)),
+                }
+            }
+            AgentAction::Resume { child_id } => {
+                let child = agent_runtime_core::ids::ChildId::new(child_id);
+                match coordinator.resume(&child).await {
+                    Ok(()) => Ok(ToolOutcome::json(json!({
+                        "resumed": child.as_str(),
+                        "mode": "exact_checkpoint",
                     }))),
                     Err(err) => Ok(ToolOutcome::error(err.message)),
                 }

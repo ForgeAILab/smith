@@ -40,6 +40,20 @@ versioned extension state. Smith saves after each completed turn and during
 orderly shutdown. The outer Smith snapshot schema is checked before the payload
 is parsed.
 
+For a root session, redaction-safe extension state also contains a bounded
+durable-child catalog: stable child and child-session IDs, parent ownership,
+immutable composition fingerprint, lifecycle state, cumulative limits/usage,
+record revision, and latest safe checkpoint watermark. It contains no task
+body, prepared argument, questionnaire answer, or raw child result. Those stay
+in each child's own snapshot/protected checkpoint under the same project-owned
+session namespace.
+
+If a child returns a questionnaire to its parent, the exact request is a
+sensitive child-checkpoint component. Smith reloads and re-queues that same
+request while wiring the restored coordinator—still without constructing the
+child provider. Public prompts may then enter the ordinary typed parent
+delivery; sensitive prompts remain metadata-only there.
+
 Ordinary JSON snapshots retain only extension namespaces explicitly classified
 redaction-safe. Registered credential literals are removed from the persisted
 clone; live canonical state is not rewritten. Sensitive todo, questionnaire,
@@ -102,6 +116,14 @@ Only one process may own a session lifecycle, and checkpoint saves use a
 cross-process writer lease plus monotonic revision checks. Two sibling writers
 cannot both replace the latest state.
 
+Durable child checkpoints and the parent-owned child catalog cross separate
+atomic boundaries. After resuming the parent, Smith calls the coordinator's
+provider-free recovery pass before accepting delegation commands. A compatible
+child checkpoint newer than the catalog refreshes its watermark and exact
+resumability; missing, regressed, terminal-without-catalog-transition, or
+indeterminate provider checkpoints are reported non-resumable and never start
+a replacement. The same pass restores protected returned questionnaires.
+
 If the protected key service is unavailable, a host that can safely continue
 may report mid-turn durability as unavailable; it must not claim pending
 approval/question recovery. An existing protected record that cannot be opened
@@ -143,13 +165,28 @@ protected session artifact. A dedicated tool-free summary request has its own
 purpose, token cap, timeout, revision, retention, and disjoint usage source.
 Failed or invalid summaries leave the structural history plan unchanged.
 
-## Ephemeral work
+## Durable children and legacy ephemeral work
 
-Child sessions and process-owned monitors are not silently resumed. The journal
-records metadata-only start/terminal markers. On process restart, unresolved
-identities are deterministically marked `process_exit`, displayed as
-interrupted/not restarted, and written once so a second resume does not report
-them again. No monitor executor is inferred from these reconciliation markers.
+When both child snapshot and protected checkpoint stores are available, a
+child is durable. Parent startup validates its catalog and renders retained
+children without constructing providers, invoking tools, or consuming tokens.
+An idle child accepts an explicit new-turn `follow_up` under its original
+history and cumulative limits. An orphaned running record becomes
+`interrupted`; only explicit `resume` may continue its exact safe checkpoint,
+without incrementing the child task count again.
+
+Resume refuses a missing, corrupt, terminal, regressed, policy-incompatible,
+or unsafe checkpoint. A checkpoint immediately before provider I/O is unsafe:
+the remote outcome is indeterminate, so replay could duplicate work. Smith
+marks it non-resumable instead. Unknown or incompatible child IDs never cause
+a replacement spawn.
+
+Journal-only historical children and intentionally non-persistent children
+remain `legacy_ephemeral`. On process restart unresolved legacy identities are
+deterministically marked `process_exit`, displayed as interrupted/not
+restarted, and written once so a second resume does not report them again.
+Process-owned monitors remain ephemeral; no monitor executor is inferred from
+reconciliation markers.
 
 `/timeline` flushes and reads the redacted canonical journal, then projects
 stable root turn/child IDs, terminal todo counts, shell validation-gate
@@ -163,6 +200,9 @@ restarted by navigation.
 - Use `smith sessions list` to obtain exact project-scoped identities.
 - Resume interactively with `smith --resume <session-id>` when a protected
   approval/question is pending.
+- Inspect retained children with `/agent`; use `@child-id …` for a new
+  follow-up turn and `/agent resume <child-id>` only for the exact interrupted
+  task.
 - A schema, integrity, key, lifecycle-lease, or retained-gap error is a real
   recovery boundary; do not delete it merely to make startup proceed.
 - Back up the whole project partition together. Copying only a JSONL journal

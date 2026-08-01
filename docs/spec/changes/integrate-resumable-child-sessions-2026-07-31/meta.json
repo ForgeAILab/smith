@@ -1,0 +1,18 @@
+{
+  "change_id": "integrate-resumable-child-sessions",
+  "change_ref": "integrate-resumable-child-sessions-2026-07-31",
+  "created_at": "2026-08-01T00:56:16Z",
+  "updated_at": "2026-08-01T01:08:11Z",
+  "completed_at": null,
+  "status": "approved",
+  "approved_at": "2026-08-01T01:08:11Z",
+  "reapproval_required": false,
+  "depends_on": [
+    "add-smith-agent-harness-2026-07-23",
+    "integrate-stable-session-harness-2026-07-31",
+    "add-agent-first-workflow-ux-2026-07-31"
+  ],
+  "external_dependencies": [
+    "../agent-runtime:add-resumable-child-sessions-2026-07-31"
+  ]
+}

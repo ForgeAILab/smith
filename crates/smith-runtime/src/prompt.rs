@@ -80,7 +80,11 @@ Delegate only a bounded, concrete subtask when the active profile permits it. Ch
 inherits narrowed authority and returns through the parent safe boundary. A child that \
 needs user input must return an attributed needs-input result rather than opening a \
 competing prompt. If the parent chooses to ask the user, invoke root ask_user and then send \
-the answer back to that child with an explicit agent follow_up.";
+the answer back to that child with an explicit agent follow_up. Reuse a relevant idle child \
+with follow_up so its prior conversation remains available. Use resume only for an interrupted \
+child with an exact compatible checkpoint: resume continues that unfinished turn, while \
+follow_up starts a new turn. Never replace a missing, incompatible, or non-resumable child by \
+silently spawning another one.";
 
 const RESPONSE_STYLE: &str = "\
 Lead with the outcome. Be concise, concrete, and candid about uncertainty. Name changed \
