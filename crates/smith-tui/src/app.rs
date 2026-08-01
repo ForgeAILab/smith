@@ -552,6 +552,30 @@ impl App {
         self.expire_prompts();
     }
 
+    /// Whether the footer should ask for the confirming `Ctrl+C` press.
+    pub fn ctrl_c_exit_hint_active(&self) -> bool {
+        self.last_ctrl_c
+            .is_some_and(|pressed| pressed.elapsed() < FORCE_QUIT_WINDOW)
+    }
+
+    /// Expires the first-press footer hint after the double-press window.
+    ///
+    /// Returns whether visible footer state changed so the host can request an
+    /// idle redraw without continuously animating the status line.
+    pub fn expire_ctrl_c_exit_hint(&mut self) -> bool {
+        self.expire_ctrl_c_exit_hint_at(Instant::now())
+    }
+
+    pub(crate) fn expire_ctrl_c_exit_hint_at(&mut self, now: Instant) -> bool {
+        let expired = self
+            .last_ctrl_c
+            .is_some_and(|pressed| now.duration_since(pressed) >= FORCE_QUIT_WINDOW);
+        if expired {
+            self.last_ctrl_c = None;
+        }
+        expired
+    }
+
     /// Monotonic elapsed time for the active turn.
     pub fn turn_elapsed(&self) -> Option<Duration> {
         self.turn_started_at.map(|started| started.elapsed())
@@ -3179,6 +3203,21 @@ mod tests {
         assert_eq!(app.on_key(ctrl('c')), None);
         assert!(!app.should_quit);
         assert!(app.composer.is_empty());
+    }
+
+    #[test]
+    fn the_ctrl_c_exit_hint_expires_at_the_double_press_boundary() {
+        let mut app = app();
+        let pressed = Instant::now();
+        app.last_ctrl_c = Some(pressed);
+
+        assert!(app.ctrl_c_exit_hint_active());
+        assert!(
+            !app.expire_ctrl_c_exit_hint_at(pressed + FORCE_QUIT_WINDOW - Duration::from_millis(1))
+        );
+        assert!(app.expire_ctrl_c_exit_hint_at(pressed + FORCE_QUIT_WINDOW));
+        assert!(!app.ctrl_c_exit_hint_active());
+        assert!(app.last_ctrl_c.is_none());
     }
 
     #[test]

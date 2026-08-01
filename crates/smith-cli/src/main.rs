@@ -797,11 +797,15 @@ async fn run_tui(
             }
 
             _ = spinner.tick() => {
-                if app.is_busy() {
+                let exit_hint_expired = app.expire_ctrl_c_exit_hint();
+                let busy = app.is_busy();
+                if busy {
                     app.tick();
-                    if theme.uses_motion() || app.tick.is_multiple_of(10) {
-                        dirty = true;
-                    }
+                }
+                if exit_hint_expired
+                    || (busy && (theme.uses_motion() || app.tick.is_multiple_of(10)))
+                {
+                    dirty = true;
                 }
             }
 

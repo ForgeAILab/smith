@@ -214,7 +214,7 @@ and the keyboard contract below are sufficient, so it adds no control strip.
 | `Enter` | Send the composer |
 | `Shift+Enter` / `Alt+Enter` | Newline in the composer |
 | `Esc` | Interrupt the running turn; if idle, clear the composer |
-| `Ctrl+C` | Stash and clear the composer; twice within 1s exits from any state |
+| `Ctrl+C` | Stash and clear the composer; replace the identity footer with `press Ctrl+C again to exit` for the 1s double-press window; a second press exits from any state |
 | `Ctrl+P` | Open command completion using the shared command registry |
 | `Tab` | Cycle root agent mode only when empty and idle; otherwise complete or move the active overlay selection |
 | `Shift+Tab` | Move the active completion/questionnaire selection backward |
@@ -251,7 +251,10 @@ shortcut strip: `?` from an empty composer and `/help` both render the bounded
 local command/composer guide without provider spend or canonical history. This
 identity disappears while work is active; it is not a permanent header. At 44
 columns, low-priority path detail disappears before mode, activity, model,
-approval, or context provenance.
+approval, or context provenance. After a first `Ctrl+C`, the entire identity or
+activity footer temporarily becomes the warning-toned text `press Ctrl+C again
+to exit`. A second press within one second exits; expiry or any other key
+restores the current status without leaving a transcript record.
 
 `build`, `plan`, and `review` are host-owned policy presets. `plan` and
 `review` are read-only; changing mode can only narrow the already resolved

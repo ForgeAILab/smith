@@ -1138,6 +1138,17 @@ fn draw_identity_footer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: The
     // Identity lives at the point of action. During work, activity replaces
     // the idle mode label; no permanent header or focusable status region is
     // introduced.
+    if app.ctrl_c_exit_hint_active() {
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("  ", theme.style(Tone::Dim)),
+                Span::styled("press Ctrl+C again to exit", theme.style(Tone::Warning)),
+            ])),
+            area,
+        );
+        return;
+    }
+
     let mut identity = vec![Span::styled("  ", theme.style(Tone::Dim))];
     if !app.following {
         identity.push(Span::styled(
@@ -2893,6 +2904,44 @@ mod tests {
             assert!(
                 screen.contains("gpt-5.3"),
                 "{width}×{height} lost the footer:\n{screen}"
+            );
+        }
+    }
+
+    #[test]
+    fn ctrl_c_exit_hint_replaces_then_restores_the_footer_at_all_widths() {
+        for (width, height) in [(44, 14), (74, 24), (120, 32)] {
+            let mut app = App::new("glm-5.2", "/Volumes/Data/codes/ai/agent-runtime:main");
+            app.status.switch_model(Some("zai".to_owned()), "glm-5.2");
+            app.status.set_agent("build");
+            let theme = Theme::new().without_color().without_motion();
+
+            let baseline = render(&app, width, height, theme);
+            let baseline_footer = baseline.lines().last().unwrap_or_default().to_owned();
+            assert!(baseline_footer.contains("glm-5.2"), "{baseline_footer}");
+
+            assert_eq!(
+                app.on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+                None
+            );
+            let armed = render(&app, width, height, theme);
+            let armed_footer = armed.lines().last().unwrap_or_default();
+            assert_eq!(
+                armed_footer.trim(),
+                "press Ctrl+C again to exit",
+                "{width}x{height}: {armed}"
+            );
+            assert!(!armed_footer.contains("glm-5.2"), "{armed_footer}");
+            assert!(!armed_footer.contains("? ctx"), "{armed_footer}");
+
+            assert!(app.expire_ctrl_c_exit_hint_at(
+                std::time::Instant::now() + std::time::Duration::from_secs(1)
+            ));
+            let restored = render(&app, width, height, theme);
+            assert_eq!(
+                restored.lines().last().unwrap_or_default(),
+                baseline_footer,
+                "{width}x{height}: {restored}"
             );
         }
     }
