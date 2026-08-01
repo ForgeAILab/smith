@@ -21,9 +21,11 @@ use agent_runtime_core::checkpoint::{
 };
 use agent_runtime_core::error::{ErrorKind, RuntimeError};
 use agent_runtime_core::ids::SessionId;
+use agent_runtime_core::store::Secret;
 use async_trait::async_trait;
 use chacha20poly1305::aead::{Aead, Generate, Payload};
 use chacha20poly1305::{Key, KeyInit, XChaCha20Poly1305, XNonce};
+use smith_config::credential::{CredentialRef, CredentialResolver};
 use tokio::sync::Mutex;
 use zeroize::Zeroizing;
 
@@ -139,6 +141,102 @@ impl From<CheckpointProtectionError> for RuntimeError {
 pub trait CheckpointKeyProvider: Send + Sync + fmt::Debug {
     /// Loads the existing key or enrolls one when none exists.
     fn load_or_create(&self) -> Result<CheckpointKey, CheckpointProtectionError>;
+}
+
+/// Explicit no-prompt checkpoint key resolved from owner-controlled config or
+/// the process environment.
+pub struct ConfiguredCheckpointKeyProvider {
+    bytes: Zeroizing<[u8; KEY_BYTES]>,
+}
+
+impl ConfiguredCheckpointKeyProvider {
+    /// Decodes a redaction-safe 64-character hexadecimal secret.
+    pub fn new(secret: &Secret) -> Result<Self, CheckpointProtectionError> {
+        decode_checkpoint_key(secret).map(|bytes| Self { bytes })
+    }
+}
+
+impl fmt::Debug for ConfiguredCheckpointKeyProvider {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ConfiguredCheckpointKeyProvider([REDACTED])")
+    }
+}
+
+impl CheckpointKeyProvider for ConfiguredCheckpointKeyProvider {
+    fn load_or_create(&self) -> Result<CheckpointKey, CheckpointProtectionError> {
+        let mut bytes = Zeroizing::new([0; KEY_BYTES]);
+        bytes.copy_from_slice(self.bytes.as_slice());
+        Ok(CheckpointKey(bytes))
+    }
+}
+
+/// Explicit protected credential reference for a checkpoint key.
+///
+/// Resolution runs on the same blocking pool as the platform provider. The
+/// selected reference is the only backend consulted; an `env:` reference, for
+/// example, never constructs or calls the keychain path.
+pub struct CredentialCheckpointKeyProvider {
+    resolver: CredentialResolver,
+    reference: CredentialRef,
+}
+
+impl CredentialCheckpointKeyProvider {
+    /// Binds one already-validated resolver to an exact reference.
+    pub fn new(
+        resolver: CredentialResolver,
+        reference: &str,
+    ) -> Result<Self, CheckpointProtectionError> {
+        let reference = CredentialRef::parse(reference)
+            .map_err(|_| CheckpointProtectionError::unavailable())?;
+        Ok(Self {
+            resolver,
+            reference,
+        })
+    }
+}
+
+impl fmt::Debug for CredentialCheckpointKeyProvider {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CredentialCheckpointKeyProvider")
+            .field("reference", &self.reference)
+            .finish_non_exhaustive()
+    }
+}
+
+impl CheckpointKeyProvider for CredentialCheckpointKeyProvider {
+    fn load_or_create(&self) -> Result<CheckpointKey, CheckpointProtectionError> {
+        let secret = self
+            .resolver
+            .resolve_blocking(&self.reference)
+            .map_err(|_| CheckpointProtectionError::unavailable())?;
+        decode_checkpoint_key(&secret).map(CheckpointKey)
+    }
+}
+
+fn decode_checkpoint_key(
+    secret: &Secret,
+) -> Result<Zeroizing<[u8; KEY_BYTES]>, CheckpointProtectionError> {
+    let encoded = secret.expose().as_bytes();
+    if encoded.len() != KEY_BYTES * 2 {
+        return Err(CheckpointProtectionError::unavailable());
+    }
+    let mut bytes = Zeroizing::new([0; KEY_BYTES]);
+    for (index, pair) in encoded.chunks_exact(2).enumerate() {
+        let high = hex_nibble(pair[0]).ok_or_else(CheckpointProtectionError::unavailable)?;
+        let low = hex_nibble(pair[1]).ok_or_else(CheckpointProtectionError::unavailable)?;
+        bytes[index] = (high << 4) | low;
+    }
+    Ok(bytes)
+}
+
+fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 /// A host-owned durability boundary that must complete before a checkpoint is
@@ -422,7 +520,10 @@ impl CheckpointStore for SmithCheckpointStore {
             }
         } else if checkpoint.state_revision != 0
             || checkpoint.watermark.checkpoint_sequence != 1
-            || !matches!(checkpoint.state, TurnState::Accepted { .. })
+            || !matches!(
+                checkpoint.state,
+                TurnState::Accepted { .. } | TurnState::LocalActionAccepted { .. }
+            )
         {
             return Err(RuntimeError::conflict(
                 "the first protected checkpoint must be an accepted turn at revision zero and sequence one",
@@ -470,7 +571,10 @@ fn compare_checkpoint(
 
     if matches!(existing.state, TurnState::Terminal { .. })
         && next.state_revision == 0
-        && matches!(next.state, TurnState::Accepted { .. })
+        && matches!(
+            next.state,
+            TurnState::Accepted { .. } | TurnState::LocalActionAccepted { .. }
+        )
         && next.watermark.checkpoint_sequence
             == existing.watermark.checkpoint_sequence.saturating_add(1)
         && next.watermark.event_sequence >= existing.watermark.event_sequence
@@ -619,6 +723,7 @@ mod tests {
     use agent_runtime_core::ids::TurnId;
     use agent_runtime_core::store::{SessionIdentityState, SessionSnapshot};
     use agent_runtime_core::usage::UsageLedger;
+    use smith_config::credential::{Environment, Keychain, KeychainError};
 
     use super::*;
     use crate::session::ProjectId;
@@ -638,6 +743,24 @@ mod tests {
     impl CheckpointKeyProvider for UnavailableKeyProvider {
         fn load_or_create(&self) -> Result<CheckpointKey, CheckpointProtectionError> {
             Err(CheckpointProtectionError::unavailable())
+        }
+    }
+
+    #[derive(Debug)]
+    struct PanicsIfKeychainCalled;
+
+    impl Keychain for PanicsIfKeychainCalled {
+        fn secret(&self, _service: &str, _account: &str) -> Result<Secret, KeychainError> {
+            panic!("an environment checkpoint key consulted the keychain")
+        }
+    }
+
+    #[derive(Debug)]
+    struct FixedCheckpointEnvironment(&'static str);
+
+    impl Environment for FixedCheckpointEnvironment {
+        fn value(&self, _name: &str) -> Option<Secret> {
+            Some(Secret::new(self.0))
         }
     }
 
@@ -736,6 +859,75 @@ mod tests {
         let debug = format!("{store:?}");
         assert!(debug.contains("[REDACTED]"));
         assert!(!debug.contains("070707"));
+    }
+
+    #[tokio::test]
+    async fn configured_hex_key_round_trips_without_platform_storage() {
+        const ENCODED: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let root = tempfile::tempdir().unwrap();
+        let provider = Arc::new(
+            ConfiguredCheckpointKeyProvider::new(&Secret::new(ENCODED)).expect("a configured key"),
+        );
+        let store = SmithCheckpointStore::initialize_with(
+            paths(root.path(), "configured-project"),
+            provider,
+        )
+        .await
+        .expect("a configured store");
+        let checkpoint = accepted("configured-session", "configured-turn");
+        store.save(&checkpoint).await.expect("encrypted save");
+        assert_eq!(
+            store
+                .load_latest(&checkpoint.session)
+                .await
+                .expect("encrypted load"),
+            Some(checkpoint.clone())
+        );
+        let envelope = tokio::fs::read(
+            store
+                .paths()
+                .checkpoint(&checkpoint.session)
+                .expect("checkpoint path"),
+        )
+        .await
+        .expect("checkpoint envelope");
+        assert!(envelope.starts_with(MAGIC));
+        assert!(
+            !envelope
+                .windows(ENCODED.len())
+                .any(|window| window == ENCODED.as_bytes())
+        );
+        let debug = format!(
+            "{:?}",
+            ConfiguredCheckpointKeyProvider::new(&Secret::new(ENCODED)).unwrap()
+        );
+        assert!(debug.contains("REDACTED"));
+        assert!(!debug.contains(ENCODED));
+    }
+
+    #[test]
+    fn configured_key_rejects_invalid_material_with_one_opaque_error() {
+        let invalid_hex = "g".repeat(KEY_BYTES * 2);
+        for invalid in ["short", invalid_hex.as_str()] {
+            let error = ConfiguredCheckpointKeyProvider::new(&Secret::new(invalid))
+                .expect_err("invalid checkpoint key material");
+            assert_eq!(error.to_string(), PROTECTED_STATE_DIAGNOSTIC);
+            assert!(!format!("{error:?}").contains(invalid));
+        }
+    }
+
+    #[test]
+    fn environment_reference_never_calls_the_keychain_backend() {
+        const ENCODED: &str = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+        let resolver = CredentialResolver::new("/nonexistent-user-state")
+            .with_keychain(Arc::new(PanicsIfKeychainCalled))
+            .with_environment(Arc::new(FixedCheckpointEnvironment(ENCODED)));
+        let provider =
+            CredentialCheckpointKeyProvider::new(resolver, "env:SMITH_CHECKPOINT_SECRET")
+                .expect("an environment checkpoint provider");
+        provider
+            .load_or_create()
+            .expect("the environment key is decoded without keychain access");
     }
 
     #[tokio::test]

@@ -73,8 +73,12 @@ completed conversation/accounting state.
 ## Protected checkpoints
 
 The latest exact `TurnCheckpoint` is encrypted with XChaCha20-Poly1305 under a
-256-bit per-user key stored in macOS Keychain or Linux Secret Service. The
-project, session, turn, envelope schema, algorithm, and fresh 192-bit nonce are
+256-bit per-user key. The source is explicitly one of macOS Keychain/Linux
+Secret Service, `SMITH_CHECKPOINT_KEY`, an owner-only inline
+`persistence.checkpoint_key`, or an `env:`
+`persistence.checkpoint_key_credential`. Inline/environment sources bypass OS
+credential services entirely and decoded material is zeroized. The project,
+session, turn, envelope schema, algorithm, and fresh 192-bit nonce are
 authenticated. A moved, corrupted, wrong-key, truncated, or incompatible
 record produces the same non-secret diagnostic.
 
@@ -88,6 +92,12 @@ versioned component state. Smith checkpoints after:
 4. each committed tool result or interaction boundary;
 5. turn completion and publication.
 
+Direct prepared composer actions use the same machine. Exact file reads and
+leading-`!` shell calls checkpoint acceptance, preparation, execution intent,
+raw outcome, processed/artifact result, and terminal publication. Recovery
+may execute a durably prepared action once, processes a durable raw outcome
+without replay, and refuses to replay an indeterminate executing action.
+
 Only one process may own a session lifecycle, and checkpoint saves use a
 cross-process writer lease plus monotonic revision checks. Two sibling writers
 cannot both replace the latest state.
@@ -96,6 +106,13 @@ If the protected key service is unavailable, a host that can safely continue
 may report mid-turn durability as unavailable; it must not claim pending
 approval/question recovery. An existing protected record that cannot be opened
 fails closed.
+
+`smith setup checkpoint-key` performs an owner-only atomic config transaction.
+Selecting the existing source is a no-op. If any `.checkpoint.bin` exists
+under the bounded session inventory, a source change refuses before touching
+config; Smith does not guess whether old encrypted state may be discarded.
+This is the supported fail-closed rotation behavior until an all-checkpoint
+atomic re-encryption transaction is available.
 
 ## Pending interactions
 
@@ -133,6 +150,13 @@ records metadata-only start/terminal markers. On process restart, unresolved
 identities are deterministically marked `process_exit`, displayed as
 interrupted/not restarted, and written once so a second resume does not report
 them again. No monitor executor is inferred from these reconciliation markers.
+
+`/timeline` flushes and reads the redacted canonical journal, then projects
+stable root turn/child IDs, terminal todo counts, shell validation-gate
+outcomes, and metadata-only undo/revert/redo transactions. It never consults
+protected raw invocation state or sends a provider request. Child inspection
+is temporary; process-exit children remain labelled interrupted and are never
+restarted by navigation.
 
 ## Operational recovery
 

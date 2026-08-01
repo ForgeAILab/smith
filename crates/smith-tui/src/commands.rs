@@ -21,6 +21,10 @@ pub enum CommandAction {
     Status,
     /// Visualize the latest model-facing context plan.
     Context,
+    /// Toggle bounded active-work detail.
+    Details,
+    /// Render the bounded local root/child/recovery timeline.
+    Timeline,
     /// List children or inspect one child.
     Agent(Option<String>),
     /// Inspect a Git change scope.
@@ -29,6 +33,8 @@ pub enum CommandAction {
     Review(Option<String>),
     /// Undo the newest attributable turn.
     Undo,
+    /// Reapply the newest exact successfully undone turn.
+    Redo,
     /// Revert a selected file or hunk.
     Revert(Option<String>),
     /// Exit under the active-work policy.
@@ -72,6 +78,20 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "context",
         argument_hint: "",
         description: "show current context usage",
+        requires_idle: false,
+        advanced: false,
+    },
+    CommandSpec {
+        name: "details",
+        argument_hint: "",
+        description: "toggle bounded live-work detail",
+        requires_idle: false,
+        advanced: false,
+    },
+    CommandSpec {
+        name: "timeline",
+        argument_hint: "",
+        description: "show local turn, child, and recovery history",
         requires_idle: false,
         advanced: false,
     },
@@ -121,6 +141,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "undo",
         argument_hint: "",
         description: "undo the last attributable turn",
+        requires_idle: true,
+        advanced: false,
+    },
+    CommandSpec {
+        name: "redo",
+        argument_hint: "",
+        description: "reapply the newest exact undone turn",
         requires_idle: true,
         advanced: false,
     },
@@ -196,6 +223,8 @@ pub fn parse(input: &str) -> Result<CommandAction, String> {
         "help" => CommandAction::Help,
         "status" => CommandAction::Status,
         "context" => CommandAction::Context,
+        "details" => CommandAction::Details,
+        "timeline" => CommandAction::Timeline,
         "new" => CommandAction::NewSession,
         "resume" => CommandAction::Resume(argument),
         "profile" => CommandAction::Profile(argument),
@@ -205,6 +234,7 @@ pub fn parse(input: &str) -> Result<CommandAction, String> {
         "diff" => CommandAction::Diff(argument),
         "review" => CommandAction::Review(argument),
         "undo" => CommandAction::Undo,
+        "redo" => CommandAction::Redo,
         "revert" => CommandAction::Revert(argument),
         "quit" => CommandAction::Quit,
         _ => unreachable!("every registered command is parsed above"),
@@ -221,7 +251,13 @@ pub fn help() -> String {
     for command in COMMANDS.iter().filter(|command| command.advanced) {
         push_help_line(&mut output, command);
     }
-    output.push_str("\nStart a message with // to send a literal leading slash.");
+    output.push_str(
+        "\nComposer\n\
+         Tab cycles build/plan/review only while empty and idle.\n\
+         @ completes exact files and read-only agents; @@ sends a literal @.\n\
+         ! runs a prepared local shell action; !! sends a literal !.\n\
+         Start a message with // to send a literal leading slash.",
+    );
     output
 }
 
@@ -247,7 +283,13 @@ mod tests {
         for command in COMMANDS {
             assert!(help.contains(&format!("/{}", command.name)), "{help}");
         }
-        assert_eq!(matches("/rev"), vec![&COMMANDS[8], &COMMANDS[10]]);
+        assert_eq!(
+            matches("/rev")
+                .into_iter()
+                .map(|command| command.name)
+                .collect::<Vec<_>>(),
+            ["review", "revert"]
+        );
     }
 
     #[test]

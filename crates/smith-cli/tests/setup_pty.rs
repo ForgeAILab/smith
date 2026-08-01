@@ -299,7 +299,7 @@ expect {
         "screen: {screen}\nstderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(screen.contains("zai/glm-4.7"), "{screen}");
+    assert!(screen.contains("zai/glm-5.2"), "{screen}");
     assert!(screen.contains("TERMINAL_RESTORED"), "{screen}");
     let config = std::fs::read_to_string(fixture.home.path().join(".smith/config.toml"))
         .expect("committed GLM config");
@@ -360,7 +360,7 @@ expect {{
     assert!(screen.contains("plaintext at rest"), "{screen}");
     assert!(screen.contains("[redacted]"), "{screen}");
     assert!(!screen.contains(SECRET), "{screen}");
-    assert!(screen.contains("zai/glm-4.7"), "{screen}");
+    assert!(screen.contains("zai/glm-5.2"), "{screen}");
     assert!(screen.contains("TERMINAL_RESTORED"), "{screen}");
 
     let path = fixture.home.path().join(".smith/config.toml");

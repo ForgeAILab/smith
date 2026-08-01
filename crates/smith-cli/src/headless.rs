@@ -1028,6 +1028,7 @@ mod tests {
                 id: "protected".to_owned(),
                 text: protected_item.to_owned(),
                 status: agent_runtime_core::event::PlanItemStatus::Pending,
+                reason: None,
             }]),
         );
 
@@ -1072,6 +1073,7 @@ mod tests {
                         id: "protected".to_owned(),
                         text: protected_item.to_owned(),
                         status: agent_runtime_core::event::PlanItemStatus::InProgress,
+                        reason: None,
                     }]),
                 }),
             },
@@ -1593,8 +1595,9 @@ max_output_tokens = 4096
         assert_eq!(result["output"], "final committed answer");
         assert_eq!(result["lifecycle"]["attempts_discarded"], 1);
         assert_eq!(result["lifecycle"]["attempts_committed"], 3);
-        assert_eq!(result["lifecycle"]["plan"]["revision"], 1);
-        assert_eq!(result["lifecycle"]["plan"]["counts"]["in_progress"], 1);
+        assert_eq!(result["lifecycle"]["plan"]["revision"], 2);
+        assert_eq!(result["lifecycle"]["plan"]["counts"]["in_progress"], 0);
+        assert_eq!(result["lifecycle"]["plan"]["counts"]["cancelled"], 1);
         assert!(
             result["lifecycle"]["activation"]["capabilities"]
                 .as_array()

@@ -395,10 +395,10 @@ impl SetupApp {
                 "provider: zai (openai-compatible)".into(),
                 "endpoint: https://api.z.ai/api/coding/paas/v4".into(),
                 format!("credential: {}", self.credential_reference("zai")),
-                "model: glm-4.7".into(),
-                "limits: context 200000 · max input 196000 · max output 131072 (trusted catalog v1)"
+                "model: glm-5.2".into(),
+                "limits: context 1000000 · max input 1000000 · max output 131072 (trusted catalog v2)"
                     .into(),
-                "request/output reserve: 8192".into(),
+                "request/output reserve: 32768".into(),
                 "response: reasoning-only success becomes visible text; thinking stays enabled"
                     .into(),
                 "default profile: glm".into(),
@@ -633,9 +633,9 @@ impl SetupApp {
                     self.action = Some(SetupAction::QuickGlm);
                     self.provider = "zai".into();
                     self.endpoint = "https://api.z.ai/api/coding/paas/v4".into();
-                    self.model = "glm-4.7".into();
-                    self.context_tokens = Some(200_000);
-                    self.max_input_tokens = Some(196_000);
+                    self.model = "glm-5.2".into();
+                    self.context_tokens = Some(1_000_000);
+                    self.max_input_tokens = Some(1_000_000);
                     self.max_output_tokens = Some(131_072);
                     self.reasoning_only_text = true;
                     self.make_default = true;
@@ -1107,7 +1107,7 @@ mod tests {
         let mut app = glm_environment_review();
         assert_eq!(app.step, Step::Review);
         let review = app.review_lines().join("\n");
-        assert!(review.contains("glm-4.7"));
+        assert!(review.contains("glm-5.2"));
         assert!(review.contains("env:ZAI_API_KEY"));
         assert!(review.contains("reasoning-only"));
         assert!(matches!(
@@ -1251,9 +1251,9 @@ mod tests {
             "provider: zai",
             "api.z.ai/api/coding/paas/v4",
             "env:ZAI_API_KEY",
-            "glm-4.7",
-            "context 200000",
-            "trusted catalog v1",
+            "glm-5.2",
+            "context 1000000",
+            "trusted catalog v2",
             "/tmp/smith-home/.smith/config.toml",
             "pending action:",
             "Shift+Tab Back",

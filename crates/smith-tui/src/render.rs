@@ -88,7 +88,7 @@ fn draw_surface(
             Constraint::Min(3),
             Constraint::Length(composer_rows),
             Constraint::Length(palette_rows),
-            Constraint::Length(1),
+            Constraint::Length(hint_rows(app)),
         ])
         .areas(area);
         draw_transcript(frame, transcript, app, theme, transcript_lines.take());
@@ -99,7 +99,7 @@ fn draw_surface(
         let [transcript, composer, hint] = Layout::vertical([
             Constraint::Min(3),
             Constraint::Length(composer_rows),
-            Constraint::Length(1),
+            Constraint::Length(hint_rows(app)),
         ])
         .areas(area);
         draw_transcript(frame, transcript, app, theme, transcript_lines.take());
@@ -121,11 +121,17 @@ fn draw_surface(
         Some(Overlay::UndoConfirm { content }) => {
             draw_recovery_confirm(frame, area, "undo last Smith turn", content, theme);
         }
+        Some(Overlay::RedoConfirm { content }) => {
+            draw_recovery_confirm(frame, area, "redo last exact Smith turn", content, theme);
+        }
         Some(Overlay::RevertConfirm { content, .. }) => {
             draw_recovery_confirm(frame, area, "revert selected change", content, theme);
         }
         Some(Overlay::ReviewConfirm { content, .. }) => {
             draw_review_confirm(frame, area, content, theme);
+        }
+        Some(Overlay::AgentConfirm { content, .. }) => {
+            draw_agent_confirm(frame, area, content, theme);
         }
         Some(Overlay::ExitConfirm {
             approval,
@@ -153,7 +159,7 @@ fn transcript_area(area: Rect, app: &App) -> Rect {
             Constraint::Min(3),
             Constraint::Length(composer_rows),
             Constraint::Length(palette_rows),
-            Constraint::Length(1),
+            Constraint::Length(hint_rows(app)),
         ])
         .areas(area);
         transcript
@@ -161,10 +167,18 @@ fn transcript_area(area: Rect, app: &App) -> Rect {
         let [transcript, _, _] = Layout::vertical([
             Constraint::Min(3),
             Constraint::Length(composer_rows),
-            Constraint::Length(1),
+            Constraint::Length(hint_rows(app)),
         ])
         .areas(area);
         transcript
+    }
+}
+
+fn hint_rows(app: &App) -> u16 {
+    if app.overlay.is_none() && !app.is_busy() && app.composer.is_empty() {
+        2
+    } else {
+        1
     }
 }
 
@@ -393,6 +407,7 @@ fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<'static>> {
             Activity::Interrupting => "Interrupting",
             Activity::Idle | Activity::Ended => unreachable!("activity was filtered above"),
         };
+        let summary = app.work_summary_lines();
         lines.push(Line::from(vec![
             Span::styled(
                 format!("{} ", theme.spinner(app.tick)),
@@ -400,15 +415,25 @@ fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<'static>> {
             ),
             Span::styled(
                 format!(
-                    "{label}{} · {}",
+                    "{label}{} · {}{}",
                     glyph::ELIDED,
                     app.turn_elapsed()
                         .map(render_elapsed)
-                        .unwrap_or_else(|| "?".to_owned())
+                        .unwrap_or_else(|| "?".to_owned()),
+                    summary
+                        .first()
+                        .map(|line| format!(" · {line}"))
+                        .unwrap_or_default(),
                 ),
                 theme.style(Tone::Reasoning),
             ),
         ]));
+        for detail in summary.iter().skip(1) {
+            lines.push(Line::from(vec![
+                Span::styled("  ", theme.style(Tone::Dim)),
+                Span::styled(detail.clone(), theme.style(Tone::Reasoning)),
+            ]));
+        }
     }
 
     lines
@@ -949,15 +974,6 @@ fn draw_composer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
 }
 
 fn draw_hint(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
-    // The paused indicator leads, because truncation drops from the right and
-    // "you are not seeing new output" outranks a key reminder.
-    let mut spans = vec![Span::styled("  ", theme.style(Tone::Dim))];
-    if !app.following {
-        spans.push(Span::styled(
-            "▼ following paused · End/Ctrl+L newest".to_owned(),
-            theme.style(Tone::Warning),
-        ));
-    }
     if let Some(hint) = match &app.overlay {
         Some(Overlay::Approval { .. }) => {
             let waiting = app.pending_approval_count().saturating_sub(1);
@@ -989,61 +1005,112 @@ fn draw_hint(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
             Some("type to filter · ↑↓ choose · enter confirm · esc cancel".to_owned())
         }
         Some(Overlay::UndoConfirm { .. }) => Some("y apply undo · n/esc cancel".to_owned()),
+        Some(Overlay::RedoConfirm { .. }) => Some("y apply redo · n/esc cancel".to_owned()),
         Some(Overlay::RevertConfirm { .. }) => Some("y apply revert · n/esc cancel".to_owned()),
         Some(Overlay::ReviewConfirm { .. }) => Some("y start review · n/esc cancel".to_owned()),
+        Some(Overlay::AgentConfirm { .. }) => {
+            Some("y start read-only child · n/esc cancel".to_owned())
+        }
         Some(Overlay::ExitConfirm { .. }) => Some("y quit · n keep working".to_owned()),
         None => None,
     } {
-        if spans.len() > 1 {
-            push_segment(
-                &mut spans,
-                theme,
-                Span::styled(hint, theme.style(Tone::Dim)),
-            );
-        } else {
-            spans.push(Span::styled(hint, theme.style(Tone::Dim)));
-        }
-    } else {
-        let model = match &app.status.provider {
-            Some(provider) => format!("{provider}/{}", app.status.model),
-            None => app.status.model.clone(),
-        };
-        if spans.len() > 1 {
-            push_segment(
-                &mut spans,
-                theme,
-                Span::styled(model, theme.style(Tone::StatusModel)),
-            );
-        } else {
-            spans.push(Span::styled(model, theme.style(Tone::StatusModel)));
-        }
-        push_segment(
-            &mut spans,
-            theme,
-            Span::styled(app.status.project.clone(), theme.style(Tone::StatusPath)),
+        frame.render_widget(
+            Paragraph::new(Line::from(truncate(
+                vec![
+                    Span::styled("  ", theme.style(Tone::Dim)),
+                    Span::styled(hint, theme.style(Tone::Dim)),
+                ],
+                area.width,
+            ))),
+            area,
         );
-        let context = app.status.render_context_footer();
+        return;
+    }
+
+    // Identity lives at the point of action. During work, activity replaces
+    // the idle mode label; no permanent header or focusable status region is
+    // introduced.
+    let mut identity = vec![Span::styled("  ", theme.style(Tone::Dim))];
+    if !app.following {
+        identity.push(Span::styled(
+            "▼ following paused · End/Ctrl+L newest".to_owned(),
+            theme.style(Tone::Warning),
+        ));
         push_segment(
-            &mut spans,
+            &mut identity,
             theme,
             Span::styled(
-                context,
-                theme.style(
-                    if app.status.context_plan.as_ref().is_some_and(|plan| {
-                        plan.confidence == agent_runtime_core::event::EstimationConfidence::Exact
-                    }) {
-                        Tone::Default
-                    } else {
-                        Tone::Warning
-                    },
-                ),
+                if app.is_busy() {
+                    app.status.activity.label().to_owned()
+                } else {
+                    app.status.agent.clone()
+                },
+                theme.style(Tone::Accent),
             ),
         );
+    } else {
+        identity.push(Span::styled(
+            if app.is_busy() {
+                app.status.activity.label().to_owned()
+            } else {
+                app.status.agent.clone()
+            },
+            theme.style(Tone::Accent),
+        ));
     }
-    frame.render_widget(
-        Paragraph::new(Line::from(truncate(spans, area.width))),
-        area,
+    let model = match &app.status.provider {
+        Some(provider) => format!("{provider}/{}", app.status.model),
+        None => app.status.model.clone(),
+    };
+    push_segment(
+        &mut identity,
+        theme,
+        Span::styled(model, theme.style(Tone::StatusModel)),
     );
+    push_segment(
+        &mut identity,
+        theme,
+        Span::styled(app.status.project.clone(), theme.style(Tone::StatusPath)),
+    );
+    let context = app.status.render_context_footer();
+    push_segment(
+        &mut identity,
+        theme,
+        Span::styled(
+            context,
+            theme.style(
+                if app.status.context_plan.as_ref().is_some_and(|plan| {
+                    plan.confidence == agent_runtime_core::event::EstimationConfidence::Exact
+                }) {
+                    Tone::Default
+                } else {
+                    Tone::Warning
+                },
+            ),
+        ),
+    );
+
+    let mut lines = vec![Line::from(truncate(identity, area.width))];
+    if !app.is_busy() && app.composer.is_empty() && area.height > 1 {
+        let mut hints = vec![
+            Span::styled("  Tab agents", theme.style(Tone::Dim)),
+            Span::styled(
+                format!(" {} Ctrl+P commands", glyph::SEPARATOR),
+                theme.style(Tone::Dim),
+            ),
+            Span::styled(
+                format!(" {} @ files/agents", glyph::SEPARATOR),
+                theme.style(Tone::Dim),
+            ),
+            Span::styled(
+                format!(" {} ! shell", glyph::SEPARATOR),
+                theme.style(Tone::Dim),
+            ),
+        ];
+        hints = truncate(hints, area.width);
+        lines.push(Line::from(hints));
+    }
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 // ---------------------------------------------------------------------------
@@ -1660,6 +1727,32 @@ fn draw_review_confirm(frame: &mut Frame<'_>, area: Rect, content: &str, theme: 
     draw_modal(frame, area, "read-only review", lines, theme, Tone::Accent);
 }
 
+fn draw_agent_confirm(frame: &mut Frame<'_>, area: Rect, content: &str, theme: Theme) {
+    let mut lines = content
+        .lines()
+        .take(MAX_BODY_LINES.saturating_sub(2))
+        .map(|line| Line::from(line.to_owned()))
+        .collect::<Vec<_>>();
+    lines.push(Line::default());
+    lines.push(Line::from(vec![
+        Span::styled("y", theme.style(Tone::Accent)),
+        Span::styled(
+            " start child and spend provider tokens   ",
+            theme.style(Tone::Dim),
+        ),
+        Span::styled("n/esc", theme.style(Tone::Success)),
+        Span::styled(" cancel", theme.style(Tone::Dim)),
+    ]));
+    draw_modal(
+        frame,
+        area,
+        "read-only child agent",
+        lines,
+        theme,
+        Tone::Accent,
+    );
+}
+
 fn draw_exit_confirm(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -2239,6 +2332,38 @@ mod tests {
     }
 
     #[test]
+    fn unified_reference_picker_labels_files_and_agents_without_color() {
+        let mut app = App::new("glm-5.2", "api:main");
+        app.set_resources(crate::app::RuntimeResources {
+            files: vec![crate::picker::ResourceEntry::new(
+                "file:src/lib.rs",
+                "@src/lib.rs",
+                "file · 42 bytes",
+            )],
+            child_agents: vec![crate::picker::ResourceEntry::new(
+                "agent:review",
+                "@review",
+                "agent · read-only child preset",
+            )],
+            ..crate::app::RuntimeResources::default()
+        });
+        app.on_key(KeyEvent::new(KeyCode::Char('@'), KeyModifiers::NONE));
+
+        let screen = render(&app, 74, 24, Theme::new().without_color().without_motion());
+        insta_like(
+            &screen,
+            &[
+                "Attach file or invoke agent",
+                "@review",
+                "agent · read-only",
+                "@src/lib.rs",
+                "file · 42 bytes",
+                "↑/↓ choose · Enter confirm · Esc cancel",
+            ],
+        );
+    }
+
+    #[test]
     fn a_narrow_footer_keeps_the_model_and_drops_detail() {
         let app = conversation();
         let screen = render(&app, 44, 14, Theme::new());
@@ -2247,6 +2372,54 @@ mod tests {
         assert!(
             footer.width() <= 44,
             "the footer must not overflow: {footer}"
+        );
+    }
+
+    #[test]
+    fn agent_first_idle_snapshots_are_accessible_at_supported_sizes() {
+        let mut app = App::new("glm-5.2", "api:main");
+        app.status.switch_model(Some("zai".to_owned()), "glm-5.2");
+        app.status.set_agent("build");
+        let theme = Theme::new().without_color().without_motion();
+
+        for (width, height) in [(44, 14), (74, 24), (120, 32)] {
+            let screen = render(&app, width, height, theme);
+            assert!(screen.contains("build"), "{width}×{height}:\n{screen}");
+            assert!(screen.contains("glm-5.2"), "{width}×{height}:\n{screen}");
+            assert!(screen.contains("? ctx"), "{width}×{height}:\n{screen}");
+            assert!(screen.contains("Tab agents"), "{width}×{height}:\n{screen}");
+            assert!(
+                screen
+                    .lines()
+                    .all(|line| line.width() <= usize::from(width)),
+                "{width}×{height} overflowed:\n{screen}"
+            );
+            assert!(!screen.contains('\u{1b}'), "ANSI leaked:\n{screen:?}");
+            assert_eq!(
+                screen.matches("zai/glm-5.2").count(),
+                1,
+                "identity became permanent chrome:\n{screen}"
+            );
+        }
+
+        let normal = render(&app, 74, 24, theme);
+        insta_like(
+            &normal,
+            &[
+                "build · zai/glm-5.2 · api:main · ? ctx",
+                "Tab agents",
+                "Ctrl+P commands",
+                "@ files/agents",
+                "! shell",
+            ],
+        );
+
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        let reduced_motion = render(&app, 74, 24, theme);
+        assert!(reduced_motion.contains("Working"), "{reduced_motion}");
+        assert!(
+            reduced_motion.contains(glyph::STILL),
+            "reduced motion did not use the static activity marker:\n{reduced_motion}"
         );
     }
 

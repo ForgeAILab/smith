@@ -25,6 +25,7 @@ pub mod composer;
 pub mod diff;
 pub mod picker;
 pub mod questionnaire;
+pub mod references;
 pub mod render;
 pub mod setup;
 pub mod status;
@@ -42,6 +43,9 @@ pub use questionnaire::{
     QuestionnaireAnswer, QuestionnaireAnswerValue, QuestionnaireChoice, QuestionnaireFocus,
     QuestionnaireForm, QuestionnaireQuestion, QuestionnaireResolution, QuestionnaireState,
     QuestionnaireValidationError,
+};
+pub use references::{
+    ComposerReference, MAX_COMPOSER_REFERENCES, ParsedReferences, parse_references,
 };
 pub use render::{draw, draw_synced};
 pub use setup::{

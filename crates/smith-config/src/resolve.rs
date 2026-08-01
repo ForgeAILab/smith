@@ -36,15 +36,16 @@
 //! stops there: a `credential` is checked for *shape* only, and resolving that
 //! reference into a secret happens later, behind the trust boundary.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 use agent_runtime_core::store::Secret;
 
 use crate::model::{
-    ApprovalMode, ApprovalSection, BackgroundExit, BackgroundSection, ConfigFile, ContextSection,
-    KIND_FAKE, KIND_OPENAI_COMPATIBLE, LimitsSection, PersistenceSection, ReasoningOnlyBehavior,
+    AgentModeSection, AgentPosture, ApprovalMode, ApprovalSection, BackgroundExit,
+    BackgroundSection, ChildAgentSection, ConfigFile, ContextSection, KIND_FAKE,
+    KIND_OPENAI_COMPATIBLE, LimitsSection, PersistenceSection, ReasoningOnlyBehavior,
 };
 
 /// The directory Smith keeps its per-user and per-project state in.
@@ -77,6 +78,7 @@ const AUTH_HEADERS: &[&str] = &[
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ValueKind {
     Text,
+    Secret,
     Integer,
     Flag,
     List,
@@ -89,6 +91,8 @@ enum ValueKind {
 /// absent. Those are named tables the user defines in a file; the layers above
 /// a file *select* among them rather than redefine them.
 const SETTINGS: &[(&str, ValueKind)] = &[
+    ("agent", ValueKind::Text),
+    ("agent_order", ValueKind::List),
     ("approval.auto_approve", ValueKind::List),
     ("approval.mode", ValueKind::Text),
     ("background.exit_policy", ValueKind::Text),
@@ -115,6 +119,8 @@ const SETTINGS: &[(&str, ValueKind)] = &[
     ("model", ValueKind::Text),
     ("persistence.enabled", ValueKind::Flag),
     ("persistence.journal_events", ValueKind::Flag),
+    ("persistence.checkpoint_key", ValueKind::Secret),
+    ("persistence.checkpoint_key_credential", ValueKind::Text),
     ("persistence.sessions_dir", ValueKind::Text),
     ("profile", ValueKind::Text),
     ("provider", ValueKind::Text),
@@ -307,7 +313,7 @@ impl SettingValue {
     fn kind(&self) -> ValueKind {
         match self {
             Self::Text(_) => ValueKind::Text,
-            Self::Secret(_) => ValueKind::Text,
+            Self::Secret(_) => ValueKind::Secret,
             Self::Integer(_) => ValueKind::Integer,
             Self::Flag(_) => ValueKind::Flag,
             Self::List(_) => ValueKind::List,
@@ -434,6 +440,8 @@ struct Contribution {
 /// argument parsing and fills this in.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Overrides {
+    /// Select a root agent mode by name.
+    pub agent: Option<String>,
     /// Select a profile by name.
     pub profile: Option<String>,
     /// Select a declared provider by name.
@@ -500,6 +508,9 @@ impl Overrides {
 
         if let Some(value) = &self.profile {
             push("profile", SettingValue::Text(value.clone()));
+        }
+        if let Some(value) = &self.agent {
+            push("agent", SettingValue::Text(value.clone()));
         }
         if let Some(value) = &self.provider {
             push("provider", SettingValue::Text(value.clone()));
@@ -706,6 +717,8 @@ pub struct Layout {
 pub struct ResolvedConfig {
     /// The selected profile, if any layer selected one.
     pub profile: Option<Sourced<String>>,
+    /// Selected root agent mode and registered bounded presets.
+    pub agent: ResolvedAgent,
     /// The selected provider and its options.
     pub provider: ResolvedProvider,
     /// The selected model.
@@ -810,6 +823,52 @@ pub struct ResolvedPersistence {
     pub sessions_dir: Sourced<PathBuf>,
     /// Whether canonical runtime events are journaled.
     pub journal_events: Sourced<bool>,
+    /// Explicit no-prompt checkpoint key, when configured.
+    pub checkpoint_key: Option<Sourced<Secret>>,
+    /// Protected credential reference for a checkpoint key, when configured.
+    pub checkpoint_key_credential: Option<Sourced<String>>,
+}
+
+/// Resolved root-agent mode registry and child presets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedAgent {
+    /// Selected root mode.
+    pub active: Sourced<String>,
+    /// Stable user-facing cycle order.
+    pub order: Sourced<Vec<String>>,
+    /// Every declared root mode.
+    pub modes: BTreeMap<String, ResolvedAgentMode>,
+    /// Every declared direct-child preset.
+    pub child_presets: BTreeMap<String, ResolvedChildAgent>,
+}
+
+impl ResolvedAgent {
+    /// The active mode's authority-narrowing posture.
+    pub fn active_posture(&self) -> AgentPosture {
+        self.modes
+            .get(&self.active.value)
+            .expect("resolved active agent is declared")
+            .posture
+            .value
+    }
+}
+
+/// One resolved root-agent mode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedAgentMode {
+    /// Authority-narrowing posture.
+    pub posture: Sourced<AgentPosture>,
+    /// Bounded display description.
+    pub description: Option<Sourced<String>>,
+}
+
+/// One resolved direct-child preset.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedChildAgent {
+    /// Read-only posture.
+    pub posture: Sourced<AgentPosture>,
+    /// Bounded display description.
+    pub description: Option<Sourced<String>>,
 }
 
 /// Resolved approval policy.
@@ -885,6 +944,10 @@ impl fmt::Display for Position {
 /// What an unusable reference was pointing at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReferenceKind {
+    /// A root agent mode selected by configuration or the TUI.
+    AgentMode,
+    /// A direct-child preset selected by an explicit user invocation.
+    ChildAgent,
     /// A profile named by `default_profile`, a flag, or an override.
     Profile,
     /// A provider named by a profile or a higher layer.
@@ -895,6 +958,8 @@ impl ReferenceKind {
     /// The word used in diagnostics.
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::AgentMode => "agent mode",
+            Self::ChildAgent => "child agent",
             Self::Profile => "profile",
             Self::Provider => "provider",
         }
@@ -1103,14 +1168,12 @@ pub fn resolve(request: &ResolveRequest) -> Result<Resolution, ConfigError> {
 
     let mut declared = Declarations::default();
     let mut file_layers: Vec<Vec<Contribution>> = Vec::new();
-    file_layers.push(contributions_of(
-        &built_in_defaults(&layout.user_dir),
-        Layer::BuiltIn,
-        None,
-    )?);
+    let defaults = built_in_defaults(&layout.user_dir);
+    declared.absorb(&defaults, Layer::BuiltIn, None);
+    file_layers.push(contributions_of(&defaults, Layer::BuiltIn, None)?);
     for file in &layout.files {
         let loaded = load(&file.path, file.layer)?;
-        declared.absorb(&loaded.file, file.layer, &file.path);
+        declared.absorb(&loaded.file, file.layer, Some(&file.path));
         file_layers.push(loaded.contributions);
     }
 
@@ -1132,6 +1195,7 @@ pub fn resolve(request: &ResolveRequest) -> Result<Resolution, ConfigError> {
     provenance.extend(env);
     provenance.extend(cli);
     provenance.extend(session);
+    apply_product_model_defaults(&mut provenance);
 
     let config = extract(&provenance, selected, &declared)?;
     Ok(Resolution {
@@ -1139,6 +1203,34 @@ pub fn resolve(request: &ResolveRequest) -> Result<Resolution, ConfigError> {
         config,
         provenance,
     })
+}
+
+fn apply_product_model_defaults(provenance: &mut Provenance) {
+    if provenance.winner("max_output_tokens").is_some() {
+        return;
+    }
+    let (Some(provider), Some(model)) = (provenance.winner("provider"), provenance.winner("model"))
+    else {
+        return;
+    };
+    let (SettingValue::Text(provider), SettingValue::Text(model)) = (&provider.value, &model.value)
+    else {
+        return;
+    };
+    let Some(record) = crate::setup::trusted_model(provider, model) else {
+        return;
+    };
+    if record.request_output_tokens == 0 {
+        return;
+    }
+    provenance.extend(vec![Contribution {
+        key: "max_output_tokens".to_owned(),
+        value: SettingValue::Integer(i64::from(record.request_output_tokens)),
+        source: Source::built_in(format!(
+            "trusted catalog {}@{} models.\"{}/{}\".request_output_tokens",
+            record.catalog, record.revision, record.provider, record.model
+        )),
+    }]);
 }
 
 /// Inspects whether an invocation is ready, genuinely unconfigured, or
@@ -1265,6 +1357,51 @@ fn canonical_or_given(path: &Path) -> PathBuf {
 /// Smith is in no position to make.
 fn built_in_defaults(user_dir: &Path) -> ConfigFile {
     ConfigFile {
+        default_agent: Some("build".to_owned()),
+        agent_order: Some(vec![
+            "build".to_owned(),
+            "plan".to_owned(),
+            "review".to_owned(),
+        ]),
+        agent_modes: BTreeMap::from([
+            (
+                "build".to_owned(),
+                AgentModeSection {
+                    posture: Some(AgentPosture::Build),
+                    description: Some("coding workflow with policy-bounded mutation".to_owned()),
+                },
+            ),
+            (
+                "plan".to_owned(),
+                AgentModeSection {
+                    posture: Some(AgentPosture::Plan),
+                    description: Some("read-only inspection and planning".to_owned()),
+                },
+            ),
+            (
+                "review".to_owned(),
+                AgentModeSection {
+                    posture: Some(AgentPosture::Review),
+                    description: Some("read-only change review and findings".to_owned()),
+                },
+            ),
+        ]),
+        child_agents: BTreeMap::from([
+            (
+                "explore".to_owned(),
+                ChildAgentSection {
+                    posture: Some(AgentPosture::Plan),
+                    description: Some("read-only repository exploration".to_owned()),
+                },
+            ),
+            (
+                "review".to_owned(),
+                ChildAgentSection {
+                    posture: Some(AgentPosture::Review),
+                    description: Some("read-only independent review".to_owned()),
+                },
+            ),
+        ]),
         context: Some(ContextSection {
             reasoning_reserve: Some(0),
             compaction_high_watermark_percent: Some(85),
@@ -1284,6 +1421,8 @@ fn built_in_defaults(user_dir: &Path) -> ConfigFile {
             enabled: Some(true),
             sessions_dir: Some(user_dir.join("sessions").to_string_lossy().into_owned()),
             journal_events: Some(true),
+            checkpoint_key: None,
+            checkpoint_key_credential: None,
         }),
         // Approval and background-work defaults fail closed: ask before acting,
         // and refuse to exit while work is still running.
@@ -1309,23 +1448,33 @@ struct Loaded {
 /// The named tables a file declares, and where each was declared.
 #[derive(Debug, Default)]
 struct Declarations {
+    agent_modes: BTreeMap<String, Source>,
+    child_agents: BTreeMap<String, Source>,
     profiles: BTreeMap<String, Source>,
     providers: BTreeMap<String, Source>,
 }
 
 impl Declarations {
-    fn absorb(&mut self, file: &ConfigFile, layer: Layer, path: &Path) {
+    fn absorb(&mut self, file: &ConfigFile, layer: Layer, path: Option<&Path>) {
+        for name in file.agent_modes.keys() {
+            let key = join_key(&["agent_modes", name]);
+            self.agent_modes
+                .insert(name.clone(), source_for(layer, path, key));
+        }
+        for name in file.child_agents.keys() {
+            let key = join_key(&["child_agents", name]);
+            self.child_agents
+                .insert(name.clone(), source_for(layer, path, key));
+        }
         for name in file.profiles.keys() {
-            self.profiles.insert(
-                name.clone(),
-                Source::file(layer, path, join_key(&["profiles", name])),
-            );
+            let key = join_key(&["profiles", name]);
+            self.profiles
+                .insert(name.clone(), source_for(layer, path, key));
         }
         for name in file.providers.keys() {
-            self.providers.insert(
-                name.clone(),
-                Source::file(layer, path, join_key(&["providers", name])),
-            );
+            let key = join_key(&["providers", name]);
+            self.providers
+                .insert(name.clone(), source_for(layer, path, key));
         }
     }
 }
@@ -1350,18 +1499,44 @@ fn validate_inline_secret_file(
     layer: Layer,
     file: &ConfigFile,
 ) -> Result<(), ConfigError> {
-    let has_inline = file
+    let has_inline_provider_key = file
         .providers
         .values()
         .any(|provider| provider.api_key.is_some());
+    let checkpoint_key = file
+        .persistence
+        .as_ref()
+        .is_some_and(|persistence| persistence.checkpoint_key.is_some());
+    let checkpoint_credential = file
+        .persistence
+        .as_ref()
+        .is_some_and(|persistence| persistence.checkpoint_key_credential.is_some());
+    if layer != Layer::UserFile && (checkpoint_key || checkpoint_credential) {
+        return Err(ConfigError::InvalidValue {
+            source: Source::file(layer, path, "persistence.checkpoint_key"),
+            message:
+                "checkpoint protection is user-scoped; project configuration cannot supply or redirect its key"
+                    .to_owned(),
+        });
+    }
+
+    let has_inline = has_inline_provider_key || checkpoint_key;
     if !has_inline {
         return Ok(());
     }
-    let source = Source::file(layer, path, "providers.<name>.api_key");
+    let source = Source::file(
+        layer,
+        path,
+        if checkpoint_key {
+            "persistence.checkpoint_key"
+        } else {
+            "providers.<name>.api_key"
+        },
+    );
     if layer != Layer::UserFile {
         return Err(ConfigError::PlaintextSecret {
             source,
-            message: "`api_key` is allowed only in `~/.smith/config.toml`; project files must use a credential reference"
+            message: "inline keys are allowed only in `~/.smith/config.toml`; project files must use a credential reference"
                 .to_owned(),
         });
     }
@@ -1493,6 +1668,13 @@ fn contributions_of(
             source: source_for(layer, path, "default_profile"),
         });
     }
+    if let Some(name) = &file.default_agent {
+        out.push(Contribution {
+            key: "agent".to_owned(),
+            value: SettingValue::Text(name.clone()),
+            source: source_for(layer, path, "default_agent"),
+        });
+    }
     Ok(out)
 }
 
@@ -1507,20 +1689,24 @@ fn flatten(
         prefix.push(name.clone());
         let result = match value {
             toml::Value::Table(inner) => flatten(inner, prefix, layer, path, out),
-            other if prefix.last().is_some_and(|segment| segment == "api_key") => {
+            other
+                if prefix.last().is_some_and(|segment| {
+                    matches!(segment.as_str(), "api_key" | "checkpoint_key")
+                }) =>
+            {
                 let key = join_owned(prefix);
                 let source = source_for(layer, path, key.clone());
                 if layer != Layer::UserFile {
                     Err(ConfigError::PlaintextSecret {
                         source,
-                        message: "`api_key` is allowed only in owner-only user configuration"
+                        message: "inline keys are allowed only in owner-only user configuration"
                             .to_owned(),
                     })
                 } else if let Some(value) = other.as_str() {
                     if value.is_empty() {
                         Err(ConfigError::InvalidValue {
                             source,
-                            message: "`api_key` cannot be empty".to_owned(),
+                            message: "an inline key cannot be empty".to_owned(),
                         })
                     } else {
                         out.push(Contribution {
@@ -1670,6 +1856,9 @@ fn setting_for_env(name: &str) -> Option<&'static str> {
 
 /// The environment variable name for a setting key.
 pub fn env_name(key: &str) -> String {
+    if key == "persistence.checkpoint_key" {
+        return "SMITH_CHECKPOINT_KEY".to_owned();
+    }
     format!("{ENV_PREFIX}{}", key.replace('.', "_").to_uppercase())
 }
 
@@ -1690,6 +1879,7 @@ fn kind_of(key: &str) -> ValueKind {
 fn parse_text(raw: &str, kind: ValueKind, source: &Source) -> Result<SettingValue, ConfigError> {
     match kind {
         ValueKind::Text => Ok(SettingValue::Text(raw.to_owned())),
+        ValueKind::Secret => Ok(SettingValue::Secret(Secret::new(raw))),
         ValueKind::Integer => raw
             .trim()
             .parse::<i64>()
@@ -1816,6 +2006,7 @@ fn extract(
         message: "select one with a profile, `SMITH_MODEL`, or `--model`".to_owned(),
     })?;
 
+    let agent = resolve_agent(provenance, declared)?;
     let provider = resolve_provider(provenance, provider_name)?;
     let model_limits = resolve_model_limits(provenance, &provider.name.value, &model.value)?;
     let context = resolve_context(provenance)?;
@@ -1826,6 +2017,7 @@ fn extract(
 
     Ok(ResolvedConfig {
         profile,
+        agent,
         provider,
         model,
         max_output_tokens: optional_u32(provenance, "max_output_tokens")?,
@@ -1836,6 +2028,156 @@ fn extract(
         approval,
         background,
     })
+}
+
+fn resolve_agent(
+    provenance: &Provenance,
+    declared: &Declarations,
+) -> Result<ResolvedAgent, ConfigError> {
+    let active = required_text(provenance, "agent")?;
+    if !declared.agent_modes.contains_key(&active.value) {
+        return Err(ConfigError::UnusableReference {
+            source: active.source,
+            what: ReferenceKind::AgentMode,
+            name: active.value.clone(),
+            suggestions: nearest(
+                &active.value,
+                declared.agent_modes.keys().map(String::as_str),
+            ),
+        });
+    }
+
+    let order = list(provenance, "agent_order")?.ok_or_else(|| missing("agent_order"))?;
+    if order.value.is_empty() {
+        return Err(ConfigError::InvalidValue {
+            source: order.source,
+            message: "`agent_order` must contain at least one declared mode".to_owned(),
+        });
+    }
+    let mut seen = BTreeSet::new();
+    for name in &order.value {
+        if !seen.insert(name) {
+            return Err(ConfigError::InvalidValue {
+                source: order.source.clone(),
+                message: format!("`agent_order` contains duplicate mode `{name}`"),
+            });
+        }
+        if !declared.agent_modes.contains_key(name) {
+            return Err(ConfigError::UnusableReference {
+                source: order.source.clone(),
+                what: ReferenceKind::AgentMode,
+                name: name.clone(),
+                suggestions: nearest(name, declared.agent_modes.keys().map(String::as_str)),
+            });
+        }
+    }
+    if !seen.contains(&active.value) {
+        return Err(ConfigError::InvalidValue {
+            source: order.source.clone(),
+            message: format!(
+                "active agent mode `{}` must appear in `agent_order`",
+                active.value
+            ),
+        });
+    }
+
+    let mut modes = BTreeMap::new();
+    for (name, declaration) in &declared.agent_modes {
+        validate_agent_name(name, declaration, "agent mode")?;
+        let scope = join_key(&["agent_modes", name]);
+        let posture = resolve_agent_posture(provenance, &format!("{scope}.posture"), declaration)?;
+        let description = bounded_description(provenance, &format!("{scope}.description"))?;
+        modes.insert(
+            name.clone(),
+            ResolvedAgentMode {
+                posture,
+                description,
+            },
+        );
+    }
+
+    let mut child_presets = BTreeMap::new();
+    for (name, declaration) in &declared.child_agents {
+        validate_agent_name(name, declaration, "child agent")?;
+        let scope = join_key(&["child_agents", name]);
+        let posture = resolve_agent_posture(provenance, &format!("{scope}.posture"), declaration)?;
+        if !posture.value.is_read_only() {
+            return Err(ConfigError::InvalidValue {
+                source: posture.source,
+                message: format!(
+                    "child agent `{name}` must use a read-only `plan` or `review` posture"
+                ),
+            });
+        }
+        let description = bounded_description(provenance, &format!("{scope}.description"))?;
+        child_presets.insert(
+            name.clone(),
+            ResolvedChildAgent {
+                posture,
+                description,
+            },
+        );
+    }
+
+    Ok(ResolvedAgent {
+        active,
+        order,
+        modes,
+        child_presets,
+    })
+}
+
+fn validate_agent_name(name: &str, source: &Source, kind: &str) -> Result<(), ConfigError> {
+    if name.is_empty()
+        || name.len() > 32
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(ConfigError::InvalidValue {
+            source: source.clone(),
+            message: format!(
+                "a {kind} name must contain 1 to 32 ASCII letters, digits, `-`, or `_`"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn resolve_agent_posture(
+    provenance: &Provenance,
+    key: &str,
+    declaration: &Source,
+) -> Result<Sourced<AgentPosture>, ConfigError> {
+    let raw = text(provenance, key)?.ok_or_else(|| ConfigError::InvalidValue {
+        source: declaration.clone(),
+        message: "an agent definition must declare a `posture`".to_owned(),
+    })?;
+    let posture = AgentPosture::parse(&raw.value).ok_or_else(|| ConfigError::InvalidValue {
+        source: raw.source.clone(),
+        message: format!(
+            "`{}` is not an agent posture; the postures are {}",
+            raw.value,
+            list_spellings(AgentPosture::spellings())
+        ),
+    })?;
+    Ok(Sourced::new(posture, raw.source))
+}
+
+fn bounded_description(
+    provenance: &Provenance,
+    key: &str,
+) -> Result<Option<Sourced<String>>, ConfigError> {
+    let description = text(provenance, key)?;
+    if let Some(description) = &description
+        && (description.value.is_empty() || description.value.chars().count() > 160)
+    {
+        return Err(ConfigError::InvalidValue {
+            source: description.source.clone(),
+            message: "an agent description must contain 1 to 160 characters".to_owned(),
+        });
+    }
+    Ok(description)
 }
 
 fn resolve_provider(
@@ -2052,10 +2394,35 @@ fn resolve_limits(provenance: &Provenance) -> Result<ResolvedLimits, ConfigError
 
 fn resolve_persistence(provenance: &Provenance) -> Result<ResolvedPersistence, ConfigError> {
     let sessions_dir = required_text(provenance, "persistence.sessions_dir")?;
+    let checkpoint_key = secret(provenance, "persistence.checkpoint_key")?;
+    let checkpoint_key_credential = text(provenance, "persistence.checkpoint_key_credential")?;
+    if let (Some(key), Some(_credential)) = (&checkpoint_key, &checkpoint_key_credential) {
+        return Err(ConfigError::InvalidValue {
+            source: key.source.clone(),
+            message: "choose exactly one checkpoint key source: `checkpoint_key` or `checkpoint_key_credential`"
+                .to_owned(),
+        });
+    }
+    if let Some(key) = &checkpoint_key {
+        let exposed = key.value.expose();
+        if exposed.len() != 64 || !exposed.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(ConfigError::InvalidValue {
+                source: key.source.clone(),
+                message:
+                    "`checkpoint_key` must encode exactly 32 bytes as 64 hexadecimal characters"
+                        .to_owned(),
+            });
+        }
+    }
+    if let Some(credential) = &checkpoint_key_credential {
+        validate_credential(credential)?;
+    }
     Ok(ResolvedPersistence {
         enabled: required_flag(provenance, "persistence.enabled")?,
         sessions_dir: Sourced::new(PathBuf::from(sessions_dir.value), sessions_dir.source),
         journal_events: required_flag(provenance, "persistence.journal_events")?,
+        checkpoint_key,
+        checkpoint_key_credential,
     })
 }
 
@@ -2166,6 +2533,7 @@ fn wrong_kind(entry: &Entry, found: &SettingValue, expected: &str) -> ConfigErro
 fn describe(kind: ValueKind) -> &'static str {
     match kind {
         ValueKind::Text => "a string",
+        ValueKind::Secret => "a secret string",
         ValueKind::Integer => "a whole number",
         ValueKind::Flag => "a boolean",
         ValueKind::List => "a list",

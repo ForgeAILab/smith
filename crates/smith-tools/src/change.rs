@@ -67,6 +67,12 @@ pub struct TurnChangeSet {
     pub undone: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RedoDirection {
+    ReapplyUndoneTurn,
+    ReapplyRevertedChange,
+}
+
 impl TurnChangeSet {
     /// Whether every mutation has an exact reversible image.
     pub fn is_fully_attributable(&self) -> bool {
@@ -85,6 +91,7 @@ struct State {
     historical: bool,
     pending: Vec<ToolMutation>,
     completed: Vec<TurnChangeSet>,
+    timeline: Vec<String>,
 }
 
 /// Shared mutation recorder installed around Smith's built-in tools.
@@ -107,6 +114,9 @@ impl ChangeRecorder {
                 };
                 if let Some(turn) = value.get("turn").and_then(Value::as_u64) {
                     state.next_turn = state.next_turn.max(turn);
+                }
+                if let Some(label) = persisted_timeline_label(&value) {
+                    state.timeline.push(label);
                 }
                 state.historical = true;
             }
@@ -144,6 +154,16 @@ impl ChangeRecorder {
             set
         };
         self.persist(&JournalEntry::TurnCompleted(PersistedTurn::from(&set)));
+        self.record_timeline(format!(
+            "turn {} · {} · {} mutation(s)",
+            set.turn,
+            if set.is_fully_attributable() {
+                "exact"
+            } else {
+                "ambiguous"
+            },
+            set.mutations.len()
+        ));
         Some(set)
     }
 
@@ -164,6 +184,19 @@ impl ChangeRecorder {
             .lock()
             .expect("change recorder poisoned")
             .historical
+    }
+
+    /// Bounded metadata-only change and recovery timeline.
+    pub fn timeline(&self) -> Vec<String> {
+        let state = self.state.lock().expect("change recorder poisoned");
+        state
+            .timeline
+            .iter()
+            .rev()
+            .take(100)
+            .rev()
+            .cloned()
+            .collect()
     }
 
     /// Whether the latest live change set proves Smith ownership of `path`.
@@ -238,6 +271,7 @@ impl ChangeRecorder {
             fingerprint: &fingerprint,
             outcome: "previewed",
         });
+        self.record_timeline(format!("undo previewed · turn {}", set.turn));
         Ok(output)
     }
 
@@ -267,6 +301,7 @@ impl ChangeRecorder {
             fingerprint: &fingerprint,
             outcome: "cancelled",
         });
+        self.record_timeline("undo cancelled".to_owned());
     }
 
     /// Atomically restores every pre-image after exact post-image checks.
@@ -340,6 +375,134 @@ impl ChangeRecorder {
             turn: set.turn,
             outcome: "applied",
         });
+        self.record_timeline(format!("undo applied · turn {}", set.turn));
+        Ok(())
+    }
+
+    /// Forward-patch preview for the newest successfully undone exact turn.
+    pub fn redo_preview(&self) -> Result<String, RuntimeError> {
+        let set = self
+            .latest()
+            .ok_or_else(|| unavailable("no exact redo candidate exists"))?;
+        let direction = redo_direction(&set).ok_or_else(|| {
+            unavailable(
+                "no exact redo candidate exists; ambiguous shell changes are never redoable",
+            )
+        })?;
+        let output = redo_preview_text(&set, direction);
+        let fingerprint = hash(Some(output.as_bytes()));
+        self.persist(&JournalEntry::RecoveryRequest {
+            operation: "redo",
+            scope: "last-undone-turn",
+            fingerprint: &fingerprint,
+            outcome: "previewed",
+        });
+        self.record_timeline(format!("redo previewed · turn {}", set.turn));
+        Ok(output)
+    }
+
+    /// Journals cancellation of the current redo preview without file content.
+    pub fn record_redo_cancelled(&self) {
+        let fingerprint = self
+            .latest()
+            .and_then(|set| redo_direction(&set).map(|direction| (set, direction)))
+            .map(|(set, direction)| redo_preview_text(&set, direction))
+            .map(|preview| hash(Some(preview.as_bytes())))
+            .unwrap_or_else(|| "unavailable".to_owned());
+        self.persist(&JournalEntry::RecoveryRequest {
+            operation: "redo",
+            scope: "latest-exact-recovery",
+            fingerprint: &fingerprint,
+            outcome: "cancelled",
+        });
+        self.record_timeline("redo cancelled".to_owned());
+    }
+
+    /// Atomically reapplies every post-image after exact pre-image checks.
+    pub fn redo_latest(&self) -> Result<(), RuntimeError> {
+        let set = self
+            .latest()
+            .ok_or_else(|| unavailable("no exact redo candidate exists"))?;
+        let direction = redo_direction(&set)
+            .ok_or_else(|| unavailable("the newest change set is not eligible for exact redo"))?;
+        let edits = set
+            .mutations
+            .iter()
+            .filter_map(|mutation| match mutation {
+                ToolMutation::Exact(edit) => Some(edit),
+                ToolMutation::Ambiguous { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        for edit in &edits {
+            let current = bounded_image(&edit.path)?;
+            let expected_hash = match direction {
+                RedoDirection::ReapplyUndoneTurn => &edit.before_hash,
+                RedoDirection::ReapplyRevertedChange => &edit.after_hash,
+            };
+            if hash(current.as_deref()) != *expected_hash {
+                self.persist(&JournalEntry::Recovery {
+                    operation: "redo",
+                    turn: set.turn,
+                    outcome: "conflict",
+                });
+                self.record_timeline(format!("redo conflict · turn {}", set.turn));
+                return Err(unavailable(format!(
+                    "redo refused: `{}` changed after undo; use /diff and /timeline",
+                    edit.path.display()
+                )));
+            }
+        }
+
+        let mut applied: Vec<&EditMutation> = Vec::new();
+        for edit in &edits {
+            let target = match direction {
+                RedoDirection::ReapplyUndoneTurn => &edit.after,
+                RedoDirection::ReapplyRevertedChange => &edit.before,
+            };
+            let result = match target {
+                Some(after) => atomic_write(&edit.path, after),
+                None => match std::fs::remove_file(&edit.path) {
+                    Ok(()) => Ok(()),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    Err(error) => Err(io_error(error)),
+                },
+            };
+            if let Err(error) = result {
+                for prior in applied.into_iter().rev() {
+                    let prior_rollback = match direction {
+                        RedoDirection::ReapplyUndoneTurn => &prior.before,
+                        RedoDirection::ReapplyRevertedChange => &prior.after,
+                    };
+                    match prior_rollback {
+                        Some(before) => {
+                            let _ = atomic_write(&prior.path, before);
+                        }
+                        None => {
+                            let _ = std::fs::remove_file(&prior.path);
+                        }
+                    }
+                }
+                self.persist(&JournalEntry::Recovery {
+                    operation: "redo",
+                    turn: set.turn,
+                    outcome: "rolled_back",
+                });
+                self.record_timeline(format!("redo rolled back · turn {}", set.turn));
+                return Err(error);
+            }
+            applied.push(edit);
+        }
+        let mut state = self.state.lock().expect("change recorder poisoned");
+        if let Some(latest) = state.completed.last_mut() {
+            latest.undone = matches!(direction, RedoDirection::ReapplyRevertedChange);
+        }
+        drop(state);
+        self.persist(&JournalEntry::Recovery {
+            operation: "redo",
+            turn: set.turn,
+            outcome: "applied",
+        });
+        self.record_timeline(format!("redo applied · turn {}", set.turn));
         Ok(())
     }
 
@@ -373,6 +536,15 @@ impl ChangeRecorder {
         }
     }
 
+    fn record_timeline(&self, entry: String) {
+        let mut state = self.state.lock().expect("change recorder poisoned");
+        state.timeline.push(entry);
+        if state.timeline.len() > 200 {
+            let remove = state.timeline.len() - 200;
+            state.timeline.drain(..remove);
+        }
+    }
+
     /// Journals a selective recovery request or outcome without file content.
     pub fn record_revert_event(&self, scope: &str, fingerprint: &str, outcome: &str) {
         self.persist(&JournalEntry::RecoveryRequest {
@@ -381,6 +553,7 @@ impl ChangeRecorder {
             fingerprint,
             outcome,
         });
+        self.record_timeline(format!("revert {outcome} · {scope}"));
     }
 }
 
@@ -539,6 +712,107 @@ fn textual_reverse(edit: &EditMutation) -> String {
         output.push_str(&format!("+{line}\n"));
     }
     output
+}
+
+fn textual_forward(edit: &EditMutation) -> String {
+    let before = edit
+        .before
+        .as_deref()
+        .map(String::from_utf8_lossy)
+        .unwrap_or_default();
+    let after = edit
+        .after
+        .as_deref()
+        .map(String::from_utf8_lossy)
+        .unwrap_or_default();
+    let mut output = String::new();
+    for line in before.lines() {
+        output.push_str(&format!("-{line}\n"));
+    }
+    for line in after.lines() {
+        output.push_str(&format!("+{line}\n"));
+    }
+    output
+}
+
+fn redo_direction(set: &TurnChangeSet) -> Option<RedoDirection> {
+    if !set.is_fully_attributable() {
+        return None;
+    }
+    let is_revert = set.mutations.iter().all(|mutation| {
+        matches!(
+            mutation,
+            ToolMutation::Exact(edit) if edit.call_id == "recovery:revert"
+        )
+    });
+    if is_revert {
+        (!set.undone).then_some(RedoDirection::ReapplyRevertedChange)
+    } else {
+        set.undone.then_some(RedoDirection::ReapplyUndoneTurn)
+    }
+}
+
+fn redo_preview_text(set: &TurnChangeSet, direction: RedoDirection) -> String {
+    let mut output = format!("Smith turn {} redo\n", set.turn);
+    for mutation in &set.mutations {
+        let ToolMutation::Exact(edit) = mutation else {
+            unreachable!("redo direction requires exact mutations");
+        };
+        output.push_str(&format!(
+            "\n--- current {}\n+++ reapply {}\n",
+            edit.path.display(),
+            edit.path.display()
+        ));
+        match direction {
+            RedoDirection::ReapplyUndoneTurn => output.push_str(&textual_forward(edit)),
+            RedoDirection::ReapplyRevertedChange => output.push_str(&textual_reverse(edit)),
+        }
+    }
+    output
+}
+
+fn persisted_timeline_label(value: &Value) -> Option<String> {
+    let record = value.get("record")?.as_str()?;
+    match record {
+        "turn_completed" => Some(format!(
+            "turn {} · persisted attribution",
+            value
+                .get("turn")
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+        )),
+        "recovery" => Some(format!(
+            "{} {} · turn {}",
+            value
+                .get("operation")
+                .and_then(Value::as_str)
+                .unwrap_or("recovery"),
+            value
+                .get("outcome")
+                .and_then(Value::as_str)
+                .unwrap_or("recorded"),
+            value
+                .get("turn")
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+        )),
+        "recovery_request" => Some(format!(
+            "{} {} · {}",
+            value
+                .get("operation")
+                .and_then(Value::as_str)
+                .unwrap_or("recovery"),
+            value
+                .get("outcome")
+                .and_then(Value::as_str)
+                .unwrap_or("recorded"),
+            value
+                .get("scope")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown scope")
+        )),
+        _ => None,
+    }
 }
 
 fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), RuntimeError> {
@@ -759,6 +1033,84 @@ mod tests {
         assert_eq!(set.mutations.len(), 1);
         recorder.undo_latest().expect("undo");
         assert_eq!(std::fs::read(path).expect("read"), b"first\n");
+    }
+
+    #[test]
+    fn exact_undo_can_be_previewed_and_redone_once() {
+        let dir = tempfile::tempdir().expect("temp");
+        let path = dir.path().join("file.txt");
+        std::fs::write(&path, b"after\n").expect("write");
+        let recorder = ChangeRecorder::new(None);
+        recorder.start_turn();
+        recorder.record(exact(&path, Some(b"before\n"), b"after\n"));
+        recorder.finish_turn().expect("set");
+        recorder.undo_latest().expect("undo");
+
+        let preview = recorder.redo_preview().expect("redo preview");
+        assert!(preview.contains("-before"));
+        assert!(preview.contains("+after"));
+        recorder.redo_latest().expect("redo");
+
+        assert_eq!(std::fs::read(&path).expect("read"), b"after\n");
+        assert!(recorder.redo_latest().is_err(), "redo is single-use");
+    }
+
+    #[test]
+    fn concurrent_edit_refuses_redo_without_touching_any_path() {
+        let dir = tempfile::tempdir().expect("temp");
+        let first = dir.path().join("first.txt");
+        let second = dir.path().join("second.txt");
+        std::fs::write(&first, b"after one\n").expect("first");
+        std::fs::write(&second, b"after two\n").expect("second");
+        let recorder = ChangeRecorder::new(None);
+        recorder.start_turn();
+        recorder.record(exact(&first, Some(b"before one\n"), b"after one\n"));
+        recorder.record(exact(&second, Some(b"before two\n"), b"after two\n"));
+        recorder.finish_turn().expect("set");
+        recorder.undo_latest().expect("undo");
+
+        std::fs::write(&second, b"user edit\n").expect("edit");
+        let error = recorder.redo_latest().expect_err("conflict");
+        assert!(error.message.contains("/diff"));
+        assert!(error.message.contains("/timeline"));
+        assert_eq!(std::fs::read(&first).expect("first"), b"before one\n");
+        assert_eq!(std::fs::read(&second).expect("second"), b"user edit\n");
+    }
+
+    #[test]
+    fn exact_selective_revert_is_a_redo_candidate() {
+        let dir = tempfile::tempdir().expect("temp");
+        let path = dir.path().join("file.txt");
+        std::fs::write(&path, b"restored\n").expect("reverted state");
+        let recorder = ChangeRecorder::new(None);
+        recorder.record_recovery(
+            path.clone(),
+            Some(b"changed\n".to_vec()),
+            Some(b"restored\n".to_vec()),
+            "revert",
+            None,
+        );
+
+        let preview = recorder.redo_preview().expect("redo preview");
+        assert!(preview.contains("-restored"));
+        assert!(preview.contains("+changed"));
+        recorder.redo_latest().expect("redo revert");
+
+        assert_eq!(std::fs::read(path).expect("read"), b"changed\n");
+        assert!(recorder.redo_preview().is_err(), "redo is single-use");
+    }
+
+    #[test]
+    fn ambiguous_shell_delta_is_never_redoable() {
+        let recorder = ChangeRecorder::new(None);
+        recorder.start_turn();
+        recorder.record(ToolMutation::Ambiguous {
+            call_id: "shell-1".to_owned(),
+            tool: "shell".to_owned(),
+        });
+        recorder.finish_turn().expect("set");
+        assert!(recorder.redo_preview().is_err());
+        assert!(recorder.redo_latest().is_err());
     }
 
     #[test]

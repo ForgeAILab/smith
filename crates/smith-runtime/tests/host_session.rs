@@ -117,6 +117,92 @@ fn test_checkpoint_keys() -> Arc<dyn CheckpointKeyProvider> {
 }
 
 #[tokio::test]
+async fn terminal_and_headless_runs_leave_agent_metadata_outside_the_project() {
+    let home = tempfile::tempdir().expect("a user root");
+    let project = tempfile::tempdir().expect("a project root");
+    let user_config_dir = home.path().join(".smith");
+    std::fs::create_dir_all(&user_config_dir).expect("a user config directory");
+    std::fs::write(user_config_dir.join("config.toml"), CONFIG).expect("a user config");
+    std::fs::write(project.path().join("tracked.txt"), "project content\n")
+        .expect("project fixture");
+    let before = project_tree(project.path());
+
+    for surface in [HostSurface::Terminal, HostSurface::Headless] {
+        let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+            .expect("resolved user configuration")
+            .config;
+        let provider: Arc<dyn Provider> = Arc::new(FakeProvider::new(
+            "example-model",
+            Capabilities::basic_streaming(),
+            vec![ScriptedStream::new(vec![
+                ProviderStreamEvent::TextDelta {
+                    text: "done".to_owned(),
+                },
+                ProviderStreamEvent::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ])],
+        ));
+        let runtime = RuntimeRequest {
+            provider: Some(provider),
+            workspace: Some(Arc::new(
+                ProjectWorkspace::new(project.path()).expect("a project workspace"),
+            )),
+            approval: Some(Arc::new(DenyAll)),
+            ..RuntimeRequest::new(config, surface)
+        };
+        let host = start(
+            HostSessionRequest::new(runtime, project.path())
+                .checkpoint_keys(test_checkpoint_keys()),
+        )
+        .await
+        .expect("a hosted session");
+        host.session()
+            .run(UserInput::text("answer without changing the checkout"))
+            .await
+            .expect("the turn completes");
+        host.shutdown().await.expect("clean shutdown");
+    }
+
+    assert_eq!(project_tree(project.path()), before);
+    for forbidden in [".smith", ".omo", "sessions", "timeline", "children"] {
+        assert!(
+            !project.path().join(forbidden).exists(),
+            "Smith created project-local agent metadata `{forbidden}`"
+        );
+    }
+    assert!(
+        home.path().join(".smith/sessions").is_dir(),
+        "durable state was not redirected to user storage"
+    );
+}
+
+fn project_tree(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    fn visit(root: &std::path::Path, current: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let mut entries = std::fs::read_dir(current)
+            .expect("read project tree")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("read project entry");
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            let path = entry.path();
+            out.push(
+                path.strip_prefix(root)
+                    .expect("project-relative path")
+                    .to_owned(),
+            );
+            if path.is_dir() {
+                visit(root, &path, out);
+            }
+        }
+    }
+
+    let mut paths = Vec::new();
+    visit(root, root, &mut paths);
+    paths
+}
+
+#[tokio::test]
 async fn protected_checkpoint_availability_is_explicit_and_encrypted() {
     let fixture = Fixture::new();
     let host = start(fixture.request(HostSurface::Headless))
@@ -625,12 +711,13 @@ async fn todo_lifecycle_is_checkpointed_renderable_and_restored_as_context() {
         .collect::<Vec<_>>();
     assert_eq!(
         plan_events.len(),
-        2,
+        3,
         "events: {payloads:?}; requests: {:?}",
         provider.requests()
     );
     assert_eq!(plan_events[0].0, 1);
     assert_eq!(plan_events[1].0, 2);
+    assert_eq!(plan_events[2].0, 3);
     assert_eq!(
         plan_events[1].1,
         agent_runtime_core::event::PlanSensitivity::Public
@@ -640,6 +727,18 @@ async fn todo_lifecycle_is_checkpointed_renderable_and_restored_as_context() {
         plan_events[1].3.as_ref().expect("public item projection")[2].text,
         "Run focused tests"
     );
+    assert_eq!(plan_events[2].2["in_progress"], 0);
+    assert_eq!(plan_events[2].2["pending"], 0);
+    assert_eq!(plan_events[2].2["cancelled"], 1);
+    let terminal_verify = &plan_events[2].3.as_ref().expect("terminal public plan")[2];
+    assert_eq!(
+        terminal_verify.status,
+        agent_runtime_core::event::PlanItemStatus::Cancelled
+    );
+    assert_eq!(
+        terminal_verify.reason.as_deref(),
+        Some("turn_ended_unfinished")
+    );
 
     let snapshot = host.session().snapshot();
     let state = snapshot
@@ -647,7 +746,7 @@ async fn todo_lifecycle_is_checkpointed_renderable_and_restored_as_context() {
         .get("harness.todo.state")
         .expect("checkpointed todo state");
     assert_eq!(state.sensitivity, SessionStateSensitivity::RedactionSafe);
-    assert_eq!(state.value["revision"], 2);
+    assert_eq!(state.value["revision"], 3);
     let session = host.session().id().clone();
     host.shutdown().await.expect("clean shutdown");
 
@@ -664,7 +763,8 @@ async fn todo_lifecycle_is_checkpointed_renderable_and_restored_as_context() {
         .expect("the restored plan contributes to the next request");
     let requests = resumed_provider.requests();
     let wire = serde_json::to_string(&requests[0].messages).expect("provider messages");
-    assert!(wire.contains(r#"<todo_plan revision=\"2\">"#), "{wire}");
+    assert!(wire.contains(r#"<todo_plan revision=\"3\">"#), "{wire}");
+    assert!(wire.contains("[cancelled] verify"), "{wire}");
     assert!(wire.contains("Run focused tests"), "{wire}");
     resumed.shutdown().await.expect("clean resumed shutdown");
 }

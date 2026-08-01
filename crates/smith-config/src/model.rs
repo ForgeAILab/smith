@@ -26,6 +26,7 @@ use std::fmt;
 
 use agent_runtime_core::store::Secret;
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
 
 /// A plaintext value present in owner-only user configuration.
 ///
@@ -65,6 +66,80 @@ impl fmt::Display for ConfigSecret {
     }
 }
 
+impl Drop for ConfigSecret {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+/// Authority-narrowing posture of one Smith agent mode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentPosture {
+    /// Normal coding workflow. The resolved run still decides actual authority.
+    #[default]
+    Build,
+    /// Read-only inspection and planning.
+    Plan,
+    /// Read-only change review and findings.
+    Review,
+}
+
+impl AgentPosture {
+    /// Parses the stable configuration spelling.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "build" => Some(Self::Build),
+            "plan" => Some(Self::Plan),
+            "review" => Some(Self::Review),
+            _ => None,
+        }
+    }
+
+    /// The stable configuration spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Build => "build",
+            Self::Plan => "plan",
+            Self::Review => "review",
+        }
+    }
+
+    /// Every supported posture spelling.
+    pub fn spellings() -> &'static [&'static str] {
+        &["build", "plan", "review"]
+    }
+
+    /// Whether the posture is guaranteed read-only.
+    pub fn is_read_only(self) -> bool {
+        matches!(self, Self::Plan | Self::Review)
+    }
+}
+
+/// One named root-agent mode.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentModeSection {
+    /// Built-in authority-narrowing behavior this name selects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub posture: Option<AgentPosture>,
+    /// Bounded user-facing explanation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// One named direct-child preset.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChildAgentSection {
+    /// Read-only posture applied to the child.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub posture: Option<AgentPosture>,
+    /// Bounded user-facing explanation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
 /// One `config.toml` file.
 ///
 /// The same shape serves `~/.smith/config.toml`, `<project>/.smith/config.toml`,
@@ -76,6 +151,18 @@ pub struct ConfigFile {
     /// The profile to select when no higher layer selects one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_profile: Option<String>,
+    /// Root agent mode selected when no higher layer supplies one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_agent: Option<String>,
+    /// Stable order used by idle-composer agent cycling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_order: Option<Vec<String>>,
+    /// Named root-agent modes: `[agent_modes.<name>]`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub agent_modes: BTreeMap<String, AgentModeSection>,
+    /// Named depth-one child presets: `[child_agents.<name>]`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub child_agents: BTreeMap<String, ChildAgentSection>,
     /// Named profiles: `[profiles.<name>]`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub profiles: BTreeMap<String, ProfileSection>,
@@ -116,6 +203,9 @@ pub struct ProfileSection {
     /// The model this profile sends to that provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Root agent mode selected with this provider/model profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
     /// The generation cap this profile asks the provider for.
     ///
     /// This is the request-time ask. The model's own ceiling belongs in
@@ -290,6 +380,15 @@ pub struct PersistenceSection {
     /// Whether canonical runtime events are journaled alongside snapshots.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub journal_events: Option<bool>,
+    /// A 32-byte checkpoint key encoded as 64 hexadecimal characters.
+    ///
+    /// Accepted only from owner-only user configuration. Environment input
+    /// uses the corresponding `SMITH_PERSISTENCE_CHECKPOINT_KEY` setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoint_key: Option<ConfigSecret>,
+    /// Optional protected credential reference for the checkpoint key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoint_key_credential: Option<String>,
 }
 
 /// How tool approval is answered.

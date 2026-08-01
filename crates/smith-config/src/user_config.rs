@@ -290,6 +290,89 @@ pub fn prepare_user_config_edit(
     })
 }
 
+/// Prepares removal of every explicit checkpoint-key source so Smith returns
+/// to its platform-protected default.
+///
+/// The caller must first prove that changing key sources cannot strand
+/// encrypted checkpoint state. This function only performs the reviewed,
+/// comment-preserving user-config transaction and never opens the credential
+/// service itself.
+pub fn prepare_checkpoint_key_source_removal(
+    user_dir: impl AsRef<Path>,
+) -> Result<PreparedConfigEdit, UserConfigEditError> {
+    let target = user_dir.as_ref().join(CONFIG_FILE);
+    let prior = match fs::read(&target) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(UserConfigEditError::Unreadable {
+                path: target,
+                message: error.to_string(),
+            });
+        }
+    };
+    let existing_text = match &prior {
+        Some(bytes) => std::str::from_utf8(bytes)
+            .map_err(|_| UserConfigEditError::InvalidExistingConfig {
+                path: target.clone(),
+            })?
+            .to_owned(),
+        None => String::new(),
+    };
+    let existing_file = ConfigFile::parse(&existing_text).map_err(|_| {
+        UserConfigEditError::InvalidExistingConfig {
+            path: target.clone(),
+        }
+    })?;
+    validate_safe_references(&existing_file).map_err(|_| {
+        UserConfigEditError::InvalidExistingConfig {
+            path: target.clone(),
+        }
+    })?;
+    let mut candidate = existing_text.parse::<DocumentMut>().map_err(|_| {
+        UserConfigEditError::InvalidExistingConfig {
+            path: target.clone(),
+        }
+    })?;
+    let mut changes = Vec::new();
+    let mut collisions = Vec::new();
+    if let Some(table) = candidate
+        .as_table_mut()
+        .get_mut("persistence")
+        .and_then(Item::as_table_mut)
+    {
+        for field in ["checkpoint_key", "checkpoint_key_credential"] {
+            let Some(previous_item) = table.remove(field) else {
+                continue;
+            };
+            let path = vec!["persistence".to_owned(), field.to_owned()];
+            let key = display_path(&path);
+            let previous = safe_render(&path, &previous_item);
+            changes.push(ConfigChange {
+                key: key.clone(),
+                previous: Some(previous.clone()),
+                proposed: "<platform default>".to_owned(),
+            });
+            collisions.push(ConfigCollision {
+                key,
+                existing: previous,
+                proposed: "<platform default>".to_owned(),
+            });
+        }
+    }
+    let candidate_text = candidate.to_string();
+    let candidate_file =
+        ConfigFile::parse(&candidate_text).map_err(|_| UserConfigEditError::InvalidCandidate)?;
+    validate_safe_references(&candidate_file)?;
+    Ok(PreparedConfigEdit {
+        target,
+        prior,
+        candidate: candidate_text.into_bytes(),
+        changes,
+        collisions,
+    })
+}
+
 /// Replacing a provider credential is intentionally different from an
 /// additive setup patch: the two source fields are mutually exclusive, so a
 /// reviewed new source removes the old alternative before the ordinary merge.
@@ -335,9 +418,53 @@ fn remove_alternative_credential_fields(
             proposed: "<removed>".to_owned(),
         });
     }
+
+    let Some(persistence) = &patch.persistence else {
+        return;
+    };
+    let alternative = match (
+        persistence.checkpoint_key.is_some(),
+        persistence.checkpoint_key_credential.is_some(),
+    ) {
+        (true, false) => "checkpoint_key_credential",
+        (false, true) => "checkpoint_key",
+        _ => return,
+    };
+    let Some(table) = candidate
+        .get_mut("persistence")
+        .and_then(Item::as_table_mut)
+    else {
+        return;
+    };
+    let Some(previous_item) = table.remove(alternative) else {
+        return;
+    };
+    let path = vec!["persistence".to_owned(), alternative.to_owned()];
+    let key = display_path(&path);
+    let previous = safe_render(&path, &previous_item);
+    changes.push(ConfigChange {
+        key: key.clone(),
+        previous: Some(previous.clone()),
+        proposed: "<removed>".to_owned(),
+    });
+    collisions.push(ConfigCollision {
+        key,
+        existing: previous,
+        proposed: "<removed>".to_owned(),
+    });
 }
 
 fn validate_safe_references(file: &ConfigFile) -> Result<(), UserConfigEditError> {
+    if let Some(persistence) = &file.persistence {
+        if persistence.checkpoint_key.is_some() && persistence.checkpoint_key_credential.is_some() {
+            return Err(UserConfigEditError::InvalidCandidate);
+        }
+        if let Some(reference) = &persistence.checkpoint_key_credential
+            && CredentialRef::parse(reference).is_err()
+        {
+            return Err(UserConfigEditError::InvalidCandidate);
+        }
+    }
     for (provider, section) in &file.providers {
         if section.credential.is_some() && section.api_key.is_some() {
             return Err(UserConfigEditError::UnsafeCredential {
@@ -448,7 +575,10 @@ fn semantically_equal(left: &Item, right: &Item) -> bool {
 }
 
 fn safe_render(path: &[String], item: &Item) -> String {
-    if path.last().is_some_and(|segment| segment == "api_key") {
+    if path
+        .last()
+        .is_some_and(|segment| matches!(segment.as_str(), "api_key" | "checkpoint_key"))
+    {
         return "[redacted]".to_owned();
     }
     if path.iter().any(|segment| segment == "headers") {
@@ -571,5 +701,40 @@ fn sync_parent(path: &Path) {
         && let Ok(directory) = fs::File::open(parent)
     {
         let _ = directory.sync_all();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn checkpoint_source_removal_is_redacted_comment_preserving_and_atomic() {
+        const KEY: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let directory = tempfile::tempdir().expect("temporary config root");
+        let path = directory.path().join(CONFIG_FILE);
+        fs::write(
+            &path,
+            format!(
+                "# retained comment\n[persistence]\nenabled = true\ncheckpoint_key = \"{KEY}\"\n"
+            ),
+        )
+        .expect("seed config");
+
+        let prepared =
+            prepare_checkpoint_key_source_removal(directory.path()).expect("prepared removal");
+        let preview = prepared.preview();
+        assert!(preview.contains("[redacted]"), "{preview}");
+        assert!(preview.contains("<platform default>"), "{preview}");
+        assert!(!preview.contains(KEY), "{preview}");
+        assert_eq!(prepared.collisions().len(), 1);
+        assert!(prepared.commit(false).is_err(), "confirmation is required");
+
+        prepared.commit(true).expect("commit").accept();
+        let stored = fs::read_to_string(path).expect("stored config");
+        assert!(stored.contains("# retained comment"), "{stored}");
+        assert!(stored.contains("enabled = true"), "{stored}");
+        assert!(!stored.contains("checkpoint_key"), "{stored}");
+        assert!(!stored.contains(KEY), "{stored}");
     }
 }

@@ -16,6 +16,16 @@ use agent_runtime::harness::{ComponentDescriptor, ContextContributor, ContextPat
 use agent_runtime::registry::RegistryRevision;
 use agent_runtime_core::error::RuntimeError;
 use async_trait::async_trait;
+use smith_config::model::AgentPosture;
+
+/// Trusted, authority-narrowing root mode selected for this run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentModePrompt {
+    /// Validated display/configuration name.
+    pub name: String,
+    /// Host-owned posture that bounds capabilities.
+    pub posture: AgentPosture,
+}
 
 /// Prompt section schema. Bump an individual section revision when its wording
 /// changes; bump this only when the section assembly contract changes.
@@ -79,6 +89,8 @@ files, verification evidence, and remaining blockers when they materially help t
 /// One dynamic Smith prompt contribution.
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct DynamicPromptContext {
+    /// Active root-agent mode. This may narrow but never widen authority.
+    pub agent_mode: Option<AgentModePrompt>,
     /// Activated, trusted skill instructions.
     pub activated_skills: Option<String>,
     /// Bounded memory selected by Smith policy.
@@ -91,6 +103,7 @@ impl fmt::Debug for DynamicPromptContext {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("DynamicPromptContext")
+            .field("agent_mode", &self.agent_mode)
             .field("has_activated_skills", &self.activated_skills.is_some())
             .field("has_memory", &self.memory.is_some())
             .field("has_project_context", &self.project_context.is_some())
@@ -248,6 +261,35 @@ pub fn stable_fragments() -> Vec<ContextFragment> {
 /// Returns separately budgeted dynamic Smith sections.
 pub fn dynamic_fragments(context: &DynamicPromptContext) -> Vec<ContextFragment> {
     let mut fragments = Vec::new();
+    if let Some(mode) = &context.agent_mode {
+        let behavior = match mode.posture {
+            AgentPosture::Build => {
+                "Follow the normal coding workflow. Mutation remains subject to the resolved workspace, security, and approval policy."
+            }
+            AgentPosture::Plan => {
+                "Inspect and produce an implementation plan. This mode is read-only: do not request editing, shell, or other mutating capabilities."
+            }
+            AgentPosture::Review => {
+                "Review existing changes and report prioritized, evidence-backed findings. This mode is read-only: do not modify the workspace."
+            }
+        };
+        fragments.push(
+            ContextFragment::new(
+                "smith.prompt.agent-mode",
+                FragmentKind::DeveloperInstruction,
+                FragmentSource::Host,
+                RegistryRevision::new("smith-prompt-agent-mode-1"),
+                FragmentContent::Text(format!(
+                    "Active Smith agent mode: `{}`. {behavior}",
+                    mode.name
+                )),
+            )
+            .with_position(ContextPosition::new(ContextLane::Instructions, 10))
+            .with_priority(10)
+            .with_cache_class(CacheClass::Ephemeral)
+            .with_sensitivity(Sensitivity::Internal),
+        );
+    }
     if let Some(body) = non_empty(context.activated_skills.as_deref()) {
         fragments.push(
             ContextFragment::new(
@@ -404,6 +446,10 @@ mod tests {
             .map(ContextFragment::content_hash)
             .collect::<Vec<_>>();
         let dynamic = dynamic_fragments(&DynamicPromptContext {
+            agent_mode: Some(AgentModePrompt {
+                name: "review".into(),
+                posture: AgentPosture::Review,
+            }),
             activated_skills: Some("Use the Rust migration skill.".into()),
             memory: Some("The project prefers deterministic fixtures.".into()),
             project_context: Some("The current package is smith-runtime.".into()),
@@ -414,7 +460,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(before, after);
-        assert_eq!(dynamic.len(), 3);
+        assert_eq!(dynamic.len(), 4);
         assert!(
             dynamic
                 .iter()
@@ -469,6 +515,7 @@ mod tests {
             activated_skills: Some("skill".into()),
             memory: Some("memory".into()),
             project_context: Some("project".into()),
+            ..DynamicPromptContext::default()
         });
         let revisions = dynamic
             .iter()
@@ -494,6 +541,7 @@ mod tests {
             activated_skills: Some("Use the approved Rust skill.".into()),
             memory: Some(secret_memory.into()),
             project_context: Some("Package: smith-runtime".into()),
+            ..DynamicPromptContext::default()
         });
         let debug = format!("{contributor:?}");
         assert!(!debug.contains(secret_memory), "{debug}");

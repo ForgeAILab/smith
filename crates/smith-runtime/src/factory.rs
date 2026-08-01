@@ -66,6 +66,7 @@ use agent_runtime::hub::{ScopeIdentity, ScopeInputs};
 use agent_runtime::provider::fake::FakeProvider;
 use agent_runtime::provider::openai::{OpenAiConfig, OpenAiProvider};
 use agent_runtime::provider::retry::RetryPolicy;
+use agent_runtime::registry::Permission;
 use agent_runtime::registry::RegistryRevision;
 use agent_runtime::runtime::{Runtime, RuntimeBuilder};
 use agent_runtime_core::approval::{AllowAll, ApprovalPolicy, DenyAll};
@@ -86,7 +87,7 @@ use reqwest::Url;
 use smith_config::credential::{
     CredentialError, CredentialRef, CredentialRefError, CredentialResolver,
 };
-use smith_config::model::{ApprovalMode, KIND_FAKE, KIND_OPENAI_COMPATIBLE};
+use smith_config::model::{AgentPosture, ApprovalMode, KIND_FAKE, KIND_OPENAI_COMPATIBLE};
 use smith_config::resolve::{ResolvedConfig, ResolvedProvider};
 use smith_config::setup::trusted_model;
 
@@ -100,7 +101,9 @@ use crate::checkpoint::{BarrierCheckpointStore, CheckpointBarrier, SmithCheckpoi
 use crate::delegation::{AgentTool, DelegationAuthority, SmithChildFactory, SmithDelegation};
 use crate::journal::DefaultRedactor;
 use crate::memory::SmithMemorySource;
-use crate::prompt::{DynamicPromptContext, SmithPromptContributor, render_fragments};
+use crate::prompt::{
+    AgentModePrompt, DynamicPromptContext, SmithPromptContributor, render_fragments,
+};
 use crate::skills::{SkillIndexEntry, SmithSkillSources};
 use crate::summary::{
     SemanticSummaryRuntimePolicy, SmithProviderSummaryModel, SmithSemanticSummaryConfig,
@@ -331,6 +334,10 @@ impl RuntimeRequest {
 /// secret — only values that are safe to display.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimePolicy {
+    /// Active root-agent mode selected for this run.
+    pub agent_mode: String,
+    /// Authority-narrowing behavior behind the selected mode name.
+    pub agent_posture: AgentPosture,
     /// The provider name, as declared in `[providers.<name>]`.
     pub provider_name: String,
     /// The shared adapter kind it mapped to.
@@ -627,9 +634,18 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         compaction_policy,
         mut loop_config,
     } = prepare_factory_inputs(&request).await?;
+    let agent_posture = request.config.agent.active_posture();
+    let agent_mode = request.config.agent.active.value.clone();
+    let prompt_context = DynamicPromptContext {
+        agent_mode: Some(AgentModePrompt {
+            name: agent_mode.clone(),
+            posture: agent_posture,
+        }),
+        ..DynamicPromptContext::default()
+    };
     let prompt_contributor = match request.system_prompt.clone() {
         Some(prompt) => SmithPromptContributor::override_prompt(prompt),
-        None => SmithPromptContributor::new(&DynamicPromptContext::default()),
+        None => SmithPromptContributor::new(&prompt_context),
     };
     let resolved_skills = request.skills.resolve().map_err(FactoryError::Runtime)?;
     let memory_contributor = request
@@ -721,13 +737,21 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
     // bounded public projection may enter the redacted journal and powers the
     // transcript's compact inline plan block. It never grants tool authority.
     let todo_component = Arc::new(TodoComponent::public());
-    let built_in_count = tools.len().saturating_sub(request.tools.len());
-    let mut ability_sources =
-        vec![agent_runtime::registry::RegistrySource::BuiltIn; built_in_count];
-    ability_sources.extend(std::iter::repeat_n(
-        agent_runtime::registry::RegistrySource::Host,
-        request.tools.len(),
-    ));
+    let host_tool_names = request
+        .tools
+        .iter()
+        .map(|tool| tool.spec().name)
+        .collect::<BTreeSet<_>>();
+    let mut ability_sources = tools
+        .iter()
+        .map(|tool| {
+            if host_tool_names.contains(&tool.spec().name) {
+                agent_runtime::registry::RegistrySource::Host
+            } else {
+                agent_runtime::registry::RegistrySource::BuiltIn
+            }
+        })
+        .collect::<Vec<_>>();
 
     // Root surfaces get the model-facing `agent` tool and, below, the
     // authoritative coverage and child factory behind it. A child runtime
@@ -782,6 +806,8 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
     };
 
     let policy = RuntimePolicy {
+        agent_mode: agent_mode.clone(),
+        agent_posture,
         provider_name: provider_name.clone(),
         provider_kind: provider_kind.clone(),
         endpoint,
@@ -835,7 +861,7 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
             .with_agent(if matches!(request.surface, HostSurface::Child) {
                 "smith-child"
             } else {
-                "smith"
+                agent_mode.as_str()
             }),
     );
     let activation_budget = ActivationBudget::new(
@@ -875,7 +901,8 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         .activation_budget(activation_budget)
         .context_contributor(Arc::new(prompt_contributor.clone()))
         .context_contributor(todo_component.clone())
-        .tool_output_processor(todo_component)
+        .tool_output_processor(todo_component.clone())
+        .turn_commit_hook(todo_component)
         .clock(clock.clone())
         .event_buffer(request.event_buffer)
         .shutdown_timeout_ms(request.shutdown_timeout_ms);
@@ -945,6 +972,7 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
             semantic_summary: semantic_summary
                 .as_ref()
                 .map(|(coordinator, _)| coordinator.clone()),
+            read_only: agent_posture.is_read_only(),
         }),
         slot,
     });
@@ -1375,6 +1403,7 @@ fn loop_config(request: &RuntimeRequest, model: &ModelId) -> LoopConfig {
 
 /// The tools this run registers.
 fn tools(request: &RuntimeRequest) -> Vec<Arc<dyn Tool>> {
+    let read_only = request.config.agent.active_posture().is_read_only();
     let mut tools = if request.built_in_tools {
         request
             .change_recorder
@@ -1385,6 +1414,9 @@ fn tools(request: &RuntimeRequest) -> Vec<Arc<dyn Tool>> {
     } else {
         Vec::new()
     };
+    if read_only {
+        tools.retain(|tool| tool.spec().effects.is_read_only());
+    }
     if !matches!(request.surface, HostSurface::Child) {
         tools.push(Arc::new(QuestionnaireTool::new()));
     }
@@ -1392,8 +1424,22 @@ fn tools(request: &RuntimeRequest) -> Vec<Arc<dyn Tool>> {
         tools.push(Arc::new(ArtifactReadTool::new(store)));
     }
     tools.push(Arc::new(WriteTodosTool::new()));
-    tools.extend(request.tools.iter().map(Arc::clone));
+    tools.extend(
+        request
+            .tools
+            .iter()
+            .filter(|tool| !read_only || read_only_extension(tool.spec()))
+            .map(Arc::clone),
+    );
     tools
+}
+
+fn read_only_extension(spec: agent_runtime_core::tool::ToolSpec) -> bool {
+    spec.effects.is_read_only()
+        && spec
+            .permission_upper_bound
+            .iter()
+            .all(|permission| matches!(permission, Permission::FsRead | Permission::ClockRead))
 }
 
 #[cfg(test)]
@@ -1405,7 +1451,9 @@ mod tests {
     use agent_runtime_core::clock::Deadline;
     use agent_runtime_core::ids::ToolCallId;
     use agent_runtime_core::tool::{PreparedToolCall, ToolCallDisplay, ToolEffects};
-    use smith_config::resolve::{ResolvedContext, Source, Sourced};
+    use smith_config::resolve::{
+        ResolvedAgent, ResolvedAgentMode, ResolvedContext, Source, Sourced,
+    };
     use smith_host::HeadlessApproval;
 
     const TOKEN: &str = "sk-live-4kQm2ZpX8vRt7nLb1cWs9aYe";
@@ -1501,6 +1549,7 @@ mod tests {
         let profile = profile(ModelLimits::new(128_000, 124_000, 4_096));
         let mut config = ResolvedConfig {
             profile: None,
+            agent: agent(AgentPosture::Build),
             provider: provider(KIND_FAKE, None),
             model: sourced("example-model".to_owned()),
             max_output_tokens: None,
@@ -1540,6 +1589,7 @@ mod tests {
         let profile = profile(ModelLimits::new(8_000, 8_000, 4_096));
         let config = ResolvedConfig {
             profile: None,
+            agent: agent(AgentPosture::Build),
             provider: provider(KIND_FAKE, None),
             model: sourced("example-model".to_owned()),
             max_output_tokens: None,
@@ -1573,6 +1623,7 @@ mod tests {
         let profile = profile(ModelLimits::new(1_000, 900, 200));
         let mut config = ResolvedConfig {
             profile: None,
+            agent: agent(AgentPosture::Build),
             provider: provider(KIND_FAKE, None),
             model: sourced("example-model".to_owned()),
             max_output_tokens: None,
@@ -1607,6 +1658,7 @@ mod tests {
     async fn auto_approve_is_shared_factory_policy_and_falls_back_for_other_tools() {
         let mut config = ResolvedConfig {
             profile: None,
+            agent: agent(AgentPosture::Build),
             provider: provider(KIND_FAKE, None),
             model: sourced("example-model".to_owned()),
             max_output_tokens: None,
@@ -1669,6 +1721,24 @@ mod tests {
             enabled: sourced(true),
             sessions_dir: sourced("/state/sessions".into()),
             journal_events: sourced(true),
+            checkpoint_key: None,
+            checkpoint_key_credential: None,
+        }
+    }
+
+    fn agent(posture: AgentPosture) -> ResolvedAgent {
+        let name = posture.as_str().to_owned();
+        ResolvedAgent {
+            active: sourced(name.clone()),
+            order: sourced(vec![name.clone()]),
+            modes: std::collections::BTreeMap::from([(
+                name,
+                ResolvedAgentMode {
+                    posture: sourced(posture),
+                    description: None,
+                },
+            )]),
+            child_presets: Default::default(),
         }
     }
 

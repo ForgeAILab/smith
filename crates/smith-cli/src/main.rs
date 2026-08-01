@@ -11,6 +11,7 @@ mod interaction;
 mod setup;
 mod terminal;
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -18,24 +19,27 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agent_runtime_core::cancel::CancelReason;
-use agent_runtime_core::content::UserInput;
+use agent_runtime_core::content::{ContentPart, ToolResultBlock, UserInput};
 use agent_runtime_core::delegation::{
     ChildLimits, ChildModelSelection, ChildSpec, ToolViewScope, WorkspacePolicy,
 };
-use agent_runtime_core::event::{EstimationConfidence, RuntimeEvent};
-use agent_runtime_core::ids::SessionId;
+use agent_runtime_core::event::{EstimationConfidence, EventEnvelope, RuntimeEvent, TurnFinish};
+use agent_runtime_core::ids::{ChildId, SessionId};
 use agent_runtime_core::usage::CounterKind;
 use anyhow::{Context, Result};
 use cli::{Command, Prompt, RunArgs, Selection};
 use crossterm::event::{Event as TermEvent, EventStream};
 use futures_util::StreamExt;
+use ignore::WalkBuilder;
 use ratatui::layout::Rect;
 use smith_config::credential::CredentialResolver;
 use smith_config::inventory::{
     InventoryLimit, ModelLimitOrigin, SelectionInventory, local_inventory_with_catalog,
 };
 use smith_config::model::ApprovalMode;
-use smith_config::resolve::{ConfigReadiness, Resolution, ResolveRequest, inspect, resolve};
+use smith_config::resolve::{
+    ConfigReadiness, Resolution, ResolveRequest, ResolvedAgent, inspect, resolve,
+};
 use smith_host::{
     ApprovalPrompt, ApprovalRequests, GitChanges, HeadlessApproval, HeadlessInteraction,
     InteractionRequests, InteractiveApproval, InteractiveInteraction, ProjectWorkspace,
@@ -198,6 +202,7 @@ struct StartedHost {
     headless_interaction: Option<Arc<HeadlessInteraction>>,
     project: PathBuf,
     inventory: SelectionInventory,
+    agents: ResolvedAgent,
     sessions: Vec<SessionListing>,
     catalog: Arc<smith_config::catalog::CatalogSnapshot>,
 }
@@ -239,6 +244,7 @@ async fn start_host(
         local_inventory_with_catalog(&resolution, AVAILABLE_ADAPTER_KINDS, Some(&catalog))
             .map_err(|error| anyhow::anyhow!("{error}"))
             .context("building the local runtime inventory")?;
+    let agents = resolution.config.agent.clone();
     let workspace = ProjectWorkspace::new(&project)
         .map_err(|error| anyhow::anyhow!("{error}"))
         .context("rooting the project workspace")?;
@@ -312,6 +318,7 @@ async fn start_host(
         headless_interaction,
         project,
         inventory,
+        agents,
         sessions,
         catalog,
     })
@@ -327,6 +334,7 @@ async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
             interactions,
             project,
             inventory,
+            agents,
             sessions,
             catalog,
             ..
@@ -343,8 +351,11 @@ async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
             approvals,
             interactions,
             &project,
-            inventory,
-            sessions,
+            InteractiveResources {
+                inventory,
+                agents,
+                sessions,
+            },
             PresentationOptions {
                 no_color: args.no_color,
                 no_motion: args.no_motion,
@@ -356,7 +367,9 @@ async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
             InteractiveExit::Reconfigure(command) => {
                 frozen_catalog = matches!(
                     &command,
-                    PaletteCommand::Profile(_) | PaletteCommand::Model { .. }
+                    PaletteCommand::Profile(_)
+                        | PaletteCommand::Model { .. }
+                        | PaletteCommand::Agent(_)
                 )
                 .then_some(catalog);
                 apply_palette_command(&mut args.selection, &mut resume, current_session, command);
@@ -390,6 +403,10 @@ fn apply_palette_command(
             selection.model = Some(model);
             *resume = Some(current_session);
         }
+        PaletteCommand::Agent(agent) => {
+            selection.agent = Some(agent);
+            *resume = Some(current_session);
+        }
     }
 }
 
@@ -418,27 +435,43 @@ struct PresentationOptions {
     no_motion: bool,
 }
 
+struct InteractiveResources {
+    inventory: SelectionInventory,
+    agents: ResolvedAgent,
+    sessions: Vec<SessionListing>,
+}
+
 async fn run_interactive(
     host: &HostSession,
     approvals: Option<ApprovalRequests>,
     interactions: Option<InteractionRequests>,
     project: &std::path::Path,
-    inventory: SelectionInventory,
-    sessions: Vec<SessionListing>,
+    resources: InteractiveResources,
     presentation: PresentationOptions,
 ) -> Result<InteractiveExit> {
+    let InteractiveResources {
+        inventory,
+        agents,
+        sessions,
+    } = resources;
     let policy = host.runtime().policy();
     let snapshot = host.session().snapshot();
-    let mut app = App::new(
-        policy.model.as_str(),
-        abbreviate_home(&project.to_string_lossy()),
-    );
+    let project_label = GitChanges::discover(project)
+        .and_then(|git| git.branch_label())
+        .map_or_else(
+            |_| abbreviate_home(&project.to_string_lossy()),
+            |branch| format!("{}:{branch}", abbreviate_home(&project.to_string_lossy())),
+        );
+    let mut app = App::new(policy.model.as_str(), project_label);
     app.status
         .switch_model(Some(policy.provider_name.clone()), policy.model.as_str());
+    app.status.set_agent(policy.agent_mode.clone());
     app.set_resources(runtime_resources(
         inventory,
         sessions,
         host.session().id().as_str(),
+        project,
+        &agents,
     ));
     app.transcript.replace_from_history(&snapshot.history);
     if let Some(interruption) = host.recovered_ephemeral_work() {
@@ -547,6 +580,23 @@ async fn run_tui(
                                     ));
                                 }
                             }
+                            Some(Action::SendWithFiles { text, files }) => {
+                                start_prepared_send(
+                                    session.clone(),
+                                    text,
+                                    files,
+                                    host.runtime().policy().turn_time_limit_ms.unwrap_or(120_000),
+                                    local_tx.clone(),
+                                );
+                            }
+                            Some(Action::RunShell { command }) => {
+                                start_local_shell(
+                                    session.clone(),
+                                    command,
+                                    host.runtime().policy().turn_time_limit_ms.unwrap_or(120_000),
+                                    local_tx.clone(),
+                                );
+                            }
                             Some(Action::Interrupt) => {
                                 if let Err(error) = session
                                     .interrupt_current_turn(CancelReason::UserRequested)
@@ -573,6 +623,17 @@ async fn run_tui(
                             Some(Action::CancelUndo) => {
                                 host.changes().record_undo_cancelled();
                                 app.transcript.push_notice("undo", "cancelled");
+                            }
+                            Some(Action::ApplyRedo) => match host.changes().redo_latest() {
+                                Ok(()) => app.transcript.push_notice(
+                                    "redo",
+                                    "newest exact undone Smith turn was reapplied",
+                                ),
+                                Err(error) => app.transcript.push_error(error.message),
+                            },
+                            Some(Action::CancelRedo) => {
+                                host.changes().record_redo_cancelled();
+                                app.transcript.push_notice("redo", "cancelled");
                             }
                             Some(Action::ApplyRevert { scope, fingerprint }) => {
                                 let recovery_dir = host.paths().map(|paths| {
@@ -628,6 +689,9 @@ async fn run_tui(
                             }
                             Some(Action::StartReview { scope }) => {
                                 start_review(host, project, scope, local_tx.clone());
+                            }
+                            Some(Action::StartAgent { preset, task }) => {
+                                start_agent(host, preset, task, local_tx.clone());
                             }
                             None => {}
                         }
@@ -700,6 +764,17 @@ async fn run_tui(
                             app.transcript.push_notice("review", text);
                         }
                         LocalOutcome::Error(text) => app.transcript.push_error(text),
+                        LocalOutcome::Shell { content, is_error } => {
+                            if is_error {
+                                app.show_local_error("shell", content);
+                            } else {
+                                app.show_local_result("shell", content);
+                            }
+                        }
+                        LocalOutcome::PreparedSendFailed { text, error } => {
+                            app.composer.replace(text);
+                            app.transcript.push_error(error);
+                        }
                     }
                     dirty = true;
                 }
@@ -740,6 +815,61 @@ async fn handle_local_command(
                 "context",
                 render_context_view(&app.status, host.runtime().policy()),
             );
+        }
+        CommandAction::Timeline => {
+            let events = match host.timeline_events().await {
+                Ok(events) => events,
+                Err(error) => {
+                    app.show_local_error("timeline", format!("timeline unavailable: {error}"));
+                    return;
+                }
+            };
+            let timeline = render_runtime_timeline(&events);
+            let mut lines = timeline.lines;
+            if lines.is_empty() {
+                lines.extend(host.session().snapshot().manifests.iter().map(|manifest| {
+                    format!(
+                        "root {} · committed · {}/{} · {} activated capability/capabilities",
+                        manifest.turn,
+                        manifest.manifest.model.provider,
+                        manifest.manifest.model.model,
+                        manifest.manifest.activation.len(),
+                    )
+                }));
+            }
+            if let Some(coordinator) = host
+                .runtime()
+                .delegation()
+                .and_then(|delegation| delegation.coordinator())
+            {
+                lines.extend(
+                    coordinator
+                        .list()
+                        .into_iter()
+                        .filter(|child| !timeline.children.contains(&child.child))
+                        .map(|child| {
+                            format!(
+                                "child {} · {:?} · {}/{} turns",
+                                child.child, child.state, child.turns_used, child.max_turns
+                            )
+                        }),
+                );
+            }
+            lines.extend(
+                host.changes()
+                    .timeline()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, entry)| format!("recovery recovery-{} · {entry}", index + 1)),
+            );
+            if lines.len() > 100 {
+                lines.drain(..lines.len().saturating_sub(100));
+            }
+            if lines.is_empty() {
+                app.show_local_empty("timeline", "No turns, children, or recovery actions yet.");
+            } else {
+                app.show_local_result("timeline", lines.join("\n"));
+            }
         }
         CommandAction::Status => {
             let policy = host.runtime().policy();
@@ -801,6 +931,36 @@ async fn handle_local_command(
                 return;
             };
             let children = coordinator.list();
+            let selected = match selected.as_deref() {
+                Some("parent") => {
+                    app.inspected_child = None;
+                    app.show_local_result(
+                        "agent",
+                        "Returned to the root timeline; the root composer remained focused.",
+                    );
+                    return;
+                }
+                Some("next" | "previous") if children.is_empty() => None,
+                Some(direction @ ("next" | "previous")) => {
+                    let current = app
+                        .inspected_child
+                        .as_deref()
+                        .and_then(|current| {
+                            children
+                                .iter()
+                                .position(|status| status.child.as_str() == current)
+                        })
+                        .unwrap_or(0);
+                    let index = if direction == "next" {
+                        (current + 1) % children.len()
+                    } else {
+                        current.checked_sub(1).unwrap_or(children.len() - 1)
+                    };
+                    Some(children[index].child.as_str().to_owned())
+                }
+                Some(selected) => Some(selected.to_owned()),
+                None => None,
+            };
             if let Some(selected) = selected {
                 let Some(status) = children
                     .iter()
@@ -809,10 +969,11 @@ async fn handle_local_command(
                     app.show_local_error("agents", format!("No child named `{selected}`."));
                     return;
                 };
+                app.inspected_child = Some(selected);
                 app.show_local_result(
                     "agent",
                     format!(
-                        "child: {}\nstate: {:?}\nturns: {}/{}\nworkspace: {:?}\nresult: {}",
+                        "child: {}\nstate: {:?}\nturns: {}/{}\nworkspace: {:?}\nresult: {}\n\nnavigation: /agent previous · /agent next · /agent parent",
                         status.child,
                         status.state,
                         status.turns_used,
@@ -878,6 +1039,10 @@ async fn handle_local_command(
             Ok(preview) => app.confirm_undo(preview),
             Err(error) => app.transcript.push_error(error.message),
         },
+        CommandAction::Redo => match host.changes().redo_preview() {
+            Ok(preview) => app.confirm_redo(preview),
+            Err(error) => app.show_local_error("redo", error.message),
+        },
         CommandAction::Revert(Some(scope)) => {
             match GitChanges::discover(project).and_then(|git| git.preview_revert(&scope)) {
                 Ok(mut preview) => {
@@ -904,6 +1069,7 @@ async fn handle_local_command(
             .transcript
             .push_error("usage: /revert FILE or /revert FILE#HUNK; use /diff to choose a scope"),
         CommandAction::Help
+        | CommandAction::Details
         | CommandAction::NewSession
         | CommandAction::Resume(_)
         | CommandAction::Profile(_)
@@ -912,6 +1078,121 @@ async fn handle_local_command(
         | CommandAction::Quit => {
             unreachable!("the reducer handles this command before host dispatch")
         }
+    }
+}
+
+#[derive(Debug, Default)]
+struct RuntimeTimeline {
+    lines: Vec<String>,
+    children: BTreeSet<ChildId>,
+}
+
+#[derive(Debug, Default)]
+struct TurnTimelineState {
+    plan: Option<BTreeMap<String, u32>>,
+    passed_gates: u32,
+    failed_gates: u32,
+}
+
+fn render_runtime_timeline(events: &[EventEnvelope]) -> RuntimeTimeline {
+    let mut timeline = RuntimeTimeline::default();
+    let mut turns = BTreeMap::<String, TurnTimelineState>::new();
+    let mut tools = BTreeMap::<String, String>::new();
+
+    for event in events {
+        match &event.payload {
+            RuntimeEvent::PlanUpdated { counts, .. } => {
+                if let Some(turn) = &event.turn {
+                    turns.entry(turn.as_str().to_owned()).or_default().plan = Some(counts.clone());
+                }
+            }
+            RuntimeEvent::ToolCallRequested { call, name, .. } => {
+                tools.insert(call.as_str().to_owned(), name.clone());
+            }
+            RuntimeEvent::ToolCallCompleted { call, is_error, .. }
+                if tools.get(call.as_str()).is_some_and(|name| name == "shell") =>
+            {
+                if let Some(turn) = &event.turn {
+                    let state = turns.entry(turn.as_str().to_owned()).or_default();
+                    if *is_error {
+                        state.failed_gates = state.failed_gates.saturating_add(1);
+                    } else {
+                        state.passed_gates = state.passed_gates.saturating_add(1);
+                    }
+                }
+            }
+            RuntimeEvent::TurnCompleted { finish, .. } => {
+                if let Some(turn) = &event.turn {
+                    let state = turns.remove(turn.as_str()).unwrap_or_default();
+                    timeline.lines.push(format!(
+                        "root {} · {} · {} · gates {} passed/{} failed",
+                        turn,
+                        turn_finish_label(finish),
+                        render_terminal_plan(state.plan.as_ref()),
+                        state.passed_gates,
+                        state.failed_gates,
+                    ));
+                }
+            }
+            RuntimeEvent::ChildSpawned {
+                child,
+                workspace,
+                max_turns,
+                ..
+            } => {
+                timeline.children.insert(child.clone());
+                timeline.lines.push(format!(
+                    "child {child} · started · {workspace:?} · {max_turns} turn limit"
+                ));
+            }
+            RuntimeEvent::ChildNeedsInput { child, .. } => {
+                timeline.children.insert(child.clone());
+                timeline.lines.push(format!("child {child} · needs input"));
+            }
+            RuntimeEvent::ChildCompleted { child, .. } => {
+                timeline.children.insert(child.clone());
+                timeline
+                    .lines
+                    .push(format!("child {child} · task completed"));
+            }
+            RuntimeEvent::ChildStopped { child, reason } => {
+                timeline.children.insert(child.clone());
+                timeline
+                    .lines
+                    .push(format!("child {child} · stopped ({reason:?})"));
+            }
+            RuntimeEvent::ChildFailed { child, .. } => {
+                timeline.children.insert(child.clone());
+                timeline.lines.push(format!("child {child} · failed"));
+            }
+            _ => {}
+        }
+    }
+
+    timeline
+}
+
+fn render_terminal_plan(counts: Option<&BTreeMap<String, u32>>) -> String {
+    let Some(counts) = counts else {
+        return "plan none".to_owned();
+    };
+    let count = |status: &str| counts.get(status).copied().unwrap_or_default();
+    format!(
+        "plan {} active/{} pending/{} done/{} cancelled",
+        count("in_progress"),
+        count("pending"),
+        count("completed"),
+        count("cancelled")
+    )
+}
+
+fn turn_finish_label(finish: &TurnFinish) -> String {
+    match finish {
+        TurnFinish::Completed => "completed".to_owned(),
+        TurnFinish::Cancelled { reason } => format!("cancelled ({reason:?})"),
+        TurnFinish::LimitReached { limit } => format!("limit reached ({limit:?})"),
+        TurnFinish::NeedsInput { request } => format!("needs input ({request})"),
+        TurnFinish::Failed => "failed".to_owned(),
     }
 }
 
@@ -1288,6 +1569,162 @@ fn render_context_grid(entries: &[(&'static str, u32)]) -> Vec<String> {
 enum LocalOutcome {
     Notice(String),
     Error(String),
+    Shell { content: String, is_error: bool },
+    PreparedSendFailed { text: String, error: String },
+}
+
+fn start_local_shell(
+    session: smith_runtime::SessionHandle,
+    command: String,
+    timeout_ms: u64,
+    outcomes: tokio::sync::mpsc::UnboundedSender<LocalOutcome>,
+) {
+    tokio::spawn(async move {
+        let outcome = session
+            .run_local_tool(
+                "shell",
+                serde_json::json!({
+                    "command": command,
+                    "cwd": ".",
+                    "timeout_ms": timeout_ms,
+                }),
+                timeout_ms,
+            )
+            .await;
+        let result = match outcome {
+            Ok(block) => LocalOutcome::Shell {
+                content: tool_result_text(&block),
+                is_error: block.is_error,
+            },
+            Err(error) => LocalOutcome::Error(format!("shell action failed: {error}")),
+        };
+        let _ = outcomes.send(result);
+    });
+}
+
+fn start_prepared_send(
+    session: smith_runtime::SessionHandle,
+    text: String,
+    files: Vec<String>,
+    timeout_ms: u64,
+    outcomes: tokio::sync::mpsc::UnboundedSender<LocalOutcome>,
+) {
+    tokio::spawn(async move {
+        match prepare_attached_input(&session, text.clone(), files, timeout_ms).await {
+            Ok(input) => {
+                if let Err(error) = session.send(input) {
+                    let _ = outcomes.send(LocalOutcome::PreparedSendFailed {
+                        text,
+                        error: format!(
+                            "turn submission was rejected after attachment reads: {error}"
+                        ),
+                    });
+                }
+            }
+            Err(error) => {
+                let _ = outcomes.send(LocalOutcome::PreparedSendFailed { text, error });
+            }
+        }
+    });
+}
+
+async fn prepare_attached_input(
+    session: &smith_runtime::SessionHandle,
+    text: String,
+    files: Vec<String>,
+    timeout_ms: u64,
+) -> Result<UserInput, String> {
+    const MAX_ATTACHMENT_CHARS: usize = 512 * 1024;
+    let mut parts = vec![ContentPart::text(text)];
+    let mut attached_chars = 0usize;
+    for path in files {
+        let block = session
+            .run_local_tool(
+                "read",
+                serde_json::json!({ "path": path, "offset": 1, "limit": 2_000 }),
+                timeout_ms,
+            )
+            .await
+            .map_err(|error| format!("attachment `@{path}` was not sent: {error}"))?;
+        if block.is_error {
+            return Err(format!(
+                "attachment `@{path}` was not sent: {}",
+                tool_result_text(&block)
+            ));
+        }
+        let content = tool_result_text(&block);
+        attached_chars = attached_chars.saturating_add(content.chars().count());
+        if attached_chars > MAX_ATTACHMENT_CHARS {
+            return Err(format!(
+                "prepared attachments exceed the {MAX_ATTACHMENT_CHARS}-character bound"
+            ));
+        }
+        parts.push(ContentPart::text(format!(
+            "<smith_file_attachment path=\"{path}\" source=\"prepared_read\">\n{content}\n</smith_file_attachment>"
+        )));
+    }
+    Ok(UserInput { parts })
+}
+
+fn tool_result_text(block: &ToolResultBlock) -> String {
+    let text = block
+        .content
+        .iter()
+        .filter_map(ContentPart::as_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.is_empty() {
+        "tool completed without text output".to_owned()
+    } else {
+        text
+    }
+}
+
+fn start_agent(
+    host: &HostSession,
+    preset: String,
+    task: String,
+    outcomes: tokio::sync::mpsc::UnboundedSender<LocalOutcome>,
+) {
+    let Some(coordinator) = host
+        .runtime()
+        .delegation()
+        .and_then(|delegation| delegation.coordinator())
+        .cloned()
+    else {
+        let _ = outcomes.send(LocalOutcome::Error(
+            "child delegation is unavailable because the coordinator is not wired".to_owned(),
+        ));
+        return;
+    };
+    tokio::spawn(async move {
+        let outcome = coordinator
+            .spawn(ChildSpec {
+                task: UserInput::text(format!(
+                    "You are the `{preset}` read-only child preset. Complete this bounded task without modifying the workspace:\n\n{task}"
+                )),
+                model: ChildModelSelection::Inherit,
+                limits: ChildLimits::turns(1),
+                tools: ToolViewScope::ReadOnly,
+                workspace: WorkspacePolicy::ReadOnlyView,
+            })
+            .await;
+        let message = match outcome {
+            Ok(SpawnOutcome::Spawned { child, .. }) => {
+                LocalOutcome::Notice(format!("{preset} child {child} started"))
+            }
+            Ok(SpawnOutcome::Queued { child }) => {
+                LocalOutcome::Notice(format!("{preset} child {child} queued"))
+            }
+            Ok(SpawnOutcome::AtCapacity { running, limit }) => LocalOutcome::Error(format!(
+                "{preset} child did not start: {running} children are already running (limit {limit})"
+            )),
+            Err(error) => {
+                LocalOutcome::Error(format!("{preset} child did not start: {}", error.message))
+            }
+        };
+        let _ = outcomes.send(message);
+    });
 }
 
 fn start_review(
@@ -1413,6 +1850,8 @@ fn runtime_resources(
     inventory: SelectionInventory,
     sessions: Vec<SessionListing>,
     current_session: &str,
+    project: &std::path::Path,
+    agents: &ResolvedAgent,
 ) -> RuntimeResources {
     let profiles = inventory
         .profiles
@@ -1517,14 +1956,99 @@ fn runtime_resources(
         .collect();
 
     let session_entries = session_resource_entries(sessions, Some(current_session));
+    let files = workspace_file_entries(project, 4_096);
+    let child_agents = agents
+        .child_presets
+        .iter()
+        .map(|(name, preset)| {
+            let description = preset
+                .description
+                .as_ref()
+                .map_or("read-only child preset", |value| value.value.as_str());
+            ResourceEntry::new(
+                format!("agent:{name}"),
+                format!("@{name}"),
+                format!("agent · {} · {description}", preset.posture.value.as_str()),
+            )
+        })
+        .collect();
+    let agent_modes = agents
+        .order
+        .value
+        .iter()
+        .filter_map(|name| {
+            let mode = agents.modes.get(name)?;
+            let description = mode
+                .description
+                .as_ref()
+                .map_or("root agent mode", |value| value.value.as_str());
+            Some(
+                ResourceEntry::new(
+                    name.clone(),
+                    name.clone(),
+                    format!("{} · {description}", mode.posture.value.as_str()),
+                )
+                .active(agents.active.value == *name),
+            )
+        })
+        .collect();
 
     RuntimeResources {
         models,
         providers,
         profiles,
         sessions: session_entries,
+        files,
+        child_agents,
+        agent_modes,
         current_session: Some(current_session.to_owned()),
     }
+}
+
+fn workspace_file_entries(project: &std::path::Path, limit: usize) -> Vec<ResourceEntry> {
+    let Ok(root) = project.canonicalize() else {
+        return Vec::new();
+    };
+    let mut walker = WalkBuilder::new(&root);
+    walker
+        .hidden(true)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .parents(true)
+        .follow_links(false)
+        .filter_entry(|entry| entry.file_name() != ".git");
+
+    let mut entries = Vec::new();
+    for entry in walker.build().filter_map(Result::ok) {
+        if entries.len() >= limit {
+            break;
+        }
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let Ok(canonical) = entry.path().canonicalize() else {
+            continue;
+        };
+        if !canonical.starts_with(&root) {
+            continue;
+        }
+        let Ok(relative) = canonical.strip_prefix(&root) else {
+            continue;
+        };
+        let path = relative.to_string_lossy().replace('\\', "/");
+        if path.is_empty() {
+            continue;
+        }
+        let bytes = entry.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+        entries.push(ResourceEntry::new(
+            format!("file:{path}"),
+            format!("@{path}"),
+            format!("file · {bytes} bytes"),
+        ));
+    }
+    entries.sort_by(|left, right| left.label.cmp(&right.label));
+    entries
 }
 
 fn session_resource_entries(
@@ -1778,6 +2302,170 @@ max_output_tokens = 4096
 "#;
 
     #[test]
+    fn runtime_timeline_uses_stable_ids_terminal_plan_and_redacted_gate_evidence() {
+        use agent_runtime_core::clock::Timestamp;
+        use agent_runtime_core::event::PlanSensitivity;
+        use agent_runtime_core::ids::{EventId, ToolCallId, TurnId};
+
+        let session = SessionId::new("session-1");
+        let turn = TurnId::new("turn-7");
+        let envelope = |seq, payload| {
+            EventEnvelope::new(
+                seq,
+                EventId::new(format!("event-{seq}")),
+                session.clone(),
+                Some(turn.clone()),
+                Timestamp::ZERO,
+                payload,
+            )
+        };
+        let events = vec![
+            envelope(
+                1,
+                RuntimeEvent::PlanUpdated {
+                    revision: 3,
+                    sensitivity: PlanSensitivity::Public,
+                    counts: BTreeMap::from([
+                        ("pending".to_owned(), 0),
+                        ("in_progress".to_owned(), 0),
+                        ("completed".to_owned(), 2),
+                        ("cancelled".to_owned(), 1),
+                    ]),
+                    items: Some(Vec::new()),
+                },
+            ),
+            envelope(
+                2,
+                RuntimeEvent::ToolCallRequested {
+                    call: ToolCallId::new("call-4"),
+                    name: "shell".to_owned(),
+                    argument_keys: vec!["command".to_owned()],
+                    argument_fingerprint: serde_json::from_value(serde_json::json!(
+                        "0123456789abcdef0123456789abcdef"
+                    ))
+                    .expect("fingerprint"),
+                    arguments: Some(serde_json::json!({"command": "secret-command"})),
+                },
+            ),
+            envelope(
+                3,
+                RuntimeEvent::ToolCallCompleted {
+                    call: ToolCallId::new("call-4"),
+                    name: "shell".to_owned(),
+                    is_error: false,
+                },
+            ),
+            envelope(
+                4,
+                RuntimeEvent::TurnCompleted {
+                    finish: TurnFinish::Completed,
+                    visible_output: true,
+                },
+            ),
+            envelope(
+                5,
+                RuntimeEvent::ChildSpawned {
+                    child: ChildId::new("child-2"),
+                    workspace: WorkspacePolicy::ReadOnlyView,
+                    max_turns: 1,
+                    max_tokens: None,
+                    deadline_ms: None,
+                },
+            ),
+            envelope(
+                6,
+                RuntimeEvent::ChildCompleted {
+                    child: ChildId::new("child-2"),
+                    result: "secret-child-result".to_owned(),
+                },
+            ),
+        ];
+
+        let rendered = render_runtime_timeline(&events);
+        assert_eq!(
+            rendered.lines,
+            [
+                "root turn-7 · completed · plan 0 active/0 pending/2 done/1 cancelled · gates 1 passed/0 failed",
+                "child child-2 · started · ReadOnlyView · 1 turn limit",
+                "child child-2 · task completed",
+            ]
+        );
+        assert_eq!(rendered.children, BTreeSet::from([ChildId::new("child-2")]));
+        let joined = rendered.lines.join("\n");
+        assert!(!joined.contains("secret-command"));
+        assert!(!joined.contains("secret-child-result"));
+    }
+
+    #[tokio::test]
+    async fn prepared_file_attachment_reads_exactly_without_provider_spend() {
+        let home = tempfile::tempdir().expect("home");
+        let project = tempfile::tempdir().expect("project");
+        std::fs::create_dir_all(project.path().join(".smith")).expect("config directory");
+        std::fs::write(
+            project.path().join(".smith/config.toml"),
+            LOCAL_COMMAND_CONFIG,
+        )
+        .expect("config");
+        std::fs::create_dir_all(project.path().join("src")).expect("source directory");
+        std::fs::write(
+            project.path().join("src/lib.rs"),
+            "pub fn answer() -> u8 { 42 }\n",
+        )
+        .expect("source file");
+        let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+            .expect("resolution")
+            .config;
+        let provider = Arc::new(agent_runtime::provider::fake::FakeProvider::new(
+            "example-model",
+            agent_runtime_core::provider::Capabilities::basic_streaming(),
+            Vec::new(),
+        ));
+        let runtime = RuntimeRequest {
+            provider: Some(provider.clone()),
+            workspace: Some(Arc::new(
+                ProjectWorkspace::new(project.path()).expect("workspace"),
+            )),
+            approval: Some(Arc::new(agent_runtime_core::approval::DenyAll)),
+            ..RuntimeRequest::new(config, HostSurface::Terminal)
+        };
+        let host = smith_runtime::host::start(
+            HostSessionRequest::new(runtime, project.path())
+                .checkpoint_keys(Arc::new(TestCheckpointKeys)),
+        )
+        .await
+        .expect("host");
+        let history_before = host.session().history();
+
+        let input = prepare_attached_input(
+            host.session(),
+            "explain this".to_owned(),
+            vec!["src/lib.rs".to_owned()],
+            5_000,
+        )
+        .await
+        .expect("prepared attachment");
+        assert_eq!(input.parts.len(), 2);
+        let wire = serde_json::to_string(&input).expect("input wire");
+        assert!(wire.contains("source=\\\"prepared_read\\\""), "{wire}");
+        assert!(wire.contains("pub fn answer()"), "{wire}");
+        assert_eq!(host.session().history(), history_before);
+        assert!(provider.requests().is_empty());
+
+        let error = prepare_attached_input(
+            host.session(),
+            "do not send".to_owned(),
+            vec!["../outside.txt".to_owned()],
+            5_000,
+        )
+        .await
+        .expect_err("workspace escape must fail locally");
+        assert!(error.contains("was not sent"), "{error}");
+        assert!(provider.requests().is_empty());
+
+        host.shutdown().await.expect("shutdown");
+    }
+
+    #[test]
     fn a_home_relative_path_is_abbreviated() {
         let home = "/Users/example";
         assert_eq!(abbreviate("/Users/example/work/api", home), "~/work/api");
@@ -1862,7 +2550,13 @@ output_reserve = 4096
                 .expect("catalog inventory");
         let selectable_count = inventory.providers[0].model_count;
 
-        let resources = runtime_resources(inventory, Vec::new(), "session");
+        let resources = runtime_resources(
+            inventory,
+            Vec::new(),
+            "session",
+            project.path(),
+            &resolution.config.agent,
+        );
         assert_eq!(resources.models.len(), 339);
         assert!(
             resources.providers[0]

@@ -50,6 +50,8 @@ pub(crate) enum SetupAction {
         /// Provider to migrate.
         provider: String,
     },
+    /// Configure the authenticated-encryption key for exact checkpoints.
+    CheckpointKey,
 }
 
 /// Presentation and project inputs for guided setup.
@@ -70,6 +72,8 @@ pub(crate) struct SetupArgs {
 pub(crate) struct Selection {
     /// Where project discovery starts.
     pub project: Option<PathBuf>,
+    /// A root agent mode override.
+    pub agent: Option<String>,
     /// A named profile override.
     pub profile: Option<String>,
     /// A named provider override.
@@ -86,6 +90,7 @@ impl Selection {
     /// Converts parsed flags into the config resolver's typed CLI layer.
     pub(crate) fn overrides(&self) -> Overrides {
         Overrides {
+            agent: self.agent.clone(),
             profile: self.profile.clone(),
             provider: self.provider.clone(),
             model: self.model.clone(),
@@ -206,9 +211,13 @@ fn parse_setup(mut args: VecDeque<OsString>) -> Result<Command, ParseError> {
                 provider: String::new(),
             }
         }
+        Some("checkpoint-key") => {
+            args.pop_front();
+            SetupAction::CheckpointKey
+        }
         Some(value) if !value.starts_with('-') => {
             return Err(ParseError::new(format!(
-                "unknown setup action `{value}`; expected `add-provider`, `add-model`, or `credential`"
+                "unknown setup action `{value}`; expected `add-provider`, `add-model`, `credential`, or `checkpoint-key`"
             )));
         }
         _ => SetupAction::Menu,
@@ -388,6 +397,10 @@ fn parse_selection_flag(
             let parsed = text_value(flag, inline, args)?;
             set_once(&mut selection.profile, parsed, flag)
         }
+        "--agent" => {
+            let parsed = text_value(flag, inline, args)?;
+            set_once(&mut selection.agent, parsed, flag)
+        }
         "--provider" => {
             let parsed = text_value(flag, inline, args)?;
             set_once(&mut selection.provider, parsed, flag)
@@ -523,6 +536,7 @@ USAGE:
   smith setup add-provider [--project <PATH>]
   smith setup add-model [--provider <NAME>] [--project <PATH>]
   smith setup credential --provider <NAME> [--project <PATH>]
+  smith setup checkpoint-key [--project <PATH>]
 
 RUN OPTIONS:
   -p, --prompt <PROMPT|->       Run once; `-` reads the prompt from stdin
@@ -530,6 +544,7 @@ RUN OPTIONS:
       --resume [SESSION_ID]     Resume by ID, or choose from project sessions
       --session [SESSION_ID]    Alias for --resume
       --profile <NAME>          Select a configured profile
+      --agent <MODE>            Select a configured root agent mode
       --provider <NAME>         Select a configured provider
       --model <MODEL>           Select a configured model
       --approval <POLICY>       ask | deny | allow-all
@@ -539,6 +554,14 @@ RUN OPTIONS:
       --no-motion               Disable terminal animation
   -h, --help                    Print help
   -V, --version                 Print version
+
+INTERACTIVE COMPOSER:
+  Tab                           Cycle build/plan/review while empty and idle
+  @FILE                         Prepare an exact file attachment read
+  @explore TASK / @review TASK  Confirm a same-model read-only child
+  !COMMAND                      Run the canonical prepared local shell path
+  @@ / !!                       Send a literal leading @ / !
+  /details /timeline /redo      Inspect work, history, or exact recovery
 
 Headless runs fail closed at approval boundaries unless an explicit policy or
 auto-approve rule authorizes the tool. Machine output is written only to stdout;

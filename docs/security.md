@@ -83,6 +83,16 @@ are registered with the persistence redactor. Events, default JSONL journals,
 ordinary snapshots, errors, setup review, and headless machine output are
 tested for non-disclosure.
 
+Protected-checkpoint keys are independent of provider credentials. Smith may
+load one from OS protected storage, the dedicated `SMITH_CHECKPOINT_KEY`
+environment value, an owner-only inline `persistence.checkpoint_key`, or an
+explicit `env:` checkpoint-key reference. Inline and environment routes are
+mutually exclusive with the OS reference, never initialize or query
+Keychain/Secret Service, and zeroize decoded key material. Project files may
+not define or redirect any checkpoint-key source. Source changes refuse before
+configuration mutation whenever encrypted checkpoints exist; Smith never
+silently abandons unreadable state or falls back to plaintext.
+
 Redaction is defense in depth, not permission to put secrets in observability.
 Low-entropy argument fingerprints can confirm a guess and are correlation
 metadata, not cryptographic secrecy.
@@ -123,6 +133,14 @@ Provider output is untrusted. It can request tools but cannot bypass schema
 validation, capability activation, authorization, approval, workspace
 containment, deadlines, or output bounds. Failed attempt output remains
 speculative until a commit event and is discarded on retry.
+
+The `@file` and leading-`!` composer shortcuts are not alternate authority
+paths. Attachments execute the canonical exact prepared `read`; local shell
+executes the canonical prepared `shell` with its broad permission bound,
+approval, deadline, cancellation, output offload, and checkpoint semantics.
+Neither shortcut spends provider tokens during local preparation. Registered
+`@agent` presets are host-owned, read-only, depth-one, same-model children and
+require explicit provider-spend confirmation.
 
 Questionnaire answers resume task reasoning but grant no permission or
 remembered approval. Child agents inherit a scoped tool view, capacity and

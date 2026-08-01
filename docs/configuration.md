@@ -37,6 +37,28 @@ example `SMITH_CONTEXT_REASONING_RESERVE`,
 case-insensitively; defining two case variants for one key is an ambiguity and
 fails.
 
+Root-agent selection follows the same provenance rules. Smith provides
+`build`, `plan`, and `review`, ordered that way by default, plus read-only
+`explore` and `review` child presets. Owner-controlled configuration may
+select/reorder or describe modes:
+
+```toml
+default_agent = "plan"
+agent_order = ["plan", "build", "review"]
+
+[agent_modes.plan]
+posture = "plan"
+description = "inspect and propose without mutation"
+
+[child_agents.review]
+posture = "review"
+description = "read-only independent review"
+```
+
+Mode and preset declarations contain no permission, credential, trust, or
+approval fields. Project definitions are validated and intersected with the
+authoritative run policy; they cannot grant authority.
+
 ## Complete example
 
 ```toml
@@ -90,6 +112,7 @@ max_output_tokens = 4096
 enabled = true
 sessions_dir = "/absolute/user-owned/state/sessions"
 journal_events = true
+checkpoint_key_credential = "env:SMITH_CHECKPOINT_SECRET"
 ```
 
 Policy tables may be top-level or profile-scoped as shown. Providers and models
@@ -117,11 +140,35 @@ Choose exactly one credential source:
 Project and project-local files cannot contain `api_key`. Setup masks secret
 input and reviews only `[redacted]` before an owner-only atomic write.
 
+Checkpoint protection has explicit, mutually exclusive sources:
+
+- the default OS credential service;
+- `SMITH_CHECKPOINT_KEY`, containing exactly 64 hexadecimal characters;
+- owner-only `[persistence].checkpoint_key`, containing the same encoding; or
+- `[persistence].checkpoint_key_credential = "env:VARIABLE"`, which resolves
+  that variable without opening a credential service.
+
+Checkpoint-key settings are forbidden in project configuration. All
+explanation/debug surfaces show only `[redacted]` and source provenance. Run
+`smith setup checkpoint-key` to choose `Store in config (no future prompts)`,
+an environment reference, or OS protected storage. Inline/environment
+selection never initializes Keychain or Secret Service. If protected
+checkpoints already exist under the selected session root, changing sources
+refuses before modifying config; retire or resume that state deliberately
+before choosing another key.
+
 The selected `provider/model` must resolve exact `context_tokens`,
 `max_input_tokens`, and `max_output_tokens` from configured values, trusted
 embedded metadata, or a validated endpoint-bound catalog. Explicit fields win
 independently. `profiles.<name>.max_output_tokens` is the per-request ask and
 cannot exceed the model's resolved ceiling.
+
+For the endpoint-bound Z.AI Coding Plan `glm-5.2` catalog entry, Smith keeps
+the provider model ceiling (`131072`) separate from its product request budget
+and defaults the latter to `32768`. An owner-controlled profile, environment,
+CLI, or session source may request a lower value. `smith config explain
+max_output_tokens --profile zai-glm-5-2` identifies the winning value and every
+overridden source.
 
 `providers.<name>.response.reasoning_only = "text"` is a narrow compatibility
 mode for a provider that returns a successful answer solely as non-redacted
@@ -167,6 +214,7 @@ The run surface accepts:
 ```text
 --project PATH
 --profile NAME
+--agent build|plan|review
 --provider NAME
 --model ID
 --approval ask|deny|allow-all

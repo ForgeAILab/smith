@@ -194,7 +194,8 @@ hint row.
 | `Esc` | Interrupt the running turn; if idle, clear the composer |
 | `Ctrl+C` | Quit (confirm if work is live); twice within 1s forces quit |
 | `Ctrl+P` | Open command completion using the shared command registry |
-| `Tab` / `Shift+Tab` | Complete or move command selection; never change regions |
+| `Tab` | Cycle root agent mode only when empty and idle; otherwise complete or move the active overlay selection |
+| `Shift+Tab` | Move the active completion/questionnaire selection backward |
 | `PageUp` / `PageDown` / `Home` / `End` | Scroll transcript or jump to either edge |
 | `Ctrl+L` | Jump to newest and re-enable follow |
 | `y` / `n` / `a` | Approval: allow once / deny / allow for session |
@@ -218,6 +219,48 @@ selection backward; `Enter` executes; and `Esc` dismisses the menu while
 preserving the draft. `Ctrl+P` opens the same registry and parser. `//` sends a
 literal leading slash to the provider.
 
+### Agent-first composer actions
+
+The empty idle footer identifies the selected root mode beside provider/model,
+project/branch, and honest context confidence. A second row advertises `Tab
+agents`, `Ctrl+P commands`, `@ files/agents`, and `! shell`. This identity
+disappears while work is active; it is not a permanent header. At 44 columns,
+low-priority path and shortcut detail disappear before mode, activity, model,
+approval, or context provenance.
+
+`build`, `plan`, and `review` are host-owned policy presets. `plan` and
+`review` are read-only; changing mode can only narrow the already resolved
+tool view and never changes provider, credentials, project trust, approval, or
+permission authority. `Tab` cycles the configured authorized order only when
+the composer is empty, the runtime is idle, and no overlay is open.
+
+Typing `@` at a token boundary opens one bounded picker with explicit `file`
+and `agent` labels. Files are canonical workspace-relative entries that honor
+ignore policy. On submit, Smith performs an exact prepared `read` through the
+runtime executor and contributes bounded content (or an artifact reference)
+with `prepared_read` provenance. Unresolved, ambiguous, oversized, binary, or
+outside-workspace references fail locally and preserve the draft before any
+provider request. `@@` escapes one literal `@`; typed `@file:name` and
+`@agent:name` disambiguate collisions.
+
+The built-in `@explore <task>` and `@review <task>` entries are explicit
+depth-one, read-only children. Their confirmation shows inherited
+provider/model, limits, workspace posture, expected result, and provider
+spend. They cannot delegate again or widen the root policy.
+
+A first non-whitespace `!` performs one direct local shell action. It uses the
+same schema preparation, broad shell authority, approval, scheduler, deadline,
+cancellation, checkpoint, bounded output, and artifact-offload path as a
+model-requested `shell` call, then renders the committed result locally. It
+does not send a provider request. `!!` sends a normal prompt beginning with one
+literal `!`.
+
+During work, one reducer-owned summary replaces itself in place with plan
+counts, tools, validation gates, retries, changed paths, and children.
+`/details` toggles bounded redaction-safe projections. Every terminal boundary
+commits one evidence row and reconciles pending/in-progress todo items to
+`cancelled (turn_ended_unfinished)` rather than inventing completion.
+
 The initial command set is deliberately bounded:
 
 | Command | Result |
@@ -225,15 +268,18 @@ The initial command set is deliberately bounded:
 | `/help` | List every implemented command, grouped by primary and advanced use. |
 | `/status` | Show resolved runtime, context window, session, permission, Git, child, and attribution state locally. |
 | `/context` | Visualize the latest model-facing context plan, free input space, reserves, and compaction state locally. |
+| `/details` | Toggle bounded redaction-safe live-work detail. |
+| `/timeline` | Show ordered root turn, child, terminal plan/gate, and recovery evidence locally. |
 | `/new` | Save the current session and create a fresh identity. |
 | `/resume [ID]` | With no ID, choose a project session locally; otherwise validate and resume `ID`. |
 | `/profile [NAME]` | With no name, choose a configured profile; apply it while clearing narrower overrides. |
 | `/provider [NAME]` | With no name, choose a configured provider; cascade to its model choices when needed. |
 | `/model [PROVIDER/MODEL]` | With no pair, choose from provider-qualified models; apply provider and model atomically. |
-| `/agent [ID]` | List children or show one child's latest state/result. |
+| `/agent [ID\|previous\|next\|parent]` | List children or temporarily inspect one while the root composer retains focus. |
 | `/diff [SCOPE]` | Inspect all, last-turn, staged, unstaged, untracked, file, or hunk changes. |
 | `/review [SCOPE]` | Confirm and launch a provider-backed read-only review. |
 | `/undo` | Preview the last fully attributable Smith turn and require explicit confirmation. |
+| `/redo` | Preview and explicitly confirm the newest exact undo/selective-revert forward patch. |
 | `/revert [FILE]` | Select one current file or hunk, preview it, and require explicit confirmation. |
 | `/quit` | Exit under the active-work policy. |
 

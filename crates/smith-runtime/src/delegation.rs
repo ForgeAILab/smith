@@ -176,6 +176,8 @@ pub struct SmithChildFactory {
     pub(crate) skills: Vec<Arc<dyn Ability>>,
     pub(crate) memory: Option<MemoryContributor>,
     pub(crate) semantic_summary: Option<Arc<SemanticSummaryCoordinator>>,
+    /// Whether the root mode permanently narrows every child to read-only.
+    pub(crate) read_only: bool,
 }
 
 impl ChildRuntimeFactory for SmithChildFactory {
@@ -221,7 +223,11 @@ impl ChildRuntimeFactory for SmithChildFactory {
         let tool_authority = Arc::new(SmithToolAuthority::new(workspace.root()));
         let tool_coverage = tool_authority.coverage().clone();
 
-        let mut tools = smith_tools::all();
+        let mut tools = if self.read_only {
+            smith_tools::read_only()
+        } else {
+            smith_tools::all()
+        };
         tools.push(Arc::new(QuestionnaireTool::new()));
         tools.push(Arc::new(WriteTodosTool::new()));
         if let Some(store) = self.artifact_store.clone() {
@@ -279,7 +285,8 @@ impl ChildRuntimeFactory for SmithChildFactory {
             .activation_budget(activation_budget)
             .context_contributor(Arc::new(self.prompt_contributor.clone()))
             .context_contributor(todo_component.clone())
-            .tool_output_processor(todo_component)
+            .tool_output_processor(todo_component.clone())
+            .turn_commit_hook(todo_component)
             .clock(self.clock.clone());
         if let Some(contributor) = self.memory.clone() {
             builder = builder.context_contributor(Arc::new(contributor));

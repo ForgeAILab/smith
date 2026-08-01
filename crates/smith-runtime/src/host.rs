@@ -26,7 +26,10 @@ use smith_config::resolve::{Layer, ResolvedConfig, Source};
 use smith_tools::{ToolCallDisplay, project_tool_call_display};
 
 use crate::artifact::SmithArtifactStore;
-use crate::checkpoint::{CheckpointBarrier, CheckpointKeyProvider, SmithCheckpointSetup};
+use crate::checkpoint::{
+    CheckpointBarrier, CheckpointKeyProvider, ConfiguredCheckpointKeyProvider,
+    CredentialCheckpointKeyProvider, SmithCheckpointSetup,
+};
 use crate::factory::{FactoryError, RuntimeRequest, SmithRuntime};
 use crate::journal::{
     DefaultRedactor, EphemeralWorkInterruption, EventJournal, JournalConfig, JournalRecord,
@@ -153,6 +156,23 @@ impl HostSession {
     /// this resume.
     pub fn recovered_ephemeral_work(&self) -> Option<&EphemeralWorkInterruption> {
         self.recovered_ephemeral_work.as_ref()
+    }
+
+    /// Flushes and returns the redaction-safe canonical events available for
+    /// local timeline projection.
+    ///
+    /// A non-persistent session has no replayable timeline and returns an
+    /// empty vector. The protected checkpoint is deliberately not consulted:
+    /// local presentation must never reconstruct raw prepared arguments or
+    /// sensitive interaction content.
+    pub async fn timeline_events(&self) -> Result<Vec<EventEnvelope>, RuntimeError> {
+        let (Some(journal), Some(paths)) = (&self.journal, &self.paths) else {
+            return Ok(Vec::new());
+        };
+        journal.flush().await?;
+        let path = paths.journal(self.session.id())?;
+        let recovery = read_journal(path).await?;
+        Ok(recovery.events().into_iter().cloned().collect())
     }
 
     /// Resolves a protected live event to reviewed display metadata.
@@ -292,7 +312,30 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         request.runtime.session_store = Some(store);
         if request.runtime.checkpoint_store.is_none() && request.runtime.checkpoint_setup.is_none()
         {
-            request.runtime.checkpoint_setup = Some(match request.checkpoint_keys.clone() {
+            let provider = match request.checkpoint_keys.clone() {
+                Some(provider) => Some(provider),
+                None => {
+                    if let Some(key) = &config.persistence.checkpoint_key {
+                        Some(Arc::new(
+                            ConfiguredCheckpointKeyProvider::new(&key.value)
+                                .map_err(RuntimeError::from)?,
+                        ) as Arc<dyn CheckpointKeyProvider>)
+                    } else if let Some(reference) = &config.persistence.checkpoint_key_credential {
+                        let resolver = request.runtime.credentials.clone().ok_or_else(|| {
+                            RuntimeError::config(
+                                "a checkpoint key credential reference requires a credential resolver",
+                            )
+                        })?;
+                        Some(Arc::new(
+                            CredentialCheckpointKeyProvider::new(resolver, &reference.value)
+                                .map_err(RuntimeError::from)?,
+                        ) as Arc<dyn CheckpointKeyProvider>)
+                    } else {
+                        None
+                    }
+                }
+            };
+            request.runtime.checkpoint_setup = Some(match provider {
                 Some(provider) => SmithCheckpointSetup::with_provider(paths.clone(), provider),
                 None => SmithCheckpointSetup::platform(paths.clone()),
             });
@@ -693,6 +736,33 @@ fn reject_project_controlled_persistence(
         ),
     ] {
         if controlled_by_project(source, project_root) {
+            return Err(HostSessionError::ProjectControlledPersistence {
+                setting,
+                provenance: source.clone(),
+            });
+        }
+    }
+    for (setting, value) in [
+        (
+            "persistence.checkpoint_key",
+            config
+                .persistence
+                .checkpoint_key
+                .as_ref()
+                .map(|key| &key.source),
+        ),
+        (
+            "persistence.checkpoint_key_credential",
+            config
+                .persistence
+                .checkpoint_key_credential
+                .as_ref()
+                .map(|credential| &credential.source),
+        ),
+    ] {
+        if let Some(source) = value
+            && controlled_by_project(source, project_root)
+        {
             return Err(HostSessionError::ProjectControlledPersistence {
                 setting,
                 provenance: source.clone(),

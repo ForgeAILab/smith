@@ -28,10 +28,10 @@ smith-tui = { path = "crates/smith-tui", version = "0.0.1" }
 # revision. Local sibling-checkout development uses the git-ignored
 # `.cargo/config.toml` patch table; committed manifests never rely on a
 # developer-specific filesystem layout.
-agent-runtime = { git = "https://github.com/mai1015/agent-runtime.git", rev = "1e52c934e199c2900e57869711542eaaf01e11d7", version = "=0.1.0" }
-agent-runtime-core = { git = "https://github.com/mai1015/agent-runtime.git", rev = "1e52c934e199c2900e57869711542eaaf01e11d7", version = "=0.1.0" }
-agent-runtime-registry = { git = "https://github.com/mai1015/agent-runtime.git", rev = "1e52c934e199c2900e57869711542eaaf01e11d7", version = "=0.1.0" }
-agent-runtime-testkit = { git = "https://github.com/mai1015/agent-runtime.git", rev = "1e52c934e199c2900e57869711542eaaf01e11d7", version = "=0.1.0" }
+agent-runtime = { git = "https://github.com/mai1015/agent-runtime.git", rev = "50f230e4ca8ba318fd4c5c84df0876051c54d93e", version = "=0.1.0" }
+agent-runtime-core = { git = "https://github.com/mai1015/agent-runtime.git", rev = "50f230e4ca8ba318fd4c5c84df0876051c54d93e", version = "=0.1.0" }
+agent-runtime-registry = { git = "https://github.com/mai1015/agent-runtime.git", rev = "50f230e4ca8ba318fd4c5c84df0876051c54d93e", version = "=0.1.0" }
+agent-runtime-testkit = { git = "https://github.com/mai1015/agent-runtime.git", rev = "50f230e4ca8ba318fd4c5c84df0876051c54d93e", version = "=0.1.0" }
 
 anyhow = "1"
 async-trait = "0.1"
@@ -40,6 +40,7 @@ crossterm = { version = "0.29", features = ["event-stream"] }
 dirs = "6"
 futures-core = "0.3"
 futures-util = "0.3"
+ignore = "0.4"
 keyring = { version = "3", default-features = false, features = ["apple-native", "sync-secret-service"] }
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29", "layout-cache", "underline-color"] }
 # The production HTTP transport. `rustls` keeps the TLS stack in Rust so the

@@ -92,6 +92,20 @@ impl GitChanges {
         })
     }
 
+    /// Returns the current branch, or a bounded detached-HEAD label.
+    pub fn branch_label(&self) -> Result<String, RuntimeError> {
+        let symbolic = self.git(["symbolic-ref", "--short", "--quiet", "HEAD"])?;
+        if symbolic.status.success() {
+            let branch = bounded_git_label(&String::from_utf8_lossy(&symbolic.stdout));
+            if !branch.is_empty() {
+                return Ok(branch);
+            }
+        }
+        let detached = self.git(["rev-parse", "--short=12", "HEAD"])?;
+        let revision = ensure_success(detached, "read current Git revision")?;
+        Ok(format!("detached@{}", bounded_git_label(&revision)))
+    }
+
     /// Hashes one current project-relative path, including absence.
     pub fn path_hash(&self, path: &str) -> Result<String, RuntimeError> {
         validate_relative_path(path)?;
@@ -388,6 +402,15 @@ impl GitChanges {
         }
         Ok(())
     }
+}
+
+fn bounded_git_label(value: &str) -> String {
+    value
+        .trim()
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(80)
+        .collect()
 }
 
 fn parse_revert_scope(scope: &str) -> Result<(&str, Option<usize>), RuntimeError> {

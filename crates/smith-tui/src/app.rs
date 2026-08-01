@@ -10,9 +10,10 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use agent_runtime_core::clock::SystemClock;
+#[cfg(test)]
+use agent_runtime_core::event::PlanItemStatus;
 use agent_runtime_core::event::{
-    ChildPhase, EventEnvelope, PlanItemProjection, PlanItemStatus, PlanSensitivity, RuntimeEvent,
-    TurnFinish,
+    ChildPhase, EventEnvelope, PlanItemProjection, PlanSensitivity, RuntimeEvent, TurnFinish,
 };
 use agent_runtime_core::ids::{AttemptId, RequestId};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -24,6 +25,7 @@ use crate::composer::Composer;
 use crate::diff::EditReview;
 use crate::picker::{PickerOutcome, ResourceEntry, ResourcePicker};
 use crate::questionnaire::{QuestionnaireForm, QuestionnaireResolution, QuestionnaireState};
+use crate::references::{ComposerReference, parse_references};
 use crate::status::{Activity, ContextPlanUpdate, Status, render_elapsed};
 use crate::transcript::{LocalResultState, ToolStatus, Transcript};
 
@@ -35,6 +37,18 @@ const FORCE_QUIT_WINDOW: Duration = Duration::from_secs(1);
 pub enum Action {
     /// Submit this text as a user turn.
     Send(String),
+    /// Submit a user turn after exact local file reads are attached.
+    SendWithFiles {
+        /// Prompt text, including visible `@path` provenance.
+        text: String,
+        /// Canonical workspace-relative file identities.
+        files: Vec<String>,
+    },
+    /// Execute one explicit local shell shortcut without provider spend.
+    RunShell {
+        /// Command after the leading `!` marker.
+        command: String,
+    },
     /// Cancel the running turn.
     Interrupt,
     /// Leave the application.
@@ -48,6 +62,10 @@ pub enum Action {
     ApplyUndo,
     /// Record that the already-previewed undo was explicitly cancelled.
     CancelUndo,
+    /// Apply the already-previewed newest exact redo candidate.
+    ApplyRedo,
+    /// Record that the already-previewed redo was explicitly cancelled.
+    CancelRedo,
     /// Apply an exact file/hunk revert after stale-preview validation.
     ApplyRevert {
         /// File or `file#hunk` scope.
@@ -67,6 +85,13 @@ pub enum Action {
         /// Review scope.
         scope: String,
     },
+    /// Start one confirmed, host-registered read-only child preset.
+    StartAgent {
+        /// Registered child preset.
+        preset: String,
+        /// Bounded task supplied after the reference.
+        task: String,
+    },
 }
 
 /// A command selected from the TUI command palette.
@@ -85,6 +110,8 @@ pub enum PaletteCommand {
         /// Provider model ID.
         model: String,
     },
+    /// Select a root-agent mode at a safe session boundary.
+    Agent(String),
 }
 
 /// Bounded local resources available to runtime pickers.
@@ -98,6 +125,12 @@ pub struct RuntimeResources {
     pub profiles: Vec<ResourceEntry>,
     /// Project-scoped saved sessions.
     pub sessions: Vec<ResourceEntry>,
+    /// Bounded canonical workspace-file index.
+    pub files: Vec<ResourceEntry>,
+    /// Host-registered read-only child presets.
+    pub child_agents: Vec<ResourceEntry>,
+    /// Authorized root-agent modes in configured cycle order.
+    pub agent_modes: Vec<ResourceEntry>,
     /// Active session ID.
     pub current_session: Option<String>,
 }
@@ -113,6 +146,8 @@ pub enum ResourceTarget {
     Profile,
     /// Project session.
     Resume,
+    /// Insert one typed file or child-agent reference into the composer.
+    Reference,
 }
 
 /// A modal drawn over the transcript. At most one exists at a time.
@@ -154,6 +189,11 @@ pub enum Overlay {
         /// Bounded reverse patch.
         content: String,
     },
+    /// Exact forward patch awaiting a no-default confirmation.
+    RedoConfirm {
+        /// Bounded forward patch.
+        content: String,
+    },
     /// Selective revert awaiting a no-default confirmation.
     RevertConfirm {
         /// File or `file#hunk` scope.
@@ -168,6 +208,15 @@ pub enum Overlay {
         /// Review scope.
         scope: String,
         /// Spend and scope explanation.
+        content: String,
+    },
+    /// Explicit child invocation awaiting provider-spend confirmation.
+    AgentConfirm {
+        /// Registered preset identity.
+        preset: String,
+        /// Exact bounded task.
+        task: String,
+        /// Inherited model, limits, and posture summary.
         content: String,
     },
     /// Exit was requested while work is live.
@@ -228,34 +277,13 @@ pub struct PlanSummary {
     pub items: Option<Vec<PlanItemProjection>>,
 }
 
-impl PlanSummary {
-    fn render_inline(&self) -> String {
-        let count = |status: &str| self.counts.get(status).copied().unwrap_or_default();
-        let mut text = format!(
-            "revision {} · {} active · {} pending · {} done · {} cancelled",
-            self.revision,
-            count("in_progress"),
-            count("pending"),
-            count("completed"),
-            count("cancelled"),
-        );
-        if self.sensitivity == PlanSensitivity::Public
-            && let Some(items) = &self.items
-        {
-            for item in items {
-                let marker = match item.status {
-                    PlanItemStatus::Pending => "[ ]",
-                    PlanItemStatus::InProgress => "[>]",
-                    PlanItemStatus::Completed => "[x]",
-                    PlanItemStatus::Cancelled => "[-]",
-                };
-                let id = one_line(&item.id);
-                let item_text = one_line(&item.text);
-                text.push_str(&format!("\n{marker} {id} — {item_text}"));
-            }
-        }
-        text
-    }
+/// Replaceable, replay-derived evidence for the current turn.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct WorkSummary {
+    tools: BTreeMap<String, (String, ToolStatus)>,
+    requests: BTreeSet<String>,
+    attempts: u32,
+    changed_paths: BTreeSet<String>,
 }
 
 /// One provider attempt's speculative presentation identity.
@@ -333,8 +361,14 @@ pub struct App {
     questionnaire_resolutions: VecDeque<(String, QuestionnaireResolution)>,
     /// Latest child states, keyed by stable child id.
     pub children: BTreeMap<String, ChildSummary>,
+    /// Temporary child inspector selection; the root composer keeps focus.
+    pub inspected_child: Option<String>,
     /// Latest durable todo plan, projected without a permanent pane.
     pub plan: Option<PlanSummary>,
+    /// One replaceable work summary for the active turn.
+    work: Option<WorkSummary>,
+    /// Whether bounded work-summary details are expanded.
+    pub work_details: bool,
     /// Bounded local choices supplied by the host.
     pub resources: RuntimeResources,
     /// Whether the transcript follows new output.
@@ -366,7 +400,10 @@ impl App {
             pending_prompts: VecDeque::new(),
             questionnaire_resolutions: VecDeque::new(),
             children: BTreeMap::new(),
+            inspected_child: None,
             plan: None,
+            work: None,
+            work_details: false,
             resources: RuntimeResources::default(),
             following: true,
             scroll_back: 0,
@@ -547,7 +584,91 @@ impl App {
 
     /// Enriches a protected live tool event with a reviewed local projection.
     pub fn set_tool_display(&mut self, call_id: &str, display: ToolCallDisplay) {
+        if let Some(work) = &mut self.work
+            && work
+                .tools
+                .get(call_id)
+                .is_some_and(|(name, _)| name == "edit")
+        {
+            work.changed_paths.insert(one_line(display.target()));
+        }
         self.transcript.set_tool_display(call_id, display);
+    }
+
+    /// Toggles bounded, redaction-safe detail on the one live work summary.
+    pub fn toggle_work_details(&mut self) {
+        self.work_details = !self.work_details;
+    }
+
+    /// Render-ready lines for the one replaceable active-work summary.
+    pub(crate) fn work_summary_lines(&self) -> Vec<String> {
+        let Some(work) = &self.work else {
+            return Vec::new();
+        };
+        let active_tools = work
+            .tools
+            .values()
+            .filter(|(_, status)| *status == ToolStatus::Running)
+            .count();
+        let finished_tools = work.tools.len().saturating_sub(active_tools);
+        let retries = work
+            .attempts
+            .saturating_sub(u32::try_from(work.requests.len()).unwrap_or(u32::MAX));
+        let count = |status: &str| {
+            self.plan
+                .as_ref()
+                .and_then(|plan| plan.counts.get(status))
+                .copied()
+                .unwrap_or_default()
+        };
+        let running_children = self
+            .children
+            .values()
+            .filter(|child| matches!(child.state.as_str(), "running" | "working" | "needs input"))
+            .count();
+        let mut lines = vec![format!(
+            "plan {} active/{} pending/{} done/{} cancelled · tools {active_tools} active/{finished_tools} finished · gates {} · retries {retries} · paths {} · children {running_children}",
+            count("in_progress"),
+            count("pending"),
+            count("completed"),
+            count("cancelled"),
+            work.tools
+                .values()
+                .filter(|(name, _)| name == "shell")
+                .count(),
+            work.changed_paths.len(),
+        )];
+        if self.work_details {
+            lines.extend(
+                work.tools
+                    .values()
+                    .take(12)
+                    .map(|(name, status)| format!("tool {name} · {}", status.label())),
+            );
+            if let Some(plan) = &self.plan
+                && plan.sensitivity == PlanSensitivity::Public
+                && let Some(items) = &plan.items
+            {
+                lines.extend(items.iter().take(12).map(|item| {
+                    format!(
+                        "plan {} · {:?} · {}",
+                        item.id,
+                        item.status,
+                        one_line(&item.text)
+                    )
+                }));
+            }
+        }
+        lines
+    }
+
+    fn commit_work_summary(&mut self, finish: &TurnFinish) {
+        let lines = self.work_summary_lines();
+        if !lines.is_empty() {
+            self.transcript
+                .push_notice("work", format!("{:?} · {}", finish, lines[0]));
+        }
+        self.work = None;
     }
 
     fn begin_speculative_attempt(&mut self, request: &RequestId, attempt: &AttemptId) {
@@ -662,6 +783,7 @@ impl App {
                 self.status.capabilities = Default::default();
                 self.status.context_plan = None;
                 self.plan = None;
+                self.work = None;
                 self.turn_started_at = None;
                 self.speculative_attempts.clear();
                 self.speculative_order.clear();
@@ -670,6 +792,7 @@ impl App {
             RuntimeEvent::TurnStarted => {
                 self.discard_orphaned_speculative_output("next turn start");
                 self.status.activity = Activity::Working;
+                self.work = Some(WorkSummary::default());
                 self.turn_started_at = Some(Instant::now());
                 self.finalized_attempts.clear();
             }
@@ -734,6 +857,10 @@ impl App {
             RuntimeEvent::ProviderAttemptStarted {
                 request, attempt, ..
             } => {
+                if let Some(work) = &mut self.work {
+                    work.requests.insert(request.as_str().to_owned());
+                    work.attempts = work.attempts.saturating_add(1);
+                }
                 self.begin_speculative_attempt(request, attempt);
             }
             RuntimeEvent::TextDelta {
@@ -764,6 +891,12 @@ impl App {
                 arguments,
                 ..
             } => {
+                if let Some(work) = &mut self.work {
+                    work.tools.insert(
+                        call.as_str().to_owned(),
+                        (name.clone(), ToolStatus::Running),
+                    );
+                }
                 self.transcript.push_tool_call(
                     call.as_str(),
                     name,
@@ -777,6 +910,11 @@ impl App {
                 } else {
                     ToolStatus::Ok
                 };
+                if let Some(work) = &mut self.work
+                    && let Some((_, work_status)) = work.tools.get_mut(call.as_str())
+                {
+                    *work_status = status;
+                }
                 self.transcript.complete_tool_call(call.as_str(), status);
             }
             RuntimeEvent::ContextPlanned {
@@ -834,7 +972,6 @@ impl App {
                         None
                     },
                 };
-                self.transcript.push_notice("plan", plan.render_inline());
                 self.plan = Some(plan);
             }
             RuntimeEvent::Usage { record } => {
@@ -867,6 +1004,7 @@ impl App {
                 let elapsed = self.turn_started_at.take().map(|started| started.elapsed());
                 self.transcript.close_open();
                 self.status.activity = Activity::Idle;
+                self.commit_work_summary(finish);
                 match finish {
                     TurnFinish::Cancelled { reason } => {
                         self.transcript.push_notice(
@@ -1338,6 +1476,19 @@ impl App {
                     _ => None,
                 };
             }
+            Some(Overlay::RedoConfirm { .. }) => {
+                return match key.code {
+                    KeyCode::Char('y') => {
+                        self.overlay = None;
+                        Some(Action::ApplyRedo)
+                    }
+                    KeyCode::Char('n') | KeyCode::Esc => {
+                        self.overlay = None;
+                        Some(Action::CancelRedo)
+                    }
+                    _ => None,
+                };
+            }
             Some(Overlay::RevertConfirm {
                 scope, fingerprint, ..
             }) => {
@@ -1377,13 +1528,38 @@ impl App {
                     _ => None,
                 };
             }
+            Some(Overlay::AgentConfirm { preset, task, .. }) => {
+                return match key.code {
+                    KeyCode::Char('y') => {
+                        let action = Action::StartAgent {
+                            preset: preset.clone(),
+                            task: task.clone(),
+                        };
+                        self.overlay = None;
+                        self.composer.clear();
+                        Some(action)
+                    }
+                    KeyCode::Char('n') | KeyCode::Esc => {
+                        self.overlay = None;
+                        None
+                    }
+                    _ => None,
+                };
+            }
             Some(Overlay::ExitConfirm { .. }) => return self.on_exit_confirm_key(key),
             None => {}
         }
 
         match (key.code, key.modifiers) {
-            // Tab has no region-focus meaning. Outside command completion it
-            // deliberately does nothing and leaves the composer ready.
+            // At the empty idle point of action, Tab cycles only the
+            // configured root-agent modes. Overlay-specific Tab behavior was
+            // handled above and a non-empty draft is never changed.
+            (KeyCode::Tab, _) if !self.is_busy() && self.composer.is_empty() => {
+                self.cycle_agent_mode(false)
+            }
+            (KeyCode::BackTab, _) if !self.is_busy() && self.composer.is_empty() => {
+                self.cycle_agent_mode(true)
+            }
             (KeyCode::Tab | KeyCode::BackTab, _) => None,
             (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
                 let original = self.composer.text().to_owned();
@@ -1514,6 +1690,20 @@ impl App {
     }
 
     fn on_resource_picker_key(&mut self, key: KeyEvent) -> Option<Action> {
+        if key.code == KeyCode::Char('@')
+            && matches!(
+                self.overlay,
+                Some(Overlay::ResourcePicker {
+                    target: ResourceTarget::Reference,
+                    ref picker,
+                    ..
+                }) if picker.query.is_empty()
+            )
+        {
+            self.overlay = None;
+            self.composer.insert_str("@@");
+            return None;
+        }
         let outcome = match &mut self.overlay {
             Some(Overlay::ResourcePicker { picker, .. }) => picker.on_key(key),
             _ => return None,
@@ -1522,8 +1712,11 @@ impl App {
             PickerOutcome::Pending => None,
             PickerOutcome::Cancelled => {
                 if let Some(Overlay::ResourcePicker {
-                    restore_on_escape, ..
+                    target,
+                    restore_on_escape,
+                    ..
                 }) = self.overlay.take()
+                    && target != ResourceTarget::Reference
                 {
                     self.composer.replace(restore_on_escape);
                 }
@@ -1556,6 +1749,7 @@ impl App {
             ResourceTarget::Provider => "Choose provider",
             ResourceTarget::Profile => "Choose profile",
             ResourceTarget::Resume => "Resume session",
+            ResourceTarget::Reference => "Attach file or invoke agent",
         };
         let mut picker = ResourcePicker::new(title, entries, empty_guidance);
         if let Some(query) = initial_query {
@@ -1586,6 +1780,19 @@ impl App {
                 self.resources.sessions.clone(),
                 "Nothing to resume for this project · use /new",
             ),
+            ResourceTarget::Reference => {
+                let entries = self
+                    .resources
+                    .child_agents
+                    .iter()
+                    .chain(&self.resources.files)
+                    .cloned()
+                    .collect();
+                (
+                    entries,
+                    "No matching file or child preset in the bounded local index",
+                )
+            }
         };
         self.open_resource_picker(target, entries, guidance, restore, None);
     }
@@ -1643,7 +1850,63 @@ impl App {
                     Some(Action::Reconfigure(PaletteCommand::Resume(id)))
                 }
             }
+            ResourceTarget::Reference => {
+                let selected = id
+                    .strip_prefix("file:")
+                    .map(|identity| ("file", identity))
+                    .or_else(|| {
+                        id.strip_prefix("agent:")
+                            .map(|identity| ("agent", identity))
+                    });
+                match selected {
+                    Some((kind, identity)) => {
+                        let collides = self
+                            .resources
+                            .files
+                            .iter()
+                            .any(|entry| entry.id.strip_prefix("file:") == Some(identity))
+                            && self
+                                .resources
+                                .child_agents
+                                .iter()
+                                .any(|entry| entry.id.strip_prefix("agent:") == Some(identity));
+                        if collides {
+                            self.composer.insert_str(&format!("@{kind}:{identity} "));
+                        } else {
+                            self.composer.insert_str(&format!("@{identity} "));
+                        }
+                    }
+                    None => self
+                        .transcript
+                        .push_error("reference picker returned an invalid typed identity"),
+                }
+                None
+            }
         }
+    }
+
+    fn cycle_agent_mode(&mut self, backwards: bool) -> Option<Action> {
+        let selectable = self
+            .resources
+            .agent_modes
+            .iter()
+            .filter(|entry| entry.disabled_reason.is_none())
+            .collect::<Vec<_>>();
+        if selectable.len() < 2 {
+            return None;
+        }
+        let current = selectable
+            .iter()
+            .position(|entry| entry.active)
+            .unwrap_or(0);
+        let next = if backwards {
+            current.checked_sub(1).unwrap_or(selectable.len() - 1)
+        } else {
+            (current + 1) % selectable.len()
+        };
+        Some(Action::Reconfigure(PaletteCommand::Agent(
+            selectable[next].id.clone(),
+        )))
     }
 
     fn apply_model_id(&mut self, id: &str) -> Option<Action> {
@@ -1861,6 +2124,31 @@ impl App {
                     self.follow_newest();
                     return Some(Action::Send(literal));
                 }
+                // `!!…` is the literal escape for a provider prompt beginning
+                // with `!`; one marker is removed and no local process starts.
+                if let Some(literal) = text.strip_prefix("!!") {
+                    let literal = format!("!{literal}");
+                    self.composer.clear();
+                    self.transcript.push_user(&literal);
+                    self.follow_newest();
+                    return Some(Action::Send(literal));
+                }
+                // One leading marker is an explicit local prepared shell
+                // action. Keep the draft on validation failure so no command
+                // disappears before it has been accepted.
+                if let Some(command) = text.strip_prefix('!') {
+                    let command = command.trim();
+                    if command.is_empty() {
+                        self.transcript
+                            .push_error("a shell shortcut requires a command after `!`");
+                        return None;
+                    }
+                    let command = command.to_owned();
+                    self.composer.clear();
+                    self.transcript.push_notice("shell", format!("$ {command}"));
+                    self.follow_newest();
+                    return Some(Action::RunShell { command });
+                }
                 // `/…` is a local command and never reaches the provider.
                 if text.starts_with('/') {
                     self.follow_newest();
@@ -1872,10 +2160,93 @@ impl App {
                         }
                     };
                 }
+                let files = self
+                    .resources
+                    .files
+                    .iter()
+                    .filter_map(|entry| entry.id.strip_prefix("file:"))
+                    .map(str::to_owned)
+                    .collect();
+                let agents = self
+                    .resources
+                    .child_agents
+                    .iter()
+                    .filter_map(|entry| entry.id.strip_prefix("agent:"))
+                    .map(str::to_owned)
+                    .collect();
+                let parsed = match parse_references(&text, &files, &agents) {
+                    Ok(parsed) => parsed,
+                    Err(error) => {
+                        self.transcript.push_error(error);
+                        return None;
+                    }
+                };
+                let attached_files = parsed
+                    .references
+                    .iter()
+                    .filter_map(|reference| match reference {
+                        ComposerReference::File(path) => Some(path.clone()),
+                        ComposerReference::Agent(_) => None,
+                    })
+                    .collect::<Vec<_>>();
+                let referenced_agents = parsed
+                    .references
+                    .iter()
+                    .filter_map(|reference| match reference {
+                        ComposerReference::Agent(agent) => Some(agent.clone()),
+                        ComposerReference::File(_) => None,
+                    })
+                    .collect::<Vec<_>>();
+                if let Some(preset) = referenced_agents.first() {
+                    let trimmed = parsed.text.trim_start();
+                    let plain = format!("@{preset}");
+                    let typed = format!("@agent:{preset}");
+                    let task = trimmed
+                        .strip_prefix(&typed)
+                        .or_else(|| trimmed.strip_prefix(&plain));
+                    let Some(task) = task else {
+                        self.transcript.push_error(
+                            "a child preset must be the first token, for example `@review inspect the diff`",
+                        );
+                        return None;
+                    };
+                    if referenced_agents.len() != 1 || !attached_files.is_empty() {
+                        self.transcript.push_error(
+                            "one explicit child preset must be submitted without file attachments",
+                        );
+                        return None;
+                    }
+                    let task = task.trim();
+                    if task.is_empty() {
+                        self.transcript.push_error(format!(
+                            "`@{preset}` requires a bounded task after the preset name"
+                        ));
+                        return None;
+                    }
+                    let model = match &self.status.provider {
+                        Some(provider) => format!("{provider}/{}", self.status.model),
+                        None => self.status.model.clone(),
+                    };
+                    self.overlay = Some(Overlay::AgentConfirm {
+                        preset: preset.clone(),
+                        task: task.to_owned(),
+                        content: format!(
+                            "preset: {preset}\nprovider/model: {model}\nworkspace: read-only\nturn limit: 1\nprovider spend: yes\nresult: bounded child summary"
+                        ),
+                    });
+                    return None;
+                }
                 self.composer.clear();
-                self.transcript.push_user(&text);
+                self.transcript.push_user(&parsed.text);
                 self.follow_newest();
-                Some(Action::Send(text))
+                if attached_files.is_empty() {
+                    Some(Action::Send(parsed.text))
+                } else {
+                    Some(Action::SendWithFiles {
+                        text: parsed.text,
+                        files: attached_files,
+                    })
+                }
             }
             (KeyCode::Backspace, _) => {
                 self.composer.backspace();
@@ -1902,6 +2273,11 @@ impl App {
                 None
             }
             (KeyCode::Char(ch), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
+                if ch == '@' && self.composer_at_token_boundary() {
+                    let restore = self.composer.text().to_owned();
+                    self.open_target_picker(ResourceTarget::Reference, restore);
+                    return None;
+                }
                 self.composer.insert(ch);
                 if self.composer.text().starts_with('/') {
                     self.overlay = Some(Overlay::Palette {
@@ -1916,12 +2292,28 @@ impl App {
         }
     }
 
+    fn composer_at_token_boundary(&self) -> bool {
+        let cursor = self.composer.cursor();
+        cursor == 0
+            || self
+                .composer
+                .text()
+                .chars()
+                .nth(cursor.saturating_sub(1))
+                .is_some_and(|character| {
+                    character.is_whitespace()
+                        || matches!(character, '(' | '[' | '{' | ',' | ';' | ':')
+                })
+    }
+
     fn dispatch_command(&mut self, command: CommandAction) -> Option<Action> {
         let Some(spec) = commands::COMMANDS.iter().find(|spec| {
             let name = match &command {
                 CommandAction::Help => "help",
                 CommandAction::Status => "status",
                 CommandAction::Context => "context",
+                CommandAction::Details => "details",
+                CommandAction::Timeline => "timeline",
                 CommandAction::NewSession => "new",
                 CommandAction::Resume(_) => "resume",
                 CommandAction::Profile(_) => "profile",
@@ -1931,6 +2323,7 @@ impl App {
                 CommandAction::Diff(_) => "diff",
                 CommandAction::Review(_) => "review",
                 CommandAction::Undo => "undo",
+                CommandAction::Redo => "redo",
                 CommandAction::Revert(_) => "revert",
                 CommandAction::Quit => "quit",
             };
@@ -1957,6 +2350,19 @@ impl App {
             CommandAction::Help => {
                 self.composer.clear();
                 self.show_local_result("help", commands::help());
+                None
+            }
+            CommandAction::Details => {
+                self.composer.clear();
+                self.toggle_work_details();
+                self.transcript.push_notice(
+                    "details",
+                    if self.work_details {
+                        "bounded work details shown"
+                    } else {
+                        "bounded work details hidden"
+                    },
+                );
                 None
             }
             CommandAction::Quit => {
@@ -2140,6 +2546,13 @@ impl App {
         });
     }
 
+    /// Shows an exact redo preview with no default action.
+    pub fn confirm_redo(&mut self, content: impl Into<String>) {
+        self.overlay = Some(Overlay::RedoConfirm {
+            content: content.into(),
+        });
+    }
+
     /// Shows an exact selective-revert preview with no default action.
     pub fn confirm_revert(
         &mut self,
@@ -2271,6 +2684,7 @@ mod tests {
                 "2 turns · local/model-2",
             )],
             current_session: Some("current-session".into()),
+            ..RuntimeResources::default()
         });
         app
     }
@@ -3148,7 +3562,7 @@ mod tests {
             visible_output: true,
         }));
 
-        assert_eq!(app.transcript.len(), 2);
+        assert_eq!(app.transcript.len(), 3);
         assert_eq!(
             app.transcript.blocks()[0],
             Block::Assistant {
@@ -3157,7 +3571,7 @@ mod tests {
             }
         );
         assert!(matches!(
-            &app.transcript.blocks()[1],
+            &app.transcript.blocks()[2],
             Block::Notice { source, text }
                 if source == "turn" && text.starts_with("completed in ")
         ));
@@ -3555,11 +3969,13 @@ mod tests {
                             id: "inspect".to_owned(),
                             text: "Inspect state".to_owned(),
                             status: PlanItemStatus::Completed,
+                            reason: None,
                         },
                         PlanItemProjection {
                             id: "verify".to_owned(),
                             text: "Verify replay".to_owned(),
                             status: PlanItemStatus::InProgress,
+                            reason: None,
                         },
                     ]),
                 },
@@ -3754,6 +4170,134 @@ mod tests {
         assert_eq!(app.composer.text(), "/status");
     }
 
+    fn agent_first_app() -> App {
+        let mut app = app();
+        app.status.switch_model(Some("zai".to_owned()), "glm-5.2");
+        app.status.set_agent("build");
+        app.set_resources(RuntimeResources {
+            files: vec![ResourceEntry::new(
+                "file:src/lib.rs",
+                "@src/lib.rs",
+                "file · 42 bytes",
+            )],
+            child_agents: vec![ResourceEntry::new(
+                "agent:review",
+                "@review",
+                "agent · read-only child preset",
+            )],
+            agent_modes: vec![
+                ResourceEntry::new("build", "build", "coding").active(true),
+                ResourceEntry::new("plan", "plan", "read-only planning"),
+                ResourceEntry::new("review", "review", "read-only review"),
+            ],
+            ..app.resources.clone()
+        });
+        app
+    }
+
+    #[test]
+    fn tab_cycles_only_an_empty_idle_root_agent() {
+        let mut app = agent_first_app();
+        assert_eq!(
+            app.on_key(key(KeyCode::Tab)),
+            Some(Action::Reconfigure(PaletteCommand::Agent(
+                "plan".to_owned()
+            )))
+        );
+
+        type_text(&mut app, "draft");
+        assert_eq!(app.on_key(key(KeyCode::Tab)), None);
+        assert_eq!(app.composer.text(), "draft");
+
+        app.composer.clear();
+        assert_eq!(
+            app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)),
+            Some(Action::Reconfigure(PaletteCommand::Agent(
+                "review".to_owned()
+            )))
+        );
+
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        assert_eq!(app.on_key(key(KeyCode::Tab)), None);
+    }
+
+    #[test]
+    fn file_reference_submission_is_typed_and_unresolved_drafts_fail_locally() {
+        let mut app = agent_first_app();
+        app.composer.replace("inspect @src/lib.rs");
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Some(Action::SendWithFiles {
+                text: "inspect @src/lib.rs".to_owned(),
+                files: vec!["src/lib.rs".to_owned()],
+            })
+        );
+
+        let mut unresolved = agent_first_app();
+        unresolved.composer.replace("inspect @missing.rs");
+        assert_eq!(unresolved.on_key(key(KeyCode::Enter)), None);
+        assert_eq!(unresolved.composer.text(), "inspect @missing.rs");
+        assert!(unresolved.transcript.blocks().iter().any(|block| matches!(
+            block,
+            Block::Error { message } if message.contains("unresolved reference")
+        )));
+    }
+
+    #[test]
+    fn at_escape_and_shell_escape_are_provider_prompts() {
+        let mut at = agent_first_app();
+        at.on_key(key(KeyCode::Char('@')));
+        assert!(matches!(at.overlay, Some(Overlay::ResourcePicker { .. })));
+        at.on_key(key(KeyCode::Char('@')));
+        type_text(&mut at, "owner please");
+        assert_eq!(
+            at.on_key(key(KeyCode::Enter)),
+            Some(Action::Send("@owner please".to_owned()))
+        );
+
+        let mut shell = agent_first_app();
+        shell.composer.replace("!cargo test --workspace");
+        assert_eq!(
+            shell.on_key(key(KeyCode::Enter)),
+            Some(Action::RunShell {
+                command: "cargo test --workspace".to_owned(),
+            })
+        );
+
+        let mut literal_shell = agent_first_app();
+        literal_shell.composer.replace("!!explain shell syntax");
+        assert_eq!(
+            literal_shell.on_key(key(KeyCode::Enter)),
+            Some(Action::Send("!explain shell syntax".to_owned()))
+        );
+    }
+
+    #[test]
+    fn explicit_child_requires_non_default_spend_confirmation() {
+        let mut app = agent_first_app();
+        app.composer.replace("@review inspect the diff");
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert!(matches!(
+            app.overlay,
+            Some(Overlay::AgentConfirm { ref preset, ref task, ref content })
+                if preset == "review"
+                    && task == "inspect the diff"
+                    && content.contains("zai/glm-5.2")
+                    && content.contains("read-only")
+                    && content.contains("provider spend: yes")
+        ));
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert!(matches!(app.overlay, Some(Overlay::AgentConfirm { .. })));
+        assert_eq!(
+            app.on_key(key(KeyCode::Char('y'))),
+            Some(Action::StartAgent {
+                preset: "review".to_owned(),
+                task: "inspect the diff".to_owned(),
+            })
+        );
+        assert!(app.composer.is_empty());
+    }
+
     #[test]
     fn slash_and_ctrl_p_open_the_same_filtered_registry() {
         let mut slash = app();
@@ -3913,41 +4457,48 @@ mod tests {
                     id: "inspect".to_owned(),
                     text: "Inspect\nrelevant code".to_owned(),
                     status: PlanItemStatus::Completed,
+                    reason: None,
                 },
                 PlanItemProjection {
                     id: "change".to_owned(),
                     text: "Implement the change".to_owned(),
                     status: PlanItemStatus::InProgress,
+                    reason: None,
                 },
                 PlanItemProjection {
                     id: "verify".to_owned(),
                     text: "Run focused tests".to_owned(),
                     status: PlanItemStatus::Pending,
+                    reason: None,
                 },
             ]),
         });
         let mut live = app();
+        live.apply(&event(RuntimeEvent::TurnStarted));
         live.apply(&update);
         let mut replayed = app();
+        replayed.apply(&event(RuntimeEvent::TurnStarted));
         replayed.apply(&update);
 
         assert_eq!(live.plan, replayed.plan);
         assert_eq!(live.transcript.blocks(), replayed.transcript.blocks());
-        assert!(live.transcript.blocks().iter().any(|block| matches!(
-            block,
-            Block::Notice { source, text }
-                if source == "plan"
-                    && text == "revision 3 · 1 active · 1 pending · 1 done · 0 cancelled\n\
-                               [x] inspect — Inspect relevant code\n\
-                               [>] change — Implement the change\n\
-                               [ ] verify — Run focused tests"
-        )));
+        let lines = live.work_summary_lines();
+        assert!(lines[0].contains("plan 1 active/1 pending/1 done/0 cancelled"));
+        assert!(
+            !live
+                .transcript
+                .blocks()
+                .iter()
+                .any(|block| matches!(block, Block::Notice { source, .. } if source == "plan")),
+            "plan updates must replace one work row instead of appending notices"
+        );
     }
 
     #[test]
     fn sensitive_todo_update_displays_counts_without_item_text() {
         const PROTECTED_ITEM: &str = "PROTECTED PLAN CONTENT";
         let mut app = app();
+        app.apply(&event(RuntimeEvent::TurnStarted));
         app.apply(&event(RuntimeEvent::PlanUpdated {
             revision: 1,
             sensitivity: PlanSensitivity::Sensitive,
@@ -3961,6 +4512,7 @@ mod tests {
                 id: "protected".to_owned(),
                 text: PROTECTED_ITEM.to_owned(),
                 status: PlanItemStatus::Pending,
+                reason: None,
             }]),
         }));
 
@@ -3970,12 +4522,7 @@ mod tests {
             plan.items.is_none(),
             "sensitive item text survived the reducer seam"
         );
-        assert!(app.transcript.blocks().iter().any(|block| matches!(
-            block,
-            Block::Notice { source, text }
-                if source == "plan"
-                    && text == "revision 1 · 0 active · 2 pending · 0 done · 1 cancelled"
-        )));
+        assert!(app.work_summary_lines()[0].contains("plan 0 active/2 pending/0 done/1 cancelled"));
         assert!(!format!("{:?}", app.transcript.blocks()).contains(PROTECTED_ITEM));
     }
 

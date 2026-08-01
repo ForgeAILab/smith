@@ -36,6 +36,7 @@ use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use smith_config::catalog::CatalogSnapshot;
 use smith_config::credential::{CredentialResolver, Environment, Keychain, KeychainError};
+use smith_config::model::AgentPosture;
 use smith_config::resolve::{Layer, ResolveRequest, ResolvedConfig, resolve};
 use smith_config::trust::TrustStatus;
 use smith_runtime::factory::{self, FactoryError, HostSurface, RuntimeRequest};
@@ -485,9 +486,13 @@ async fn a_resolved_fake_configuration_builds_a_runtime_and_runs_a_turn() {
     );
     assert_eq!(
         policy.system_prompt,
-        smith_runtime::prompt::legacy_system_prompt(
-            &smith_runtime::prompt::DynamicPromptContext::default()
-        )
+        smith_runtime::prompt::legacy_system_prompt(&smith_runtime::prompt::DynamicPromptContext {
+            agent_mode: Some(smith_runtime::prompt::AgentModePrompt {
+                name: "build".into(),
+                posture: AgentPosture::Build,
+            }),
+            ..smith_runtime::prompt::DynamicPromptContext::default()
+        })
     );
     assert_eq!(
         policy.tools,
@@ -541,6 +546,30 @@ async fn a_resolved_fake_configuration_builds_a_runtime_and_runs_a_turn() {
         "the turn produced no assistant answer"
     );
     session.shutdown().await.expect("a clean shutdown");
+}
+
+#[tokio::test]
+async fn plan_mode_narrows_the_live_tool_view_and_child_factory() {
+    let config = format!("default_agent = \"plan\"\n{FAKE_CONFIG}");
+    let fixture = Fixture::new(&config);
+    let smith = factory::build(request(&fixture, HostSurface::Terminal))
+        .await
+        .expect("a plan-mode runtime");
+
+    assert_eq!(smith.policy().agent_mode, "plan");
+    assert_eq!(smith.policy().agent_posture, AgentPosture::Plan);
+    assert_eq!(
+        smith.policy().tools,
+        ["read", "list", "search", "ask_user", "write_todos", "agent"]
+    );
+    assert!(!smith.abilities().names().contains(&"edit"));
+    assert!(!smith.abilities().names().contains(&"shell"));
+    assert!(
+        smith
+            .policy()
+            .system_prompt
+            .contains("This mode is read-only")
+    );
 }
 
 async fn provider_tool_names_for(fixture: &Fixture, user_input: &str) -> Vec<String> {
@@ -601,12 +630,10 @@ async fn explicit_read_tool_routing_does_not_substitute_edit() {
     )
     .await;
 
-    assert!(names.iter().any(|name| name == "read"), "{names:?}");
-    assert!(
-        names
-            .iter()
-            .all(|name| matches!(name.as_str(), "read" | "registry.search")),
-        "explicit read intent received another capability: {names:?}"
+    assert_eq!(
+        names,
+        ["list", "read", "registry.search", "search"],
+        "explicit inspection must receive the complete bounded read bundle"
     );
 }
 
@@ -619,12 +646,10 @@ async fn live_routing_advertises_exact_edit_without_broad_shell_or_delegation() 
     )
     .await;
 
-    assert!(names.iter().any(|name| name == "edit"), "{names:?}");
-    assert!(
-        names
-            .iter()
-            .all(|name| matches!(name.as_str(), "edit" | "registry.search")),
-        "ordinary editing intent received a broader tool surface: {names:?}"
+    assert_eq!(
+        names,
+        ["edit", "read", "registry.search"],
+        "ordinary editing must pair exact edit with the least-authority read prerequisite"
     );
 }
 
@@ -688,11 +713,10 @@ async fn protected_registry_search_stages_edit_only_for_the_next_provider_bounda
         second.contains(&"edit"),
         "the staged mutation ability missed the next safe boundary: {second:?}"
     );
-    assert!(
-        second
-            .iter()
-            .all(|name| matches!(*name, "edit" | "registry.search")),
-        "capability search staged a broader surface than requested: {second:?}"
+    assert_eq!(
+        second,
+        ["edit", "read", "registry.search"],
+        "capability search must stage exact edit and its read prerequisite only"
     );
 }
 
@@ -774,7 +798,13 @@ async fn provider_planning_records_every_versioned_smith_prompt_fragment() {
         .await
         .expect("the turn runs");
 
-    let expected = smith_runtime::prompt::stable_fragments();
+    let expected = smith_runtime::prompt::fragments(&smith_runtime::prompt::DynamicPromptContext {
+        agent_mode: Some(smith_runtime::prompt::AgentModePrompt {
+            name: "build".to_owned(),
+            posture: AgentPosture::Build,
+        }),
+        ..smith_runtime::prompt::DynamicPromptContext::default()
+    });
     let snapshot = session.snapshot();
     let manifest = snapshot.manifests.last().expect("a run manifest");
     let smith_segments = manifest

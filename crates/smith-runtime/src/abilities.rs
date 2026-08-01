@@ -108,14 +108,87 @@ impl ActivationHandle for SmithToolAbility {
 
 fn keywords(name: &str) -> Vec<&'static str> {
     match name {
-        "read" => vec!["read", "inspect", "file", "source"],
-        "list" => vec!["list", "browse", "directory", "files"],
-        "search" => vec!["search", "find", "text", "repository"],
-        "edit" => vec!["edit", "replace", "create", "modify", "patch", "write"],
-        "shell" => vec!["shell", "command", "test", "build"],
-        AGENT_TOOL_NAME => vec!["agent", "delegate", "sub-agent", "task"],
+        "read" => vec![
+            "read",
+            "inspect",
+            "examine",
+            "open",
+            "file",
+            "source",
+            "repository",
+            "review",
+        ],
+        "list" => vec![
+            "list",
+            "browse",
+            "tree",
+            "directory",
+            "files",
+            "repository",
+            "inspect",
+            "review",
+        ],
+        "search" => vec![
+            "search",
+            "find",
+            "locate",
+            "grep",
+            "symbol",
+            "usages",
+            "text",
+            "repository",
+            "inspect",
+            "review",
+        ],
+        "edit" => vec![
+            "edit",
+            "fix",
+            "implement",
+            "replace",
+            "create",
+            "change",
+            "update",
+            "refactor",
+            "modify",
+            "patch",
+            "write",
+        ],
+        "shell" => vec![
+            "shell",
+            "command",
+            "run",
+            "test",
+            "tests",
+            "cargo",
+            "compile",
+            "check",
+            "verify",
+            "validation",
+            "benchmark",
+            "build",
+        ],
+        AGENT_TOOL_NAME => vec![
+            "agent",
+            "delegate",
+            "delegation",
+            "sub-agent",
+            "subagent",
+            "reviewer",
+            "review",
+            "parallel",
+            "investigate",
+        ],
         QUESTIONNAIRE_TOOL_NAME => vec!["ask", "question", "clarify", "choice", "user"],
-        WRITE_TODOS_TOOL_NAME => vec!["plan", "todo", "multi-step", "track"],
+        WRITE_TODOS_TOOL_NAME => vec![
+            "plan",
+            "todo",
+            "todos",
+            "steps",
+            "multi-step",
+            "workflow",
+            "track",
+            "review",
+        ],
         ARTIFACT_READ_TOOL_NAME => vec!["artifact", "read", "output", "page"],
         _ => Vec::new(),
     }
@@ -123,7 +196,7 @@ fn keywords(name: &str) -> Vec<&'static str> {
 
 fn affordances(name: &str, permissions: &[Permission]) -> Vec<&'static str> {
     let mut values = match name {
-        "read" => vec!["file-read"],
+        "read" => vec!["file-content-read", "file-read"],
         "list" => vec!["directory-list", "file-read"],
         "search" => vec!["file-search", "file-read"],
         "edit" => vec!["file-edit", "file-read", "file-write", "file-create"],
@@ -204,8 +277,20 @@ mod tests {
     }
 
     fn coding_view() -> agent_runtime::registry::RegistryView<AbilityDescriptor> {
+        view_for(six_tools())
+    }
+
+    fn workflow_view() -> agent_runtime::registry::RegistryView<AbilityDescriptor> {
+        let mut tools = six_tools();
+        tools.push(Arc::new(agent_runtime::harness::WriteTodosTool::new()));
+        view_for(tools)
+    }
+
+    fn view_for(
+        tools: Vec<Arc<dyn Tool>>,
+    ) -> agent_runtime::registry::RegistryView<AbilityDescriptor> {
         let catalog = seal_tool_abilities(
-            six_tools()
+            tools
                 .into_iter()
                 .map(|tool| (tool, RegistrySource::BuiltIn)),
         )
@@ -221,9 +306,16 @@ mod tests {
     }
 
     fn selected(query: &str) -> BTreeSet<agent_runtime::registry::RegistryId> {
+        selected_from(&coding_view(), query)
+    }
+
+    fn selected_from(
+        view: &agent_runtime::registry::RegistryView<AbilityDescriptor>,
+        query: &str,
+    ) -> BTreeSet<agent_runtime::registry::RegistryId> {
         CapabilityResolver::new()
             .pre_activate(
-                &coding_view(),
+                view,
                 &RoutingQuery::derive(query, Vec::<String>::new()),
                 ActivationBudget::new(16_000, 6),
             )
@@ -355,12 +447,12 @@ mod tests {
     #[test]
     fn read_only_intent_never_routes_to_mutation_or_delegation() {
         let selected = selected("inspect and explain the Rust source files in this repository");
-        assert!(
-            selected.contains(&agent_runtime::registry::RegistryId::tool("read"))
-                || selected.contains(&agent_runtime::registry::RegistryId::tool("search"))
-                || selected.contains(&agent_runtime::registry::RegistryId::tool("list")),
-            "read intent selected no read capability: {selected:?}"
-        );
+        for expected in ["read", "list", "search"] {
+            assert!(
+                selected.contains(&agent_runtime::registry::RegistryId::tool(expected)),
+                "inspection intent omitted `{expected}`: {selected:?}"
+            );
+        }
         for forbidden in ["edit", "shell", "agent"] {
             assert!(
                 !selected.contains(&agent_runtime::registry::RegistryId::tool(forbidden)),
@@ -388,7 +480,7 @@ mod tests {
 
     #[test]
     fn editing_intent_selects_exact_edit_without_broad_shell_or_delegation() {
-        let selected = selected("edit the Rust file and replace the incorrect function");
+        let selected = selected("fix the incorrect Rust function");
         assert!(
             selected.contains(&agent_runtime::registry::RegistryId::tool("edit")),
             "editing intent did not activate edit: {selected:?}"
@@ -397,6 +489,35 @@ mod tests {
             assert!(
                 !selected.contains(&agent_runtime::registry::RegistryId::tool(forbidden)),
                 "ordinary edit intent activated broad `{forbidden}`: {selected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn shell_requires_explicit_command_build_or_test_intent() {
+        let ordinary_edit = selected("fix the scheduler race and update its state transition");
+        assert!(
+            !ordinary_edit.contains(&agent_runtime::registry::RegistryId::tool("shell")),
+            "ordinary editing activated broad shell: {ordinary_edit:?}"
+        );
+
+        let validation = selected("run cargo tests and verify the build");
+        assert!(
+            validation.contains(&agent_runtime::registry::RegistryId::tool("shell")),
+            "explicit validation intent omitted shell: {validation:?}"
+        );
+    }
+
+    #[test]
+    fn review_workflow_activates_plan_tracking_and_delegation() {
+        let selected = selected_from(
+            &workflow_view(),
+            "review this multi-step change with an independent reviewer and track the plan",
+        );
+        for expected in [WRITE_TODOS_TOOL_NAME, AGENT_TOOL_NAME] {
+            assert!(
+                selected.contains(&agent_runtime::registry::RegistryId::tool(expected)),
+                "review workflow omitted `{expected}`: {selected:?}"
             );
         }
     }

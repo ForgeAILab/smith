@@ -273,6 +273,8 @@ impl Activity {
 /// The header's model of session status.
 #[derive(Debug, Clone)]
 pub struct Status {
+    /// Active host-owned root-agent mode.
+    pub agent: String,
     /// The serving provider's name, once resolved.
     pub provider: Option<String>,
     /// The model in use.
@@ -297,6 +299,7 @@ impl Status {
     /// A status for a session that has not yet run a turn.
     pub fn new(model: impl Into<String>, project: impl Into<String>) -> Self {
         Self {
+            agent: "build".to_owned(),
             provider: None,
             model: model.into(),
             project: project.into(),
@@ -307,6 +310,11 @@ impl Status {
             activity: Activity::Idle,
             usage_reported: false,
         }
+    }
+
+    /// Sets the active root-agent mode shown at the point of action.
+    pub fn set_agent(&mut self, agent: impl Into<String>) {
+        self.agent = agent.into();
     }
 
     /// Folds a provider-reported usage delta into the running totals.

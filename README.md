@@ -70,10 +70,11 @@ configuration is reported as invalid and is never overwritten. Headless,
 piped, machine-output, session-list, and config-explain commands remain
 non-interactive and non-mutating.
 
-The first-run GLM path configures Z.AI's Coding Plan endpoint and `glm-4.7`,
-including Smith's versioned model limits and compatibility policy for providers
-that deliver a successful final answer only as reasoning content. Ongoing
-changes use the same reusable surface:
+The first-run GLM path configures Z.AI's Coding Plan endpoint and `glm-5.2`,
+including the verified 1M context/input limits, 131,072 model-output ceiling,
+Smith's 32,768 per-request output budget, and compatibility policy for
+providers that deliver a successful final answer only as reasoning content.
+Ongoing changes use the same reusable surface:
 
 ```sh
 smith setup
@@ -81,6 +82,7 @@ smith setup add-provider
 smith setup add-model
 smith setup add-model --provider openrouter
 smith setup credential --provider openrouter
+smith setup checkpoint-key
 ```
 
 The generic provider path asks for a stable provider name, OpenAI-compatible
@@ -116,6 +118,14 @@ unlock prompt fails with an `env:<VAR>` recovery hint instead of hanging.
 provider's credential source; it does not rewrite its endpoint, models,
 limits, profiles, or default.
 
+Checkpoint protection is configured separately. `smith setup checkpoint-key`
+offers owner-only inline storage, an environment-variable reference, or OS
+protected storage. Inline/environment choices never initialize Keychain or
+Secret Service, remain redacted in config explanation and journals, and keep
+the exact checkpoint authenticated-encrypted. Source changes refuse without
+modification while encrypted checkpoints exist, so old resumable state is
+never silently abandoned.
+
 Encrypted `file:` references are reserved for a future externally unlocked
 encrypted-store backend; Smith does not silently treat a plaintext file as
 encrypted storage. When rotating a key, revoke the old key at the provider,
@@ -140,7 +150,15 @@ max_input_tokens = 124000
 max_output_tokens = 4096
 ```
 
-Inside the idle TUI, `Ctrl+P` opens the command palette. `/model`, `/provider`,
+Inside the empty idle TUI, the footer identifies `build`, `plan`, or `review`
+beside provider/model and context confidence. `Tab` cycles modes only at that
+safe empty/idle boundary. `@` completes canonical workspace files and the
+read-only `explore`/`review` child presets; leading `!` runs the canonical
+prepared local-shell path without a provider request. `@@` and `!!` are the
+literal escapes. `/details`, `/timeline`, and `/redo` expose bounded live work,
+canonical session evidence, and exact recovery locally.
+
+`Ctrl+P` opens the command palette. `/model`, `/provider`,
 `/profile`, and `/resume` need no argument: each opens a searchable local list
 with current and unavailable states. Explicit values remain validated
 shortcuts. Model rows are always provider-qualified, so selecting a model
@@ -241,9 +259,9 @@ For a Z.AI Coding Plan account, export the API key as
 
 ```sh
 SMITH_LIVE_BASE_URL=https://api.z.ai/api/coding/paas/v4 \
-SMITH_LIVE_MODEL=glm-4.7 \
-SMITH_LIVE_CONTEXT_TOKENS=200000 \
-SMITH_LIVE_MAX_INPUT_TOKENS=196000 \
+SMITH_LIVE_MODEL=glm-5.2 \
+SMITH_LIVE_CONTEXT_TOKENS=1000000 \
+SMITH_LIVE_MAX_INPUT_TOKENS=1000000 \
 SMITH_LIVE_MAX_OUTPUT_TOKENS=131072 \
 cargo test --all-features -p smith-cli --test live_provider -- --ignored --nocapture
 ```

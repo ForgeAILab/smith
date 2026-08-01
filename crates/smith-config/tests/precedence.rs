@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use smith_config::inventory::local_inventory;
-use smith_config::model::{ApprovalMode, BackgroundExit};
+use smith_config::model::{AgentPosture, ApprovalMode, BackgroundExit};
 use smith_config::resolve::{
     ConfigError, Layer, Overrides, ReferenceKind, Resolution, ResolveRequest, SettingValue, resolve,
 };
@@ -655,6 +655,162 @@ api_key = "{SECRET}"
     ] {
         assert!(!rendered.contains(SECRET), "{rendered}");
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn checkpoint_key_sources_are_private_redacted_and_mutually_exclusive() {
+    const KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    let fixture = Fixture::new();
+    fixture.write_project(BASE_PROJECT_CONFIG);
+    fixture.write_private_user(&format!("[persistence]\ncheckpoint_key = \"{KEY}\"\n"));
+
+    let resolution = resolve(&fixture.request()).expect("an owner-only checkpoint key");
+    let key = resolution
+        .config
+        .persistence
+        .checkpoint_key
+        .as_ref()
+        .expect("the configured key");
+    assert_eq!(key.value.expose(), KEY);
+    assert_eq!(key.source.layer, Layer::UserFile);
+    let explanation = resolution
+        .provenance
+        .explain("persistence.checkpoint_key")
+        .expect("checkpoint-key provenance");
+    assert_eq!(explanation.value.to_string(), "[redacted]");
+    for rendered in [
+        format!("{resolution:?}"),
+        format!("{:?}", resolution.config),
+        format!("{explanation:?}"),
+    ] {
+        assert!(!rendered.contains(KEY), "{rendered}");
+    }
+
+    let mut env = BTreeMap::new();
+    env.insert("SMITH_CHECKPOINT_KEY".to_owned(), KEY.to_owned());
+    let env_resolution = resolve(&fixture.request().with_env(env.clone()))
+        .expect("the environment key overrides the inline value");
+    assert_eq!(
+        env_resolution
+            .config
+            .persistence
+            .checkpoint_key
+            .as_ref()
+            .expect("environment key")
+            .source
+            .layer,
+        Layer::Environment
+    );
+
+    fixture.write_private_user(
+        "[persistence]\ncheckpoint_key_credential = \"env:SMITH_CHECKPOINT_SECRET\"\n",
+    );
+    let error = resolve(&fixture.request().with_env(env))
+        .expect_err("direct and referenced checkpoint keys are mutually exclusive");
+    assert!(matches!(error, ConfigError::InvalidValue { .. }));
+    assert!(!error.to_string().contains(KEY), "{error}");
+}
+
+#[test]
+fn project_checkpoint_key_sources_are_rejected_before_use() {
+    const KEY: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    for setting in [
+        format!("checkpoint_key = \"{KEY}\""),
+        "checkpoint_key_credential = \"env:CHECKPOINT_KEY\"".to_owned(),
+    ] {
+        let fixture = Fixture::new();
+        fixture.write_project(&format!(
+            "{BASE_PROJECT_CONFIG}\n[persistence]\n{setting}\n"
+        ));
+        let error = resolve(&fixture.request()).expect_err("project-controlled checkpoint key");
+        assert!(matches!(error, ConfigError::InvalidValue { .. }));
+        assert!(!format!("{error:?} {error}").contains(KEY));
+    }
+}
+
+#[test]
+fn agent_modes_are_typed_ordered_and_child_presets_stay_read_only() {
+    let fixture = Fixture::new();
+    fixture.write_project(BASE_PROJECT_CONFIG);
+    fixture.write_user(
+        r#"
+default_agent = "plan"
+agent_order = ["plan", "build", "review"]
+
+[agent_modes.audit]
+posture = "review"
+description = "Evidence-only audit"
+
+[child_agents.inspect]
+posture = "plan"
+description = "Inspect without mutation"
+"#,
+    );
+    let resolution = resolve(&fixture.request()).expect("typed agent modes");
+    assert_eq!(resolution.config.agent.active.value, "plan");
+    assert_eq!(
+        resolution.config.agent.order.value,
+        ["plan", "build", "review"]
+    );
+    assert_eq!(resolution.config.agent.active_posture(), AgentPosture::Plan);
+    assert_eq!(
+        resolution.config.agent.modes["audit"].posture.value,
+        AgentPosture::Review
+    );
+    assert!(
+        resolution.config.agent.child_presets["inspect"]
+            .posture
+            .value
+            .is_read_only()
+    );
+
+    fixture.write_user(
+        r#"
+[child_agents.unsafe]
+posture = "build"
+"#,
+    );
+    let error = resolve(&fixture.request()).expect_err("a write-capable child preset");
+    assert!(
+        error.to_string().contains("must use a read-only"),
+        "{error}"
+    );
+}
+
+#[test]
+fn glm_5_2_gets_a_source_explainable_32768_request_budget() {
+    let resolution = resolve_project(
+        r#"
+default_profile = "glm"
+
+[profiles.glm]
+provider = "zai"
+model = "glm-5.2"
+
+[providers.zai]
+kind = "openai-compatible"
+base_url = "https://api.z.ai/api/coding/paas/v4"
+credential = "env:ZAI_API_KEY"
+"#,
+    )
+    .expect("a cataloged GLM-5.2 selection");
+    assert_eq!(
+        resolution
+            .config
+            .max_output_tokens
+            .as_ref()
+            .expect("product request budget")
+            .value,
+        32_768
+    );
+    let explanation = resolution
+        .provenance
+        .explain("max_output_tokens")
+        .expect("request-budget provenance");
+    assert_eq!(explanation.source.layer, Layer::BuiltIn);
+    assert!(explanation.source.key.contains("glm-5.2"));
+    assert!(explanation.source.key.contains("request_output_tokens"));
 }
 
 #[cfg(unix)]
