@@ -226,14 +226,11 @@ fn desired_todo_rows(app: &App) -> u16 {
 }
 
 fn hint_rows(app: &App) -> u16 {
-    if is_compact_interaction(app) { 2 } else { 1 }
+    if has_stacked_control_hint(app) { 2 } else { 1 }
 }
 
-fn is_compact_interaction(app: &App) -> bool {
-    matches!(
-        app.overlay,
-        Some(Overlay::Palette { .. } | Overlay::ResourcePicker { .. })
-    )
+fn has_stacked_control_hint(app: &App) -> bool {
+    matches!(app.overlay, Some(Overlay::ResourcePicker { .. }))
 }
 
 fn draw_too_small(frame: &mut Frame<'_>, area: Rect, theme: Theme) {
@@ -1086,9 +1083,7 @@ fn overlay_hint(app: &App) -> Option<String> {
                 format!("{answer} · tab actions · esc cancel · {queued} queued")
             })
         }
-        Some(Overlay::Palette { .. }) => {
-            Some("tab complete · ↑↓ select · enter run · esc close".to_owned())
-        }
+        Some(Overlay::Palette { .. }) => None,
         Some(Overlay::ResourcePicker { .. }) => {
             Some("type to filter · ↑↓ choose · enter confirm · esc cancel".to_owned())
         }
@@ -1112,7 +1107,7 @@ fn overlay_hint(app: &App) -> Option<String> {
 
 fn draw_hint(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
     if let Some(hint) = overlay_hint(app) {
-        if is_compact_interaction(app) && area.height > 1 {
+        if has_stacked_control_hint(app) && area.height > 1 {
             let [identity, controls] =
                 Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
             draw_identity_footer(frame, identity, app, theme);
@@ -2078,7 +2073,7 @@ mod tests {
     }
 
     #[test]
-    fn command_completion_renders_above_the_composer_without_color() {
+    fn command_completion_renders_above_the_composer_without_a_control_strip() {
         let mut app = App::new("gpt-5.3", "~/work/api");
         app.on_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
         for character in "bogus".chars() {
@@ -2093,13 +2088,46 @@ mod tests {
                 "no matching commands",
                 "› /bogus",
                 "unknown command",
-                "tab complete",
+                "gpt-5.3",
             ],
         );
+        assert!(!screen.contains("tab complete"), "{screen}");
+        assert!(!screen.contains("↑↓ select"), "{screen}");
+        assert!(!screen.contains("enter run"), "{screen}");
+        assert!(!screen.contains("esc close"), "{screen}");
         assert!(
             !screen.contains("command completion"),
             "the Codex-style completion list must not grow a modal title:\n{screen}"
         );
+    }
+
+    #[test]
+    fn command_completion_keeps_one_identity_footer_row_at_all_widths() {
+        for (width, height) in [(44, 14), (74, 24), (120, 32)] {
+            let mut app = App::new("gpt-5.3", "~/work/api");
+            app.on_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+
+            let screen = render(
+                &app,
+                width,
+                height,
+                Theme::new().without_color().without_motion(),
+            );
+            assert!(screen.contains("/help"), "{width}x{height}: {screen}");
+            assert!(
+                screen
+                    .lines()
+                    .last()
+                    .is_some_and(|line| line.contains("gpt-5.3")),
+                "{width}x{height}: {screen}"
+            );
+            assert!(
+                !screen.contains("tab complete"),
+                "{width}x{height}: {screen}"
+            );
+            assert!(!screen.contains("enter run"), "{width}x{height}: {screen}");
+            assert!(!screen.contains("esc close"), "{width}x{height}: {screen}");
+        }
     }
 
     #[test]

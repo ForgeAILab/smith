@@ -63,16 +63,17 @@ Regions, top to bottom:
 | Transcript | flex | Minimum 3 rows; below that Smith renders a size warning only. |
 | Anchored pane | 0–6 | A compact picker while one is open; otherwise the latest public plan. Hidden when neither exists. |
 | Composer | 3–10 | One-row vertical inset around 1–8 rows of input. |
-| Footer | 1–2 | Identity uses one row; a compact picker temporarily adds its controls on the second. |
+| Footer | 1–2 | Identity uses one row; resource pickers and prompts may add controls on the second. Slash completion does not. |
 
 Typing `/` opens command completion as a compact bottom-pane list directly
 above the fixed composer, following the same selected-row grammar as Codex.
 Local resource choices opened by `/model`, `/provider`, `/profile`, `/resume`,
 or `@` reuse that placement and show at most five matching rows; moving the
 selection scrolls the bounded window instead of expanding or covering the
-transcript. Opening a compact picker temporarily replaces the todo pane and
-adds one footer control row. Closing it restores the unchanged todo projection
-and one-row identity footer. Modal overlays are reserved for
+transcript. Any compact picker temporarily replaces the todo pane, but only a
+resource picker adds a footer control row. Slash completion relies on the
+established keyboard contract and keeps the one-row identity footer. Closing a
+picker restores the unchanged todo projection. Modal overlays are reserved for
 consequential interaction:
 approval, provider-spend confirmation, agent-originated questionnaires,
 undo/revert confirmation, and exit confirmation. They are centered, max 72
@@ -203,9 +204,10 @@ Rules:
 ## 5. Composer, commands, and keyboard
 
 The composer is the only persistent focus target. Transcript scrolling is
-global and never requires a focus mode. There is no hidden modal state: when a
-modal or temporary view is open, it owns input and names its controls in the
-hint row.
+global and never requires a focus mode. There is no hidden modal state: a
+modal or resource picker owns input and names its controls in the hint row.
+Slash completion is the deliberate quiet exception: its selected-row grammar
+and the keyboard contract below are sufficient, so it adds no control strip.
 
 | Key | Action |
 | --- | --- |
