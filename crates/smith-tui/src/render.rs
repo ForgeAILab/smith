@@ -7,6 +7,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use agent_runtime_core::clock::Deadline;
+use agent_runtime_core::event::{PlanItemStatus, PlanSensitivity};
 use agent_runtime_core::security::SecurityResource;
 use agent_runtime_core::tool::PreparedToolCall;
 use agent_runtime_registry::Permission;
@@ -20,7 +21,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::app::{App, Overlay};
 use crate::commands;
 use crate::diff::{Change, EditReview};
-use crate::picker::{ResourcePicker, draw_resource_picker};
+use crate::picker::{compact_resource_picker_rows, draw_compact_resource_picker};
 use crate::questionnaire::{QuestionnaireFocus, QuestionnaireState};
 use crate::status::{Activity, render_elapsed};
 use crate::theme::{Theme, Tone, glyph};
@@ -39,6 +40,9 @@ pub const MIN_HEIGHT: u16 = 10;
 /// A pathological argument blob would otherwise cost a `Line` per JSON line on
 /// every frame, and no terminal is tall enough to show them.
 const MAX_BODY_LINES: usize = 128;
+
+/// Maximum public todo items kept immediately above the composer.
+const MAX_VISIBLE_TODOS: usize = 5;
 
 /// Draws the whole client without changing application state.
 ///
@@ -78,34 +82,32 @@ fn draw_surface(
     }
 
     let composer_rows = composer_rows(app, area.width).saturating_add(2);
-    if let Some(Overlay::Palette {
-        selected, error, ..
-    }) = &app.overlay
-    {
-        let palette_rows = desired_palette_rows(app, error.as_deref())
-            .min(area.height.saturating_sub(composer_rows).saturating_sub(4));
-        let [transcript, composer, palette, hint] = Layout::vertical([
-            Constraint::Min(3),
-            Constraint::Length(composer_rows),
-            Constraint::Length(palette_rows),
-            Constraint::Length(hint_rows(app)),
-        ])
-        .areas(area);
-        draw_transcript(frame, transcript, app, theme, transcript_lines.take());
-        draw_composer(frame, composer, app, theme);
-        draw_palette(frame, palette, app, *selected, error.as_deref(), theme);
-        draw_hint(frame, hint, app, theme);
-    } else {
-        let [transcript, composer, hint] = Layout::vertical([
-            Constraint::Min(3),
-            Constraint::Length(composer_rows),
-            Constraint::Length(hint_rows(app)),
-        ])
-        .areas(area);
-        draw_transcript(frame, transcript, app, theme, transcript_lines.take());
-        draw_composer(frame, composer, app, theme);
-        draw_hint(frame, hint, app, theme);
+    let anchored = anchored_rows(app, area, composer_rows);
+    let [transcript, compact, todos, composer, hint] = Layout::vertical([
+        Constraint::Min(3),
+        Constraint::Length(anchored.compact),
+        Constraint::Length(anchored.todos),
+        Constraint::Length(composer_rows),
+        Constraint::Length(hint_rows(app)),
+    ])
+    .areas(area);
+    draw_transcript(frame, transcript, app, theme, transcript_lines.take());
+    if anchored.compact > 0 {
+        match &app.overlay {
+            Some(Overlay::Palette {
+                selected, error, ..
+            }) => draw_palette(frame, compact, app, *selected, error.as_deref(), theme),
+            Some(Overlay::ResourcePicker { picker, .. }) => {
+                draw_compact_resource_picker(frame, compact, picker, theme);
+            }
+            _ => unreachable!("compact rows require a compact interaction"),
+        }
     }
+    if anchored.todos > 0 {
+        draw_todos(frame, todos, app, theme);
+    }
+    draw_composer(frame, composer, app, theme);
+    draw_hint(frame, hint, app, theme);
 
     match &app.overlay {
         Some(Overlay::Approval { prompt, review }) => {
@@ -114,10 +116,7 @@ fn draw_surface(
         Some(Overlay::Questionnaire { state }) => {
             draw_questionnaire(frame, area, state, theme);
         }
-        Some(Overlay::Palette { .. }) => {}
-        Some(Overlay::ResourcePicker { picker, .. }) => {
-            draw_resource_picker(frame, resource_picker_area(area, picker), picker, theme);
-        }
+        Some(Overlay::Palette { .. } | Overlay::ResourcePicker { .. }) => {}
         Some(Overlay::UndoConfirm { content }) => {
             draw_recovery_confirm(frame, area, "undo last Smith turn", content, theme);
         }
@@ -172,34 +171,69 @@ fn draw_surface(
 
 fn transcript_area(area: Rect, app: &App) -> Rect {
     let composer_rows = composer_rows(app, area.width).saturating_add(2);
-    if let Some(Overlay::Palette { error, .. }) = &app.overlay {
-        let palette_rows = desired_palette_rows(app, error.as_deref())
-            .min(area.height.saturating_sub(composer_rows).saturating_sub(4));
-        let [transcript, _, _, _] = Layout::vertical([
-            Constraint::Min(3),
-            Constraint::Length(composer_rows),
-            Constraint::Length(palette_rows),
-            Constraint::Length(hint_rows(app)),
-        ])
-        .areas(area);
-        transcript
+    let anchored = anchored_rows(app, area, composer_rows);
+    let [transcript, _, _, _, _] = Layout::vertical([
+        Constraint::Min(3),
+        Constraint::Length(anchored.compact),
+        Constraint::Length(anchored.todos),
+        Constraint::Length(composer_rows),
+        Constraint::Length(hint_rows(app)),
+    ])
+    .areas(area);
+    transcript
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AnchoredRows {
+    compact: u16,
+    todos: u16,
+}
+
+fn anchored_rows(app: &App, area: Rect, composer_rows: u16) -> AnchoredRows {
+    let compact_desired = match &app.overlay {
+        Some(Overlay::Palette { error, .. }) => desired_palette_rows(app, error.as_deref()),
+        Some(Overlay::ResourcePicker { picker, .. }) => compact_resource_picker_rows(picker),
+        _ => 0,
+    };
+    let available = area
+        .height
+        .saturating_sub(composer_rows)
+        .saturating_sub(hint_rows(app))
+        .saturating_sub(3);
+    let todo_desired = desired_todo_rows(app);
+    let (compact, todos) = if compact_desired > 0 {
+        // Compact interactions temporarily own the anchored pane. The todo
+        // projection remains in App state and returns unchanged when the
+        // interaction closes.
+        (compact_desired.min(available), 0)
     } else {
-        let [transcript, _, _] = Layout::vertical([
-            Constraint::Min(3),
-            Constraint::Length(composer_rows),
-            Constraint::Length(hint_rows(app)),
-        ])
-        .areas(area);
-        transcript
+        (0, todo_desired.min(available))
+    };
+    AnchoredRows { compact, todos }
+}
+
+fn desired_todo_rows(app: &App) -> u16 {
+    let Some(plan) = &app.plan else {
+        return 0;
+    };
+    if plan.sensitivity != PlanSensitivity::Public {
+        return 0;
     }
+    let Some(items) = plan.items.as_ref().filter(|items| !items.is_empty()) else {
+        return 0;
+    };
+    u16::try_from(items.len().min(MAX_VISIBLE_TODOS).saturating_add(1)).unwrap_or(u16::MAX)
 }
 
 fn hint_rows(app: &App) -> u16 {
-    if app.overlay.is_none() && !app.is_busy() && app.composer.is_empty() {
-        2
-    } else {
-        1
-    }
+    if is_compact_interaction(app) { 2 } else { 1 }
+}
+
+fn is_compact_interaction(app: &App) -> bool {
+    matches!(
+        app.overlay,
+        Some(Overlay::Palette { .. } | Overlay::ResourcePicker { .. })
+    )
 }
 
 fn draw_too_small(frame: &mut Frame<'_>, area: Rect, theme: Theme) {
@@ -427,7 +461,7 @@ fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<'static>> {
             Activity::Interrupting => "Interrupting",
             Activity::Idle | Activity::Ended => unreachable!("activity was filtered above"),
         };
-        let summary = app.work_summary_lines();
+        let details = app.work_detail_lines();
         lines.push(Line::from(vec![
             Span::styled(
                 format!("{} ", theme.spinner(app.tick)),
@@ -440,7 +474,7 @@ fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<'static>> {
                     app.turn_elapsed()
                         .map(render_elapsed)
                         .unwrap_or_else(|| "?".to_owned()),
-                    summary
+                    details
                         .first()
                         .map(|line| format!(" · {line}"))
                         .unwrap_or_default(),
@@ -448,7 +482,7 @@ fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<'static>> {
                 theme.style(Tone::Reasoning),
             ),
         ]));
-        for detail in summary.iter().skip(1) {
+        for detail in details.iter().skip(1) {
             lines.push(Line::from(vec![
                 Span::styled("  ", theme.style(Tone::Dim)),
                 Span::styled(detail.clone(), theme.style(Tone::Reasoning)),
@@ -993,8 +1027,42 @@ fn draw_composer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
     }
 }
 
-fn draw_hint(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
-    if let Some(hint) = match &app.overlay {
+fn draw_todos(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
+    let Some(items) = app.plan.as_ref().and_then(|plan| plan.items.as_ref()) else {
+        return;
+    };
+    let capacity = usize::from(area.height).saturating_sub(1);
+    let mut lines = vec![Line::from(Span::styled(
+        "  Todo",
+        theme.style(Tone::Heading),
+    ))];
+    lines.extend(items.iter().take(capacity).map(|item| {
+        let (marker, tone) = match item.status {
+            PlanItemStatus::Pending => ("[ ]", Tone::Default),
+            PlanItemStatus::InProgress => ("[>]", Tone::Accent),
+            PlanItemStatus::Completed => ("[x]", Tone::Success),
+            PlanItemStatus::Cancelled => ("[-]", Tone::Dim),
+        };
+        let text = item.text.split_whitespace().collect::<Vec<_>>().join(" ");
+        Line::from(vec![
+            Span::styled(format!("  {marker} "), theme.style(tone)),
+            Span::styled(
+                if text.is_empty() {
+                    item.id.clone()
+                } else {
+                    text
+                },
+                theme.style(tone),
+            ),
+        ])
+    }));
+    // Todo rows are fixed-height composer chrome; long text clips instead of
+    // wrapping and moving the input.
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn overlay_hint(app: &App) -> Option<String> {
+    match &app.overlay {
         Some(Overlay::Approval { .. }) => {
             let waiting = app.pending_approval_count().saturating_sub(1);
             Some(if waiting == 0 {
@@ -1039,20 +1107,39 @@ fn draw_hint(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
         }
         Some(Overlay::ExitConfirm { .. }) => Some("y quit · n keep working".to_owned()),
         None => None,
-    } {
-        frame.render_widget(
-            Paragraph::new(Line::from(truncate(
-                vec![
-                    Span::styled("  ", theme.style(Tone::Dim)),
-                    Span::styled(hint, theme.style(Tone::Dim)),
-                ],
-                area.width,
-            ))),
-            area,
-        );
+    }
+}
+
+fn draw_hint(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
+    if let Some(hint) = overlay_hint(app) {
+        if is_compact_interaction(app) && area.height > 1 {
+            let [identity, controls] =
+                Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
+            draw_identity_footer(frame, identity, app, theme);
+            draw_control_hint(frame, controls, &hint, theme);
+        } else {
+            draw_control_hint(frame, area, &hint, theme);
+        }
         return;
     }
 
+    draw_identity_footer(frame, area, app, theme);
+}
+
+fn draw_control_hint(frame: &mut Frame<'_>, area: Rect, hint: &str, theme: Theme) {
+    frame.render_widget(
+        Paragraph::new(Line::from(truncate(
+            vec![
+                Span::styled("  ", theme.style(Tone::Dim)),
+                Span::styled(hint.to_owned(), theme.style(Tone::Dim)),
+            ],
+            area.width,
+        ))),
+        area,
+    );
+}
+
+fn draw_identity_footer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
     // Identity lives at the point of action. During work, activity replaces
     // the idle mode label; no permanent header or focusable status region is
     // introduced.
@@ -1116,45 +1203,15 @@ fn draw_hint(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
         ),
     );
 
-    let mut lines = vec![Line::from(truncate(identity, area.width))];
-    if !app.is_busy() && app.composer.is_empty() && area.height > 1 {
-        let mut hints = vec![
-            Span::styled("  Tab agents", theme.style(Tone::Dim)),
-            Span::styled(
-                format!(" {} Ctrl+P commands", glyph::SEPARATOR),
-                theme.style(Tone::Dim),
-            ),
-            Span::styled(
-                format!(" {} @ files/agents", glyph::SEPARATOR),
-                theme.style(Tone::Dim),
-            ),
-            Span::styled(
-                format!(" {} ! shell", glyph::SEPARATOR),
-                theme.style(Tone::Dim),
-            ),
-        ];
-        hints = truncate(hints, area.width);
-        lines.push(Line::from(hints));
-    }
-    frame.render_widget(Paragraph::new(lines), area);
+    frame.render_widget(
+        Paragraph::new(Line::from(truncate(identity, area.width))),
+        area,
+    );
 }
 
 // ---------------------------------------------------------------------------
-// Overlays
+// Consequential overlays
 // ---------------------------------------------------------------------------
-
-fn resource_picker_area(area: Rect, picker: &ResourcePicker) -> Rect {
-    let width = area.width.saturating_sub(4).min(100);
-    let wanted_height = u16::try_from(picker.entries.len().saturating_add(4))
-        .unwrap_or(u16::MAX)
-        .clamp(6, area.height.saturating_sub(2));
-    Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(wanted_height) / 2,
-        width,
-        wanted_height,
-    )
-}
 
 fn draw_approval(
     frame: &mut Frame<'_>,
@@ -1874,10 +1931,12 @@ fn draw_modal(
 mod tests {
     use super::*;
     use agent_runtime_core::approval::{ApprovalOrigin, ApprovalPolicy, ApprovalRequest};
+    use agent_runtime_core::cancel::CancelReason;
     use agent_runtime_core::clock::{Deadline, SystemClock, Timestamp};
     use agent_runtime_core::content::{ContentPart, Message, ToolCall, ToolResultBlock};
     use agent_runtime_core::event::{
-        EstimationConfidence, EventEnvelope, RuntimeEvent, TurnFinish,
+        EstimationConfidence, EventEnvelope, PlanItemProjection, PlanItemStatus, PlanSensitivity,
+        RuntimeEvent, TurnFinish,
     };
     use agent_runtime_core::ids::{AttemptId, EventId, RequestId, SessionId, ToolCallId};
     use agent_runtime_core::manifest::SegmentKind;
@@ -2015,7 +2074,7 @@ mod tests {
     }
 
     #[test]
-    fn command_completion_renders_beneath_the_composer_without_color() {
+    fn command_completion_renders_above_the_composer_without_color() {
         let mut app = App::new("gpt-5.3", "~/work/api");
         app.on_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
         for character in "bogus".chars() {
@@ -2125,6 +2184,8 @@ mod tests {
 
         let waiting = render(&app, 74, 12, Theme::new());
         assert!(waiting.contains("Working… · 0s"), "{waiting}");
+        assert!(!waiting.contains("plan 0 active"), "{waiting}");
+        assert!(!waiting.contains("tools 0 active"), "{waiting}");
 
         app.transcript
             .push_reasoning_delta("private draft that resembles the answer", false);
@@ -2149,11 +2210,51 @@ mod tests {
             "{answered}"
         );
         assert!(!answered.contains("Working…"), "{answered}");
-        assert!(answered.contains("turn · completed in 0s"), "{answered}");
+        assert!(!answered.contains("turn · completed"), "{answered}");
         assert!(
             !answered.contains("private draft that resembles the answer"),
             "{answered}"
         );
+    }
+
+    #[test]
+    fn successful_terminals_are_quiet_and_non_success_stays_visible_at_all_widths() {
+        for (width, height) in [(44, 14), (74, 24), (120, 32)] {
+            let theme = Theme::new().without_color().without_motion();
+
+            let mut completed = App::new("gpt-5.3", "~/work/api");
+            completed.apply(&event(RuntimeEvent::TurnStarted));
+            completed.transcript.push_text_delta("Committed answer.");
+            completed.apply(&event(RuntimeEvent::TurnCompleted {
+                finish: TurnFinish::Completed,
+                visible_output: true,
+            }));
+            let completed_screen = render(&completed, width, height, theme);
+            assert!(
+                completed_screen.contains("Committed answer."),
+                "{width}x{height}: {completed_screen}"
+            );
+            assert!(
+                !completed_screen.contains("turn · completed")
+                    && !completed_screen.contains("reasoning only")
+                    && !completed_screen.contains("Working…"),
+                "{width}x{height}: {completed_screen}"
+            );
+
+            let mut interrupted = App::new("gpt-5.3", "~/work/api");
+            interrupted.apply(&event(RuntimeEvent::TurnStarted));
+            interrupted.apply(&event(RuntimeEvent::TurnCompleted {
+                finish: TurnFinish::Cancelled {
+                    reason: CancelReason::UserRequested,
+                },
+                visible_output: false,
+            }));
+            let interrupted_screen = render(&interrupted, width, height, theme);
+            assert!(
+                interrupted_screen.contains("interrupted"),
+                "{width}x{height}: {interrupted_screen}"
+            );
+        }
     }
 
     #[test]
@@ -2202,6 +2303,13 @@ mod tests {
             let completion_y = (0..buffer.area.height)
                 .find(|y| row(*y).contains("/help"))
                 .expect("selected completion row");
+            let composer_y = (0..buffer.area.height)
+                .find(|y| row(*y).trim_end() == "› /")
+                .expect("composer row");
+            assert!(
+                completion_y < composer_y,
+                "completion should sit above the fixed composer"
+            );
             let completion = row(completion_y);
             let command_x = u16::try_from(completion.find("/help").expect("command position"))
                 .expect("command position fits");
@@ -2334,30 +2442,55 @@ mod tests {
     }
 
     #[test]
-    fn runtime_resource_picker_renders_over_the_history_without_model_content() {
+    fn runtime_resource_picker_is_a_bounded_pane_above_the_composer() {
         let mut app = conversation();
         let history_len = app.transcript.blocks().len();
+        let entries = (0..12)
+            .map(|index| {
+                crate::picker::ResourceEntry::new(
+                    format!("provider/model-{index:02}"),
+                    format!("provider/model-{index:02}"),
+                    "trusted limits",
+                )
+                .active(index == 0)
+            })
+            .collect();
         app.overlay = Some(Overlay::ResourcePicker {
-            picker: crate::picker::ResourcePicker::new(
-                "Choose model",
-                vec![
-                    crate::picker::ResourceEntry::new(
-                        "zai/glm-4.7",
-                        "zai/glm-4.7",
-                        "trusted limits",
-                    )
-                    .active(true),
-                ],
-                "run setup",
-            ),
+            picker: crate::picker::ResourcePicker::new("Choose model", entries, "run setup"),
             target: crate::app::ResourceTarget::Model,
             restore_on_escape: "/model".into(),
         });
-        let rendered = render(&app, 48, 14, Theme::from_env().without_color());
+        let rendered = render(&app, 64, 18, Theme::from_env().without_color());
         assert!(rendered.contains("Choose model"), "{rendered}");
-        assert!(rendered.contains("zai/glm-4.7"), "{rendered}");
+        assert!(rendered.contains("provider/model-00"), "{rendered}");
         assert!(rendered.contains("current"), "{rendered}");
-        assert!(rendered.contains("Esc cancel"), "{rendered}");
+        assert!(rendered.contains("1/12"), "{rendered}");
+        assert!(
+            rendered.contains("The retry policy classifies failures."),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("provider/model-05"),
+            "the pane expanded past five results:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains('╭'),
+            "runtime choices should not draw a modal border:\n{rendered}"
+        );
+        let lines = rendered.lines().collect::<Vec<_>>();
+        let picker_y = lines
+            .iter()
+            .position(|line| line.contains("Choose model"))
+            .expect("picker row");
+        let composer_y = lines
+            .iter()
+            .position(|line| line.contains("Ask Smith to do anything"))
+            .expect("composer row");
+        assert!(picker_y < composer_y, "{rendered}");
+        assert!(
+            composer_y - picker_y <= 7,
+            "pane grew too tall:\n{rendered}"
+        );
         assert_eq!(
             app.transcript.blocks().len(),
             history_len,
@@ -2367,7 +2500,9 @@ mod tests {
 
     #[test]
     fn unified_reference_picker_labels_files_and_agents_without_color() {
-        let mut app = App::new("glm-5.2", "api:main");
+        let mut app = App::new("glm-5.2", "/Volumes/Data/codes/ai/agent-runtime:main");
+        app.status.switch_model(Some("zai".to_owned()), "glm-5.2");
+        app.status.set_agent("build");
         app.set_resources(crate::app::RuntimeResources {
             files: vec![crate::picker::ResourceEntry::new(
                 "file:src/lib.rs",
@@ -2381,9 +2516,20 @@ mod tests {
             )],
             ..crate::app::RuntimeResources::default()
         });
+        let before = render(&app, 120, 24, Theme::new().without_color().without_motion());
+        let before_lines = before.lines().collect::<Vec<_>>();
+        let before_identity = before_lines
+            .iter()
+            .position(|line| line.contains("build · zai/glm-5.2"))
+            .expect("idle identity row");
+        let before_composer = before_lines
+            .iter()
+            .position(|line| line.contains("Ask Smith to do anything"))
+            .expect("idle composer row");
+
         app.on_key(KeyEvent::new(KeyCode::Char('@'), KeyModifiers::NONE));
 
-        let screen = render(&app, 74, 24, Theme::new().without_color().without_motion());
+        let screen = render(&app, 120, 24, Theme::new().without_color().without_motion());
         insta_like(
             &screen,
             &[
@@ -2392,7 +2538,128 @@ mod tests {
                 "agent · read-only",
                 "@src/lib.rs",
                 "file · 42 bytes",
-                "↑/↓ choose · Enter confirm · Esc cancel",
+                "build · zai/glm-5.2 · /Volumes/Data/codes/ai/agent-runtime:main · ? ctx",
+                "type to filter · ↑↓ choose · enter confirm · esc cancel",
+            ],
+        );
+        let open_lines = screen.lines().collect::<Vec<_>>();
+        let open_identity = open_lines
+            .iter()
+            .position(|line| line.contains("build · zai/glm-5.2"))
+            .expect("picker identity row");
+        let open_composer = open_lines
+            .iter()
+            .position(|line| line.contains("Ask Smith to do anything"))
+            .expect("picker composer row");
+        assert_eq!(
+            open_identity.saturating_add(1),
+            before_identity,
+            "picker controls should reserve exactly one temporary footer row:\n{screen}"
+        );
+        assert_eq!(
+            open_composer.saturating_add(1),
+            before_composer,
+            "picker controls should move the composer by exactly one row:\n{screen}"
+        );
+    }
+
+    #[test]
+    fn compact_picker_replaces_todo_pane_with_one_temporary_control_row() {
+        let mut app = App::new("glm-5.2", "api:main");
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        app.apply(&event(RuntimeEvent::PlanUpdated {
+            revision: 1,
+            sensitivity: PlanSensitivity::Public,
+            counts: std::collections::BTreeMap::from([
+                ("cancelled".to_owned(), 0),
+                ("completed".to_owned(), 1),
+                ("in_progress".to_owned(), 1),
+                ("pending".to_owned(), 1),
+            ]),
+            items: Some(vec![
+                PlanItemProjection {
+                    id: "inspect".to_owned(),
+                    text: "Inspect relevant code".to_owned(),
+                    status: PlanItemStatus::Completed,
+                    reason: None,
+                },
+                PlanItemProjection {
+                    id: "change".to_owned(),
+                    text: "Implement the change".to_owned(),
+                    status: PlanItemStatus::InProgress,
+                    reason: None,
+                },
+                PlanItemProjection {
+                    id: "verify".to_owned(),
+                    text: "Run focused tests".to_owned(),
+                    status: PlanItemStatus::Pending,
+                    reason: None,
+                },
+            ]),
+        }));
+        app.apply(&event(RuntimeEvent::TurnCompleted {
+            finish: TurnFinish::Completed,
+            visible_output: true,
+        }));
+        app.set_resources(crate::app::RuntimeResources {
+            files: vec![crate::picker::ResourceEntry::new(
+                "file:src/lib.rs",
+                "@src/lib.rs",
+                "file · 42 bytes",
+            )],
+            ..crate::app::RuntimeResources::default()
+        });
+
+        let theme = Theme::new().without_color().without_motion();
+        let before = render(&app, 80, 14, theme);
+        insta_like(
+            &before,
+            &[
+                "Todo",
+                "[x] Inspect relevant code",
+                "[>] Implement the change",
+                "[ ] Run focused tests",
+            ],
+        );
+        assert!(!before.contains("work ·"), "{before}");
+        assert!(!before.contains("plan 0 active"), "{before}");
+        let before_lines = before.lines().collect::<Vec<_>>();
+        let before_composer = before_lines
+            .iter()
+            .position(|line| line.contains("Ask Smith to do anything"))
+            .expect("composer row");
+
+        app.on_key(KeyEvent::new(KeyCode::Char('@'), KeyModifiers::NONE));
+        let open = render(&app, 80, 14, theme);
+        let open_lines = open.lines().collect::<Vec<_>>();
+        let picker = open_lines
+            .iter()
+            .position(|line| line.contains("Attach file or invoke agent"))
+            .expect("picker row");
+        let open_composer = open_lines
+            .iter()
+            .position(|line| line.contains("Ask Smith to do anything"))
+            .expect("open composer row");
+        assert!(picker < open_composer, "{open}");
+        assert!(!open.contains("Todo"), "{open}");
+        assert!(!open.contains("Inspect relevant code"), "{open}");
+        assert!(!open.contains("Implement the change"), "{open}");
+        assert!(!open.contains("Run focused tests"), "{open}");
+        assert_eq!(
+            open_composer.saturating_add(1),
+            before_composer,
+            "picker controls should move the composer by exactly one row:\n{open}"
+        );
+
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let closed = render(&app, 80, 14, theme);
+        insta_like(
+            &closed,
+            &[
+                "Todo",
+                "[x] Inspect relevant code",
+                "[>] Implement the change",
+                "[ ] Run focused tests",
             ],
         );
     }
@@ -2421,7 +2688,14 @@ mod tests {
             assert!(screen.contains("build"), "{width}×{height}:\n{screen}");
             assert!(screen.contains("glm-5.2"), "{width}×{height}:\n{screen}");
             assert!(screen.contains("? ctx"), "{width}×{height}:\n{screen}");
-            assert!(screen.contains("Tab agents"), "{width}×{height}:\n{screen}");
+            assert!(
+                !screen.contains("Tab agents"),
+                "{width}×{height}:\n{screen}"
+            );
+            assert!(
+                !screen.contains("Ctrl+P commands"),
+                "{width}×{height}:\n{screen}"
+            );
             assert!(
                 screen
                     .lines()
@@ -2437,16 +2711,7 @@ mod tests {
         }
 
         let normal = render(&app, 74, 24, theme);
-        insta_like(
-            &normal,
-            &[
-                "build · zai/glm-5.2 · api:main · ? ctx",
-                "Tab agents",
-                "Ctrl+P commands",
-                "@ files/agents",
-                "! shell",
-            ],
-        );
+        insta_like(&normal, &["build · zai/glm-5.2 · api:main · ? ctx"]);
 
         app.apply(&event(RuntimeEvent::TurnStarted));
         let reduced_motion = render(&app, 74, 24, theme);

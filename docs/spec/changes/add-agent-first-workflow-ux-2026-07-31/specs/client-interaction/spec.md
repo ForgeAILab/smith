@@ -3,23 +3,42 @@
 ### Requirement: Agent-first idle composer
 
 The interactive TUI SHALL identify the active root agent mode, provider/model,
-project/branch, and context confidence at the idle point of action and SHALL
-show bounded discovery hints without adding a permanent header or focusable
-region. The composer remains the sole persistent focus.
+project/branch, and context confidence at the idle point of action without
+adding a permanent header, shortcut strip, or focusable region. The composer
+remains the sole persistent focus. `?` from an empty composer and `/help` SHALL
+render the same bounded local command/composer guide without a provider request
+or canonical history entry.
 
 #### Scenario: Empty idle composer at normal width
 - **GIVEN** no overlay or turn is active and the composer is empty
 - **WHEN** Smith renders at a normal terminal width
 - **THEN** it shows the active agent mode beside provider/model and project
-- **AND** it exposes `Tab agents`, `Ctrl+P commands`, `@ files/agents`, and
-  `! shell` as concise hints
+- **AND** it does not render a persistent shortcut strip
 
 #### Scenario: Empty idle composer at narrow width
 - **GIVEN** the terminal is 44 columns wide
-- **WHEN** the identity and hints cannot all fit
-- **THEN** Smith removes low-priority hint and path detail first
+- **WHEN** the identity cannot all fit
+- **THEN** Smith removes low-priority path detail first
 - **AND** retains agent/activity, approval state, model, and honest context
   provenance without relying on color
+
+#### Scenario: Local help is available on demand
+- **GIVEN** no overlay is open and the composer is empty
+- **WHEN** the user presses `?` or submits `/help`
+- **THEN** Smith renders the same bounded command and composer guide locally
+- **AND** creates no provider request or canonical model-history entry
+
+#### Scenario: Interrupted draft is recoverable before exit
+- **GIVEN** the composer contains an unsent draft
+- **WHEN** the user presses `Ctrl+C` once
+- **THEN** Smith clears the composer and stores the draft in bounded local
+  recall history
+- **AND** `Up` restores the draft without a provider request
+
+#### Scenario: Consecutive control-C presses exit
+- **GIVEN** the user has pressed `Ctrl+C` once and no intervening key
+- **WHEN** the user presses `Ctrl+C` again within one second
+- **THEN** Smith exits from either idle or active work
 
 #### Scenario: Tab cycles an idle root mode
 - **GIVEN** the runtime is idle, the composer is empty, and no overlay is open
@@ -86,25 +105,38 @@ checkpoint semantics as a model-requested shell call.
 - **THEN** Smith sends a normal user prompt beginning with one `!`
 - **AND** starts no local shell action
 
-### Requirement: Replay-equivalent live work summary
+### Requirement: Replay-equivalent anchored todo pane
 
-Smith SHALL derive one replaceable live work summary from versioned runtime
-events, covering plan progress, active tools, validation gates, retries,
-changed-path count, and attributed child state. `/details` SHALL toggle bounded
-detail without revealing protected arguments, and the terminal evidence row
-MUST be equivalent under live reduction and journal replay.
+Smith SHALL derive one replaceable todo projection from versioned runtime
+events. Public items SHALL render in a bounded, non-focusable pane immediately
+above the composer and MUST NOT enter transcript history. Sensitive plan item
+text MUST NOT render. `/details` SHALL toggle bounded tool lifecycle detail
+without revealing protected arguments. Live reduction and journal replay MUST
+produce the same todo projection. A compact picker SHALL temporarily replace
+the todo presentation in the anchored pane without changing that projection.
 
 #### Scenario: Multi-step coding turn advances
-- **GIVEN** a turn has a plan, active tool, and running child review
-- **WHEN** their lifecycle events arrive
-- **THEN** one work summary updates in place with current state and attribution
-- **AND** the composer remains usable without a permanent plan pane
+- **GIVEN** a turn has a public multi-step plan
+- **WHEN** plan lifecycle events arrive
+- **THEN** the authored todo items update in place immediately above the
+  composer
+- **AND** the transcript retains only the quiet working timer and ordinary
+  attributed events
 
 #### Scenario: Turn reaches a terminal result
-- **GIVEN** a work summary is live
+- **GIVEN** an anchored todo pane is visible
 - **WHEN** the turn succeeds, fails, is interrupted, or reaches a limit
-- **THEN** Smith commits one compact evidence row with terminal plan counts
-- **AND** no pending or in-progress state remains presented as active work
+- **THEN** the reconciled terminal todo remains visible until the next turn
+  starts
+- **AND** Smith commits no aggregate `work` row to the transcript
+
+#### Scenario: Compact interaction replaces the todo presentation
+- **GIVEN** an anchored public todo projection is visible
+- **WHEN** the user opens command or resource completion
+- **THEN** the compact picker replaces the todo presentation directly above
+  the fixed composer
+- **AND** closing the picker restores the unchanged todo projection
+- **AND** the temporary picker controls disappear with it
 
 #### Scenario: Details remain redaction-safe
 - **GIVEN** a prepared tool contains a command, edit body, or sensitive answer

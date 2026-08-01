@@ -290,6 +290,25 @@ and disabled labels, narrow terminals, no color, and reduced motion. Filtering
 and selection MUST operate on bounded display metadata and MUST NOT add picker
 contents to canonical model history.
 
+Runtime pickers SHALL render as a compact pane directly above the fixed
+composer with at most five matching rows visible. They MUST preserve the
+transcript region instead of drawing a centered modal over it. Setup and
+pre-host selection MAY retain a larger standalone presentation when no coding
+transcript/composer exists.
+
+#### Scenario: Runtime picker preserves the coding surface
+
+- **GIVEN** the interactive coding surface has transcript history
+- **WHEN** the user opens model, provider, profile, resume, file, or agent
+  selection
+- **THEN** Smith temporarily replaces the todo presentation with at most five
+  matching choices directly above the fixed composer
+- **AND** moving through a larger inventory scrolls that pane without covering
+  or adding content to the transcript
+- **AND** closing the picker restores the unchanged todo projection
+- **AND** the identity footer remains visible while the composer and footer
+  keep their existing screen rows
+
 #### Scenario: Filter a long model list
 
 - **GIVEN** the model inventory is longer than the visible picker height

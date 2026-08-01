@@ -30,7 +30,7 @@ use crate::references::{ComposerReference, parse_references};
 use crate::status::{Activity, ContextPlanUpdate, Status, render_elapsed};
 use crate::transcript::{LocalResultState, ToolStatus, Transcript};
 
-/// How long a second `Ctrl+C` still counts as a force-quit.
+/// How long a second `Ctrl+C` still counts as the exit press.
 const FORCE_QUIT_WINDOW: Duration = Duration::from_secs(1);
 
 /// Something the host loop must do on the app's behalf.
@@ -163,7 +163,10 @@ pub enum ResourceTarget {
     Reference,
 }
 
-/// A modal drawn over the transcript. At most one exists at a time.
+/// A temporary interactive surface. At most one exists at a time.
+///
+/// Consequential variants draw over the transcript; completion and resource
+/// selection reserve a compact pane above the composer.
 #[derive(Debug)]
 pub enum Overlay {
     /// A tool is waiting for approval.
@@ -183,12 +186,12 @@ pub enum Overlay {
     Palette {
         /// Selected filtered result.
         selected: usize,
-        /// A parse error kept inside the modal.
+        /// A parse error kept inside the completion pane.
         error: Option<String>,
         /// Draft restored when `Ctrl+P` discovery is dismissed.
         restore_on_escape: Option<String>,
     },
-    /// Search locally available runtime/session resources.
+    /// Search locally available runtime/session resources in a compact pane.
     ResourcePicker {
         /// Pure shared picker state.
         picker: ResourcePicker,
@@ -292,8 +295,8 @@ pub struct ChildSummary {
 /// Latest durable todo-plan projection.
 ///
 /// Smith deliberately treats bounded plan text as public working state: it is
-/// rendered inline and may be reconstructed from the redacted journal. A
-/// sensitive runtime projection retains counts only.
+/// rendered in the anchored todo pane and may be reconstructed from the
+/// redacted journal. A sensitive runtime projection retains counts only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanSummary {
     /// Monotonic plan revision.
@@ -310,9 +313,6 @@ pub struct PlanSummary {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct WorkSummary {
     tools: BTreeMap<String, (String, ToolStatus)>,
-    requests: BTreeSet<String>,
-    attempts: u32,
-    changed_paths: BTreeSet<String>,
 }
 
 /// One provider attempt's speculative presentation identity.
@@ -392,11 +392,11 @@ pub struct App {
     pub children: BTreeMap<String, ChildSummary>,
     /// Temporary child inspector selection; the root composer keeps focus.
     pub inspected_child: Option<String>,
-    /// Latest durable todo plan, projected without a permanent pane.
+    /// Latest durable todo plan, projected in the anchored composer pane.
     pub plan: Option<PlanSummary>,
-    /// One replaceable work summary for the active turn.
+    /// Bounded live tool detail available only through `/details`.
     work: Option<WorkSummary>,
-    /// Whether bounded work-summary details are expanded.
+    /// Whether bounded live tool details are expanded.
     pub work_details: bool,
     /// Bounded local choices supplied by the host.
     pub resources: RuntimeResources,
@@ -633,90 +633,30 @@ impl App {
 
     /// Enriches a protected live tool event with a reviewed local projection.
     pub fn set_tool_display(&mut self, call_id: &str, display: ToolCallDisplay) {
-        if let Some(work) = &mut self.work
-            && work
-                .tools
-                .get(call_id)
-                .is_some_and(|(name, _)| name == "edit")
-        {
-            work.changed_paths.insert(one_line(display.target()));
-        }
         self.transcript.set_tool_display(call_id, display);
     }
 
-    /// Toggles bounded, redaction-safe detail on the one live work summary.
+    /// Toggles bounded, redaction-safe tool detail beneath the working row.
     pub fn toggle_work_details(&mut self) {
         self.work_details = !self.work_details;
     }
 
-    /// Render-ready lines for the one replaceable active-work summary.
-    pub(crate) fn work_summary_lines(&self) -> Vec<String> {
+    /// Render-ready lines for explicitly requested active-work detail.
+    pub(crate) fn work_detail_lines(&self) -> Vec<String> {
         let Some(work) = &self.work else {
             return Vec::new();
         };
-        let active_tools = work
-            .tools
-            .values()
-            .filter(|(_, status)| *status == ToolStatus::Running)
-            .count();
-        let finished_tools = work.tools.len().saturating_sub(active_tools);
-        let retries = work
-            .attempts
-            .saturating_sub(u32::try_from(work.requests.len()).unwrap_or(u32::MAX));
-        let count = |status: &str| {
-            self.plan
-                .as_ref()
-                .and_then(|plan| plan.counts.get(status))
-                .copied()
-                .unwrap_or_default()
-        };
-        let running_children = self
-            .children
-            .values()
-            .filter(|child| matches!(child.state.as_str(), "running" | "working" | "needs input"))
-            .count();
-        let mut lines = vec![format!(
-            "plan {} active/{} pending/{} done/{} cancelled · tools {active_tools} active/{finished_tools} finished · gates {} · retries {retries} · paths {} · children {running_children}",
-            count("in_progress"),
-            count("pending"),
-            count("completed"),
-            count("cancelled"),
-            work.tools
-                .values()
-                .filter(|(name, _)| name == "shell")
-                .count(),
-            work.changed_paths.len(),
-        )];
-        if self.work_details {
-            lines.extend(
-                work.tools
-                    .values()
-                    .take(12)
-                    .map(|(name, status)| format!("tool {name} · {}", status.label())),
-            );
-            if let Some(plan) = &self.plan
-                && plan.sensitivity == PlanSensitivity::Public
-                && let Some(items) = &plan.items
-            {
-                lines.extend(items.iter().take(12).map(|item| {
-                    format!(
-                        "plan {} · {:?} · {}",
-                        item.id,
-                        item.status,
-                        one_line(&item.text)
-                    )
-                }));
-            }
+        if !self.work_details {
+            return Vec::new();
         }
-        lines
+        work.tools
+            .values()
+            .take(12)
+            .map(|(name, status)| format!("tool {name} · {}", status.label()))
+            .collect()
     }
 
-    fn commit_work_summary(&mut self, finish: &TurnFinish) {
-        let lines = self.work_summary_lines();
-        if !lines.is_empty() {
-            self.transcript
-                .push_notice("work", format!("{:?} · {}", finish, lines[0]));
-        }
+    fn finish_work(&mut self) {
         self.work = None;
     }
 
@@ -841,6 +781,7 @@ impl App {
             RuntimeEvent::TurnStarted => {
                 self.discard_orphaned_speculative_output("next turn start");
                 self.status.activity = Activity::Working;
+                self.plan = None;
                 self.work = Some(WorkSummary::default());
                 self.turn_started_at = Some(Instant::now());
                 self.finalized_attempts.clear();
@@ -906,10 +847,6 @@ impl App {
             RuntimeEvent::ProviderAttemptStarted {
                 request, attempt, ..
             } => {
-                if let Some(work) = &mut self.work {
-                    work.requests.insert(request.as_str().to_owned());
-                    work.attempts = work.attempts.saturating_add(1);
-                }
                 self.begin_speculative_attempt(request, attempt);
             }
             RuntimeEvent::TextDelta {
@@ -1040,10 +977,7 @@ impl App {
             RuntimeEvent::Error { error } => {
                 self.transcript.push_error(error.to_string());
             }
-            RuntimeEvent::TurnCompleted {
-                finish,
-                visible_output,
-            } => {
+            RuntimeEvent::TurnCompleted { finish, .. } => {
                 self.cancel_pending_prompts();
                 // A valid v5 stream has already committed or discarded every
                 // attempt. A gap, corrupt journal, or incompatible producer
@@ -1053,7 +987,7 @@ impl App {
                 let elapsed = self.turn_started_at.take().map(|started| started.elapsed());
                 self.transcript.close_open();
                 self.status.activity = Activity::Idle;
-                self.commit_work_summary(finish);
+                self.finish_work();
                 match finish {
                     TurnFinish::Cancelled { reason } => {
                         self.transcript.push_notice(
@@ -1097,37 +1031,18 @@ impl App {
                             ),
                         );
                     }
-                    // A reasoning-only completion would otherwise end in
-                    // silence; say so instead of showing nothing.
-                    TurnFinish::Completed if !visible_output => {
+                    // A successful terminal is state, not another transcript
+                    // message. The committed answer/tool rows and canonical
+                    // runtime event already carry the outcome.
+                    TurnFinish::Completed => {}
+                    TurnFinish::Failed => {
                         self.transcript.push_notice(
                             "turn",
                             elapsed.map_or_else(
-                                || "completed without a visible answer (reasoning only)".to_owned(),
-                                |elapsed| {
-                                    format!(
-                                        "completed in {} without a visible answer (reasoning only)",
-                                        render_elapsed(elapsed)
-                                    )
-                                },
+                                || "failed".to_owned(),
+                                |elapsed| format!("failed after {}", render_elapsed(elapsed)),
                             ),
                         );
-                    }
-                    TurnFinish::Completed => {
-                        if let Some(elapsed) = elapsed {
-                            self.transcript.push_notice(
-                                "turn",
-                                format!("completed in {}", render_elapsed(elapsed)),
-                            );
-                        }
-                    }
-                    TurnFinish::Failed => {
-                        if let Some(elapsed) = elapsed {
-                            self.transcript.push_notice(
-                                "turn",
-                                format!("failed after {}", render_elapsed(elapsed)),
-                            );
-                        }
                     }
                 }
             }
@@ -1560,7 +1475,8 @@ impl App {
             return None;
         }
 
-        // Ctrl+C is checked before overlays: it must always be able to leave.
+        // Ctrl+C is checked before overlays: two consecutive presses must
+        // always be able to leave, even while a prompt owns input.
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return self.on_ctrl_c();
         }
@@ -1722,6 +1638,10 @@ impl App {
                 self.follow_newest();
                 None
             }
+            (KeyCode::Char('?'), KeyModifiers::NONE) if self.composer.is_empty() => {
+                self.follow_newest();
+                self.dispatch_command(CommandAction::Help)
+            }
             (KeyCode::Esc, _) => self.on_escape(),
             (KeyCode::PageUp, _) => {
                 self.scroll_up(10);
@@ -1729,6 +1649,17 @@ impl App {
             }
             (KeyCode::PageDown, _) => {
                 self.scroll_down(10);
+                None
+            }
+            (KeyCode::Up, _) if self.composer.is_empty() || self.composer.is_recalling() => {
+                if self.composer.recall_previous() {
+                    None
+                } else {
+                    self.on_scroll_key(key)
+                }
+            }
+            (KeyCode::Down, _) if self.composer.is_recalling() => {
+                self.composer.recall_next();
                 None
             }
             (KeyCode::Up | KeyCode::Down | KeyCode::Home | KeyCode::End, _) => {
@@ -1740,17 +1671,41 @@ impl App {
 
     fn on_ctrl_c(&mut self) -> Option<Action> {
         let now = Instant::now();
-        let forced = self
+        let second_press = self
             .last_ctrl_c
             .is_some_and(|previous| now.duration_since(previous) < FORCE_QUIT_WINDOW);
 
-        if forced || !self.has_live_work() {
+        if second_press {
             self.cancel_pending_prompts();
             self.should_quit = true;
             return Some(Action::Quit);
         }
 
         self.last_ctrl_c = Some(now);
+        match self.overlay.take() {
+            Some(Overlay::Palette {
+                restore_on_escape, ..
+            }) => {
+                if let Some(original) = restore_on_escape {
+                    self.composer.replace(original);
+                }
+            }
+            Some(Overlay::ResourcePicker {
+                restore_on_escape, ..
+            }) => self.composer.replace(restore_on_escape),
+            other => self.overlay = other,
+        }
+        self.composer.stash_for_recall();
+        None
+    }
+
+    fn request_exit(&mut self) -> Option<Action> {
+        if !self.has_live_work() {
+            self.cancel_pending_prompts();
+            self.should_quit = true;
+            return Some(Action::Quit);
+        }
+
         let (approval, questionnaire) = match self.overlay.take() {
             Some(Overlay::Approval { prompt, review }) => (Some((prompt, review)), None),
             Some(Overlay::Questionnaire { state }) => (None, Some(state)),
@@ -2548,16 +2503,16 @@ impl App {
                 self.transcript.push_notice(
                     "details",
                     if self.work_details {
-                        "bounded work details shown"
+                        "bounded tool details shown"
                     } else {
-                        "bounded work details hidden"
+                        "bounded tool details hidden"
                     },
                 );
                 None
             }
             CommandAction::Quit => {
                 self.composer.clear();
-                self.on_ctrl_c()
+                self.request_exit()
             }
             CommandAction::NewSession => {
                 self.composer.clear();
@@ -2817,10 +2772,6 @@ fn model_pair(providers: &[ResourceEntry], id: &str) -> Option<(String, String)>
     }
     let (provider, model) = id.split_once('/')?;
     (!provider.is_empty() && !model.is_empty()).then(|| (provider.to_owned(), model.to_owned()))
-}
-
-fn one_line(value: &str) -> String {
-    value.replace(['\r', '\n'], " ")
 }
 
 /// Finished copy for a child's declared workspace posture.
@@ -3177,36 +3128,65 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_c_quits_when_idle_but_confirms_when_busy() {
+    fn first_ctrl_c_clears_and_stashes_the_draft_without_quitting() {
         let mut idle = app();
-        assert_eq!(idle.on_key(ctrl('c')), Some(Action::Quit));
-        assert!(idle.should_quit);
+        type_text(&mut idle, "recover this draft");
+        assert_eq!(idle.on_key(ctrl('c')), None);
+        assert!(idle.composer.is_empty());
+        assert!(!idle.should_quit);
+
+        assert_eq!(idle.on_key(key(KeyCode::Up)), None);
+        assert_eq!(idle.composer.text(), "recover this draft");
+        assert!(!idle.should_quit);
 
         let mut busy = app();
         busy.apply(&event(RuntimeEvent::TurnStarted));
         assert_eq!(busy.on_key(ctrl('c')), None);
-        assert!(matches!(busy.overlay, Some(Overlay::ExitConfirm { .. })));
+        assert!(busy.overlay.is_none());
         assert!(!busy.should_quit);
+        assert!(busy.is_busy());
     }
 
     #[test]
-    fn declining_the_exit_confirmation_leaves_work_running() {
+    fn a_non_ctrl_c_key_disarms_the_double_press_exit() {
         let mut app = app();
-        app.apply(&event(RuntimeEvent::TurnStarted));
-        app.on_key(ctrl('c'));
-        assert_eq!(app.on_key(key(KeyCode::Char('n'))), None);
-        assert!(app.overlay.is_none());
+        assert_eq!(app.on_key(ctrl('c')), None);
+        assert_eq!(app.on_key(key(KeyCode::Char('x'))), None);
+        assert_eq!(app.on_key(ctrl('c')), None);
         assert!(!app.should_quit);
-        assert!(app.is_busy());
+        assert!(app.composer.is_empty());
     }
 
     #[test]
-    fn a_second_ctrl_c_forces_the_exit() {
+    fn a_second_ctrl_c_exits_when_idle_or_busy() {
+        let mut idle = app();
+        assert_eq!(idle.on_key(ctrl('c')), None);
+        assert_eq!(idle.on_key(ctrl('c')), Some(Action::Quit));
+        assert!(idle.should_quit);
+
         let mut app = app();
         app.apply(&event(RuntimeEvent::TurnStarted));
         assert_eq!(app.on_key(ctrl('c')), None);
         assert_eq!(app.on_key(ctrl('c')), Some(Action::Quit));
         assert!(app.should_quit);
+    }
+
+    #[test]
+    fn question_mark_opens_the_same_local_help_without_a_provider_send() {
+        let mut app = app();
+        assert_eq!(app.on_key(key(KeyCode::Char('?'))), None);
+        assert!(app.composer.is_empty());
+        let help = app
+            .transcript
+            .blocks()
+            .iter()
+            .find_map(|block| match block {
+                Block::LocalResult { title, content, .. } if title == "help" => Some(content),
+                _ => None,
+            })
+            .expect("question mark should render local help");
+        assert!(help.contains("Ctrl+C twice"), "{help}");
+        assert!(help.contains("Up recalls"), "{help}");
     }
 
     #[test]
@@ -3401,11 +3381,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancelling_exit_restores_the_pending_approval() {
+    async fn cancelling_an_explicit_exit_restores_the_pending_approval() {
         let mut app = app();
         app.present_approval(prompt("shell").await);
 
-        assert_eq!(app.on_key(ctrl('c')), None);
+        assert_eq!(app.request_exit(), None);
         assert!(matches!(
             app.overlay,
             Some(Overlay::ExitConfirm {
@@ -3574,13 +3554,7 @@ mod tests {
         app.present_questionnaire(questionnaire_form("queued", Deadline::never()).restored(true));
 
         assert_eq!(app.on_key(ctrl('c')), None);
-        assert!(matches!(
-            app.overlay,
-            Some(Overlay::ExitConfirm {
-                questionnaire: Some(_),
-                ..
-            })
-        ));
+        assert!(matches!(app.overlay, Some(Overlay::Questionnaire { .. })));
         assert_eq!(app.on_key(ctrl('c')), Some(Action::Quit));
 
         for expected in ["visible", "queued"] {
@@ -3786,7 +3760,7 @@ mod tests {
             visible_output: true,
         }));
 
-        assert_eq!(app.transcript.len(), 3);
+        assert_eq!(app.transcript.len(), 1);
         assert_eq!(
             app.transcript.blocks()[0],
             Block::Assistant {
@@ -3794,11 +3768,18 @@ mod tests {
                 open: false
             }
         );
-        assert!(matches!(
-            &app.transcript.blocks()[2],
-            Block::Notice { source, text }
-                if source == "turn" && text.starts_with("completed in ")
-        ));
+        assert!(
+            !app.transcript
+                .blocks()
+                .iter()
+                .any(|block| matches!(block, Block::Notice { source, .. } if source == "turn"))
+        );
+        assert!(
+            !app.transcript
+                .blocks()
+                .iter()
+                .any(|block| matches!(block, Block::Notice { source, .. } if source == "work"))
+        );
         assert_eq!(app.status.context.render(), "12.4k");
         assert_eq!(app.status.activity, Activity::Idle);
     }
@@ -3858,7 +3839,7 @@ mod tests {
     }
 
     #[test]
-    fn a_completed_turn_freezes_its_monotonic_elapsed_time() {
+    fn a_completed_turn_clears_its_monotonic_timer_without_a_notice() {
         let mut app = app();
         app.apply(&event(RuntimeEvent::TurnStarted));
         app.turn_started_at = Instant::now().checked_sub(Duration::from_secs(65));
@@ -3873,13 +3854,21 @@ mod tests {
         }));
 
         assert!(app.turn_elapsed().is_none());
-        match app.transcript.blocks().last() {
-            Some(Block::Notice { source, text }) => {
-                assert_eq!(source, "turn");
-                assert_eq!(text, "completed in 1m 05s");
-            }
-            other => panic!("expected a completed-duration notice, got {other:?}"),
-        }
+        assert!(app.transcript.is_empty());
+    }
+
+    #[test]
+    fn a_reasoning_only_success_returns_to_idle_without_a_notice() {
+        let mut app = app();
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        app.apply(&event(RuntimeEvent::TurnCompleted {
+            finish: TurnFinish::Completed,
+            visible_output: false,
+        }));
+
+        assert_eq!(app.status.activity, Activity::Idle);
+        assert!(app.turn_elapsed().is_none());
+        assert!(app.transcript.is_empty());
     }
 
     #[test]
@@ -4292,6 +4281,8 @@ mod tests {
         assert!(rendered.contains("call-approved-edit"));
         assert!(rendered.contains("call-question"));
         assert!(rendered.contains("not restarted"));
+        assert!(!rendered.contains("completed in"));
+        assert!(!rendered.contains("reasoning only"));
         assert!(
             !rendered.contains("discarded speculative prefix"),
             "failed attempt output entered the committed transcript"
@@ -4725,7 +4716,7 @@ mod tests {
     }
 
     #[test]
-    fn public_todo_updates_render_inline_and_replay_the_same_state() {
+    fn public_todo_updates_remain_replaceable_and_replay_equivalent() {
         let update = event(RuntimeEvent::PlanUpdated {
             revision: 3,
             sensitivity: PlanSensitivity::Public,
@@ -4765,8 +4756,7 @@ mod tests {
 
         assert_eq!(live.plan, replayed.plan);
         assert_eq!(live.transcript.blocks(), replayed.transcript.blocks());
-        let lines = live.work_summary_lines();
-        assert!(lines[0].contains("plan 1 active/1 pending/1 done/0 cancelled"));
+        assert!(live.work_detail_lines().is_empty());
         assert!(
             !live
                 .transcript
@@ -4805,7 +4795,7 @@ mod tests {
             plan.items.is_none(),
             "sensitive item text survived the reducer seam"
         );
-        assert!(app.work_summary_lines()[0].contains("plan 0 active/2 pending/0 done/1 cancelled"));
+        assert!(app.work_detail_lines().is_empty());
         assert!(!format!("{:?}", app.transcript.blocks()).contains(PROTECTED_ITEM));
     }
 

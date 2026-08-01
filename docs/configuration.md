@@ -59,6 +59,33 @@ Mode and preset declarations contain no permission, credential, trust, or
 approval fields. Project definitions are validated and intersected with the
 authoritative run policy; they cannot grant authority.
 
+## Project instructions and context identity
+
+After configuration resolves the canonical project root, a standard TUI or
+headless host examines exactly `<project>/AGENTS.md`. It does not search parent
+directories, nested directories, or override filenames in this release. An
+absent file contributes nothing. A present file must be a regular,
+non-symlinked UTF-8 file no larger than 32 KiB; otherwise startup fails before
+provider construction, session state, or terminal entry instead of silently
+skipping or truncating it.
+
+Smith reads the file once per constructed runtime. The immutable snapshot is
+activated as its own required developer-instruction fragment and inherited by
+direct children; children and later turns do not reread the workspace. Editing
+the file therefore does not mutate an active context. A user can explicitly
+ask the agent to read it again through the ordinary workspace tool path, while
+a newly constructed runtime captures the new body automatically.
+
+The fragment records `AGENTS.md` plus a content-derived revision separately
+from Smith's built-in prompt revisions, optional retrieval context, and
+canonical conversation history. A changed snapshot creates a different exact
+prompt/cache-plan identity, while unchanged Smith policy fragments keep their
+own revisions. Repository instructions are sent to the selected provider and
+may guide work, but cannot grant a tool, permission, approval, credential,
+executable trust, or wider workspace. A direct embedder's complete
+`system_prompt` override remains a complete replacement and receives no
+implicit project-instruction fragment.
+
 ## Complete example
 
 ```toml

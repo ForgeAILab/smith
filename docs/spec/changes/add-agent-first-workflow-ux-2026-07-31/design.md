@@ -50,24 +50,39 @@ model child review.
 
 ## Decisions
 
-### Agent identity lives at the point of action
+### Agent identity and help live at the point of action
 
 The existing no-permanent-header rule remains. When the composer is empty and
-idle, the hint/footer renders, in priority order:
+idle, the footer renders one identity row in priority order:
 
 ```text
 build · zai/glm-5.2 · project:branch · ? ctx
-Tab agents · Ctrl+P commands · @ files/agents · ! shell
 ```
 
-Narrow terminals truncate low-priority hints and path detail before agent,
-model, activity, approval, or context honesty. During a turn the same area
-shows activity rather than a decorative identity banner. Color remains
-supplemental.
+Smith does not reserve a shortcut strip that appears and disappears around
+typing. `?` from an empty composer and `/help` both append the same bounded
+local command/composer guide without provider spend or canonical history.
+Narrow terminals truncate low-priority path detail before agent, model,
+activity, approval, or context honesty. During a turn the same area shows
+activity rather than a decorative identity banner. Color remains supplemental.
 
 Alternative considered: add an OpenCode-style large startup logo. Rejected
 because it consumes transcript space and conflicts with Smith's established
 single-composer, terminal-native design.
+
+### Exit keeps interrupted drafts recoverable
+
+The first `Ctrl+C` clears the composer and stores its exact non-blank draft in
+bounded process-local recall history. `Up` restores the newest interrupted
+draft and repeated `Up` walks older entries; `Down` returns toward an empty
+composer. A second `Ctrl+C` within one second exits from idle or active work.
+Any intervening key disarms the exit sequence, so recalling or editing a draft
+cannot accidentally turn a later interrupt into a quit. `/quit` retains its
+explicit idle-exit/live-work confirmation path.
+
+The recall buffer is UI state only: it is not canonical conversation history,
+is not persisted in checkpoints, and never reaches a provider unless the user
+later submits the recovered draft.
 
 ### Agent modes are policy presets, not authority grants
 
@@ -95,7 +110,7 @@ could then masquerade as product authority.
 
 ### One typed `@` reference surface
 
-Typing `@` at a token boundary opens one completion overlay with labelled
+Typing `@` at a token boundary opens one compact completion pane with labelled
 `file` and `agent` entries. File entries come from a bounded workspace index,
 respect ignore policy, and remain relative to the canonical project root. On
 submission, each file attachment is prepared and authorized as an exact read;
@@ -127,22 +142,29 @@ the protected checkpoint.
 Alternative considered: spawn the user's shell directly from the TUI.
 Rejected because it would create a second execution and security path.
 
-### Live work is one reducer-owned summary
+### Live todos stay anchored above the composer
 
-The reducer maintains one replaceable work summary derived from versioned
-runtime events: plan counts/current item, active prepared tools, validation
-gates, child state, retry state, and changed-path count. `/details` toggles
-bounded tool/reasoning detail; it never reveals protected arguments. At turn
-termination the summary becomes a compact committed evidence row.
+The reducer maintains the latest replaceable public todo projection from
+versioned runtime events. The renderer keeps at most five authored items in a
+non-focusable pane immediately above the composer, where updates replace the
+same rows instead of entering transcript history. A compact picker temporarily
+replaces the todo presentation in that anchored pane without mutating the todo
+projection; closing it restores the todo and removes the temporary picker
+control row. Sensitive projections retain counts
+internally but render no item pane. `/details` may add bounded tool lifecycle detail beneath the quiet
+`Working… · time` transcript row; it never reveals protected arguments. Turn
+termination commits no aggregate `work` evidence row.
 
 The runtime/harness closes advisory plan state at the same terminal boundary.
 Items the model did not explicitly finish become `cancelled` with a stable
 `turn_ended_unfinished` reason; Smith does not silently mark work completed.
 No successful or unsuccessful result may report pending or in-progress items.
-Live reduction and journal replay produce the same committed result.
+Live reduction and journal replay produce the same todo projection and
+committed result. The terminal todo remains visible until the next turn starts.
 
-Alternative considered: a permanent todo/child side pane. Rejected because it
-adds focus and narrow-terminal complexity for transient state.
+Alternative considered: a focusable todo/child side pane. Rejected because it
+adds navigation and narrow-terminal complexity; the anchored composer pane is
+bounded, read-only, and gives its rows back when no public plan exists.
 
 ### Activation and limits are product-profiled and evidence-tested
 
@@ -222,8 +244,9 @@ the outcome. Ambiguous shell deltas are never made redoable by observation.
 3. Tune activation and model request profiles; fix plan/limit terminal state.
 4. Add direct prepared file, agent, and shell host actions without changing
    canonical provider/tool security paths.
-5. Extend the reducer/rendering for identity, completion, work summary,
-   details, and child navigation at narrow/normal/wide widths.
+5. Extend the reducer/rendering for stable identity/footer rows, completion,
+   anchored todos, explicit details, and child navigation at
+   narrow/normal/wide widths.
 6. Add timeline and exact redo over existing attribution/recovery records.
 7. Run deterministic, PTY, replay, security, MSRV, dependency, and live Z.AI
    evaluations, including no-Keychain mid-turn resume.

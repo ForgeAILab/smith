@@ -43,6 +43,7 @@ use smith_runtime::factory::{self, FactoryError, HostSurface, RuntimeRequest};
 use smith_runtime::journal::{DefaultRedactor, EventJournal, JournalConfig, Redactor};
 use smith_runtime::memory::{SmithMemoryRecord, SmithMemorySource};
 use smith_runtime::model_catalog::{EMBEDDED_MODELS_DEV_SEED, runtime_catalog_source};
+use smith_runtime::project_instructions::ProjectInstructionsSnapshot;
 use smith_runtime::skills::SmithSkillSources;
 
 /// A resolvable configuration using the deterministic provider.
@@ -783,11 +784,23 @@ async fn live_factory_emits_registry_view_retrieval_activation_and_context_lifec
 async fn provider_planning_records_every_versioned_smith_prompt_fragment() {
     let fixture = Fixture::new(FAKE_CONFIG);
     let provider = Arc::new(FakeProvider::text_reply("done"));
+    let project_instructions =
+        ProjectInstructionsSnapshot::from_body("PROJECT_PROMPT_MARKER: run exact checks.")
+            .expect("bounded project instructions");
     let request = RuntimeRequest {
         provider: Some(provider.clone() as Arc<dyn Provider>),
+        project_instructions: Some(project_instructions.clone()),
         ..request(&fixture, HostSurface::Headless)
     };
     let smith = factory::build(request).await.expect("a runtime");
+    assert_eq!(
+        smith
+            .policy()
+            .project_instructions
+            .as_ref()
+            .expect("project composition evidence"),
+        &project_instructions.identity()
+    );
     let session = smith
         .runtime()
         .start_session(StartSession::new())
@@ -799,6 +812,7 @@ async fn provider_planning_records_every_versioned_smith_prompt_fragment() {
         .expect("the turn runs");
 
     let expected = smith_runtime::prompt::fragments(&smith_runtime::prompt::DynamicPromptContext {
+        project_instructions: Some(project_instructions),
         agent_mode: Some(smith_runtime::prompt::AgentModePrompt {
             name: "build".to_owned(),
             posture: AgentPosture::Build,
@@ -827,6 +841,53 @@ async fn provider_planning_records_every_versioned_smith_prompt_fragment() {
         .join("\n");
     assert!(wire_text.contains("understand the request"));
     assert!(wire_text.contains("committed successful tool result"));
+    assert!(wire_text.contains("PROJECT_PROMPT_MARKER"));
+    session.shutdown().await.expect("a clean shutdown");
+}
+
+#[tokio::test]
+async fn a_complete_prompt_override_ignores_project_instructions() {
+    let fixture = Fixture::new(FAKE_CONFIG);
+    let provider = Arc::new(FakeProvider::text_reply("done"));
+    let request = RuntimeRequest {
+        provider: Some(provider.clone() as Arc<dyn Provider>),
+        system_prompt: Some("COMPLETE_HOST_OVERRIDE_MARKER".to_owned()),
+        project_instructions: Some(
+            ProjectInstructionsSnapshot::from_body("PROJECT_INSTRUCTIONS_MUST_BE_ABSENT")
+                .expect("bounded project instructions"),
+        ),
+        ..request(&fixture, HostSurface::Headless)
+    };
+    let smith = factory::build(request).await.expect("a runtime");
+    assert_eq!(smith.policy().project_instructions, None);
+    assert!(
+        smith
+            .policy()
+            .system_prompt
+            .contains("COMPLETE_HOST_OVERRIDE_MARKER")
+    );
+    assert!(
+        !smith
+            .policy()
+            .system_prompt
+            .contains("PROJECT_INSTRUCTIONS_MUST_BE_ABSENT")
+    );
+
+    let session = smith
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .expect("a session");
+    session
+        .run(UserInput::text("answer once"))
+        .await
+        .expect("a turn");
+    let wire = serde_json::to_string(&provider.requests()[0].messages).expect("provider request");
+    assert!(wire.contains("COMPLETE_HOST_OVERRIDE_MARKER"), "{wire}");
+    assert!(
+        !wire.contains("PROJECT_INSTRUCTIONS_MUST_BE_ABSENT"),
+        "{wire}"
+    );
     session.shutdown().await.expect("a clean shutdown");
 }
 

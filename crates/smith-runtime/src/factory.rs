@@ -101,6 +101,7 @@ use crate::checkpoint::{BarrierCheckpointStore, CheckpointBarrier, SmithCheckpoi
 use crate::delegation::{AgentTool, DelegationAuthority, SmithChildFactory, SmithDelegation};
 use crate::journal::DefaultRedactor;
 use crate::memory::SmithMemorySource;
+use crate::project_instructions::{ProjectInstructionsIdentity, ProjectInstructionsSnapshot};
 use crate::prompt::{
     AgentModePrompt, DynamicPromptContext, SmithPromptContributor, render_fragments,
 };
@@ -223,6 +224,12 @@ pub struct RuntimeRequest {
     /// A complete product-instruction override. When absent, Smith's versioned
     /// prompt sections are composed through [`crate::prompt`].
     pub system_prompt: Option<String>,
+    /// Immutable root project instructions already validated by the host.
+    ///
+    /// The factory performs no ambient file discovery. A complete
+    /// `system_prompt` override retains replacement semantics and ignores this
+    /// snapshot.
+    pub project_instructions: Option<ProjectInstructionsSnapshot>,
     /// The workspace boundary tools resolve paths through. Required: the shared
     /// runtime would otherwise fall back to denying everything silently.
     pub workspace: Option<Arc<dyn Workspace>>,
@@ -296,6 +303,7 @@ impl RuntimeRequest {
             config,
             surface,
             system_prompt: None,
+            project_instructions: None,
             workspace: None,
             approval: None,
             interaction: None,
@@ -359,6 +367,8 @@ pub struct RuntimePolicy {
     pub compaction_policy: CompactionPolicy,
     /// The product instructions sent as system content.
     pub system_prompt: String,
+    /// Activated project-instruction source and exact revision, without body.
+    pub project_instructions: Option<ProjectInstructionsIdentity>,
     /// Provider attempts allowed per request, including the first.
     pub max_attempts: u32,
     /// Tool calls allowed in one turn.
@@ -636,7 +646,13 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
     } = prepare_factory_inputs(&request).await?;
     let agent_posture = request.config.agent.active_posture();
     let agent_mode = request.config.agent.active.value.clone();
+    let project_instructions = if request.system_prompt.is_none() {
+        request.project_instructions.clone()
+    } else {
+        None
+    };
     let prompt_context = DynamicPromptContext {
+        project_instructions: project_instructions.clone(),
         agent_mode: Some(AgentModePrompt {
             name: agent_mode.clone(),
             posture: agent_posture,
@@ -827,6 +843,9 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         context_policy: context_policy.clone(),
         compaction_policy: compaction_policy.clone(),
         system_prompt: rendered_system_prompt,
+        project_instructions: project_instructions
+            .as_ref()
+            .map(ProjectInstructionsSnapshot::identity),
         max_attempts: loop_config.retry.max_attempts,
         max_tool_steps: loop_config.max_tool_steps,
         turn_time_limit_ms: loop_config.turn_time_limit_ms,

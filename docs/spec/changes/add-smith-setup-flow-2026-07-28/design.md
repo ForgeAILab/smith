@@ -250,17 +250,25 @@ arguments become optional:
 ```
 
 Submitting a selector without its argument transitions from command discovery
-into a searchable resource picker. This is a distinct overlay state backed by
-typed entries, not a second command registry. Up/Down changes selection,
+into a searchable resource picker. This is a distinct temporary interaction
+state backed by typed entries, not a second command registry. In the runtime
+surface it temporarily replaces the todo presentation in the compact pane
+directly above the fixed composer, shows at most five matching rows, and
+scrolls the selected window through larger inventories without covering the
+transcript. Closing the picker restores the unchanged todo projection.
+Up/Down changes selection,
 typing filters, Enter confirms, and Escape returns to the composer without
 changing the current runtime or session. Explicit values still bypass the
 picker after local validation, so knowledgeable users and tests retain a fast
 path.
 
-The picker renderer/reducer is shared by first-run setup, runtime selection,
-and pre-host resume selection. It remains keyboard-only, scrollable, usable in
-narrow/no-color terminals, and bounded for large inventories. Opening,
-filtering, cancelling, or confirming a picker sends no provider request.
+The picker state, reducer, and row projection are shared by first-run setup,
+runtime selection, and pre-host resume selection. Setup and pre-host resume
+may use the larger bordered surface because no transcript/composer exists yet;
+runtime selection remains the compact pane. Both presentations are
+keyboard-only, scrollable, usable in narrow/no-color terminals, and bounded
+for large inventories. Opening, filtering, cancelling, or confirming a picker
+sends no provider request.
 
 Alternative considered: print an inline list and require the user to retype an
 identifier. Rejected because it preserves the original copy/paste problem and

@@ -64,6 +64,16 @@ workspace trust. Untrusted skills cannot shadow a user skill. Skill metadata
 and bodies are bounded and revision-pinned; front matter cannot promote its own
 trust class.
 
+The standard host deliberately activates root `AGENTS.md` as declarative
+project guidance. It accepts only an exact regular non-symlinked UTF-8 file up
+to 32 KiB, captures it once before runtime construction, and gives direct
+children the same immutable revision. It performs no nested discovery,
+automatic include expansion, or file watching. This activation changes model
+guidance, not authority: instructions cannot register tools, widen the
+workspace, alter approval policy, approve an action, expose a credential, or
+authorize project executables. A changed file receives a new prompt/cache
+identity only when a later runtime is constructed.
+
 Capability activation is derived from current intent, trust, host readiness,
 and policy. Registered mutation tools are not advertised for a read-only
 request merely because they exist. Descriptor permission upper bounds are
@@ -131,10 +141,11 @@ side effects.
 
 ## Provider and prompt-injection risks
 
-The selected provider sees the planned instructions, activated skills/memory,
-conversation, tool schemas, bounded results, and any user content sent to it.
-Do not send data to a provider whose retention and access policy you do not
-accept.
+The selected provider sees Smith policy, activated root project instructions,
+activated skills/memory, conversation, tool schemas, bounded results, and any
+user content sent to it. `AGENTS.md` is not copied into canonical conversation
+history, but its prompt fragment is provider input. Do not place secrets there
+or send data to a provider whose retention and access policy you do not accept.
 
 Provider output is untrusted. It can request tools but cannot bypass schema
 validation, capability activation, authorization, approval, workspace

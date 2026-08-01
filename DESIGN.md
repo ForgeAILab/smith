@@ -42,6 +42,11 @@ status-card structure, and compact footer.
 │ • Shell(.) · ok                                                        │
 │                                                                        │
 ├────────────────────────────────────────────────────────────────────────┤
+│   Todo                                                                 │
+│   [x] Inspect retry policy                                             │
+│   [>] Fix the flaky test                                               │
+│   [ ] Run focused tests                                                │  anchored pane (0–6 rows)
+├────────────────────────────────────────────────────────────────────────┤
 │                                                                        │
 │ › fix the flaky test in retry.rs▏                                      │  composer (1–8 rows + inset)
 │                                                                        │
@@ -55,19 +60,27 @@ Regions, top to bottom:
 | Region | Height | Rule |
 | --- | --- | --- |
 | Transcript | flex | Minimum 3 rows; below that Smith renders a size warning only. |
+| Anchored pane | 0–6 | A compact picker while one is open; otherwise the latest public plan. Hidden when neither exists. |
 | Composer | 3–10 | One-row vertical inset around 1–8 rows of input. |
-| Footer | 1 | Model and path while idle; controls only while an interactive overlay is active. |
+| Footer | 1–2 | Identity uses one row; a compact picker temporarily adds its controls on the second. |
 
 Typing `/` opens command completion as a compact bottom-pane list directly
-beneath the composer, following the same selected-row grammar as Codex. Modal
-overlays are reserved for consequential interaction: approval, provider-spend
-confirmation, agent-originated questionnaires, undo/revert confirmation, and
-exit confirmation. They are centered, max 72 columns wide and 60% of height,
-and drawn over the transcript. Read-only command information never opens a
-modal; it appends to the transcript. Only one interactive surface is visible
-at a time. Runtime-originated approvals and questionnaires wait in a stable
-FIFO prompt queue; a new prompt never supersedes, implicitly denies, or drops
-an older one. The footer names the visible prompt and remaining queue count.
+above the fixed composer, following the same selected-row grammar as Codex.
+Local resource choices opened by `/model`, `/provider`, `/profile`, `/resume`,
+or `@` reuse that placement and show at most five matching rows; moving the
+selection scrolls the bounded window instead of expanding or covering the
+transcript. Opening a compact picker temporarily replaces the todo pane and
+adds one footer control row. Closing it restores the unchanged todo projection
+and one-row identity footer. Modal overlays are reserved for
+consequential interaction:
+approval, provider-spend confirmation, agent-originated questionnaires,
+undo/revert confirmation, and exit confirmation. They are centered, max 72
+columns wide and 60% of height, and drawn over the transcript. Read-only
+command information never opens a modal; it appends to the transcript. Only
+one interactive surface is visible at a time. Runtime-originated approvals and
+questionnaires wait in a stable FIFO prompt queue; a new prompt never
+supersedes, implicitly denies, or drops an older one. The footer names the
+visible prompt and remaining queue count.
 
 ### Narrow and short terminals
 
@@ -136,11 +149,14 @@ Reasoning is progress, not a second assistant reply. From `turn_started` until
 the turn ends, the transcript appends one animated, dim
 `Working… · 12s` row rather than rendering the provider's raw reasoning text.
 Its duration comes from a local monotonic clock. At the turn boundary the
-working row disappears and a quiet notice freezes the outcome and elapsed
-time, such as `turn · completed in 12s` or `turn · interrupted after 12s`.
-Canonical session history and the journal still retain reasoning for model
-continuity, replay, and diagnostics; historical durations are not invented
-when replay has no local timing record.
+working row disappears. Success is transcript-silent: the committed answer or
+tool rows already carry the result, and a reasoning-only success simply
+returns to idle. Interrupted, limited, needs-input, and failed turns retain a
+quiet attributed notice with elapsed time when the live reducer measured one.
+Canonical session history and the journal retain the start/completion events,
+timestamps, and reasoning needed for model continuity, replay, timelines, and
+diagnostics; historical durations are not invented when replay has no local
+timing record.
 
 ## 4. Color
 
@@ -192,12 +208,14 @@ hint row.
 | `Enter` | Send the composer |
 | `Shift+Enter` / `Alt+Enter` | Newline in the composer |
 | `Esc` | Interrupt the running turn; if idle, clear the composer |
-| `Ctrl+C` | Quit (confirm if work is live); twice within 1s forces quit |
+| `Ctrl+C` | Stash and clear the composer; twice within 1s exits from any state |
 | `Ctrl+P` | Open command completion using the shared command registry |
 | `Tab` | Cycle root agent mode only when empty and idle; otherwise complete or move the active overlay selection |
 | `Shift+Tab` | Move the active completion/questionnaire selection backward |
 | `PageUp` / `PageDown` / `Home` / `End` | Scroll transcript or jump to either edge |
 | `Ctrl+L` | Jump to newest and re-enable follow |
+| `?` (empty composer) | Show the same local guide as `/help`; never contact the provider |
+| `Up` / `Down` (draft recall) | Recall drafts stashed by `Ctrl+C` or return toward empty |
 | `y` / `n` / `a` | Approval: allow once / deny / allow for session |
 | `Up` / `Down` or `1`–`9` | Questionnaire: move to or stage a labelled choice |
 | `Space` | Questionnaire: select the highlighted choice; never submit |
@@ -222,10 +240,11 @@ literal leading slash to the provider.
 ### Agent-first composer actions
 
 The empty idle footer identifies the selected root mode beside provider/model,
-project/branch, and honest context confidence. A second row advertises `Tab
-agents`, `Ctrl+P commands`, `@ files/agents`, and `! shell`. This identity
-disappears while work is active; it is not a permanent header. At 44 columns,
-low-priority path and shortcut detail disappear before mode, activity, model,
+project/branch, and honest context confidence. It does not reserve a persistent
+shortcut strip: `?` from an empty composer and `/help` both render the bounded
+local command/composer guide without provider spend or canonical history. This
+identity disappears while work is active; it is not a permanent header. At 44
+columns, low-priority path detail disappears before mode, activity, model,
 approval, or context provenance.
 
 `build`, `plan`, and `review` are host-owned policy presets. `plan` and
@@ -262,20 +281,26 @@ model-requested `shell` call, then renders the committed result locally. It
 does not send a provider request. `!!` sends a normal prompt beginning with one
 literal `!`.
 
-During work, one reducer-owned summary replaces itself in place with plan
-counts, tools, validation gates, retries, changed paths, and children.
-`/details` toggles bounded redaction-safe projections. Every terminal boundary
-commits one evidence row and reconciles pending/in-progress todo items to
-`cancelled (turn_ended_unfinished)` rather than inventing completion.
+During work, the latest public todo projection replaces itself in a bounded
+pane anchored immediately above the composer. It remains there through the
+turn terminal and clears when the next turn starts. Sensitive plans expose no
+item text and therefore open no pane. A compact picker temporarily replaces
+this pane without mutating the todo projection, which returns when the picker
+closes. The transcript's progress row stays
+quiet — `Working… · 12s` — while `/details` may explicitly add bounded
+redaction-safe tool lifecycle lines. No aggregate `work` row is committed at
+the terminal. Every terminal boundary still reconciles pending/in-progress
+todo items to `cancelled (turn_ended_unfinished)` rather than inventing
+completion.
 
 The initial command set is deliberately bounded:
 
 | Command | Result |
 | --- | --- |
-| `/help` | List every implemented command, grouped by primary and advanced use. |
+| `/help` | List every implemented command and composer shortcut locally, grouped by primary and advanced use. |
 | `/status` | Show resolved runtime, context window, session, permission, Git, child, and attribution state locally. |
 | `/context` | Visualize the latest model-facing context plan, free input space, reserves, and compaction state locally. |
-| `/details` | Toggle bounded redaction-safe live-work detail. |
+| `/details` | Toggle bounded redaction-safe live tool detail beneath the working row. |
 | `/timeline` | Show ordered root turn, child, terminal plan/gate, and recovery evidence locally. |
 | `/new` | Save the current session and create a fresh identity. |
 | `/resume [ID]` | With no ID, choose a project session locally; otherwise validate and resume `ID`. |
@@ -502,6 +527,26 @@ stable non-success results rather than reading stdin or waiting indefinitely.
 
 ## 7. Status honesty
 
+### Project instruction context
+
+A standard interactive or headless host examines exactly
+`<canonical-project-root>/AGENTS.md` before runtime construction. Absence is
+ordinary; a present file must be a regular non-symlinked UTF-8 file no larger
+than 32 KiB or startup fails before provider, session, or terminal work. Smith
+captures one immutable snapshot for the constructed runtime and every direct
+child. It does not search parent/nested directories, expand include syntax,
+watch the file, or mutate an active context after an edit.
+
+The snapshot is a required developer-instruction fragment separate from
+Smith's independently revisioned product policy, optional retrieval context,
+and canonical user history. Its source and content-derived revision enter the
+composition/context manifest. A newly constructed runtime sees a changed file
+and gets a new exact prompt/cache identity; an active runtime keeps its old
+snapshot. An explicit complete host system-prompt override remains a complete
+replacement and receives no implicit project fragment. Project text may guide
+work but never grants tools, permissions, approval, executable trust, or a
+wider workspace.
+
 The footer and `/status` carry the provenance rules from `usage-accounting`
 directly into glyphs. The footer's `ctx` value comes from the latest enforced
 plan, while provider-reported cumulative input appears only in `/status`:
@@ -557,12 +602,14 @@ mechanism for child results sent to the parent model. It is not a visible or
 focusable TUI region. `/agent` provides child list, status, and result detail
 on demand.
 
-A todo update is a bounded inline `plan` notice and optional local detail, not
-a permanent pane. Public items show their stable id/status/text; sensitive
-plans show aggregate counts only, even if an invalid replay payload attempts to
-attach text. Oversized tool output appears as a bounded preview plus an opaque
-artifact reference. Artifact bodies remain in user state and are fetched only
-through authorized, paginated reads.
+A todo update replaces the bounded anchored pane above the composer. Public
+items show status and text in authored order; sensitive plans show no pane,
+even if an invalid replay payload attempts to attach text. The pane is not
+focusable and never enters canonical model history. A compact picker replaces
+the todo presentation while open and restores it unchanged on close.
+Oversized tool output appears as a
+bounded preview plus an opaque artifact reference. Artifact bodies remain in
+user state and are fetched only through authorized, paginated reads.
 
 On resume, Smith runs the coordinator's asynchronous recovery pass before it
 accepts commands. The pass reconciles a lagging parent catalog against each

@@ -37,6 +37,7 @@ use crate::journal::{
     JournalRecovery, JournalStats, Redactor, read_journal, reconcile_nonterminal_journal,
 };
 use crate::private_storage::{PrivateFileLock, try_acquire_private_lock};
+use crate::project_instructions::discover as discover_project_instructions;
 use crate::session::{FileSessionStore, ProjectId, SessionListing, SessionPaths};
 use crate::summary::SmithSemanticSummaryConfig;
 
@@ -284,6 +285,10 @@ pub enum HostSessionError {
 /// first session event is emitted. A bad provider configuration therefore
 /// cannot leave an empty session journal behind.
 pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostSessionError> {
+    if request.runtime.system_prompt.is_none() && request.runtime.project_instructions.is_none() {
+        request.runtime.project_instructions =
+            discover_project_instructions(&request.project_root)?;
+    }
     let config = request.runtime.config.clone();
     let surface = request.runtime.surface;
     reject_project_granted_authority(&config, &request.project_root)?;

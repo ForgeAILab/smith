@@ -57,20 +57,22 @@ completed_at: 2026-08-01T00:44:17Z
 
 ## 4. TUI presentation and navigation
 
-- [x] 4.1 Render idle agent/mode, provider/model, project/branch, context, and
-  prioritized shortcut hints without a permanent header; implement empty-idle
-  `Tab` mode cycling.
+- [x] 4.1 Render idle agent/mode, provider/model, project/branch, and context
+  without a permanent header or shortcut strip; implement empty-idle `Tab`
+  mode cycling plus stateless `?`/`/help` discovery.
 - [x] 4.2 Render `@` completion with labelled file/agent entries and preserve
   current command/questionnaire/approval keyboard contracts.
-- [x] 4.3 Add one replaceable replay-equivalent work summary for plan, active
-  tools, gates, retries, changed paths, and children plus a bounded `/details`
-  toggle.
+- [x] 4.3 Add one replaceable replay-equivalent public todo pane anchored above
+  the composer, keep the default working row aggregate-free, and retain a
+  bounded `/details` toggle for explicit tool lifecycle detail.
 - [x] 4.4 Add `/timeline` and temporary previous/next/parent child inspection
   while keeping the root composer as the only persistent focus.
 - [x] 4.5 Add `/redo` preview/confirmation over exact recovery records and
   fail closed for stale or ambiguous changes.
 - [x] 4.6 Add snapshot and PTY coverage at 44x14, 74x24, and 120x32, with
   colorless/reduced-motion/accessibility assertions.
+- [x] 4.7 Require double-`Ctrl+C` exit and retain the first-cleared draft in
+  bounded local Up/Down recall history.
 
 ## 5. Persistence, cleanliness, and compatibility
 

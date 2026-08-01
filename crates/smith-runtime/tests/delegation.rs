@@ -46,6 +46,7 @@ use smith_host::ProjectWorkspace;
 use smith_runtime::artifact::SmithArtifactStore;
 use smith_runtime::delegation::{AGENT_TOOL_NAME, AgentTool, wire_delegation};
 use smith_runtime::factory::{self, HostSurface, RuntimeRequest};
+use smith_runtime::project_instructions::ProjectInstructionsSnapshot;
 
 const FAKE_CONFIG: &str = r#"
 default_profile = "dev"
@@ -748,10 +749,18 @@ async fn a_spawned_child_completes_and_its_result_reaches_the_parent_model() {
     let fixture = Fixture::new();
     let provider = scripted(3, "the child's findings");
     let mut runtime_request = request(&fixture, provider.clone());
+    let project_instructions =
+        ProjectInstructionsSnapshot::from_body("SHARED_PARENT_CHILD_INSTRUCTIONS")
+            .expect("bounded project instructions");
+    runtime_request.project_instructions = Some(project_instructions.clone());
     runtime_request.event_buffer = 1;
     let smith = factory::build(runtime_request)
         .await
         .expect("a runtime with a one-event presentation buffer");
+    assert_eq!(
+        smith.policy().project_instructions.as_ref(),
+        Some(&project_instructions.identity())
+    );
 
     let session = smith
         .runtime()
@@ -799,6 +808,11 @@ async fn a_spawned_child_completes_and_its_result_reaches_the_parent_model() {
     // the executable view: at least one relevant read tool plus the protected
     // discovery bootstrap, and never a mutation/delegation/question surface.
     let child_request = &provider.requests()[0];
+    let child_wire = serde_json::to_string(&child_request.messages).expect("child messages");
+    assert!(
+        child_wire.contains("SHARED_PARENT_CHILD_INSTRUCTIONS"),
+        "{child_wire}"
+    );
     let names: Vec<&str> = child_request
         .tools
         .iter()
@@ -825,6 +839,11 @@ async fn a_spawned_child_completes_and_its_result_reaches_the_parent_model() {
         .await
         .expect("the parent turn runs");
     let parent_request = provider.requests()[1].clone();
+    let parent_wire = serde_json::to_string(&parent_request.messages).expect("parent messages");
+    assert!(
+        parent_wire.contains("SHARED_PARENT_CHILD_INSTRUCTIONS"),
+        "{parent_wire}"
+    );
     let deliveries = parent_request
         .messages
         .iter()

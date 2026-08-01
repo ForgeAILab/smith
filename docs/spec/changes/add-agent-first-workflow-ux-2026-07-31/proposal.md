@@ -22,8 +22,11 @@ redacted journals, project cleanliness, and transcript-first presentation.
 ## What Changes
 
 - Enrich the idle composer/footer with the active agent mode, provider/model,
-  project and branch, context provenance, and the smallest useful shortcut
-  hints without adding a permanent header or pane.
+  project and branch, and context provenance without adding a permanent header,
+  pane, or shortcut strip; expose the local command/composer guide through `?`
+  and `/help` on demand.
+- Require two `Ctrl+C` presses within one second to exit, with the first press
+  clearing and locally stashing the draft for `Up`-arrow recovery.
 - Add bounded Smith-owned `build`, `plan`, and `review` agent modes. **BREAKING:**
   `Tab` on an empty idle composer cycles these modes instead of being a no-op;
   command, questionnaire, and completion overlays retain their current `Tab`
@@ -32,9 +35,10 @@ redacted journals, project cleanliness, and transcript-first presentation.
   attachments and explicit read-only child-agent presets, plus a `!` local
   shell shortcut that executes only through Smith's prepared tool authority
   and approval path.
-- Replace noisy repeated lifecycle notices with one replay-equivalent live work
-  summary, add a details toggle, and expose local session/child timeline and
-  safe redo navigation without adding project metadata files.
+- Replace noisy repeated lifecycle notices and aggregate work rows with one
+  replay-equivalent todo pane anchored above the composer, add a details
+  toggle for explicit tool lifecycle detail, and expose local session/child
+  timeline and safe redo navigation without adding project metadata files.
 - Make successful and unsuccessful terminal results reconcile todo state,
   discard uncommitted reasoning on limits/retries, and keep machine output
   structurally honest.

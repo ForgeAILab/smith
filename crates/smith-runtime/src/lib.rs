@@ -23,6 +23,7 @@ pub mod journal;
 pub mod memory;
 pub mod model_catalog;
 mod private_storage;
+pub mod project_instructions;
 pub mod prompt;
 pub mod response;
 pub mod session;

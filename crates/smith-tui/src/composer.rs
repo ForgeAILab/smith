@@ -5,12 +5,21 @@
 //! and panics the renderer — which is exactly what happens the first time
 //! someone types an accented character into a byte-indexed buffer.
 
+use std::collections::VecDeque;
+
+/// Drafts interrupted with `Ctrl+C` are intentionally bounded local UI state.
+const MAX_STASHED_DRAFTS: usize = 100;
+
 /// A multi-line text buffer with a cursor.
 #[derive(Debug, Clone, Default)]
 pub struct Composer {
     text: String,
     /// Cursor position, counted in characters from the start.
     cursor: usize,
+    /// Composer drafts cleared by the first `Ctrl+C`, oldest first.
+    stashed_drafts: VecDeque<String>,
+    /// Draft currently selected while navigating [`Self::stashed_drafts`].
+    history_cursor: Option<usize>,
 }
 
 impl Composer {
@@ -53,6 +62,7 @@ impl Composer {
 
     /// Inserts a character at the cursor.
     pub fn insert(&mut self, ch: char) {
+        self.history_cursor = None;
         let offset = self.byte_offset(self.cursor);
         self.text.insert(offset, ch);
         self.cursor += 1;
@@ -60,6 +70,7 @@ impl Composer {
 
     /// Inserts a string at the cursor, as a paste would.
     pub fn insert_str(&mut self, value: &str) {
+        self.history_cursor = None;
         let offset = self.byte_offset(self.cursor);
         self.text.insert_str(offset, value);
         self.cursor += value.chars().count();
@@ -73,6 +84,7 @@ impl Composer {
         let offset = self.byte_offset(self.cursor - 1);
         self.text.remove(offset);
         self.cursor -= 1;
+        self.history_cursor = None;
     }
 
     /// Deletes the character at the cursor.
@@ -82,6 +94,7 @@ impl Composer {
         }
         let offset = self.byte_offset(self.cursor);
         self.text.remove(offset);
+        self.history_cursor = None;
     }
 
     /// Moves the cursor one character left.
@@ -118,12 +131,65 @@ impl Composer {
     pub fn clear(&mut self) {
         self.text.clear();
         self.cursor = 0;
+        self.history_cursor = None;
     }
 
     /// Replaces the draft and leaves the cursor at its end.
     pub fn replace(&mut self, value: impl Into<String>) {
         self.text = value.into();
         self.cursor = self.text.chars().count();
+        self.history_cursor = None;
+    }
+
+    /// Clears the current draft and keeps it in bounded local recall history.
+    pub fn stash_for_recall(&mut self) {
+        let draft = std::mem::take(&mut self.text);
+        self.cursor = 0;
+        self.history_cursor = None;
+        if draft.trim().is_empty() || self.stashed_drafts.back() == Some(&draft) {
+            return;
+        }
+        if self.stashed_drafts.len() == MAX_STASHED_DRAFTS {
+            self.stashed_drafts.pop_front();
+        }
+        self.stashed_drafts.push_back(draft);
+    }
+
+    /// Recalls the previous draft cleared with `Ctrl+C`.
+    pub fn recall_previous(&mut self) -> bool {
+        let Some(last) = self.stashed_drafts.len().checked_sub(1) else {
+            return false;
+        };
+        let index = self
+            .history_cursor
+            .map_or(last, |current| current.saturating_sub(1));
+        self.history_cursor = Some(index);
+        self.text.clone_from(&self.stashed_drafts[index]);
+        self.cursor = self.text.chars().count();
+        true
+    }
+
+    /// Moves toward newer recalled drafts, clearing after the newest entry.
+    pub fn recall_next(&mut self) -> bool {
+        let Some(current) = self.history_cursor else {
+            return false;
+        };
+        if current + 1 < self.stashed_drafts.len() {
+            let index = current + 1;
+            self.history_cursor = Some(index);
+            self.text.clone_from(&self.stashed_drafts[index]);
+            self.cursor = self.text.chars().count();
+        } else {
+            self.text.clear();
+            self.cursor = 0;
+            self.history_cursor = None;
+        }
+        true
+    }
+
+    /// Whether Up/Down currently navigate interrupted-draft history.
+    pub fn is_recalling(&self) -> bool {
+        self.history_cursor.is_some()
     }
 
     /// Empties the buffer and returns its trimmed contents.
@@ -239,5 +305,38 @@ mod tests {
         composer.insert_str("  \n ");
         assert!(composer.is_blank());
         assert!(!composer.is_empty());
+    }
+
+    #[test]
+    fn stashed_drafts_are_recalled_newest_first_and_can_return_to_empty() {
+        let mut composer = Composer::new();
+        composer.insert_str("first draft");
+        composer.stash_for_recall();
+        composer.insert_str("second\ndraft");
+        composer.stash_for_recall();
+
+        assert!(composer.is_empty());
+        assert!(composer.recall_previous());
+        assert_eq!(composer.text(), "second\ndraft");
+        assert!(composer.recall_previous());
+        assert_eq!(composer.text(), "first draft");
+        assert!(composer.recall_next());
+        assert_eq!(composer.text(), "second\ndraft");
+        assert!(composer.recall_next());
+        assert!(composer.is_empty());
+        assert!(!composer.is_recalling());
+    }
+
+    #[test]
+    fn editing_a_recalled_draft_leaves_history_navigation() {
+        let mut composer = Composer::new();
+        composer.insert_str("recover me");
+        composer.stash_for_recall();
+        assert!(composer.recall_previous());
+
+        composer.insert('!');
+        assert_eq!(composer.text(), "recover me!");
+        assert!(!composer.is_recalling());
+        assert!(!composer.recall_next());
     }
 }

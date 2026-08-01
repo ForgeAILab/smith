@@ -86,7 +86,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "details",
         argument_hint: "",
-        description: "toggle bounded live-work detail",
+        description: "toggle bounded live tool detail",
         requires_idle: false,
         advanced: false,
     },
@@ -264,9 +264,12 @@ pub fn help() -> String {
     }
     output.push_str(
         "\nComposer\n\
+         ? or /help shows this local guide without contacting the model.\n\
          Tab cycles build/plan/review only while empty and idle.\n\
          @ completes exact files and read-only agents; @@ sends a literal @.\n\
          ! runs a prepared local shell action; !! sends a literal !.\n\
+         Up recalls a draft cleared by Ctrl+C; Down returns toward empty.\n\
+         Ctrl+C twice within 1s exits; the first press stashes the draft.\n\
          Start a message with // to send a literal leading slash.",
     );
     output

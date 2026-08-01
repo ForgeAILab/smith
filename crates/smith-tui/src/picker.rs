@@ -12,6 +12,12 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::theme::{Theme, Tone};
 
+/// Maximum number of resource matches shown beside the composer.
+///
+/// Runtime choice is deliberately a small Codex-style pane. Setup and the
+/// standalone pre-host resume surface keep using the full bordered picker.
+const COMPACT_VISIBLE_ENTRIES: usize = 5;
+
 /// One locally selectable resource.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceEntry {
@@ -201,6 +207,49 @@ pub fn draw_resource_picker(
     );
 }
 
+/// Draws a bounded runtime picker directly above the fixed composer.
+pub(crate) fn draw_compact_resource_picker(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    picker: &ResourcePicker,
+    theme: Theme,
+) {
+    if area.is_empty() {
+        return;
+    }
+
+    let indices = picker.filtered_indices();
+    let selected = picker.selected.min(indices.len().saturating_sub(1));
+    let position = if indices.len() > COMPACT_VISIBLE_ENTRIES {
+        format!(" · {}/{}", selected.saturating_add(1), indices.len())
+    } else {
+        String::new()
+    };
+    let filter = if picker.query.is_empty() {
+        "type to filter".to_owned()
+    } else {
+        format!("filter: {}", picker.query)
+    };
+    let mut lines = vec![Line::from(vec![
+        Span::styled(format!("  {}", picker.title), theme.style(Tone::Heading)),
+        Span::styled(format!(" · {filter}{position}"), theme.style(Tone::Dim)),
+    ])];
+    lines.extend(picker_entry_lines(
+        picker,
+        usize::from(area.height).saturating_sub(1),
+        theme,
+    ));
+    // Runtime entries stay one row each. Long metadata clips at the terminal
+    // edge instead of making the compact pane grow or reflow.
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// Rows requested by the compact runtime picker before terminal constraints.
+pub(crate) fn compact_resource_picker_rows(picker: &ResourcePicker) -> u16 {
+    let matches = picker.filtered_indices().len().max(1);
+    u16::try_from(matches.min(COMPACT_VISIBLE_ENTRIES).saturating_add(1)).unwrap_or(u16::MAX)
+}
+
 fn picker_lines(picker: &ResourcePicker, height: usize, theme: Theme) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(vec![
         Span::styled(" filter: ", theme.style(Tone::Dim)),
@@ -217,6 +266,12 @@ fn picker_lines(picker: &ResourcePicker, height: usize, theme: Theme) -> Vec<Lin
             }),
         ),
     ])];
+    lines.extend(picker_entry_lines(picker, height.saturating_sub(1), theme));
+    lines
+}
+
+fn picker_entry_lines(picker: &ResourcePicker, height: usize, theme: Theme) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
     let indices = picker.filtered_indices();
     if indices.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -224,7 +279,7 @@ fn picker_lines(picker: &ResourcePicker, height: usize, theme: Theme) -> Vec<Lin
             theme.style(Tone::Warning),
         )));
     } else {
-        let capacity = height.saturating_sub(1).max(1);
+        let capacity = height.max(1);
         let selected = picker.selected.min(indices.len().saturating_sub(1));
         let start = selected
             .saturating_sub(capacity / 2)
