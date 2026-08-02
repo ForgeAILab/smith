@@ -115,7 +115,7 @@ provider = "remote"
 model = "example-model"
 
 [providers.remote]
-kind = "anthropic-messages"
+kind = "grpc-frontier"
 base_url = "https://api.example.test/v1"
 
 [models."remote/example-model"]
@@ -1073,9 +1073,10 @@ async fn an_adapter_the_pinned_runtime_does_not_ship_is_reported_as_unavailable(
         "{err}"
     );
     let rendered = err.to_string();
-    assert!(rendered.contains("anthropic-messages"), "{rendered}");
+    assert!(rendered.contains("grpc-frontier"), "{rendered}");
     // It says which adapters exist rather than quietly picking one.
     assert!(rendered.contains("openai-compatible"), "{rendered}");
+    assert!(rendered.contains("anthropic-messages"), "{rendered}");
 }
 
 #[tokio::test]

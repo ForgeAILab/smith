@@ -7,7 +7,10 @@
 
 use std::collections::BTreeSet;
 
-use crate::model::{KIND_OPENAI_COMPATIBLE, ReasoningOnlyBehavior};
+use crate::model::{
+    ANTHROPIC_DEFAULT_ENDPOINT, KIND_ANTHROPIC_MESSAGES, KIND_OPENAI_COMPATIBLE,
+    ReasoningOnlyBehavior,
+};
 
 /// Revision of the trusted model data shipped with this Smith build.
 pub const TRUSTED_MODEL_CATALOG_REVISION: u32 = 2;
@@ -136,6 +139,18 @@ const DESCRIPTORS: &[ProviderSetupDescriptor] = &[
         profile: None,
         adapter: KIND_OPENAI_COMPATIBLE,
         endpoint: None,
+        credentials: CREDENTIAL_METHODS,
+        models: &[],
+        reasoning_only: None,
+    },
+    ProviderSetupDescriptor {
+        id: "anthropic-messages",
+        label: "Anthropic Messages API",
+        description: "Native Claude endpoint with images and thinking; enter a model ID and limits",
+        provider: None,
+        profile: None,
+        adapter: KIND_ANTHROPIC_MESSAGES,
+        endpoint: Some(ANTHROPIC_DEFAULT_ENDPOINT),
         credentials: CREDENTIAL_METHODS,
         models: &[],
         reasoning_only: None,

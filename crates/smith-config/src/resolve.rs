@@ -45,9 +45,9 @@ use sha2::{Digest, Sha256};
 
 use crate::model::{
     AgentModeSection, AgentPosture, ApprovalMode, ApprovalSection, BackgroundExit,
-    BackgroundSection, ChildAgentSection, ConfigFile, ContextSection, KIND_FAKE,
-    KIND_OPENAI_COMPATIBLE, LimitsSection, PersistenceSection, ProfileUse, ReasoningDialect,
-    ReasoningOnlyBehavior,
+    BackgroundSection, ChildAgentSection, ConfigFile, ContextSection, KIND_ANTHROPIC_MESSAGES,
+    KIND_FAKE, KIND_OPENAI_COMPATIBLE, LimitsSection, PersistenceSection, ProfileUse,
+    ReasoningDialect, ReasoningOnlyBehavior,
 };
 
 /// The directory Smith keeps its per-user and per-project state in.
@@ -2910,8 +2910,10 @@ fn validate_provider(provider: &ResolvedProvider) -> Result<(), ConfigError> {
             });
         }
     }
-    if provider.kind.value != KIND_OPENAI_COMPATIBLE
-        && let Some(policy) = &provider.response.reasoning_only
+    if !matches!(
+        provider.kind.value.as_str(),
+        KIND_OPENAI_COMPATIBLE | KIND_ANTHROPIC_MESSAGES
+    ) && let Some(policy) = &provider.response.reasoning_only
     {
         return Err(ConfigError::IncompatibleOption {
             source: policy.source.clone(),
@@ -2932,6 +2934,10 @@ fn validate_provider(provider: &ResolvedProvider) -> Result<(), ConfigError> {
                 });
             }
         }
+        // The Messages API has one well-known endpoint, so `base_url` is
+        // optional and defaults at provider construction; everything else a
+        // provider table carries (credential, headers) applies unchanged.
+        KIND_ANTHROPIC_MESSAGES => {}
         KIND_FAKE => {
             for (source, option) in [
                 (provider.base_url.as_ref(), "base_url"),

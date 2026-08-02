@@ -631,6 +631,12 @@ impl BackgroundExit {
 /// The adapter kind Smith's first production provider maps to.
 pub const KIND_OPENAI_COMPATIBLE: &str = "openai-compatible";
 
+/// The adapter kind for the native Anthropic Messages API.
+pub const KIND_ANTHROPIC_MESSAGES: &str = "anthropic-messages";
+
+/// The endpoint an `anthropic-messages` provider uses when none is configured.
+pub const ANTHROPIC_DEFAULT_ENDPOINT: &str = "https://api.anthropic.com/v1";
+
 /// The adapter kind deterministic tests and development runs use.
 pub const KIND_FAKE: &str = "fake";
 

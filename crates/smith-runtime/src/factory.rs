@@ -65,6 +65,7 @@ use agent_runtime::harness::{
     TodoComponent, UpdateGoalTool, WriteTodosTool,
 };
 use agent_runtime::hub::{ScopeIdentity, ScopeInputs};
+use agent_runtime::provider::anthropic::{AnthropicConfig, AnthropicProvider};
 use agent_runtime::provider::fake::FakeProvider;
 use agent_runtime::provider::openai::{OpenAiConfig, OpenAiProvider};
 use agent_runtime::provider::retry::RetryPolicy;
@@ -90,7 +91,8 @@ use smith_config::credential::{
     CredentialError, CredentialRef, CredentialRefError, CredentialResolver,
 };
 use smith_config::model::{
-    AgentPosture, ApprovalMode, KIND_FAKE, KIND_OPENAI_COMPATIBLE, ProfileUse,
+    AgentPosture, ApprovalMode, KIND_ANTHROPIC_MESSAGES, KIND_FAKE, KIND_OPENAI_COMPATIBLE,
+    ProfileUse,
 };
 use smith_config::resolve::{ResolvedConfig, ResolvedProvider};
 use smith_config::setup::trusted_model;
@@ -160,7 +162,8 @@ pub const DEFAULT_CREDENTIAL_TIMEOUT_MS: u64 = 30_000;
 /// Adapter kinds compiled into this Smith build.
 ///
 /// Setup uses this list to hide descriptors it cannot actually compose.
-pub const AVAILABLE_ADAPTER_KINDS: &[&str] = &[KIND_OPENAI_COMPATIBLE, KIND_FAKE];
+pub const AVAILABLE_ADAPTER_KINDS: &[&str] =
+    &[KIND_OPENAI_COMPATIBLE, KIND_ANTHROPIC_MESSAGES, KIND_FAKE];
 
 /// Which Smith presentation asked for this runtime.
 ///
@@ -555,7 +558,8 @@ pub enum FactoryError {
     /// The configured adapter kind is not one the pinned runtime ships.
     #[error(
         "provider `{provider}` selects the `{kind}` adapter, which this build of Agent Runtime \
-         does not ship; the available kinds are `{KIND_OPENAI_COMPATIBLE}` and `{KIND_FAKE}`"
+         does not ship; the available kinds are `{KIND_OPENAI_COMPATIBLE}`, \
+         `{KIND_ANTHROPIC_MESSAGES}`, and `{KIND_FAKE}`"
     )]
     AdapterUnavailable {
         /// The provider that selected it.
@@ -646,6 +650,8 @@ pub enum FactoryError {
 enum Adapter {
     /// Agent Runtime's OpenAI-compatible Chat-Completions adapter.
     OpenAiCompatible,
+    /// Agent Runtime's native Anthropic Messages API adapter.
+    AnthropicMessages,
     /// Agent Runtime's deterministic fake.
     Fake,
 }
@@ -1264,7 +1270,11 @@ async fn prepare_factory_inputs(
     // wire protocol.
     let adapter = adapter(&config.provider)?;
     let endpoint = match adapter {
-        Adapter::OpenAiCompatible => Some(endpoint(&config.provider)?),
+        Adapter::OpenAiCompatible => Some(endpoint(&config.provider, None)?),
+        Adapter::AnthropicMessages => Some(endpoint(
+            &config.provider,
+            Some(smith_config::model::ANTHROPIC_DEFAULT_ENDPOINT),
+        )?),
         Adapter::Fake => None,
     };
 
@@ -1350,6 +1360,7 @@ async fn prepare_factory_inputs(
 fn adapter(provider: &ResolvedProvider) -> Result<Adapter, FactoryError> {
     match provider.kind.value.as_str() {
         KIND_OPENAI_COMPATIBLE => Ok(Adapter::OpenAiCompatible),
+        KIND_ANTHROPIC_MESSAGES => Ok(Adapter::AnthropicMessages),
         KIND_FAKE => Ok(Adapter::Fake),
         kind => Err(FactoryError::AdapterUnavailable {
             provider: provider.name.value.clone(),
@@ -1360,19 +1371,26 @@ fn adapter(provider: &ResolvedProvider) -> Result<Adapter, FactoryError> {
 
 /// Validates the configured endpoint and normalizes it for the adapter.
 ///
+/// `default` supplies the endpoint for adapters whose wire protocol has one
+/// well-known home (the Anthropic Messages API); without it, a missing
+/// `base_url` is a configuration error.
+///
 /// No message repeats the URL. A base URL is the other place a key is known to
 /// be pasted — as userinfo or as a query parameter — and both are refused here
 /// rather than forwarded, because a credential in a URL ends up in a log the
 /// moment anything prints the request target.
-fn endpoint(provider: &ResolvedProvider) -> Result<String, FactoryError> {
+fn endpoint(provider: &ResolvedProvider, default: Option<&str>) -> Result<String, FactoryError> {
     let refuse = |message: &str| FactoryError::Endpoint {
         provider: provider.name.value.clone(),
         message: message.to_owned(),
     };
-    let configured = provider
-        .base_url
-        .as_ref()
-        .ok_or_else(|| refuse("an OpenAI-compatible provider needs the endpoint it talks to"))?;
+    let configured = match (&provider.base_url, default) {
+        (Some(configured), _) => configured,
+        (None, Some(default)) => return Ok(default.trim_end_matches('/').to_owned()),
+        (None, None) => {
+            return Err(refuse("the provider needs the endpoint it talks to"));
+        }
+    };
 
     let url = Url::parse(&configured.value).map_err(|_| refuse("it is not an absolute URL"))?;
     if !matches!(url.scheme(), "http" | "https") {
@@ -1473,6 +1491,28 @@ fn construct(
             // The secret's first and last stop.
             config.api_key = secret;
             Ok(Arc::new(OpenAiProvider::new(transport, config)))
+        }
+        Adapter::AnthropicMessages => {
+            let transport = ReqwestTransport::new(request.transport.clone())
+                .map_err(FactoryError::Transport)?;
+            let mut config = AnthropicConfig::new(
+                endpoint.unwrap_or_default(),
+                request.config.model.value.clone(),
+            );
+            // The resolved profile governs request validation, so the adapter
+            // is told what the profile declared rather than a provider-wide
+            // guess about every model the endpoint might serve.
+            config.capabilities = profile.capabilities.clone();
+            config.extra_headers = request
+                .config
+                .provider
+                .headers
+                .iter()
+                .map(|(name, value)| (name.clone(), value.value.clone()))
+                .collect();
+            // The secret's first and last stop.
+            config.api_key = secret;
+            Ok(Arc::new(AnthropicProvider::new(transport, config)))
         }
     }
 }
@@ -1847,10 +1887,11 @@ mod tests {
 
     #[test]
     fn an_adapter_this_build_does_not_ship_is_never_routed_elsewhere() {
-        let err = adapter(&provider("anthropic-messages", None)).expect_err("unavailable");
+        let err = adapter(&provider("grpc-frontier", None)).expect_err("unavailable");
         assert!(matches!(err, FactoryError::AdapterUnavailable { .. }));
-        assert!(err.to_string().contains("anthropic-messages"));
+        assert!(err.to_string().contains("grpc-frontier"));
         assert!(err.to_string().contains(KIND_OPENAI_COMPATIBLE));
+        assert!(err.to_string().contains(KIND_ANTHROPIC_MESSAGES));
 
         assert_eq!(
             adapter(&provider(
@@ -1861,17 +1902,55 @@ mod tests {
             Adapter::OpenAiCompatible
         );
         assert_eq!(
+            adapter(&provider(KIND_ANTHROPIC_MESSAGES, None)).expect("a known kind"),
+            Adapter::AnthropicMessages
+        );
+        assert_eq!(
             adapter(&provider(KIND_FAKE, None)).expect("a known kind"),
             Adapter::Fake
         );
     }
 
     #[test]
+    fn an_anthropic_provider_defaults_to_the_official_endpoint() {
+        let defaulted = endpoint(
+            &provider(KIND_ANTHROPIC_MESSAGES, None),
+            Some(smith_config::model::ANTHROPIC_DEFAULT_ENDPOINT),
+        )
+        .expect("the default endpoint");
+        assert_eq!(defaulted, "https://api.anthropic.com/v1");
+
+        // A configured endpoint (e.g. a gateway) still wins and is validated.
+        let configured = endpoint(
+            &provider(
+                KIND_ANTHROPIC_MESSAGES,
+                Some("https://claude-gw.example.test/v1/"),
+            ),
+            Some(smith_config::model::ANTHROPIC_DEFAULT_ENDPOINT),
+        )
+        .expect("a configured endpoint");
+        assert_eq!(configured, "https://claude-gw.example.test/v1");
+
+        let err = endpoint(
+            &provider(
+                KIND_ANTHROPIC_MESSAGES,
+                Some("https://key@claude-gw.example.test/v1"),
+            ),
+            Some(smith_config::model::ANTHROPIC_DEFAULT_ENDPOINT),
+        )
+        .expect_err("credentials in the URL are refused even with a default");
+        assert!(err.to_string().contains("unusable"));
+    }
+
+    #[test]
     fn an_endpoint_keeps_its_path_and_loses_its_trailing_slash() {
-        let endpoint = endpoint(&provider(
-            KIND_OPENAI_COMPATIBLE,
-            Some("https://api.example.test:8443/v1/"),
-        ))
+        let endpoint = endpoint(
+            &provider(
+                KIND_OPENAI_COMPATIBLE,
+                Some("https://api.example.test:8443/v1/"),
+            ),
+            None,
+        )
         .expect("an endpoint");
         assert_eq!(endpoint, "https://api.example.test:8443/v1");
     }
@@ -1882,7 +1961,7 @@ mod tests {
             &format!("https://smith:{TOKEN}@api.example.test/v1"),
             &format!("https://api.example.test/v1?api_key={TOKEN}"),
         ] {
-            let err = endpoint(&provider(KIND_OPENAI_COMPATIBLE, Some(url)))
+            let err = endpoint(&provider(KIND_OPENAI_COMPATIBLE, Some(url)), None)
                 .expect_err("a refused endpoint");
             let rendered = format!("{err} {err:?}");
             assert!(!rendered.contains(TOKEN), "{rendered}");
@@ -1893,7 +1972,7 @@ mod tests {
     fn an_endpoint_must_be_an_absolute_http_url() {
         for url in ["api.example.test/v1", "ftp://api.example.test/v1"] {
             assert!(
-                endpoint(&provider(KIND_OPENAI_COMPATIBLE, Some(url))).is_err(),
+                endpoint(&provider(KIND_OPENAI_COMPATIBLE, Some(url)), None).is_err(),
                 "{url}"
             );
         }
