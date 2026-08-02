@@ -1540,6 +1540,7 @@ max_output_tokens = 4096
                     ProviderStreamEvent::ReasoningDelta {
                         text: "the current turn has no visible answer".into(),
                         redacted: false,
+                        signature: None,
                     },
                     ProviderStreamEvent::Finish {
                         reason: FinishReason::Stop,

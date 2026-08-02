@@ -138,6 +138,7 @@ impl Stream for ReasoningOnlyTextStream {
                         ProviderStreamEvent::ReasoningDelta {
                             text,
                             redacted: false,
+                            ..
                         } => {
                             this.reasoning.push_str(text);
                             Action::Buffer
@@ -241,6 +242,7 @@ mod tests {
         ProviderStreamEvent::ReasoningDelta {
             text: text.into(),
             redacted,
+            signature: None,
         }
     }
 
