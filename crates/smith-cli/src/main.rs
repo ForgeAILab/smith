@@ -2109,7 +2109,7 @@ fn runtime_resources(
                 .map_or("read-only child preset", |value| value.value.as_str());
             ResourceEntry::new(
                 format!("agent:{name}"),
-                format!("@{name}"),
+                name.clone(),
                 format!("agent · {} · {description}", preset.posture.value.as_str()),
             )
         })
@@ -2185,7 +2185,7 @@ fn workspace_file_entries(project: &std::path::Path, limit: usize) -> Vec<Resour
         let bytes = entry.metadata().map(|metadata| metadata.len()).unwrap_or(0);
         entries.push(ResourceEntry::new(
             format!("file:{path}"),
-            format!("@{path}"),
+            path,
             format!("file · {bytes} bytes"),
         ));
     }

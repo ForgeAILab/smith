@@ -284,10 +284,12 @@ permission authority. `Tab` cycles the configured authorized order only when
 the composer is empty, the runtime is idle, and no overlay is open.
 
 Typing `@` at a token boundary opens one bounded picker with explicit `file`
-and `agent` labels. Files are canonical workspace-relative entries that honor
-ignore policy. On submit, Smith performs an exact prepared `read` through the
-runtime executor and contributes bounded content (or an artifact reference)
-with `prepared_read` provenance. Unresolved, ambiguous, oversized, binary, or
+and `agent` labels. Picker rows show the plain file or agent identity without a
+leading `@`; choosing one inserts the visible `@identity` mention into the
+composer. Files are canonical workspace-relative entries that honor ignore
+policy. On submit, Smith performs an exact prepared `read` through the runtime
+executor and contributes bounded content (or an artifact reference) with
+`prepared_read` provenance. Unresolved, ambiguous, oversized, binary, or
 outside-workspace references fail locally and preserve the draft before any
 provider request. `@@` escapes one literal `@`; typed `@file:name` and
 `@agent:name` disambiguate collisions.

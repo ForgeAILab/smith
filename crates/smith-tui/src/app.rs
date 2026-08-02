@@ -2017,7 +2017,7 @@ impl App {
                 entries.extend(self.children.iter().map(|(child, summary)| {
                     ResourceEntry::new(
                         format!("agent:{child}"),
-                        format!("@{child}"),
+                        child.clone(),
                         format!(
                             "existing child · {}{}",
                             summary.state,
@@ -4746,12 +4746,12 @@ mod tests {
         app.set_resources(RuntimeResources {
             files: vec![ResourceEntry::new(
                 "file:src/lib.rs",
-                "@src/lib.rs",
+                "src/lib.rs",
                 "file · 42 bytes",
             )],
             child_agents: vec![ResourceEntry::new(
                 "agent:review",
-                "@review",
+                "review",
                 "agent · read-only child preset",
             )],
             agent_modes: vec![

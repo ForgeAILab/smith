@@ -2761,19 +2761,19 @@ mod tests {
     }
 
     #[test]
-    fn unified_reference_picker_labels_files_and_agents_without_color() {
+    fn reference_picker_uses_plain_rows_and_visible_composer_mentions_without_color() {
         let mut app = App::new("glm-5.2", "/Volumes/Data/codes/ai/agent-runtime:main");
         app.status.switch_model(Some("zai".to_owned()), "glm-5.2");
         app.status.set_agent("build");
         app.set_resources(crate::app::RuntimeResources {
             files: vec![crate::picker::ResourceEntry::new(
                 "file:src/lib.rs",
-                "@src/lib.rs",
+                "src/lib.rs",
                 "file · 42 bytes",
             )],
             child_agents: vec![crate::picker::ResourceEntry::new(
                 "agent:review",
-                "@review",
+                "review",
                 "agent · read-only child preset",
             )],
             ..crate::app::RuntimeResources::default()
@@ -2796,14 +2796,16 @@ mod tests {
             &screen,
             &[
                 "Attach file or invoke agent",
-                "@review",
+                "review",
                 "agent · read-only",
-                "@src/lib.rs",
+                "src/lib.rs",
                 "file · 42 bytes",
                 "build · zai/glm-5.2 · /Volumes/Data/codes/ai/agent-runtime:main · ? ctx",
                 "type to filter · ↑↓ choose · enter confirm · esc cancel",
             ],
         );
+        assert!(!screen.contains("@review"), "{screen}");
+        assert!(!screen.contains("@src/lib.rs"), "{screen}");
         let open_lines = screen.lines().collect::<Vec<_>>();
         let open_identity = open_lines
             .iter()
@@ -2823,6 +2825,16 @@ mod tests {
             before_composer,
             "picker controls should move the composer by exactly one row:\n{screen}"
         );
+
+        assert_eq!(
+            app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+            None
+        );
+        assert_eq!(
+            app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            None
+        );
+        assert_eq!(app.composer.text(), "@src/lib.rs ");
     }
 
     #[test]
@@ -2866,7 +2878,7 @@ mod tests {
         app.set_resources(crate::app::RuntimeResources {
             files: vec![crate::picker::ResourceEntry::new(
                 "file:src/lib.rs",
-                "@src/lib.rs",
+                "src/lib.rs",
                 "file · 42 bytes",
             )],
             ..crate::app::RuntimeResources::default()
