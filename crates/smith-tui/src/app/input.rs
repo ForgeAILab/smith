@@ -2,9 +2,7 @@
 
 use std::time::Instant;
 
-use crossterm::event::{
-    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
-};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use smith_host::approval::PromptScope;
 
 use crate::commands::{self, CommandAction};
@@ -15,46 +13,6 @@ use crate::status::Activity;
 use super::state::*;
 
 impl App {
-    /// Handles one mouse event, returning whether visible state changed.
-    ///
-    /// The wheel scrolls the transcript; a left click inside the composer
-    /// moves its cursor. Both apply only while the composer surface is
-    /// focused — a modal overlay owns the screen and ignores the mouse.
-    pub fn on_mouse(&mut self, mouse: MouseEvent) -> bool {
-        if !matches!(self.overlay, None | Some(Overlay::Palette { .. })) {
-            return false;
-        }
-        match mouse.kind {
-            MouseEventKind::ScrollUp => {
-                self.scroll_up(MOUSE_SCROLL_LINES);
-                true
-            }
-            MouseEventKind::ScrollDown => {
-                self.scroll_down(MOUSE_SCROLL_LINES);
-                true
-            }
-            MouseEventKind::Down(MouseButton::Left) => {
-                let Some(area) = self.composer_pointer_area else {
-                    return false;
-                };
-                if mouse.column < area.x
-                    || mouse.column >= area.right()
-                    || mouse.row < area.y
-                    || mouse.row >= area.bottom()
-                {
-                    return false;
-                }
-                let line = usize::from(mouse.row - area.y);
-                // The composer draws a two-column `▌ ` marker prefix before
-                // the text; clicks inside the prefix land at column zero.
-                let column = usize::from(mouse.column.saturating_sub(area.x + 2));
-                self.composer.move_to_position(line, column);
-                true
-            }
-            _ => false,
-        }
-    }
-
     /// Handles a key press, returning an action for the host loop.
     pub fn on_key(&mut self, key: KeyEvent) -> Option<Action> {
         let action = self.reduce_key(key);

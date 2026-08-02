@@ -61,38 +61,13 @@
     }
 
     #[test]
-    fn a_click_inside_the_composer_moves_the_cursor() {
+    fn keyboard_cursor_movement_keeps_the_composer_editable() {
         let mut app = app();
-        type_text(&mut app, "first line");
-        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
-        type_text(&mut app, "second line");
-        app.composer_pointer_area = Some(Rect::new(0, 20, 80, 3));
-
-        // Column maps past the two-column marker prefix; row maps to lines.
-        assert!(app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 20)));
-        assert_eq!(app.composer.cursor_position(), (0, 3));
-        assert!(app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 2, 21)));
-        assert_eq!(app.composer.cursor_position(), (1, 0));
-
-        // Clicks outside the recorded area and clicks under a modal are inert.
-        assert!(!app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 2)));
-        app.overlay = Some(Overlay::UndoConfirm {
-            content: "preview".into(),
-        });
-        assert!(!app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 20)));
-    }
-
-    #[test]
-    fn the_wheel_scrolls_the_transcript_and_motion_stays_inert() {
-        let mut app = app();
-        app.sync_scroll_limit(40);
-        assert!(app.on_mouse(mouse(MouseEventKind::ScrollUp, 10, 5)));
-        assert_eq!(app.scroll_back, 3);
-        assert!(!app.following);
-        assert!(app.on_mouse(mouse(MouseEventKind::ScrollDown, 10, 5)));
-        assert_eq!(app.scroll_back, 0);
-        assert!(app.following);
-        assert!(!app.on_mouse(mouse(MouseEventKind::Moved, 10, 5)));
+        type_text(&mut app, "copy");
+        app.on_key(key(KeyCode::Left));
+        app.on_key(key(KeyCode::Left));
+        app.on_key(key(KeyCode::Char('-')));
+        assert_eq!(app.composer.text(), "co-py");
     }
 
     #[test]

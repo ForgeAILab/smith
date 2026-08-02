@@ -6,13 +6,11 @@
 //! [`enter`] installs a panic hook that restores first and then panics, so a
 //! crash prints a readable backtrace instead of a scrambled one.
 
-use std::io::{Stdout, stdout};
+use std::io::{Stdout, Write, stdout};
 
 use anyhow::Result;
 use crossterm::cursor::MoveTo;
-use crossterm::event::{
-    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-};
+use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::execute;
 use crossterm::terminal::{
     Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -57,14 +55,9 @@ impl Drop for Terminal {
 pub(crate) fn enter() -> Result<Terminal> {
     enable_raw_mode()?;
     // Bracketed paste turns a paste into one `Event::Paste` instead of a
-    // storm of key events; mouse capture delivers clicks and wheel scrolls.
-    // Both are global terminal state and restored in `leave`.
-    if let Err(error) = execute!(
-        stdout(),
-        EnterAlternateScreen,
-        EnableBracketedPaste,
-        EnableMouseCapture
-    ) {
+    // storm of key events. Mouse reporting deliberately stays disabled so the
+    // terminal retains native drag selection and copy behavior everywhere.
+    if let Err(error) = enter_screen(&mut stdout()) {
         let _ = disable_raw_mode();
         return Err(error.into());
     }
@@ -103,12 +96,43 @@ pub(crate) fn enter() -> Result<Terminal> {
 
 /// Restores the terminal. Safe to call more than once.
 pub(crate) fn leave() -> Result<()> {
-    execute!(
-        stdout(),
-        DisableMouseCapture,
-        DisableBracketedPaste,
-        LeaveAlternateScreen
-    )?;
+    leave_screen(&mut stdout())?;
     disable_raw_mode()?;
     Ok(())
+}
+
+fn enter_screen(writer: &mut impl Write) -> std::io::Result<()> {
+    execute!(writer, EnterAlternateScreen, EnableBracketedPaste)
+}
+
+fn leave_screen(writer: &mut impl Write) -> std::io::Result<()> {
+    execute!(writer, DisableBracketedPaste, LeaveAlternateScreen)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MOUSE_MODE_CODES: [&str; 5] = ["1000", "1002", "1003", "1015", "1006"];
+
+    #[test]
+    fn terminal_screen_modes_preserve_native_pointer_selection() {
+        let mut entered = Vec::new();
+        enter_screen(&mut entered).expect("enter sequences");
+        let entered = String::from_utf8(entered).expect("ANSI is UTF-8");
+        assert!(entered.contains("\u{1b}[?1049h"), "{entered:?}");
+        assert!(entered.contains("\u{1b}[?2004h"), "{entered:?}");
+        for code in MOUSE_MODE_CODES {
+            assert!(!entered.contains(&format!("?{code}h")), "{entered:?}");
+        }
+
+        let mut left = Vec::new();
+        leave_screen(&mut left).expect("leave sequences");
+        let left = String::from_utf8(left).expect("ANSI is UTF-8");
+        assert!(left.contains("\u{1b}[?2004l"), "{left:?}");
+        assert!(left.contains("\u{1b}[?1049l"), "{left:?}");
+        for code in MOUSE_MODE_CODES {
+            assert!(!left.contains(&format!("?{code}l")), "{left:?}");
+        }
+    }
 }

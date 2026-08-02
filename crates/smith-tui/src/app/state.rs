@@ -14,7 +14,6 @@ use agent_runtime_core::content::{ContentPart, UserInput};
 use agent_runtime_core::event::{PlanItemProjection, PlanSensitivity};
 use agent_runtime_core::ids::{AttemptId, RequestId, TurnId};
 use agent_runtime_core::steer::SteerReceipt;
-use ratatui::layout::Rect;
 use smith_host::approval::ApprovalPrompt;
 use smith_tools::ToolCallDisplay;
 
@@ -35,9 +34,6 @@ pub(super) const PASTE_CHUNK_MIN_LINES: usize = 3;
 pub(super) const PASTE_CHUNK_MIN_CHARS: usize = 1_000;
 /// Bounded process-local paste storage; the oldest chunk is dropped first.
 pub(super) const MAX_PASTED_CHUNKS: usize = 50;
-
-/// Transcript lines one wheel notch scrolls.
-pub(super) const MOUSE_SCROLL_LINES: u16 = 3;
 
 /// One large paste stored aside so the composer stays editable.
 ///
@@ -569,9 +565,6 @@ pub struct App {
     pub(super) image_attachments: Vec<ImageAttachment>,
     /// Monotonic number for `[Image #N …]` labels.
     pub(super) image_counter: usize,
-    /// The composer's text area from the last synced frame, recorded by the
-    /// renderer so mouse clicks can be mapped back to a cursor position.
-    pub(crate) composer_pointer_area: Option<Rect>,
     /// Ephemeral "Worked for …" summary of the newest completed turn.
     ///
     /// Deliberately not a transcript block: one row per historical turn is
@@ -615,7 +608,6 @@ impl App {
             paste_counter: 0,
             image_attachments: Vec::new(),
             image_counter: 0,
-            composer_pointer_area: None,
             turn_summary: None,
             turn_started_at: None,
             turn_started_timestamp: None,

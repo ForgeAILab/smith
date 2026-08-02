@@ -353,11 +353,6 @@ pub(super) async fn run_tui(
                         app.on_paste(&text);
                         dirty = true;
                     }
-                    TermEvent::Mouse(mouse) => {
-                        if app.on_mouse(mouse) {
-                            dirty = true;
-                        }
-                    }
                     TermEvent::Resize(_, _) => dirty = true,
                     _ => {}
                 }

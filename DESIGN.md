@@ -26,8 +26,10 @@ status-card structure, and compact footer.
    the same weight as a provider-reported fact.
 4. **Nothing moves that the user did not cause.** Streaming text appends;
    layout does not reflow, jump, or animate underneath a reader.
-5. **The keyboard is the only required input.** A mouse may work; it is never
-   necessary.
+5. **The keyboard is the only required input.** Smith leaves pointer text
+   selection and copying to the terminal instead of enabling application-wide
+   mouse reporting; every Smith interaction remains available from the
+   keyboard.
 
 ## 2. Layout
 
@@ -210,6 +212,15 @@ global and never requires a focus mode. There is no hidden modal state: a
 modal or resource picker owns input and names its controls in the hint row.
 Slash completion is the deliberate quiet exception: its selected-row grammar
 and the keyboard contract below are sufficient, so it adds no control strip.
+
+The terminal owns pointer selection and copying across the transcript,
+composer, footer, pickers, modals, setup, and resume surfaces. Smith does not
+enable global mouse reporting: common terminal protocols cannot restrict
+capture to the composer, and consuming the initial press would prevent native
+drag selection everywhere else. Consequently click-to-position and mouse-wheel
+transcript scrolling are not Smith interactions; cursor movement and
+transcript scrolling use the keyboard controls below. Bracketed paste remains
+enabled independently of pointer reporting.
 
 | Key | Action |
 | --- | --- |
@@ -772,7 +783,8 @@ Deferred to a later revision, and therefore not to be invented in code:
 
 - Custom extension-drawn widgets beyond a declarative status item.
 - Word-level or intra-line diff highlighting.
-- Split panes, multiple simultaneous sessions on screen, and mouse selection.
+- Split panes, multiple simultaneous sessions on screen, and
+  application-owned mouse selection or clipboard writes.
 - Broad reset/revert-all actions, staged commit/push controls, and automatic
   recovery for arbitrary shell side effects.
 - Non-Git change recovery and queued commands during an active turn.

@@ -26,9 +26,7 @@ mod tests {
     use agent_runtime_core::usage::{
         CounterKind, Provenance, UsageDelta, UsageRecord, UsageSource,
     };
-    use crossterm::event::{
-        KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
-    };
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
     use smith_host::approval::InteractiveApproval;
 
     use crate::commands;
@@ -232,15 +230,6 @@ mod tests {
         });
         let prompt = requests.recv().await.expect("an approval prompt");
         (prompt, decision)
-    }
-
-    fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
-        MouseEvent {
-            kind,
-            column,
-            row,
-            modifiers: KeyModifiers::NONE,
-        }
     }
 
     fn agent_first_app() -> App {

@@ -49,20 +49,11 @@ pub fn draw_synced(frame: &mut Frame<'_>, app: &mut App, theme: Theme) {
     let area = frame.area();
     if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
         app.sync_scroll_limit(0);
-        app.composer_pointer_area = None;
         draw_too_small(frame, area, theme);
         return;
     }
 
-    let (transcript, composer) = surface_rects(area, app);
-    // The same inset `draw_composer` applies, recorded so mouse clicks can be
-    // mapped back onto composer text.
-    app.composer_pointer_area = Some(Rect::new(
-        composer.x,
-        composer.y.saturating_add(1),
-        composer.width,
-        composer.height.saturating_sub(2),
-    ));
+    let transcript = transcript_rect(area, app);
     let lines = transcript_lines(app, theme, transcript.width);
     let limit = visual_scroll_limit(&lines, transcript);
     app.sync_scroll_limit(limit);
@@ -180,12 +171,12 @@ fn draw_surface(
     }
 }
 
-/// The transcript and composer rects under the same vertical layout
-/// `draw_surface` renders with.
-fn surface_rects(area: Rect, app: &App) -> (Rect, Rect) {
+/// The transcript rect under the same vertical layout `draw_surface` renders
+/// with.
+fn transcript_rect(area: Rect, app: &App) -> Rect {
     let composer_rows = composer_rows(app, area.width).saturating_add(2);
     let anchored = anchored_rows(app, area, composer_rows);
-    let [transcript, _, _, _, composer, _] = Layout::vertical([
+    let [transcript, _, _, _, _, _] = Layout::vertical([
         Constraint::Min(3),
         Constraint::Length(anchored.compact),
         Constraint::Length(anchored.pending),
@@ -194,7 +185,7 @@ fn surface_rects(area: Rect, app: &App) -> (Rect, Rect) {
         Constraint::Length(hint_rows(app)),
     ])
     .areas(area);
-    (transcript, composer)
+    transcript
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
