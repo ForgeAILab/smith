@@ -1,0 +1,18 @@
+{
+  "change_id": "unify-agent-profiles",
+  "change_ref": "unify-agent-profiles-2026-08-01",
+  "created_at": "2026-08-01T21:41:00Z",
+  "updated_at": "2026-08-01T22:49:15Z",
+  "completed_at": "2026-08-01T22:49:15Z",
+  "status": "completed",
+  "approved_at": "2026-08-01T21:51:22Z",
+  "implementation_started_at": "2026-08-01T21:51:22Z",
+  "reapproval_required": false,
+  "depends_on": [
+    "add-smith-agent-harness-2026-07-23",
+    "add-agent-first-workflow-ux-2026-07-31",
+    "integrate-resumable-child-sessions-2026-07-31",
+    "add-project-instructions-and-quiet-turns-2026-08-01"
+  ],
+  "external_dependencies": []
+}

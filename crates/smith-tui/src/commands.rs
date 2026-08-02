@@ -17,6 +17,10 @@ pub enum CommandAction {
     Provider(Option<String>),
     /// Select a model.
     Model(Option<String>),
+    /// Select an explicit thinking state or the provider default.
+    Think(Option<String>),
+    /// Select an advertised reasoning effort or the provider default.
+    Effort(Option<String>),
     /// Render resolved local status.
     Status,
     /// Visualize the latest model-facing context plan.
@@ -115,6 +119,20 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "model",
         argument_hint: "[PROVIDER/MODEL]",
         description: "switch model",
+        requires_idle: true,
+        advanced: false,
+    },
+    CommandSpec {
+        name: "think",
+        argument_hint: "[on|off|default]",
+        description: "set thinking for the next turn",
+        requires_idle: true,
+        advanced: false,
+    },
+    CommandSpec {
+        name: "effort",
+        argument_hint: "[LEVEL|default]",
+        description: "set reasoning effort for the next turn",
         requires_idle: true,
         advanced: false,
     },
@@ -241,6 +259,8 @@ pub fn parse(input: &str) -> Result<CommandAction, String> {
         "profile" => CommandAction::Profile(argument),
         "provider" => CommandAction::Provider(argument),
         "model" => CommandAction::Model(argument),
+        "think" => CommandAction::Think(argument),
+        "effort" => CommandAction::Effort(argument),
         "agent" => CommandAction::Agent(argument),
         "diff" => CommandAction::Diff(argument),
         "review" => CommandAction::Review(argument),
@@ -265,7 +285,7 @@ pub fn help() -> String {
     output.push_str(
         "\nComposer\n\
          ? or /help shows this local guide without contacting the model.\n\
-         Tab cycles build/plan/review only while empty and idle.\n\
+         Tab cycles the configured profile order only while empty and idle.\n\
          @ completes exact files and read-only agents; @@ sends a literal @.\n\
          ! runs a prepared local shell action; !! sends a literal !.\n\
          Up/Down browse accepted and Ctrl+C-stashed input without losing your draft.\n\
@@ -321,6 +341,19 @@ mod tests {
         );
         assert_eq!(parse("/context").expect("context"), CommandAction::Context);
         assert_eq!(parse("/model").expect("picker"), CommandAction::Model(None));
+        assert_eq!(
+            parse("/think off").expect("thinking state"),
+            CommandAction::Think(Some("off".into()))
+        );
+        assert_eq!(
+            parse("/effort high").expect("effort"),
+            CommandAction::Effort(Some("high".into()))
+        );
+        assert_eq!(parse("/think").expect("picker"), CommandAction::Think(None));
+        assert_eq!(
+            parse("/effort").expect("picker"),
+            CommandAction::Effort(None)
+        );
         assert_eq!(
             parse("/agent resume child-7").expect("child resume"),
             CommandAction::AgentResume("child-7".into())

@@ -287,12 +287,14 @@ impl Activity {
 /// The header's model of session status.
 #[derive(Debug, Clone)]
 pub struct Status {
-    /// Active host-owned root-agent mode.
+    /// Active main agent profile.
     pub agent: String,
     /// The serving provider's name, once resolved.
     pub provider: Option<String>,
     /// The model in use.
     pub model: String,
+    /// Compact non-default reasoning override, when one is active.
+    pub reasoning_hint: Option<String>,
     /// The project root, shown abbreviated.
     pub project: String,
     /// Cumulative provider-reported input for this session.
@@ -316,6 +318,7 @@ impl Status {
             agent: "build".to_owned(),
             provider: None,
             model: model.into(),
+            reasoning_hint: None,
             project: project.into(),
             context: TokenCount::UNKNOWN,
             context_plan: None,
@@ -326,9 +329,14 @@ impl Status {
         }
     }
 
-    /// Sets the active root-agent mode shown at the point of action.
+    /// Sets the active agent profile shown at the point of action.
     pub fn set_agent(&mut self, agent: impl Into<String>) {
         self.agent = agent.into();
+    }
+
+    /// Sets the compact footer hint for a non-default reasoning selection.
+    pub fn set_reasoning_hint(&mut self, hint: Option<String>) {
+        self.reasoning_hint = hint;
     }
 
     /// Folds a provider-reported usage delta into the running totals.

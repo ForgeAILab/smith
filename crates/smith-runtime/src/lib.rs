@@ -25,6 +25,7 @@ pub mod model_catalog;
 mod private_storage;
 pub mod project_instructions;
 pub mod prompt;
+pub mod reasoning;
 pub mod response;
 pub mod session;
 pub mod skills;

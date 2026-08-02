@@ -144,10 +144,22 @@ For local development, a minimal offline smoke configuration is:
 
 ```toml
 default_profile = "dev"
+profile_order = ["dev", "review"]
 
 [profiles.dev]
 provider = "local"
 model = "example-model"
+description = "local implementation"
+posture = "build"
+use = ["main", "child"]
+instructions = "Implement the request and verify the result."
+
+[profiles.review]
+extends = "dev"
+description = "read-only independent review"
+posture = "review"
+use = ["main", "child"]
+instructions = "Report prioritized evidence-backed findings."
 
 [providers.local]
 kind = "fake"
@@ -158,11 +170,13 @@ max_input_tokens = 124000
 max_output_tokens = 4096
 ```
 
-Inside the empty idle TUI, the footer identifies `build`, `plan`, or `review`
-beside provider/model and context confidence. `Tab` cycles modes only at that
-safe empty/idle boundary. `@` completes canonical workspace files and the
-read-only `explore`/`review` child presets, plus retained child IDs available
-for follow-up; leading `!` runs the canonical
+Inside the empty idle TUI, the footer identifies the active agent profile
+beside provider/model and context confidence. `Tab` cycles the main-enabled
+profiles in `profile_order` only at that safe empty/idle boundary. If the order
+is omitted, Smith derives it deterministically from real main-enabled profiles;
+guided setup creates build, plan, and review variants explicitly. `@`
+completes canonical workspace files and child-enabled profiles, plus retained
+child IDs available for follow-up; leading `!` runs the canonical
 prepared local-shell path without a provider request. `@@` and `!!` are the
 literal escapes. `/details`, `/timeline`, and `/redo` expose bounded live work,
 canonical session evidence, and exact recovery locally.
@@ -173,6 +187,13 @@ with current and unavailable states. Explicit values remain validated
 shortcuts. Model rows are always provider-qualified, so selecting a model
 applies its provider/model pair atomically; selecting a provider with several
 models cascades into that provider's model list.
+
+`/think [on|off|default]` and `/effort [LEVEL|default]` use the same local
+picker grammar and require an idle turn. They become real controls only when
+the exact provider/model metadata can represent the request; a generic catalog
+reasoning boolean remains fixed. The effective state, effort, and source are
+visible in `/status` and `/context`, and a non-default override is shown in the
+wide footer. These choices can affect latency, token use, and cost.
 
 `smith --resume` likewise opens a project-session picker before any host is
 constructed. `smith --resume <session-id>` remains the explicit form, while
@@ -306,6 +327,9 @@ the same session interactively to answer the exact request. With the default
 4; explicitly choose `--approval allow-all` only in an already trusted
 automation boundary. See [`docs/headless-protocol.md`](docs/headless-protocol.md)
 for the complete stdout, schema, redaction, and exit contract.
+`--yolo` is the explicit shorthand for `--approval allow-all`; it never adds
+tools removed by a read-only profile, so `smith --profile plan --yolo` remains
+read-only.
 Repository-controlled config cannot set `allow-all` or `auto_approve` merely
 by being opened; those authority-bearing choices must come from user config or
 an explicit command-line policy. It likewise cannot redirect or disable

@@ -13,8 +13,8 @@ use crate::credential::CredentialRef;
 #[cfg(test)]
 use crate::model::ReasoningOnlyBehavior;
 use crate::model::{
-    ConfigFile, KIND_OPENAI_COMPATIBLE, ModelSection, ProfileSection, ProviderResponseSection,
-    ProviderSection,
+    AgentPosture, ConfigFile, KIND_OPENAI_COMPATIBLE, ModelSection, ProfileUse,
+    ProviderResponseSection, ProviderSection,
 };
 use crate::resolve::{ConfigError, Position, Resolution, Source};
 use crate::setup::trusted_model;
@@ -28,6 +28,16 @@ pub struct ProfileInventoryEntry {
     pub provider: Option<String>,
     /// Effective model when the profile declares one.
     pub model: Option<String>,
+    /// Authority-narrowing behavior selected by the profile.
+    pub posture: AgentPosture,
+    /// Bounded user-facing description.
+    pub description: Option<String>,
+    /// Main/child placements where this profile is eligible.
+    pub uses: Vec<ProfileUse>,
+    /// Deterministic effective profile revision.
+    pub revision: String,
+    /// Whether this entry came from a one-release legacy adapter.
+    pub legacy: bool,
     /// Whether the provider/model pair is selectable.
     pub selectable: bool,
     /// Whether this is the active profile.
@@ -243,7 +253,6 @@ pub fn local_inventory_with_catalog(
     available_adapter_kinds: &[&str],
     catalog: Option<&CatalogSnapshot>,
 ) -> Result<SelectionInventory, ConfigError> {
-    let mut profiles = BTreeMap::<String, ProfileSection>::new();
     let mut providers = BTreeMap::<String, ProviderSection>::new();
     let mut models = BTreeMap::<String, ModelSection>::new();
 
@@ -257,9 +266,6 @@ pub fn local_inventory_with_catalog(
             location: error.span().map(|span| position(&text, span.start)),
             message: error.message().to_owned(),
         })?;
-        for (name, section) in file.profiles {
-            merge_profile(profiles.entry(name).or_default(), section);
-        }
         for (name, section) in file.providers {
             merge_provider(providers.entry(name).or_default(), section);
         }
@@ -281,9 +287,9 @@ pub fn local_inventory_with_catalog(
             Some((provider.to_owned(), model.to_owned()))
         })
         .collect();
-    for section in profiles.values() {
-        if let (Some(provider), Some(model)) = (&section.provider, &section.model) {
-            candidate_pairs.insert((provider.clone(), model.clone()));
+    for profile in resolution.config.agent.profiles.values() {
+        if let (Some(provider), Some(model)) = (&profile.provider, &profile.model) {
+            candidate_pairs.insert((provider.value.clone(), model.value.clone()));
         }
     }
 
@@ -411,11 +417,16 @@ pub fn local_inventory_with_catalog(
             && context_tokens.is_some()
             && max_input_tokens.is_some()
             && max_output_tokens.is_some();
-        let associated_profiles = profiles
+        let associated_profiles = resolution
+            .config
+            .agent
+            .profiles
             .iter()
-            .filter(|(_, section)| {
-                section.provider.as_deref() == Some(provider.as_str())
-                    && section.model.as_deref() == Some(model.as_str())
+            .filter(|(_, profile)| {
+                profile.provider.as_ref().map(|value| value.value.as_str())
+                    == Some(provider.as_str())
+                    && profile.model.as_ref().map(|value| value.value.as_str())
+                        == Some(model.as_str())
             })
             .map(|(name, _)| name.clone())
             .collect();
@@ -449,27 +460,41 @@ pub fn local_inventory_with_catalog(
         .filter(|model| model.selectable)
         .map(ModelInventoryEntry::id)
         .collect();
-    let profile_entries = profiles
+    let profile_entries = resolution
+        .config
+        .agent
+        .profiles
         .iter()
-        .map(|(name, section)| {
-            let pair = match (&section.provider, &section.model) {
-                (Some(provider), Some(model)) => Some(format!("{provider}/{model}")),
-                _ => None,
-            };
+        .map(|(name, profile)| {
+            let provider = profile
+                .provider
+                .as_ref()
+                .map(|value| value.value.clone())
+                .or_else(|| profile.legacy.then(|| active_provider.clone()));
+            let model = profile
+                .model
+                .as_ref()
+                .map(|value| value.value.clone())
+                .or_else(|| profile.legacy.then(|| active_model.clone()));
+            let pair = provider
+                .as_ref()
+                .zip(model.as_ref())
+                .map(|(provider, model)| format!("{provider}/{model}"));
             ProfileInventoryEntry {
                 name: name.clone(),
-                provider: section.provider.clone(),
-                model: section.model.clone(),
-                selectable: pair.as_ref().is_some_and(|pair| model_ids.contains(pair)),
-                active: resolution
-                    .config
-                    .profile
+                provider,
+                model,
+                posture: profile.posture.value,
+                description: profile
+                    .description
                     .as_ref()
-                    .is_some_and(|profile| profile.value == *name),
-                source: resolution
-                    .provenance
-                    .source(&format!("profiles.{}.provider", quote(name)))
-                    .cloned(),
+                    .map(|value| value.value.clone()),
+                uses: profile.uses.value.clone(),
+                revision: profile.revision.clone(),
+                legacy: profile.legacy,
+                selectable: pair.as_ref().is_some_and(|pair| model_ids.contains(pair)),
+                active: resolution.config.agent.profile.name == *name,
+                source: Some(profile.posture.source.clone()),
             }
         })
         .collect::<Vec<_>>();
@@ -573,16 +598,6 @@ fn inventory_limit(
             retrieved_at_ms: snapshot.retrieved_at_ms,
         },
     })
-}
-
-fn merge_profile(target: &mut ProfileSection, source: ProfileSection) {
-    overlay(&mut target.provider, source.provider);
-    overlay(&mut target.model, source.model);
-    overlay(&mut target.max_output_tokens, source.max_output_tokens);
-    overlay(&mut target.context, source.context);
-    overlay(&mut target.limits, source.limits);
-    overlay(&mut target.approval, source.approval);
-    overlay(&mut target.background, source.background);
 }
 
 fn merge_provider(target: &mut ProviderSection, source: ProviderSection) {

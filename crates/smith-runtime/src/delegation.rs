@@ -21,6 +21,7 @@
 //!   ([`SessionHandle::inject`]) so they reach the model only at a
 //!   provider/tool boundary.
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
 use agent_runtime::ability::Ability;
@@ -67,6 +68,7 @@ use agent_runtime_core::workspace::Workspace;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use smith_config::model::AgentPosture;
 use smith_host::ProjectWorkspace;
 
 use crate::abilities::{INTERACTION_READY_CONFIG, seal_tool_abilities};
@@ -164,14 +166,8 @@ impl SecurityCheck for DelegationAuthority {
 /// the [`AGENT_TOOL_NAME`] tool after this returns.
 #[derive(Debug)]
 pub struct SmithChildFactory {
-    pub(crate) provider: Arc<dyn Provider>,
-    pub(crate) provider_name: String,
-    pub(crate) provider_kind: String,
-    pub(crate) model: ModelId,
-    pub(crate) profile: ResolvedModelProfile,
-    pub(crate) context_policy: ContextPolicy,
-    pub(crate) loop_config: LoopConfig,
-    pub(crate) prompt_contributor: SmithPromptContributor,
+    pub(crate) default_route: SmithChildRoute,
+    pub(crate) profile_routes: BTreeMap<String, SmithChildRoute>,
     pub(crate) approval: Arc<dyn ApprovalPolicy>,
     pub(crate) workspace: Arc<dyn Workspace>,
     pub(crate) clock: Arc<dyn Clock>,
@@ -181,8 +177,61 @@ pub struct SmithChildFactory {
     pub(crate) skills: Vec<Arc<dyn Ability>>,
     pub(crate) memory: Option<MemoryContributor>,
     pub(crate) semantic_summary: Option<Arc<SemanticSummaryCoordinator>>,
-    /// Whether the root mode permanently narrows every child to read-only.
+}
+
+/// One fully preflighted provider/model/profile route available to children.
+#[derive(Debug, Clone)]
+pub struct SmithChildRoute {
+    pub(crate) provider: Arc<dyn Provider>,
+    pub(crate) provider_name: String,
+    pub(crate) provider_kind: String,
+    pub(crate) model: ModelId,
+    pub(crate) model_profile: ResolvedModelProfile,
+    pub(crate) context_policy: ContextPolicy,
+    pub(crate) loop_config: LoopConfig,
+    pub(crate) prompt_contributor: SmithPromptContributor,
+    pub(crate) agent_profile_name: String,
+    pub(crate) agent_profile_revision: String,
+    pub(crate) agent_profile_posture: AgentPosture,
+    /// Children remain read-only in this release, even for build profiles.
     pub(crate) read_only: bool,
+}
+
+/// Opaque Smith host route persisted in the existing child model-selection slot.
+pub fn profile_route_key(name: &str, revision: &str) -> String {
+    let short_revision = revision.get(..16).unwrap_or(revision);
+    format!("smith-profile:{name}@{short_revision}")
+}
+
+impl SmithChildFactory {
+    fn route_for(&self, selection: &ChildModelSelection) -> Result<&SmithChildRoute, RuntimeError> {
+        match selection {
+            ChildModelSelection::Inherit => Ok(&self.default_route),
+            ChildModelSelection::Explicit { provider, model } => {
+                if let Some(route_key) = provider
+                    && let Some(route) = self.profile_routes.get(route_key)
+                {
+                    if model == &route.model {
+                        return Ok(route);
+                    }
+                    return Err(RuntimeError::config(format!(
+                        "child profile route `{route_key}` resolves model `{}` rather than `{model}`",
+                        route.model
+                    )));
+                }
+                let same_provider = provider
+                    .as_ref()
+                    .is_none_or(|name| name == &self.default_route.provider_name);
+                if same_provider && model == &self.default_route.model {
+                    Ok(&self.default_route)
+                } else {
+                    Err(RuntimeError::config(
+                        "the requested child provider/model has no preflighted agent-profile route",
+                    ))
+                }
+            }
+        }
+    }
 }
 
 impl ChildRuntimeFactory for SmithChildFactory {
@@ -199,7 +248,8 @@ impl ChildRuntimeFactory for SmithChildFactory {
     }
 
     fn policy_fingerprint(&self, spec: &DurableChildSpec) -> Result<Fingerprint, RuntimeError> {
-        let prompt_revisions = self
+        let route = self.route_for(&spec.model)?;
+        let prompt_revisions = route
             .prompt_contributor
             .fragments()
             .iter()
@@ -213,15 +263,19 @@ impl ChildRuntimeFactory for SmithChildFactory {
         let encoded = serde_json::to_vec(&json!({
             "schema_version": 1,
             "spec": spec,
-            "provider_name": self.provider_name,
-            "provider_kind": self.provider_kind,
-            "model": self.model,
-            "model_profile": self.profile,
-            "context_policy_revision": self.context_policy.revision,
+            "provider_name": route.provider_name,
+            "provider_kind": route.provider_kind,
+            "model": route.model,
+            "model_profile": route.model_profile,
+            "agent_profile_name": route.agent_profile_name,
+            "agent_profile_revision": route.agent_profile_revision,
+            "agent_profile_placement": "child",
+            "agent_profile_posture": route.agent_profile_posture.as_str(),
+            "context_policy_revision": route.context_policy.revision,
             "prompt_revisions": prompt_revisions,
             "skill_names": skill_names,
             "workspace_root": self.workspace.root(),
-            "read_only": self.read_only,
+            "read_only": route.read_only,
         }))
         .map_err(|error| {
             RuntimeError::new(
@@ -233,23 +287,7 @@ impl ChildRuntimeFactory for SmithChildFactory {
     }
 
     fn child_builder(&self, spec: &ChildSpec) -> Result<RuntimeBuilder, RuntimeError> {
-        // The parent chose this run's provider and model through the one
-        // factory path. A child may inherit them or restate them; routing a
-        // child to a *different* provider/model needs its own credential and
-        // profile resolution and is a coordinated follow-up, so it is refused
-        // rather than half-built.
-        if let ChildModelSelection::Explicit { provider, model } = &spec.model {
-            let same_provider = provider
-                .as_ref()
-                .is_none_or(|name| name == &self.provider_name);
-            if !same_provider || model != &self.model {
-                return Err(RuntimeError::new(
-                    ErrorKind::Config,
-                    "child sessions currently run on the parent's provider and model; \
-                     explicit child model routing is a coordinated follow-up",
-                ));
-            }
-        }
+        let route = self.route_for(&spec.model)?;
 
         let workspace: Arc<dyn Workspace> = match &spec.workspace {
             WorkspacePolicy::SharedProject | WorkspacePolicy::ReadOnlyView => {
@@ -265,12 +303,12 @@ impl ChildRuntimeFactory for SmithChildFactory {
             }
         };
 
-        let mut loop_config = self.loop_config.clone();
-        loop_config.model = self.model.clone();
+        let mut loop_config = route.loop_config.clone();
+        loop_config.model = route.model.clone();
         let tool_authority = Arc::new(SmithToolAuthority::new(workspace.root()));
         let tool_coverage = tool_authority.coverage().clone();
 
-        let mut tools = if self.read_only {
+        let mut tools = if route.read_only {
             smith_tools::read_only()
         } else {
             smith_tools::all()
@@ -294,20 +332,20 @@ impl ChildRuntimeFactory for SmithChildFactory {
                 .with_agent("child"),
         );
         let activation_budget = ActivationBudget::new(
-            ContextBudget::from_limits(&self.profile.limits, &self.context_policy)
+            ContextBudget::from_limits(&route.model_profile.limits, &route.context_policy)
                 .capability_budget,
             8,
         );
 
-        let mut builder = RuntimeBuilder::new(self.model.clone())
-            .provider(self.provider.clone())
-            .provider_name(self.provider_name.clone())
-            .model_profile(self.profile.clone())
+        let mut builder = RuntimeBuilder::new(route.model.clone())
+            .provider(route.provider.clone())
+            .provider_name(route.provider_name.clone())
+            .model_profile(route.model_profile.clone())
             .loop_config(loop_config)
-            .context_policy(self.context_policy.clone())
+            .context_policy(route.context_policy.clone())
             .cache_capability(agent_runtime::context::ProviderCacheCapability::none(
                 RegistryRevision::new(CACHE_CAPABILITY_REVISION),
-                self.provider_kind.clone(),
+                route.provider_kind.clone(),
             ))
             .security_check(
                 tool_authority,
@@ -330,7 +368,7 @@ impl ChildRuntimeFactory for SmithChildFactory {
                 ActivationContext::new().with_ready_config([INTERACTION_READY_CONFIG]),
             )
             .activation_budget(activation_budget)
-            .context_contributor(Arc::new(self.prompt_contributor.clone()))
+            .context_contributor(Arc::new(route.prompt_contributor.clone()))
             .context_contributor(todo_component.clone())
             .tool_output_processor(todo_component.clone())
             .turn_commit_hook(todo_component)

@@ -532,6 +532,11 @@ impl SetupApp {
             self.step = step;
             self.input.clear();
             self.error = None;
+            // Leaving the review invalidates a collision approval: anything
+            // edited on the way back must be re-reviewed before it can
+            // replace existing values.
+            self.collision_preview = None;
+            self.allow_collisions = false;
             self.configure_picker();
         }
     }
@@ -938,7 +943,24 @@ pub fn draw_setup(frame: &mut Frame<'_>, app: &SetupApp, theme: Theme) {
     frame.render_widget(block, outer);
 
     if let Some(picker) = &app.picker {
-        draw_resource_picker(frame, inner, picker, theme);
+        // A failure that returns to a picker step still explains itself: the
+        // error renders above the picker instead of being silently dropped.
+        let picker_area = if let Some(error) = &app.error {
+            let [message, rest] =
+                Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(inner);
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    format!("error: {error}"),
+                    theme.style(Tone::Danger),
+                )))
+                .wrap(Wrap { trim: false }),
+                message,
+            );
+            rest
+        } else {
+            inner
+        };
+        draw_resource_picker(frame, picker_area, picker, theme);
         return;
     }
 
@@ -1301,5 +1323,41 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn backing_out_of_collision_review_revokes_the_stale_approval() {
+        let mut review = glm_environment_review();
+        review.review_collisions(
+            "[providers.zai]\n- credential = \"env:OLD\"\n+ credential = \"env:ZAI_API_KEY\"",
+        );
+
+        // Back-editing invalidates the approval: a re-entered review submits
+        // without collision consent until the merge preview is shown again.
+        review.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+        for character in "ZAI_API_KEY".chars() {
+            review.on_key(key(KeyCode::Char(character)));
+        }
+        review.on_key(key(KeyCode::Enter));
+        assert_eq!(review.step, Step::Review);
+        assert!(matches!(
+            review.on_key(key(KeyCode::Enter)),
+            SetupEffect::Submit {
+                allow_collisions: false,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn picker_step_failures_render_their_error_above_the_picker() {
+        let mut app = SetupApp::new(SetupMode::FirstRun, Vec::new(), Vec::new());
+        choose(&mut app, "glm");
+        app.fail("keychain unavailable: locked", true);
+        let rendered = render_setup(&app, 72, 18);
+        assert!(
+            rendered.contains("error: keychain unavailable: locked"),
+            "{rendered}"
+        );
     }
 }

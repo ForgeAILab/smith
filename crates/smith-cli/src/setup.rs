@@ -19,8 +19,8 @@ use smith_config::credential::{
 };
 use smith_config::inventory::{SelectionInventory, local_inventory};
 use smith_config::model::{
-    ConfigFile, ConfigSecret, ContextSection, KIND_OPENAI_COMPATIBLE, ModelSection,
-    PersistenceSection, ProfileSection, ProviderResponseSection, ProviderSection,
+    AgentPosture, ConfigFile, ConfigSecret, ContextSection, KIND_OPENAI_COMPATIBLE, ModelSection,
+    PersistenceSection, ProfileSection, ProfileUse, ProviderResponseSection, ProviderSection,
     ReasoningOnlyBehavior,
 };
 use smith_config::resolve::{ConfigReadiness, ResolveRequest, inspect};
@@ -782,6 +782,7 @@ fn setup_plan(submission: SetupSubmission) -> Result<SetupPlan> {
                         context_tokens: Some(GLM_5_2.context_tokens),
                         max_input_tokens: Some(GLM_5_2.max_input_tokens),
                         max_output_tokens: Some(GLM_5_2.max_output_tokens),
+                        ..ModelSection::default()
                     },
                 )]),
                 ..ConfigFile::default()
@@ -957,6 +958,7 @@ fn model_section(limits: SetupModelLimits) -> ModelSection {
         context_tokens: Some(limits.context_tokens),
         max_input_tokens: Some(limits.max_input_tokens),
         max_output_tokens: Some(limits.max_output_tokens),
+        ..ModelSection::default()
     }
 }
 
@@ -967,10 +969,24 @@ fn select_default(
     model: &str,
     request_output_tokens: u32,
 ) {
+    let plan_profile = profile_variant_name(profile, "plan");
+    let review_profile = profile_variant_name(profile, "review");
     patch.default_profile = Some(profile.to_owned());
+    patch.profile_order = Some(vec![
+        profile.to_owned(),
+        plan_profile.clone(),
+        review_profile.clone(),
+    ]);
     patch.profiles.insert(
         profile.to_owned(),
         ProfileSection {
+            description: Some("default Smith coding agent".to_owned()),
+            posture: Some(AgentPosture::Build),
+            uses: Some(vec![ProfileUse::Main, ProfileUse::Child]),
+            instructions: Some(
+                "Implement the requested change, verify it, and report concrete evidence."
+                    .to_owned(),
+            ),
             provider: Some(provider.to_owned()),
             model: Some(model.to_owned()),
             max_output_tokens: Some(request_output_tokens),
@@ -981,6 +997,42 @@ fn select_default(
             ..ProfileSection::default()
         },
     );
+    patch.profiles.insert(
+        plan_profile,
+        ProfileSection {
+            extends: Some(profile.to_owned()),
+            description: Some("read-only implementation planning".to_owned()),
+            posture: Some(AgentPosture::Plan),
+            uses: Some(vec![ProfileUse::Main, ProfileUse::Child]),
+            instructions: Some(
+                "Inspect the repository and produce an implementation-ready plan without modifying the workspace."
+                    .to_owned(),
+            ),
+            ..ProfileSection::default()
+        },
+    );
+    patch.profiles.insert(
+        review_profile,
+        ProfileSection {
+            extends: Some(profile.to_owned()),
+            description: Some("read-only independent review".to_owned()),
+            posture: Some(AgentPosture::Review),
+            uses: Some(vec![ProfileUse::Main, ProfileUse::Child]),
+            instructions: Some(
+                "Report prioritized, evidence-backed findings without modifying the workspace."
+                    .to_owned(),
+            ),
+            ..ProfileSection::default()
+        },
+    );
+}
+
+fn profile_variant_name(profile: &str, posture: &str) -> String {
+    let suffix = format!("-{posture}");
+    let keep = 32usize.saturating_sub(suffix.len());
+    let mut base = profile.chars().take(keep).collect::<String>();
+    base.push_str(&suffix);
+    base
 }
 
 fn safe_profile_name(provider: &str, model: &str) -> String {
@@ -994,7 +1046,7 @@ fn safe_profile_name(provider: &str, model: &str) -> String {
             }
         })
         .collect::<String>();
-    name.truncate(64);
+    name.truncate(32);
     let name = name.trim_matches('-');
     if name.is_empty() {
         "smith-model".to_owned()
@@ -1134,6 +1186,28 @@ mod tests {
             Some(1_000_000)
         );
         assert_eq!(plan.patch.profiles[GLM_PROFILE].max_output_tokens, None);
+        assert_eq!(
+            plan.patch.profile_order.as_ref().expect("profile order"),
+            &[
+                GLM_PROFILE.to_owned(),
+                format!("{GLM_PROFILE}-plan"),
+                format!("{GLM_PROFILE}-review"),
+            ]
+        );
+        assert_eq!(
+            plan.patch.profiles[GLM_PROFILE].posture,
+            Some(AgentPosture::Build)
+        );
+        assert_eq!(
+            plan.patch.profiles[GLM_PROFILE].uses.as_deref(),
+            Some([ProfileUse::Main, ProfileUse::Child].as_slice())
+        );
+        let plan_profile = &plan.patch.profiles[&format!("{GLM_PROFILE}-plan")];
+        assert_eq!(plan_profile.extends.as_deref(), Some(GLM_PROFILE));
+        assert_eq!(plan_profile.posture, Some(AgentPosture::Plan));
+        let review_profile = &plan.patch.profiles[&format!("{GLM_PROFILE}-review")];
+        assert_eq!(review_profile.extends.as_deref(), Some(GLM_PROFILE));
+        assert_eq!(review_profile.posture, Some(AgentPosture::Review));
     }
 
     #[test]

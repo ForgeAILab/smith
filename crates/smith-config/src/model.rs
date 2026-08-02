@@ -116,6 +116,41 @@ impl AgentPosture {
     }
 }
 
+/// A placement where a named agent profile may be selected.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProfileUse {
+    /// The interactive or headless root agent.
+    #[default]
+    Main,
+    /// An explicit depth-one child agent.
+    Child,
+}
+
+impl ProfileUse {
+    /// Parses the stable configuration spelling.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "main" => Some(Self::Main),
+            "child" => Some(Self::Child),
+            _ => None,
+        }
+    }
+
+    /// The stable configuration spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Main => "main",
+            Self::Child => "child",
+        }
+    }
+
+    /// Every supported placement spelling.
+    pub fn spellings() -> &'static [&'static str] {
+        &["main", "child"]
+    }
+}
+
 /// One named root-agent mode.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -151,6 +186,9 @@ pub struct ConfigFile {
     /// The profile to select when no higher layer selects one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_profile: Option<String>,
+    /// Stable order used by idle-composer profile cycling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_order: Option<Vec<String>>,
     /// Root agent mode selected when no higher layer supplies one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_agent: Option<String>,
@@ -172,6 +210,9 @@ pub struct ConfigFile {
     /// Model limits keyed `"<provider>/<model>"`: `[models."acme/example-model"]`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub models: BTreeMap<String, ModelSection>,
+    /// Default reasoning selection for the active provider/model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ReasoningSection>,
     /// Context reserves, budgets, and compaction watermarks: `[context]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<ContextSection>,
@@ -197,6 +238,21 @@ pub struct ConfigFile {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileSection {
+    /// Optional single parent profile whose unset fields this profile inherits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extends: Option<String>,
+    /// Bounded user-facing explanation of this agent preset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Authority-narrowing behavior this profile selects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub posture: Option<AgentPosture>,
+    /// Main/child placements where the profile is selectable.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "use")]
+    pub uses: Option<Vec<ProfileUse>>,
+    /// Bounded additive developer instructions for this agent preset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
     /// The name of a provider declared in `[providers.<name>]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
@@ -212,6 +268,9 @@ pub struct ProfileSection {
     /// `[models."<provider>/<model>"]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
+    /// Profile-scoped reasoning defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ReasoningSection>,
     /// Profile-scoped `[context]` overrides.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<ContextSection>,
@@ -314,6 +373,78 @@ pub struct ModelSection {
     /// The largest output the model can produce, in tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
+    /// Exact, owner-controlled reasoning capability metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ModelReasoningSection>,
+}
+
+/// A layered request for the provider/model reasoning state.
+///
+/// Omission preserves the provider default. In particular, Smith never turns
+/// reasoning on merely because a model is known to support it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReasoningSection {
+    /// Explicit thinking state for subsequent turns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// Provider-advertised effort name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+}
+
+/// Exact request dialect for one trusted provider/model binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReasoningDialect {
+    /// OpenAI-compatible top-level `reasoning_effort`.
+    OpenaiEffort,
+    /// OpenRouter's unified `reasoning` object.
+    Openrouter,
+    /// Z.AI's `thinking.type` object.
+    ZaiThinking,
+}
+
+impl ReasoningDialect {
+    /// Every dialect, in documentation order. Parsing and error messages
+    /// derive from this list so a new dialect cannot miss either.
+    pub const ALL: [Self; 3] = [Self::OpenaiEffort, Self::Openrouter, Self::ZaiThinking];
+
+    /// Stable configuration/status spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenaiEffort => "openai-effort",
+            Self::Openrouter => "openrouter",
+            Self::ZaiThinking => "zai-thinking",
+        }
+    }
+}
+
+/// Rich control metadata for one exact configured model.
+///
+/// A Models.dev `reasoning = true` boolean deliberately does not populate
+/// this shape: presence is not evidence that an API exposes controls.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelReasoningSection {
+    /// Whether an explicit on/off state can be represented.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toggle: Option<bool>,
+    /// Whether the provider forbids turning reasoning off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mandatory: Option<bool>,
+    /// Ordered effort names accepted by this exact binding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub efforts: Option<Vec<String>>,
+    /// Provider/model default thinking state, when documented.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_enabled: Option<bool>,
+    /// Provider/model default effort, when documented.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_effort: Option<String>,
+    /// Exact request-body dialect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dialect: Option<ReasoningDialect>,
 }
 
 /// Context reserves, sub-budgets, and compaction watermarks.

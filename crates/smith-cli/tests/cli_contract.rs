@@ -366,6 +366,14 @@ fn repository_approval_cannot_self_authorize_but_an_explicit_flag_can() {
     );
     assert_eq!(json(&explicit)["status"], "ok");
 
+    let yolo = fixture.run(&["-p", "hello", "--yolo", "--output-format", "json"]);
+    assert!(
+        yolo.status.success(),
+        "{}",
+        String::from_utf8_lossy(&yolo.stderr)
+    );
+    assert_eq!(json(&yolo)["status"], "ok");
+
     let auto = Fixture::with_config(&format!(
         "{CONFIG}\n[approval]\nauto_approve = [\"edit\"]\n"
     ));
@@ -376,6 +384,38 @@ fn repository_approval_cannot_self_authorize_but_an_explicit_flag_can() {
         "{}",
         String::from_utf8_lossy(&refused.stderr)
     );
+}
+
+#[test]
+fn yolo_does_not_widen_a_read_only_plan_profile() {
+    let fixture = Fixture::with_config(&format!(
+        "{CONFIG}\n[profiles.plan]\nextends = \"dev\"\nposture = \"plan\"\nuse = [\"main\"]\n"
+    ));
+
+    let output = fixture.run(&[
+        "-p",
+        "Edit denied-proof.txt, then run a shell command",
+        "--profile",
+        "plan",
+        "--yolo",
+        "--output-format",
+        "json",
+    ]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let activated = json(&output)["lifecycle"]["activation"]["capabilities"]
+        .as_array()
+        .expect("a frozen activation projection")
+        .clone();
+    assert!(activated.iter().all(|id| {
+        id.as_str().is_some_and(|id| {
+            !id.contains("edit") && !id.contains("shell") && !id.contains("write_todos")
+        })
+    }));
+    assert!(!fixture.project.path().join("denied-proof.txt").exists());
 }
 
 #[test]

@@ -38,6 +38,7 @@ use crate::journal::{
 };
 use crate::private_storage::{PrivateFileLock, try_acquire_private_lock};
 use crate::project_instructions::discover as discover_project_instructions;
+use crate::reasoning::{PersistedReasoningOverride, SESSION_STATE_NAMESPACE};
 use crate::session::{FileSessionStore, ProjectId, SessionListing, SessionPaths};
 use crate::summary::SmithSemanticSummaryConfig;
 
@@ -56,6 +57,8 @@ pub struct HostSessionRequest {
     /// service; deterministic tests inject a provider so they never access the
     /// developer's keychain.
     pub checkpoint_keys: Option<Arc<dyn CheckpointKeyProvider>>,
+    reasoning_reset_enabled: bool,
+    reasoning_reset_effort: bool,
 }
 
 impl HostSessionRequest {
@@ -70,6 +73,8 @@ impl HostSessionRequest {
             session_id: None,
             journal: JournalConfig::default(),
             checkpoint_keys: None,
+            reasoning_reset_enabled: false,
+            reasoning_reset_effort: false,
         }
     }
 
@@ -84,6 +89,14 @@ impl HostSessionRequest {
     #[must_use]
     pub fn checkpoint_keys(mut self, provider: Arc<dyn CheckpointKeyProvider>) -> Self {
         self.checkpoint_keys = Some(provider);
+        self
+    }
+
+    /// Clears selected fields from a compatible persisted reasoning override.
+    #[must_use]
+    pub fn reasoning_reset(mut self, enabled: bool, effort: bool) -> Self {
+        self.reasoning_reset_enabled = enabled;
+        self.reasoning_reset_effort = effort;
         self
     }
 }
@@ -320,7 +333,7 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         request.runtime.project_instructions =
             discover_project_instructions(&request.project_root)?;
     }
-    let config = request.runtime.config.clone();
+    let mut config = request.runtime.config.clone();
     let surface = request.runtime.surface;
     reject_project_granted_authority(&config, &request.project_root)?;
     reject_project_controlled_persistence(&config, &request.project_root)?;
@@ -348,13 +361,27 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         if request.runtime.artifact_store.is_none() {
             request.runtime.artifact_store = Some(Arc::new(SmithArtifactStore::new(paths.clone())));
         }
-        let store = Arc::new(RedactingSessionStore::new(
-            FileSessionStore::new(paths.clone()),
-            persistence_redactor.clone(),
-        ));
+        let inner = FileSessionStore::new(paths.clone());
         if request.session_id.is_some() {
-            resume_snapshot_exists = store.load(&session_id).await?.is_some();
+            let snapshot = inner.load(&session_id).await?;
+            resume_snapshot_exists = snapshot.is_some();
+            if let Some(state) = snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.extension_state.get(SESSION_STATE_NAMESPACE))
+            {
+                PersistedReasoningOverride::restore(state)?.apply(
+                    &mut config,
+                    request.reasoning_reset_enabled,
+                    request.reasoning_reset_effort,
+                );
+                request.runtime.config = config.clone();
+            }
         }
+        let store = Arc::new(RedactingSessionStore::new(
+            inner,
+            persistence_redactor.clone(),
+            PersistedReasoningOverride::from_config(&config),
+        ));
         request.runtime.session_store = Some(store);
         if request.runtime.checkpoint_store.is_none() && request.runtime.checkpoint_setup.is_none()
         {
@@ -721,11 +748,20 @@ impl EventObserver for ChangeTurnObserver {
 struct RedactingSessionStore {
     inner: FileSessionStore,
     redactor: DefaultRedactor,
+    reasoning: PersistedReasoningOverride,
 }
 
 impl RedactingSessionStore {
-    fn new(inner: FileSessionStore, redactor: DefaultRedactor) -> Self {
-        Self { inner, redactor }
+    fn new(
+        inner: FileSessionStore,
+        redactor: DefaultRedactor,
+        reasoning: PersistedReasoningOverride,
+    ) -> Self {
+        Self {
+            inner,
+            redactor,
+            reasoning,
+        }
     }
 }
 
@@ -736,7 +772,16 @@ impl SessionStore for RedactingSessionStore {
     }
 
     async fn save(&self, snapshot: &SessionSnapshot) -> Result<(), RuntimeError> {
-        let mut value = serde_json::to_value(snapshot).map_err(|error| {
+        let mut snapshot = snapshot.clone();
+        if self.reasoning.is_empty() {
+            snapshot.extension_state.remove(SESSION_STATE_NAMESPACE);
+        } else {
+            snapshot.extension_state.insert(
+                SESSION_STATE_NAMESPACE.to_owned(),
+                self.reasoning.versioned()?,
+            );
+        }
+        let mut value = serde_json::to_value(&snapshot).map_err(|error| {
             RuntimeError::new(
                 ErrorKind::Serialization,
                 format!(

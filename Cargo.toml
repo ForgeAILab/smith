@@ -42,7 +42,10 @@ futures-core = "0.3"
 futures-util = "0.3"
 ignore = "0.4"
 keyring = { version = "3", default-features = false, features = ["apple-native", "sync-secret-service"] }
-ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29", "layout-cache", "underline-color"] }
+# `unstable-rendered-line-info` provides `Paragraph::line_count`, the only way
+# to size scroll offsets and modal heights with the renderer's own word-wrap
+# arithmetic instead of a drifting character-wrap estimate.
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29", "layout-cache", "underline-color", "unstable-rendered-line-info"] }
 # The production HTTP transport. `rustls` keeps the TLS stack in Rust so the
 # workspace stays free of an OpenSSL build dependency.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "http2", "charset"] }

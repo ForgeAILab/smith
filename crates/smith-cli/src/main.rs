@@ -25,6 +25,7 @@ use agent_runtime_core::delegation::{
 };
 use agent_runtime_core::event::{EstimationConfidence, EventEnvelope, RuntimeEvent, TurnFinish};
 use agent_runtime_core::ids::{ChildId, SessionId};
+use agent_runtime_core::provider::{ModelId, ReasoningSupport};
 use agent_runtime_core::usage::CounterKind;
 use anyhow::{Context, Result};
 use cli::{Command, Prompt, RunArgs, Selection};
@@ -36,21 +37,24 @@ use smith_config::credential::CredentialResolver;
 use smith_config::inventory::{
     InventoryLimit, ModelLimitOrigin, SelectionInventory, local_inventory_with_catalog,
 };
-use smith_config::model::ApprovalMode;
+use smith_config::model::{ApprovalMode, ProfileUse};
 use smith_config::resolve::{
-    ConfigReadiness, Resolution, ResolveRequest, ResolvedAgent, inspect, resolve,
+    ConfigReadiness, Layer, Resolution, ResolveRequest, ResolvedAgent, inspect, resolve,
 };
 use smith_host::{
     ApprovalPrompt, ApprovalRequests, GitChanges, HeadlessApproval, HeadlessInteraction,
     InteractionRequests, InteractiveApproval, InteractiveInteraction, ProjectWorkspace,
 };
-use smith_runtime::factory::{AVAILABLE_ADAPTER_KINDS, HostSurface, RuntimePolicy, RuntimeRequest};
+use smith_runtime::factory::{
+    AVAILABLE_ADAPTER_KINDS, ChildProfileRequest, FactoryError, HostSurface, RuntimePolicy,
+    RuntimeRequest,
+};
 use smith_runtime::host::{HostSession, HostSessionRequest};
 use smith_runtime::journal::DefaultRedactor;
 use smith_runtime::model_catalog::{CatalogLoader, runtime_catalog_source};
 use smith_runtime::session::{SNAPSHOT_SCHEMA_VERSION, SessionListing};
 use smith_runtime::{ChildDurability, ChildState, ChildStatus, SpawnOutcome};
-use smith_tui::app::{Action, App, PaletteCommand};
+use smith_tui::app::{Action, App, LEGACY_AGENT_PROFILE_PREFIX, PaletteCommand};
 use smith_tui::commands::CommandAction;
 #[cfg(test)]
 use smith_tui::status::ContextPlanUpdate;
@@ -245,6 +249,16 @@ async fn start_host(
             .map_err(|error| anyhow::anyhow!("{error}"))
             .context("building the local runtime inventory")?;
     let agents = resolution.config.agent.clone();
+    for profile in agents
+        .profiles
+        .values()
+        .filter(|profile| profile.legacy && profile.posture.source.layer != Layer::BuiltIn)
+    {
+        eprintln!(
+            "smith: warning: {}: deprecated agent mode/child preset `{}` was adapted as a profile; migrate to [profiles.{}] with explicit posture and use",
+            profile.posture.source, profile.name, profile.name,
+        );
+    }
     let workspace = ProjectWorkspace::new(&project)
         .map_err(|error| anyhow::anyhow!("{error}"))
         .context("rooting the project workspace")?;
@@ -267,6 +281,44 @@ async fn start_host(
             .map(|value| value.value.as_str()),
     ) {
         runtime.catalog_sources.push(source);
+    }
+    for profile in agents
+        .profiles
+        .values()
+        .filter(|profile| profile.supports(ProfileUse::Child) && !profile.legacy)
+    {
+        let mut child_selection = selection.clone();
+        child_selection.profile = Some(profile.name.clone());
+        child_selection.provider = None;
+        child_selection.model = None;
+        // The session `/think`–`/effort` override belongs to the main
+        // binding the user chose it against. Forwarding it here would make a
+        // child profile on a non-controllable binding abort startup and clear
+        // the parent's valid override.
+        child_selection.reasoning_enabled = None;
+        child_selection.reasoning_effort = None;
+        let (_, child_request) = resolution_request(&child_selection)?;
+        let child_resolution = resolve(&child_request.with_profile_use(ProfileUse::Child))
+            .map_err(|error| anyhow::anyhow!("{error}"))
+            .with_context(|| format!("resolving child profile `{}`", profile.name))?;
+        let mut catalog_sources = Vec::new();
+        if let Some(source) = runtime_catalog_source(
+            &catalog,
+            &child_resolution.config.provider.name.value,
+            &child_resolution.config.provider.kind.value,
+            child_resolution
+                .config
+                .provider
+                .base_url
+                .as_ref()
+                .map(|value| value.value.as_str()),
+        ) {
+            catalog_sources.push(source);
+        }
+        runtime.child_profiles.push(ChildProfileRequest {
+            config: child_resolution.config,
+            catalog_sources,
+        });
     }
 
     let mut approvals = None;
@@ -294,16 +346,19 @@ async fn start_host(
             runtime.interaction = Some(broker.clone());
             (None, Some(broker))
         }
-        HostSurface::Child | HostSurface::Embedded => (None, None),
+        HostSurface::Child => (None, None),
     };
 
-    let mut request = HostSessionRequest::new(runtime, &project);
+    let mut request = HostSessionRequest::new(runtime, &project).reasoning_reset(
+        selection.reasoning_enabled_reset,
+        selection.reasoning_effort_reset,
+    );
     if let Some(session) = resume {
         request = request.resume(SessionId::new(session));
     }
     let host = smith_runtime::host::start(request)
         .await
-        .map_err(|error| anyhow::anyhow!("{error}"))
+        .map_err(anyhow::Error::new)
         .context("starting the Smith session")?;
     let sessions = smith_runtime::host::list(&resolution.config, &project)
         .await
@@ -327,7 +382,37 @@ async fn start_host(
 async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
     let mut resume = args.resume.take();
     let mut frozen_catalog = None;
+    let mut reasoning_notice = None;
     loop {
+        let started = match start_host(
+            &args.selection,
+            resume.as_deref(),
+            HostSurface::Terminal,
+            frozen_catalog.clone(),
+        )
+        .await
+        {
+            Ok(started) => started,
+            Err(error)
+                if is_reasoning_startup_error(&error)
+                    && (args.selection.reasoning_enabled.is_some()
+                        || args.selection.reasoning_effort.is_some()
+                        || (resume.is_some()
+                            && (!args.selection.reasoning_enabled_reset
+                                || !args.selection.reasoning_effort_reset))) =>
+            {
+                args.selection.reasoning_enabled = None;
+                args.selection.reasoning_effort = None;
+                args.selection.reasoning_enabled_reset = true;
+                args.selection.reasoning_effort_reset = true;
+                reasoning_notice = Some(
+                    "cleared the saved thinking/effort override because the selected provider/model cannot represent it"
+                        .to_owned(),
+                );
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         let StartedHost {
             host,
             approvals,
@@ -338,13 +423,7 @@ async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
             sessions,
             catalog,
             ..
-        } = start_host(
-            &args.selection,
-            resume.as_deref(),
-            HostSurface::Terminal,
-            frozen_catalog.clone(),
-        )
-        .await?;
+        } = started;
         let current_session = host.session().id().as_str().to_owned();
         match run_interactive(
             &host,
@@ -359,6 +438,7 @@ async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
             PresentationOptions {
                 no_color: args.no_color,
                 no_motion: args.no_motion,
+                reasoning_notice: reasoning_notice.take(),
             },
         )
         .await?
@@ -370,12 +450,23 @@ async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
                     PaletteCommand::Profile(_)
                         | PaletteCommand::Model { .. }
                         | PaletteCommand::Agent(_)
+                        | PaletteCommand::Think(_)
+                        | PaletteCommand::Effort(_)
                 )
                 .then_some(catalog);
                 apply_palette_command(&mut args.selection, &mut resume, current_session, command);
             }
         }
     }
+}
+
+fn is_reasoning_startup_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|source| {
+        matches!(
+            source.downcast_ref::<FactoryError>(),
+            Some(FactoryError::Reasoning { .. })
+        )
+    })
 }
 
 fn apply_palette_command(
@@ -407,6 +498,16 @@ fn apply_palette_command(
             selection.agent = Some(agent);
             *resume = Some(current_session);
         }
+        PaletteCommand::Think(enabled) => {
+            selection.reasoning_enabled = enabled;
+            selection.reasoning_enabled_reset = enabled.is_none();
+            *resume = Some(current_session);
+        }
+        PaletteCommand::Effort(effort) => {
+            selection.reasoning_effort = effort;
+            selection.reasoning_effort_reset = selection.reasoning_effort.is_none();
+            *resume = Some(current_session);
+        }
     }
 }
 
@@ -433,6 +534,7 @@ enum InteractiveExit {
 struct PresentationOptions {
     no_color: bool,
     no_motion: bool,
+    reasoning_notice: Option<String>,
 }
 
 struct InteractiveResources {
@@ -465,13 +567,36 @@ async fn run_interactive(
     let mut app = App::new(policy.model.as_str(), project_label);
     app.status
         .switch_model(Some(policy.provider_name.clone()), policy.model.as_str());
-    app.status.set_agent(policy.agent_mode.clone());
+    app.status.set_agent(policy.agent_profile.clone());
+    app.status
+        .set_reasoning_hint(policy.reasoning.has_override().then(|| {
+            format!(
+                "think {} · effort {}",
+                policy.reasoning.effective_state(),
+                policy.reasoning.effective_effort(),
+            )
+        }));
+    if policy.reasoning.has_override() {
+        app.transcript.push_notice(
+            "reasoning",
+            format!(
+                "thinking {} · effort {} · {} · applies to the next turn",
+                policy.reasoning.effective_state(),
+                policy.reasoning.effective_effort(),
+                policy.reasoning.selection_source,
+            ),
+        );
+    }
+    if let Some(notice) = presentation.reasoning_notice {
+        app.transcript.push_notice("reasoning", notice);
+    }
     app.set_resources(runtime_resources(
         inventory,
         sessions,
         host.session().id().as_str(),
         project,
         &agents,
+        &policy.reasoning,
     ));
     app.transcript.replace_from_history(&snapshot.history);
     for (call, display) in host.tool_call_displays() {
@@ -535,11 +660,14 @@ async fn run_interactive(
     let run_result = run_tui(
         &mut terminal,
         app,
-        host,
-        project,
-        approvals,
-        interactions,
-        theme,
+        TuiRunInputs {
+            host,
+            project,
+            approvals,
+            interactions,
+            agents: &agents,
+            theme,
+        },
     )
     .await;
     let restore_result = terminal.restore().context("restoring the terminal");
@@ -554,15 +682,28 @@ async fn run_interactive(
     run_result
 }
 
+struct TuiRunInputs<'a> {
+    host: &'a HostSession,
+    project: &'a std::path::Path,
+    approvals: Option<ApprovalRequests>,
+    interactions: Option<InteractionRequests>,
+    agents: &'a ResolvedAgent,
+    theme: Theme,
+}
+
 async fn run_tui(
     terminal: &mut terminal::Terminal,
     mut app: App,
-    host: &HostSession,
-    project: &std::path::Path,
-    mut approvals: Option<ApprovalRequests>,
-    interactions: Option<InteractionRequests>,
-    theme: Theme,
+    inputs: TuiRunInputs<'_>,
 ) -> Result<InteractiveExit> {
+    let TuiRunInputs {
+        host,
+        project,
+        mut approvals,
+        interactions,
+        agents,
+        theme,
+    } = inputs;
     let session = host.session();
     let mut events = session.subscribe();
     let mut keys = EventStream::new();
@@ -598,7 +739,7 @@ async fn run_tui(
                                     session.clone(),
                                     text,
                                     files,
-                                    host.runtime().policy().turn_time_limit_ms.unwrap_or(120_000),
+                                    host.runtime().policy().turn_time_limit_ms.unwrap_or(600_000),
                                     local_tx.clone(),
                                 );
                             }
@@ -606,7 +747,7 @@ async fn run_tui(
                                 start_local_shell(
                                     session.clone(),
                                     command,
-                                    host.runtime().policy().turn_time_limit_ms.unwrap_or(120_000),
+                                    host.runtime().policy().turn_time_limit_ms.unwrap_or(600_000),
                                     local_tx.clone(),
                                 );
                             }
@@ -704,7 +845,7 @@ async fn run_tui(
                                 start_review(host, project, scope, local_tx.clone());
                             }
                             Some(Action::StartAgent { preset, task }) => {
-                                start_agent(host, preset, task, local_tx.clone());
+                                start_agent(host, agents, preset, task, local_tx.clone());
                             }
                             Some(Action::FollowUpAgent { child_id, task }) => {
                                 follow_up_agent(host, child_id, task, local_tx.clone());
@@ -776,8 +917,8 @@ async fn run_tui(
             outcome = local_rx.recv() => {
                 if let Some(outcome) = outcome {
                     match outcome {
-                        LocalOutcome::Notice(text) => {
-                            app.transcript.push_notice("review", text);
+                        LocalOutcome::Notice { source, text } => {
+                            app.transcript.push_notice(source, text);
                         }
                         LocalOutcome::Error(text) => app.transcript.push_error(text),
                         LocalOutcome::Shell { content, is_error } => {
@@ -933,14 +1074,32 @@ async fn handle_local_command(
             );
             let context = render_context_status(&app.status, policy);
             let harness = render_harness_status(&app.status);
+            let reasoning = render_reasoning_status(policy);
             app.show_local_result(
                 "status",
                 format!(
-                    "session: {}\nprovider: {}\nmodel: {}\npermission: {:?}\n\
+                    "session: {}\nprofile: {} · posture {} · use {} · rev {} · source {}{}\n\
+                     provider: {}\nmodel: {}\npermission: {:?}\n\
+                     {reasoning}\n\
                      protected mid-turn recovery: {}\n\
                      {harness}\n{context}\nproject: {}\nGit: {}\n\
                      children: {}\nchange attribution: {}",
                     host.session().id(),
+                    policy.agent_profile,
+                    policy.agent_posture.as_str(),
+                    policy
+                        .agent_profile_uses
+                        .iter()
+                        .map(|placement| placement.as_str())
+                        .collect::<Vec<_>>()
+                        .join("+"),
+                    bounded_text(&policy.agent_profile_revision, 12),
+                    bounded_text(&policy.agent_profile_source, 80),
+                    if policy.agent_profile_legacy {
+                        " · legacy adapter; migrate to [profiles]"
+                    } else {
+                        ""
+                    },
                     policy.provider_name,
                     policy.model,
                     policy.approval_mode,
@@ -1047,14 +1206,6 @@ async fn handle_local_command(
                 );
             }
         }
-        CommandAction::AgentResume(child_id) => {
-            app.show_local_error(
-                "agents",
-                format!(
-                    "`/agent resume {child_id}` must be confirmed in the composer before it can run"
-                ),
-            );
-        }
         CommandAction::Diff(scope) => {
             if scope.as_deref() == Some("last-turn") {
                 match host.changes().undo_preview() {
@@ -1130,6 +1281,9 @@ async fn handle_local_command(
         | CommandAction::Profile(_)
         | CommandAction::Provider(_)
         | CommandAction::Model(_)
+        | CommandAction::Think(_)
+        | CommandAction::Effort(_)
+        | CommandAction::AgentResume(_)
         | CommandAction::Quit => {
             unreachable!("the reducer handles this command before host dispatch")
         }
@@ -1376,7 +1530,29 @@ fn render_context_status(status: &Status, policy: &RuntimePolicy) -> String {
         status.context.render()
     ));
     lines.push(format!("cache read (session): {}", status.render_cache()));
+    lines.push(render_reasoning_status(policy));
     lines.join("\n")
+}
+
+fn render_reasoning_status(policy: &RuntimePolicy) -> String {
+    let support = match policy.reasoning.support {
+        ReasoningSupport::Unsupported => "unsupported",
+        ReasoningSupport::Fixed => "fixed",
+        ReasoningSupport::Controllable => "controllable",
+    };
+    let efforts = if policy.reasoning.efforts.is_empty() {
+        "none".to_owned()
+    } else {
+        policy.reasoning.efforts.join(", ")
+    };
+    format!(
+        "reasoning: {} · effort {} · {}\nreasoning controls: {support} · switch {} · efforts {efforts} · {}",
+        policy.reasoning.effective_state(),
+        policy.reasoning.effective_effort(),
+        policy.reasoning.selection_source,
+        policy.reasoning.switch.as_str(),
+        policy.reasoning.capability_source,
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -1416,17 +1592,7 @@ fn render_context_view(status: &Status, policy: &RuntimePolicy) -> String {
         ));
         lines.push(String::new());
 
-        let mut categories = plan
-            .totals
-            .iter()
-            .filter(|(_, tokens)| **tokens > 0)
-            .map(|(kind, tokens)| context_display_category(kind, *tokens))
-            .collect::<Vec<_>>();
-        categories.sort_by(|left, right| {
-            left.rank
-                .cmp(&right.rank)
-                .then_with(|| left.label.cmp(&right.label))
-        });
+        let mut categories = context_display_categories(&plan.totals);
         let categorized = categories.iter().fold(0u32, |total, category| {
             total.saturating_add(category.tokens)
         });
@@ -1511,6 +1677,14 @@ fn render_context_view(status: &Status, policy: &RuntimePolicy) -> String {
         lines.push(String::new());
         lines.push("Available capacity".to_owned());
         lines.push(format!(
+            "{} system instructions: ? (not counted yet)",
+            glyph::CONTEXT_SYSTEM,
+        ));
+        lines.push(format!(
+            "{} tool schemas: ? (not counted yet)",
+            glyph::CONTEXT_TOOL,
+        ));
+        lines.push(format!(
             "{} free input: {}",
             glyph::CONTEXT_FREE,
             exact(input_budget),
@@ -1536,7 +1710,52 @@ fn render_context_view(status: &Status, policy: &RuntimePolicy) -> String {
         status.context.render()
     ));
     lines.push(format!("cache read (session): {}", status.render_cache()));
+    lines.push(render_reasoning_status(policy));
     lines.join("\n")
+}
+
+fn context_display_categories(
+    totals: &std::collections::BTreeMap<String, u32>,
+) -> Vec<ContextDisplayCategory> {
+    const INSTRUCTION_KINDS: [&str; 3] = [
+        "system_instruction",
+        "developer_instruction",
+        "ability_instruction",
+    ];
+
+    let instruction_tokens = INSTRUCTION_KINDS.iter().fold(0u32, |sum, kind| {
+        sum.saturating_add(totals.get(*kind).copied().unwrap_or_default())
+    });
+    let mut categories = vec![
+        ContextDisplayCategory {
+            label: "system instructions".to_owned(),
+            glyph: glyph::CONTEXT_SYSTEM,
+            tokens: instruction_tokens,
+            rank: 0,
+        },
+        ContextDisplayCategory {
+            label: "tool schemas".to_owned(),
+            glyph: glyph::CONTEXT_TOOL,
+            tokens: totals.get("tool_schema").copied().unwrap_or_default(),
+            rank: 1,
+        },
+    ];
+    categories.extend(
+        totals
+            .iter()
+            .filter(|(kind, tokens)| {
+                **tokens > 0
+                    && !INSTRUCTION_KINDS.contains(&kind.as_str())
+                    && kind.as_str() != "tool_schema"
+            })
+            .map(|(kind, tokens)| context_display_category(kind, *tokens)),
+    );
+    categories.sort_by(|left, right| {
+        left.rank
+            .cmp(&right.rank)
+            .then_with(|| left.label.cmp(&right.label))
+    });
+    categories
 }
 
 fn context_display_category(kind: &str, tokens: u32) -> ContextDisplayCategory {
@@ -1622,10 +1841,21 @@ fn render_context_grid(entries: &[(&'static str, u32)]) -> Vec<String> {
 }
 
 enum LocalOutcome {
-    Notice(String),
+    Notice {
+        /// The transcript block label — "agents" for child lifecycle,
+        /// "review" for reviewer starts.
+        source: &'static str,
+        text: String,
+    },
     Error(String),
-    Shell { content: String, is_error: bool },
-    PreparedSendFailed { text: String, error: String },
+    Shell {
+        content: String,
+        is_error: bool,
+    },
+    PreparedSendFailed {
+        text: String,
+        error: String,
+    },
 }
 
 fn start_local_shell(
@@ -1764,10 +1994,17 @@ fn child_summary_projection(status: &ChildStatus) -> (&'static str, String) {
 
 fn start_agent(
     host: &HostSession,
+    agents: &ResolvedAgent,
     preset: String,
     task: String,
     outcomes: tokio::sync::mpsc::UnboundedSender<LocalOutcome>,
 ) {
+    let Some(profile) = agents.child_profile(&preset).cloned() else {
+        let _ = outcomes.send(LocalOutcome::Error(format!(
+            "profile `{preset}` is not available for direct-child use"
+        )));
+        return;
+    };
     let Some(coordinator) = host
         .runtime()
         .delegation()
@@ -1779,25 +2016,45 @@ fn start_agent(
         ));
         return;
     };
+    let model = match (&profile.provider, &profile.model) {
+        (Some(_provider), Some(model)) => ChildModelSelection::Explicit {
+            provider: Some(smith_runtime::delegation::profile_route_key(
+                &profile.name,
+                &profile.revision,
+            )),
+            model: ModelId::new(model.value.clone()),
+        },
+        (None, None) if profile.legacy => ChildModelSelection::Inherit,
+        _ => {
+            let _ = outcomes.send(LocalOutcome::Error(format!(
+                "profile `{preset}` does not resolve a complete provider/model pair"
+            )));
+            return;
+        }
+    };
+    let profile_revision = profile.revision.clone();
+    let posture = profile.posture.value.as_str();
     tokio::spawn(async move {
         let outcome = coordinator
             .spawn(ChildSpec {
                 task: UserInput::text(format!(
-                    "You are the `{preset}` read-only child preset. Complete this bounded task without modifying the workspace:\n\n{task}"
+                    "Run this bounded task under the preflighted `{preset}` agent profile (revision {profile_revision}, posture {posture}) as a read-only direct child. Do not modify the workspace.\n\nTask:\n{task}"
                 )),
-                model: ChildModelSelection::Inherit,
+                model,
                 limits: ChildLimits::turns(1),
                 tools: ToolViewScope::ReadOnly,
                 workspace: WorkspacePolicy::ReadOnlyView,
             })
             .await;
         let message = match outcome {
-            Ok(SpawnOutcome::Spawned { child, .. }) => {
-                LocalOutcome::Notice(format!("{preset} child {child} started"))
-            }
-            Ok(SpawnOutcome::Queued { child }) => {
-                LocalOutcome::Notice(format!("{preset} child {child} queued"))
-            }
+            Ok(SpawnOutcome::Spawned { child, .. }) => LocalOutcome::Notice {
+                source: "agents",
+                text: format!("{preset} child {child} started"),
+            },
+            Ok(SpawnOutcome::Queued { child }) => LocalOutcome::Notice {
+                source: "agents",
+                text: format!("{preset} child {child} queued"),
+            },
             Ok(SpawnOutcome::AtCapacity { running, limit }) => LocalOutcome::Error(format!(
                 "{preset} child did not start: {running} children are already running (limit {limit})"
             )),
@@ -1829,9 +2086,10 @@ fn follow_up_agent(
     tokio::spawn(async move {
         let child = agent_runtime_core::ids::ChildId::new(child_id);
         let message = match coordinator.follow_up(&child, UserInput::text(task)).await {
-            Ok(()) => LocalOutcome::Notice(format!(
-                "{child} follow-up started · same child session and prior history"
-            )),
+            Ok(()) => LocalOutcome::Notice {
+                source: "agents",
+                text: format!("{child} follow-up started · same child session and prior history"),
+            },
             Err(error) => LocalOutcome::Error(format!(
                 "{child} follow-up did not start: {}",
                 error.message
@@ -1860,9 +2118,10 @@ fn resume_agent(
     tokio::spawn(async move {
         let child = agent_runtime_core::ids::ChildId::new(child_id);
         let message = match coordinator.resume(&child).await {
-            Ok(()) => LocalOutcome::Notice(format!(
-                "{child} exact checkpoint resume started · no new child task"
-            )),
+            Ok(()) => LocalOutcome::Notice {
+                source: "agents",
+                text: format!("{child} exact checkpoint resume started · no new child task"),
+            },
             Err(error) => LocalOutcome::Error(format!("{child} did not resume: {}", error.message)),
         };
         let _ = outcomes.send(message);
@@ -1911,12 +2170,14 @@ fn start_review(
             })
             .await;
         let message = match outcome {
-            Ok(SpawnOutcome::Spawned { child, .. }) => {
-                LocalOutcome::Notice(format!("read-only reviewer {child} started"))
-            }
-            Ok(SpawnOutcome::Queued { child }) => {
-                LocalOutcome::Notice(format!("read-only reviewer {child} queued"))
-            }
+            Ok(SpawnOutcome::Spawned { child, .. }) => LocalOutcome::Notice {
+                source: "review",
+                text: format!("read-only reviewer {child} started"),
+            },
+            Ok(SpawnOutcome::Queued { child }) => LocalOutcome::Notice {
+                source: "review",
+                text: format!("read-only reviewer {child} queued"),
+            },
             Ok(SpawnOutcome::AtCapacity { running, limit }) => LocalOutcome::Error(format!(
                 "review did not start: {running} children are already running (limit {limit})"
             )),
@@ -1969,7 +2230,8 @@ fn resolution_request(selection: &Selection) -> Result<(PathBuf, ResolveRequest)
 
     let request = ResolveRequest::new(&start)
         .with_env(std::env::vars())
-        .with_cli(selection.overrides());
+        .with_cli(selection.overrides())
+        .with_session(selection.session_overrides());
     Ok((start, request))
 }
 
@@ -1994,16 +2256,62 @@ fn runtime_resources(
     current_session: &str,
     project: &std::path::Path,
     agents: &ResolvedAgent,
+    reasoning: &smith_runtime::reasoning::ReasoningRuntimePolicy,
 ) -> RuntimeResources {
-    let profiles = inventory
-        .profiles
-        .into_iter()
+    let model_limits = inventory
+        .models
+        .iter()
+        .map(|model| {
+            (
+                model.id(),
+                format!(
+                    "ctx {} · input {} · output {}",
+                    render_optional_inventory_limit(model.context_tokens.as_ref()),
+                    render_optional_inventory_limit(model.max_input_tokens.as_ref()),
+                    render_optional_inventory_limit(model.max_output_tokens.as_ref()),
+                ),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let profile_inventory = inventory.profiles;
+    let profiles = profile_inventory
+        .iter()
+        .filter(|profile| profile.uses.contains(&ProfileUse::Main))
         .map(|profile| {
-            let detail = profile
+            let pair = profile
                 .pair()
                 .unwrap_or_else(|| "incomplete provider/model selection".to_owned());
-            let entry = ResourceEntry::new(profile.name.clone(), profile.name, detail)
-                .active(profile.active);
+            let description = profile.description.as_deref().unwrap_or("agent profile");
+            let placements = profile
+                .uses
+                .iter()
+                .map(|placement| placement.as_str())
+                .collect::<Vec<_>>()
+                .join("+");
+            let revision = bounded_text(&profile.revision, 12);
+            let source = profile
+                .source
+                .as_ref()
+                .map_or_else(|| "unknown source".to_owned(), ToString::to_string);
+            let legacy = if profile.legacy {
+                format!(
+                    " · legacy from {}; migrate to [profiles.{}]",
+                    bounded_text(&source, 48),
+                    profile.name
+                )
+            } else {
+                format!(" · source {}", bounded_text(&source, 48))
+            };
+            let detail = format!(
+                "{} · use {placements} · {pair} · {description} · rev {revision}{legacy}",
+                profile.posture.as_str(),
+            );
+            let id = if profile.legacy {
+                format!("{LEGACY_AGENT_PROFILE_PREFIX}{}", profile.name)
+            } else {
+                profile.name.clone()
+            };
+            let entry = ResourceEntry::new(id, profile.name.clone(), detail).active(profile.active);
             if profile.selectable {
                 entry
             } else {
@@ -2099,41 +2407,175 @@ fn runtime_resources(
 
     let session_entries = session_resource_entries(sessions, Some(current_session));
     let files = workspace_file_entries(project, 4_096);
-    let child_agents = agents
-        .child_presets
+    let child_agents = profile_inventory
         .iter()
-        .map(|(name, preset)| {
-            let description = preset
+        .filter(|profile| profile.uses.contains(&ProfileUse::Child))
+        .map(|profile| {
+            let description = profile
                 .description
+                .as_deref()
+                .unwrap_or("read-only child profile");
+            let pair = profile.pair().unwrap_or_else(|| {
+                format!(
+                    "{}/{}",
+                    agents
+                        .profile
+                        .provider
+                        .as_ref()
+                        .map_or("current", |value| value.value.as_str()),
+                    agents
+                        .profile
+                        .model
+                        .as_ref()
+                        .map_or("model", |value| value.value.as_str())
+                )
+            });
+            let limits = model_limits
+                .get(&pair)
+                .map_or("limits inherited from active runtime", String::as_str);
+            let instructions = agents
+                .profiles
+                .get(&profile.name)
+                .and_then(|resolved| resolved.instructions.as_ref())
+                .map_or("default instructions", |_| "custom instructions configured");
+            let revision = bounded_text(&profile.revision, 12);
+            let source = profile
+                .source
                 .as_ref()
-                .map_or("read-only child preset", |value| value.value.as_str());
-            ResourceEntry::new(
-                format!("agent:{name}"),
-                name.clone(),
-                format!("agent · {} · {description}", preset.posture.value.as_str()),
-            )
+                .map_or_else(|| "unknown source".to_owned(), ToString::to_string);
+            let legacy = if profile.legacy {
+                format!(
+                    " · legacy from {}; migrate to [profiles.{}] use=[\"child\"]",
+                    bounded_text(&source, 48),
+                    profile.name
+                )
+            } else {
+                format!(" · source {}", bounded_text(&source, 48))
+            };
+            let entry = ResourceEntry::new(
+                format!("agent:{}", profile.name),
+                profile.name.clone(),
+                format!(
+                    "child profile · {} · {pair} · {limits} · {instructions} · {description} · rev {revision}{legacy}",
+                    profile.posture.as_str(),
+                ),
+            );
+            if profile.selectable {
+                entry
+            } else {
+                entry.disabled("child profile does not resolve a usable provider/model pair")
+            }
         })
         .collect();
-    let agent_modes = agents
-        .order
+    let main_profiles = agents
+        .profile_order
         .value
         .iter()
         .filter_map(|name| {
-            let mode = agents.modes.get(name)?;
-            let description = mode
+            let profile = profile_inventory
+                .iter()
+                .find(|profile| profile.name == *name)?;
+            let description = profile
                 .description
-                .as_ref()
-                .map_or("root agent mode", |value| value.value.as_str());
+                .as_deref()
+                .unwrap_or("main agent profile");
             Some(
                 ResourceEntry::new(
+                    if profile.legacy {
+                        format!("{LEGACY_AGENT_PROFILE_PREFIX}{name}")
+                    } else {
+                        name.clone()
+                    },
                     name.clone(),
-                    name.clone(),
-                    format!("{} · {description}", mode.posture.value.as_str()),
+                    format!(
+                        "main profile · {} · {description} · rev {}",
+                        profile.posture.as_str(),
+                        bounded_text(&profile.revision, 12)
+                    ),
                 )
-                .active(agents.active.value == *name),
+                .active(agents.profile.name == *name),
             )
         })
         .collect();
+
+    let capability_reason = || match reasoning.support {
+        ReasoningSupport::Unsupported => {
+            "this model does not advertise reasoning support".to_owned()
+        }
+        ReasoningSupport::Fixed => {
+            format!("reasoning is fixed; {}", reasoning.capability_source)
+        }
+        ReasoningSupport::Controllable => format!(
+            "the active binding has no explicit switch; {}",
+            reasoning.capability_source
+        ),
+    };
+    let mut thinking = vec![
+        ResourceEntry::new(
+            "default",
+            "provider default",
+            "clear the session thinking override",
+        )
+        .active(reasoning.selected_enabled.is_none()),
+    ];
+    let on = ResourceEntry::new("on", "on", "enable thinking for the next turn")
+        .active(reasoning.selected_enabled == Some(true));
+    thinking.push(match reasoning.switch {
+        smith_runtime::reasoning::ReasoningSwitch::Optional
+        | smith_runtime::reasoning::ReasoningSwitch::MandatoryOn
+            if reasoning.dialect != Some(smith_config::model::ReasoningDialect::OpenaiEffort)
+                || reasoning.selected_effort.is_some()
+                || reasoning.default_effort.is_some() =>
+        {
+            on
+        }
+        smith_runtime::reasoning::ReasoningSwitch::Optional
+        | smith_runtime::reasoning::ReasoningSwitch::MandatoryOn => {
+            on.disabled("choose an advertised /effort to turn reasoning on")
+        }
+        smith_runtime::reasoning::ReasoningSwitch::Unavailable => on.disabled(capability_reason()),
+    });
+    let off = ResourceEntry::new("off", "off", "disable thinking for the next turn")
+        .active(reasoning.selected_enabled == Some(false));
+    thinking.push(match reasoning.switch {
+        // The OpenAI-effort dialect sends off as the effort `none`, so off is
+        // selectable only when that effort is advertised. Mirrors the
+        // validation in `smith_runtime::reasoning::resolve_reasoning_policy`.
+        smith_runtime::reasoning::ReasoningSwitch::Optional
+            if reasoning.dialect == Some(smith_config::model::ReasoningDialect::OpenaiEffort)
+                && !reasoning.efforts.iter().any(|effort| effort == "none") =>
+        {
+            off.disabled("off requires this binding to advertise the `none` effort")
+        }
+        smith_runtime::reasoning::ReasoningSwitch::Optional => off,
+        smith_runtime::reasoning::ReasoningSwitch::MandatoryOn => {
+            off.disabled("reasoning is mandatory for this provider/model")
+        }
+        smith_runtime::reasoning::ReasoningSwitch::Unavailable => off.disabled(capability_reason()),
+    });
+
+    let mut efforts = vec![
+        ResourceEntry::new(
+            "default",
+            "provider default",
+            "clear the session effort override",
+        )
+        .active(reasoning.selected_effort.is_none()),
+    ];
+    efforts.extend(reasoning.efforts.iter().map(|effort| {
+        ResourceEntry::new(
+            effort.clone(),
+            effort.clone(),
+            "applies to every request in the next turn",
+        )
+        .active(reasoning.selected_effort.as_deref() == Some(effort.as_str()))
+    }));
+    if reasoning.efforts.is_empty() {
+        efforts.push(
+            ResourceEntry::new("unavailable", "not adjustable", capability_reason())
+                .disabled(capability_reason()),
+        );
+    }
 
     RuntimeResources {
         models,
@@ -2142,7 +2584,9 @@ fn runtime_resources(
         sessions: session_entries,
         files,
         child_agents,
-        agent_modes,
+        main_profiles,
+        thinking,
+        efforts,
         current_session: Some(current_session.to_owned()),
     }
 }
@@ -2672,6 +3116,15 @@ max_output_tokens = 4096
             &mut selection,
             &mut resume,
             "current-session".into(),
+            PaletteCommand::Agent("review".into()),
+        );
+        assert_eq!(selection.profile.as_deref(), Some("work"));
+        assert_eq!(selection.agent.as_deref(), Some("review"));
+
+        apply_palette_command(
+            &mut selection,
+            &mut resume,
+            "current-session".into(),
             PaletteCommand::NewSession,
         );
         assert_eq!(resume, None);
@@ -2683,6 +3136,20 @@ max_output_tokens = 4096
             PaletteCommand::Resume("selected-session".into()),
         );
         assert_eq!(resume.as_deref(), Some("selected-session"));
+    }
+
+    #[test]
+    fn reasoning_startup_errors_are_distinguished_for_compatible_switch_cleanup() {
+        let reasoning = anyhow::Error::new(FactoryError::Reasoning {
+            provider: "example".to_owned(),
+            model: ModelId::new("fixed-model"),
+            message: "reasoning is not adjustable".to_owned(),
+        })
+        .context("starting the Smith session");
+        assert!(is_reasoning_startup_error(&reasoning));
+
+        let unrelated = anyhow::anyhow!("provider is unavailable");
+        assert!(!is_reasoning_startup_error(&unrelated));
     }
 
     #[test]
@@ -2722,8 +3189,20 @@ output_reserve = 4096
             "session",
             project.path(),
             &resolution.config.agent,
+            &smith_runtime::reasoning::ReasoningRuntimePolicy::default(),
         );
         assert_eq!(resources.models.len(), 339);
+        assert_eq!(
+            resources
+                .main_profiles
+                .iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            ["router"]
+        );
+        assert!(resources.profiles.iter().any(|entry| {
+            entry.label == "review" && entry.id == format!("{LEGACY_AGENT_PROFILE_PREFIX}review")
+        }));
         assert!(
             resources.providers[0]
                 .detail
@@ -2781,6 +3260,28 @@ output_reserve = 4096
         let unknown = context_display_category("future_context_kind", 1);
         assert_eq!(unknown.label, "future context kind");
         assert_eq!(unknown.glyph, glyph::CONTEXT_OTHER);
+    }
+
+    #[test]
+    fn context_categories_keep_system_and_tools_visible_and_aggregate_instructions() {
+        let totals = std::collections::BTreeMap::from([
+            ("system_instruction".to_owned(), 100),
+            ("developer_instruction".to_owned(), 40),
+            ("ability_instruction".to_owned(), 60),
+            ("history".to_owned(), 300),
+        ]);
+
+        let categories = context_display_categories(&totals);
+        assert_eq!(categories[0].label, "system instructions");
+        assert_eq!(categories[0].tokens, 200);
+        assert_eq!(categories[1].label, "tool schemas");
+        assert_eq!(categories[1].tokens, 0);
+        assert_eq!(categories[2].label, "history");
+        assert!(
+            categories
+                .iter()
+                .all(|category| category.label != "developer instructions")
+        );
     }
 
     #[test]
@@ -2878,6 +3379,14 @@ output_reserve = 4096
             before_context.contains("□ output/reasoning reserve: 4k"),
             "{before_context}"
         );
+        assert!(
+            before_context.contains("■ system instructions: ? (not counted yet)"),
+            "{before_context}"
+        );
+        assert!(
+            before_context.contains("◆ tool schemas: ? (not counted yet)"),
+            "{before_context}"
+        );
         assert_eq!(
             before_context
                 .lines()
@@ -2927,6 +3436,10 @@ output_reserve = 4096
             "{context}"
         );
         assert!(context.contains("◆ tool schemas: ~500"), "{context}");
+        assert!(
+            context.contains("■ system instructions: ~0 (0.0%)"),
+            "{context}"
+        );
         assert!(context.contains("● history: ~1.5k"), "{context}");
         assert!(
             context.contains("counting: estimated · 2 segments"),
@@ -3005,6 +3518,11 @@ output_reserve = 4096
             status_content.contains("~98% input left"),
             "{status_content}"
         );
+        assert!(
+            status_content.contains("profile: dev · posture build · use main · rev"),
+            "{status_content}"
+        );
+        assert!(status_content.contains("source"), "{status_content}");
         let context_content = app
             .transcript
             .blocks()

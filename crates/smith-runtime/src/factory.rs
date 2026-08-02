@@ -47,7 +47,8 @@
 //! path — `Secret`, `DefaultRedactor`, `ProviderError`, [`FactoryError`] —
 //! renders locators and classifications rather than values.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -87,7 +88,9 @@ use reqwest::Url;
 use smith_config::credential::{
     CredentialError, CredentialRef, CredentialRefError, CredentialResolver,
 };
-use smith_config::model::{AgentPosture, ApprovalMode, KIND_FAKE, KIND_OPENAI_COMPATIBLE};
+use smith_config::model::{
+    AgentPosture, ApprovalMode, KIND_FAKE, KIND_OPENAI_COMPATIBLE, ProfileUse,
+};
 use smith_config::resolve::{ResolvedConfig, ResolvedProvider};
 use smith_config::setup::trusted_model;
 
@@ -98,12 +101,18 @@ use crate::abilities::{INTERACTION_READY_CONFIG, seal_tool_abilities};
 use crate::authority::SmithToolAuthority;
 use crate::catalog::{CatalogLayers, ProfileResolution};
 use crate::checkpoint::{BarrierCheckpointStore, CheckpointBarrier, SmithCheckpointSetup};
-use crate::delegation::{AgentTool, DelegationAuthority, SmithChildFactory, SmithDelegation};
+use crate::delegation::{
+    AgentTool, DelegationAuthority, SmithChildFactory, SmithChildRoute, SmithDelegation,
+};
 use crate::journal::DefaultRedactor;
 use crate::memory::SmithMemorySource;
 use crate::project_instructions::{ProjectInstructionsIdentity, ProjectInstructionsSnapshot};
 use crate::prompt::{
-    AgentModePrompt, DynamicPromptContext, SmithPromptContributor, render_fragments,
+    AgentProfilePrompt, DynamicPromptContext, SmithPromptContributor, render_fragments,
+};
+use crate::reasoning::{
+    ReasoningDialectProvider, ReasoningInterceptor, ReasoningRuntimePolicy,
+    resolve_reasoning_policy,
 };
 use crate::skills::{SkillIndexEntry, SmithSkillSources};
 use crate::summary::{
@@ -166,8 +175,6 @@ pub enum HostSurface {
     Headless,
     /// A direct child session started by the root agent.
     Child,
-    /// An embedding host, such as a future Forge adapter.
-    Embedded,
 }
 
 /// Whether this composition can durably resume exact in-flight work.
@@ -197,7 +204,6 @@ impl HostSurface {
             Self::Terminal => "terminal",
             Self::Headless => "headless",
             Self::Child => "child",
-            Self::Embedded => "embedded",
         }
     }
 }
@@ -289,6 +295,8 @@ pub struct RuntimeRequest {
     pub credential_timeout_ms: u64,
     /// Model-metadata layers below Smith's own configuration.
     pub catalog_sources: Vec<Arc<dyn ModelCatalogSource>>,
+    /// Fully resolved child-enabled profiles preflighted before child dispatch.
+    pub child_profiles: Vec<ChildProfileRequest>,
     /// The runtime's event broadcast buffer.
     pub event_buffer: usize,
     /// The bounded-shutdown grace period, in milliseconds.
@@ -327,10 +335,20 @@ impl RuntimeRequest {
             transport: TransportConfig::default(),
             credential_timeout_ms: DEFAULT_CREDENTIAL_TIMEOUT_MS,
             catalog_sources: Vec::new(),
+            child_profiles: Vec::new(),
             event_buffer: DEFAULT_EVENT_BUFFER,
             shutdown_timeout_ms: DEFAULT_SHUTDOWN_TIMEOUT_MS,
         }
     }
+}
+
+/// One child-enabled profile resolved through the normal Smith configuration path.
+#[derive(Debug, Clone)]
+pub struct ChildProfileRequest {
+    /// Profile-selected, provenance-carrying child configuration.
+    pub config: ResolvedConfig,
+    /// Catalog layers applicable to that profile's provider/model.
+    pub catalog_sources: Vec<Arc<dyn ModelCatalogSource>>,
 }
 
 /// What one composition actually mapped onto the shared builder.
@@ -340,10 +358,18 @@ impl RuntimeRequest {
 /// produce equal policies, and a test can say so. It is also what a status line
 /// or a run manifest reads, which is why it holds no adapter handles and no
 /// secret — only values that are safe to display.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct RuntimePolicy {
-    /// Active root-agent mode selected for this run.
-    pub agent_mode: String,
+    /// Active agent profile selected for this run.
+    pub agent_profile: String,
+    /// Deterministic effective agent-profile revision.
+    pub agent_profile_revision: String,
+    /// Placements allowed by the effective profile declaration.
+    pub agent_profile_uses: Vec<ProfileUse>,
+    /// Source of the effective authority posture, without instruction text.
+    pub agent_profile_source: String,
+    /// Whether the profile came from the transition-release legacy adapter.
+    pub agent_profile_legacy: bool,
     /// Authority-narrowing behavior behind the selected mode name.
     pub agent_posture: AgentPosture,
     /// The provider name, as declared in `[providers.<name>]`.
@@ -360,6 +386,8 @@ pub struct RuntimePolicy {
     pub model: ModelId,
     /// The frozen profile every request is planned against.
     pub model_profile: ResolvedModelProfile,
+    /// Exact controls and effective reasoning selection for this run.
+    pub reasoning: ReasoningRuntimePolicy,
     /// The reserves and sub-budget planning enforces.
     pub context_policy: ContextPolicy,
     /// The semantic compaction thresholds derived from the enforced input
@@ -393,6 +421,47 @@ pub struct RuntimePolicy {
     pub shutdown_timeout_ms: u64,
     /// Whether exact protected mid-turn recovery was successfully installed.
     pub mid_turn_durability: MidTurnDurability,
+}
+
+impl fmt::Debug for RuntimePolicy {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RuntimePolicy")
+            .field("agent_profile", &self.agent_profile)
+            .field("agent_profile_revision", &self.agent_profile_revision)
+            .field("agent_profile_uses", &self.agent_profile_uses)
+            .field("agent_profile_source", &self.agent_profile_source)
+            .field("agent_profile_legacy", &self.agent_profile_legacy)
+            .field("agent_posture", &self.agent_posture)
+            .field("provider_name", &self.provider_name)
+            .field("provider_kind", &self.provider_kind)
+            .field("endpoint", &self.endpoint)
+            .field("credential", &self.credential)
+            .field("approval_mode", &self.approval_mode)
+            .field("model", &self.model)
+            .field("model_profile", &self.model_profile)
+            .field("reasoning", &self.reasoning)
+            .field("context_policy", &self.context_policy)
+            .field("compaction_policy", &self.compaction_policy)
+            .field(
+                "prompt_fragment_count",
+                &self.system_prompt.matches("<smith-section ").count(),
+            )
+            .field("project_instructions", &self.project_instructions)
+            .field("max_attempts", &self.max_attempts)
+            .field("max_tool_steps", &self.max_tool_steps)
+            .field("turn_time_limit_ms", &self.turn_time_limit_ms)
+            .field("output_limit", &self.output_limit)
+            .field("max_output_tokens", &self.max_output_tokens)
+            .field("tools", &self.tools)
+            .field("skills", &self.skills)
+            .field("memory_revision", &self.memory_revision)
+            .field("semantic_summary", &self.semantic_summary)
+            .field("event_buffer", &self.event_buffer)
+            .field("shutdown_timeout_ms", &self.shutdown_timeout_ms)
+            .field("mid_turn_durability", &self.mid_turn_durability)
+            .finish()
+    }
 }
 
 /// A built runtime, the policy it was built from, and the surface that asked.
@@ -457,11 +526,6 @@ impl SmithRuntime {
     /// tool (root surfaces only — a child runtime never has one).
     pub fn delegation(&self) -> Option<&SmithDelegation> {
         self.delegation.as_ref()
-    }
-
-    /// Takes the shared runtime, discarding the composition record.
-    pub fn into_runtime(self) -> Runtime {
-        self.runtime
     }
 }
 
@@ -533,6 +597,16 @@ pub enum FactoryError {
         /// The shared resolver's structured failure.
         source: ModelProfileError,
     },
+    /// A reasoning request cannot be represented by the exact binding.
+    #[error("provider `{provider}` cannot apply reasoning controls to model `{model}`: {message}")]
+    Reasoning {
+        /// Serving provider identity.
+        provider: String,
+        /// Selected model.
+        model: ModelId,
+        /// Redaction-safe validation detail and alternatives.
+        message: String,
+    },
     /// The configured context reserves leave no room to plan in.
     #[error("the configured context reserves cannot be planned against: {message}")]
     ContextReserve {
@@ -596,6 +670,7 @@ struct PreparedFactoryInputs {
     secret: Option<Secret>,
     model: ModelId,
     profile: ProfileResolution,
+    reasoning: ReasoningRuntimePolicy,
     context_policy: ContextPolicy,
     compaction_policy: CompactionPolicy,
     loop_config: LoopConfig,
@@ -640,12 +715,14 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         secret,
         model,
         profile,
+        reasoning,
         context_policy,
         compaction_policy,
         mut loop_config,
     } = prepare_factory_inputs(&request).await?;
     let agent_posture = request.config.agent.active_posture();
-    let agent_mode = request.config.agent.active.value.clone();
+    let agent_profile = request.config.agent.profile.clone();
+    let agent_profile_name = agent_profile.name.clone();
     let project_instructions = if request.system_prompt.is_none() {
         request.project_instructions.clone()
     } else {
@@ -653,9 +730,14 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
     };
     let prompt_context = DynamicPromptContext {
         project_instructions: project_instructions.clone(),
-        agent_mode: Some(AgentModePrompt {
-            name: agent_mode.clone(),
+        agent_profile: Some(AgentProfilePrompt {
+            name: agent_profile_name.clone(),
             posture: agent_posture,
+            instructions: agent_profile
+                .instructions
+                .as_ref()
+                .map(|instructions| instructions.value.clone()),
+            revision: agent_profile.revision.clone(),
         }),
         ..DynamicPromptContext::default()
     };
@@ -704,11 +786,19 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
             .as_ref()
             .map(|policy| policy.value),
     );
+    let provider = match reasoning.dialect {
+        Some(dialect) => {
+            Arc::new(ReasoningDialectProvider::new(provider, dialect)) as Arc<dyn Provider>
+        }
+        None => provider,
+    };
 
     let clock: Arc<dyn Clock> = request
         .clock
         .clone()
         .unwrap_or_else(|| Arc::new(SystemClock));
+    let child_profile_routes =
+        prepare_child_profile_routes(&request, project_instructions.as_ref()).await?;
     let semantic_summary = match request.semantic_summary.clone() {
         Some(config) => {
             config.validate().map_err(FactoryError::Runtime)?;
@@ -827,7 +917,11 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
     };
 
     let policy = RuntimePolicy {
-        agent_mode: agent_mode.clone(),
+        agent_profile: agent_profile_name.clone(),
+        agent_profile_revision: agent_profile.revision.clone(),
+        agent_profile_uses: agent_profile.uses.value.clone(),
+        agent_profile_source: agent_profile.posture.source.to_string(),
+        agent_profile_legacy: agent_profile.legacy,
         agent_posture,
         provider_name: provider_name.clone(),
         provider_kind: provider_kind.clone(),
@@ -840,6 +934,7 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         approval_mode: config.approval.mode.value,
         model: model.clone(),
         model_profile: profile.profile.clone(),
+        reasoning: reasoning.clone(),
         context_policy: context_policy.clone(),
         compaction_policy: compaction_policy.clone(),
         system_prompt: rendered_system_prompt,
@@ -885,7 +980,7 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
             .with_agent(if matches!(request.surface, HostSurface::Child) {
                 "smith-child"
             } else {
-                agent_mode.as_str()
+                agent_profile_name.as_str()
             }),
     );
     let activation_budget = ActivationBudget::new(
@@ -900,6 +995,7 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         // would be dead weight because an explicit profile always outranks it.
         .model_profile(profile.profile.clone())
         .loop_config(loop_config.clone())
+        .model_interceptor(Arc::new(ReasoningInterceptor::new(&reasoning)))
         .context_policy(context_policy.clone())
         .compactor(StructuralCompactor::new(compaction_policy))
         // Declared explicitly so the shared planner records Smith's answer
@@ -979,14 +1075,21 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
     let runtime = builder.build().map_err(FactoryError::Runtime)?;
     let delegation = delegation_slot.map(|slot| SmithDelegation {
         factory: Arc::new(SmithChildFactory {
-            provider,
-            provider_name,
-            provider_kind,
-            model,
-            profile: profile.profile.clone(),
-            context_policy,
-            loop_config,
-            prompt_contributor,
+            default_route: SmithChildRoute {
+                provider,
+                provider_name,
+                provider_kind,
+                model,
+                model_profile: profile.profile.clone(),
+                context_policy,
+                loop_config,
+                prompt_contributor,
+                agent_profile_name: agent_profile.name.clone(),
+                agent_profile_revision: agent_profile.revision.clone(),
+                agent_profile_posture: agent_profile.posture.value,
+                read_only: true,
+            },
+            profile_routes: child_profile_routes,
             approval,
             workspace,
             clock,
@@ -998,7 +1101,6 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
             semantic_summary: semantic_summary
                 .as_ref()
                 .map(|(coordinator, _)| coordinator.clone()),
-            read_only: agent_posture.is_read_only(),
         }),
         slot,
     });
@@ -1013,6 +1115,99 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         surface: request.surface,
         delegation,
     })
+}
+
+async fn prepare_child_profile_routes(
+    request: &RuntimeRequest,
+    project_instructions: Option<&ProjectInstructionsSnapshot>,
+) -> Result<BTreeMap<String, SmithChildRoute>, FactoryError> {
+    let mut routes = BTreeMap::new();
+    for child in &request.child_profiles {
+        let mut route_request = RuntimeRequest::new(child.config.clone(), HostSurface::Child);
+        route_request.project_instructions = project_instructions.cloned();
+        route_request.workspace = request.workspace.clone();
+        route_request.approval = request.approval.clone();
+        route_request.credentials = request.credentials.clone();
+        route_request.transport = request.transport.clone();
+        route_request.credential_timeout_ms = request.credential_timeout_ms;
+        route_request.catalog_sources = child.catalog_sources.clone();
+        route_request.persistence_redactor = request.persistence_redactor.clone();
+
+        let PreparedFactoryInputs {
+            provider_name,
+            provider_kind,
+            adapter,
+            endpoint,
+            secret,
+            model,
+            profile,
+            reasoning,
+            context_policy,
+            compaction_policy: _,
+            mut loop_config,
+        } = prepare_factory_inputs(&route_request).await?;
+        if let (Some(secret), Some(redactor)) = (&secret, &route_request.persistence_redactor) {
+            redactor.register_secret(secret);
+        }
+        let provider = construct(adapter, &route_request, &profile.profile, endpoint, secret)?;
+        let provider = crate::response::apply_response_policy(
+            provider,
+            route_request
+                .config
+                .provider
+                .response
+                .reasoning_only
+                .as_ref()
+                .map(|policy| policy.value),
+        );
+        let provider = match reasoning.dialect {
+            Some(dialect) => {
+                Arc::new(ReasoningDialectProvider::new(provider, dialect)) as Arc<dyn Provider>
+            }
+            None => provider,
+        };
+        let agent_profile = &route_request.config.agent.profile;
+        let prompt_context = DynamicPromptContext {
+            project_instructions: project_instructions.cloned(),
+            agent_profile: Some(AgentProfilePrompt {
+                name: agent_profile.name.clone(),
+                posture: agent_profile.posture.value,
+                instructions: agent_profile
+                    .instructions
+                    .as_ref()
+                    .map(|instructions| instructions.value.clone()),
+                revision: agent_profile.revision.clone(),
+            }),
+            ..DynamicPromptContext::default()
+        };
+        let prompt_contributor = SmithPromptContributor::new(&prompt_context);
+        loop_config.system_prompt = None;
+        let route_key =
+            crate::delegation::profile_route_key(&agent_profile.name, &agent_profile.revision);
+        let replaced = routes.insert(
+            route_key.clone(),
+            SmithChildRoute {
+                provider,
+                provider_name,
+                provider_kind,
+                model,
+                model_profile: profile.profile,
+                context_policy,
+                loop_config,
+                prompt_contributor,
+                agent_profile_name: agent_profile.name.clone(),
+                agent_profile_revision: agent_profile.revision.clone(),
+                agent_profile_posture: agent_profile.posture.value,
+                read_only: true,
+            },
+        );
+        if replaced.is_some() {
+            return Err(FactoryError::Runtime(RuntimeError::conflict(format!(
+                "duplicate child profile route `{route_key}`"
+            ))));
+        }
+    }
+    Ok(routes)
 }
 
 fn require_workspace(request: &RuntimeRequest) -> Result<Arc<dyn Workspace>, FactoryError> {
@@ -1043,18 +1238,6 @@ async fn prepare_factory_inputs(
         Adapter::Fake => None,
     };
 
-    // An injected provider is already constructed, so resolving a credential
-    // would prompt for a value no request can use.
-    let secret = match (
-        &request.provider,
-        &config.provider.credential,
-        &config.provider.api_key,
-    ) {
-        (None, _, Some(api_key)) => Some(api_key.value.clone()),
-        (None, Some(reference), None) => Some(secret(request, &reference.value).await?),
-        _ => None,
-    };
-
     let mut layers = CatalogLayers::new(provider_name.clone(), model.clone())
         .with_sources(request.catalog_sources.iter().map(Arc::clone));
     if let Some(trusted) = trusted_model(&provider_name, model.as_str()) {
@@ -1064,7 +1247,7 @@ async fn prepare_factory_inputs(
             trusted.max_output_tokens,
         )));
     }
-    let profile = layers
+    let mut profile = layers
         .with_configured_limits(&config.model_limits)
         .resolve()
         .map_err(|source| FactoryError::ModelProfile {
@@ -1072,9 +1255,32 @@ async fn prepare_factory_inputs(
             model: model.clone(),
             source,
         })?;
+    let reasoning = resolve_reasoning_policy(config, &profile.profile, endpoint.as_deref())
+        .map_err(|message| FactoryError::Reasoning {
+            provider: provider_name.clone(),
+            model: model.clone(),
+            message,
+        })?;
+    if reasoning.support == agent_runtime_core::provider::ReasoningSupport::Controllable {
+        profile.profile.capabilities.reasoning =
+            agent_runtime_core::provider::ReasoningSupport::Controllable;
+    }
+
+    // Capability and requested-value validation precede credential lookup, so
+    // an invalid effort never opens a keychain prompt.
+    let secret = match (
+        &request.provider,
+        &config.provider.credential,
+        &config.provider.api_key,
+    ) {
+        (None, _, Some(api_key)) => Some(api_key.value.clone()),
+        (None, Some(reference), None) => Some(secret(request, &reference.value).await?),
+        _ => None,
+    };
     let context_policy = context_policy(config, &profile.profile)?;
     let compaction_policy = compaction_policy(config, &profile.profile, &context_policy);
-    let loop_config = loop_config(request, &model);
+    let mut loop_config = loop_config(request, &model);
+    loop_config.reasoning = reasoning.request_config();
 
     Ok(PreparedFactoryInputs {
         provider_name,
@@ -1084,6 +1290,7 @@ async fn prepare_factory_inputs(
         secret,
         model,
         profile,
+        reasoning,
         context_policy,
         compaction_policy,
         loop_config,
@@ -1477,8 +1684,9 @@ mod tests {
     use agent_runtime_core::clock::Deadline;
     use agent_runtime_core::ids::ToolCallId;
     use agent_runtime_core::tool::{PreparedToolCall, ToolCallDisplay, ToolEffects};
+    use smith_config::model::ProfileUse;
     use smith_config::resolve::{
-        ResolvedAgent, ResolvedAgentMode, ResolvedContext, Source, Sourced,
+        ResolvedAgent, ResolvedAgentMode, ResolvedAgentProfile, ResolvedContext, Source, Sourced,
     };
     use smith_host::HeadlessApproval;
 
@@ -1514,6 +1722,78 @@ mod tests {
 
     fn profile(limits: ModelLimits) -> ResolvedModelProfile {
         ResolvedModelProfile::explicit("acme", ModelId::new("example-model"), limits)
+    }
+
+    fn resolved_config() -> ResolvedConfig {
+        ResolvedConfig {
+            profile: None,
+            agent: agent(AgentPosture::Build),
+            provider: provider(KIND_FAKE, None),
+            model: sourced("example-model".to_owned()),
+            max_output_tokens: None,
+            model_limits: Default::default(),
+            reasoning: Default::default(),
+            model_reasoning: Default::default(),
+            context: context(None, 0),
+            limits: limits(),
+            persistence: persistence(),
+            approval: approval_config(ApprovalMode::Ask),
+            background: background(),
+        }
+    }
+
+    #[test]
+    fn reasoning_boolean_remains_fixed_and_omission_preserves_provider_default() {
+        let config = resolved_config();
+        let mut model_profile = profile(ModelLimits::new(128_000, 124_000, 4_096));
+        model_profile.capabilities.reasoning =
+            agent_runtime_core::provider::ReasoningSupport::Fixed;
+
+        let policy =
+            resolve_reasoning_policy(&config, &model_profile, None).expect("presence-only profile");
+        assert_eq!(
+            policy.support,
+            agent_runtime_core::provider::ReasoningSupport::Fixed
+        );
+        assert_eq!(
+            policy.switch,
+            crate::reasoning::ReasoningSwitch::Unavailable
+        );
+        assert!(policy.efforts.is_empty());
+        assert!(policy.request_config().is_none());
+    }
+
+    #[test]
+    fn explicit_reasoning_metadata_accepts_only_advertised_efforts() {
+        let mut config = resolved_config();
+        config.model_reasoning = smith_config::resolve::ResolvedModelReasoning {
+            toggle: sourced(true).into(),
+            mandatory: sourced(false).into(),
+            efforts: sourced(vec!["none".to_owned(), "low".to_owned(), "high".to_owned()]).into(),
+            default_enabled: sourced(true).into(),
+            default_effort: sourced("low".to_owned()).into(),
+            dialect: sourced(smith_config::model::ReasoningDialect::OpenaiEffort).into(),
+        };
+        config.reasoning.enabled = Some(sourced(true));
+        config.reasoning.effort = Some(sourced("high".to_owned()));
+        let model_profile = profile(ModelLimits::new(128_000, 124_000, 4_096));
+
+        let policy =
+            resolve_reasoning_policy(&config, &model_profile, None).expect("advertised effort");
+        assert_eq!(policy.effective_state(), "on");
+        assert_eq!(policy.effective_effort(), "high");
+        assert_eq!(
+            policy
+                .request_config()
+                .and_then(|reasoning| reasoning.effort),
+            Some("high".to_owned())
+        );
+
+        config.reasoning.effort = Some(sourced("extreme".to_owned()));
+        let error = resolve_reasoning_policy(&config, &model_profile, None)
+            .expect_err("unadvertised effort");
+        assert!(error.contains("extreme"), "{error}");
+        assert!(error.contains("none, low, high"), "{error}");
     }
 
     #[test]
@@ -1580,6 +1860,8 @@ mod tests {
             model: sourced("example-model".to_owned()),
             max_output_tokens: None,
             model_limits: Default::default(),
+            reasoning: Default::default(),
+            model_reasoning: Default::default(),
             context: context(None, 0),
             limits: limits(),
             persistence: persistence(),
@@ -1620,6 +1902,8 @@ mod tests {
             model: sourced("example-model".to_owned()),
             max_output_tokens: None,
             model_limits: Default::default(),
+            reasoning: Default::default(),
+            model_reasoning: Default::default(),
             context: context(Some(6_000), 2_000),
             limits: limits(),
             persistence: persistence(),
@@ -1654,6 +1938,8 @@ mod tests {
             model: sourced("example-model".to_owned()),
             max_output_tokens: None,
             model_limits: Default::default(),
+            reasoning: Default::default(),
+            model_reasoning: Default::default(),
             context: context(Some(100), 0),
             limits: limits(),
             persistence: persistence(),
@@ -1689,6 +1975,8 @@ mod tests {
             model: sourced("example-model".to_owned()),
             max_output_tokens: None,
             model_limits: Default::default(),
+            reasoning: Default::default(),
+            model_reasoning: Default::default(),
             context: context(None, 0),
             limits: limits(),
             persistence: persistence(),
@@ -1754,17 +2042,31 @@ mod tests {
 
     fn agent(posture: AgentPosture) -> ResolvedAgent {
         let name = posture.as_str().to_owned();
+        let profile = ResolvedAgentProfile {
+            name: name.clone(),
+            posture: sourced(posture),
+            description: None,
+            instructions: None,
+            uses: sourced(vec![ProfileUse::Main]),
+            provider: None,
+            model: None,
+            revision: format!("test-{name}-profile-1"),
+            legacy: false,
+        };
         ResolvedAgent {
             active: sourced(name.clone()),
             order: sourced(vec![name.clone()]),
             modes: std::collections::BTreeMap::from([(
-                name,
+                name.clone(),
                 ResolvedAgentMode {
                     posture: sourced(posture),
                     description: None,
                 },
             )]),
             child_presets: Default::default(),
+            profile: profile.clone(),
+            profiles: std::collections::BTreeMap::from([(name.clone(), profile)]),
+            profile_order: sourced(vec![name]),
         }
     }
 

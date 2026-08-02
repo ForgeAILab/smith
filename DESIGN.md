@@ -217,7 +217,7 @@ and the keyboard contract below are sufficient, so it adds no control strip.
 | `Ctrl+C` | Add a non-blank composer draft to bounded local history and clear it; replace the identity footer with `press Ctrl+C again to exit` for the 1s double-press window; a second press exits from any state |
 | `Ctrl+P` | Open command completion using the shared command registry |
 | `Ctrl+R` | Open incremental reverse search over bounded process-local composer history |
-| `Tab` | Cycle root agent mode only when empty and idle; otherwise complete or move the active overlay selection |
+| `Tab` | Cycle `profile_order` only when empty and idle; otherwise complete or move the active overlay selection |
 | `Shift+Tab` | Move the active completion/questionnaire selection backward |
 | `PageUp` / `PageDown` / `Home` / `End` | Scroll transcript or jump to either edge |
 | `Ctrl+L` | Jump to newest and re-enable follow |
@@ -266,7 +266,7 @@ draft before applying the existing double-press exit contract.
 
 ### Agent-first composer actions
 
-The empty idle footer identifies the selected root mode beside provider/model,
+The empty idle footer identifies the selected main agent profile beside provider/model,
 project/branch, and honest context confidence. It does not reserve a persistent
 shortcut strip: `?` from an empty composer and `/help` both render the bounded
 local command/composer guide without provider spend or canonical history. This
@@ -277,11 +277,13 @@ activity footer temporarily becomes the warning-toned text `press Ctrl+C again
 to exit`. A second press within one second exits; expiry or any other key
 restores the current status without leaving a transcript record.
 
-`build`, `plan`, and `review` are host-owned policy presets. `plan` and
-`review` are read-only; changing mode can only narrow the already resolved
-tool view and never changes provider, credentials, project trust, approval, or
-permission authority. `Tab` cycles the configured authorized order only when
-the composer is empty, the runtime is idle, and no overlay is open.
+Named `[profiles]` are the shared agent presets. Each profile selects a bounded
+`build`, `plan`, or `review` posture and may be enabled for `main`, `child`, or
+both placements. `plan` and `review` are read-only; profile instructions are
+additive prompt guidance, never permission or approval. `Tab` cycles the
+validated main-enabled `profile_order` only when the composer is empty, the
+runtime is idle, and no overlay is open. `/profile` uses the same atomic
+safe-boundary rebuild and clears narrower provider/model overrides.
 
 Typing `@` at a token boundary opens one bounded picker with explicit `file`
 and `agent` labels. Picker rows show the plain file or agent identity without a
@@ -294,10 +296,13 @@ outside-workspace references fail locally and preserve the draft before any
 provider request. `@@` escapes one literal `@`; typed `@file:name` and
 `@agent:name` disambiguate collisions.
 
-The built-in `@explore <task>` and `@review <task>` entries are explicit
-depth-one, read-only children. Their confirmation shows inherited
-provider/model, limits, workspace posture, expected result, and provider
-spend. They cannot delegate again or widen the root policy.
+Every child-enabled `@profile <task>` entry is an explicit depth-one,
+read-only child. The profile may resolve another declared provider/model
+through normal credential, catalog, context, and runtime preflight. Its
+confirmation shows profile configuration, provider/model, limits, workspace
+posture, expected result, and provider spend. Effective authority is the
+intersection of parent authority, the host child ceiling, and profile posture;
+children cannot delegate again or widen root policy.
 
 Retained children appear as separate `@child-id` entries. Selecting one keeps
 the stable child/session identity and confirms a new follow-up turn with its
@@ -332,6 +337,8 @@ The initial command set is deliberately bounded:
 | `/help` | List every implemented command and composer shortcut locally, grouped by primary and advanced use. |
 | `/status` | Show resolved runtime, context window, session, permission, Git, child, and attribution state locally. |
 | `/context` | Visualize the latest model-facing context plan, free input space, reserves, and compaction state locally. |
+| `/think [on\|off\|default]` | Inspect or change thinking for the next complete turn when the provider/model exposes an exact toggle. |
+| `/effort [LEVEL\|default]` | Inspect or change reasoning effort using only levels advertised for the active provider/model. |
 | `/details` | Toggle bounded redaction-safe live tool detail beneath the working row. |
 | `/timeline` | Show ordered root turn, child, terminal plan/gate, and recovery evidence locally. |
 | `/new` | Save the current session and create a fresh identity. |
@@ -385,12 +392,30 @@ fixed 5×10 map uses both distinct single-width glyphs and named ANSI colors to
 show system instructions, tool schemas, history, summaries, current user
 input, free input space, and reserved output/reasoning capacity. The
 accompanying legend repeats each glyph, count, and percentage so color is never
-the only channel. Below it, Smith names exact versus estimated counting,
-segment count, provider-reported cumulative session input, cache reads, and
-whether compaction is waiting or has applied a summary. The map represents the
-latest request Smith actually planned; before the first turn it renders
-capacity and reserve with `usage unavailable until the first turn` instead of
-inventing segment usage. It does not retain or reveal raw context content.
+the only channel. Its first two rows are always `system instructions` and
+`tool schemas`, in that order. The system row aggregates canonical system,
+developer, and ability-instruction totals for display only; telemetry keeps the
+original kinds. After planning, both rows remain visible with an honest zero
+when absent, although a zero category occupies no grid cell. Before the first
+plan their rows read `? (not counted yet)` while the grid renders only known
+capacity and reserve. Unknown never becomes zero, and Smith does not synthesize
+a request merely to size it because tool activation depends on the submitted
+turn. Below the map, Smith names exact versus estimated counting, segment
+count, provider-reported cumulative session input, cache reads, and whether
+compaction is waiting or has applied a summary. The map represents the latest
+request Smith actually planned and does not retain or reveal raw context
+content.
+
+`/think` and `/effort` share the local command and resource-picker grammar.
+They require an idle root session, spend no provider tokens themselves, and
+affect the next whole turn rather than a running attempt or tool continuation.
+The thinking picker offers only `on`, `off`, and provider default states that
+the exact provider/model contract supports; mandatory thinking removes `off`.
+The effort picker lists only advertised levels plus provider default. A model
+that reasons but exposes no controls receives a written fixed/unavailable
+result instead of a guessed selector. `/status` and `/context` name the
+effective state, effort when applicable, and provider/profile/session
+provenance without rendering raw reasoning.
 
 `/help`, `/status`, `/context`, `/agent`, and every `/diff` scope use this
 primitive.
@@ -416,6 +441,17 @@ and `Esc` to restore the untouched composer draft. Active choices are labelled
 point to `smith setup`; an empty session view says there is nothing to resume.
 Filtering and selection resolve no credential, read no model history, make no
 network request, and spend no provider tokens.
+
+Reasoning presence and reasoning control are different facts. A catalog
+boolean that says a model reasons means only fixed reasoning. Adjustable
+controls require source-explainable switch behavior, ordered effort choices,
+optional token-budget support, a provider wire dialect, defaults, and
+provenance from an exact trusted provider/model binding or explicit trusted
+configuration. Smith snapshots the effective selection at turn acceptance and
+uses it unchanged for retries and tool continuations. Compatible session
+overrides resume and flow into newly created children; a provider/model switch
+that cannot represent the override clears it with a local notice rather than
+mapping to a nearest value.
 
 For configured OpenRouter and Z.AI Coding Plan endpoints, model rows may come
 from Smith's frozen Models.dev snapshot as well as explicit TOML. The exact

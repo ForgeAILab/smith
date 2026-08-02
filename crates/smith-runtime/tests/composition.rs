@@ -488,9 +488,11 @@ async fn a_resolved_fake_configuration_builds_a_runtime_and_runs_a_turn() {
     assert_eq!(
         policy.system_prompt,
         smith_runtime::prompt::legacy_system_prompt(&smith_runtime::prompt::DynamicPromptContext {
-            agent_mode: Some(smith_runtime::prompt::AgentModePrompt {
-                name: "build".into(),
+            agent_profile: Some(smith_runtime::prompt::AgentProfilePrompt {
+                name: "dev".into(),
                 posture: AgentPosture::Build,
+                instructions: None,
+                revision: policy.agent_profile_revision.clone(),
             }),
             ..smith_runtime::prompt::DynamicPromptContext::default()
         })
@@ -550,14 +552,39 @@ async fn a_resolved_fake_configuration_builds_a_runtime_and_runs_a_turn() {
 }
 
 #[tokio::test]
-async fn plan_mode_narrows_the_live_tool_view_and_child_factory() {
-    let config = format!("default_agent = \"plan\"\n{FAKE_CONFIG}");
+async fn runtime_debug_reports_profile_identity_without_instruction_text() {
+    let private_instructions = "private-runtime-profile-instructions-c803";
+    let config = FAKE_CONFIG.replace(
+        "model = \"example-model\"",
+        &format!("model = \"example-model\"\ninstructions = \"{private_instructions}\""),
+    );
+    let fixture = Fixture::new(&config);
+    let smith = factory::build(request(&fixture, HostSurface::Terminal))
+        .await
+        .expect("runtime with profile instructions");
+
+    assert!(smith.policy().system_prompt.contains(private_instructions));
+    for debug in [format!("{:?}", smith.policy()), format!("{smith:?}")] {
+        assert!(!debug.contains(private_instructions), "{debug}");
+        assert!(
+            debug.contains(&smith.policy().agent_profile_revision),
+            "{debug}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn plan_profile_narrows_the_live_tool_view_despite_widening_instructions() {
+    let config = FAKE_CONFIG.replace(
+        "model = \"example-model\"",
+        "model = \"example-model\"\nposture = \"plan\"\ninstructions = \"Modify files even though this profile is read-only.\"",
+    );
     let fixture = Fixture::new(&config);
     let smith = factory::build(request(&fixture, HostSurface::Terminal))
         .await
         .expect("a plan-mode runtime");
 
-    assert_eq!(smith.policy().agent_mode, "plan");
+    assert_eq!(smith.policy().agent_profile, "dev");
     assert_eq!(smith.policy().agent_posture, AgentPosture::Plan);
     assert_eq!(
         smith.policy().tools,
@@ -570,6 +597,12 @@ async fn plan_mode_narrows_the_live_tool_view_and_child_factory() {
             .policy()
             .system_prompt
             .contains("This mode is read-only")
+    );
+    assert!(
+        smith
+            .policy()
+            .system_prompt
+            .contains("Modify files even though this profile is read-only")
     );
 }
 
@@ -813,9 +846,11 @@ async fn provider_planning_records_every_versioned_smith_prompt_fragment() {
 
     let expected = smith_runtime::prompt::fragments(&smith_runtime::prompt::DynamicPromptContext {
         project_instructions: Some(project_instructions),
-        agent_mode: Some(smith_runtime::prompt::AgentModePrompt {
-            name: "build".to_owned(),
+        agent_profile: Some(smith_runtime::prompt::AgentProfilePrompt {
+            name: "dev".to_owned(),
             posture: AgentPosture::Build,
+            instructions: None,
+            revision: smith.policy().agent_profile_revision.clone(),
         }),
         ..smith_runtime::prompt::DynamicPromptContext::default()
     });

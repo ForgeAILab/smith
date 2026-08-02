@@ -72,7 +72,7 @@ pub(crate) struct SetupArgs {
 pub(crate) struct Selection {
     /// Where project discovery starts.
     pub project: Option<PathBuf>,
-    /// A root agent mode override.
+    /// Deprecated root-mode compatibility override; prefer `profile`.
     pub agent: Option<String>,
     /// A named profile override.
     pub profile: Option<String>,
@@ -80,6 +80,14 @@ pub(crate) struct Selection {
     pub provider: Option<String>,
     /// A model override.
     pub model: Option<String>,
+    /// Session-local explicit thinking state.
+    pub reasoning_enabled: Option<bool>,
+    /// An explicit `/think default` clears a persisted override.
+    pub reasoning_enabled_reset: bool,
+    /// Session-local provider-advertised effort.
+    pub reasoning_effort: Option<String>,
+    /// An explicit `/effort default` clears a persisted override.
+    pub reasoning_effort_reset: bool,
     /// An approval policy override.
     pub approval: Option<ApprovalMode>,
     /// A background-exit policy override.
@@ -96,6 +104,16 @@ impl Selection {
             model: self.model.clone(),
             approval_mode: self.approval,
             background_exit: self.background_exit,
+            ..Overrides::default()
+        }
+    }
+
+    /// Converts interactive controls into the highest-precedence session
+    /// layer rather than pretending they were command-line flags.
+    pub(crate) fn session_overrides(&self) -> Overrides {
+        Overrides {
+            reasoning_enabled: self.reasoning_enabled,
+            reasoning_effort: self.reasoning_effort.clone(),
             ..Overrides::default()
         }
     }
@@ -416,7 +434,13 @@ fn parse_selection_flag(
                     "invalid approval policy `{raw}`; expected `ask`, `deny`, or `allow-all`"
                 ))
             })?;
-            set_once(&mut selection.approval, parsed, flag)
+            set_approval_once(selection, parsed)
+        }
+        "--yolo" => {
+            if inline.is_some() {
+                return Err(ParseError::new("`--yolo` does not take a value"));
+            }
+            set_approval_once(selection, ApprovalMode::AllowAll)
         }
         "--background-exit" => {
             let raw = text_value(flag, inline, args)?;
@@ -523,6 +547,17 @@ fn set_once<T>(slot: &mut Option<T>, value: T, flag: &str) -> Result<(), ParseEr
     }
 }
 
+fn set_approval_once(selection: &mut Selection, approval: ApprovalMode) -> Result<(), ParseError> {
+    if selection.approval.is_some() {
+        Err(ParseError::new(
+            "approval policy was supplied more than once (`--approval`/`--yolo`)",
+        ))
+    } else {
+        selection.approval = Some(approval);
+        Ok(())
+    }
+}
+
 /// Complete command help kept as a stable golden contract.
 pub(crate) const HELP: &str = "\
 Smith — a terminal coding agent
@@ -543,11 +578,12 @@ RUN OPTIONS:
       --project <PATH>          Start project discovery at PATH
       --resume [SESSION_ID]     Resume by ID, or choose from project sessions
       --session [SESSION_ID]    Alias for --resume
-      --profile <NAME>          Select a configured profile
-      --agent <MODE>            Select a configured root agent mode
+      --profile <NAME>          Select a main-enabled agent profile
+      --agent <MODE>            Deprecated legacy root-mode override
       --provider <NAME>         Select a configured provider
       --model <MODEL>           Select a configured model
       --approval <POLICY>       ask | deny | allow-all
+      --yolo                    Alias for --approval allow-all
       --background-exit <MODE>  error | wait | stop
       --output-format <FORMAT>  text | json | stream-json
       --no-color                Disable terminal colors
@@ -556,9 +592,9 @@ RUN OPTIONS:
   -V, --version                 Print version
 
 INTERACTIVE COMPOSER:
-  Tab                           Cycle build/plan/review while empty and idle
+  Tab                           Cycle profile_order while empty and idle
   @FILE                         Prepare an exact file attachment read
-  @explore TASK / @review TASK  Confirm a same-model read-only child
+  @PROFILE TASK                 Confirm a child-enabled read-only profile
   !COMMAND                      Run the canonical prepared local shell path
   @@ / !!                       Send a literal leading @ / !
   /details /timeline /redo      Inspect work, history, or exact recovery
@@ -598,6 +634,33 @@ mod tests {
         assert_eq!(run.output, OutputFormat::StreamJson);
         assert_eq!(run.selection.project, Some(PathBuf::from("/repo")));
         assert_eq!(run.selection.approval, Some(ApprovalMode::Deny));
+    }
+
+    #[test]
+    fn yolo_is_a_valueless_allow_all_alias_and_conflicts_fail_closed() {
+        let Command::Run(run) = command(&["--yolo"]) else {
+            panic!("expected a run");
+        };
+        assert_eq!(run.selection.approval, Some(ApprovalMode::AllowAll));
+
+        let valued =
+            parse(["--yolo=true"].map(OsString::from)).expect_err("yolo does not accept a value");
+        assert!(valued.to_string().contains("does not take a value"));
+
+        for args in [
+            vec!["--yolo", "--yolo"],
+            vec!["--yolo", "--approval", "deny"],
+            vec!["--approval", "ask", "--yolo"],
+        ] {
+            let duplicate =
+                parse(args.into_iter().map(OsString::from)).expect_err("approval conflict");
+            assert!(
+                duplicate
+                    .to_string()
+                    .contains("approval policy was supplied more than once"),
+                "{duplicate}"
+            );
+        }
     }
 
     #[test]

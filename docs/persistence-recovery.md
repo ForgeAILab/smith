@@ -48,6 +48,21 @@ body, prepared argument, questionnaire answer, or raw child result. Those stay
 in each child's own snapshot/protected checkpoint under the same project-owned
 session namespace.
 
+A profile-based child's immutable composition fingerprint includes the
+child placement, effective profile name and revision, posture, resolved
+provider/model, model/context policy, prompt-fragment revisions, and read-only
+ceiling. Follow-up therefore reuses the exact profile identity. Resume fails
+closed if the profile instructions, posture, placement, provider/model, or
+source-derived revision changed; it never mixes revisions or silently spawns
+a replacement. Raw profile instructions are not copied into the child catalog.
+
+The optional `smith.reasoning.override` extension is also redaction-safe. It
+contains only an explicit boolean thinking state and/or a bounded advertised
+effort name. Older sessions omit it and retain provider/model defaults. Resume
+re-applies it as a session override and the runtime revalidates it against the
+new frozen capability snapshot before credential lookup or provider I/O;
+`/think default` and `/effort default` remove their respective saved fields.
+
 If a child returns a questionnaire to its parent, the exact request is a
 sensitive child-checkpoint component. Smith reloads and re-queues that same
 request while wiring the restored coordinator—still without constructing the

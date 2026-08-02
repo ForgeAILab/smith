@@ -46,7 +46,10 @@ shutdown.
 
 Headless `ask` cannot wait for a user and exits 4 with redaction-safe prepared
 metadata. `allow-all` is appropriate only inside an already isolated and
-trusted automation boundary.
+trusted automation boundary. The explicit `--yolo` alias selects that same
+approval mode; it bypasses approval prompts but does not bypass authorization,
+workspace bounds, or profile capability narrowing. In particular, a `plan`
+profile remains read-only under `--yolo`.
 
 ## Repository and configuration attacks
 
@@ -173,8 +176,14 @@ paths. Attachments execute the canonical exact prepared `read`; local shell
 executes the canonical prepared `shell` with its broad permission bound,
 approval, deadline, cancellation, output offload, and checkpoint semantics.
 Neither shortcut spends provider tokens during local preparation. Registered
-`@agent` presets are host-owned, read-only, depth-one, same-model children and
-require explicit provider-spend confirmation.
+Child-enabled `@profile` presets are host-resolved, read-only, depth-one
+children and require explicit provider-spend confirmation. A profile may name
+another declared provider/model, but Smith completes the same credential,
+catalog, limit, context, and provider preflight before allocating the child.
+The effective capability view is parent authority intersected with the
+read-only direct-child ceiling and profile posture. Profile instructions are
+provider input, not permission; raw bodies stay out of ordinary status, debug,
+journals, and canonical user history.
 
 Questionnaire answers resume task reasoning but grant no permission or
 remembered approval. Child agents inherit a scoped tool view, capacity and

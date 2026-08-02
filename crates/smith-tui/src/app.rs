@@ -33,6 +33,9 @@ use crate::transcript::{LocalResultState, ToolStatus, Transcript};
 /// How long a second `Ctrl+C` still counts as the exit press.
 const FORCE_QUIT_WINDOW: Duration = Duration::from_secs(1);
 
+/// Resource-ID namespace for transition-release root-mode adapters.
+pub const LEGACY_AGENT_PROFILE_PREFIX: &str = "legacy-agent:";
+
 /// Something the host loop must do on the app's behalf.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
@@ -86,9 +89,9 @@ pub enum Action {
         /// Review scope.
         scope: String,
     },
-    /// Start one confirmed, host-registered read-only child preset.
+    /// Start one confirmed, child-enabled read-only agent profile.
     StartAgent {
-        /// Registered child preset.
+        /// Registered child-enabled profile.
         preset: String,
         /// Bounded task supplied after the reference.
         task: String,
@@ -123,8 +126,12 @@ pub enum PaletteCommand {
         /// Provider model ID.
         model: String,
     },
-    /// Select a root-agent mode at a safe session boundary.
+    /// Select a deprecated legacy root mode at a safe session boundary.
     Agent(String),
+    /// Select an explicit thinking state; `None` restores provider behavior.
+    Think(Option<bool>),
+    /// Select an advertised effort; `None` restores provider behavior.
+    Effort(Option<String>),
 }
 
 /// Bounded local resources available to runtime pickers.
@@ -140,10 +147,14 @@ pub struct RuntimeResources {
     pub sessions: Vec<ResourceEntry>,
     /// Bounded canonical workspace-file index.
     pub files: Vec<ResourceEntry>,
-    /// Host-registered read-only child presets.
+    /// Child-enabled read-only agent profiles.
     pub child_agents: Vec<ResourceEntry>,
-    /// Authorized root-agent modes in configured cycle order.
-    pub agent_modes: Vec<ResourceEntry>,
+    /// Main-enabled agent profiles in configured cycle order.
+    pub main_profiles: Vec<ResourceEntry>,
+    /// Bounded thinking-state choices for the active binding.
+    pub thinking: Vec<ResourceEntry>,
+    /// Bounded effort choices for the active binding.
+    pub efforts: Vec<ResourceEntry>,
     /// Active session ID.
     pub current_session: Option<String>,
 }
@@ -159,6 +170,10 @@ pub enum ResourceTarget {
     Profile,
     /// Project session.
     Resume,
+    /// Thinking state for subsequent turns.
+    Think,
+    /// Advertised effort for subsequent turns.
+    Effort,
     /// Insert one typed file or child-agent reference into the composer.
     Reference,
 }
@@ -278,20 +293,6 @@ pub enum Overlay {
 enum PendingPrompt {
     Approval(Box<ApprovalPrompt>, Option<EditReview>),
     Questionnaire(QuestionnaireState),
-}
-
-/// One background notification.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Notification {
-    /// Where it came from, e.g. a monitor name.
-    pub source: String,
-    /// The one-line summary.
-    pub text: String,
-    /// Whether it is terminal — a monitor stopping, a child finishing.
-    ///
-    /// Terminal events are never coalesced away, because "the monitor died" is
-    /// not noise even when it arrives amid noise.
-    pub terminal: bool,
 }
 
 /// The latest user-visible state of one child.
@@ -609,20 +610,6 @@ impl App {
     /// Number of provider attempts with output awaiting an explicit terminal.
     pub fn speculative_attempt_count(&self) -> usize {
         self.speculative_attempts.len()
-    }
-
-    /// Renders a background notification inline without stealing composer
-    /// focus.
-    pub fn notify(&mut self, notification: Notification) {
-        let suffix = if notification.terminal {
-            " · finished"
-        } else {
-            ""
-        };
-        self.transcript.push_notice(
-            notification.source,
-            format!("{}{suffix}", notification.text),
-        );
     }
 
     /// Projects metadata-only process-exit reconciliation into the transcript.
@@ -1669,13 +1656,13 @@ impl App {
 
         match (key.code, key.modifiers) {
             // At the empty idle point of action, Tab cycles only the
-            // configured root-agent modes. Overlay-specific Tab behavior was
+            // configured main-agent profiles. Overlay-specific Tab behavior was
             // handled above and a non-empty draft is never changed.
             (KeyCode::Tab, _) if !self.is_busy() && self.composer.is_empty() => {
-                self.cycle_agent_mode(false)
+                self.cycle_agent_profile(false)
             }
             (KeyCode::BackTab, _) if !self.is_busy() && self.composer.is_empty() => {
-                self.cycle_agent_mode(true)
+                self.cycle_agent_profile(true)
             }
             (KeyCode::Tab | KeyCode::BackTab, _) => None,
             (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
@@ -1975,6 +1962,8 @@ impl App {
             ResourceTarget::Provider => "Choose provider",
             ResourceTarget::Profile => "Choose profile",
             ResourceTarget::Resume => "Resume session",
+            ResourceTarget::Think => "Choose thinking state",
+            ResourceTarget::Effort => "Choose reasoning effort",
             ResourceTarget::Reference => "Attach file or invoke agent",
         };
         let mut picker = ResourcePicker::new(title, entries, empty_guidance);
@@ -2006,6 +1995,14 @@ impl App {
                 self.resources.sessions.clone(),
                 "Nothing to resume for this project · use /new",
             ),
+            ResourceTarget::Think => (
+                self.resources.thinking.clone(),
+                "Thinking is not adjustable for this provider/model",
+            ),
+            ResourceTarget::Effort => (
+                self.resources.efforts.clone(),
+                "Effort is not adjustable for this provider/model",
+            ),
             ResourceTarget::Reference => {
                 let mut entries = self
                     .resources
@@ -2031,7 +2028,7 @@ impl App {
                 }));
                 (
                     entries,
-                    "No matching file, child preset, or existing child in the bounded local index",
+                    "No matching file, child-enabled profile, or existing child in the bounded local index",
                 )
             }
         };
@@ -2079,7 +2076,7 @@ impl App {
             }
             ResourceTarget::Profile => {
                 self.composer.clear();
-                Some(Action::Reconfigure(PaletteCommand::Profile(id)))
+                Some(Action::Reconfigure(profile_palette_command(id)))
             }
             ResourceTarget::Resume => {
                 self.composer.clear();
@@ -2090,6 +2087,27 @@ impl App {
                 } else {
                     Some(Action::Reconfigure(PaletteCommand::Resume(id)))
                 }
+            }
+            ResourceTarget::Think => {
+                self.composer.clear();
+                Some(Action::Reconfigure(PaletteCommand::Think(
+                    match id.as_str() {
+                        "default" => None,
+                        "on" => Some(true),
+                        "off" => Some(false),
+                        _ => {
+                            self.transcript
+                                .push_error("thinking picker returned an invalid typed value");
+                            return None;
+                        }
+                    },
+                )))
+            }
+            ResourceTarget::Effort => {
+                self.composer.clear();
+                Some(Action::Reconfigure(PaletteCommand::Effort(
+                    (id != "default").then_some(id),
+                )))
             }
             ResourceTarget::Reference => {
                 let selected = id
@@ -2126,26 +2144,25 @@ impl App {
         }
     }
 
-    fn cycle_agent_mode(&mut self, backwards: bool) -> Option<Action> {
+    fn cycle_agent_profile(&mut self, backwards: bool) -> Option<Action> {
         let selectable = self
             .resources
-            .agent_modes
+            .main_profiles
             .iter()
             .filter(|entry| entry.disabled_reason.is_none())
             .collect::<Vec<_>>();
         if selectable.len() < 2 {
             return None;
         }
-        let current = selectable
-            .iter()
-            .position(|entry| entry.active)
-            .unwrap_or(0);
-        let next = if backwards {
-            current.checked_sub(1).unwrap_or(selectable.len() - 1)
-        } else {
-            (current + 1) % selectable.len()
+        // When the active profile is itself unselectable, cycling starts at
+        // the first selectable entry instead of silently skipping it.
+        let next = match selectable.iter().position(|entry| entry.active) {
+            Some(current) if backwards => current.checked_sub(1).unwrap_or(selectable.len() - 1),
+            Some(current) => (current + 1) % selectable.len(),
+            None if backwards => selectable.len() - 1,
+            None => 0,
         };
-        Some(Action::Reconfigure(PaletteCommand::Agent(
+        Some(Action::Reconfigure(profile_palette_command(
             selectable[next].id.clone(),
         )))
     }
@@ -2222,6 +2239,53 @@ impl App {
         }
     }
 
+    fn apply_direct_reasoning_choice(
+        &mut self,
+        target: ResourceTarget,
+        value: &str,
+        restore: String,
+    ) -> Option<Action> {
+        let normalized = value.trim().to_ascii_lowercase();
+        let entries = match target {
+            ResourceTarget::Think => &self.resources.thinking,
+            ResourceTarget::Effort => &self.resources.efforts,
+            _ => unreachable!("reasoning choice helper receives only reasoning targets"),
+        };
+        if entries
+            .iter()
+            .any(|entry| entry.id == normalized && entry.disabled_reason.is_none())
+        {
+            self.accept_composer_input();
+            return self.apply_resource_selection(target, normalized, restore);
+        }
+        let reason = entries
+            .iter()
+            .find(|entry| entry.id == normalized)
+            .and_then(|entry| entry.disabled_reason.as_deref())
+            .map_or_else(
+                || match target {
+                    ResourceTarget::Think => {
+                        "use `on`, `off`, or `default`, subject to the active model".to_owned()
+                    }
+                    ResourceTarget::Effort => {
+                        let supported = entries
+                            .iter()
+                            .filter(|entry| entry.disabled_reason.is_none())
+                            .map(|entry| entry.id.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!("supported values: {supported}")
+                    }
+                    _ => unreachable!(),
+                },
+                str::to_owned,
+            );
+        self.transcript.push_error(format!(
+            "reasoning choice `{value}` is unavailable: {reason}"
+        ));
+        None
+    }
+
     fn on_exit_confirm_key(&mut self, key: KeyEvent) -> Option<Action> {
         match key.code {
             KeyCode::Char('y') => {
@@ -2281,11 +2345,14 @@ impl App {
                 if count > 0
                     && let Some(Overlay::Palette { selected, .. }) = &mut self.overlay
                 {
-                    *selected = (*selected + 1) % count;
+                    // Tab completes the highlighted entry — the same one Enter
+                    // acts on — while Down only moves the highlight.
                     if key.code == KeyCode::Tab {
-                        let command = commands::matches(self.composer.text())[*selected];
+                        let command = commands::matches(self.composer.text())[*selected % count];
                         self.composer.replace(commands::completion(command));
                         self.overlay = None;
+                    } else {
+                        *selected = (*selected + 1) % count;
                     }
                 }
                 None
@@ -2314,7 +2381,10 @@ impl App {
                     Ok(command) => self.dispatch_command(command),
                     Err(message) => {
                         let needs_value = matches.get(selected).is_some_and(|command| {
-                            matches!(command.name, "resume" | "profile" | "provider" | "model")
+                            matches!(
+                                command.name,
+                                "resume" | "profile" | "provider" | "model" | "think" | "effort"
+                            )
                         });
                         if needs_value && self.composer.text().split_whitespace().count() == 1 {
                             let command = matches[selected];
@@ -2421,6 +2491,7 @@ impl App {
                     .resources
                     .child_agents
                     .iter()
+                    .filter(|entry| entry.disabled_reason.is_none())
                     .filter_map(|entry| entry.id.strip_prefix("agent:"))
                     .map(str::to_owned)
                     .chain(self.children.keys().cloned())
@@ -2457,13 +2528,13 @@ impl App {
                         .or_else(|| trimmed.strip_prefix(&plain));
                     let Some(task) = task else {
                         self.transcript.push_error(
-                            "a child preset or existing child must be the first token, for example `@review inspect the diff` or `@child-1 check that edge case`",
+                            "a child-enabled profile or existing child must be the first token, for example `@review inspect the diff` or `@child-1 check that edge case`",
                         );
                         return None;
                     };
                     if referenced_agents.len() != 1 || !attached_files.is_empty() {
                         self.transcript.push_error(
-                            "one explicit child preset must be submitted without file attachments",
+                            "one explicit child profile must be submitted without file attachments",
                         );
                         return None;
                     }
@@ -2504,16 +2575,18 @@ impl App {
                         });
                         return None;
                     }
-                    let model = match &self.status.provider {
-                        Some(provider) => format!("{provider}/{}", self.status.model),
-                        None => self.status.model.clone(),
-                    };
+                    let profile_detail = self
+                        .resources
+                        .child_agents
+                        .iter()
+                        .find(|entry| entry.id.strip_prefix("agent:") == Some(agent.as_str()))
+                        .map_or("read-only child profile", |entry| entry.detail.as_str());
                     self.composer.record_current();
                     self.overlay = Some(Overlay::AgentConfirm {
                         preset: agent.clone(),
                         task: task.to_owned(),
                         content: format!(
-                            "preset: {agent}\nprovider/model: {model}\nworkspace: read-only\nturn limit: 1\nprovider spend: yes\nresult: bounded child summary"
+                            "profile: {agent}\nconfiguration: {profile_detail}\nworkspace: read-only\nturn limit: 1\nprovider spend: yes\nresult: bounded child summary"
                         ),
                     });
                     return None;
@@ -2602,6 +2675,8 @@ impl App {
                 CommandAction::Profile(_) => "profile",
                 CommandAction::Provider(_) => "provider",
                 CommandAction::Model(_) => "model",
+                CommandAction::Think(_) => "think",
+                CommandAction::Effort(_) => "effort",
                 CommandAction::Agent(_) | CommandAction::AgentResume(_) => "agent",
                 CommandAction::Diff(_) => "diff",
                 CommandAction::Review(_) => "review",
@@ -2687,10 +2762,16 @@ impl App {
                     .resources
                     .profiles
                     .iter()
-                    .any(|entry| entry.id == name && entry.disabled_reason.is_none());
-                if selectable {
+                    .find(|entry| {
+                        (entry.id == name
+                            || entry.id.strip_prefix(LEGACY_AGENT_PROFILE_PREFIX)
+                                == Some(name.as_str()))
+                            && entry.disabled_reason.is_none()
+                    })
+                    .map(|entry| entry.id.clone());
+                if let Some(id) = selectable {
                     self.accept_composer_input();
-                    self.apply_resource_selection(ResourceTarget::Profile, name, restore)
+                    self.apply_resource_selection(ResourceTarget::Profile, id, restore)
                 } else {
                     self.transcript.push_error(format!(
                         "profile `{name}` is not locally selectable; use `/profile` to choose"
@@ -2736,6 +2817,22 @@ impl App {
                 None
             }
             CommandAction::Model(Some(name)) => self.direct_model(&name, restore),
+            CommandAction::Think(None) => {
+                self.accept_composer_input();
+                self.open_target_picker(ResourceTarget::Think, restore);
+                None
+            }
+            CommandAction::Think(Some(value)) => {
+                self.apply_direct_reasoning_choice(ResourceTarget::Think, &value, restore)
+            }
+            CommandAction::Effort(None) => {
+                self.accept_composer_input();
+                self.open_target_picker(ResourceTarget::Effort, restore);
+                None
+            }
+            CommandAction::Effort(Some(value)) => {
+                self.apply_direct_reasoning_choice(ResourceTarget::Effort, &value, restore)
+            }
             CommandAction::AgentResume(child_id) => {
                 if self.is_busy() {
                     self.overlay = None;
@@ -2906,6 +3003,15 @@ impl App {
     }
 }
 
+/// Routes a profile choice to the legacy root-mode override when the entry is
+/// a transition-release adapter, and to the unified profile path otherwise.
+fn profile_palette_command(id: String) -> PaletteCommand {
+    match id.strip_prefix(LEGACY_AGENT_PROFILE_PREFIX) {
+        Some(agent) => PaletteCommand::Agent(agent.to_owned()),
+        None => PaletteCommand::Profile(id),
+    }
+}
+
 /// Splits a provider-qualified model ID without assuming provider names cannot
 /// themselves contain `/`. The local provider inventory is authoritative; the
 /// first-slash fallback only keeps synthetic test inventories useful.
@@ -3009,6 +3115,16 @@ mod tests {
                 "session-7 · recent work",
                 "2 turns · local/model-2",
             )],
+            thinking: vec![
+                ResourceEntry::new("default", "provider default", "clear override"),
+                ResourceEntry::new("on", "on", "enable thinking"),
+                ResourceEntry::new("off", "off", "disable thinking"),
+            ],
+            efforts: vec![
+                ResourceEntry::new("default", "provider default", "clear override"),
+                ResourceEntry::new("low", "low", "advertised effort"),
+                ResourceEntry::new("high", "high", "advertised effort"),
+            ],
             current_session: Some("current-session".into()),
             ..RuntimeResources::default()
         });
@@ -3556,6 +3672,47 @@ mod tests {
         assert_eq!(app.on_key(key(KeyCode::Esc)), None);
         assert_eq!(app.composer.text(), "/resume");
         assert!(app.overlay.is_none());
+    }
+
+    #[test]
+    fn reasoning_commands_share_typed_direct_and_picker_validation() {
+        let mut direct = app();
+        type_text(&mut direct, "/think off");
+        assert_eq!(
+            direct.on_key(key(KeyCode::Enter)),
+            Some(Action::Reconfigure(PaletteCommand::Think(Some(false))))
+        );
+
+        let mut picker_app = app();
+        type_text(&mut picker_app, "/effort");
+        assert_eq!(picker_app.on_key(key(KeyCode::Enter)), None);
+        assert!(matches!(
+            picker_app.overlay,
+            Some(Overlay::ResourcePicker {
+                target: ResourceTarget::Effort,
+                ..
+            })
+        ));
+        picker_app.on_key(key(KeyCode::Down));
+        assert_eq!(
+            picker_app.on_key(key(KeyCode::Enter)),
+            Some(Action::Reconfigure(PaletteCommand::Effort(Some(
+                "low".to_owned()
+            ))))
+        );
+    }
+
+    #[test]
+    fn unavailable_reasoning_choice_fails_locally_without_reconfiguration() {
+        let mut app = app();
+        app.resources.thinking[2] = app.resources.thinking[2]
+            .clone()
+            .disabled("reasoning is mandatory for this provider/model");
+        type_text(&mut app, "/think off");
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert!(app.transcript.blocks().iter().any(|block| {
+            matches!(block, Block::Error { message } if message.contains("mandatory"))
+        }));
     }
 
     #[test]
@@ -4739,6 +4896,38 @@ mod tests {
         assert_eq!(app.composer.text(), "/status");
     }
 
+    #[test]
+    fn tab_completes_the_highlighted_palette_entry() {
+        // `/re` matches resume, review, redo, and revert; the initial
+        // highlight sits on the first match, and Tab must complete that exact
+        // entry — not its successor.
+        let mut first = app();
+        type_text(&mut first, "/re");
+        assert_eq!(
+            commands::matches("/re").first().map(|command| command.name),
+            Some("resume")
+        );
+        assert_eq!(first.on_key(key(KeyCode::Tab)), None);
+        assert_eq!(first.composer.text(), "/resume ");
+
+        // Down moves the highlight without completing; Tab then completes the
+        // entry Enter would act on.
+        let mut moved = app();
+        type_text(&mut moved, "/re");
+        moved.on_key(key(KeyCode::Down));
+        assert_eq!(moved.on_key(key(KeyCode::Tab)), None);
+        assert_eq!(moved.composer.text(), "/review ");
+    }
+
+    #[test]
+    fn enter_completes_a_bare_reasoning_command_prefix() {
+        let mut app = app();
+        type_text(&mut app, "/eff");
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert_eq!(app.composer.text(), "/effort ");
+        assert!(app.overlay.is_none());
+    }
+
     fn agent_first_app() -> App {
         let mut app = app();
         app.status.switch_model(Some("zai".to_owned()), "glm-5.2");
@@ -4752,9 +4941,9 @@ mod tests {
             child_agents: vec![ResourceEntry::new(
                 "agent:review",
                 "review",
-                "agent · read-only child preset",
+                "child profile · review · zai/glm-5.2 · ctx 131072 · custom instructions configured",
             )],
-            agent_modes: vec![
+            main_profiles: vec![
                 ResourceEntry::new("build", "build", "coding").active(true),
                 ResourceEntry::new("plan", "plan", "read-only planning"),
                 ResourceEntry::new("review", "review", "read-only review"),
@@ -4765,11 +4954,11 @@ mod tests {
     }
 
     #[test]
-    fn tab_cycles_only_an_empty_idle_root_agent() {
+    fn tab_cycles_only_an_empty_idle_main_profile() {
         let mut app = agent_first_app();
         assert_eq!(
             app.on_key(key(KeyCode::Tab)),
-            Some(Action::Reconfigure(PaletteCommand::Agent(
+            Some(Action::Reconfigure(PaletteCommand::Profile(
                 "plan".to_owned()
             )))
         );
@@ -4781,13 +4970,56 @@ mod tests {
         app.composer.clear();
         assert_eq!(
             app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)),
-            Some(Action::Reconfigure(PaletteCommand::Agent(
+            Some(Action::Reconfigure(PaletteCommand::Profile(
                 "review".to_owned()
             )))
         );
 
         app.apply(&event(RuntimeEvent::TurnStarted));
         assert_eq!(app.on_key(key(KeyCode::Tab)), None);
+    }
+
+    #[test]
+    fn legacy_profile_choices_reconfigure_the_legacy_agent_override() {
+        let mut app = agent_first_app();
+        app.resources.profiles.push(ResourceEntry::new(
+            format!("{LEGACY_AGENT_PROFILE_PREFIX}review"),
+            "review",
+            "legacy root-mode adapter",
+        ));
+        app.composer.replace("/profile review");
+
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Some(Action::Reconfigure(PaletteCommand::Agent(
+                "review".to_owned()
+            )))
+        );
+    }
+
+    #[test]
+    fn tab_routes_a_legacy_cycle_entry_without_inventing_a_profile() {
+        let mut app = agent_first_app();
+        app.resources.main_profiles = vec![
+            ResourceEntry::new(
+                format!("{LEGACY_AGENT_PROFILE_PREFIX}build"),
+                "build",
+                "legacy build adapter",
+            )
+            .active(true),
+            ResourceEntry::new(
+                format!("{LEGACY_AGENT_PROFILE_PREFIX}review"),
+                "review",
+                "legacy review adapter",
+            ),
+        ];
+
+        assert_eq!(
+            app.on_key(key(KeyCode::Tab)),
+            Some(Action::Reconfigure(PaletteCommand::Agent(
+                "review".to_owned()
+            )))
+        );
     }
 
     #[test]
@@ -4865,6 +5097,28 @@ mod tests {
             })
         );
         assert!(app.composer.is_empty());
+    }
+
+    #[test]
+    fn disabled_child_profile_fails_locally_and_preserves_the_draft() {
+        let mut app = agent_first_app();
+        app.resources.child_agents.push(
+            ResourceEntry::new(
+                "agent:main-only",
+                "main-only",
+                "main profile · unavailable for child use",
+            )
+            .disabled("profile is enabled only for main-agent use"),
+        );
+        app.composer.replace("@main-only inspect the diff");
+
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert_eq!(app.composer.text(), "@main-only inspect the diff");
+        assert!(app.transcript.blocks().iter().any(|block| matches!(
+            block,
+            Block::Error { message } if message.contains("unresolved reference")
+        )));
+        assert!(app.overlay.is_none());
     }
 
     #[test]
@@ -5344,20 +5598,5 @@ mod tests {
         release.kind = KeyEventKind::Release;
         app.on_key(release);
         assert!(app.composer.is_empty());
-    }
-
-    #[test]
-    fn notifications_render_inline_without_a_focusable_inbox() {
-        let mut app = app();
-        app.notify(Notification {
-            source: "monitor:build".into(),
-            text: "stopped".into(),
-            terminal: true,
-        });
-        assert!(matches!(
-            app.transcript.blocks().last(),
-            Some(Block::Notice { source, text })
-                if source == "monitor:build" && text.contains("finished")
-        ));
     }
 }

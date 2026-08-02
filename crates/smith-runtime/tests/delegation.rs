@@ -41,11 +41,12 @@ use agent_runtime_core::tool::{InvocationContext, PreparationContext, Tool, Tool
 use agent_runtime_testkit::{InMemoryCheckpointStore, InMemorySessionStore, MemoryWorkspace};
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use smith_config::resolve::{ResolveRequest, ResolvedConfig, resolve};
+use smith_config::model::ProfileUse;
+use smith_config::resolve::{Overrides, ResolveRequest, ResolvedConfig, resolve};
 use smith_host::ProjectWorkspace;
 use smith_runtime::artifact::SmithArtifactStore;
-use smith_runtime::delegation::{AGENT_TOOL_NAME, AgentTool, wire_delegation};
-use smith_runtime::factory::{self, HostSurface, RuntimeRequest};
+use smith_runtime::delegation::{AGENT_TOOL_NAME, AgentTool, profile_route_key, wire_delegation};
+use smith_runtime::factory::{self, ChildProfileRequest, HostSurface, RuntimeRequest};
 use smith_runtime::project_instructions::ProjectInstructionsSnapshot;
 
 const FAKE_CONFIG: &str = r#"
@@ -271,6 +272,116 @@ async fn a_child_surface_gets_no_delegation_tool() {
             .iter()
             .any(|name| name == AGENT_TOOL_NAME)
     );
+}
+
+#[tokio::test]
+async fn a_child_enabled_profile_uses_its_preflighted_alternate_model_route() {
+    let fixture = Fixture::new();
+    let config = r#"
+default_profile = "dev"
+profile_order = ["dev"]
+
+[profiles.dev]
+provider = "local"
+model = "parent-model"
+posture = "build"
+use = ["main"]
+
+[profiles.audit]
+provider = "local"
+model = "audit-model"
+posture = "review"
+use = ["child"]
+instructions = "Audit the requested scope and report evidence."
+
+[providers.local]
+kind = "fake"
+
+[models."local/parent-model"]
+context_tokens = 128000
+max_input_tokens = 124000
+max_output_tokens = 4096
+
+[models."local/audit-model"]
+context_tokens = 64000
+max_input_tokens = 60000
+max_output_tokens = 2048
+
+[approval]
+mode = "allow-all"
+"#;
+    std::fs::write(fixture.project.path().join(".smith/config.toml"), config)
+        .expect("profile config");
+    let root =
+        resolve(&ResolveRequest::new(fixture.project.path()).with_home_dir(fixture.home.path()))
+            .expect("root profile");
+    let child = resolve(
+        &ResolveRequest::new(fixture.project.path())
+            .with_home_dir(fixture.home.path())
+            .with_cli(Overrides {
+                profile: Some("audit".to_owned()),
+                ..Overrides::default()
+            })
+            .with_profile_use(ProfileUse::Child),
+    )
+    .expect("child profile");
+    let route = profile_route_key(
+        &child.config.agent.profile.name,
+        &child.config.agent.profile.revision,
+    );
+    let parent_provider = scripted(1, "root fallback must not run");
+    let mut request = RuntimeRequest {
+        workspace: Some(Arc::new(MemoryWorkspace::new("/repo"))),
+        provider: Some(parent_provider.clone()),
+        ..RuntimeRequest::new(root.config, HostSurface::Terminal)
+    };
+    request.child_profiles.push(ChildProfileRequest {
+        config: child.config,
+        catalog_sources: Vec::new(),
+    });
+
+    let smith = factory::build(request)
+        .await
+        .expect("root with alternate child route");
+    let session = smith
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .expect("root session");
+    let delegation = smith.delegation().expect("delegation surface");
+    wire_delegation(&session, delegation)
+        .await
+        .expect("delegation wiring");
+    let coordinator = delegation.coordinator().expect("coordinator");
+    let child_id = match coordinator
+        .spawn(ChildSpec {
+            task: UserInput::text("audit the parser"),
+            model: ChildModelSelection::Explicit {
+                provider: Some(route),
+                model: agent_runtime_core::provider::ModelId::new("audit-model"),
+            },
+            limits: ChildLimits::turns(1),
+            tools: ToolViewScope::ReadOnly,
+            workspace: WorkspacePolicy::ReadOnlyView,
+        })
+        .await
+        .expect("alternate-profile child spawn")
+    {
+        SpawnOutcome::Spawned { child, .. } => child,
+        other => panic!("expected an alternate-profile child, got {other:?}"),
+    };
+    assert!(matches!(
+        coordinator
+            .wait_task_outcome(&child_id)
+            .await
+            .expect("alternate-profile child outcome"),
+        ChildTaskOutcome::Completed { .. }
+    ));
+    assert!(
+        parent_provider.requests().is_empty(),
+        "the child silently fell back to the root provider/model route"
+    );
+    session.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test]
@@ -901,21 +1012,26 @@ async fn a_spawned_child_completes_and_its_result_reaches_the_parent_model() {
 #[tokio::test]
 async fn a_child_artifact_is_explicitly_transferred_without_widening_source_ownership() {
     let fixture = Fixture::new();
-    let command = "yes 'child-owned artifact line' | head -c 262144";
-    let mut shell = tool_call_fragments(
+    let large_fixture = "child-owned artifact line\n".repeat(10_000);
+    std::fs::write(
+        fixture.project.path().join("child-artifact.txt"),
+        large_fixture,
+    )
+    .expect("large read-only child fixture");
+    let mut read = tool_call_fragments(
         0,
-        "child-large-shell",
-        "shell",
-        &serde_json::json!({ "command": command }).to_string(),
+        "child-large-read",
+        "read",
+        &serde_json::json!({ "path": "child-artifact.txt", "limit": 10_000 }).to_string(),
     );
-    shell.push(ProviderStreamEvent::Finish {
+    read.push(ProviderStreamEvent::Finish {
         reason: FinishReason::ToolCalls,
     });
     let provider = Arc::new(FakeProvider::new(
         "example-model",
         Capabilities::basic_streaming(),
         vec![
-            ScriptedStream::new(shell),
+            ScriptedStream::new(read),
             ScriptedStream::new(vec![
                 ProviderStreamEvent::TextDelta {
                     text: "child artifact ready".into(),
@@ -959,12 +1075,12 @@ async fn a_child_artifact_is_explicitly_transferred_without_widening_source_owne
     let spawned = coordinator
         .spawn(ChildSpec {
             task: UserInput::text(
-                "Use shell to produce a large result so it is retained as an artifact.",
+                "Read the large fixture so its bounded result is retained as an artifact.",
             ),
             model: ChildModelSelection::Inherit,
             limits: ChildLimits::turns(1),
-            tools: ToolViewScope::All,
-            workspace: WorkspacePolicy::SharedProject,
+            tools: ToolViewScope::ReadOnly,
+            workspace: WorkspacePolicy::ReadOnlyView,
         })
         .await
         .expect("the child spawns");

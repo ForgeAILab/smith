@@ -247,14 +247,19 @@ fn draw_too_small(frame: &mut Frame<'_>, area: Rect, theme: Theme) {
 }
 
 fn composer_rows(app: &App, width: u16) -> u16 {
-    let usable = usize::from(width.saturating_sub(2)).max(1);
-    let wrapped: usize = app
+    // Mirrors `draw_composer`'s marker prefix so the height budget counts the
+    // same lines the renderer wraps.
+    let lines: Vec<Line<'static>> = app
         .composer
         .lines()
         .iter()
-        .map(|line| line.width().div_ceil(usable).max(1))
-        .sum();
-    u16::try_from(wrapped.clamp(1, 8)).unwrap_or(1)
+        .enumerate()
+        .map(|(index, line)| {
+            let marker = if index == 0 { glyph::USER } else { " " };
+            Line::from(format!("{marker} {line}"))
+        })
+        .collect();
+    u16::try_from(rendered_rows(&lines, width).clamp(1, 8)).unwrap_or(1)
 }
 
 fn push_segment(spans: &mut Vec<Span<'static>>, theme: Theme, segment: Span<'static>) {
@@ -313,17 +318,22 @@ fn draw_transcript(
     frame.render_widget(paragraph, area);
 }
 
-fn visual_scroll_limit(lines: &[Line<'_>], area: Rect) -> u16 {
-    let height = usize::from(area.height);
-    let width = usize::from(area.width).max(1);
+fn visual_scroll_limit(lines: &[Line<'static>], area: Rect) -> u16 {
+    let rows = rendered_rows(lines, area.width);
+    u16::try_from(rows.saturating_sub(usize::from(area.height))).unwrap_or(u16::MAX)
+}
 
-    // A blank line separates blocks so screen-reader paragraph navigation
-    // matches Smith's block structure (`DESIGN.md` §9).
-    let visual_rows = lines
-        .iter()
-        .map(|line| line.width().div_ceil(width).max(1))
-        .sum::<usize>();
-    u16::try_from(visual_rows.saturating_sub(height)).unwrap_or(u16::MAX)
+/// Rows `lines` occupy under the exact word-wrap arithmetic the paragraphs
+/// render with. Every height/scroll estimate must go through here: a local
+/// character-wrap guess undercounts word-wrapped prose, which clips the newest
+/// transcript rows and truncates modal action bars.
+fn rendered_rows(lines: &[Line<'static>], width: u16) -> usize {
+    if lines.is_empty() {
+        return 0;
+    }
+    Paragraph::new(lines.to_vec())
+        .wrap(Wrap { trim: false })
+        .line_count(width.max(1))
 }
 
 fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<'static>> {
@@ -1197,6 +1207,15 @@ fn draw_identity_footer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: The
         theme,
         Span::styled(model, theme.style(Tone::StatusModel)),
     );
+    if area.width >= 100
+        && let Some(reasoning) = &app.status.reasoning_hint
+    {
+        push_segment(
+            &mut identity,
+            theme,
+            Span::styled(reasoning.clone(), theme.style(Tone::Reasoning)),
+        );
+    }
     push_segment(
         &mut identity,
         theme,
@@ -1704,7 +1723,7 @@ fn fit_rows(lines: Vec<Line<'static>>, width: usize, budget: usize) -> (Vec<Line
     let mut kept = Vec::new();
     let mut dropped = 0;
     for line in lines {
-        let rows = line.width().div_ceil(width).max(1);
+        let rows = wrapped_rows(std::slice::from_ref(&line), width);
         // Once one line is dropped the rest go too, so the survivors stay a
         // prefix and the reader is never shown a gap they cannot see.
         if dropped > 0 || used + rows > budget {
@@ -1719,10 +1738,7 @@ fn fit_rows(lines: Vec<Line<'static>>, width: usize, budget: usize) -> (Vec<Line
 
 /// Rows `lines` occupy once wrapped to `width` columns.
 fn wrapped_rows(lines: &[Line<'static>], width: usize) -> usize {
-    lines
-        .iter()
-        .map(|line| line.width().div_ceil(width).max(1))
-        .sum()
+    rendered_rows(lines, u16::try_from(width).unwrap_or(u16::MAX))
 }
 
 fn draw_palette(
@@ -2003,7 +2019,6 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::style::Color;
 
-    use crate::app::Notification;
     use crate::questionnaire::{QuestionnaireChoice, QuestionnaireForm, QuestionnaireQuestion};
 
     fn render(app: &App, width: u16, height: u16, theme: Theme) -> String {
@@ -2774,7 +2789,7 @@ mod tests {
             child_agents: vec![crate::picker::ResourceEntry::new(
                 "agent:review",
                 "review",
-                "agent · read-only child preset",
+                "child profile · review · zai/glm-5.2",
             )],
             ..crate::app::RuntimeResources::default()
         });
@@ -2797,7 +2812,7 @@ mod tests {
             &[
                 "Attach file or invoke agent",
                 "review",
-                "agent · read-only",
+                "child profile · review",
                 "src/lib.rs",
                 "file · 42 bytes",
                 "build · zai/glm-5.2 · /Volumes/Data/codes/ai/agent-runtime:main · ? ctx",
@@ -2951,6 +2966,18 @@ mod tests {
     }
 
     #[test]
+    fn non_default_reasoning_hint_is_width_gated_in_the_existing_footer() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.status
+            .set_reasoning_hint(Some("think on · effort high".to_owned()));
+        let narrow = render(&app, 74, 14, Theme::new().without_color().without_motion());
+        assert!(!narrow.contains("effort high"), "{narrow}");
+
+        let wide = render(&app, 120, 14, Theme::new().without_color().without_motion());
+        assert!(wide.contains("think on · effort high"), "{wide}");
+    }
+
+    #[test]
     fn agent_first_idle_snapshots_are_accessible_at_supported_sizes() {
         let mut app = App::new("glm-5.2", "api:main");
         app.status.switch_model(Some("zai".to_owned()), "glm-5.2");
@@ -3070,15 +3097,29 @@ mod tests {
     }
 
     #[test]
-    fn a_notification_appears_inline_in_the_transcript() {
+    fn following_keeps_the_newest_word_wrapped_rows_visible() {
+        // Words just over half the width wrap one-per-row, so word wrapping
+        // emits far more rows than a character-wrap estimate; a drifting
+        // estimate under-scrolls and clips exactly the newest rows.
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        let word = "a".repeat(23);
+        for _ in 0..4 {
+            app.transcript
+                .push_user(format!("{word} ").repeat(8).trim_end().to_owned());
+        }
+        app.transcript.push_notice("marker", "newest-entry");
+        assert!(app.following);
+
+        let screen = render(&app, 44, 14, Theme::new().without_color());
+        assert!(screen.contains("newest-entry"), "{screen}");
+    }
+
+    #[test]
+    fn a_notice_appears_inline_in_the_transcript() {
         let mut app = conversation();
         assert!(!render(&app, 74, 24, Theme::new()).contains("monitor:build"));
 
-        app.notify(Notification {
-            source: "monitor:build".into(),
-            text: "error[E0433]".into(),
-            terminal: false,
-        });
+        app.transcript.push_notice("monitor:build", "error[E0433]");
         assert!(render(&app, 74, 24, Theme::new()).contains("monitor:build"));
     }
 

@@ -86,6 +86,7 @@ fn glm_patch(credential: &str) -> ConfigFile {
                 context_tokens: Some(200_000),
                 max_input_tokens: Some(196_000),
                 max_output_tokens: Some(131_072),
+                ..ModelSection::default()
             },
         )]),
         context: Some(ContextSection {

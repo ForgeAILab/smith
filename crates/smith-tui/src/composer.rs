@@ -247,13 +247,6 @@ impl Composer {
         self.history_scratch = None;
     }
 
-    /// Empties the buffer and returns its trimmed contents.
-    pub fn take(&mut self) -> String {
-        let taken = self.text.trim().to_owned();
-        self.clear();
-        taken
-    }
-
     /// The buffer split into display lines.
     pub fn lines(&self) -> Vec<&str> {
         self.text.split('\n').collect()
@@ -342,16 +335,6 @@ mod tests {
         assert_eq!(composer.cursor_position(), (1, 2));
         composer.move_home();
         assert_eq!(composer.cursor_position(), (1, 0));
-    }
-
-    #[test]
-    fn taking_trims_and_empties() {
-        let mut composer = Composer::new();
-        composer.insert_str("  run the tests  ");
-        assert!(!composer.is_blank());
-        assert_eq!(composer.take(), "run the tests");
-        assert!(composer.is_empty());
-        assert_eq!(composer.cursor(), 0);
     }
 
     #[test]

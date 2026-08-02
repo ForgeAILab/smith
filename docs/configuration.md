@@ -37,27 +37,59 @@ example `SMITH_CONTEXT_REASONING_RESERVE`,
 case-insensitively; defining two case variants for one key is an ambiguity and
 fails.
 
-Root-agent selection follows the same provenance rules. Smith provides
-`build`, `plan`, and `review`, ordered that way by default, plus read-only
-`explore` and `review` child presets. Owner-controlled configuration may
-select/reorder or describe modes:
+Agent-profile selection follows the same provenance rules. One named profile
+can configure the main agent, an explicit direct child, or both:
 
 ```toml
-default_agent = "plan"
-agent_order = ["plan", "build", "review"]
+default_profile = "work"
+profile_order = ["work", "plan", "review"]
 
-[agent_modes.plan]
+[profiles.work]
+provider = "remote"
+model = "vendor/model-id"
+description = "implementation with bounded mutation"
+posture = "build"
+use = ["main"]
+instructions = "Implement, verify, and report concrete evidence."
+
+[profiles.plan]
+extends = "work"
 posture = "plan"
+use = ["main", "child"]
 description = "inspect and propose without mutation"
+instructions = "Produce an implementation-ready plan without editing."
 
-[child_agents.review]
+[profiles.review]
+extends = "work"
 posture = "review"
+use = ["main", "child"]
 description = "read-only independent review"
+instructions = "Report prioritized evidence-backed findings."
 ```
 
-Mode and preset declarations contain no permission, credential, trust, or
-approval fields. Project definitions are validated and intersected with the
-authoritative run policy; they cannot grant authority.
+`use` defaults to `["main"]` when omitted. `extends` names one parent; the
+child replaces inherited fields rather than concatenating instructions. Smith
+rejects missing parents, cycles, inheritance deeper than 16 profiles, invalid
+placements, and child-only entries in `profile_order` before credential or
+provider construction. Instructions are nonempty UTF-8 text bounded to 32 KiB
+and become an additive developer-instruction fragment after Smith's stable
+host policy. Profile text and settings cannot grant a tool, credential, trust,
+approval, permission, or larger workspace.
+
+When `profile_order` is omitted, Smith derives a deterministic cycle from all
+real main-enabled profiles and excludes legacy adapters and child-only
+profiles. Guided setup writes an explicit three-profile order: the selected
+build profile plus inherited `-plan` and `-review` variants. Legacy entries
+shown by `/profile` route through the deprecated mode override and never become
+an invalid `--profile` selection.
+
+For one transition release, `[agent_modes.<name>]` is adapted as a deprecated
+main-only profile and `[child_agents.<name>]` as a deprecated child-only
+profile. Inventory labels these entries `legacy` with their source; migrate
+them to `[profiles.<name>]` with an explicit `posture` and `use`. A legacy and
+new declaration claiming the same name is an error—Smith never picks one by
+map or file order. Existing `[profiles]` without the new fields remain
+main-only build profiles.
 
 ## Project instructions and context identity
 
@@ -90,11 +122,27 @@ implicit project-instruction fragment.
 
 ```toml
 default_profile = "work"
+profile_order = ["work", "review"]
 
 [profiles.work]
 provider = "remote"
 model = "vendor/model-id"
+description = "implementation profile"
+posture = "build"
+use = ["main", "child"]
+instructions = "Implement the requested change and verify it."
 max_output_tokens = 4096
+
+[profiles.review]
+extends = "work"
+description = "read-only independent review"
+posture = "review"
+use = ["main", "child"]
+instructions = "Report prioritized findings with concrete evidence."
+
+[profiles.work.reasoning]
+enabled = true
+effort = "high"
 
 [profiles.work.context]
 output_reserve = 4096
@@ -134,6 +182,14 @@ x-client-name = "smith"
 context_tokens = 128000
 max_input_tokens = 124000
 max_output_tokens = 4096
+
+[models."remote/vendor/model-id".reasoning]
+toggle = true
+mandatory = false
+efforts = ["none", "low", "medium", "high"]
+default_enabled = true
+default_effort = "medium"
+dialect = "openai-effort"
 
 [persistence]
 enabled = true
@@ -202,6 +258,23 @@ mode for a provider that returns a successful answer solely as non-redacted
 reasoning. The omitted/default value, `"reasoning"`, preserves the provider's
 classification.
 
+Reasoning presence is separate from reasoning control. A catalog
+`reasoning = true` value means only that reasoning is present and fixed; it
+does not create a toggle or effort selector. Rich
+`[models."provider/model".reasoning]` metadata must name the exact wire
+dialect (`openai-effort`, `openrouter`, or `zai-thinking`), switch behavior,
+and ordered effort values. Unknown OpenAI-compatible endpoints expose no
+inferred controls.
+
+`[reasoning]` and `[profiles.<name>.reasoning]` select `enabled` and/or one
+advertised `effort`. Omission sends no reasoning option and preserves provider
+behavior. The exact Z.AI Coding Plan binding exposes its documented thinking
+toggle but no general effort ladder. `/think [on|off|default]` and
+`/effort [LEVEL|default]` apply session overrides at an idle boundary; omitted
+arguments open local bounded selectors and make no provider request. Invalid
+or mandatory/fixed choices fail before credential lookup. Higher effort can
+increase latency, token use, and cost.
+
 ## Policy keys and defaults
 
 Smith's defaults claim no provider, model, model limit, model-dependent output
@@ -223,6 +296,8 @@ reserve, capability budget, or estimated-count slack.
 | `approval.mode` | `"ask"` | Fail closed until a decision exists |
 | `background.exit_policy` | `"error"` | Refuse to orphan active work |
 | `background.max_children` | `4` | Concurrent child capacity |
+| `reasoning.enabled` | provider/model default | Explicit thinking state when supported |
+| `reasoning.effort` | provider/model default | Exact advertised effort when supported |
 | `background.max_monitors` | `8` | Reserved process-monitor capacity |
 
 The compaction low watermark must be below the high watermark. Reserves must
@@ -241,10 +316,11 @@ The run surface accepts:
 ```text
 --project PATH
 --profile NAME
---agent build|plan|review
+--agent MODE                  # deprecated legacy mode compatibility
 --provider NAME
 --model ID
 --approval ask|deny|allow-all
+--yolo                       # explicit alias for --approval allow-all
 --background-exit error|wait|stop
 --resume [SESSION_ID]
 --output-format text|json|stream-json
@@ -256,4 +332,6 @@ Headless or piped use must pass the exact ID. `--output-format` requires `-p`.
 Project-controlled configuration cannot grant `allow-all`, populate
 `auto_approve`, disable/redirect persistence, or choose the user session root.
 Those settings require a higher-trust source. Opening a repository is never
-authority.
+authority. `--yolo` is only a shorter explicit spelling of
+`--approval allow-all`; it does not add tools or override a profile's
+read-only posture.

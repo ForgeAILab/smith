@@ -20,18 +20,34 @@ use smith_config::model::AgentPosture;
 
 use crate::project_instructions::ProjectInstructionsSnapshot;
 
-/// Trusted, authority-narrowing root mode selected for this run.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentModePrompt {
+/// Trusted, authority-narrowing agent profile selected for this run.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AgentProfilePrompt {
     /// Validated display/configuration name.
     pub name: String,
     /// Host-owned posture that bounds capabilities.
     pub posture: AgentPosture,
+    /// Optional bounded additive instructions.
+    pub instructions: Option<String>,
+    /// Deterministic effective profile revision.
+    pub revision: String,
+}
+
+impl fmt::Debug for AgentProfilePrompt {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AgentProfilePrompt")
+            .field("name", &self.name)
+            .field("posture", &self.posture)
+            .field("has_instructions", &self.instructions.is_some())
+            .field("revision", &self.revision)
+            .finish()
+    }
 }
 
 /// Prompt section schema. Bump an individual section revision when its wording
 /// changes; bump this only when the section assembly contract changes.
-pub const PROMPT_SCHEMA_REVISION: &str = "smith-prompt-sections-2";
+pub const PROMPT_SCHEMA_REVISION: &str = "smith-prompt-sections-3";
 
 const IDENTITY: &str = "\
 You are Smith, a terminal-first coding agent. Work only through the capabilities \
@@ -97,8 +113,8 @@ files, verification evidence, and remaining blockers when they materially help t
 pub struct DynamicPromptContext {
     /// Root project instructions captured once by the standard host.
     pub project_instructions: Option<ProjectInstructionsSnapshot>,
-    /// Active root-agent mode. This may narrow but never widen authority.
-    pub agent_mode: Option<AgentModePrompt>,
+    /// Active agent profile. This may narrow but never widen authority.
+    pub agent_profile: Option<AgentProfilePrompt>,
     /// Activated, trusted skill instructions.
     pub activated_skills: Option<String>,
     /// Bounded memory selected by Smith policy.
@@ -118,7 +134,7 @@ impl fmt::Debug for DynamicPromptContext {
                     .as_ref()
                     .map(ProjectInstructionsSnapshot::identity),
             )
-            .field("agent_mode", &self.agent_mode)
+            .field("agent_profile", &self.agent_profile)
             .field("has_activated_skills", &self.activated_skills.is_some())
             .field("has_memory", &self.memory.is_some())
             .field("has_project_context", &self.project_context.is_some())
@@ -297,8 +313,8 @@ pub fn dynamic_fragments(context: &DynamicPromptContext) -> Vec<ContextFragment>
             .with_sensitivity(Sensitivity::Internal),
         );
     }
-    if let Some(mode) = &context.agent_mode {
-        let behavior = match mode.posture {
+    if let Some(profile) = &context.agent_profile {
+        let behavior = match profile.posture {
             AgentPosture::Build => {
                 "Follow the normal coding workflow. Mutation remains subject to the resolved workspace, security, and approval policy."
             }
@@ -311,13 +327,19 @@ pub fn dynamic_fragments(context: &DynamicPromptContext) -> Vec<ContextFragment>
         };
         fragments.push(
             ContextFragment::new(
-                "smith.prompt.agent-mode",
+                "smith.prompt.agent-profile",
                 FragmentKind::DeveloperInstruction,
                 FragmentSource::Host,
-                RegistryRevision::new("smith-prompt-agent-mode-1"),
+                RegistryRevision::new(profile.revision.clone()),
                 FragmentContent::Text(format!(
-                    "Active Smith agent mode: `{}`. {behavior}",
-                    mode.name
+                    "Active Smith agent profile: `{}`. {behavior}{}",
+                    profile.name,
+                    profile
+                        .instructions
+                        .as_deref()
+                        .map_or_else(String::new, |instructions| {
+                            format!("\n\nProfile instructions:\n{instructions}")
+                        })
                 )),
             )
             .with_position(ContextPosition::new(ContextLane::Instructions, 11))
@@ -486,9 +508,11 @@ mod tests {
                 ProjectInstructionsSnapshot::from_body("Use the repository checks.")
                     .expect("bounded project instructions"),
             ),
-            agent_mode: Some(AgentModePrompt {
+            agent_profile: Some(AgentProfilePrompt {
                 name: "review".into(),
                 posture: AgentPosture::Review,
+                instructions: Some("Report evidence-backed findings.".into()),
+                revision: "test-review-profile-1".into(),
             }),
             activated_skills: Some("Use the Rust migration skill.".into()),
             memory: Some("The project prefers deterministic fixtures.".into()),
@@ -506,6 +530,34 @@ mod tests {
                 .iter()
                 .all(|fragment| fragment.id.as_str().starts_with("smith.prompt."))
         );
+    }
+
+    #[test]
+    fn profile_fragment_uses_the_exact_revision_and_debug_hides_instructions() {
+        let private_instructions = "private-profile-instructions-24fd";
+        let profile = AgentProfilePrompt {
+            name: "audit".into(),
+            posture: AgentPosture::Review,
+            instructions: Some(private_instructions.into()),
+            revision: "audit-profile-revision-7".into(),
+        };
+        let debug = format!("{profile:?}");
+        assert!(!debug.contains(private_instructions), "{debug}");
+        assert!(debug.contains("audit-profile-revision-7"), "{debug}");
+
+        let dynamic = dynamic_fragments(&DynamicPromptContext {
+            agent_profile: Some(profile),
+            ..DynamicPromptContext::default()
+        });
+        let [fragment] = dynamic.as_slice() else {
+            panic!("expected exactly one profile fragment: {dynamic:?}");
+        };
+        assert_eq!(fragment.id.as_str(), "smith.prompt.agent-profile");
+        assert_eq!(fragment.revision.as_str(), "audit-profile-revision-7");
+        assert_eq!(fragment.kind, FragmentKind::DeveloperInstruction);
+        assert_eq!(fragment.source, FragmentSource::Host);
+        assert_eq!(fragment.cache_class, CacheClass::Ephemeral);
+        assert!(render_fragments(&dynamic).contains(private_instructions));
     }
 
     #[test]
