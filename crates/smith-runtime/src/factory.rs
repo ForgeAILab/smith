@@ -38,9 +38,10 @@
 //!
 //! # The secret boundary
 //!
-//! A resolved [`Secret`] exists between step 4 and step 6. It is moved into
-//! [`OpenAiConfig`] at provider construction, which is the single point where a
-//! credential and a request meet. When persistence is enabled, the same value
+//! A resolved [`Secret`] exists between step 4 and step 6. The OpenAI-compatible
+//! path moves it into a host-injected static credential source at provider
+//! construction; the adapter acquires that source only at its trusted request
+//! boundary. When persistence is enabled, the same value
 //! is registered with the host's non-printing redactor so a reflected
 //! credential cannot reach a journal or saved snapshot. It is never stored on
 //! the run request, in [`RuntimePolicy`], or in any error. Every type on that
@@ -82,6 +83,9 @@ use agent_runtime_core::error::RuntimeError;
 use agent_runtime_core::interaction::{InteractionBroker, InteractionReadiness};
 use agent_runtime_core::observer::EventObserver;
 use agent_runtime_core::provider::{ModelId, Provider, ProviderError};
+use agent_runtime_core::provider_credential::{
+    ProviderCredentialSource, ProviderCredentialTarget, StaticProviderCredentialSource,
+};
 use agent_runtime_core::store::{Secret, SecretStore, SessionStore};
 use agent_runtime_core::tool::Tool;
 use agent_runtime_core::workspace::Workspace;
@@ -91,8 +95,8 @@ use smith_config::credential::{
     CredentialError, CredentialRef, CredentialRefError, CredentialResolver,
 };
 use smith_config::model::{
-    AgentPosture, ApprovalMode, KIND_ANTHROPIC_MESSAGES, KIND_FAKE, KIND_OPENAI_COMPATIBLE,
-    ProfileUse,
+    AgentPosture, ApprovalMode, KIND_ANTHROPIC_MESSAGES, KIND_CHATGPT_RESPONSES, KIND_FAKE,
+    KIND_OPENAI_COMPATIBLE, ProfileUse,
 };
 use smith_config::resolve::{ResolvedConfig, ResolvedProvider};
 use smith_config::setup::trusted_model;
@@ -103,6 +107,9 @@ use agent_runtime_core::grant::SecurityCheckMode;
 use crate::abilities::{INTERACTION_READY_CONFIG, seal_tool_abilities};
 use crate::authority::SmithToolAuthority;
 use crate::catalog::{CatalogLayers, ProfileResolution};
+use crate::chatgpt::{
+    ChatGptCredentialSource, ChatGptProvider, ChatGptProviderConfig, ChatGptTokenBundle,
+};
 use crate::checkpoint::{BarrierCheckpointStore, CheckpointBarrier, SmithCheckpointSetup};
 use crate::delegation::{
     AgentTool, DelegationAuthority, SmithChildFactory, SmithChildRoute, SmithDelegation,
@@ -162,8 +169,12 @@ pub const DEFAULT_CREDENTIAL_TIMEOUT_MS: u64 = 30_000;
 /// Adapter kinds compiled into this Smith build.
 ///
 /// Setup uses this list to hide descriptors it cannot actually compose.
-pub const AVAILABLE_ADAPTER_KINDS: &[&str] =
-    &[KIND_OPENAI_COMPATIBLE, KIND_ANTHROPIC_MESSAGES, KIND_FAKE];
+pub const AVAILABLE_ADAPTER_KINDS: &[&str] = &[
+    KIND_OPENAI_COMPATIBLE,
+    KIND_ANTHROPIC_MESSAGES,
+    KIND_CHATGPT_RESPONSES,
+    KIND_FAKE,
+];
 
 /// Which Smith presentation asked for this runtime.
 ///
@@ -559,7 +570,7 @@ pub enum FactoryError {
     #[error(
         "provider `{provider}` selects the `{kind}` adapter, which this build of Agent Runtime \
          does not ship; the available kinds are `{KIND_OPENAI_COMPATIBLE}`, \
-         `{KIND_ANTHROPIC_MESSAGES}`, and `{KIND_FAKE}`"
+         `{KIND_ANTHROPIC_MESSAGES}`, `{KIND_CHATGPT_RESPONSES}`, and `{KIND_FAKE}`"
     )]
     AdapterUnavailable {
         /// The provider that selected it.
@@ -599,6 +610,9 @@ pub enum FactoryError {
         /// Configured lookup boundary.
         timeout_ms: u64,
     },
+    /// Smith's protected ChatGPT token bundle or OAuth client is unusable.
+    #[error("the experimental ChatGPT connection is unusable: {0}")]
+    ChatGptAuth(#[source] crate::chatgpt::ChatGptAuthError),
     /// No layer supplied enforceable limits for the selected model.
     #[error(
         "provider `{provider}` cannot plan against model `{model}`: {source}. Declare \
@@ -652,6 +666,8 @@ enum Adapter {
     OpenAiCompatible,
     /// Agent Runtime's native Anthropic Messages API adapter.
     AnthropicMessages,
+    /// Smith's experimental direct ChatGPT Codex Responses adapter.
+    ChatGptResponses,
     /// Agent Runtime's deterministic fake.
     Fake,
 }
@@ -1398,6 +1414,10 @@ async fn prepare_factory_inputs(
             &config.provider,
             Some(smith_config::model::ANTHROPIC_DEFAULT_ENDPOINT),
         )?),
+        Adapter::ChatGptResponses => Some(endpoint(
+            &config.provider,
+            Some(smith_config::setup::CHATGPT_ENDPOINT),
+        )?),
         Adapter::Fake => None,
     };
 
@@ -1455,6 +1475,12 @@ async fn prepare_factory_inputs(
         (None, Some(reference), None) => Some(secret(request, &reference.value).await?),
         _ => None,
     };
+    if adapter == Adapter::ChatGptResponses {
+        let secret = secret.as_ref().ok_or(FactoryError::ChatGptAuth(
+            crate::chatgpt::ChatGptAuthError::InvalidBundle,
+        ))?;
+        ChatGptTokenBundle::from_secret(secret).map_err(FactoryError::ChatGptAuth)?;
+    }
     let context_policy = context_policy(config, &profile.profile)?;
     let compaction_policy = compaction_policy(config, &profile.profile, &context_policy);
     let mut loop_config = loop_config(request, &model);
@@ -1484,6 +1510,7 @@ fn adapter(provider: &ResolvedProvider) -> Result<Adapter, FactoryError> {
     match provider.kind.value.as_str() {
         KIND_OPENAI_COMPATIBLE => Ok(Adapter::OpenAiCompatible),
         KIND_ANTHROPIC_MESSAGES => Ok(Adapter::AnthropicMessages),
+        KIND_CHATGPT_RESPONSES => Ok(Adapter::ChatGptResponses),
         KIND_FAKE => Ok(Adapter::Fake),
         kind => Err(FactoryError::AdapterUnavailable {
             provider: provider.name.value.clone(),
@@ -1611,9 +1638,22 @@ fn construct(
                 .iter()
                 .map(|(name, value)| (name.clone(), value.value.clone()))
                 .collect();
-            // The secret's first and last stop.
-            config.api_key = secret;
-            Ok(Arc::new(OpenAiProvider::new(transport, config)))
+            match secret {
+                Some(secret) => {
+                    let target =
+                        ProviderCredentialTarget::new(request.config.provider.name.value.clone())
+                            .map_err(|error| {
+                            FactoryError::Runtime(RuntimeError::config(error.to_string()))
+                        })?;
+                    let source = Arc::new(StaticProviderCredentialSource::new(secret))
+                        as Arc<dyn ProviderCredentialSource>;
+                    let provider =
+                        OpenAiProvider::with_credential_source(transport, config, target, source)
+                            .map_err(FactoryError::Transport)?;
+                    Ok(Arc::new(provider))
+                }
+                None => Ok(Arc::new(OpenAiProvider::new(transport, config))),
+            }
         }
         Adapter::AnthropicMessages => {
             let transport = ReqwestTransport::new(request.transport.clone())
@@ -1633,9 +1673,56 @@ fn construct(
                 .iter()
                 .map(|(name, value)| (name.clone(), value.value.clone()))
                 .collect();
-            // The secret's first and last stop.
+            // Anthropic retains its reviewed static compatibility path until
+            // that upstream adapter exposes the credential-source contract.
             config.api_key = secret;
             Ok(Arc::new(AnthropicProvider::new(transport, config)))
+        }
+        Adapter::ChatGptResponses => {
+            let transport = ReqwestTransport::new(request.transport.clone())
+                .map_err(FactoryError::Transport)?;
+            let secret = secret.ok_or(FactoryError::ChatGptAuth(
+                crate::chatgpt::ChatGptAuthError::InvalidBundle,
+            ))?;
+            let bundle =
+                ChatGptTokenBundle::from_secret(&secret).map_err(FactoryError::ChatGptAuth)?;
+            let account_id = bundle.account_id().to_owned();
+            let reference = request
+                .config
+                .provider
+                .credential
+                .as_ref()
+                .ok_or(FactoryError::ChatGptAuth(
+                    crate::chatgpt::ChatGptAuthError::InvalidBundle,
+                ))
+                .and_then(|reference| {
+                    CredentialRef::parse(&reference.value).map_err(|source| {
+                        FactoryError::CredentialReference {
+                            provider: request.config.provider.name.value.clone(),
+                            source,
+                        }
+                    })
+                })?;
+            let target = ProviderCredentialTarget::new(request.config.provider.name.value.clone())
+                .map_err(|error| FactoryError::Runtime(RuntimeError::config(error.to_string())))?;
+            let source = Arc::new(
+                ChatGptCredentialSource::production(
+                    target.clone(),
+                    reference,
+                    &secret,
+                    request.persistence_redactor.clone(),
+                )
+                .map_err(FactoryError::ChatGptAuth)?,
+            ) as Arc<dyn ProviderCredentialSource>;
+            let config = ChatGptProviderConfig::new(
+                request.config.model.value.clone(),
+                profile.capabilities.clone(),
+                account_id,
+            )
+            .map_err(FactoryError::Transport)?;
+            Ok(Arc::new(ChatGptProvider::new(
+                transport, config, target, source,
+            )))
         }
     }
 }
@@ -2027,6 +2114,14 @@ mod tests {
         assert_eq!(
             adapter(&provider(KIND_ANTHROPIC_MESSAGES, None)).expect("a known kind"),
             Adapter::AnthropicMessages
+        );
+        assert_eq!(
+            adapter(&provider(
+                KIND_CHATGPT_RESPONSES,
+                Some(smith_config::setup::CHATGPT_ENDPOINT),
+            ))
+            .expect("a known kind"),
+            Adapter::ChatGptResponses
         );
         assert_eq!(
             adapter(&provider(KIND_FAKE, None)).expect("a known kind"),

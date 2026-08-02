@@ -61,6 +61,8 @@
             "/resume",
             "/profile",
             "/provider",
+            "/connect",
+            "/disconnect",
             "/model",
             "/agent",
             "/diff",
@@ -71,6 +73,36 @@
         ] {
             assert!(help.contains(command), "help must list {command}");
         }
+    }
+
+    #[test]
+    fn connect_and_disconnect_use_idle_local_pickers_and_typed_boundaries() {
+        let mut connect = app();
+        type_text(&mut connect, "/connect");
+        assert_eq!(connect.on_key(key(KeyCode::Enter)), None);
+        assert!(matches!(
+            connect.overlay,
+            Some(Overlay::ResourcePicker {
+                target: ResourceTarget::Connect,
+                ..
+            })
+        ));
+        connect.on_key(key(KeyCode::Down));
+        assert_eq!(
+            connect.on_key(key(KeyCode::Enter)),
+            Some(Action::Reconfigure(PaletteCommand::Connect(
+                "openrouter".to_owned()
+            )))
+        );
+
+        let mut disconnect = app();
+        type_text(&mut disconnect, "/disconnect local");
+        assert_eq!(
+            disconnect.on_key(key(KeyCode::Enter)),
+            Some(Action::Reconfigure(PaletteCommand::Disconnect(
+                "local".to_owned()
+            )))
+        );
     }
 
     #[test]

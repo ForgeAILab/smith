@@ -143,6 +143,41 @@ unlock prompt fails with an `env:<VAR>` recovery hint instead of hanging.
 provider's credential source; it does not rewrite its endpoint, models,
 limits, profiles, or default.
 
+The same credential funnel is available at an idle TUI boundary with
+`/connect [PROVIDER]`; omitting the name opens a searchable provider picker.
+`/disconnect [PROVIDER]` removes only that authentication source, and
+`/status` reports the connection method/readiness without showing a key,
+account ID, or credential locator. OpenRouter is built in: `/connect
+openrouter` fixes `https://openrouter.ai/api/v1`, offers the normal protected
+credential choices, and hands off to a reviewed catalog-model picker with
+enforceable limits. Existing OpenRouter connections change only authentication.
+
+ChatGPT subscription login is deliberately different and explicitly
+experimental. `/connect chatgpt` offers Smith-owned browser PKCE or device-code
+login in a bounded popup, stores one renewable token bundle in the `chatgpt`
+entry of the fixed owner-only plaintext file `~/.smith/auth.json`, and adds a
+trusted `chatgpt/gpt-5.6-terra` model. Smith creates `~/.smith` as mode `0700`
+and `auth.json` as mode `0600`; same-user processes and backups can still read
+or retain these tokens, so treat the file like a password. ChatGPT connect,
+startup, refresh, reconnect, and disconnect never query Keychain or Secret
+Service.
+Smith then calls the fixed ChatGPT Codex Responses endpoint directly through
+its normal runtime, so Smith tools, approvals, attachments, steering, goals,
+checkpoints, persistence, cancellation, recovery, events, and usage remain in
+force. No Codex executable or another client's auth cache is used.
+
+This subscription-token endpoint is not a supported public OpenAI Platform API
+contract and may change without compatibility notice. Use an OpenAI Platform
+API-key provider when a supported integration is required. `/disconnect
+chatgpt` removes Smith's protected bundle while preserving the endpoint and
+model declaration.
+
+If an earlier Smith build stored ChatGPT at `keychain:smith/chatgpt`, that
+legacy entry is intentionally neither read nor deleted. Start Smith with
+another configured provider, run `/connect chatgpt`, and complete a fresh login
+to publish `authfile:chatgpt`. Remove the old Keychain item manually only if you
+want to clean it up without involving Smith.
+
 Checkpoint protection is configured separately. `smith setup checkpoint-key`
 offers owner-only inline storage, an environment-variable reference, or OS
 protected storage. Inline/environment choices never initialize Keychain or
@@ -198,12 +233,12 @@ prepared local-shell path without a provider request. `@@` and `!!` are the
 literal escapes. `/details`, `/timeline`, and `/redo` expose bounded live work,
 canonical session evidence, and exact recovery locally.
 
-`Ctrl+P` opens the command palette. `/model`, `/provider`,
-`/profile`, and `/resume` need no argument: each opens a searchable local list
-with current and unavailable states. Explicit values remain validated
-shortcuts. Model rows are always provider-qualified, so selecting a model
-applies its provider/model pair atomically; selecting a provider with several
-models cascades into that provider's model list.
+`Ctrl+P` opens the command palette. `/model`, `/provider`, `/connect`,
+`/disconnect`, `/profile`, and `/resume` need no argument: each opens a
+searchable local list with current and unavailable states. Explicit values
+remain validated shortcuts. Model rows are always provider-qualified, so
+selecting a model applies its provider/model pair atomically; selecting a
+provider with several models cascades into that provider's model list.
 
 `/think [on|off|default]` and `/effort [LEVEL|default]` use the same local
 picker grammar and require an idle turn. They become real controls only when
@@ -323,6 +358,15 @@ cargo test --all-features -p smith-cli --test live_provider -- --ignored --nocap
 The key is never written to project configuration. Unset
 `SMITH_LIVE_API_KEY` after the run. Other OpenAI-compatible endpoints can use
 the same test with their documented model limits.
+
+The live direct ChatGPT Responses smoke test is ignored by default because it
+requires explicitly injected test credentials and may spend provider quota. It
+never reads Smith's Keychain entry. Have a secret-safe test runner inject
+`SMITH_CHATGPT_TEST_ACCESS_TOKEN` and `SMITH_CHATGPT_TEST_ACCOUNT_ID`, then run:
+
+```sh
+cargo test -p smith-runtime live_chatgpt_responses -- --ignored --nocapture
+```
 
 Headless mode accepts a direct prompt or stdin and keeps machine stdout clean:
 

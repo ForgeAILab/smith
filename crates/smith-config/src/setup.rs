@@ -8,12 +8,12 @@
 use std::collections::BTreeSet;
 
 use crate::model::{
-    ANTHROPIC_DEFAULT_ENDPOINT, KIND_ANTHROPIC_MESSAGES, KIND_OPENAI_COMPATIBLE,
-    ReasoningOnlyBehavior,
+    ANTHROPIC_DEFAULT_ENDPOINT, KIND_ANTHROPIC_MESSAGES, KIND_CHATGPT_RESPONSES,
+    KIND_OPENAI_COMPATIBLE, ReasoningOnlyBehavior,
 };
 
 /// Revision of the trusted model data shipped with this Smith build.
-pub const TRUSTED_MODEL_CATALOG_REVISION: u32 = 2;
+pub const TRUSTED_MODEL_CATALOG_REVISION: u32 = 3;
 
 /// Stable name recorded for Smith's built-in setup model data.
 pub const TRUSTED_MODEL_CATALOG_NAME: &str = "smith-trusted-models";
@@ -23,6 +23,16 @@ pub const GLM_PROVIDER: &str = "zai";
 pub const GLM_PROFILE: &str = "glm";
 /// Z.AI Coding Plan OpenAI-compatible endpoint.
 pub const GLM_ENDPOINT: &str = "https://api.z.ai/api/coding/paas/v4";
+/// Provider name used by the built-in OpenRouter connection descriptor.
+pub const OPENROUTER_PROVIDER: &str = "openrouter";
+/// Fixed OpenRouter OpenAI-compatible API endpoint.
+pub const OPENROUTER_ENDPOINT: &str = crate::catalog::OPENROUTER_ENDPOINT;
+/// Provider name used by Smith's experimental ChatGPT integration.
+pub const CHATGPT_PROVIDER: &str = "chatgpt";
+/// Fixed base URL for the experimental direct ChatGPT Codex Responses API.
+pub const CHATGPT_ENDPOINT: &str = "https://chatgpt.com/backend-api/codex";
+/// Fixed owner-only plaintext auth-file reference for Smith's renewable ChatGPT bundle.
+pub const CHATGPT_CREDENTIAL: &str = "authfile:chatgpt";
 
 /// The credential enrollment paths a setup descriptor permits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,7 +126,26 @@ pub const GLM_5_2: TrustedModelRecord = TrustedModelRecord {
     output_reserve: 32_768,
 };
 
+/// First reviewed model binding for Smith's experimental direct ChatGPT path.
+///
+/// The public Codex catalog publishes the 272k context window. Its output
+/// ceiling is not part of that public record, so Smith deliberately enforces a
+/// conservative 16k product cap instead of treating the remainder as output.
+pub const CHATGPT_TERRA: TrustedModelRecord = TrustedModelRecord {
+    provider: CHATGPT_PROVIDER,
+    model: "gpt-5.6-terra",
+    label: "GPT-5.6 Terra (experimental ChatGPT)",
+    catalog: TRUSTED_MODEL_CATALOG_NAME,
+    revision: TRUSTED_MODEL_CATALOG_REVISION,
+    context_tokens: 272_000,
+    max_input_tokens: 255_616,
+    max_output_tokens: 16_384,
+    request_output_tokens: 16_384,
+    output_reserve: 16_384,
+};
+
 const GLM_MODELS: &[TrustedModelRecord] = &[GLM_5_2, GLM_4_7];
+const CHATGPT_MODELS: &[TrustedModelRecord] = &[CHATGPT_TERRA];
 
 const DESCRIPTORS: &[ProviderSetupDescriptor] = &[
     ProviderSetupDescriptor {
@@ -130,6 +159,18 @@ const DESCRIPTORS: &[ProviderSetupDescriptor] = &[
         credentials: CREDENTIAL_METHODS,
         models: GLM_MODELS,
         reasoning_only: Some(ReasoningOnlyBehavior::Text),
+    },
+    ProviderSetupDescriptor {
+        id: "openrouter",
+        label: "Connect OpenRouter",
+        description: "OpenRouter API key with a fixed endpoint and reviewed model limits",
+        provider: Some(OPENROUTER_PROVIDER),
+        profile: None,
+        adapter: KIND_OPENAI_COMPATIBLE,
+        endpoint: Some(OPENROUTER_ENDPOINT),
+        credentials: CREDENTIAL_METHODS,
+        models: &[],
+        reasoning_only: None,
     },
     ProviderSetupDescriptor {
         id: "openai-compatible",
@@ -153,6 +194,18 @@ const DESCRIPTORS: &[ProviderSetupDescriptor] = &[
         endpoint: Some(ANTHROPIC_DEFAULT_ENDPOINT),
         credentials: CREDENTIAL_METHODS,
         models: &[],
+        reasoning_only: None,
+    },
+    ProviderSetupDescriptor {
+        id: "chatgpt",
+        label: "Connect ChatGPT (experimental)",
+        description: "Smith OAuth and direct Responses calls; unsupported public API boundary",
+        provider: Some(CHATGPT_PROVIDER),
+        profile: None,
+        adapter: KIND_CHATGPT_RESPONSES,
+        endpoint: Some(CHATGPT_ENDPOINT),
+        credentials: &[],
+        models: CHATGPT_MODELS,
         reasoning_only: None,
     },
 ];
@@ -187,7 +240,7 @@ mod tests {
         let choices = provider_descriptors(&[KIND_OPENAI_COMPATIBLE]);
         assert_eq!(
             choices.iter().map(|choice| choice.id).collect::<Vec<_>>(),
-            ["glm", "openai-compatible"]
+            ["glm", "openrouter", "openai-compatible"]
         );
         assert!(
             choices
@@ -234,9 +287,48 @@ mod tests {
     }
 
     #[test]
+    fn openrouter_descriptor_fixes_the_reviewed_endpoint() {
+        let descriptor = provider_descriptors(&[KIND_OPENAI_COMPATIBLE])
+            .into_iter()
+            .find(|choice| choice.id == "openrouter")
+            .expect("OpenRouter descriptor");
+        assert_eq!(descriptor.provider, Some(OPENROUTER_PROVIDER));
+        assert_eq!(descriptor.endpoint, Some(OPENROUTER_ENDPOINT));
+        assert_eq!(descriptor.adapter, KIND_OPENAI_COMPATIBLE);
+        assert!(descriptor.models.is_empty());
+    }
+
+    #[test]
+    fn chatgpt_descriptor_is_fixed_experimental_and_versioned() {
+        let descriptor = provider_descriptors(&[KIND_CHATGPT_RESPONSES])
+            .into_iter()
+            .find(|choice| choice.id == CHATGPT_PROVIDER)
+            .expect("ChatGPT descriptor");
+        assert_eq!(descriptor.provider, Some(CHATGPT_PROVIDER));
+        assert_eq!(descriptor.endpoint, Some(CHATGPT_ENDPOINT));
+        assert_eq!(descriptor.adapter, KIND_CHATGPT_RESPONSES);
+        assert!(descriptor.credentials.is_empty());
+        assert!(descriptor.description.contains("unsupported"));
+        assert_eq!(descriptor.models, &[CHATGPT_TERRA]);
+        assert_eq!(
+            (
+                CHATGPT_TERRA.context_tokens,
+                CHATGPT_TERRA.max_input_tokens,
+                CHATGPT_TERRA.max_output_tokens,
+                CHATGPT_TERRA.request_output_tokens,
+            ),
+            (272_000, 255_616, 16_384, 16_384)
+        );
+    }
+
+    #[test]
     fn trusted_records_are_provider_scoped() {
         assert_eq!(trusted_model("zai", "glm-4.7"), Some(&GLM_4_7));
         assert_eq!(trusted_model("zai", "glm-5.2"), Some(&GLM_5_2));
+        assert_eq!(
+            trusted_model(CHATGPT_PROVIDER, CHATGPT_TERRA.model),
+            Some(&CHATGPT_TERRA)
+        );
         assert_eq!(trusted_model("other", "glm-4.7"), None);
     }
 }

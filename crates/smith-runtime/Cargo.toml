@@ -18,6 +18,8 @@ smith-config = { workspace = true }
 smith-host = { workspace = true }
 smith-tools = { workspace = true }
 async-trait = { workspace = true }
+async-stream = { workspace = true }
+base64 = { workspace = true }
 chacha20poly1305 = { workspace = true }
 dirs = { workspace = true }
 futures-core = { workspace = true }
@@ -32,6 +34,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+url = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]

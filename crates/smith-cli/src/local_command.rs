@@ -19,6 +19,12 @@ pub(super) async fn handle_local_command(
     command: CommandAction,
 ) {
     match command {
+        CommandAction::Connect(_) | CommandAction::Disconnect(_) => {
+            app.show_local_error(
+                "connect",
+                "connection commands must run at the safe session-rebuild boundary",
+            );
+        }
         CommandAction::Context => {
             app.show_local_result(
                 "context",
@@ -119,6 +125,16 @@ pub(super) async fn handle_local_command(
                 |error| format!("unavailable ({error})"),
                 |goal| goal.as_ref().map_or_else(|| "none".to_owned(), render_goal),
             );
+            let connections = if app.resources.disconnections.is_empty() {
+                "none".to_owned()
+            } else {
+                app.resources
+                    .disconnections
+                    .iter()
+                    .map(|entry| format!("{} ({})", entry.label, entry.detail))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
             app.show_local_result(
                 "status",
                 format!(
@@ -127,7 +143,7 @@ pub(super) async fn handle_local_command(
                      {reasoning}\n\
                      protected mid-turn recovery: {}\n\
                      {harness}\n{context}\nproject: {}\nGit: {}\n\
-                     goal: {goal}\nchildren: {}\nchange attribution: {}",
+                     goal: {goal}\nconnections: {connections}\nchildren: {}\nchange attribution: {}",
                     host.session().id(),
                     policy.agent_profile,
                     policy.agent_posture.as_str(),

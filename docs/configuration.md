@@ -240,6 +240,57 @@ checkpoints already exist under the selected session root, changing sources
 refuses before modifying config; retire or resume that state deliberately
 before choosing another key.
 
+## Runtime connections
+
+`/connect [PROVIDER]` and `/disconnect [PROVIDER]` are idle-only local TUI
+actions. They preserve the current Smith session and apply changes only after
+the direct runtime has shut down at its safe boundary. Reconnecting a declared
+provider changes only `providers.<name>.credential` or its user-only
+`api_key`; endpoint, model, limits, profiles, and defaults are not rewritten.
+Disconnect removes only those authentication leaves and rolls the config back
+if protected-credential cleanup fails.
+
+`openrouter` is a reviewed built-in connection descriptor with fixed provider
+identity, `openai-compatible` adapter, and
+`https://openrouter.ai/api/v1`. A fresh connection selects exact model limits
+from Smith's embedded/last-good OpenRouter catalog without network or provider
+I/O during the credential ceremony. Custom endpoints remain a `smith setup
+add-provider` operation.
+
+ChatGPT is a fixed experimental direct provider. `/connect chatgpt` writes only
+the trusted declaration below and stores the renewable bundle in the
+`chatgpt` entry of the fixed plaintext `~/.smith/auth.json` file:
+
+```toml
+[providers.chatgpt]
+kind = "chatgpt-responses"
+base_url = "https://chatgpt.com/backend-api/codex"
+credential = "authfile:chatgpt"
+
+[models."chatgpt/gpt-5.6-terra".reasoning]
+mandatory = true
+efforts = ["low", "medium", "high", "xhigh", "max", "ultra"]
+default_enabled = true
+default_effort = "medium"
+dialect = "openai-effort"
+```
+
+The endpoint, credential reference, OAuth issuer/client/scopes, callback ports,
+and account header are product constants; project layers cannot redirect them.
+Smith creates `~/.smith` as mode `0700` and `auth.json` as a regular mode `0600`
+file, uses a cross-process lock and atomic replacement, and refuses symlink,
+non-regular, malformed, or oversized storage. This avoids Keychain/Secret
+Service prompts but is not encryption at rest: same-user processes and backups
+can read or retain the tokens.
+
+Legacy `keychain:smith/chatgpt` entries are not read, migrated, or deleted.
+Reconnect from a session running another configured provider to create the new
+auth-file entry, then remove the legacy item manually if desired.
+Trusted metadata supplies a 272,000-token context window and Smith enforces a
+conservative 16,384-token output cap. The underlying subscription-token API is
+not a supported public OpenAI Platform contract. No Codex installation or auth
+cache is used.
+
 The selected `provider/model` must resolve exact `context_tokens`,
 `max_input_tokens`, and `max_output_tokens` from configured values, trusted
 embedded metadata, or a validated endpoint-bound catalog. Explicit fields win

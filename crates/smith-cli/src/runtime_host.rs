@@ -250,6 +250,33 @@ pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
         {
             InteractiveExit::Quit => return Ok(0),
             InteractiveExit::Reconfigure(command) => {
+                match &command {
+                    PaletteCommand::Connect(provider) => {
+                        resume = Some(current_session);
+                        frozen_catalog = None;
+                        let _completed = connection::connect(
+                            args.selection.clone(),
+                            provider,
+                            args.no_color,
+                            args.no_motion,
+                        )
+                        .await?;
+                        continue;
+                    }
+                    PaletteCommand::Disconnect(provider) => {
+                        let outcome = connection::disconnect(&args.selection, provider).await?;
+                        if outcome == connection::DisconnectOutcome::ActiveDirectProvider {
+                            println!(
+                                "The active provider was disconnected. The session is saved; restart Smith with a connected provider to resume it."
+                            );
+                            return Ok(0);
+                        }
+                        resume = Some(current_session);
+                        frozen_catalog = None;
+                        continue;
+                    }
+                    _ => {}
+                }
                 frozen_catalog = matches!(
                     &command,
                     PaletteCommand::Profile(_)
@@ -298,6 +325,9 @@ pub(super) fn apply_palette_command(
             selection.provider = Some(provider);
             selection.model = Some(model);
             *resume = Some(current_session);
+        }
+        PaletteCommand::Connect(_) | PaletteCommand::Disconnect(_) => {
+            unreachable!("connection commands are handled before selection reconfiguration")
         }
         PaletteCommand::Agent(agent) => {
             selection.agent = Some(agent);

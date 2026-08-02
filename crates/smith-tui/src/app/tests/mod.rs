@@ -50,6 +50,16 @@ mod tests {
                 "local",
                 "openai-compatible · 1 model",
             )],
+            connections: vec![
+                ResourceEntry::new("local", "local", "API key · connected"),
+                ResourceEntry::new("openrouter", "OpenRouter", "API key · available"),
+                ResourceEntry::new("chatgpt", "ChatGPT", "Smith OAuth · experimental"),
+            ],
+            disconnections: vec![ResourceEntry::new(
+                "local",
+                "local",
+                "API key · connected",
+            )],
             profiles: vec![ResourceEntry::new("work", "work", "local/model-2")],
             sessions: vec![ResourceEntry::new(
                 "session-7",

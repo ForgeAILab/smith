@@ -22,6 +22,7 @@
 //! Nothing here performs provider I/O; a configuration failure must be visible
 //! before a terminal is entered or a request is sent.
 
+pub mod auth_file;
 pub mod catalog;
 pub mod credential;
 pub mod inventory;

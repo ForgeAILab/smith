@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use agent_runtime_core::error::ErrorKind;
 use agent_runtime_core::store::{Secret, SecretStore};
+use smith_config::auth_file::{AuthFileBackend, OwnerOnlyAuthFile};
 use smith_config::credential::{
     CredentialEnroller, CredentialEnrollmentBackend, CredentialEnrollmentError, CredentialError,
     CredentialRef, CredentialRefError, CredentialResolver, Environment, Keychain, KeychainError,
@@ -34,6 +35,32 @@ const SECRET: &str = "sk-live-do-not-print-me";
 struct FakeKeychain {
     entries: BTreeMap<(String, String), String>,
     failure: Option<KeychainError>,
+}
+
+#[derive(Debug)]
+struct PanicsIfKeychainRead;
+
+impl Keychain for PanicsIfKeychainRead {
+    fn secret(&self, _service: &str, _account: &str) -> Result<Secret, KeychainError> {
+        panic!("an authfile reference must not query the keychain")
+    }
+}
+
+#[derive(Debug)]
+struct PanicsIfKeychainEnrolled;
+
+impl CredentialEnrollmentBackend for PanicsIfKeychainEnrolled {
+    fn prior(&self, _service: &str, _account: &str) -> Result<Option<Secret>, KeychainError> {
+        panic!("an authfile enrollment must not read the keychain")
+    }
+
+    fn store(&self, _service: &str, _account: &str, _secret: &Secret) -> Result<(), KeychainError> {
+        panic!("an authfile enrollment must not write the keychain")
+    }
+
+    fn remove(&self, _service: &str, _account: &str) -> Result<(), KeychainError> {
+        panic!("an authfile enrollment must not remove a keychain entry")
+    }
 }
 
 impl FakeKeychain {
@@ -180,6 +207,12 @@ fn every_reference_form_parses_into_its_backend_and_locator() {
         }
     );
     assert_eq!(
+        reference("authfile:chatgpt"),
+        CredentialRef::AuthFile {
+            entry: "chatgpt".to_owned(),
+        }
+    );
+    assert_eq!(
         reference("file:credentials/acme.enc"),
         CredentialRef::File {
             path: Path::new("credentials/acme.enc").to_path_buf(),
@@ -208,6 +241,8 @@ fn malformed_references_are_rejected_by_form() {
         ("keychain:smith/acme/extra", CredentialRefError::Keychain),
         ("env:", CredentialRefError::Env),
         ("env:NOT A NAME", CredentialRefError::Env),
+        ("authfile:", CredentialRefError::AuthFile),
+        ("authfile:../chatgpt", CredentialRefError::AuthFile),
         ("file:", CredentialRefError::File),
         ("file:/etc/passwd", CredentialRefError::File),
         ("file:../../etc/passwd", CredentialRefError::File),
@@ -292,6 +327,51 @@ fn a_keychain_reference_resolves_through_the_injected_credential_service() {
         .resolve_blocking(&reference("keychain:smith/acme"))
         .expect("resolved");
     assert_eq!(resolved.expose(), SECRET);
+}
+
+#[test]
+fn auth_file_enrollment_resolution_rollback_and_cleanup_never_touch_keychain() {
+    let parent = tempfile::tempdir().expect("temporary parent");
+    let root = parent.path().join("state");
+    let auth_file = Arc::new(OwnerOnlyAuthFile::new(&root));
+    auth_file
+        .store("other", &Secret::new("preserved-other-entry"))
+        .expect("seed unrelated entry");
+    let enroller =
+        CredentialEnroller::with_backends(Arc::new(PanicsIfKeychainEnrolled), auth_file.clone());
+    let reference = reference("authfile:chatgpt");
+
+    let first = enroller
+        .enroll(&reference, &Secret::new("first-bundle"))
+        .expect("fresh enrollment");
+    let replacement = enroller
+        .enroll(&reference, &Secret::new(SECRET))
+        .expect("replacement enrollment");
+    enroller.restore(replacement).expect("exact rollback");
+
+    let resolver = CredentialResolver::new(&root)
+        .with_keychain(Arc::new(PanicsIfKeychainRead))
+        .with_auth_file(auth_file.clone());
+    assert_eq!(
+        resolver
+            .resolve_blocking(&reference)
+            .expect("resolved bundle")
+            .expose(),
+        "first-bundle"
+    );
+    assert_eq!(
+        auth_file
+            .read("other")
+            .expect("read other")
+            .expect("other remains")
+            .expose(),
+        "preserved-other-entry"
+    );
+
+    enroller.restore(first).expect("restore original absence");
+    enroller.cleanup(&reference).expect("idempotent cleanup");
+    assert!(auth_file.read("chatgpt").expect("read absence").is_none());
+    assert!(auth_file.read("other").expect("read other").is_some());
 }
 
 // -- Setup enrollment -------------------------------------------------------

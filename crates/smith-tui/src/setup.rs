@@ -4,6 +4,7 @@
 //! Secret input stays in a private masked buffer and crosses the effect
 //! boundary only as Agent Runtime's redaction-safe [`Secret`] wrapper.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use agent_runtime_core::store::Secret;
@@ -25,6 +26,8 @@ pub enum SetupMode {
     Menu,
     /// Direct `smith setup add-provider`.
     AddProvider,
+    /// Built-in OpenRouter connection with fixed provider and endpoint.
+    OpenRouter,
     /// Direct `smith setup add-model`.
     AddModel {
         /// Preselected provider, or a picker when absent.
@@ -240,6 +243,7 @@ pub struct SetupApp {
     provider_actions: Vec<ResourceEntry>,
     provider_entries: Vec<ResourceEntry>,
     model_entries: Vec<ResourceEntry>,
+    catalog_model_limits: BTreeMap<String, SetupModelLimits>,
     action: Option<SetupAction>,
     provider: String,
     endpoint: String,
@@ -302,6 +306,7 @@ impl SetupApp {
             ],
             provider_entries,
             model_entries,
+            catalog_model_limits: BTreeMap::new(),
             action: None,
             provider: String::new(),
             endpoint: String::new(),
@@ -325,6 +330,12 @@ impl SetupApp {
             SetupMode::AddProvider => {
                 app.action = Some(SetupAction::AddProvider);
                 app.enter(Step::ProviderName, false);
+            }
+            SetupMode::OpenRouter => {
+                app.action = Some(SetupAction::AddProvider);
+                app.provider = "openrouter".into();
+                app.endpoint = "https://openrouter.ai/api/v1".into();
+                app.enter(Step::CredentialMethod, false);
             }
             SetupMode::AddModel {
                 provider: Some(provider),
@@ -358,6 +369,15 @@ impl SetupApp {
     #[must_use]
     pub fn with_provider_actions(mut self, actions: Vec<ResourceEntry>) -> Self {
         self.provider_actions = actions;
+        self.configure_picker();
+        self
+    }
+
+    /// Supplies reviewed catalog limits keyed by the exact model IDs shown by
+    /// a built-in provider picker.
+    #[must_use]
+    pub fn with_catalog_model_limits(mut self, limits: BTreeMap<String, SetupModelLimits>) -> Self {
+        self.catalog_model_limits = limits;
         self.configure_picker();
         self
     }
@@ -686,6 +706,12 @@ impl SetupApp {
                     self.action = Some(SetupAction::AddProvider);
                     self.enter(Step::ProviderName, true);
                 }
+                "openrouter" => {
+                    self.action = Some(SetupAction::AddProvider);
+                    self.provider = "openrouter".into();
+                    self.endpoint = "https://openrouter.ai/api/v1".into();
+                    self.enter(Step::CredentialMethod, true);
+                }
                 "add-model" => {
                     self.action = Some(SetupAction::AddModel);
                     self.enter(Step::ProviderChoice, true);
@@ -724,7 +750,18 @@ impl SetupApp {
                 _ => {}
             },
             Step::ModelChoice => {
-                if let Some((provider, model)) = id.split_once('/') {
+                if matches!(self.mode, SetupMode::OpenRouter) {
+                    let Some(limits) = self.catalog_model_limits.get(&id).copied() else {
+                        self.error =
+                            Some("the selected catalog model has no enforceable limits".to_owned());
+                        return;
+                    };
+                    self.model = id;
+                    self.context_tokens = Some(limits.context_tokens);
+                    self.max_input_tokens = Some(limits.max_input_tokens);
+                    self.max_output_tokens = Some(limits.max_output_tokens);
+                    self.enter(Step::DefaultChoice, true);
+                } else if let Some((provider, model)) = id.split_once('/') {
                     self.provider = provider.to_owned();
                     self.model = model.to_owned();
                     self.enter(Step::Review, true);
@@ -748,6 +785,9 @@ impl SetupApp {
     }
 
     fn after_credential_step(&self) -> Step {
+        if matches!(self.mode, SetupMode::OpenRouter) {
+            return Step::ModelChoice;
+        }
         if matches!(
             self.action,
             Some(SetupAction::QuickGlm | SetupAction::ChangeCredential)
@@ -1177,6 +1217,44 @@ mod tests {
                 allow_collisions: false,
             } if variable == "ZAI_API_KEY"
         ));
+    }
+
+    #[test]
+    fn openrouter_mode_fixes_identity_and_endpoint_before_authentication() {
+        let model = "openai/gpt-reviewed";
+        let limits = SetupModelLimits {
+            context_tokens: 128_000,
+            max_input_tokens: 120_000,
+            max_output_tokens: 8_000,
+        };
+        let mut app = SetupApp::new(
+            SetupMode::OpenRouter,
+            Vec::new(),
+            vec![ResourceEntry::new(
+                model,
+                "Reviewed model",
+                "catalog limits",
+            )],
+        )
+        .with_catalog_model_limits(BTreeMap::from([(model.to_owned(), limits)]));
+        assert_eq!(app.step, Step::CredentialMethod);
+        assert_eq!(app.provider, "openrouter");
+        assert_eq!(app.endpoint, "https://openrouter.ai/api/v1");
+
+        choose(&mut app, "environment");
+        for character in "OPENROUTER_API_KEY".chars() {
+            app.on_key(key(KeyCode::Char(character)));
+        }
+        app.on_key(key(KeyCode::Enter));
+        assert_eq!(app.step, Step::ModelChoice);
+        assert!(app.secret.is_empty());
+
+        choose(&mut app, model);
+        assert_eq!(app.step, Step::DefaultChoice);
+        assert_eq!(app.model, model);
+        assert_eq!(app.context_tokens, Some(limits.context_tokens));
+        assert_eq!(app.max_input_tokens, Some(limits.max_input_tokens));
+        assert_eq!(app.max_output_tokens, Some(limits.max_output_tokens));
     }
 
     #[test]

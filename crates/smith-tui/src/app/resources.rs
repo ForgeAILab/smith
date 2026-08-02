@@ -68,6 +68,8 @@ impl App {
         let title = match target {
             ResourceTarget::Model => "Choose model",
             ResourceTarget::Provider => "Choose provider",
+            ResourceTarget::Connect => "Connect provider",
+            ResourceTarget::Disconnect => "Disconnect provider",
             ResourceTarget::Profile => "Choose profile",
             ResourceTarget::Resume => "Resume session",
             ResourceTarget::Think => "Choose thinking state",
@@ -94,6 +96,14 @@ impl App {
             ResourceTarget::Provider => (
                 self.resources.providers.clone(),
                 "No provider is selectable · run smith setup add-provider",
+            ),
+            ResourceTarget::Connect => (
+                self.resources.connections.clone(),
+                "No supported provider connection is available",
+            ),
+            ResourceTarget::Disconnect => (
+                self.resources.disconnections.clone(),
+                "No provider is currently connected",
             ),
             ResourceTarget::Profile => (
                 self.resources.profiles.clone(),
@@ -181,6 +191,14 @@ impl App {
                         None
                     }
                 }
+            }
+            ResourceTarget::Connect => {
+                self.composer.clear();
+                Some(Action::Reconfigure(PaletteCommand::Connect(id)))
+            }
+            ResourceTarget::Disconnect => {
+                self.composer.clear();
+                Some(Action::Reconfigure(PaletteCommand::Disconnect(id)))
             }
             ResourceTarget::Profile => {
                 self.composer.clear();
@@ -407,6 +425,8 @@ impl App {
                 CommandAction::Resume(_) => "resume",
                 CommandAction::Profile(_) => "profile",
                 CommandAction::Provider(_) => "provider",
+                CommandAction::Connect(_) => "connect",
+                CommandAction::Disconnect(_) => "disconnect",
                 CommandAction::Model(_) => "model",
                 CommandAction::Think(_) => "think",
                 CommandAction::Effort(_) => "effort",
@@ -559,6 +579,48 @@ impl App {
                 } else {
                     self.transcript.push_error(format!(
                         "provider `{name}` is not locally selectable; run `smith setup add-provider`"
+                    ));
+                    None
+                }
+            }
+            CommandAction::Connect(None) => {
+                self.accept_composer_input();
+                self.open_target_picker(ResourceTarget::Connect, restore);
+                None
+            }
+            CommandAction::Connect(Some(name)) => {
+                let selectable = self
+                    .resources
+                    .connections
+                    .iter()
+                    .any(|entry| entry.id == name && entry.disabled_reason.is_none());
+                if selectable {
+                    self.accept_composer_input();
+                    self.apply_resource_selection(ResourceTarget::Connect, name, restore)
+                } else {
+                    self.transcript.push_error(format!(
+                        "connection `{name}` is unavailable; use `/connect` to choose"
+                    ));
+                    None
+                }
+            }
+            CommandAction::Disconnect(None) => {
+                self.accept_composer_input();
+                self.open_target_picker(ResourceTarget::Disconnect, restore);
+                None
+            }
+            CommandAction::Disconnect(Some(name)) => {
+                let selectable = self
+                    .resources
+                    .disconnections
+                    .iter()
+                    .any(|entry| entry.id == name && entry.disabled_reason.is_none());
+                if selectable {
+                    self.accept_composer_input();
+                    self.apply_resource_selection(ResourceTarget::Disconnect, name, restore)
+                } else {
+                    self.transcript.push_error(format!(
+                        "connection `{name}` is not active; use `/disconnect` to choose"
                     ));
                     None
                 }

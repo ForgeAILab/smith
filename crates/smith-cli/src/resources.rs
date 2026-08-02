@@ -71,6 +71,66 @@ pub(super) fn runtime_resources(
             }
         })
         .collect();
+    let mut connections = inventory
+        .providers
+        .iter()
+        .map(|provider| {
+            let authentication =
+                if provider.kind.as_deref() == Some(smith_config::model::KIND_CHATGPT_RESPONSES) {
+                    "Smith OAuth · experimental direct Responses"
+                } else {
+                    "API key"
+                };
+            let entry = ResourceEntry::new(
+                provider.name.clone(),
+                provider.name.clone(),
+                format!(
+                    "{authentication} · {} · {}",
+                    provider.kind.as_deref().unwrap_or("unknown adapter"),
+                    if provider.active {
+                        "active"
+                    } else {
+                        "configured"
+                    }
+                ),
+            )
+            .active(provider.active);
+            if provider.selectable {
+                entry
+            } else {
+                entry.disabled("configure an available adapter and at least one model first")
+            }
+        })
+        .collect::<Vec<_>>();
+    let disconnections = inventory
+        .providers
+        .iter()
+        .map(|provider| {
+            ResourceEntry::new(
+                provider.name.clone(),
+                provider.name.clone(),
+                format!(
+                    "remove only the configured authentication source · {}",
+                    provider.kind.as_deref().unwrap_or("unknown adapter")
+                ),
+            )
+            .active(provider.active)
+        })
+        .collect::<Vec<_>>();
+    if !connections.iter().any(|entry| entry.id == "openrouter") {
+        connections.push(ResourceEntry::new(
+            "openrouter",
+            "OpenRouter",
+            "API key · fixed OpenRouter endpoint · adds a reviewed model",
+        ));
+    }
+    if !connections.iter().any(|entry| entry.id == "chatgpt") {
+        connections.push(ResourceEntry::new(
+            "chatgpt",
+            "ChatGPT (experimental)",
+            "Smith OAuth · direct ChatGPT Responses · unsupported public API boundary",
+        ));
+    }
     let providers = inventory
         .providers
         .into_iter()
@@ -93,7 +153,7 @@ pub(super) fn runtime_resources(
                 entry.disabled("adapter unavailable or no model with enforceable limits")
             }
         })
-        .collect();
+        .collect::<Vec<_>>();
     let models = inventory
         .models
         .into_iter()
@@ -155,8 +215,7 @@ pub(super) fn runtime_resources(
                 None => entry.disabled("model is not locally selectable"),
             }
         })
-        .collect();
-
+        .collect::<Vec<_>>();
     let session_entries = session_resource_entries(sessions, Some(current_session));
     let files = workspace_file_entries(project, 4_096);
     let child_agents = profile_inventory
@@ -332,6 +391,8 @@ pub(super) fn runtime_resources(
     RuntimeResources {
         models,
         providers,
+        connections,
+        disconnections,
         profiles,
         sessions: session_entries,
         files,

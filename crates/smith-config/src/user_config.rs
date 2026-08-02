@@ -373,6 +373,95 @@ pub fn prepare_checkpoint_key_source_removal(
     })
 }
 
+/// Prepares removal of one provider's explicit credential source while
+/// preserving its endpoint, models, profiles, headers, and defaults.
+///
+/// This transaction never opens the credential service. The caller may use
+/// the prior typed configuration to remove a Keychain entry after publishing
+/// this edit, rolling the edit back if protected-storage cleanup fails.
+pub fn prepare_provider_credential_removal(
+    user_dir: impl AsRef<Path>,
+    provider: &str,
+) -> Result<PreparedConfigEdit, UserConfigEditError> {
+    let target = user_dir.as_ref().join(CONFIG_FILE);
+    let prior = match fs::read(&target) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(UserConfigEditError::Unreadable {
+                path: target,
+                message: error.to_string(),
+            });
+        }
+    };
+    let existing_text = match &prior {
+        Some(bytes) => std::str::from_utf8(bytes)
+            .map_err(|_| UserConfigEditError::InvalidExistingConfig {
+                path: target.clone(),
+            })?
+            .to_owned(),
+        None => String::new(),
+    };
+    let existing_file = ConfigFile::parse(&existing_text).map_err(|_| {
+        UserConfigEditError::InvalidExistingConfig {
+            path: target.clone(),
+        }
+    })?;
+    validate_safe_references(&existing_file).map_err(|_| {
+        UserConfigEditError::InvalidExistingConfig {
+            path: target.clone(),
+        }
+    })?;
+    let mut candidate = existing_text.parse::<DocumentMut>().map_err(|_| {
+        UserConfigEditError::InvalidExistingConfig {
+            path: target.clone(),
+        }
+    })?;
+    let mut changes = Vec::new();
+    let mut collisions = Vec::new();
+    if let Some(table) = candidate
+        .as_table_mut()
+        .get_mut("providers")
+        .and_then(Item::as_table_mut)
+        .and_then(|providers| providers.get_mut(provider))
+        .and_then(Item::as_table_mut)
+    {
+        for field in ["credential", "api_key"] {
+            let Some(previous_item) = table.remove(field) else {
+                continue;
+            };
+            let path = vec![
+                "providers".to_owned(),
+                provider.to_owned(),
+                field.to_owned(),
+            ];
+            let key = display_path(&path);
+            let previous = safe_render(&path, &previous_item);
+            changes.push(ConfigChange {
+                key: key.clone(),
+                previous: Some(previous.clone()),
+                proposed: "<disconnected>".to_owned(),
+            });
+            collisions.push(ConfigCollision {
+                key,
+                existing: previous,
+                proposed: "<disconnected>".to_owned(),
+            });
+        }
+    }
+    let candidate_text = candidate.to_string();
+    let candidate_file =
+        ConfigFile::parse(&candidate_text).map_err(|_| UserConfigEditError::InvalidCandidate)?;
+    validate_safe_references(&candidate_file)?;
+    Ok(PreparedConfigEdit {
+        target,
+        prior,
+        candidate: candidate_text.into_bytes(),
+        changes,
+        collisions,
+    })
+}
+
 /// Replacing a provider credential is intentionally different from an
 /// additive setup patch: the two source fields are mutually exclusive, so a
 /// reviewed new source removes the old alternative before the ordinary merge.
@@ -735,6 +824,34 @@ mod tests {
         assert!(stored.contains("# retained comment"), "{stored}");
         assert!(stored.contains("enabled = true"), "{stored}");
         assert!(!stored.contains("checkpoint_key"), "{stored}");
+        assert!(!stored.contains(KEY), "{stored}");
+    }
+
+    #[test]
+    fn provider_disconnect_removes_only_authentication_fields() {
+        const KEY: &str = "openrouter-key-canary";
+        let directory = tempfile::tempdir().expect("temporary config root");
+        let path = directory.path().join(CONFIG_FILE);
+        fs::write(
+            &path,
+            format!(
+                "# retained provider\n[providers.openrouter]\nkind = \"openai-compatible\"\nbase_url = \"https://openrouter.ai/api/v1\"\napi_key = \"{KEY}\"\n"
+            ),
+        )
+        .expect("seed config");
+
+        let prepared = prepare_provider_credential_removal(directory.path(), "openrouter")
+            .expect("prepared disconnect");
+        let preview = prepared.preview();
+        assert!(preview.contains("[redacted]"), "{preview}");
+        assert!(preview.contains("<disconnected>"), "{preview}");
+        assert!(!preview.contains(KEY), "{preview}");
+        prepared.commit(true).expect("commit").accept();
+
+        let stored = fs::read_to_string(path).expect("stored config");
+        assert!(stored.contains("# retained provider"), "{stored}");
+        assert!(stored.contains("https://openrouter.ai/api/v1"), "{stored}");
+        assert!(!stored.contains("api_key"), "{stored}");
         assert!(!stored.contains(KEY), "{stored}");
     }
 }

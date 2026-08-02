@@ -634,6 +634,9 @@ pub const KIND_OPENAI_COMPATIBLE: &str = "openai-compatible";
 /// The adapter kind for the native Anthropic Messages API.
 pub const KIND_ANTHROPIC_MESSAGES: &str = "anthropic-messages";
 
+/// Smith's experimental direct ChatGPT Codex Responses adapter.
+pub const KIND_CHATGPT_RESPONSES: &str = "chatgpt-responses";
+
 /// The endpoint an `anthropic-messages` provider uses when none is configured.
 pub const ANTHROPIC_DEFAULT_ENDPOINT: &str = "https://api.anthropic.com/v1";
 

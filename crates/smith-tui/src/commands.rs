@@ -15,6 +15,10 @@ pub enum CommandAction {
     Profile(Option<String>),
     /// Select a provider.
     Provider(Option<String>),
+    /// Connect or reconnect a provider/backend.
+    Connect(Option<String>),
+    /// Disconnect a provider/backend.
+    Disconnect(Option<String>),
     /// Select a model.
     Model(Option<String>),
     /// Select an explicit thinking state or the provider default.
@@ -140,6 +144,20 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "resume",
         argument_hint: "[ID]",
         description: "resume a saved session",
+        requires_idle: true,
+        advanced: false,
+    },
+    CommandSpec {
+        name: "connect",
+        argument_hint: "[PROVIDER]",
+        description: "connect or reconnect a provider",
+        requires_idle: true,
+        advanced: false,
+    },
+    CommandSpec {
+        name: "disconnect",
+        argument_hint: "[PROVIDER]",
+        description: "disconnect a provider",
         requires_idle: true,
         advanced: false,
     },
@@ -290,6 +308,8 @@ pub fn parse(input: &str) -> Result<CommandAction, String> {
         "resume" => CommandAction::Resume(argument),
         "profile" => CommandAction::Profile(argument),
         "provider" => CommandAction::Provider(argument),
+        "connect" => CommandAction::Connect(argument),
+        "disconnect" => CommandAction::Disconnect(argument),
         "model" => CommandAction::Model(argument),
         "think" => CommandAction::Think(argument),
         "effort" => CommandAction::Effort(argument),
@@ -413,6 +433,14 @@ mod tests {
         );
         assert_eq!(parse("/context").expect("context"), CommandAction::Context);
         assert_eq!(parse("/model").expect("picker"), CommandAction::Model(None));
+        assert_eq!(
+            parse("/connect openrouter").expect("connection"),
+            CommandAction::Connect(Some("openrouter".into()))
+        );
+        assert_eq!(
+            parse("/disconnect").expect("disconnect picker"),
+            CommandAction::Disconnect(None)
+        );
         assert_eq!(
             parse("/think off").expect("thinking state"),
             CommandAction::Think(Some("off".into()))

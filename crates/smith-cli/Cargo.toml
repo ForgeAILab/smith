@@ -28,6 +28,7 @@ ignore = { workspace = true }
 ratatui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 smith-config = { workspace = true }
 smith-host = { workspace = true }
 smith-runtime = { workspace = true }
@@ -36,6 +37,8 @@ smith-tui = { workspace = true }
 time = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]

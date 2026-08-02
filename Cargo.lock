@@ -2782,6 +2782,7 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
+ "sha2",
  "smith-config",
  "smith-host",
  "smith-runtime",
@@ -2792,6 +2793,8 @@ dependencies = [
  "time",
  "tokio",
  "toml",
+ "url",
+ "uuid",
  "zeroize",
 ]
 
@@ -2836,7 +2839,9 @@ dependencies = [
  "agent-runtime",
  "agent-runtime-core",
  "agent-runtime-testkit",
+ "async-stream",
  "async-trait",
+ "base64",
  "chacha20poly1305",
  "dirs",
  "futures-core",
@@ -2855,6 +2860,7 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+ "url",
  "uuid",
  "zeroize",
 ]

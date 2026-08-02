@@ -5,8 +5,10 @@
 //! [`smith_runtime::host`]. Presentation begins only after that preflight and
 //! the session restore have succeeded.
 
+mod chatgpt;
 mod cli;
 mod config_command;
+mod connection;
 mod headless;
 mod interaction;
 mod local_command;

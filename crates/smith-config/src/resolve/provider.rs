@@ -4,8 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use crate::model::{
-    ApprovalMode, BackgroundExit, KIND_ANTHROPIC_MESSAGES, KIND_FAKE, KIND_OPENAI_COMPATIBLE,
-    ReasoningDialect, ReasoningOnlyBehavior,
+    ApprovalMode, BackgroundExit, KIND_ANTHROPIC_MESSAGES, KIND_CHATGPT_RESPONSES, KIND_FAKE,
+    KIND_OPENAI_COMPATIBLE, ReasoningDialect, ReasoningOnlyBehavior,
 };
 use agent_runtime_core::store::Secret;
 
@@ -100,7 +100,7 @@ pub(super) fn validate_provider(provider: &ResolvedProvider) -> Result<(), Confi
     }
     if !matches!(
         provider.kind.value.as_str(),
-        KIND_OPENAI_COMPATIBLE | KIND_ANTHROPIC_MESSAGES
+        KIND_OPENAI_COMPATIBLE | KIND_ANTHROPIC_MESSAGES | KIND_CHATGPT_RESPONSES
     ) && let Some(policy) = &provider.response.reasoning_only
     {
         return Err(ConfigError::IncompatibleOption {
@@ -126,6 +126,41 @@ pub(super) fn validate_provider(provider: &ResolvedProvider) -> Result<(), Confi
         // optional and defaults at provider construction; everything else a
         // provider table carries (credential, headers) applies unchanged.
         KIND_ANTHROPIC_MESSAGES => {}
+        KIND_CHATGPT_RESPONSES => {
+            let expected_endpoint = crate::setup::CHATGPT_ENDPOINT;
+            if provider.base_url.as_ref().map(|value| value.value.as_str())
+                != Some(expected_endpoint)
+            {
+                let source = provider.base_url.as_ref().map_or_else(
+                    || provider.kind.source.clone(),
+                    |value| value.source.clone(),
+                );
+                return Err(ConfigError::InvalidValue {
+                    source,
+                    message:
+                        "the experimental ChatGPT provider uses Smith's fixed trusted endpoint"
+                            .to_owned(),
+                });
+            }
+            if provider
+                .credential
+                .as_ref()
+                .map(|value| value.value.as_str())
+                != Some(crate::setup::CHATGPT_CREDENTIAL)
+                || provider.api_key.is_some()
+                || !provider.headers.is_empty()
+            {
+                let source = provider.credential.as_ref().map_or_else(
+                    || provider.kind.source.clone(),
+                    |value| value.source.clone(),
+                );
+                return Err(ConfigError::InvalidValue {
+                    source,
+                    message: "the experimental ChatGPT provider requires Smith OAuth at `authfile:chatgpt`"
+                        .to_owned(),
+                });
+            }
+        }
         KIND_FAKE => {
             for (source, option) in [
                 (provider.base_url.as_ref(), "base_url"),

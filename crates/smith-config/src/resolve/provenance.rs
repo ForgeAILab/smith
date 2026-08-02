@@ -27,7 +27,7 @@ pub const ENV_PREFIX: &str = "SMITH_";
 ///
 /// Each names a place a secret can be *fetched from*. A value with no scheme
 /// is treated as an inline key and refused.
-pub const CREDENTIAL_SCHEMES: &[&str] = &["keychain", "env", "file"];
+pub const CREDENTIAL_SCHEMES: &[&str] = &["keychain", "authfile", "env", "file"];
 
 /// Header names that carry authorization and must never be written inline.
 pub(super) const AUTH_HEADERS: &[&str] = &[

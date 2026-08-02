@@ -347,7 +347,7 @@ fn require_interactive_terminal() -> Result<()> {
     }
 }
 
-async fn run_surface(
+pub(crate) async fn run_surface(
     selection: Selection,
     mode: SetupMode,
     no_color: bool,
@@ -355,7 +355,11 @@ async fn run_surface(
 ) -> Result<SetupOutcome> {
     let context = setup_context(selection, &mode)?;
     let providers = provider_entries(&context.inventory);
-    let models = model_entries(&context.inventory);
+    let (models, catalog_model_limits) = if matches!(mode, SetupMode::OpenRouter) {
+        openrouter_model_entries(&context).await?
+    } else {
+        (model_entries(&context.inventory), BTreeMap::new())
+    };
     let provider_actions = provider_action_entries();
     if matches!(mode, SetupMode::AddProvider)
         && !provider_actions
@@ -381,6 +385,7 @@ async fn run_surface(
 
     let mut app = SetupApp::new(mode, providers, models)
         .with_provider_actions(provider_actions)
+        .with_catalog_model_limits(catalog_model_limits)
         .with_destination(context.user_dir.join("config.toml").display().to_string());
     let mut terminal = terminal::enter().context("entering guided setup")?;
     let mut theme = Theme::from_env();
@@ -432,6 +437,59 @@ async fn run_surface(
             _ => {}
         }
     }
+}
+
+async fn openrouter_model_entries(
+    context: &SetupContext,
+) -> Result<(Vec<ResourceEntry>, BTreeMap<String, SetupModelLimits>)> {
+    let catalog = smith_runtime::model_catalog::CatalogLoader::production(&context.user_dir)
+        .map_err(|error| anyhow::anyhow!(error))
+        .context("preparing the OpenRouter model catalog")?
+        // Connection setup consumes only the embedded/last-good reviewed
+        // snapshot. It must not make a provider or catalog network request
+        // while the user is handling a credential.
+        .prepare(false)
+        .await
+        .map_err(|error| anyhow::anyhow!(error))
+        .context("loading the OpenRouter model catalog")?;
+    let provider = catalog
+        .snapshot
+        .provider(smith_config::catalog::OPENROUTER_CATALOG_PROVIDER)
+        .context("the Smith model catalog has no OpenRouter descriptor")?;
+    let mut limits_by_model = BTreeMap::new();
+    let mut entries = Vec::new();
+    for model in provider.models.values().filter(|model| {
+        model.disabled_reason.is_none()
+            && model.tool_call
+            && model.has_text_output()
+            && model.limits.is_some()
+    }) {
+        let limits = model.limits.expect("the model was filtered for limits");
+        limits_by_model.insert(
+            model.id.clone(),
+            SetupModelLimits {
+                context_tokens: limits.context_tokens,
+                max_input_tokens: limits.max_input_tokens,
+                max_output_tokens: limits.max_output_tokens,
+            },
+        );
+        entries.push(ResourceEntry::new(
+            model.id.clone(),
+            model.name.clone(),
+            format!(
+                "{} · ctx {} · input {} · output {}{}",
+                model.id,
+                limits.context_tokens,
+                limits.max_input_tokens,
+                limits.max_output_tokens,
+                if model.reasoning { " · reasoning" } else { "" }
+            ),
+        ));
+    }
+    if entries.is_empty() {
+        anyhow::bail!("the OpenRouter model catalog has no tool-capable text model with limits");
+    }
+    Ok((entries, limits_by_model))
 }
 
 fn provider_action_entries() -> Vec<ResourceEntry> {

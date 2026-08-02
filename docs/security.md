@@ -110,6 +110,35 @@ Redaction is defense in depth, not permission to put secrets in observability.
 Low-entropy argument fingerprints can confirm a guess and are correlation
 metadata, not cryptographic secrecy.
 
+ChatGPT subscription authentication is an explicitly experimental Smith-owned
+integration. Browser login uses PKCE S256, an allow-listed localhost callback,
+and exact state validation; device login uses the fixed issuer endpoints and a
+bounded poll. Verifiers, callback queries, and authorization codes stay in
+memory and are zeroized. Smith stores the access token, rotating refresh token,
+expiry, and account ID as one versioned secret in the `chatgpt` entry of the
+fixed plaintext `~/.smith/auth.json`. Smith constrains `~/.smith` to mode `0700`
+and `auth.json` to mode `0600`, serializes writers, fsyncs atomic replacements,
+and refuses symlink, non-regular, malformed, or oversized storage. These mode
+bits do not protect against same-user processes or backups. Project
+configuration cannot redirect the issuer, client, callback, endpoint, account
+header, entry, or storage location. ChatGPT connect, resolution, refresh,
+reconnect, and disconnect do not access Keychain or Secret Service, and Smith
+does not read or delete the legacy `keychain:smith/chatgpt` entry.
+
+The direct Responses adapter exposes only fixed authentication/protocol
+classifications. Token values, refresh material, account IDs, callback data,
+raw OAuth bodies, and raw provider error bodies are absent from errors, events,
+render state, transcripts, snapshots, and logs. Acquired and rotated tokens are
+registered with the persistence redactor. A current-revision 401 may trigger
+one pre-output refresh replay; a stale rejection, second rejection, partial
+stream, cancellation, or deadline expiry cannot loop or replay.
+
+This endpoint is not a supported public OpenAI Platform API contract. Smith
+does not launch Codex, import Codex/OpenCode caches, or represent subscription
+tokens as Platform API keys. The normal Smith runtime remains the execution
+owner for tools, approvals, checkpoints, goals, persistence, attachments,
+steering, cancellation, and usage.
+
 ## Persistence and recovery attacks
 
 Ordinary snapshots and journals are owner-only/redacted but may contain

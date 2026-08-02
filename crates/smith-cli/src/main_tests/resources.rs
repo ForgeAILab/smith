@@ -84,4 +84,13 @@ output_reserve = 4096
                 .as_deref()
                 .is_some_and(|reason| reason.contains("tool"))
         );
+        assert!(resources.connections.iter().any(|entry| {
+            entry.id == "chatgpt"
+                && entry.detail.contains("Smith OAuth")
+                && entry.detail.contains("direct ChatGPT Responses")
+                && !entry.active
+        }));
+        assert!(!resources.providers.iter().any(|entry| entry.id == "chatgpt"));
+        assert!(!resources.models.iter().any(|entry| entry.id.starts_with("chatgpt/")));
+        assert!(!resources.disconnections.iter().any(|entry| entry.id == "chatgpt"));
     }

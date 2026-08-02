@@ -6,10 +6,11 @@
 //! [`Secret`], which redacts itself in `Debug`, `Display`, and therefore in
 //! every event, log line, and diagnostic that formats it.
 //!
-//! Three reference forms, in the order a user should reach for them:
+//! Four reference forms, in the order a user should reach for them:
 //!
 //! ```text
 //! keychain:<service>/<account>   macOS Keychain, Linux Secret Service
+//! authfile:<entry>               Smith's owner-only plaintext auth.json
 //! env:<VAR>                      a process environment variable
 //! file:<path>                    encrypted file under ~/.smith, externally keyed
 //! ```
@@ -55,6 +56,8 @@ use agent_runtime_core::store::{Secret, SecretStore};
 use async_trait::async_trait;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::auth_file::{AuthFileBackend, AuthFileError, OwnerOnlyAuthFile};
+
 /// Smith's user state root — `~/.smith`.
 ///
 /// Sessions, trust decisions, monitor output, and credential material live
@@ -79,6 +82,11 @@ pub enum CredentialRef {
         service: String,
         /// The account within that service.
         account: String,
+    },
+    /// An entry in Smith's fixed owner-only plaintext `auth.json`.
+    AuthFile {
+        /// Stable product-owned entry name.
+        entry: String,
     },
     /// A process environment variable.
     Env {
@@ -117,6 +125,14 @@ impl CredentialRef {
                 Ok(Self::Keychain {
                     service: service.to_owned(),
                     account: account.to_owned(),
+                })
+            }
+            "authfile" => {
+                if !is_auth_file_entry(locator) {
+                    return Err(CredentialRefError::AuthFile);
+                }
+                Ok(Self::AuthFile {
+                    entry: locator.to_owned(),
                 })
             }
             "env" => {
@@ -158,10 +174,19 @@ fn is_variable_name(name: &str) -> bool {
             .all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
+fn is_auth_file_entry(entry: &str) -> bool {
+    !entry.is_empty()
+        && entry.len() <= 64
+        && entry
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "_-".contains(character))
+}
+
 impl fmt::Display for CredentialRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Keychain { service, account } => write!(f, "keychain:{service}/{account}"),
+            Self::AuthFile { entry } => write!(f, "authfile:{entry}"),
             Self::Env { variable } => write!(f, "env:{variable}"),
             Self::File { path } => write!(f, "file:{}", path.display()),
         }
@@ -200,15 +225,18 @@ pub enum CredentialRefError {
     /// reference.
     #[error(
         "a credential must be a reference, not a key: write \
-         `keychain:<service>/<account>`, `env:<VAR>`, or `file:<path>`"
+         `keychain:<service>/<account>`, `authfile:<entry>`, `env:<VAR>`, or `file:<path>`"
     )]
     Unprefixed,
     /// The prefix is not one Smith knows.
-    #[error("unknown credential scheme: expected `keychain:`, `env:`, or `file:`")]
+    #[error("unknown credential scheme: expected `keychain:`, `authfile:`, `env:`, or `file:`")]
     UnknownScheme,
     /// A `keychain:` reference does not name one service and one account.
     #[error("a keychain credential must be written `keychain:<service>/<account>`")]
     Keychain,
+    /// An `authfile:` reference does not name a bounded product entry.
+    #[error("an auth-file credential must name a product entry, as `authfile:chatgpt`")]
+    AuthFile,
     /// An `env:` reference does not name a variable.
     #[error("an environment credential must name a variable, as `env:ACME_API_KEY`")]
     Env,
@@ -340,23 +368,44 @@ impl fmt::Debug for EnrollmentReceipt {
 /// Injectable, reversible setup-time credential enrollment.
 #[derive(Clone)]
 pub struct CredentialEnroller {
-    backend: Arc<dyn CredentialEnrollmentBackend>,
+    keychain: Arc<dyn CredentialEnrollmentBackend>,
+    auth_file: Arc<dyn AuthFileBackend>,
 }
 
 impl CredentialEnroller {
-    /// Uses the operating-system credential service.
+    /// Uses the operating-system credential service for `keychain:` and
+    /// Smith's fixed owner-only file for `authfile:`.
     pub fn new() -> Self {
         Self {
-            backend: Arc::new(OsCredentialEnrollmentBackend),
+            keychain: Arc::new(OsCredentialEnrollmentBackend),
+            auth_file: Arc::new(OwnerOnlyAuthFile::discover()),
         }
     }
 
-    /// Uses an injected backend.
+    /// Uses an injected keychain backend and the production auth-file backend.
+    /// Existing API-key tests use this without touching the auth-file path.
     pub fn with_backend(backend: Arc<dyn CredentialEnrollmentBackend>) -> Self {
-        Self { backend }
+        Self {
+            keychain: backend,
+            auth_file: Arc::new(OwnerOnlyAuthFile::discover()),
+        }
     }
 
-    /// Stores `secret` at a reviewed keychain reference.
+    /// Uses injected keychain and auth-file backends.
+    ///
+    /// This is the lifecycle-test seam that proves ChatGPT never calls the
+    /// keychain backend.
+    pub fn with_backends(
+        keychain: Arc<dyn CredentialEnrollmentBackend>,
+        auth_file: Arc<dyn AuthFileBackend>,
+    ) -> Self {
+        Self {
+            keychain,
+            auth_file,
+        }
+    }
+
+    /// Stores `secret` at a reviewed Smith-managed reference.
     ///
     /// Environment references are configuration-only and are never read or
     /// copied by enrollment.
@@ -365,25 +414,39 @@ impl CredentialEnroller {
         reference: &CredentialRef,
         secret: &Secret,
     ) -> Result<EnrollmentReceipt, CredentialEnrollmentError> {
-        let CredentialRef::Keychain { service, account } = reference else {
-            return Err(CredentialEnrollmentError::NotStored {
-                reference: reference.clone(),
-            });
-        };
-        let prior = self.backend.prior(service, account).map_err(|cause| {
-            CredentialEnrollmentError::Backend {
-                reference: reference.clone(),
-                operation: EnrollmentOperation::ReadPrior,
-                cause,
+        let prior = match reference {
+            CredentialRef::Keychain { service, account } => {
+                let prior = self.keychain.prior(service, account).map_err(|cause| {
+                    CredentialEnrollmentError::Backend {
+                        reference: reference.clone(),
+                        operation: EnrollmentOperation::ReadPrior,
+                        cause,
+                    }
+                })?;
+                self.keychain
+                    .store(service, account, secret)
+                    .map_err(|cause| CredentialEnrollmentError::Backend {
+                        reference: reference.clone(),
+                        operation: EnrollmentOperation::Store,
+                        cause,
+                    })?;
+                prior
             }
-        })?;
-        self.backend
-            .store(service, account, secret)
-            .map_err(|cause| CredentialEnrollmentError::Backend {
-                reference: reference.clone(),
-                operation: EnrollmentOperation::Store,
-                cause,
-            })?;
+            CredentialRef::AuthFile { entry } => {
+                self.auth_file.replace(entry, secret).map_err(|cause| {
+                    CredentialEnrollmentError::AuthFile {
+                        reference: reference.clone(),
+                        operation: EnrollmentOperation::Store,
+                        cause,
+                    }
+                })?
+            }
+            CredentialRef::Env { .. } | CredentialRef::File { .. } => {
+                return Err(CredentialEnrollmentError::NotStored {
+                    reference: reference.clone(),
+                });
+            }
+        };
         Ok(EnrollmentReceipt {
             reference: reference.clone(),
             prior,
@@ -392,37 +455,60 @@ impl CredentialEnroller {
 
     /// Restores the value captured before [`Self::enroll`].
     pub fn restore(&self, receipt: EnrollmentReceipt) -> Result<(), CredentialEnrollmentError> {
-        let CredentialRef::Keychain { service, account } = &receipt.reference else {
-            return Err(CredentialEnrollmentError::NotStored {
+        match &receipt.reference {
+            CredentialRef::Keychain { service, account } => match &receipt.prior {
+                Some(prior) => self.keychain.store(service, account, prior),
+                None => self.keychain.remove(service, account),
+            }
+            .map_err(|cause| CredentialEnrollmentError::Backend {
                 reference: receipt.reference,
-            });
-        };
-        match &receipt.prior {
-            Some(prior) => self.backend.store(service, account, prior),
-            None => self.backend.remove(service, account),
+                operation: EnrollmentOperation::Restore,
+                cause,
+            }),
+            CredentialRef::AuthFile { entry } => match &receipt.prior {
+                Some(prior) => self.auth_file.store(entry, prior),
+                None => self.auth_file.remove(entry),
+            }
+            .map_err(|cause| CredentialEnrollmentError::AuthFile {
+                reference: receipt.reference,
+                operation: EnrollmentOperation::Restore,
+                cause,
+            }),
+            CredentialRef::Env { .. } | CredentialRef::File { .. } => {
+                Err(CredentialEnrollmentError::NotStored {
+                    reference: receipt.reference,
+                })
+            }
         }
-        .map_err(|cause| CredentialEnrollmentError::Backend {
-            reference: receipt.reference,
-            operation: EnrollmentOperation::Restore,
-            cause,
-        })
     }
 
     /// Removes an entry created for an abandoned setup when no receipt is
     /// available to restore.
     pub fn cleanup(&self, reference: &CredentialRef) -> Result<(), CredentialEnrollmentError> {
-        let CredentialRef::Keychain { service, account } = reference else {
-            return Err(CredentialEnrollmentError::NotStored {
-                reference: reference.clone(),
-            });
-        };
-        self.backend
-            .remove(service, account)
-            .map_err(|cause| CredentialEnrollmentError::Backend {
-                reference: reference.clone(),
-                operation: EnrollmentOperation::Cleanup,
-                cause,
-            })
+        match reference {
+            CredentialRef::Keychain { service, account } => self
+                .keychain
+                .remove(service, account)
+                .map_err(|cause| CredentialEnrollmentError::Backend {
+                    reference: reference.clone(),
+                    operation: EnrollmentOperation::Cleanup,
+                    cause,
+                }),
+            CredentialRef::AuthFile { entry } => {
+                self.auth_file
+                    .remove(entry)
+                    .map_err(|cause| CredentialEnrollmentError::AuthFile {
+                        reference: reference.clone(),
+                        operation: EnrollmentOperation::Cleanup,
+                        cause,
+                    })
+            }
+            CredentialRef::Env { .. } | CredentialRef::File { .. } => {
+                Err(CredentialEnrollmentError::NotStored {
+                    reference: reference.clone(),
+                })
+            }
+        }
     }
 }
 
@@ -470,7 +556,7 @@ pub enum CredentialEnrollmentError {
     /// The selected reference is managed externally rather than stored.
     #[error(
         "`{reference}` is externally managed; enrollment stores only \
-         `keychain:<service>/<account>` references"
+         `keychain:<service>/<account>` and `authfile:<entry>` references"
     )]
     NotStored {
         /// Reviewed reference.
@@ -485,6 +571,16 @@ pub enum CredentialEnrollmentError {
         operation: EnrollmentOperation,
         /// Classified service failure.
         cause: KeychainError,
+    },
+    /// Smith's owner-only auth file failed.
+    #[error("could not {operation} at `{reference}`: {cause}")]
+    AuthFile {
+        /// Reviewed reference.
+        reference: CredentialRef,
+        /// Operation that failed.
+        operation: EnrollmentOperation,
+        /// Fixed auth-file failure classification.
+        cause: AuthFileError,
     },
 }
 
@@ -561,6 +657,7 @@ impl Environment for ProcessEnvironment {
 #[derive(Clone)]
 pub struct CredentialResolver {
     keychain: Arc<dyn Keychain>,
+    auth_file: Arc<dyn AuthFileBackend>,
     environment: Arc<dyn Environment>,
     user_state: PathBuf,
 }
@@ -569,10 +666,12 @@ impl CredentialResolver {
     /// Resolves against the platform credential service and the process
     /// environment, confining the encrypted-file fallback to `user_state`.
     pub fn new(user_state: impl Into<PathBuf>) -> Self {
+        let user_state = user_state.into();
         Self {
             keychain: Arc::new(OsKeychain),
+            auth_file: Arc::new(OwnerOnlyAuthFile::new(&user_state)),
             environment: Arc::new(ProcessEnvironment),
-            user_state: user_state.into(),
+            user_state,
         }
     }
 
@@ -589,6 +688,13 @@ impl CredentialResolver {
     #[must_use]
     pub fn with_keychain(mut self, keychain: Arc<dyn Keychain>) -> Self {
         self.keychain = keychain;
+        self
+    }
+
+    /// Replaces Smith's owner-only auth-file backend.
+    #[must_use]
+    pub fn with_auth_file(mut self, auth_file: Arc<dyn AuthFileBackend>) -> Self {
+        self.auth_file = auth_file;
         self
     }
 
@@ -627,6 +733,16 @@ impl CredentialResolver {
                         reference: reference.clone(),
                         cause,
                     },
+                }),
+            CredentialRef::AuthFile { entry } => self
+                .auth_file
+                .read(entry)
+                .map_err(|cause| CredentialError::AuthFileBackend {
+                    reference: reference.clone(),
+                    cause,
+                })?
+                .ok_or_else(|| CredentialError::Missing {
+                    reference: reference.clone(),
                 }),
             CredentialRef::Env { variable } => {
                 self.environment
@@ -756,6 +872,14 @@ pub enum CredentialError {
         /// What the credential service reported.
         cause: KeychainError,
     },
+    /// Smith's owner-only auth file could not answer.
+    #[error("`{reference}` could not be read: {cause}")]
+    AuthFileBackend {
+        /// The reference that could not be read.
+        reference: CredentialRef,
+        /// Fixed auth-file failure classification.
+        cause: AuthFileError,
+    },
     /// The reference points outside the user state root.
     #[error("`{reference}` resolves outside `{root}`: credential material never lives elsewhere")]
     OutsideUserState {
@@ -823,6 +947,7 @@ mod tests {
     fn a_reference_round_trips_through_its_configured_text() {
         for text in [
             "keychain:smith/acme",
+            "authfile:chatgpt",
             "env:ACME_API_KEY",
             "file:credentials/acme.enc",
         ] {
@@ -878,6 +1003,22 @@ mod tests {
         assert!(CredentialRef::parse("env:ACME_API_KEY").is_ok());
         for rejected in ["env:", "env:1KEY", "env:ACME KEY", "env:ACME-KEY"] {
             assert_eq!(CredentialRef::parse(rejected), Err(CredentialRefError::Env));
+        }
+    }
+
+    #[test]
+    fn an_auth_file_reference_takes_a_bounded_product_entry() {
+        assert_eq!(
+            CredentialRef::parse("authfile:chatgpt"),
+            Ok(CredentialRef::AuthFile {
+                entry: "chatgpt".to_owned(),
+            })
+        );
+        for rejected in ["authfile:", "authfile:../chatgpt", "authfile:chat/gpt"] {
+            assert_eq!(
+                CredentialRef::parse(rejected),
+                Err(CredentialRefError::AuthFile)
+            );
         }
     }
 

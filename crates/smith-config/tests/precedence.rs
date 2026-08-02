@@ -576,7 +576,12 @@ credential = "{value}"
         }
     }
 
-    for value in ["keychain:smith/acme", "env:ACME_API_KEY", "file:/keys/acme"] {
+    for value in [
+        "keychain:smith/acme",
+        "authfile:chatgpt",
+        "env:ACME_API_KEY",
+        "file:/keys/acme",
+    ] {
         let resolution = resolve_project(&format!(
             r#"
 default_profile = "work"

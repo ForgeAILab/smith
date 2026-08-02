@@ -13,8 +13,8 @@ use crate::credential::CredentialRef;
 #[cfg(test)]
 use crate::model::ReasoningOnlyBehavior;
 use crate::model::{
-    AgentPosture, ConfigFile, KIND_OPENAI_COMPATIBLE, ModelSection, ProfileUse,
-    ProviderResponseSection, ProviderSection,
+    AgentPosture, ConfigFile, KIND_CHATGPT_RESPONSES, KIND_OPENAI_COMPATIBLE, ModelSection,
+    ProfileUse, ProviderResponseSection, ProviderSection,
 };
 use crate::resolve::{ConfigError, Position, Resolution, Source};
 use crate::setup::trusted_model;
@@ -533,7 +533,8 @@ fn provider_is_selectable(section: &ProviderSection, available: &BTreeSet<&str>)
         return false;
     };
     if !available.contains(kind)
-        || kind == KIND_OPENAI_COMPATIBLE && section.base_url.is_none()
+        || matches!(kind, KIND_OPENAI_COMPATIBLE | KIND_CHATGPT_RESPONSES)
+            && section.base_url.is_none()
         || section
             .credential
             .as_deref()

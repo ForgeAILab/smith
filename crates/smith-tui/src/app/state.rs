@@ -261,6 +261,10 @@ pub enum PaletteCommand {
         /// Provider model ID.
         model: String,
     },
+    /// Open the reviewed connection ceremony for a provider or backend.
+    Connect(String),
+    /// Remove one provider or backend authentication source.
+    Disconnect(String),
     /// Select a deprecated legacy root mode at a safe session boundary.
     Agent(String),
     /// Select an explicit thinking state; `None` restores provider behavior.
@@ -276,6 +280,10 @@ pub struct RuntimeResources {
     pub models: Vec<ResourceEntry>,
     /// Configured providers.
     pub providers: Vec<ResourceEntry>,
+    /// Providers available to connect.
+    pub connections: Vec<ResourceEntry>,
+    /// Currently configured providers.
+    pub disconnections: Vec<ResourceEntry>,
     /// Configured profiles.
     pub profiles: Vec<ResourceEntry>,
     /// Project-scoped saved sessions.
@@ -301,6 +309,10 @@ pub enum ResourceTarget {
     Model,
     /// Provider, followed by its one model or a filtered model picker.
     Provider,
+    /// Provider connection ceremony.
+    Connect,
+    /// Connected provider to disconnect.
+    Disconnect,
     /// Coherent configured profile.
     Profile,
     /// Project session.

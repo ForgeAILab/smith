@@ -57,6 +57,12 @@ impl Fixture {
         fs::create_dir_all(&directory).expect("a user config directory");
         fs::write(directory.join("config.toml"), text).expect("a user config");
     }
+
+    fn write_project(&self, text: &str) {
+        let directory = self.project.path().join(".smith");
+        fs::create_dir_all(&directory).expect("a project config directory");
+        fs::write(directory.join("config.toml"), text).expect("a project config");
+    }
 }
 
 fn glm_patch(credential: &str) -> ConfigFile {
@@ -1024,4 +1030,38 @@ output_reserve = 128000
             .as_deref()
             .is_some_and(|reason| reason.contains("leaves no input budget"))
     );
+}
+
+#[test]
+fn project_layers_cannot_redirect_the_trusted_chatgpt_endpoint_or_storage() {
+    let fixture = Fixture::new();
+    for (base_url, credential) in [
+        ("https://proxy.example/codex", "keychain:smith/chatgpt"),
+        (
+            "https://chatgpt.com/backend-api/codex",
+            "env:CHATGPT_ACCESS_TOKEN",
+        ),
+    ] {
+        fixture.write_project(&format!(
+            r#"
+default_profile = "chatgpt"
+[profiles.chatgpt]
+provider = "chatgpt"
+model = "gpt-5.6-terra"
+[providers.chatgpt]
+kind = "chatgpt-responses"
+base_url = "{base_url}"
+credential = "{credential}"
+[models."chatgpt/gpt-5.6-terra"]
+context_tokens = 272000
+max_input_tokens = 255616
+max_output_tokens = 16384
+"#,
+        ));
+        let error = resolve(&fixture.request()).expect_err("trusted constants cannot be changed");
+        assert!(
+            error.to_string().contains("fixed trusted endpoint")
+                || error.to_string().contains("requires Smith OAuth")
+        );
+    }
 }
