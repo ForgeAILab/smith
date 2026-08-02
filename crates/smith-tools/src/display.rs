@@ -55,13 +55,17 @@ pub fn project_tool_call_display(name: &str, arguments: &Value) -> Option<ToolCa
         "search" => project_search(arguments),
         "edit" => project_edit(arguments),
         "shell" => project_shell(arguments),
+        "registry.search" => project_registry_search(arguments),
         _ => None,
     }
 }
 
 /// Whether Smith owns a reviewed display schema for `name`.
 pub fn has_tool_call_display_schema(name: &str) -> bool {
-    matches!(name, "read" | "list" | "search" | "edit" | "shell")
+    matches!(
+        name,
+        "read" | "list" | "search" | "edit" | "shell" | "registry.search"
+    )
 }
 
 fn project_read(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
@@ -127,6 +131,20 @@ fn project_edit(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
         Vec::new()
     };
     Some(display("Edit", target, qualifiers))
+}
+
+/// The runtime's capability-discovery bootstrap (`registry.search`) is a
+/// first-party tool with a reviewed schema: `query` plus an optional
+/// `max_results`.
+fn project_registry_search(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
+    let query = required_value(arguments, "query")?;
+    let target = serde_json::to_string(&query).ok()?;
+    let max_results = optional_positive_integer(arguments, "max_results")?;
+    let mut qualifiers = Vec::new();
+    if let Some(max_results) = max_results {
+        qualifiers.push(format!("max {max_results}"));
+    }
+    Some(display("Registry Search", target, qualifiers))
 }
 
 fn project_shell(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
@@ -310,6 +328,23 @@ mod tests {
             ),
             "Shell(printf TOP_SECRET_COMMAND · cwd crates/smith-cli · timeout 3000ms)"
         );
+    }
+
+    #[test]
+    fn registry_search_projects_its_reviewed_query_and_bound() {
+        assert_eq!(
+            invocation(
+                "registry.search",
+                json!({"query": "browser automation", "max_results": 5})
+            ),
+            "Registry Search(\"browser automation\" · max 5)"
+        );
+        assert_eq!(
+            invocation("registry.search", json!({"query": "sql"})),
+            "Registry Search(\"sql\")"
+        );
+        assert!(has_tool_call_display_schema("registry.search"));
+        assert!(project_tool_call_display("registry.search", &json!({"max_results": 3})).is_none());
     }
 
     #[test]

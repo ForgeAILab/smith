@@ -172,6 +172,19 @@ impl ResourcePicker {
             _ => PickerOutcome::Pending,
         }
     }
+
+    /// Appends pasted text to the filter query, control characters dropped.
+    pub fn paste(&mut self, text: &str) {
+        let cleaned = text
+            .chars()
+            .filter(|character| !character.is_control())
+            .collect::<String>();
+        if cleaned.is_empty() {
+            return;
+        }
+        self.query.push_str(&cleaned);
+        self.selected = 0;
+    }
 }
 
 /// Draws a bordered picker within `area`.

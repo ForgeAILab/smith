@@ -29,7 +29,7 @@ use agent_runtime_core::provider::{ModelId, ReasoningSupport};
 use agent_runtime_core::usage::CounterKind;
 use anyhow::{Context, Result};
 use cli::{Command, Prompt, RunArgs, Selection};
-use crossterm::event::{Event as TermEvent, EventStream};
+use crossterm::event::{Event as TermEvent, EventStream, KeyCode, KeyEventKind, KeyModifiers};
 use futures_util::StreamExt;
 use ignore::WalkBuilder;
 use ratatui::layout::Rect;
@@ -603,6 +603,9 @@ async fn run_interactive(
     for (call, display) in host.tool_call_displays() {
         app.set_tool_display(call.as_str(), display);
     }
+    for (call, text) in host.tool_result_texts() {
+        app.set_tool_result_preview(call.as_str(), text);
+    }
     if let Some(coordinator) = host
         .runtime()
         .delegation()
@@ -726,10 +729,33 @@ async fn run_tui(
 
             Some(key) = keys.next() => {
                 match key.context("reading a terminal event")? {
+                    // `Ctrl+V` is the explicit "attach from clipboard" chord:
+                    // terminals deliver ordinary pastes as bracketed text, but
+                    // an image on the clipboard can only be fetched by asking
+                    // the platform directly.
+                    TermEvent::Key(key)
+                        if key.kind != KeyEventKind::Release
+                            && key.code == KeyCode::Char('v')
+                            && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
+                        attach_from_clipboard(&mut app);
+                        dirty = true;
+                    }
                     TermEvent::Key(key) => {
                         match app.on_key(key) {
                             Some(Action::Send(text)) => {
                                 if let Err(error) = session.send(UserInput::text(text)) {
+                                    app.transcript.push_error(format!(
+                                        "turn submission was rejected: {error}"
+                                    ));
+                                }
+                            }
+                            Some(Action::SendWithImages { text, images }) => {
+                                let mut parts = vec![ContentPart::text(text)];
+                                parts.extend(images.into_iter().map(|url| {
+                                    ContentPart::Image { url, detail: None }
+                                }));
+                                if let Err(error) = session.send(UserInput { parts }) {
                                     app.transcript.push_error(format!(
                                         "turn submission was rejected: {error}"
                                     ));
@@ -858,6 +884,15 @@ async fn run_tui(
                         }
                         dirty = true;
                     }
+                    TermEvent::Paste(text) => {
+                        app.on_paste(&text);
+                        dirty = true;
+                    }
+                    TermEvent::Mouse(mouse) => {
+                        if app.on_mouse(mouse) {
+                            dirty = true;
+                        }
+                    }
                     TermEvent::Resize(_, _) => dirty = true,
                     _ => {}
                 }
@@ -903,11 +938,18 @@ async fn run_tui(
                                         format!("Smith turn {} · {attribution}", set.turn),
                                     );
                         }
+                        let completed_tool =
+                            matches!(envelope.payload, RuntimeEvent::ToolCallCompleted { .. });
                         app.apply(&envelope);
-                        if let Some(call) = tool_call
-                            && let Some(display) = host.tool_call_display(&call)
-                        {
-                            app.set_tool_display(call.as_str(), display);
+                        if let Some(call) = tool_call {
+                            if let Some(display) = host.tool_call_display(&call) {
+                                app.set_tool_display(call.as_str(), display);
+                            }
+                            if completed_tool
+                                && let Some(text) = host.tool_result_text(&call)
+                            {
+                                app.set_tool_result_preview(call.as_str(), text);
+                            }
                         }
                         dirty = true;
                     }
@@ -1888,6 +1930,90 @@ fn start_local_shell(
     });
 }
 
+/// Largest PNG accepted from the clipboard, after encoding.
+const MAX_CLIPBOARD_IMAGE_BYTES: usize = 5 * 1024 * 1024;
+
+enum ClipboardContent {
+    Image {
+        data_uri: String,
+        width: u32,
+        height: u32,
+    },
+    Text(String),
+    Empty,
+}
+
+/// Reads the platform clipboard once and attaches whatever it holds.
+///
+/// An image becomes a composer attachment; text falls back to the ordinary
+/// paste path (covering terminals whose `Ctrl+V` never reaches bracketed
+/// paste); an unreadable clipboard reports instead of failing silently.
+fn attach_from_clipboard(app: &mut App) {
+    match read_clipboard() {
+        Ok(ClipboardContent::Image {
+            data_uri,
+            width,
+            height,
+        }) => {
+            if app.can_attach_image() {
+                app.attach_image(data_uri, width, height);
+            }
+        }
+        Ok(ClipboardContent::Text(text)) => app.on_paste(&text),
+        Ok(ClipboardContent::Empty) => {
+            app.transcript.push_notice("clipboard", "nothing to attach");
+        }
+        Err(error) => app.transcript.push_error(error),
+    }
+}
+
+fn read_clipboard() -> Result<ClipboardContent, String> {
+    let mut clipboard =
+        arboard::Clipboard::new().map_err(|error| format!("clipboard unavailable: {error}"))?;
+    if let Ok(image) = clipboard.get_image() {
+        let (width, height) = (
+            u32::try_from(image.width).map_err(|_| "clipboard image is too wide".to_owned())?,
+            u32::try_from(image.height).map_err(|_| "clipboard image is too tall".to_owned())?,
+        );
+        let png = encode_png(width, height, &image.bytes)?;
+        if png.len() > MAX_CLIPBOARD_IMAGE_BYTES {
+            return Err(format!(
+                "clipboard image is {} after PNG encoding; the bound is {}",
+                render_byte_size(png.len()),
+                render_byte_size(MAX_CLIPBOARD_IMAGE_BYTES),
+            ));
+        }
+        use base64::Engine as _;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&png);
+        return Ok(ClipboardContent::Image {
+            data_uri: format!("data:image/png;base64,{encoded}"),
+            width,
+            height,
+        });
+    }
+    match clipboard.get_text() {
+        Ok(text) if !text.is_empty() => Ok(ClipboardContent::Text(text)),
+        _ => Ok(ClipboardContent::Empty),
+    }
+}
+
+fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
+    use image::ImageEncoder as _;
+    let mut png = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut png)
+        .write_image(rgba, width, height, image::ExtendedColorType::Rgba8)
+        .map_err(|error| format!("clipboard image could not be encoded: {error}"))?;
+    Ok(png)
+}
+
+fn render_byte_size(bytes: usize) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{:.1}MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{}KB", bytes.div_ceil(1024))
+    }
+}
+
 fn start_prepared_send(
     session: smith_runtime::SessionHandle,
     text: String,
@@ -2781,6 +2907,7 @@ async fn choose_resume_session(
                     PickerOutcome::Cancelled => return Ok(None),
                     PickerOutcome::Selected(session) => return Ok(Some(session)),
                 },
+                TermEvent::Paste(text) => picker.paste(&text),
                 TermEvent::Resize(_, _) => {}
                 _ => continue,
             }

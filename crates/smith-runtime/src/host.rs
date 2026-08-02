@@ -208,6 +208,33 @@ impl HostSession {
         tool_call_displays_from_history(&self.session.history(), &self.display_redactor)
     }
 
+    /// Credential-redacted text of one canonical tool result.
+    ///
+    /// The protected event stream never carries result content; the client
+    /// asks for it after `ToolCallCompleted` and bounds it before display.
+    /// Results are model-visible text, so unlike arbitrary tool arguments
+    /// they only need the literal-secret scrub before local presentation.
+    pub fn tool_result_text(&self, call_id: &ToolCallId) -> Option<String> {
+        tool_result_text_from_history(&self.session.history(), call_id, &self.display_redactor)
+    }
+
+    /// Credential-redacted result text for every canonical tool call, used
+    /// when rebuilding a local transcript from resumed history.
+    pub fn tool_result_texts(&self) -> Vec<(ToolCallId, String)> {
+        let history = self.session.history();
+        history
+            .iter()
+            .flat_map(|message| message.content.iter())
+            .filter_map(|part| {
+                let ContentPart::ToolResult(result) = part else {
+                    return None;
+                };
+                redacted_result_text(result, &self.display_redactor)
+                    .map(|text| (result.call_id.clone(), text))
+            })
+            .collect()
+    }
+
     /// Shuts down the runtime first, then drains and syncs its journal.
     ///
     /// The journal is attempted even when snapshot persistence fails so a
@@ -255,6 +282,42 @@ fn tool_call_display_from_history(
                 .flatten()
         })
     })
+}
+
+fn tool_result_text_from_history(
+    history: &[Message],
+    call_id: &ToolCallId,
+    redactor: &DefaultRedactor,
+) -> Option<String> {
+    history.iter().rev().find_map(|message| {
+        message.content.iter().rev().find_map(|part| {
+            let ContentPart::ToolResult(result) = part else {
+                return None;
+            };
+            (result.call_id == *call_id)
+                .then(|| redacted_result_text(result, redactor))
+                .flatten()
+        })
+    })
+}
+
+fn redacted_result_text(
+    result: &agent_runtime_core::content::ToolResultBlock,
+    redactor: &DefaultRedactor,
+) -> Option<String> {
+    let text = result
+        .content
+        .iter()
+        .filter_map(ContentPart::as_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.trim().is_empty() {
+        return None;
+    }
+    match redactor.redacted_clone(&serde_json::Value::String(text)) {
+        serde_json::Value::String(redacted) => Some(redacted),
+        _ => None,
+    }
 }
 
 fn tool_call_displays_from_history(

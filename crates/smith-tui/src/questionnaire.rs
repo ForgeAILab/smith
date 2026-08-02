@@ -597,6 +597,27 @@ impl QuestionnaireState {
         self.stage_draft_if_nonblank();
     }
 
+    /// Inserts pasted text into the free-form draft, flattened to one line.
+    ///
+    /// Digits and spaces in a paste are draft characters, never choice
+    /// shortcuts — only deliberate key presses select answers.
+    pub fn paste(&mut self, text: &str) {
+        let mut pending_space = false;
+        for character in text.chars() {
+            if character == '\n' || character.is_whitespace() {
+                pending_space = true;
+                continue;
+            }
+            if character.is_control() {
+                continue;
+            }
+            if std::mem::take(&mut pending_space) && !self.draft_mut().is_empty() {
+                self.insert_free_form(' ');
+            }
+            self.insert_free_form(character);
+        }
+    }
+
     fn draft_mut(&mut self) -> &mut Composer {
         let question = self.form.questions[self.current].id.clone();
         self.drafts.entry(question).or_default()

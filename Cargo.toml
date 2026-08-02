@@ -34,13 +34,19 @@ agent-runtime-registry = { git = "https://github.com/mai1015/agent-runtime.git",
 agent-runtime-testkit = { git = "https://github.com/mai1015/agent-runtime.git", rev = "50f230e4ca8ba318fd4c5c84df0876051c54d93e", version = "=0.1.0" }
 
 anyhow = "1"
+# Clipboard image capture for composer attachments. `arboard` reads the
+# platform clipboard; `image` encodes the RGBA pixels as PNG (the only codec
+# compiled in); `base64` builds the provider-facing data URI.
+arboard = "3"
 async-trait = "0.1"
+base64 = "0.22"
 chacha20poly1305 = { version = "0.11.0", features = ["zeroize"] }
 crossterm = { version = "0.29", features = ["event-stream"] }
 dirs = "6"
 futures-core = "0.3"
 futures-util = "0.3"
 ignore = "0.4"
+image = { version = "0.25", default-features = false, features = ["png"] }
 keyring = { version = "3", default-features = false, features = ["apple-native", "sync-secret-service"] }
 # `unstable-rendered-line-info` provides `Paragraph::line_count`, the only way
 # to size scroll offsets and modal heights with the renderer's own word-wrap

@@ -58,11 +58,20 @@ pub fn draw_synced(frame: &mut Frame<'_>, app: &mut App, theme: Theme) {
     let area = frame.area();
     if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
         app.sync_scroll_limit(0);
+        app.composer_pointer_area = None;
         draw_too_small(frame, area, theme);
         return;
     }
 
-    let transcript = transcript_area(area, app);
+    let (transcript, composer) = surface_rects(area, app);
+    // The same inset `draw_composer` applies, recorded so mouse clicks can be
+    // mapped back onto composer text.
+    app.composer_pointer_area = Some(Rect::new(
+        composer.x,
+        composer.y.saturating_add(1),
+        composer.width,
+        composer.height.saturating_sub(2),
+    ));
     let lines = transcript_lines(app, theme, transcript.width);
     let limit = visual_scroll_limit(&lines, transcript);
     app.sync_scroll_limit(limit);
@@ -176,10 +185,12 @@ fn draw_surface(
     }
 }
 
-fn transcript_area(area: Rect, app: &App) -> Rect {
+/// The transcript and composer rects under the same vertical layout
+/// `draw_surface` renders with.
+fn surface_rects(area: Rect, app: &App) -> (Rect, Rect) {
     let composer_rows = composer_rows(app, area.width).saturating_add(2);
     let anchored = anchored_rows(app, area, composer_rows);
-    let [transcript, _, _, _, _] = Layout::vertical([
+    let [transcript, _, _, composer, _] = Layout::vertical([
         Constraint::Min(3),
         Constraint::Length(anchored.compact),
         Constraint::Length(anchored.todos),
@@ -187,7 +198,7 @@ fn transcript_area(area: Rect, app: &App) -> Rect {
         Constraint::Length(hint_rows(app)),
     ])
     .areas(area);
-    transcript
+    (transcript, composer)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -370,6 +381,7 @@ fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<'static>> {
                 display,
                 protected_summary,
                 status,
+                result_preview,
                 ..
             } => {
                 let tone = match status {
@@ -390,6 +402,16 @@ fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<'static>> {
                     Span::styled(" · ", theme.style(Tone::Dim)),
                     Span::styled(status.label(), theme.style(tone)),
                 ]));
+                if !matches!(status, ToolStatus::Running)
+                    && let Some(preview) = result_preview
+                {
+                    for raw in preview.lines() {
+                        lines.push(Line::from(Span::styled(
+                            format!("    {raw}"),
+                            theme.style(Tone::Dim),
+                        )));
+                    }
+                }
             }
             Block::Error { message } => {
                 for (index, raw) in message.lines().enumerate() {
@@ -397,6 +419,16 @@ fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<'static>> {
                     lines.push(Line::from(Span::styled(
                         format!("{marker} {raw}"),
                         theme.style(Tone::Danger),
+                    )));
+                }
+            }
+            // Turn boundaries read as quiet punctuation — "Worked for 5s" —
+            // not as a sourced notice row.
+            Block::Notice { source, text } if source == "turn" => {
+                for raw in text.lines() {
+                    lines.push(Line::from(Span::styled(
+                        format!("  {raw}"),
+                        theme.style(Tone::Dim),
                     )));
                 }
             }
@@ -464,6 +496,21 @@ fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<'static>> {
         lines.extend(render_speculative_lines(text, theme));
     }
 
+    if let Some(summary) = &app.turn_summary
+        && !matches!(
+            app.status.activity,
+            Activity::Working | Activity::Interrupting
+        )
+    {
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
+        lines.push(Line::from(Span::styled(
+            format!("  {summary}"),
+            theme.style(Tone::Dim),
+        )));
+    }
+
     if matches!(
         app.status.activity,
         Activity::Working | Activity::Interrupting
@@ -508,22 +555,24 @@ fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<'static>> {
     lines
 }
 
+// Streaming answer text renders exactly like committed prose — no "draft"
+// label. Only reasoning stays behind the dim working row; a later discard
+// simply removes these lines.
 fn render_speculative_lines(text: &str, theme: Theme) -> Vec<Line<'static>> {
     text.lines()
         .enumerate()
         .map(|(index, raw)| {
-            let mut spans = vec![Span::styled(
-                if index == 0 {
-                    format!("{} ", glyph::BULLET)
-                } else {
-                    "  ".to_owned()
-                },
-                theme.style(Tone::Dim),
-            )];
-            if index == 0 {
-                spans.push(Span::styled("draft · ", theme.style(Tone::Warning)));
-            }
-            spans.push(Span::styled(raw.to_owned(), theme.style(Tone::Reasoning)));
+            let spans = vec![
+                Span::styled(
+                    if index == 0 {
+                        format!("{} ", glyph::BULLET)
+                    } else {
+                        "  ".to_owned()
+                    },
+                    theme.style(Tone::Dim),
+                ),
+                Span::styled(raw.to_owned(), theme.style(Tone::Default)),
+            ];
             Line::from(spans)
         })
         .collect()
@@ -1024,7 +1073,7 @@ fn draw_composer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
                     theme.style(Tone::Dim),
                 ));
             } else {
-                spans.push(Span::raw((*line).to_owned()));
+                spans.extend(paste_placeholder_spans(line, app, theme));
             }
             Line::from(spans)
         })
@@ -1040,6 +1089,41 @@ fn draw_composer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
             frame.set_cursor_position((x, y));
         }
     }
+}
+
+/// Splits one composer line so registered paste placeholders render accented,
+/// making the collapsed chunk visually distinct from typed text.
+fn paste_placeholder_spans(line: &str, app: &App, theme: Theme) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut rest = line;
+    loop {
+        let earliest = app
+            .attachment_placeholders()
+            .filter_map(|placeholder| {
+                rest.find(placeholder)
+                    .map(|found| (found, placeholder.len()))
+            })
+            .min_by_key(|(found, _)| *found);
+        match earliest {
+            Some((found, length)) => {
+                if found > 0 {
+                    spans.push(Span::raw(rest[..found].to_owned()));
+                }
+                spans.push(Span::styled(
+                    rest[found..found + length].to_owned(),
+                    theme.style(Tone::Accent),
+                ));
+                rest = &rest[found + length..];
+            }
+            None => {
+                if !rest.is_empty() {
+                    spans.push(Span::raw(rest.to_owned()));
+                }
+                break;
+            }
+        }
+    }
+    spans
 }
 
 fn draw_todos(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
@@ -2315,7 +2399,7 @@ mod tests {
             "{answered}"
         );
         assert!(!answered.contains("Working…"), "{answered}");
-        assert!(answered.contains("turn · completed"), "{answered}");
+        assert!(answered.contains("Worked"), "{answered}");
         assert!(
             !answered.contains("private draft that resembles the answer"),
             "{answered}"
@@ -2343,7 +2427,7 @@ mod tests {
                 "{width}x{height}: {completed_screen}"
             );
             assert!(
-                completed_screen.contains("turn · completed in 842ms"),
+                completed_screen.contains("Worked for 842ms"),
                 "{width}x{height}: {completed_screen}"
             );
             assert!(
@@ -2362,7 +2446,7 @@ mod tests {
             }));
             let interrupted_screen = render(&interrupted, width, height, theme);
             assert!(
-                interrupted_screen.contains("interrupted"),
+                interrupted_screen.contains("Interrupted"),
                 "{width}x{height}: {interrupted_screen}"
             );
         }
@@ -2416,7 +2500,7 @@ mod tests {
                 "{width}x{height}: {tool_screen}"
             );
             assert!(
-                tool_screen.contains("turn · completed in 842ms"),
+                tool_screen.contains("Worked for 842ms"),
                 "{width}x{height}: {tool_screen}"
             );
 
@@ -2434,7 +2518,7 @@ mod tests {
             ));
             let reasoning_screen = render(&reasoning_only, width, height, theme);
             assert!(
-                reasoning_screen.contains("turn · completed in 842ms"),
+                reasoning_screen.contains("Worked for 842ms"),
                 "{width}x{height}: {reasoning_screen}"
             );
             assert!(
@@ -2454,11 +2538,11 @@ mod tests {
             }));
             let unavailable_screen = render(&unavailable_duration, width, height, theme);
             assert!(
-                unavailable_screen.contains("turn · completed"),
+                unavailable_screen.contains("Worked"),
                 "{unavailable_screen}"
             );
             assert!(
-                !unavailable_screen.contains("completed in"),
+                !unavailable_screen.contains("Worked for"),
                 "{unavailable_screen}"
             );
 
@@ -2477,7 +2561,7 @@ mod tests {
             }));
             let fallback_screen = render(&fallback, width, height, theme);
             assert!(
-                fallback_screen.contains("unknown schema"),
+                fallback_screen.contains("arguments hidden"),
                 "{fallback_screen}"
             );
             assert!(
@@ -2488,7 +2572,48 @@ mod tests {
     }
 
     #[test]
-    fn speculative_text_is_labelled_draft_until_the_attempt_commits() {
+    fn a_completed_tool_row_shows_its_bounded_result_preview() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.apply(&event(RuntimeEvent::ToolCallRequested {
+            call: ToolCallId::new("call-registry"),
+            name: "registry.search".to_owned(),
+            argument_keys: vec!["query".to_owned()],
+            argument_fingerprint: agent_runtime_registry::Fingerprint::of("arguments"),
+            arguments: None,
+        }));
+        app.set_tool_display(
+            "call-registry",
+            smith_tools::project_tool_call_display(
+                "registry.search",
+                &serde_json::json!({"query": "browser automation", "max_results": 3}),
+            )
+            .expect("reviewed registry projection"),
+        );
+        app.set_tool_result_preview("call-registry", "card one\ncard two");
+
+        let running = render(&app, 74, 14, Theme::new());
+        assert!(
+            running.contains("Registry Search(\"browser automation\" · max 3)"),
+            "{running}"
+        );
+        assert!(
+            !running.contains("card one"),
+            "a running row must not show result lines yet: {running}"
+        );
+
+        app.apply(&event(RuntimeEvent::ToolCallCompleted {
+            call: ToolCallId::new("call-registry"),
+            name: "registry.search".to_owned(),
+            is_error: false,
+        }));
+        let completed = render(&app, 74, 14, Theme::new());
+        assert!(completed.contains(" · ok"), "{completed}");
+        assert!(completed.contains("    card one"), "{completed}");
+        assert!(completed.contains("    card two"), "{completed}");
+    }
+
+    #[test]
+    fn speculative_text_streams_unlabelled_and_survives_the_commit() {
         let mut app = App::new("gpt-5.3", "~/work/api");
         app.apply(&event(RuntimeEvent::TurnStarted));
         app.apply(&event(RuntimeEvent::TextDelta {
@@ -2498,10 +2623,8 @@ mod tests {
         }));
 
         let speculative = render(&app, 74, 12, Theme::new());
-        assert!(
-            speculative.contains("draft · tentative answer"),
-            "{speculative}"
-        );
+        assert!(speculative.contains("tentative answer"), "{speculative}");
+        assert!(!speculative.contains("draft ·"), "{speculative}");
         assert!(app.transcript.is_empty());
 
         app.apply(&event(RuntimeEvent::ProviderAttemptOutputCommitted {
@@ -2691,7 +2814,7 @@ mod tests {
             "{screen}"
         );
         assert!(
-            screen.contains("• third_party(path · unknown schema) · failed"),
+            screen.contains("• third_party(path · arguments hidden) · failed"),
             "{screen}"
         );
         assert!(!screen.contains("TOP_SECRET_PATTERN"), "{screen}");

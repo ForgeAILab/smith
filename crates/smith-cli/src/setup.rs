@@ -427,6 +427,7 @@ async fn run_surface(
                     }
                 }
             },
+            TermEvent::Paste(text) => app.on_paste(&text),
             TermEvent::Resize(_, _) => {}
             _ => {}
         }

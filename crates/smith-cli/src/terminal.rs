@@ -10,6 +10,9 @@ use std::io::{Stdout, stdout};
 
 use anyhow::Result;
 use crossterm::cursor::MoveTo;
+use crossterm::event::{
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -53,7 +56,15 @@ impl Drop for Terminal {
 /// Enters raw mode and the alternate screen, installing a restoring panic hook.
 pub(crate) fn enter() -> Result<Terminal> {
     enable_raw_mode()?;
-    if let Err(error) = execute!(stdout(), EnterAlternateScreen) {
+    // Bracketed paste turns a paste into one `Event::Paste` instead of a
+    // storm of key events; mouse capture delivers clicks and wheel scrolls.
+    // Both are global terminal state and restored in `leave`.
+    if let Err(error) = execute!(
+        stdout(),
+        EnterAlternateScreen,
+        EnableBracketedPaste,
+        EnableMouseCapture
+    ) {
         let _ = disable_raw_mode();
         return Err(error.into());
     }
@@ -92,7 +103,12 @@ pub(crate) fn enter() -> Result<Terminal> {
 
 /// Restores the terminal. Safe to call more than once.
 pub(crate) fn leave() -> Result<()> {
-    execute!(stdout(), LeaveAlternateScreen)?;
+    execute!(
+        stdout(),
+        DisableMouseCapture,
+        DisableBracketedPaste,
+        LeaveAlternateScreen
+    )?;
     disable_raw_mode()?;
     Ok(())
 }

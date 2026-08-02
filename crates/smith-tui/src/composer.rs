@@ -129,6 +129,38 @@ impl Composer {
         self.cursor = index;
     }
 
+    /// Moves the cursor to a `(line, column)` position, both zero-based and
+    /// counted in characters, clamping to the nearest real position.
+    ///
+    /// This is the mouse-click inverse of [`Self::cursor_position`]: a click
+    /// past the end of a line lands at that line's end, and a click below the
+    /// last line lands at the end of the buffer.
+    pub fn move_to_position(&mut self, line: usize, column: usize) {
+        let mut index = 0usize;
+        let mut current_line = 0usize;
+        let mut chars = self.text.chars();
+        while current_line < line {
+            match chars.next() {
+                Some('\n') => {
+                    current_line += 1;
+                    index += 1;
+                }
+                Some(_) => index += 1,
+                None => {
+                    self.cursor = index;
+                    return;
+                }
+            }
+        }
+        for character in chars.take(column) {
+            if character == '\n' {
+                break;
+            }
+            index += 1;
+        }
+        self.cursor = index;
+    }
+
     /// Empties the buffer.
     pub fn clear(&mut self) {
         self.text.clear();
@@ -316,6 +348,28 @@ mod tests {
         assert_eq!(composer.cursor(), 2);
         composer.delete();
         assert_eq!(composer.text(), "hi");
+    }
+
+    #[test]
+    fn positional_moves_clamp_to_real_lines_and_columns() {
+        let mut composer = Composer::new();
+        composer.insert_str("first\nsecond café");
+
+        composer.move_to_position(0, 2);
+        assert_eq!(composer.cursor_position(), (0, 2));
+
+        // Past the end of a line lands at that line's end.
+        composer.move_to_position(0, 99);
+        assert_eq!(composer.cursor_position(), (0, 5));
+
+        composer.move_to_position(1, 8);
+        assert_eq!(composer.cursor_position(), (1, 8));
+        composer.insert('!');
+        assert_eq!(composer.text(), "first\nsecond c!afé");
+
+        // Below the last line lands at the end of the buffer.
+        composer.move_to_position(9, 0);
+        assert_eq!(composer.cursor(), composer.len());
     }
 
     #[test]

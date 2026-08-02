@@ -17,7 +17,10 @@ use agent_runtime_core::event::{
     RuntimeEvent, TurnFinish,
 };
 use agent_runtime_core::ids::{AttemptId, RequestId};
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
+use ratatui::layout::Rect;
 use smith_host::approval::{ApprovalPrompt, PromptScope};
 use smith_tools::ToolCallDisplay;
 
@@ -33,6 +36,50 @@ use crate::transcript::{LocalResultState, ToolStatus, Transcript};
 /// How long a second `Ctrl+C` still counts as the exit press.
 const FORCE_QUIT_WINDOW: Duration = Duration::from_secs(1);
 
+/// Pastes with at least this many lines collapse to a placeholder chunk.
+const PASTE_CHUNK_MIN_LINES: usize = 3;
+/// Single-line pastes longer than this also collapse to a chunk.
+const PASTE_CHUNK_MIN_CHARS: usize = 1_000;
+/// Bounded process-local paste storage; the oldest chunk is dropped first.
+const MAX_PASTED_CHUNKS: usize = 50;
+
+/// Transcript lines one wheel notch scrolls.
+const MOUSE_SCROLL_LINES: u16 = 3;
+
+/// One large paste stored aside so the composer stays editable.
+///
+/// The composer holds only the placeholder text — `[Pasted text #2 +8 lines]`
+/// — which the user can cursor over or delete like ordinary characters. The
+/// stored content re-enters the outgoing text only at submit time.
+#[derive(Debug, Clone)]
+struct PastedChunk {
+    placeholder: String,
+    content: String,
+}
+
+/// Bounded clipboard-image storage; the oldest attachment is dropped first.
+const MAX_IMAGE_ATTACHMENTS: usize = 16;
+
+/// One clipboard image stored aside behind an `[Image #N W×H]` placeholder.
+///
+/// The same contract as [`PastedChunk`]: the composer holds only the
+/// placeholder, and the encoded image joins the outgoing turn as an image
+/// content part when its placeholder is still present at submit time.
+#[derive(Debug, Clone)]
+struct ImageAttachment {
+    placeholder: String,
+    data_uri: String,
+}
+
+/// Collapses a paste onto one line for single-line query surfaces.
+fn flatten_paste(text: &str) -> String {
+    text.split('\n')
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Resource-ID namespace for transition-release root-mode adapters.
 pub const LEGACY_AGENT_PROFILE_PREFIX: &str = "legacy-agent:";
 
@@ -47,6 +94,13 @@ pub enum Action {
         text: String,
         /// Canonical workspace-relative file identities.
         files: Vec<String>,
+    },
+    /// Submit a user turn carrying clipboard image attachments.
+    SendWithImages {
+        /// Prompt text, including visible `[Image #N …]` provenance.
+        text: String,
+        /// PNG data URIs in placeholder-appearance order.
+        images: Vec<String>,
     },
     /// Execute one explicit local shell shortcut without provider spend.
     RunShell {
@@ -422,6 +476,22 @@ pub struct App {
     pub tick: u64,
     /// Set once the host loop should exit.
     pub should_quit: bool,
+    /// Large pastes stored aside behind composer placeholders, oldest first.
+    pasted_chunks: Vec<PastedChunk>,
+    /// Monotonic number for `[Pasted text #N …]` labels.
+    paste_counter: usize,
+    /// Clipboard images stored aside behind composer placeholders.
+    image_attachments: Vec<ImageAttachment>,
+    /// Monotonic number for `[Image #N …]` labels.
+    image_counter: usize,
+    /// The composer's text area from the last synced frame, recorded by the
+    /// renderer so mouse clicks can be mapped back to a cursor position.
+    pub(crate) composer_pointer_area: Option<Rect>,
+    /// Ephemeral "Worked for …" summary of the newest completed turn.
+    ///
+    /// Deliberately not a transcript block: one row per historical turn is
+    /// noise in the UI, while the journal keeps the full per-turn record.
+    pub turn_summary: Option<String>,
     turn_started_at: Option<Instant>,
     turn_started_timestamp: Option<Timestamp>,
     last_ctrl_c: Option<Instant>,
@@ -452,6 +522,12 @@ impl App {
             scroll_limit: 0,
             tick: 0,
             should_quit: false,
+            pasted_chunks: Vec::new(),
+            paste_counter: 0,
+            image_attachments: Vec::new(),
+            image_counter: 0,
+            composer_pointer_area: None,
+            turn_summary: None,
             turn_started_at: None,
             turn_started_timestamp: None,
             last_ctrl_c: None,
@@ -660,6 +736,11 @@ impl App {
         self.transcript.set_tool_display(call_id, display);
     }
 
+    /// Attaches host-supplied, credential-redacted result lines to a tool row.
+    pub fn set_tool_result_preview(&mut self, call_id: &str, preview: impl AsRef<str>) {
+        self.transcript.set_tool_result_preview(call_id, preview);
+    }
+
     /// Toggles bounded, redaction-safe tool detail beneath the working row.
     pub fn toggle_work_details(&mut self) {
         self.work_details = !self.work_details;
@@ -806,6 +887,7 @@ impl App {
             RuntimeEvent::TurnStarted => {
                 self.discard_orphaned_speculative_output("next turn start");
                 self.status.activity = Activity::Working;
+                self.turn_summary = None;
                 self.plan = None;
                 self.work = Some(WorkSummary::default());
                 self.turn_started_at = Some(Instant::now());
@@ -1027,10 +1109,10 @@ impl App {
                         self.transcript.push_notice(
                             "turn",
                             elapsed.map_or_else(
-                                || format!("interrupted ({reason:?})"),
+                                || format!("Interrupted ({reason:?})"),
                                 |elapsed| {
                                     format!(
-                                        "interrupted after {} ({reason:?})",
+                                        "Interrupted after {} ({reason:?})",
                                         render_elapsed(elapsed)
                                     )
                                 },
@@ -1041,10 +1123,10 @@ impl App {
                         self.transcript.push_notice(
                             "turn",
                             elapsed.map_or_else(
-                                || format!("stopped at the {limit:?} limit"),
+                                || format!("Stopped at the {limit:?} limit"),
                                 |elapsed| {
                                     format!(
-                                        "stopped after {} at the {limit:?} limit",
+                                        "Stopped after {} at the {limit:?} limit",
                                         render_elapsed(elapsed)
                                     )
                                 },
@@ -1055,10 +1137,10 @@ impl App {
                         self.transcript.push_notice(
                             "turn",
                             elapsed.map_or_else(
-                                || format!("waiting for parent input · request {request}"),
+                                || format!("Waiting for parent input · request {request}"),
                                 |elapsed| {
                                     format!(
-                                        "waiting for parent input after {} · request {request}",
+                                        "Waiting for parent input after {} · request {request}",
                                         render_elapsed(elapsed)
                                     )
                                 },
@@ -1066,22 +1148,21 @@ impl App {
                         );
                     }
                     TurnFinish::Completed => {
-                        self.transcript.push_notice(
-                            "turn",
-                            terminal_elapsed.map_or_else(
-                                || "completed".to_owned(),
-                                |elapsed| {
-                                    format!("completed in {}", render_terminal_elapsed(elapsed))
-                                },
-                            ),
-                        );
+                        // Routine completions never enter the transcript: one
+                        // row per historical turn is log detail, not UI. The
+                        // newest summary renders beneath the transcript until
+                        // the next turn starts.
+                        self.turn_summary = Some(terminal_elapsed.map_or_else(
+                            || "Worked".to_owned(),
+                            |elapsed| format!("Worked for {}", render_terminal_elapsed(elapsed)),
+                        ));
                     }
                     TurnFinish::Failed => {
                         self.transcript.push_notice(
                             "turn",
                             elapsed.map_or_else(
-                                || "failed".to_owned(),
-                                |elapsed| format!("failed after {}", render_elapsed(elapsed)),
+                                || "Failed".to_owned(),
+                                |elapsed| format!("Failed after {}", render_elapsed(elapsed)),
                             ),
                         );
                     }
@@ -1499,6 +1580,180 @@ impl App {
         self.questionnaire_resolutions
             .push_back((request_id, resolution));
         self.transcript.push_notice("questionnaire", notice);
+    }
+
+    /// Folds one bracketed paste into whichever surface currently takes text.
+    ///
+    /// Large pastes into the composer collapse to an editable
+    /// `[Pasted text #N +L lines]` placeholder; single-line surfaces receive
+    /// the paste flattened onto one line.
+    pub fn on_paste(&mut self, pasted: &str) {
+        let normalized = pasted.replace("\r\n", "\n").replace('\r', "\n");
+        if normalized.is_empty() {
+            return;
+        }
+        match &mut self.overlay {
+            None | Some(Overlay::Palette { .. }) => {
+                let lines = normalized.lines().count();
+                if lines >= PASTE_CHUNK_MIN_LINES
+                    || normalized.chars().count() > PASTE_CHUNK_MIN_CHARS
+                {
+                    self.paste_counter += 1;
+                    let placeholder = format!(
+                        "[Pasted text #{} +{lines} line{}]",
+                        self.paste_counter,
+                        if lines == 1 { "" } else { "s" }
+                    );
+                    if self.pasted_chunks.len() == MAX_PASTED_CHUNKS {
+                        self.pasted_chunks.remove(0);
+                    }
+                    self.pasted_chunks.push(PastedChunk {
+                        placeholder: placeholder.clone(),
+                        content: normalized,
+                    });
+                    self.composer.insert_str(&placeholder);
+                } else {
+                    self.composer.insert_str(&normalized);
+                }
+                if let Some(Overlay::Palette {
+                    selected, error, ..
+                }) = &mut self.overlay
+                {
+                    *selected = 0;
+                    *error = None;
+                }
+            }
+            Some(Overlay::Questionnaire { state }) => {
+                state.paste(&normalized);
+            }
+            Some(Overlay::HistorySearch { query, .. }) => {
+                query.push_str(&flatten_paste(&normalized));
+                self.refresh_history_search(false);
+            }
+            Some(Overlay::ResourcePicker { picker, .. }) => {
+                picker.paste(&flatten_paste(&normalized));
+            }
+            // Confirmation modals take no text.
+            Some(_) => {}
+        }
+    }
+
+    /// Replaces registered paste placeholders with their stored content.
+    ///
+    /// A single left-to-right pass over `text`: content brought in by one
+    /// placeholder is never rescanned, so pasted text that happens to look
+    /// like a placeholder cannot expand twice.
+    pub fn expand_pasted(&self, text: &str) -> String {
+        const MARKER: &str = "[Pasted text #";
+        let mut expanded = String::with_capacity(text.len());
+        let mut rest = text;
+        'scan: while let Some(start) = rest.find(MARKER) {
+            for chunk in &self.pasted_chunks {
+                if rest[start..].starts_with(&chunk.placeholder) {
+                    expanded.push_str(&rest[..start]);
+                    expanded.push_str(&chunk.content);
+                    rest = &rest[start + chunk.placeholder.len()..];
+                    continue 'scan;
+                }
+            }
+            let through_marker = start + MARKER.len();
+            expanded.push_str(&rest[..through_marker]);
+            rest = &rest[through_marker..];
+        }
+        expanded.push_str(rest);
+        expanded
+    }
+
+    /// Registered placeholder labels, for renderer highlighting.
+    pub(crate) fn attachment_placeholders(&self) -> impl Iterator<Item = &str> {
+        self.pasted_chunks
+            .iter()
+            .map(|chunk| chunk.placeholder.as_str())
+            .chain(
+                self.image_attachments
+                    .iter()
+                    .map(|attachment| attachment.placeholder.as_str()),
+            )
+    }
+
+    /// Whether the composer surface currently accepts an image attachment.
+    pub fn can_attach_image(&self) -> bool {
+        matches!(self.overlay, None | Some(Overlay::Palette { .. }))
+    }
+
+    /// Registers a clipboard image and inserts its composer placeholder.
+    ///
+    /// The host reads and encodes the clipboard — [`App`] stays free of I/O —
+    /// and hands over a finished PNG data URI.
+    pub fn attach_image(&mut self, data_uri: String, width: u32, height: u32) {
+        self.image_counter += 1;
+        let placeholder = format!("[Image #{} {width}×{height}]", self.image_counter);
+        if self.image_attachments.len() == MAX_IMAGE_ATTACHMENTS {
+            self.image_attachments.remove(0);
+        }
+        self.image_attachments.push(ImageAttachment {
+            placeholder: placeholder.clone(),
+            data_uri,
+        });
+        self.composer.insert_str(&placeholder);
+    }
+
+    /// Data URIs of attachments whose placeholders survive in `text`, in
+    /// order of first appearance. A deleted placeholder detaches its image.
+    fn referenced_images(&self, text: &str) -> Vec<String> {
+        let mut found: Vec<(usize, &ImageAttachment)> = self
+            .image_attachments
+            .iter()
+            .filter_map(|attachment| {
+                text.find(&attachment.placeholder)
+                    .map(|position| (position, attachment))
+            })
+            .collect();
+        found.sort_by_key(|(position, _)| *position);
+        found
+            .into_iter()
+            .map(|(_, attachment)| attachment.data_uri.clone())
+            .collect()
+    }
+
+    /// Handles one mouse event, returning whether visible state changed.
+    ///
+    /// The wheel scrolls the transcript; a left click inside the composer
+    /// moves its cursor. Both apply only while the composer surface is
+    /// focused — a modal overlay owns the screen and ignores the mouse.
+    pub fn on_mouse(&mut self, mouse: MouseEvent) -> bool {
+        if !matches!(self.overlay, None | Some(Overlay::Palette { .. })) {
+            return false;
+        }
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.scroll_up(MOUSE_SCROLL_LINES);
+                true
+            }
+            MouseEventKind::ScrollDown => {
+                self.scroll_down(MOUSE_SCROLL_LINES);
+                true
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                let Some(area) = self.composer_pointer_area else {
+                    return false;
+                };
+                if mouse.column < area.x
+                    || mouse.column >= area.right()
+                    || mouse.row < area.y
+                    || mouse.row >= area.bottom()
+                {
+                    return false;
+                }
+                let line = usize::from(mouse.row - area.y);
+                // The composer draws a two-column `▌ ` marker prefix before
+                // the text; clicks inside the prefix land at column zero.
+                let column = usize::from(mouse.column.saturating_sub(area.x + 2));
+                self.composer.move_to_position(line, column);
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Handles a key press, returning an action for the host loop.
@@ -2438,9 +2693,11 @@ impl App {
                     let literal = format!("/{literal}");
                     self.composer.record_current();
                     self.composer.clear();
+                    // The transcript keeps the compact placeholder text; only
+                    // the outgoing turn expands stored paste chunks.
                     self.transcript.push_user(&literal);
                     self.follow_newest();
-                    return Some(Action::Send(literal));
+                    return Some(Action::Send(self.expand_pasted(&literal)));
                 }
                 // `!!…` is the literal escape for a provider prompt beginning
                 // with `!`; one marker is removed and no local process starts.
@@ -2450,7 +2707,7 @@ impl App {
                     self.composer.clear();
                     self.transcript.push_user(&literal);
                     self.follow_newest();
-                    return Some(Action::Send(literal));
+                    return Some(Action::Send(self.expand_pasted(&literal)));
                 }
                 // One leading marker is an explicit local prepared shell
                 // action. Keep the draft on validation failure so no command
@@ -2467,7 +2724,9 @@ impl App {
                     self.composer.clear();
                     self.transcript.push_notice("shell", format!("$ {command}"));
                     self.follow_newest();
-                    return Some(Action::RunShell { command });
+                    return Some(Action::RunShell {
+                        command: self.expand_pasted(&command),
+                    });
                 }
                 // `/…` is a local command and never reaches the provider.
                 if text.starts_with('/') {
@@ -2568,7 +2827,7 @@ impl App {
                         self.composer.record_current();
                         self.overlay = Some(Overlay::AgentFollowUpConfirm {
                             child_id: agent.clone(),
-                            task: task.to_owned(),
+                            task: self.expand_pasted(task),
                             content: format!(
                                 "child: {agent}\noperation: new follow-up turn\ncontinuity: reuse prior child history and cumulative limits\nprovider/model: {model}\nprovider spend: yes\ncheckpoint replay: no"
                             ),
@@ -2584,22 +2843,38 @@ impl App {
                     self.composer.record_current();
                     self.overlay = Some(Overlay::AgentConfirm {
                         preset: agent.clone(),
-                        task: task.to_owned(),
+                        task: self.expand_pasted(task),
                         content: format!(
                             "profile: {agent}\nconfiguration: {profile_detail}\nworkspace: read-only\nturn limit: 1\nprovider spend: yes\nresult: bounded child summary"
                         ),
                     });
                     return None;
                 }
+                let outgoing = self.expand_pasted(&parsed.text);
+                let images = self.referenced_images(&outgoing);
+                if !images.is_empty() && !attached_files.is_empty() {
+                    // Prepared file reads and image parts use different send
+                    // paths; refuse honestly instead of dropping one, and
+                    // keep the draft so nothing disappears unaccepted.
+                    self.transcript.push_error(
+                        "image attachments cannot be combined with `@file` attachments yet",
+                    );
+                    return None;
+                }
                 self.composer.record_current();
                 self.composer.clear();
                 self.transcript.push_user(&parsed.text);
                 self.follow_newest();
-                if attached_files.is_empty() {
-                    Some(Action::Send(parsed.text))
+                if !images.is_empty() {
+                    Some(Action::SendWithImages {
+                        text: outgoing,
+                        images,
+                    })
+                } else if attached_files.is_empty() {
+                    Some(Action::Send(outgoing))
                 } else {
                     Some(Action::SendWithFiles {
-                        text: parsed.text,
+                        text: outgoing,
                         files: attached_files,
                     })
                 }
@@ -3485,6 +3760,176 @@ mod tests {
     }
 
     #[test]
+    fn a_large_paste_collapses_to_a_placeholder_and_expands_on_send() {
+        let mut app = app();
+        app.on_paste("fn main() {\r\n    println!(\"hi\");\r\n}");
+        assert_eq!(app.composer.text(), "[Pasted text #1 +3 lines]");
+
+        type_text(&mut app, " explain this");
+        let action = app.on_key(key(KeyCode::Enter));
+        assert_eq!(
+            action,
+            Some(Action::Send(
+                "fn main() {\n    println!(\"hi\");\n} explain this".to_owned()
+            ))
+        );
+        // The transcript keeps the compact placeholder, not the full paste.
+        match app.transcript.blocks().last() {
+            Some(Block::User { text }) => {
+                assert_eq!(text, "[Pasted text #1 +3 lines] explain this");
+            }
+            other => panic!("expected a user block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn short_pastes_insert_inline_and_placeholders_number_upward() {
+        let mut app = app();
+        app.on_paste("hello world");
+        assert_eq!(app.composer.text(), "hello world");
+        app.composer.clear();
+
+        app.on_paste("a\nb\nc");
+        app.on_paste("d\ne\nf\ng");
+        assert_eq!(
+            app.composer.text(),
+            "[Pasted text #1 +3 lines][Pasted text #2 +4 lines]"
+        );
+        assert_eq!(app.expand_pasted(app.composer.text()), "a\nb\ncd\ne\nf\ng");
+    }
+
+    #[test]
+    fn a_long_single_line_paste_also_collapses() {
+        let mut app = app();
+        app.on_paste(&"x".repeat(2_000));
+        assert_eq!(app.composer.text(), "[Pasted text #1 +1 line]");
+    }
+
+    #[test]
+    fn unregistered_placeholder_lookalikes_never_expand() {
+        let mut app = app();
+        type_text(&mut app, "[Pasted text #9 +4 lines] check");
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Some(Action::Send("[Pasted text #9 +4 lines] check".to_owned()))
+        );
+    }
+
+    #[test]
+    fn pasted_chunk_content_is_not_rescanned_for_placeholders() {
+        let mut app = app();
+        // The pasted content itself contains what will become chunk #2's
+        // label; expanding chunk #1 must not expand that inner text.
+        app.on_paste("[Pasted text #2 +3 lines]\nliteral\ntail");
+        app.on_paste("p\nq\nr");
+        let expanded = app.expand_pasted(app.composer.text());
+        assert_eq!(expanded, "[Pasted text #2 +3 lines]\nliteral\ntailp\nq\nr");
+    }
+
+    #[test]
+    fn a_shell_shortcut_expands_pasted_chunks_into_the_command() {
+        let mut app = app();
+        type_text(&mut app, "!");
+        app.on_paste("echo one\necho two\necho three");
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Some(Action::RunShell {
+                command: "echo one\necho two\necho three".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn attached_images_ride_the_send_in_placeholder_order() {
+        let mut app = app();
+        app.attach_image("data:image/png;base64,FIRST".into(), 800, 600);
+        type_text(&mut app, " and ");
+        app.attach_image("data:image/png;base64,SECOND".into(), 32, 32);
+        assert_eq!(
+            app.composer.text(),
+            "[Image #1 800×600] and [Image #2 32×32]"
+        );
+
+        type_text(&mut app, " compare these");
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Some(Action::SendWithImages {
+                text: "[Image #1 800×600] and [Image #2 32×32] compare these".to_owned(),
+                images: vec![
+                    "data:image/png;base64,FIRST".to_owned(),
+                    "data:image/png;base64,SECOND".to_owned(),
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn a_deleted_image_placeholder_detaches_its_image() {
+        let mut app = app();
+        app.attach_image("data:image/png;base64,GONE".into(), 10, 10);
+        app.composer.clear();
+        type_text(&mut app, "no image after all");
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Some(Action::Send("no image after all".to_owned()))
+        );
+    }
+
+    #[test]
+    fn image_attachment_is_refused_while_a_modal_owns_the_screen() {
+        let mut app = app();
+        assert!(app.can_attach_image());
+        app.overlay = Some(Overlay::UndoConfirm {
+            content: "preview".into(),
+        });
+        assert!(!app.can_attach_image());
+    }
+
+    fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn a_click_inside_the_composer_moves_the_cursor() {
+        let mut app = app();
+        type_text(&mut app, "first line");
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+        type_text(&mut app, "second line");
+        app.composer_pointer_area = Some(Rect::new(0, 20, 80, 3));
+
+        // Column maps past the two-column marker prefix; row maps to lines.
+        assert!(app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 20)));
+        assert_eq!(app.composer.cursor_position(), (0, 3));
+        assert!(app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 2, 21)));
+        assert_eq!(app.composer.cursor_position(), (1, 0));
+
+        // Clicks outside the recorded area and clicks under a modal are inert.
+        assert!(!app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 2)));
+        app.overlay = Some(Overlay::UndoConfirm {
+            content: "preview".into(),
+        });
+        assert!(!app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 20)));
+    }
+
+    #[test]
+    fn the_wheel_scrolls_the_transcript_and_motion_stays_inert() {
+        let mut app = app();
+        app.sync_scroll_limit(40);
+        assert!(app.on_mouse(mouse(MouseEventKind::ScrollUp, 10, 5)));
+        assert_eq!(app.scroll_back, 3);
+        assert!(!app.following);
+        assert!(app.on_mouse(mouse(MouseEventKind::ScrollDown, 10, 5)));
+        assert_eq!(app.scroll_back, 0);
+        assert!(app.following);
+        assert!(!app.on_mouse(mouse(MouseEventKind::Moved, 10, 5)));
+    }
+
+    #[test]
     fn ctrl_r_search_cycles_accepts_and_cancels_losslessly() {
         let mut app = app();
         for input in ["fix older", "unrelated", "fix newest"] {
@@ -4230,7 +4675,7 @@ mod tests {
             visible_output: true,
         }));
 
-        assert_eq!(app.transcript.len(), 2);
+        assert_eq!(app.transcript.len(), 1);
         assert_eq!(
             app.transcript.blocks()[0],
             Block::Assistant {
@@ -4238,13 +4683,7 @@ mod tests {
                 open: false
             }
         );
-        assert_eq!(
-            app.transcript.blocks()[1],
-            Block::Notice {
-                source: "turn".into(),
-                text: "completed".into(),
-            }
-        );
+        assert_eq!(app.turn_summary.as_deref(), Some("Worked"));
         assert!(
             !app.transcript
                 .blocks()
@@ -4329,13 +4768,8 @@ mod tests {
 
         assert!(app.turn_elapsed().is_none());
         assert_eq!(app.turn_started_timestamp, None);
-        assert_eq!(
-            app.transcript.blocks(),
-            &[Block::Notice {
-                source: "turn".into(),
-                text: "completed in 1m 05s".into(),
-            }]
-        );
+        assert!(app.transcript.is_empty());
+        assert_eq!(app.turn_summary.as_deref(), Some("Worked for 1m 05s"));
     }
 
     #[test]
@@ -4352,8 +4786,8 @@ mod tests {
 
         assert_eq!(app.status.activity, Activity::Idle);
         assert!(app.turn_elapsed().is_none());
+        assert_eq!(app.turn_summary.as_deref(), Some("Worked for 842ms"));
         let rendered = format!("{:?}", app.transcript.blocks());
-        assert!(rendered.contains("completed in 842ms"), "{rendered}");
         assert!(!rendered.contains("reasoning only"), "{rendered}");
     }
 
@@ -4372,13 +4806,8 @@ mod tests {
                     visible_output: true,
                 },
             ));
-            assert_eq!(
-                app.transcript.blocks(),
-                &[Block::Notice {
-                    source: "turn".into(),
-                    text: "completed".into(),
-                }]
-            );
+            assert!(app.transcript.is_empty());
+            assert_eq!(app.turn_summary.as_deref(), Some("Worked"));
         }
     }
 
@@ -4792,7 +5221,14 @@ mod tests {
         assert!(rendered.contains("call-approved-edit"));
         assert!(rendered.contains("call-question"));
         assert!(rendered.contains("not restarted"));
-        assert!(rendered.contains("completed in"));
+        assert_eq!(live.turn_summary, replayed.turn_summary);
+        assert!(
+            live.turn_summary
+                .as_deref()
+                .is_some_and(|summary| summary.starts_with("Worked")),
+            "{:?}",
+            live.turn_summary
+        );
         assert!(!rendered.contains("reasoning only"));
         assert!(
             !rendered.contains("discarded speculative prefix"),

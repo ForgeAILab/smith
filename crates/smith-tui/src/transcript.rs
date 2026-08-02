@@ -94,6 +94,9 @@ pub enum Block {
         protected_summary: String,
         /// The current status.
         status: ToolStatus,
+        /// Bounded, credential-redacted first lines of the tool result,
+        /// supplied by the host after completion.
+        result_preview: Option<String>,
     },
     /// A structured error.
     Error {
@@ -251,6 +254,7 @@ impl Transcript {
             display: arguments.and_then(|arguments| project_tool_call_display(name, arguments)),
             protected_summary: summarize_unavailable_arguments(name, argument_keys),
             status: ToolStatus::Running,
+            result_preview: None,
         });
     }
 
@@ -269,6 +273,30 @@ impl Transcript {
                 && id == call_id
             {
                 *slot = Some(display);
+                return;
+            }
+        }
+    }
+
+    /// Attaches a bounded, credential-redacted result preview to a call.
+    ///
+    /// Like [`Self::set_tool_display`], this is host-supplied enrichment: the
+    /// protected event stream never carries result content, so the host reads
+    /// canonical history, redacts it, and hands the transcript only what the
+    /// row shows. Input is re-bounded here so no caller can flood a frame.
+    pub fn set_tool_result_preview(&mut self, call_id: &str, preview: impl AsRef<str>) {
+        let Some(preview) = bound_result_preview(preview.as_ref()) else {
+            return;
+        };
+        for block in self.blocks.iter_mut().rev() {
+            if let Block::Tool {
+                call_id: id,
+                result_preview: slot,
+                ..
+            } = block
+                && id == call_id
+            {
+                *slot = Some(preview);
                 return;
             }
         }
@@ -329,7 +357,7 @@ impl Transcript {
         self.blocks.clear();
         for message in history {
             match message.role {
-                Role::User => self.push_user(message.joined_text()),
+                Role::User => self.push_user(user_display_text(message)),
                 Role::System => {}
                 Role::Assistant => {
                     for part in &message.content {
@@ -364,6 +392,9 @@ impl Transcript {
                                     // History records the call; the matching
                                     // result below supplies the outcome.
                                     status: ToolStatus::Running,
+                                    // As with `display`, the host supplies a
+                                    // redacted preview after rebuilding.
+                                    result_preview: None,
                                 });
                             }
                             // An assistant message does not carry results;
@@ -387,6 +418,82 @@ impl Transcript {
             }
         }
     }
+}
+
+/// Text projection of a user message, marking image parts in place so a
+/// resumed transcript still shows that an image travelled with the turn.
+fn user_display_text(message: &Message) -> String {
+    let mut text = String::new();
+    for part in &message.content {
+        let rendered = match part {
+            ContentPart::Text { text } => text.as_str(),
+            ContentPart::Image { .. } => "[image]",
+            _ => continue,
+        };
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(rendered);
+    }
+    text
+}
+
+const MAX_PREVIEW_LINES: usize = 3;
+const MAX_PREVIEW_LINE_CHARS: usize = 160;
+
+/// Bounds a raw result to its first non-blank lines, one-line-safe and
+/// control-free, with an honest `… +N lines` tail when content was dropped.
+fn bound_result_preview(raw: &str) -> Option<String> {
+    let mut lines = raw
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !line.trim().is_empty());
+    let mut kept = Vec::new();
+    let mut dropped = 0usize;
+    for line in lines.by_ref() {
+        if kept.len() < MAX_PREVIEW_LINES {
+            kept.push(sanitize_preview_line(line));
+        } else {
+            dropped += 1;
+        }
+    }
+    if kept.is_empty() {
+        return None;
+    }
+    if dropped > 0 {
+        kept.push(format!(
+            "… +{dropped} more line{}",
+            if dropped == 1 { "" } else { "s" }
+        ));
+    }
+    Some(kept.join("\n"))
+}
+
+fn sanitize_preview_line(line: &str) -> String {
+    let mut sanitized = String::new();
+    let mut chars = 0usize;
+    for character in line.chars() {
+        if chars == MAX_PREVIEW_LINE_CHARS {
+            sanitized.push('…');
+            break;
+        }
+        // The same unsafe-control set the display projector strips: C0/C1
+        // plus zero-width and bidi override codepoints.
+        if character.is_control()
+            || matches!(
+                character,
+                '\u{200b}'..='\u{200f}'
+                    | '\u{202a}'..='\u{202e}'
+                    | '\u{2060}'..='\u{206f}'
+                    | '\u{feff}'
+            )
+        {
+            continue;
+        }
+        sanitized.push(character);
+        chars += 1;
+    }
+    sanitized
 }
 
 fn bound_local_result(content: String) -> String {
@@ -419,7 +526,7 @@ fn summarize_unavailable_arguments(name: &str, argument_keys: &[String]) -> Stri
     let reason = if has_tool_call_display_schema(name) {
         "details unavailable"
     } else {
-        "unknown schema"
+        "arguments hidden"
     };
     if argument_keys.is_empty() {
         reason.to_owned()
@@ -593,6 +700,37 @@ mod tests {
         match &transcript.blocks()[1] {
             Block::Tool { status, .. } => assert_eq!(*status, ToolStatus::Failed),
             other => panic!("expected a tool block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn result_previews_are_bounded_sanitized_and_matched_by_id() {
+        let mut transcript = Transcript::new();
+        transcript.push_tool_call(
+            "c1",
+            "registry.search",
+            Some(&json!({"query": "browser", "max_results": 2})),
+            &["max_results".into(), "query".into()],
+        );
+        transcript.complete_tool_call("c1", ToolStatus::Ok);
+        transcript.set_tool_result_preview(
+            "c1",
+            "\nfirst card\u{202e}\nsecond card\n\nthird card\nfourth card\nfifth card\n",
+        );
+        transcript.set_tool_result_preview("unknown", "never lands");
+        transcript.set_tool_result_preview("c1", "   \n \n");
+
+        match &transcript.blocks()[0] {
+            Block::Tool {
+                result_preview: Some(preview),
+                ..
+            } => {
+                assert_eq!(
+                    preview,
+                    "first card\nsecond card\nthird card\n… +2 more lines"
+                );
+            }
+            other => panic!("expected a tool block with a preview, got {other:?}"),
         }
     }
 
@@ -787,6 +925,30 @@ mod tests {
                 expected.map(str::to_owned),
                 "{name}"
             );
+        }
+    }
+
+    #[test]
+    fn replayed_user_images_keep_a_visible_marker() {
+        let history = vec![Message {
+            role: Role::User,
+            content: vec![
+                ContentPart::text("what is this?"),
+                ContentPart::Image {
+                    url: "data:image/png;base64,SECRETPIXELS".into(),
+                    detail: None,
+                },
+            ],
+        }];
+        let mut transcript = Transcript::new();
+        transcript.replace_from_history(&history);
+
+        match &transcript.blocks()[0] {
+            Block::User { text } => {
+                assert_eq!(text, "what is this?\n[image]");
+                assert!(!text.contains("SECRETPIXELS"));
+            }
+            other => panic!("expected a user block, got {other:?}"),
         }
     }
 

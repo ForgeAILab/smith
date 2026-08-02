@@ -200,6 +200,10 @@ impl MaskedInput {
         self.0.push(character);
     }
 
+    fn push_str(&mut self, value: &str) {
+        self.0.push_str(value);
+    }
+
     fn pop(&mut self) {
         self.0.pop();
     }
@@ -510,6 +514,38 @@ impl SetupApp {
                 SetupEffect::None
             }
             _ => SetupEffect::None,
+        }
+    }
+
+    /// Folds one bracketed paste into the active text field.
+    ///
+    /// Pasting is how credentials usually arrive; without this, enabling
+    /// bracketed paste would silently swallow them. Newlines and controls are
+    /// dropped so a trailing newline cannot auto-submit a half-read form.
+    pub fn on_paste(&mut self, text: &str) {
+        if self.step == Step::Busy {
+            return;
+        }
+        if let Some(picker) = &mut self.picker {
+            picker.paste(text);
+            return;
+        }
+        self.error = None;
+        let cleaned = text
+            .chars()
+            .filter(|character| !character.is_control())
+            .collect::<String>();
+        if cleaned.is_empty() {
+            return;
+        }
+        if self.step == Step::CredentialValue
+            && self
+                .credential_method
+                .is_some_and(CredentialMethod::takes_secret)
+        {
+            self.secret.push_str(&cleaned);
+        } else {
+            self.input.push_str(&cleaned);
         }
     }
 
