@@ -9,14 +9,15 @@ use std::sync::Arc;
 
 use agent_runtime::ability::activation::{Activated, ActivationError, ActivationHandle};
 use agent_runtime::ability::descriptor::{
-    AbilityDescriptor, ContextCost, ReadinessRequirement, RiskLevel,
+    AbilityDescriptor, ContextCost, DependencyRequirement, ReadinessRequirement, RiskLevel,
 };
 use agent_runtime::ability::{Ability, AbilityKind, AbilityRegistry, SealedAbilities};
 use agent_runtime::harness::{
-    ARTIFACT_READ_TOOL_NAME, QUESTIONNAIRE_TOOL_NAME, WRITE_TODOS_TOOL_NAME,
+    ARTIFACT_READ_TOOL_NAME, CREATE_GOAL_TOOL_NAME, GET_GOAL_TOOL_NAME, QUESTIONNAIRE_TOOL_NAME,
+    UPDATE_GOAL_TOOL_NAME, WRITE_TODOS_TOOL_NAME,
 };
 use agent_runtime::registry::{
-    EntryProvenance, NameConflict, Named, Permission, RegistryRevision, RegistrySource,
+    EntryProvenance, NameConflict, Named, Permission, RegistryId, RegistryRevision, RegistrySource,
 };
 use agent_runtime_core::tool::{Tool, ToolSpec, canonicalize_json};
 
@@ -81,7 +82,7 @@ impl Ability for SmithToolAbility {
             .cloned()
             .collect::<Vec<_>>();
         let schema_text = self.spec.input_schema.to_string();
-        AbilityDescriptor::new(
+        let mut descriptor = AbilityDescriptor::new(
             AbilityKind::Tool,
             self.spec.name.clone(),
             EntryProvenance::new(self.provenance, revision.clone()),
@@ -96,7 +97,13 @@ impl Ability for SmithToolAbility {
         .with_readiness(readiness(&self.spec.name))
         .with_context_cost(ContextCost::estimate(&schema_text, &self.spec.description))
         .with_input_modalities(["json"])
-        .with_output_modalities(["text", "json"])
+        .with_output_modalities(["text", "json"]);
+        if self.spec.name == CREATE_GOAL_TOOL_NAME {
+            descriptor = descriptor.with_dependency(DependencyRequirement::single(
+                RegistryId::tool(UPDATE_GOAL_TOOL_NAME),
+            ));
+        }
+        descriptor
     }
 }
 
@@ -190,6 +197,18 @@ fn keywords(name: &str) -> Vec<&'static str> {
             "review",
         ],
         ARTIFACT_READ_TOOL_NAME => vec!["artifact", "read", "output", "page"],
+        GET_GOAL_TOOL_NAME => vec!["goal", "persistent", "status", "objective", "budget"],
+        CREATE_GOAL_TOOL_NAME => vec!["goal", "persistent", "create", "objective", "multi-turn"],
+        UPDATE_GOAL_TOOL_NAME => vec![
+            "goal",
+            "persistent",
+            "create",
+            "objective",
+            "multi-turn",
+            "complete",
+            "blocked",
+            "finish",
+        ],
         _ => Vec::new(),
     }
 }
@@ -205,6 +224,8 @@ fn affordances(name: &str, permissions: &[Permission]) -> Vec<&'static str> {
         QUESTIONNAIRE_TOOL_NAME => vec!["user-interaction", "task-question"],
         WRITE_TODOS_TOOL_NAME => vec!["plan-management"],
         ARTIFACT_READ_TOOL_NAME => vec!["artifact-read"],
+        GET_GOAL_TOOL_NAME => vec!["goal-read"],
+        CREATE_GOAL_TOOL_NAME | UPDATE_GOAL_TOOL_NAME => vec!["goal-management"],
         _ => Vec::new(),
     };
     values.extend(permissions.iter().map(permission_affordance));

@@ -336,6 +336,7 @@ The initial command set is deliberately bounded:
 | --- | --- |
 | `/help` | List every implemented command and composer shortcut locally, grouped by primary and advanced use. |
 | `/status` | Show resolved runtime, context window, session, permission, Git, child, and attribution state locally. |
+| `/goal [OBJECTIVE\|edit …\|budget N\|pause\|resume\|clear]` | Inspect or control one persistent multi-turn session goal without sending the command to the provider. |
 | `/context` | Visualize the latest model-facing context plan, free input space, reserves, and compaction state locally. |
 | `/think [on\|off\|default]` | Inspect or change thinking for the next complete turn when the provider/model exposes an exact toggle. |
 | `/effort [LEVEL\|default]` | Inspect or change reasoning effort using only levels advertised for the active provider/model. |
@@ -591,11 +592,14 @@ someone reading.
 
 The non-interactive surface shares the same committed event semantics. Text
 mode writes only the final assistant answer to stdout and sends concise
-lifecycle/authority evidence to stderr. JSON emits one schema-v2 result;
+lifecycle/authority evidence to stderr. Ordinary prompts remain one turn; an
+explicitly active goal follows attributed internal continuations until it
+stops. JSON emits one schema-v3 result;
 stream JSON emits ordered versioned runtime events through shutdown and that
 result last. Both machine modes project attempt commits/discards, the frozen
 activation epoch, public-or-counts-only todo state, artifact references,
-recovery metadata, prepared approval evidence, and interaction-required state.
+recovery metadata, optional goal state/continuation count, prepared approval
+evidence, and interaction-required state.
 They never expose raw approval arguments, sensitive todo items, questionnaire
 content, or artifact bodies. No-TTY approval/question paths terminate with
 stable non-success results rather than reading stdin or waiting indefinitely.

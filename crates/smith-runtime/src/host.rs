@@ -12,12 +12,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
 use agent_runtime::delegation::ChildDurability;
-use agent_runtime::runtime::{CheckpointRecoveryPolicy, SessionHandle, StartSession};
+use agent_runtime::runtime::{
+    CheckpointRecoveryPolicy, GoalController, GoalControllerConfig, SessionHandle, StartSession,
+};
 use agent_runtime_core::checkpoint::{TurnCheckpoint, TurnState};
 use agent_runtime_core::content::{ContentPart, Message};
 use agent_runtime_core::error::{ErrorKind, RuntimeError};
 use agent_runtime_core::event::EventEnvelope;
 use agent_runtime_core::event::RuntimeEvent;
+use agent_runtime_core::goal::{GoalCommand, GoalCommandResult, GoalProjection};
 use agent_runtime_core::ids::{ChildId, InteractionRequestId, SessionId, ToolCallId, TurnId};
 use agent_runtime_core::observer::EventObserver;
 use agent_runtime_core::store::{SessionSnapshot, SessionStore};
@@ -113,6 +116,7 @@ pub struct HostSession {
     lifecycle_lease: Mutex<Option<PrivateFileLock>>,
     restored_interaction: Option<RestoredInteraction>,
     recovered_ephemeral_work: Option<EphemeralWorkInterruption>,
+    goal_controller: Mutex<Option<GoalController>>,
 }
 
 /// Redaction-safe identity of an exact pending interaction restored from a
@@ -172,6 +176,28 @@ impl HostSession {
     /// this resume.
     pub fn recovered_ephemeral_work(&self) -> Option<&EphemeralWorkInterruption> {
         self.recovered_ephemeral_work.as_ref()
+    }
+
+    /// Current bounded persistent-goal projection for this eligible root
+    /// session. Ephemeral and child sessions return `None`.
+    pub fn goal(&self) -> Result<Option<GoalProjection>, RuntimeError> {
+        self.runtime
+            .goal_component()
+            .map(|component| self.session.goal(component))
+            .transpose()
+            .map(Option::flatten)
+    }
+
+    /// Applies one typed local goal control through Agent Runtime's serialized
+    /// canonical state path without provider I/O.
+    pub async fn control_goal(
+        &self,
+        command: GoalCommand,
+    ) -> Result<GoalCommandResult, RuntimeError> {
+        let component = self.runtime.goal_component().ok_or_else(|| {
+            RuntimeError::conflict("persistent goals require an eligible persisted root session")
+        })?;
+        self.session.control_goal(component, command).await
     }
 
     /// Flushes and returns the redaction-safe canonical events available for
@@ -241,6 +267,15 @@ impl HostSession {
     /// storage error cannot strand the writer task or silently lose events
     /// already accepted by its bounded queue.
     pub async fn shutdown(&self) -> Result<Option<JournalStats>, RuntimeError> {
+        let goal_controller = self
+            .goal_controller
+            .lock()
+            .expect("goal controller lock poisoned")
+            .take();
+        let goal_controller = match goal_controller {
+            Some(controller) => controller.shutdown().await,
+            None => Ok(()),
+        };
         let delegation = match self
             .runtime
             .delegation()
@@ -258,6 +293,7 @@ impl HostSession {
             .lock()
             .expect("session lifecycle lease poisoned")
             .take();
+        goal_controller?;
         delegation?;
         session?;
         journal
@@ -684,6 +720,19 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         journal.record_ephemeral_interruption(interruption).await?;
     }
 
+    let goal_controller = runtime
+        .goal_component()
+        .map(|component| {
+            session.start_goal_controller(
+                (**component).clone(),
+                GoalControllerConfig::new(
+                    "Continue the current persistent goal from its canonical state. Stop only by completing it or recording a genuine blocker.",
+                )
+                .with_sensitivity(agent_runtime_core::content::InternalTurnSensitivity::Public),
+            )
+        })
+        .transpose()?;
+
     Ok(HostSession {
         runtime,
         session,
@@ -694,6 +743,7 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         lifecycle_lease: Mutex::new(lifecycle_lease),
         restored_interaction,
         recovered_ephemeral_work,
+        goal_controller: Mutex::new(goal_controller),
     })
 }
 

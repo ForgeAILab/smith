@@ -60,8 +60,9 @@ use agent_runtime::context::{
     CompactionPolicy, ContextBudget, ContextPolicy, ProviderCacheCapability, StructuralCompactor,
 };
 use agent_runtime::harness::{
-    ArtifactOffloader, ArtifactReadTool, MemoryContributor, MemorySource, QuestionnaireTool,
-    SemanticSummaryCoordinator, SummaryModel, TodoComponent, WriteTodosTool,
+    ArtifactOffloader, ArtifactReadTool, CreateGoalTool, GetGoalTool, GoalComponent,
+    MemoryContributor, MemorySource, QuestionnaireTool, SemanticSummaryCoordinator, SummaryModel,
+    TodoComponent, UpdateGoalTool, WriteTodosTool,
 };
 use agent_runtime::hub::{ScopeIdentity, ScopeInputs};
 use agent_runtime::provider::fake::FakeProvider;
@@ -481,6 +482,7 @@ pub struct SmithRuntime {
     artifact_store: Option<Arc<dyn ArtifactStore>>,
     surface: HostSurface,
     delegation: Option<SmithDelegation>,
+    goal_component: Option<Arc<GoalComponent>>,
 }
 
 impl SmithRuntime {
@@ -531,6 +533,11 @@ impl SmithRuntime {
     /// tool (root surfaces only — a child runtime never has one).
     pub fn delegation(&self) -> Option<&SmithDelegation> {
         self.delegation.as_ref()
+    }
+
+    /// Standard persistent-goal component for eligible root sessions.
+    pub fn goal_component(&self) -> Option<&Arc<GoalComponent>> {
+        self.goal_component.as_ref()
     }
 }
 
@@ -848,6 +855,15 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
     // bounded public projection may enter the redacted journal and powers the
     // transcript's compact inline plan block. It never grants tool authority.
     let todo_component = Arc::new(TodoComponent::public());
+    let goal_component =
+        goal_component_eligible(&request).then(|| Arc::new(GoalComponent::public()));
+    if goal_component.is_some() {
+        tools.extend([
+            Arc::new(GetGoalTool::new()) as Arc<dyn Tool>,
+            Arc::new(CreateGoalTool::new()) as Arc<dyn Tool>,
+            Arc::new(UpdateGoalTool::new()) as Arc<dyn Tool>,
+        ]);
+    }
     let host_tool_names = request
         .tools
         .iter()
@@ -1031,6 +1047,13 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         .clock(clock.clone())
         .event_buffer(request.event_buffer)
         .shutdown_timeout_ms(request.shutdown_timeout_ms);
+    if let Some(component) = &goal_component {
+        builder = builder
+            .context_contributor(component.clone())
+            .model_interceptor(component.clone())
+            .tool_output_processor(component.clone())
+            .turn_commit_hook(component.clone());
+    }
     if let Some(contributor) = memory_contributor.clone() {
         builder = builder.context_contributor(Arc::new(contributor));
     }
@@ -1119,6 +1142,7 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         artifact_store: request.artifact_store,
         surface: request.surface,
         delegation,
+        goal_component,
     })
 }
 
@@ -1688,6 +1712,10 @@ fn tools(request: &RuntimeRequest) -> Vec<Arc<dyn Tool>> {
     tools
 }
 
+fn goal_component_eligible(request: &RuntimeRequest) -> bool {
+    request.config.persistence.enabled.value && !matches!(request.surface, HostSurface::Child)
+}
+
 fn read_only_extension(spec: agent_runtime_core::tool::ToolSpec) -> bool {
     spec.effects.is_read_only()
         && spec
@@ -2040,6 +2068,20 @@ mod tests {
             fallback.required().expect("a denied fallback").tool,
             "shell"
         );
+    }
+
+    #[test]
+    fn persistent_goals_are_composed_only_for_persisted_root_surfaces() {
+        let root = RuntimeRequest::new(resolved_config(), HostSurface::Terminal);
+        assert!(goal_component_eligible(&root));
+
+        let child = RuntimeRequest::new(resolved_config(), HostSurface::Child);
+        assert!(!goal_component_eligible(&child));
+
+        let mut config = resolved_config();
+        config.persistence.enabled = sourced(false);
+        let ephemeral = RuntimeRequest::new(config, HostSurface::Headless);
+        assert!(!goal_component_eligible(&ephemeral));
     }
 
     fn limits() -> smith_config::resolve::ResolvedLimits {

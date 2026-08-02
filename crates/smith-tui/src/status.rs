@@ -19,6 +19,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use agent_runtime_core::event::EstimationConfidence;
+use agent_runtime_core::goal::GoalProjection;
 use agent_runtime_core::manifest::SegmentKind;
 use agent_runtime_core::usage::{CounterKind, UsageDelta};
 
@@ -307,6 +308,8 @@ pub struct Status {
     pub cache_read: Option<u64>,
     /// What the agent is doing.
     pub activity: Activity,
+    /// Latest durability-aligned persistent-goal projection.
+    pub goal: Option<GoalProjection>,
     /// Whether any provider usage has been reported this session.
     usage_reported: bool,
 }
@@ -325,6 +328,7 @@ impl Status {
             capabilities: CapabilityStatus::default(),
             cache_read: None,
             activity: Activity::Idle,
+            goal: None,
             usage_reported: false,
         }
     }
@@ -337,6 +341,27 @@ impl Status {
     /// Sets the compact footer hint for a non-default reasoning selection.
     pub fn set_reasoning_hint(&mut self, hint: Option<String>) {
         self.reasoning_hint = hint;
+    }
+
+    /// Replaces the compact persistent-goal projection.
+    pub fn set_goal(&mut self, goal: Option<GoalProjection>) {
+        self.goal = goal;
+    }
+
+    /// Renders the compact, provenance-aware goal footer segment.
+    pub fn render_goal_footer(&self) -> Option<String> {
+        self.goal.as_ref().map(|goal| {
+            let status = goal.status.as_str();
+            let used = goal
+                .usage
+                .charged_tokens
+                .map_or_else(|| "?".to_owned(), compact_tokens);
+            let tokens = goal.token_budget.map_or_else(
+                || format!("{used} tok"),
+                |budget| format!("{used}/{} tok", compact_tokens(budget)),
+            );
+            format!("goal {status} · {tokens}")
+        })
     }
 
     /// Folds a provider-reported usage delta into the running totals.

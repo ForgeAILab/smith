@@ -507,6 +507,9 @@ async fn a_resolved_fake_configuration_builds_a_runtime_and_runs_a_turn() {
             "shell",
             "ask_user",
             "write_todos",
+            "get_goal",
+            "create_goal",
+            "update_goal",
             "agent"
         ],
         "a root surface registers the standard questionnaire, todo, and delegation tools"
@@ -521,6 +524,9 @@ async fn a_resolved_fake_configuration_builds_a_runtime_and_runs_a_turn() {
             "shell",
             "ask_user",
             "write_todos",
+            "get_goal",
+            "create_goal",
+            "update_goal",
             "agent"
         ],
         "the one factory seals every executable tool as one descriptor-first ability"
@@ -588,7 +594,17 @@ async fn plan_profile_narrows_the_live_tool_view_despite_widening_instructions()
     assert_eq!(smith.policy().agent_posture, AgentPosture::Plan);
     assert_eq!(
         smith.policy().tools,
-        ["read", "list", "search", "ask_user", "write_todos", "agent"]
+        [
+            "read",
+            "list",
+            "search",
+            "ask_user",
+            "write_todos",
+            "get_goal",
+            "create_goal",
+            "update_goal",
+            "agent"
+        ]
     );
     assert!(!smith.abilities().names().contains(&"edit"));
     assert!(!smith.abilities().names().contains(&"shell"));

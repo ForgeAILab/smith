@@ -23,6 +23,8 @@ pub enum CommandAction {
     Effort(Option<String>),
     /// Render resolved local status.
     Status,
+    /// Inspect or mutate the persistent session goal.
+    Goal(GoalAction),
     /// Visualize the latest model-facing context plan.
     Context,
     /// Toggle bounded active-work detail.
@@ -47,6 +49,25 @@ pub enum CommandAction {
     Quit,
     /// Render command help locally.
     Help,
+}
+
+/// Typed local persistent-goal control.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GoalAction {
+    /// Render the current goal, if any.
+    Show,
+    /// Create a goal with the supplied bounded objective.
+    Create(String),
+    /// Replace the unfinished goal objective.
+    Edit(String),
+    /// Set a positive token budget or remove it with `None`.
+    Budget(Option<u64>),
+    /// Pause active automatic work.
+    Pause,
+    /// Resume eligible stopped automatic work.
+    Resume,
+    /// Clear the current goal without marking it complete.
+    Clear,
 }
 
 /// One discoverable command.
@@ -77,6 +98,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         name: "status",
         argument_hint: "",
         description: "show runtime and workspace status",
+        requires_idle: false,
+        advanced: false,
+    },
+    CommandSpec {
+        name: "goal",
+        argument_hint: "[OBJECTIVE|edit …|budget N|pause|resume|clear]",
+        description: "inspect or control a persistent multi-turn goal",
         requires_idle: false,
         advanced: false,
     },
@@ -227,15 +255,19 @@ pub fn parse(input: &str) -> Result<CommandAction, String> {
     let Some(name) = words.next() else {
         return Err("select or enter a command".to_owned());
     };
+    let Some(spec) = COMMANDS.iter().find(|command| command.name == name) else {
+        return Err(format!("unknown command `/{name}` — type /help"));
+    };
+
+    if name == "goal" {
+        return parse_goal(trimmed.strip_prefix(name).unwrap_or_default().trim());
+    }
+
     let argument = words.next().map(str::to_owned);
     let second = words.next().map(str::to_owned);
     if words.next().is_some() {
         return Err(format!("`/{name}` accepts at most one value"));
     }
-    let Some(spec) = COMMANDS.iter().find(|command| command.name == name) else {
-        return Err(format!("unknown command `/{name}` — type /help"));
-    };
-
     if spec.argument_hint.is_empty() && argument.is_some() {
         return Err(format!("`/{name}` takes no value"));
     }
@@ -270,6 +302,43 @@ pub fn parse(input: &str) -> Result<CommandAction, String> {
         "quit" => CommandAction::Quit,
         _ => unreachable!("every registered command is parsed above"),
     })
+}
+
+fn parse_goal(argument: &str) -> Result<CommandAction, String> {
+    let action = if argument.is_empty() {
+        GoalAction::Show
+    } else if let Some(objective) = argument.strip_prefix("edit ") {
+        let objective = objective.trim();
+        if objective.is_empty() {
+            return Err("`/goal edit` requires an objective".to_owned());
+        }
+        GoalAction::Edit(objective.to_owned())
+    } else if argument == "edit" {
+        return Err("`/goal edit` requires an objective".to_owned());
+    } else if let Some(value) = argument.strip_prefix("budget ") {
+        let value = value.trim();
+        if value == "none" {
+            GoalAction::Budget(None)
+        } else {
+            let budget = value
+                .parse::<u64>()
+                .map_err(|_| "`/goal budget` requires a positive integer or `none`".to_owned())?;
+            if budget == 0 {
+                return Err("`/goal budget` requires a positive integer or `none`".to_owned());
+            }
+            GoalAction::Budget(Some(budget))
+        }
+    } else if argument == "budget" {
+        return Err("`/goal budget` requires a positive integer or `none`".to_owned());
+    } else {
+        match argument {
+            "pause" => GoalAction::Pause,
+            "resume" => GoalAction::Resume,
+            "clear" => GoalAction::Clear,
+            objective => GoalAction::Create(objective.to_owned()),
+        }
+    };
+    Ok(CommandAction::Goal(action))
 }
 
 /// Finished `/help` output, derived from the registry.
@@ -364,5 +433,35 @@ mod tests {
                 .contains("requires a child ID")
         );
         assert!(parse("/missing").unwrap_err().contains("/help"));
+    }
+
+    #[test]
+    fn goal_parser_preserves_objectives_and_validates_controls() {
+        assert_eq!(
+            parse("/goal").unwrap(),
+            CommandAction::Goal(GoalAction::Show)
+        );
+        assert_eq!(
+            parse("/goal ship the persistent goal system").unwrap(),
+            CommandAction::Goal(GoalAction::Create("ship the persistent goal system".into()))
+        );
+        assert_eq!(
+            parse("/goal edit ship it safely").unwrap(),
+            CommandAction::Goal(GoalAction::Edit("ship it safely".into()))
+        );
+        assert_eq!(
+            parse("/goal budget 12000").unwrap(),
+            CommandAction::Goal(GoalAction::Budget(Some(12_000)))
+        );
+        assert_eq!(
+            parse("/goal budget none").unwrap(),
+            CommandAction::Goal(GoalAction::Budget(None))
+        );
+        assert_eq!(
+            parse("/goal pause").unwrap(),
+            CommandAction::Goal(GoalAction::Pause)
+        );
+        assert!(parse("/goal edit").unwrap_err().contains("objective"));
+        assert!(parse("/goal budget 0").unwrap_err().contains("positive"));
     }
 }

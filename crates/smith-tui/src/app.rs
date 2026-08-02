@@ -24,7 +24,7 @@ use ratatui::layout::Rect;
 use smith_host::approval::{ApprovalPrompt, PromptScope};
 use smith_tools::ToolCallDisplay;
 
-use crate::commands::{self, CommandAction};
+use crate::commands::{self, CommandAction, GoalAction};
 use crate::composer::Composer;
 use crate::diff::EditReview;
 use crate::picker::{PickerOutcome, ResourceEntry, ResourcePicker};
@@ -874,6 +874,7 @@ impl App {
         match &envelope.payload {
             RuntimeEvent::SessionStarted => {
                 self.status.activity = Activity::Idle;
+                self.status.goal = None;
                 self.status.capabilities = Default::default();
                 self.status.context_plan = None;
                 self.plan = None;
@@ -884,7 +885,7 @@ impl App {
                 self.speculative_order.clear();
                 self.finalized_attempts.clear();
             }
-            RuntimeEvent::TurnStarted => {
+            RuntimeEvent::TurnStarted | RuntimeEvent::InternalTurnStarted { .. } => {
                 self.discard_orphaned_speculative_output("next turn start");
                 self.status.activity = Activity::Working;
                 self.turn_summary = None;
@@ -1068,6 +1069,9 @@ impl App {
                     },
                 };
                 self.plan = Some(plan);
+            }
+            RuntimeEvent::GoalUpdated { goal, .. } => {
+                self.status.set_goal(goal.clone());
             }
             RuntimeEvent::Usage { record } => {
                 self.status.record_usage(&record.delta);
@@ -2942,6 +2946,7 @@ impl App {
             let name = match &command {
                 CommandAction::Help => "help",
                 CommandAction::Status => "status",
+                CommandAction::Goal(_) => "goal",
                 CommandAction::Context => "context",
                 CommandAction::Details => "details",
                 CommandAction::Timeline => "timeline",
@@ -2973,6 +2978,25 @@ impl App {
                     "/{name} requires an idle turn; draft preserved",
                     name = spec.name
                 ),
+            );
+            return None;
+        }
+        if self.is_busy()
+            && matches!(
+                command,
+                CommandAction::Goal(
+                    GoalAction::Create(_)
+                        | GoalAction::Edit(_)
+                        | GoalAction::Budget(_)
+                        | GoalAction::Resume
+                        | GoalAction::Clear
+                )
+            )
+        {
+            self.overlay = None;
+            self.transcript.push_notice(
+                "goal",
+                "this goal change requires an idle turn; command preserved",
             );
             return None;
         }
@@ -3141,6 +3165,13 @@ impl App {
                     ),
                 });
                 None
+            }
+            CommandAction::Goal(GoalAction::Pause) => {
+                if self.is_busy() {
+                    self.status.activity = Activity::Interrupting;
+                }
+                self.accept_composer_input();
+                Some(Action::Command(CommandAction::Goal(GoalAction::Pause)))
             }
             local => {
                 self.accept_composer_input();
@@ -3351,9 +3382,13 @@ mod tests {
     use agent_runtime_core::delegation::WorkspacePolicy;
     use agent_runtime_core::error::RuntimeError;
     use agent_runtime_core::event::EstimationConfidence;
+    use agent_runtime_core::event::GoalUpdateCause;
+    use agent_runtime_core::goal::{
+        GoalProjection, GoalStatus, GoalTokenUsage, GoalUsageProvenance,
+    };
     use agent_runtime_core::ids::{
-        AttemptId, ChildId, EventId, InteractionRequestId, QuestionId, RequestId, SessionId,
-        ToolCallId, TurnId,
+        AttemptId, ChildId, EventId, GoalId, InteractionRequestId, QuestionId, RequestId,
+        SessionId, ToolCallId, TurnId,
     };
     use agent_runtime_core::interaction::InteractionSensitivity;
     use agent_runtime_core::manifest::{ActivatedCapability, SegmentKind};
@@ -3427,6 +3462,56 @@ mod tests {
             attempt: AttemptId::new("attempt-fixture"),
             text: text.to_owned(),
         }
+    }
+
+    fn goal_projection(status: GoalStatus, charged_tokens: Option<u64>) -> GoalProjection {
+        GoalProjection {
+            id: GoalId::new("goal-1"),
+            generation: 3,
+            objective: "Ship persistent goals".into(),
+            status,
+            token_budget: Some(100),
+            usage: GoalTokenUsage {
+                charged_tokens,
+                provenance: if charged_tokens.is_some() {
+                    GoalUsageProvenance::ProviderReported
+                } else {
+                    GoalUsageProvenance::Unknown
+                },
+                active_elapsed_ms: 1_250,
+            },
+            created_at: Timestamp(10),
+            updated_at: Timestamp(20),
+            stopped_reason: None,
+        }
+    }
+
+    #[test]
+    fn goal_events_reduce_identically_without_duplicating_transcript_history() {
+        let update = event(RuntimeEvent::GoalUpdated {
+            cause: GoalUpdateCause::TurnCommit,
+            sensitivity: PlanSensitivity::Public,
+            goal: Some(goal_projection(GoalStatus::Active, Some(17))),
+        });
+        let mut live = app();
+        let mut replayed = app();
+        live.apply(&update);
+        replayed.apply(&update);
+
+        assert_eq!(live.status.goal, replayed.status.goal);
+        assert_eq!(
+            live.status.render_goal_footer().as_deref(),
+            Some("goal active · 17/100 tok")
+        );
+        assert!(live.transcript.blocks().is_empty());
+
+        let cleared = event(RuntimeEvent::GoalUpdated {
+            cause: GoalUpdateCause::Cleared,
+            sensitivity: PlanSensitivity::Public,
+            goal: None,
+        });
+        live.apply(&cleared);
+        assert!(live.status.goal.is_none());
     }
 
     fn commit_output() -> RuntimeEvent {

@@ -1064,6 +1064,7 @@ async fn terminal_resume_merges_protected_sensitive_state_over_the_plaintext_sna
             TurnState::Completing {
                 finish: TurnFinish::Completed,
                 visible_output: false,
+                provider_error_kind: None,
             },
             snapshot.clone(),
             8,

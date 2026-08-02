@@ -53,6 +53,13 @@ interrupted checkpoint. Startup, `/agent`, `/timeline`, and headless status
 only inspect retained metadata and never spend provider tokens. Smith never
 turns a missing or incompatible child ID into an implicit new spawn.
 
+Persisted root sessions may also own one explicit multi-turn goal. `/goal
+<objective>` creates it locally; bare `/goal` shows canonical status, reported
+token evidence, budget, and active elapsed time. Smith continues an active goal
+only while this process is running and the session is idle. Real user input
+wins admission, child and ephemeral sessions never receive goal abilities, and
+no daemon or restart-time scheduler is created.
+
 ## Running it
 
 Smith requires Rust 1.88 or newer.
@@ -317,10 +324,11 @@ smith -p "inspect" --output-format stream-json
 smith -p "continue" --resume session-...
 ```
 
-`json` emits one schema-v2 result. `stream-json` emits versioned runtime events
+`json` emits one schema-v3 result. `stream-json` emits versioned runtime events
 followed by that result. Results project attempt commits/discards, the frozen
 activation epoch, todo counts/items when public, artifact references, recovery
-metadata, prepared approval authority, and interaction-required state. A
+metadata, optional final goal state and continuation count, prepared approval
+authority, and interaction-required state. A
 forced live questionnaire—or a protected pending question on resume—returns
 `interaction_required` with exit status 5 and never reads prompt stdin; resume
 the same session interactively to answer the exact request. With the default

@@ -144,7 +144,7 @@ fn json_mode_runs_through_config_and_returns_a_resumable_identity() {
     );
     assert!(first.stderr.is_empty(), "{:?}", first.stderr);
     let result = json(&first);
-    assert_eq!(result["schema_version"], 2);
+    assert_eq!(result["schema_version"], 3);
     assert_eq!(result["type"], "result");
     assert_eq!(result["status"], "ok");
     assert_eq!(result["provider"], "local");

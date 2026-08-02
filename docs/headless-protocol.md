@@ -1,8 +1,10 @@
 # Headless protocol
 
 `smith -p` uses the same resolved runtime, session, tools, authorization,
-checkpoints, and persistence as the TUI. It is a one-turn presentation, not a
-separate agent loop.
+checkpoints, and persistence as the TUI. Ordinary prompts retain one-turn
+behavior. If that turn explicitly creates an active persistent goal, the host
+remains subscribed through attributed internal continuations until the goal
+stops.
 
 ## Input and output modes
 
@@ -20,20 +22,20 @@ as an asynchronous approval or questionnaire channel.
 | Format | stdout | stderr |
 | --- | --- | --- |
 | `text` | Final committed assistant text only | Bounded lifecycle/authority diagnostics |
-| `json` | Exactly one schema-v2 result plus newline | Empty after successful protocol startup |
-| `stream-json` | Schema-v2 runtime-event lines, then one terminal result line | Empty after successful protocol startup |
+| `json` | Exactly one schema-v3 result plus newline | Empty after successful protocol startup |
+| `stream-json` | Schema-v3 runtime-event lines, then one terminal result line | Empty after successful protocol startup |
 
 Machine stdout has no ANSI sequences, setup UI, prompt text, progress prose, or
 unversioned diagnostics. CLI parsing errors exit 2; startup/protocol failures
 that cannot produce a result exit 1.
 
-## Result schema v2
+## Result schema v3
 
-Fields are additive within schema 2:
+Schema 3 retains existing field meanings and adds optional goal fields:
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "type": "result",
   "status": "ok",
   "session_id": "session-...",
@@ -66,7 +68,22 @@ Fields are additive within schema 2:
         "tokens_used": 1200
       }
     ]
-  }
+  },
+  "goal": {
+    "id": "goal-...",
+    "generation": 4,
+    "objective": "ship the requested change",
+    "status": "complete",
+    "token_budget": 20000,
+    "usage": {
+      "charged_tokens": 18342,
+      "provenance": "provider_reported",
+      "active_elapsed_ms": 9123
+    },
+    "created_at": 0,
+    "updated_at": 0
+  },
+  "goal_continuation_turns": 3
 }
 ```
 
@@ -105,6 +122,11 @@ durability, lifecycle state, exact-resume availability, cumulative turn/token
 usage, and a bounded incompatibility reason when blocked. It never includes a
 task, child history, raw result, tool arguments, or checkpoint content.
 
+`goal` and `goal_continuation_turns` are omitted for ordinary runs. Goal usage
+charges provider-reported uncached input plus output; cached input is excluded.
+Unknown evidence remains `unknown`, never zero. A token budget is an observed
+post-response limit, so reported usage may overshoot it by one request.
+
 `recovery` is metadata-only:
 
 ```json
@@ -123,10 +145,10 @@ Every nonterminal line is:
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "type": "runtime_event",
   "event": {
-    "schema_version": 9,
+    "schema_version": 10,
     "seq": 12,
     "id": "event-...",
     "session": "session-...",

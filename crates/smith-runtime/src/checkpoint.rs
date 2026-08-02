@@ -522,7 +522,9 @@ impl CheckpointStore for SmithCheckpointStore {
             || checkpoint.watermark.checkpoint_sequence != 1
             || !matches!(
                 checkpoint.state,
-                TurnState::Accepted { .. } | TurnState::LocalActionAccepted { .. }
+                TurnState::Accepted { .. }
+                    | TurnState::InternalAccepted { .. }
+                    | TurnState::LocalActionAccepted { .. }
             )
         {
             return Err(RuntimeError::conflict(
@@ -573,7 +575,9 @@ fn compare_checkpoint(
         && next.state_revision == 0
         && matches!(
             next.state,
-            TurnState::Accepted { .. } | TurnState::LocalActionAccepted { .. }
+            TurnState::Accepted { .. }
+                | TurnState::InternalAccepted { .. }
+                | TurnState::LocalActionAccepted { .. }
         )
         && next.watermark.checkpoint_sequence
             == existing.watermark.checkpoint_sequence.saturating_add(1)
@@ -1105,6 +1109,7 @@ mod tests {
                 TurnState::Completing {
                     finish: TurnFinish::Completed,
                     visible_output: false,
+                    provider_error_kind: None,
                 },
                 first.snapshot.clone(),
                 8,
@@ -1197,6 +1202,7 @@ mod tests {
                 TurnState::Completing {
                     finish: TurnFinish::Completed,
                     visible_output: false,
+                    provider_error_kind: None,
                 },
                 accepted.snapshot.clone(),
                 8,

@@ -164,6 +164,20 @@ a pending questionnaire returns metadata-only `interaction_required` with exit
 status 5. Both leave the exact pending checkpoint intact for an interactive
 resume.
 
+## Persistent goals
+
+One bounded goal may live in a persisted root session's versioned extension
+state. Identity, optimistic generation, status, optional observed token budget,
+usage provenance, active elapsed time, and stopped reason cross completed-turn
+snapshots and protected checkpoints. Automatic internal turns carry typed
+source and goal-generation metadata and no synthetic user message.
+
+Only the current Smith process schedules continuations. Resuming restores the
+projection and a newly attached host may continue an active goal; process
+downtime is never charged as active elapsed time. Ephemeral sessions, child or
+review work, detached daemons, fork inheritance, and remote schedulers are
+outside this contract.
+
 ## Artifacts and semantic summaries
 
 Oversized tool output is persisted before model-facing truncation. The model

@@ -24,6 +24,7 @@ use agent_runtime_core::delegation::{
     ChildLimits, ChildModelSelection, ChildSpec, ToolViewScope, WorkspacePolicy,
 };
 use agent_runtime_core::event::{EstimationConfidence, EventEnvelope, RuntimeEvent, TurnFinish};
+use agent_runtime_core::goal::{GoalCommand, GoalProjection};
 use agent_runtime_core::ids::{ChildId, SessionId};
 use agent_runtime_core::provider::{ModelId, ReasoningSupport};
 use agent_runtime_core::usage::CounterKind;
@@ -55,10 +56,10 @@ use smith_runtime::model_catalog::{CatalogLoader, runtime_catalog_source};
 use smith_runtime::session::{SNAPSHOT_SCHEMA_VERSION, SessionListing};
 use smith_runtime::{ChildDurability, ChildState, ChildStatus, SpawnOutcome};
 use smith_tui::app::{Action, App, LEGACY_AGENT_PROFILE_PREFIX, PaletteCommand};
-use smith_tui::commands::CommandAction;
+use smith_tui::commands::{CommandAction, GoalAction};
 #[cfg(test)]
 use smith_tui::status::ContextPlanUpdate;
-use smith_tui::status::{Status, TokenCount};
+use smith_tui::status::{Status, TokenCount, render_elapsed};
 use smith_tui::theme::{Theme, glyph};
 use smith_tui::{
     PickerOutcome, ResourceEntry, ResourcePicker, RuntimeResources, draw_resource_picker,
@@ -569,6 +570,12 @@ async fn run_interactive(
     app.status
         .switch_model(Some(policy.provider_name.clone()), policy.model.as_str());
     app.status.set_agent(policy.agent_profile.clone());
+    match host.goal() {
+        Ok(goal) => app.status.set_goal(goal),
+        Err(error) => app
+            .transcript
+            .push_error(format!("persistent goal state unavailable: {error}")),
+    }
     app.status
         .set_reasoning_hint(policy.reasoning.has_override().then(|| {
             format!(
@@ -1118,6 +1125,10 @@ async fn handle_local_command(
             let context = render_context_status(&app.status, policy);
             let harness = render_harness_status(&app.status);
             let reasoning = render_reasoning_status(policy);
+            let goal = host.goal().map_or_else(
+                |error| format!("unavailable ({error})"),
+                |goal| goal.as_ref().map_or_else(|| "none".to_owned(), render_goal),
+            );
             app.show_local_result(
                 "status",
                 format!(
@@ -1126,7 +1137,7 @@ async fn handle_local_command(
                      {reasoning}\n\
                      protected mid-turn recovery: {}\n\
                      {harness}\n{context}\nproject: {}\nGit: {}\n\
-                     children: {}\nchange attribution: {}",
+                     goal: {goal}\nchildren: {}\nchange attribution: {}",
                     host.session().id(),
                     policy.agent_profile,
                     policy.agent_posture.as_str(),
@@ -1153,6 +1164,120 @@ async fn handle_local_command(
                     attribution,
                 ),
             );
+        }
+        CommandAction::Goal(action) => {
+            let result = match action {
+                GoalAction::Show => match host.goal() {
+                    Ok(Some(goal)) => {
+                        app.show_local_result("goal", render_goal(&goal));
+                        return;
+                    }
+                    Ok(None) if host.runtime().goal_component().is_some() => {
+                        app.show_local_empty(
+                            "goal",
+                            "No persistent goal. Create one with `/goal <objective>`.",
+                        );
+                        return;
+                    }
+                    Ok(None) => {
+                        app.show_local_error(
+                            "goal",
+                            "Persistent goals require a persisted root session; they are unavailable in ephemeral and child sessions.",
+                        );
+                        return;
+                    }
+                    Err(error) => Err(error),
+                },
+                GoalAction::Create(objective) => {
+                    host.control_goal(GoalCommand::Create {
+                        objective,
+                        token_budget: None,
+                    })
+                    .await
+                }
+                GoalAction::Edit(objective) => match host.goal() {
+                    Ok(Some(goal)) => {
+                        host.control_goal(GoalCommand::Edit {
+                            id: goal.id,
+                            generation: goal.generation,
+                            objective,
+                        })
+                        .await
+                    }
+                    Ok(None) => {
+                        app.show_local_error("goal", "No goal to edit; use `/goal <objective>`.");
+                        return;
+                    }
+                    Err(error) => Err(error),
+                },
+                GoalAction::Budget(token_budget) => match host.goal() {
+                    Ok(Some(goal)) => {
+                        host.control_goal(GoalCommand::SetBudget {
+                            id: goal.id,
+                            generation: goal.generation,
+                            token_budget,
+                        })
+                        .await
+                    }
+                    Ok(None) => {
+                        app.show_local_error(
+                            "goal",
+                            "No goal budget to change; use `/goal <objective>` first.",
+                        );
+                        return;
+                    }
+                    Err(error) => Err(error),
+                },
+                GoalAction::Pause => match host.goal() {
+                    Ok(Some(goal)) => {
+                        host.control_goal(GoalCommand::Pause {
+                            id: goal.id,
+                            generation: goal.generation,
+                        })
+                        .await
+                    }
+                    Ok(None) => {
+                        app.show_local_error("goal", "No active goal to pause.");
+                        return;
+                    }
+                    Err(error) => Err(error),
+                },
+                GoalAction::Resume => match host.goal() {
+                    Ok(Some(goal)) => {
+                        host.control_goal(GoalCommand::Resume {
+                            id: goal.id,
+                            generation: goal.generation,
+                        })
+                        .await
+                    }
+                    Ok(None) => {
+                        app.show_local_error("goal", "No stopped goal to resume.");
+                        return;
+                    }
+                    Err(error) => Err(error),
+                },
+                GoalAction::Clear => match host.goal() {
+                    Ok(Some(goal)) => {
+                        host.control_goal(GoalCommand::Clear {
+                            id: goal.id,
+                            generation: goal.generation,
+                        })
+                        .await
+                    }
+                    Ok(None) => {
+                        app.show_local_error("goal", "No goal to clear.");
+                        return;
+                    }
+                    Err(error) => Err(error),
+                },
+            };
+            match result {
+                Ok(result) => match result.goal {
+                    Some(goal) => app.show_local_result("goal", render_goal(&goal)),
+                    None => app.show_local_result("goal", "Goal cleared."),
+                },
+                Err(error) => app.show_local_error("goal", error.to_string()),
+            }
         }
         CommandAction::Agent(selected) => {
             let Some(coordinator) = host
@@ -1331,6 +1456,34 @@ async fn handle_local_command(
             unreachable!("the reducer handles this command before host dispatch")
         }
     }
+}
+
+fn render_goal(goal: &GoalProjection) -> String {
+    let status = goal.status.as_str();
+    let usage = goal
+        .usage
+        .charged_tokens
+        .map_or_else(|| "unknown".to_owned(), |tokens| tokens.to_string());
+    let budget = goal
+        .token_budget
+        .map_or_else(|| "none".to_owned(), |tokens| tokens.to_string());
+    let provenance = goal.usage.provenance.as_str();
+    let reason = goal.stopped_reason.as_ref().map_or_else(
+        || "none".to_owned(),
+        |reason| {
+            reason.detail.as_ref().map_or_else(
+                || reason.code.clone(),
+                |detail| format!("{} · {detail}", reason.code),
+            )
+        },
+    );
+    format!(
+        "{}\nstatus: {status}\ntokens: {usage} · {provenance}\nbudget: {budget}\nactive elapsed: {}\nreason: {reason}\nid: {} · generation {}",
+        goal.objective,
+        render_elapsed(Duration::from_millis(goal.usage.active_elapsed_ms)),
+        goal.id,
+        goal.generation,
+    )
 }
 
 #[derive(Debug, Default)]

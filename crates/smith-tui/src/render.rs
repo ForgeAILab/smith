@@ -1300,6 +1300,13 @@ fn draw_identity_footer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: The
             Span::styled(reasoning.clone(), theme.style(Tone::Reasoning)),
         );
     }
+    if let Some(goal) = app.status.render_goal_footer() {
+        push_segment(
+            &mut identity,
+            theme,
+            Span::styled(goal, theme.style(Tone::Accent)),
+        );
+    }
     push_segment(
         &mut identity,
         theme,
@@ -2091,7 +2098,10 @@ mod tests {
         EstimationConfidence, EventEnvelope, PlanItemProjection, PlanItemStatus, PlanSensitivity,
         RuntimeEvent, TurnFinish,
     };
-    use agent_runtime_core::ids::{AttemptId, EventId, RequestId, SessionId, ToolCallId};
+    use agent_runtime_core::goal::{
+        GoalProjection, GoalStatus, GoalTokenUsage, GoalUsageProvenance,
+    };
+    use agent_runtime_core::ids::{AttemptId, EventId, GoalId, RequestId, SessionId, ToolCallId};
     use agent_runtime_core::manifest::SegmentKind;
     use agent_runtime_core::security::{PermissionSet, SecurityResource};
     use agent_runtime_core::tool::{PreparedToolCall, ToolCallDisplay, ToolEffects};
@@ -3086,6 +3096,52 @@ mod tests {
             footer.width() <= 44,
             "the footer must not overflow: {footer}"
         );
+    }
+
+    #[test]
+    fn every_goal_status_and_unknown_usage_stays_visible_at_supported_widths() {
+        let theme = Theme::new().without_color().without_motion();
+        for status in [
+            GoalStatus::Active,
+            GoalStatus::Paused,
+            GoalStatus::Blocked,
+            GoalStatus::UsageLimited,
+            GoalStatus::BudgetLimited,
+            GoalStatus::Complete,
+        ] {
+            let mut app = App::new("m", "p");
+            app.status.set_agent("b");
+            app.status.set_goal(Some(GoalProjection {
+                id: GoalId::new("goal-1"),
+                generation: 2,
+                objective: "Finish".into(),
+                status,
+                token_budget: Some(100),
+                usage: GoalTokenUsage {
+                    charged_tokens: None,
+                    provenance: GoalUsageProvenance::Unknown,
+                    active_elapsed_ms: 50,
+                },
+                created_at: Timestamp(10),
+                updated_at: Timestamp(20),
+                stopped_reason: None,
+            }));
+            for (width, height) in [(44, 14), (74, 24), (120, 32)] {
+                let screen = render(&app, width, height, theme);
+                let expected = format!("goal {}", status.as_str());
+                assert!(
+                    screen.contains(&expected),
+                    "{width}x{height} missing {expected}:\n{screen}"
+                );
+                assert!(screen.contains("?/100 tok"), "{width}x{height}:\n{screen}");
+                assert!(
+                    screen
+                        .lines()
+                        .all(|line| line.width() <= usize::from(width)),
+                    "{width}x{height} overflowed:\n{screen}"
+                );
+            }
+        }
     }
 
     #[test]

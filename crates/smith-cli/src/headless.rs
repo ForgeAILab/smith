@@ -1,6 +1,6 @@
 //! Non-interactive execution and versioned stdout contracts.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
 use std::time::Duration;
 
@@ -9,6 +9,7 @@ use agent_runtime_core::content::{Role, UserInput};
 use agent_runtime_core::event::{
     EventEnvelope, PlanItemProjection, PlanSensitivity, RuntimeEvent, TurnFinish,
 };
+use agent_runtime_core::goal::{GoalProjection, GoalStatus};
 use agent_runtime_core::interaction::InteractionOutcomeKind;
 use agent_runtime_core::security::SecurityResource;
 use agent_runtime_core::usage::UsageDelta;
@@ -23,7 +24,7 @@ use smith_runtime::{ChildDurability, ChildState};
 use crate::cli::OutputFormat;
 
 /// Version of Smith's result/event wrappers, independent of runtime events.
-const OUTPUT_SCHEMA_VERSION: u32 = 2;
+const OUTPUT_SCHEMA_VERSION: u32 = 3;
 
 /// Stable process status used when an unattended call needs authorization.
 pub(crate) const APPROVAL_REQUIRED_EXIT: u8 = 4;
@@ -58,6 +59,10 @@ struct ResultEnvelope {
     output: String,
     usage: UsageOutput,
     lifecycle: LifecycleOutput,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    goal: Option<GoalProjection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    goal_continuation_turns: Option<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     artifacts: Vec<ArtifactRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -70,7 +75,7 @@ struct ResultEnvelope {
     error: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum ResultStatus {
     Ok,
@@ -316,10 +321,25 @@ async fn run_with_io(
         activation: initial_activation,
         ..LifecycleOutput::default()
     };
+    let mut goal_continuation_turns = 0_u32;
+    let mut active_goal_turns = BTreeSet::new();
 
     while let Some(event) = events.next().await {
         observe_sequence(&mut last_sequence, event.seq, &mut sequence_error);
+        if matches!(
+            &event.payload,
+            RuntimeEvent::InternalTurnStarted { source } if source.kind == "goal"
+        ) {
+            goal_continuation_turns = goal_continuation_turns.saturating_add(1);
+            if let Some(turn) = &event.turn {
+                active_goal_turns.insert(turn.as_str().to_owned());
+            }
+        }
         let belongs_to_turn = event.turn.as_ref() == Some(&turn_id);
+        let belongs_to_goal_turn = event
+            .turn
+            .as_ref()
+            .is_some_and(|turn| active_goal_turns.contains(turn.as_str()));
         if belongs_to_turn {
             match &event.payload {
                 RuntimeEvent::Usage { record } => turn_usage.merge(&record.delta),
@@ -391,6 +411,46 @@ async fn run_with_io(
                 _ => {}
             }
         }
+        if belongs_to_goal_turn {
+            match &event.payload {
+                RuntimeEvent::Error { error } => last_error = Some(error.to_string()),
+                RuntimeEvent::InteractionRequested {
+                    request,
+                    question_count,
+                    ..
+                } => {
+                    pending_interaction = Some(InteractionRequired {
+                        request_id: request.as_str().to_owned(),
+                        question_count: usize::from(*question_count),
+                    });
+                }
+                RuntimeEvent::InteractionResolved {
+                    request,
+                    outcome: InteractionOutcomeKind::Unavailable,
+                    ..
+                } => {
+                    if let Some(required) = pending_interaction.take()
+                        && required.request_id == request.as_str()
+                    {
+                        event_interaction_required.get_or_insert(required);
+                    }
+                }
+                RuntimeEvent::TurnCompleted {
+                    finish: TurnFinish::NeedsInput { request },
+                    ..
+                } => {
+                    let required = pending_interaction
+                        .take()
+                        .filter(|pending| pending.request_id == request.as_str())
+                        .unwrap_or_else(|| InteractionRequired {
+                            request_id: request.as_str().to_owned(),
+                            question_count: 0,
+                        });
+                    event_interaction_required.get_or_insert(required);
+                }
+                _ => {}
+            }
+        }
 
         if format == OutputFormat::StreamJson
             && let Err(error) = write_json(
@@ -405,8 +465,24 @@ async fn run_with_io(
             let _ = host.shutdown().await;
             return Err(error);
         }
+        if belongs_to_goal_turn
+            && matches!(event.payload, RuntimeEvent::TurnCompleted { .. })
+            && let Some(turn) = &event.turn
+        {
+            active_goal_turns.remove(turn.as_str());
+        }
         if finish.is_some() {
-            break;
+            match host.goal() {
+                Ok(Some(goal)) if goal.status == GoalStatus::Active => {}
+                Ok(_) if active_goal_turns.is_empty() => break,
+                Ok(_) => {}
+                Err(error) => {
+                    sequence_error.get_or_insert_with(|| {
+                        format!("persistent goal state became unavailable: {error}")
+                    });
+                    break;
+                }
+            }
         }
     }
 
@@ -415,6 +491,16 @@ async fn run_with_io(
         .then(|| "the runtime event stream ended before the turn completed".to_owned());
 
     lifecycle.children = child_session_outputs(host);
+
+    let final_goal = match host.goal() {
+        Ok(goal) => goal,
+        Err(error) => {
+            sequence_error
+                .get_or_insert_with(|| format!("persistent goal state unavailable: {error}"));
+            None
+        }
+    };
+    let goal_continuation_turns = final_goal.as_ref().map(|_| goal_continuation_turns);
 
     let shutdown_error = host.shutdown().await.err().map(|error| error.to_string());
 
@@ -464,6 +550,7 @@ async fn run_with_io(
     });
     let (status, exit_code) = outcome(
         finish.as_ref(),
+        final_goal.as_ref(),
         approval_required.as_ref(),
         interaction_required.as_ref(),
         error.as_ref(),
@@ -485,6 +572,8 @@ async fn run_with_io(
             session: session_usage,
         },
         lifecycle,
+        goal: final_goal,
+        goal_continuation_turns,
         artifacts,
         approval_required: approval_required.map(Into::into),
         interaction_required: interaction_required.map(Into::into),
@@ -536,6 +625,8 @@ async fn write_restored_interaction_required(
     let session_id = session.id().as_str().to_owned();
     let turn_id = restored.turn_id().as_str().to_owned();
     let session_usage = session.snapshot().usage.total();
+    let final_goal = host.goal().ok().flatten();
+    let goal_continuation_turns = final_goal.as_ref().map(|_| 0);
     let shutdown_error = host.shutdown().await.err().map(|error| error.to_string());
     let result = ResultEnvelope {
         schema_version: OUTPUT_SCHEMA_VERSION,
@@ -557,6 +648,8 @@ async fn write_restored_interaction_required(
             children: child_session_outputs(host),
             ..LifecycleOutput::default()
         },
+        goal: final_goal,
+        goal_continuation_turns,
         artifacts: Vec::new(),
         approval_required: None,
         interaction_required: Some(required.into()),
@@ -598,6 +691,8 @@ async fn write_submission_failure(
     let session = host.session();
     let snapshot = session.snapshot();
     let session_usage = snapshot.usage.total();
+    let final_goal = host.goal().ok().flatten();
+    let goal_continuation_turns = final_goal.as_ref().map(|_| 0);
     let error = match host.shutdown().await {
         Ok(_) => submission_error,
         Err(shutdown) => format!("{submission_error}; shutdown also failed: {shutdown}"),
@@ -625,6 +720,8 @@ async fn write_submission_failure(
             children: child_session_outputs(host),
             ..LifecycleOutput::default()
         },
+        goal: final_goal,
+        goal_continuation_turns,
         artifacts: Vec::new(),
         approval_required: None,
         interaction_required: None,
@@ -686,6 +783,7 @@ fn plan_output(
 
 fn outcome(
     finish: Option<&TurnFinish>,
+    goal: Option<&GoalProjection>,
     approval: Option<&ApprovalRequired>,
     interaction: Option<&InteractionRequired>,
     error: Option<&String>,
@@ -698,6 +796,17 @@ fn outcome(
     }
     if error.is_some() {
         return (ResultStatus::Failed, 1);
+    }
+    if let Some(goal) = goal {
+        match goal.status {
+            GoalStatus::Active => return (ResultStatus::Failed, 1),
+            GoalStatus::Paused => return (ResultStatus::Cancelled, 1),
+            GoalStatus::Blocked => return (ResultStatus::Failed, 1),
+            GoalStatus::UsageLimited | GoalStatus::BudgetLimited => {
+                return (ResultStatus::LimitReached, 1);
+            }
+            GoalStatus::Complete => {}
+        }
     }
     match finish {
         Some(TurnFinish::Completed) => (ResultStatus::Ok, 0),
@@ -730,6 +839,26 @@ fn write_text(writer: &mut impl Write, text: &str) -> Result<()> {
 
 fn write_text_projection(writer: &mut impl Write, result: &ResultEnvelope) -> Result<()> {
     let mut lines = Vec::new();
+    if let Some(goal) = &result.goal {
+        let status = goal.status.as_str();
+        let used = goal
+            .usage
+            .charged_tokens
+            .map_or_else(|| "unknown".to_owned(), |tokens| tokens.to_string());
+        let budget = goal
+            .token_budget
+            .map_or_else(|| "none".to_owned(), |tokens| tokens.to_string());
+        lines.push(format!(
+            "goal: {status} · {used} tokens · budget {budget} · {} continuation turn(s)",
+            result.goal_continuation_turns.unwrap_or_default()
+        ));
+        if let Some(reason) = &goal.stopped_reason {
+            lines.push(reason.detail.as_ref().map_or_else(
+                || format!("goal reason: {}", reason.code),
+                |detail| format!("goal reason: {} · {detail}", reason.code),
+            ));
+        }
+    }
     if result.lifecycle.attempts_committed > 0 || result.lifecycle.attempts_discarded > 0 {
         lines.push(format!(
             "provider attempts: {} committed · {} discarded",
@@ -834,13 +963,18 @@ fn approval_diagnostic(required: &ApprovalOutput) -> String {
 mod tests {
     use std::sync::Arc;
 
-    use agent_runtime::provider::fake::{FakeProvider, ScriptedStream, tool_call_fragments};
+    use agent_runtime::provider::fake::{
+        FakeProvider, ScriptedStream, tool_call_fragments, usage_event,
+    };
     use agent_runtime_core::approval::{AllowAll, DenyAll};
     use agent_runtime_core::artifact::{
         ArtifactDigest, ArtifactId, ArtifactProvenance, ArtifactRead, ArtifactRef,
         ArtifactRetention, ArtifactSensitivity, MAX_ARTIFACT_READ_BYTES,
     };
     use agent_runtime_core::cancel::CancelReason;
+    use agent_runtime_core::clock::Timestamp;
+    use agent_runtime_core::goal::{GoalTokenUsage, GoalUsageProvenance};
+    use agent_runtime_core::ids::GoalId;
     use agent_runtime_core::provider::{
         Capabilities, FinishReason, Provider, ProviderError, ProviderErrorKind, ProviderStreamEvent,
     };
@@ -882,7 +1016,13 @@ mod tests {
             preparation_fingerprint: "0123456789abcdef0123456789abcdef".into(),
         };
         assert!(matches!(
-            outcome(Some(&TurnFinish::Completed), Some(&required), None, None,),
+            outcome(
+                Some(&TurnFinish::Completed),
+                None,
+                Some(&required),
+                None,
+                None,
+            ),
             (ResultStatus::ApprovalRequired, APPROVAL_REQUIRED_EXIT)
         ));
     }
@@ -897,6 +1037,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             ),
             (ResultStatus::InteractionRequired, INTERACTION_REQUIRED_EXIT)
         ));
@@ -908,6 +1049,42 @@ mod tests {
             UsageProvenance::of(&UsageDelta::new()),
             UsageProvenance::Unknown
         ));
+    }
+
+    fn goal_projection(status: GoalStatus) -> GoalProjection {
+        GoalProjection {
+            id: GoalId::new("goal-fixture"),
+            generation: 4,
+            objective: "Finish the fixture".into(),
+            status,
+            token_budget: Some(100),
+            usage: GoalTokenUsage {
+                charged_tokens: Some(120),
+                provenance: GoalUsageProvenance::ProviderReported,
+                active_elapsed_ms: 25,
+            },
+            created_at: Timestamp(10),
+            updated_at: Timestamp(20),
+            stopped_reason: None,
+        }
+    }
+
+    #[test]
+    fn every_goal_terminal_maps_to_a_stable_headless_outcome() {
+        for (status, expected) in [
+            (GoalStatus::Active, ResultStatus::Failed),
+            (GoalStatus::Paused, ResultStatus::Cancelled),
+            (GoalStatus::Blocked, ResultStatus::Failed),
+            (GoalStatus::UsageLimited, ResultStatus::LimitReached),
+            (GoalStatus::BudgetLimited, ResultStatus::LimitReached),
+            (GoalStatus::Complete, ResultStatus::Ok),
+        ] {
+            let goal = goal_projection(status);
+            assert_eq!(
+                outcome(Some(&TurnFinish::Completed), Some(&goal), None, None, None,).0,
+                expected
+            );
+        }
     }
 
     #[test]
@@ -955,7 +1132,7 @@ mod tests {
             .with(agent_runtime_core::usage::CounterKind::InputUncached, 12)
             .with(agent_runtime_core::usage::CounterKind::Output, 2);
         let result = ResultEnvelope {
-            schema_version: OUTPUT_SCHEMA_VERSION,
+            schema_version: 2,
             kind: "result",
             status: ResultStatus::Ok,
             session_id: "session-fixture".into(),
@@ -979,6 +1156,8 @@ mod tests {
                 plan: None,
                 children: Vec::new(),
             },
+            goal: None,
+            goal_continuation_turns: None,
             artifacts: Vec::new(),
             approval_required: None,
             interaction_required: None,
@@ -996,7 +1175,7 @@ mod tests {
     #[test]
     fn approval_required_v2_compatibility_fixture_is_stable_and_redacted() {
         let result = ResultEnvelope {
-            schema_version: OUTPUT_SCHEMA_VERSION,
+            schema_version: 2,
             kind: "result",
             status: ResultStatus::ApprovalRequired,
             session_id: "session-fixture".into(),
@@ -1011,6 +1190,8 @@ mod tests {
                 session_provenance: UsageProvenance::Unknown,
             },
             lifecycle: LifecycleOutput::default(),
+            goal: None,
+            goal_continuation_turns: None,
             artifacts: Vec::new(),
             approval_required: Some(ApprovalOutput {
                 call_id: "call-fixture".into(),
@@ -1050,7 +1231,7 @@ mod tests {
     #[test]
     fn interaction_required_v2_fixture_is_stable_and_content_free() {
         let result = ResultEnvelope {
-            schema_version: OUTPUT_SCHEMA_VERSION,
+            schema_version: 2,
             kind: "result",
             status: ResultStatus::InteractionRequired,
             session_id: "session-fixture".into(),
@@ -1065,6 +1246,8 @@ mod tests {
                 session_provenance: UsageProvenance::Unknown,
             },
             lifecycle: LifecycleOutput::default(),
+            goal: None,
+            goal_continuation_turns: None,
             artifacts: Vec::new(),
             approval_required: None,
             interaction_required: Some(InteractionOutput {
@@ -1161,6 +1344,8 @@ mod tests {
                 }),
                 children: Vec::new(),
             },
+            goal: None,
+            goal_continuation_turns: None,
             artifacts: vec![ArtifactRef {
                 id: ArtifactId::new("artifact-fixture").expect("valid artifact id"),
                 digest: ArtifactDigest::new("sha256", "ab12").expect("valid digest"),
@@ -1402,6 +1587,163 @@ max_output_tokens = 4096
             !String::from_utf8(stdout)
                 .expect("UTF-8 output")
                 .contains("answer from an older turn")
+        );
+    }
+
+    #[tokio::test]
+    async fn headless_follows_an_explicit_goal_until_its_internal_turn_completes() {
+        const CONFIG: &str = r#"
+default_profile = "dev"
+
+[profiles.dev]
+provider = "local"
+model = "example-model"
+
+[providers.local]
+kind = "fake"
+
+[models."local/example-model"]
+context_tokens = 128000
+max_input_tokens = 124000
+max_output_tokens = 4096
+"#;
+        let home = tempfile::tempdir().expect("a home");
+        let project = tempfile::tempdir().expect("a project");
+        let config_dir = project.path().join(".smith");
+        std::fs::create_dir_all(&config_dir).expect("a config directory");
+        std::fs::write(config_dir.join("config.toml"), CONFIG).expect("a config");
+
+        let mut create = tool_call_fragments(
+            0,
+            "call-create",
+            "create_goal",
+            r#"{"objective":"finish the explicit goal"}"#,
+        );
+        create.push(usage_event(10, 2));
+        create.push(ProviderStreamEvent::Finish {
+            reason: FinishReason::ToolCalls,
+        });
+        let mut complete = tool_call_fragments(
+            0,
+            "call-complete",
+            "update_goal",
+            r#"{"id":"goal-call-create","generation":2,"status":"complete"}"#,
+        );
+        complete.push(usage_event(8, 2));
+        complete.push(ProviderStreamEvent::Finish {
+            reason: FinishReason::ToolCalls,
+        });
+        let provider = Arc::new(FakeProvider::new(
+            "example-model",
+            Capabilities::basic_streaming(),
+            vec![
+                ScriptedStream::new(create),
+                ScriptedStream::new(vec![
+                    ProviderStreamEvent::TextDelta {
+                        text: "goal accepted".into(),
+                    },
+                    usage_event(4, 1),
+                    ProviderStreamEvent::Finish {
+                        reason: FinishReason::Stop,
+                    },
+                ]),
+                ScriptedStream::new(complete),
+                ScriptedStream::new(vec![
+                    ProviderStreamEvent::TextDelta {
+                        text: "goal complete".into(),
+                    },
+                    usage_event(3, 1),
+                    ProviderStreamEvent::Finish {
+                        reason: FinishReason::Stop,
+                    },
+                ]),
+            ],
+        ));
+        let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+            .expect("resolved config")
+            .config;
+        assert!(config.persistence.enabled.value);
+        let runtime = RuntimeRequest {
+            workspace: Some(Arc::new(
+                ProjectWorkspace::new(project.path()).expect("a workspace"),
+            )),
+            approval: Some(Arc::new(HeadlessApproval::new())),
+            provider: Some(provider.clone() as Arc<dyn Provider>),
+            ..RuntimeRequest::new(config, HostSurface::Headless)
+        };
+        let host = smith_runtime::host::start(host_request(runtime, project.path()))
+            .await
+            .expect("a host");
+        assert!(host.runtime().goal_component().is_some());
+        let session = host.session().clone();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let execution = tokio::time::timeout(
+            Duration::from_secs(3),
+            run_with_io(
+                &host,
+                "Use create_goal to create an explicit persistent multi-turn goal, then continue it until complete".into(),
+                OutputFormat::Json,
+                None,
+                None,
+                &mut stdout,
+                &mut stderr,
+            ),
+        )
+        .await;
+        let outcome = match execution {
+            Ok(result) => result.expect("goal result"),
+            Err(_) => {
+                let goal = host.goal();
+                let requests = provider.requests();
+                let request_tools = requests
+                    .iter()
+                    .take(4)
+                    .map(|request| {
+                        request
+                            .tools
+                            .iter()
+                            .map(|tool| tool.name.clone())
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
+                let complete_result = host
+                    .tool_result_text(&agent_runtime_core::ids::ToolCallId::new("call-complete"));
+                let timeline = host.timeline_events().await.unwrap_or_default();
+                let errors = timeline
+                    .iter()
+                    .filter_map(|event| match &event.payload {
+                        RuntimeEvent::Error { error } => Some(error.to_string()),
+                        _ => None,
+                    })
+                    .take(3)
+                    .collect::<Vec<_>>();
+                let _ = host.shutdown().await;
+                panic!(
+                    "goal execution did not stop; goal={goal:?}; requests={}; request_tools={request_tools:?}; complete_result={complete_result:?}; errors={errors:?}",
+                    requests.len(),
+                );
+            }
+        };
+
+        assert_eq!(outcome.exit_code, 0);
+        assert!(stderr.is_empty());
+        let result: serde_json::Value = serde_json::from_slice(&stdout).expect("goal result JSON");
+        assert_eq!(result["goal"]["status"], "complete", "{result:#}");
+        assert_eq!(result["goal"]["usage"]["charged_tokens"], 19);
+        assert_eq!(result["goal"]["usage"]["provenance"], "provider_reported");
+        assert_eq!(result["goal_continuation_turns"], 1);
+        assert_eq!(result["output"], "goal complete");
+        assert_eq!(provider.requests().len(), 4);
+        assert_eq!(
+            session
+                .history()
+                .iter()
+                .filter(|message| message.role == Role::User)
+                .count(),
+            1,
+            "the internal continuation created a synthetic user message"
         );
     }
 
@@ -1804,7 +2146,7 @@ max_output_tokens = 4096
         let rendered = String::from_utf8(stdout).expect("UTF-8 result");
         assert!(!rendered.contains(SENSITIVE_PROMPT), "{rendered}");
         let result: serde_json::Value = serde_json::from_str(rendered.trim()).expect("result JSON");
-        assert_eq!(result["schema_version"], 2);
+        assert_eq!(result["schema_version"], OUTPUT_SCHEMA_VERSION);
         assert_eq!(result["status"], "interaction_required");
         assert_eq!(result["interaction_required"]["question_count"], 1);
         assert!(
@@ -1976,7 +2318,7 @@ max_output_tokens = 4096
         assert!(!rendered.contains(SENSITIVE_PROMPT), "{rendered}");
         assert!(!rendered.contains(NEW_PROMPT), "{rendered}");
         let result: serde_json::Value = serde_json::from_str(rendered.trim()).expect("result JSON");
-        assert_eq!(result["schema_version"], 2);
+        assert_eq!(result["schema_version"], OUTPUT_SCHEMA_VERSION);
         assert_eq!(result["status"], "interaction_required");
         assert_eq!(result["session_id"], session_id.as_str());
         assert_eq!(result["turn_id"], turn_id.as_str());
