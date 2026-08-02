@@ -33,6 +33,7 @@ smith-host = { workspace = true }
 smith-runtime = { workspace = true }
 smith-tools = { workspace = true }
 smith-tui = { workspace = true }
+time = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 zeroize = { workspace = true }

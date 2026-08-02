@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agent_runtime_core::cancel::CancelReason;
+use agent_runtime_core::clock::Timestamp;
 use agent_runtime_core::content::{ContentPart, ToolResultBlock, UserInput};
 use agent_runtime_core::delegation::{
     ChildLimits, ChildModelSelection, ChildSpec, ToolViewScope, WorkspacePolicy,
@@ -3013,14 +3014,13 @@ fn session_resource_entries(
                 (Some(provider), Some(model)) => format!("{provider}/{model}"),
                 _ => "unknown provider/model".to_owned(),
             };
-            let updated = session.updated.map_or_else(
-                || "unknown update".to_owned(),
-                |updated| updated.to_string(),
-            );
+            let updated = session
+                .updated
+                .map_or_else(|| "unknown update".to_owned(), format_session_updated);
             let entry = ResourceEntry::new(
                 &id,
                 format!("{} · {preview}", short_session_id(&id)),
-                format!("{turns} · {pair} · {updated}"),
+                format!("{turns} · {pair} · updated {updated}"),
             )
             .active(active);
             if session.schema_version == SNAPSHOT_SCHEMA_VERSION {
@@ -3033,6 +3033,62 @@ fn session_resource_entries(
             }
         })
         .collect()
+}
+
+fn format_session_updated(timestamp: Timestamp) -> String {
+    let offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
+    let now = time::OffsetDateTime::now_utc().to_offset(offset);
+    format_session_updated_at(timestamp, offset, now)
+}
+
+fn format_session_updated_at(
+    timestamp: Timestamp,
+    offset: time::UtcOffset,
+    now: time::OffsetDateTime,
+) -> String {
+    let millis = timestamp.as_millis();
+    let Ok(instant) =
+        time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(millis) * 1_000_000)
+    else {
+        return format!("{millis}ms");
+    };
+    let instant = instant.to_offset(offset);
+    if instant <= now && instant.date() == now.date() {
+        let seconds = (now - instant).whole_seconds();
+        if seconds < 60 {
+            return "just now".to_owned();
+        }
+        let minutes = seconds / 60;
+        if minutes < 60 {
+            return format!(
+                "{minutes} minute{} ago",
+                if minutes == 1 { "" } else { "s" }
+            );
+        }
+        let hours = minutes / 60;
+        return format!("{hours} hour{} ago", if hours == 1 { "" } else { "s" });
+    }
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02} {}",
+        instant.year(),
+        u8::from(instant.month()),
+        instant.day(),
+        instant.hour(),
+        instant.minute(),
+        instant.second(),
+        format_session_offset(instant.offset()),
+    )
+}
+
+fn format_session_offset(offset: time::UtcOffset) -> String {
+    let seconds = offset.whole_seconds();
+    let absolute = seconds.unsigned_abs();
+    format!(
+        "{}{hours:02}:{minutes:02}",
+        if seconds < 0 { "-" } else { "+" },
+        hours = absolute / 3_600,
+        minutes = absolute % 3_600 / 60,
+    )
 }
 
 fn render_inventory_limit(limit: &InventoryLimit) -> String {
@@ -3499,6 +3555,25 @@ max_output_tokens = 4096
         assert_eq!(abbreviate("/Users/example/work/api", home), "~/work/api");
         assert_eq!(abbreviate("/Users/example", home), "~");
         assert_eq!(abbreviate("/opt/other", home), "/opt/other");
+    }
+
+    #[test]
+    fn session_update_timestamps_are_human_readable() {
+        let now = time::OffsetDateTime::from_unix_timestamp(1_700_000_000)
+            .expect("valid fixture time")
+            .to_offset(time::UtcOffset::UTC);
+        assert_eq!(
+            format_session_updated_at(Timestamp(1_699_999_877_000), time::UtcOffset::UTC, now,),
+            "2 minutes ago"
+        );
+        assert_eq!(
+            format_session_updated_at(Timestamp(1_699_989_195_000), time::UtcOffset::UTC, now,),
+            "3 hours ago"
+        );
+        assert_eq!(
+            format_session_updated_at(Timestamp(1_699_900_000_000), time::UtcOffset::UTC, now),
+            "2023-11-13 18:26:40 +00:00"
+        );
     }
 
     #[test]
