@@ -317,7 +317,7 @@ impl RuntimeRequest {
             interaction: None,
             tools: Vec::new(),
             change_recorder: None,
-            skills: SmithSkillSources::new(),
+            skills: crate::built_in_skills::built_in_sources(),
             memory: None,
             semantic_summary: None,
             built_in_tools: true,
