@@ -17,11 +17,17 @@ pub const MODELS_DEV_SOURCE_URL: &str = "https://models.dev/api.json";
 /// The normalized cache/seed schema revision.
 pub const CATALOG_SCHEMA_REVISION: u32 = 1;
 
+/// Models.dev's OpenAI provider identity.
+pub const OPENAI_CATALOG_PROVIDER: &str = "openai";
+
 /// Models.dev's OpenRouter provider identity.
 pub const OPENROUTER_CATALOG_PROVIDER: &str = "openrouter";
 
 /// Models.dev's Z.AI Coding Plan provider identity.
 pub const ZAI_CODING_PLAN_CATALOG_PROVIDER: &str = "zai-coding-plan";
+
+/// The exact normalized OpenAI endpoint Smith binds to its catalog.
+pub const OPENAI_ENDPOINT: &str = "https://api.openai.com/v1";
 
 /// The exact normalized OpenRouter endpoint Smith binds to its catalog.
 pub const OPENROUTER_ENDPOINT: &str = "https://openrouter.ai/api/v1";
@@ -99,11 +105,31 @@ pub struct CatalogModel {
     pub tool_call: bool,
     /// Whether the source advertises model reasoning.
     pub reasoning: bool,
+    /// Source-advertised reasoning controls, absent when only presence is
+    /// known. Never present when `reasoning` is `false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_controls: Option<CatalogReasoningControls>,
     /// Whether the source advertises schema-constrained output.
     pub structured_output: bool,
     /// A bounded validation reason that keeps an advertised entry visible.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disabled_reason: Option<String>,
+}
+
+/// Normalized reasoning controls one catalog source advertises for one model.
+///
+/// Only control shapes Smith can express survive normalization: an on/off
+/// switch and an ordered effort ladder. Token-budget options are dropped
+/// until a budget control exists end to end.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogReasoningControls {
+    /// Whether the source advertises an explicit on/off switch.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub toggle: bool,
+    /// Source-advertised effort names in advertised order, lowercased.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub efforts: Vec<String>,
 }
 
 impl CatalogModel {
@@ -150,6 +176,7 @@ pub fn catalog_provider_for(kind: &str, base_url: Option<&str>) -> Option<&'stat
         return None;
     }
     match normalized_endpoint(base_url?)?.as_str() {
+        OPENAI_ENDPOINT => Some(OPENAI_CATALOG_PROVIDER),
         OPENROUTER_ENDPOINT => Some(OPENROUTER_CATALOG_PROVIDER),
         ZAI_CODING_PLAN_ENDPOINT => Some(ZAI_CODING_PLAN_CATALOG_PROVIDER),
         _ => None,
@@ -195,6 +222,10 @@ mod tests {
                 Some("https://api.z.ai/api/coding/paas/v4")
             ),
             Some(ZAI_CODING_PLAN_CATALOG_PROVIDER)
+        );
+        assert_eq!(
+            catalog_provider_for(KIND_OPENAI_COMPATIBLE, Some("https://api.openai.com/v1/")),
+            Some(OPENAI_CATALOG_PROVIDER)
         );
         assert_eq!(
             catalog_provider_for(

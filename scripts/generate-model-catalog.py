@@ -13,7 +13,7 @@ from typing import Any
 
 SOURCE_URL = "https://models.dev/api.json"
 SCHEMA_REVISION = 1
-SUPPORTED_PROVIDERS = ("openrouter", "zai-coding-plan")
+SUPPORTED_PROVIDERS = ("openai", "openrouter", "zai-coding-plan")
 MAX_U32 = 2**32 - 1
 MAX_MODELS_PER_PROVIDER = 10_000
 KNOWN_MODALITIES = {
@@ -104,6 +104,62 @@ def limits(entry: dict[str, Any]) -> tuple[dict[str, int] | None, str | None]:
     }, None
 
 
+EFFORT_CHARSET = set("abcdefghijklmnopqrstuvwxyz0123456789-_")
+
+
+def ascii_lower(value: str) -> str:
+    return "".join(
+        chr(ord(character) + 32) if "A" <= character <= "Z" else character
+        for character in value
+    )
+
+
+def valid_effort(value: str) -> bool:
+    return 0 < len(value) <= 32 and all(c in EFFORT_CHARSET for c in value)
+
+
+def reasoning_controls(
+    entry: dict[str, Any], reasoning: bool
+) -> dict[str, Any] | None:
+    """Mirrors `normalize_reasoning_controls` in
+    crates/smith-runtime/src/model_catalog.rs byte for byte: only an on/off
+    switch and a bounded effort ladder survive; `budget_tokens` and unknown
+    option types grant nothing."""
+    if not reasoning:
+        return None
+    options = entry.get("reasoning_options")
+    if not isinstance(options, list):
+        return None
+    toggle = False
+    efforts: list[str] = []
+    for option in options[:8]:
+        if not isinstance(option, dict):
+            continue
+        kind = option.get("type")
+        if kind == "toggle":
+            toggle = True
+        elif kind == "effort":
+            values = option.get("values")
+            if not isinstance(values, list):
+                continue
+            for value in values:
+                if len(efforts) == 10:
+                    break
+                if not isinstance(value, str):
+                    continue
+                lowered = ascii_lower(value)
+                if valid_effort(lowered) and lowered not in efforts:
+                    efforts.append(lowered)
+    if not toggle and not efforts:
+        return None
+    controls: dict[str, Any] = {}
+    if toggle:
+        controls["toggle"] = True
+    if efforts:
+        controls["efforts"] = efforts
+    return controls
+
+
 def normalize_model(key: str, raw: Any) -> dict[str, Any] | None:
     bounded_text(key, "model key", 512)
     if not isinstance(raw, dict):
@@ -140,6 +196,9 @@ def normalize_model(key: str, raw: Any) -> dict[str, Any] | None:
     }
     if normalized_limits is not None:
         result["limits"] = normalized_limits
+    controls = reasoning_controls(raw, reasoning)
+    if controls is not None:
+        result["reasoning_controls"] = controls
     if disabled_reason is not None:
         result["disabled_reason"] = disabled_reason
     return result

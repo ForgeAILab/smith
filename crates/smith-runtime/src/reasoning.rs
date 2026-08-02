@@ -16,7 +16,9 @@ use agent_runtime_core::provider::{
 use agent_runtime_core::store::{SessionStateSensitivity, VersionedSessionState};
 use async_trait::async_trait;
 use serde_json::{Map, Value, json};
-use smith_config::catalog::ZAI_CODING_PLAN_ENDPOINT;
+use smith_config::catalog::{
+    CatalogReasoningControls, OPENAI_ENDPOINT, OPENROUTER_ENDPOINT, ZAI_CODING_PLAN_ENDPOINT,
+};
 use smith_config::model::ReasoningDialect;
 use smith_config::resolve::{Layer, ResolvedConfig, ResolvedModelReasoning, Source, Sourced};
 use smith_config::setup::trusted_model;
@@ -27,6 +29,16 @@ pub const SESSION_STATE_NAMESPACE: &str = "smith.reasoning.override";
 const SESSION_STATE_REVISION: &str = "smith-reasoning-override-1";
 const SENTINEL_ENABLED: &str = "__smith_reasoning_enabled";
 const SENTINEL_DISABLED: &str = "__smith_reasoning_disabled";
+
+/// OpenRouter's vendor-normalized effort buckets, valid for every
+/// catalog-advertised reasoning model behind the exact OpenRouter endpoint.
+const OPENROUTER_EFFORTS: [&str; 3] = ["low", "medium", "high"];
+
+/// The `reasoning_effort` values every OpenAI reasoning model family accepts.
+/// Family-specific extremes (`none`, `minimal`) are deliberately absent; a
+/// model that supports one can advertise it through explicit
+/// `[models."provider/model".reasoning]` metadata.
+const OPENAI_EFFORTS: [&str; 3] = ["low", "medium", "high"];
 
 /// Additive redaction-safe reasoning override stored with a session.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -254,10 +266,17 @@ impl ReasoningRuntimePolicy {
 }
 
 /// Resolves exact controls and validates layered/session defaults.
+///
+/// `catalog_controls` carries the frozen Models.dev-advertised controls for
+/// the exact selected binding, when the endpoint is catalog-mapped and the
+/// snapshot annotates the model. It refines the per-endpoint defaults; it
+/// never creates controls on an endpoint whose wire dialect is unknown, and
+/// explicit `[models."provider/model".reasoning]` metadata still wins.
 pub fn resolve_reasoning_policy(
     config: &ResolvedConfig,
     profile: &ResolvedModelProfile,
     endpoint: Option<&str>,
+    catalog_controls: Option<&CatalogReasoningControls>,
 ) -> Result<ReasoningRuntimePolicy, String> {
     let metadata = &config.model_reasoning;
     let explicit_controls = metadata.dialect.is_some()
@@ -289,10 +308,83 @@ pub fn resolve_reasoning_policy(
             dialect: Some(ReasoningDialect::ZaiThinking),
             capability_source: "Smith trusted Z.AI Coding Plan model binding".to_owned(),
         }
+    } else if endpoint == Some(ZAI_CODING_PLAN_ENDPOINT)
+        && profile.capabilities.reasoning != ReasoningSupport::Unsupported
+    {
+        // The Z.AI Coding Plan endpoint exposes one normalized on/off
+        // `thinking` switch for every reasoning model it serves, so a
+        // catalog-advertised reasoning model is controllable without
+        // per-model metadata. The provider default stays unknown, and any
+        // catalog-advertised effort ladder is deliberately unused: the
+        // `thinking.type` wire dialect has no effort spelling.
+        ResolvedReasoningControls {
+            support: ReasoningSupport::Controllable,
+            switch: ReasoningSwitch::Optional,
+            efforts: Vec::new(),
+            default_enabled: None,
+            default_effort: None,
+            dialect: Some(ReasoningDialect::ZaiThinking),
+            capability_source:
+                "Z.AI Coding Plan thinking switch (catalog-advertised reasoning model)".to_owned(),
+        }
+    } else if endpoint == Some(OPENAI_ENDPOINT)
+        && profile.capabilities.reasoning != ReasoningSupport::Unsupported
+    {
+        // OpenAI reasoning models share one `reasoning_effort` control. The
+        // exact ladder is model-family-specific, so the catalog-advertised
+        // values win over the universal fallback; `off` exists only where
+        // `none` is advertised.
+        let (efforts, advertised) = match catalog_controls {
+            Some(controls) if !controls.efforts.is_empty() => (controls.efforts.clone(), true),
+            _ => (OPENAI_EFFORTS.map(str::to_owned).to_vec(), false),
+        };
+        let has_off = efforts.iter().any(|effort| effort == "none");
+        ResolvedReasoningControls {
+            support: ReasoningSupport::Controllable,
+            switch: if has_off {
+                ReasoningSwitch::Optional
+            } else {
+                ReasoningSwitch::MandatoryOn
+            },
+            efforts,
+            default_enabled: (!has_off).then_some(true),
+            default_effort: None,
+            dialect: Some(ReasoningDialect::OpenaiEffort),
+            capability_source: if advertised {
+                "Models.dev advertised OpenAI reasoning controls".to_owned()
+            } else {
+                "OpenAI reasoning API (catalog-advertised reasoning model)".to_owned()
+            },
+        }
+    } else if endpoint == Some(OPENROUTER_ENDPOINT)
+        && profile.capabilities.reasoning != ReasoningSupport::Unsupported
+    {
+        // OpenRouter normalizes reasoning across vendors: one `reasoning`
+        // object carries an on/off `enabled` for every reasoning model plus
+        // the model's advertised effort ladder, so the exact endpoint is
+        // itself the dialect evidence. A toggle-only or budget-only model
+        // keeps the switch and simply advertises no ladder.
+        let (efforts, advertised) = match catalog_controls {
+            Some(controls) => (controls.efforts.clone(), true),
+            None => (OPENROUTER_EFFORTS.map(str::to_owned).to_vec(), false),
+        };
+        ResolvedReasoningControls {
+            support: ReasoningSupport::Controllable,
+            switch: ReasoningSwitch::Optional,
+            efforts,
+            default_enabled: None,
+            default_effort: None,
+            dialect: Some(ReasoningDialect::Openrouter),
+            capability_source: if advertised {
+                "Models.dev advertised OpenRouter reasoning controls".to_owned()
+            } else {
+                "OpenRouter unified reasoning API (catalog-advertised reasoning model)".to_owned()
+            },
+        }
     } else {
-        // A boolean catalog record deliberately grants no control — including
-        // on exact OpenRouter endpoints. Rich per-model metadata must opt
-        // into its dialect.
+        // On an unknown endpoint a boolean catalog record grants no control:
+        // presence is not evidence of a wire dialect. Normalized endpoints
+        // are recognized above; anything else needs per-model metadata.
         ResolvedReasoningControls {
             support: profile.capabilities.reasoning,
             switch: ReasoningSwitch::Unavailable,
@@ -619,7 +711,6 @@ mod tests {
     use super::*;
     use agent_runtime_core::catalog::{ModelLimits, ResolvedModelProfile};
     use agent_runtime_core::content::Message;
-    use smith_config::catalog::OPENROUTER_ENDPOINT;
     use smith_config::resolve::{ResolveRequest, resolve};
 
     fn request(effort: &str) -> ProviderRequest {
@@ -737,11 +828,195 @@ max_output_tokens = 4096
                 "high".to_owned(),
                 Source::session("reasoning.effort"),
             ));
-            let error = resolve_reasoning_policy(&config, &model_profile(support), None)
+            let error = resolve_reasoning_policy(&config, &model_profile(support), None, None)
                 .expect_err("presence-only metadata cannot expose controls");
             assert!(error.contains("not adjustable"), "{error}");
             assert!(error.contains("presence only"), "{error}");
         }
+    }
+
+    #[test]
+    fn openrouter_endpoint_grants_default_controls_to_catalog_reasoning_models() {
+        let mut config = resolved_config();
+        config.reasoning.effort = Some(Sourced::new(
+            "medium".to_owned(),
+            Source::session("reasoning.effort"),
+        ));
+
+        let policy = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Fixed),
+            Some(OPENROUTER_ENDPOINT),
+            None,
+        )
+        .expect("the unified OpenRouter reasoning API is controllable");
+        assert_eq!(policy.support, ReasoningSupport::Controllable);
+        assert_eq!(policy.switch, ReasoningSwitch::Optional);
+        assert_eq!(policy.efforts, ["low", "medium", "high"]);
+        assert_eq!(policy.dialect, Some(ReasoningDialect::Openrouter));
+        assert!(policy.capability_source.contains("OpenRouter"));
+        assert_eq!(
+            policy
+                .request_config()
+                .and_then(|reasoning| reasoning.effort),
+            Some("medium".to_owned())
+        );
+
+        config.reasoning.effort = None;
+        config.reasoning.enabled = Some(Sourced::new(false, Source::session("reasoning.enabled")));
+        let off = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Fixed),
+            Some(OPENROUTER_ENDPOINT),
+            None,
+        )
+        .expect("the unified API exposes an on/off switch");
+        assert_eq!(
+            off.request_config().and_then(|reasoning| reasoning.effort),
+            Some(SENTINEL_DISABLED.to_owned())
+        );
+    }
+
+    #[test]
+    fn openai_endpoint_grants_the_effort_ladder_without_an_off_switch() {
+        let mut config = resolved_config();
+        config.reasoning.effort = Some(Sourced::new(
+            "high".to_owned(),
+            Source::session("reasoning.effort"),
+        ));
+
+        let policy = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Fixed),
+            Some(OPENAI_ENDPOINT),
+            None,
+        )
+        .expect("OpenAI reasoning models share the reasoning_effort control");
+        assert_eq!(policy.support, ReasoningSupport::Controllable);
+        assert_eq!(policy.switch, ReasoningSwitch::MandatoryOn);
+        assert_eq!(policy.efforts, ["low", "medium", "high"]);
+        assert_eq!(policy.dialect, Some(ReasoningDialect::OpenaiEffort));
+        assert_eq!(
+            policy
+                .request_config()
+                .and_then(|reasoning| reasoning.effort),
+            Some("high".to_owned())
+        );
+
+        // Off has no universal `reasoning_effort` spelling, so it stays a
+        // local failure until per-model metadata advertises `none`.
+        config.reasoning.effort = None;
+        config.reasoning.enabled = Some(Sourced::new(false, Source::session("reasoning.enabled")));
+        let error = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Fixed),
+            Some(OPENAI_ENDPOINT),
+            None,
+        )
+        .expect_err("off is not representable without an advertised `none`");
+        assert!(error.contains("mandatory-on"), "{error}");
+    }
+
+    #[test]
+    fn catalog_advertised_ladders_refine_the_endpoint_defaults() {
+        // A gpt-5.x-style ladder advertises `none`, which unlocks off.
+        let mut config = resolved_config();
+        config.reasoning.enabled = Some(Sourced::new(false, Source::session("reasoning.enabled")));
+        let gpt_ladder = CatalogReasoningControls {
+            toggle: false,
+            efforts: ["none", "low", "medium", "high", "xhigh"]
+                .map(str::to_owned)
+                .to_vec(),
+        };
+        let policy = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Fixed),
+            Some(OPENAI_ENDPOINT),
+            Some(&gpt_ladder),
+        )
+        .expect("an advertised `none` unlocks off");
+        assert_eq!(policy.switch, ReasoningSwitch::Optional);
+        assert_eq!(policy.efforts, gpt_ladder.efforts);
+        assert!(policy.capability_source.contains("Models.dev"));
+        assert_eq!(
+            policy
+                .request_config()
+                .and_then(|reasoning| reasoning.effort),
+            Some("none".to_owned())
+        );
+
+        // An o3-style ladder without `none` keeps off unrepresentable.
+        let o3_ladder = CatalogReasoningControls {
+            toggle: false,
+            efforts: ["low", "medium", "high"].map(str::to_owned).to_vec(),
+        };
+        let error = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Fixed),
+            Some(OPENAI_ENDPOINT),
+            Some(&o3_ladder),
+        )
+        .expect_err("no advertised `none` means no off");
+        assert!(error.contains("mandatory-on"), "{error}");
+
+        // A toggle-only OpenRouter model keeps the unified switch and
+        // advertises no ladder, so an effort selection fails locally.
+        config.reasoning.enabled = None;
+        config.reasoning.effort = Some(Sourced::new(
+            "high".to_owned(),
+            Source::session("reasoning.effort"),
+        ));
+        let toggle_only = CatalogReasoningControls {
+            toggle: true,
+            efforts: Vec::new(),
+        };
+        let error = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Fixed),
+            Some(OPENROUTER_ENDPOINT),
+            Some(&toggle_only),
+        )
+        .expect_err("a toggle-only model advertises no efforts");
+        assert!(error.contains("no effort levels are advertised"), "{error}");
+    }
+
+    #[test]
+    fn openrouter_non_reasoning_models_stay_fail_closed() {
+        let mut config = resolved_config();
+        config.reasoning.enabled = Some(Sourced::new(true, Source::session("reasoning.enabled")));
+        let error = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Unsupported),
+            Some(OPENROUTER_ENDPOINT),
+            None,
+        )
+        .expect_err("a non-reasoning model gains no switch from the endpoint");
+        assert!(error.contains("not adjustable"), "{error}");
+    }
+
+    #[test]
+    fn zai_coding_plan_grants_the_thinking_switch_to_catalog_reasoning_models() {
+        let mut config = resolved_config();
+        config.reasoning.enabled = Some(Sourced::new(false, Source::session("reasoning.enabled")));
+
+        // `example-model` is not in the trusted list, so this exercises the
+        // catalog-advertised branch.
+        let policy = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Fixed),
+            Some(ZAI_CODING_PLAN_ENDPOINT),
+            None,
+        )
+        .expect("the coding-plan thinking switch is controllable");
+        assert_eq!(policy.dialect, Some(ReasoningDialect::ZaiThinking));
+        assert_eq!(policy.default_enabled, None);
+        assert!(policy.efforts.is_empty());
+        assert_eq!(
+            policy
+                .request_config()
+                .and_then(|reasoning| reasoning.effort),
+            Some(SENTINEL_DISABLED.to_owned())
+        );
     }
 
     #[test]
@@ -762,15 +1037,23 @@ max_output_tokens = 4096
         let mut config = resolved_config();
         config.model_reasoning = metadata(vec!["low".to_owned(), "high".to_owned()]);
         config.reasoning.enabled = Some(Sourced::new(false, Source::session("reasoning.enabled")));
-        let error =
-            resolve_reasoning_policy(&config, &model_profile(ReasoningSupport::Unsupported), None)
-                .expect_err("off would emit a non-advertised `none` effort");
+        let error = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Unsupported),
+            None,
+            None,
+        )
+        .expect_err("off would emit a non-advertised `none` effort");
         assert!(error.contains("non-advertised effort `none`"), "{error}");
 
         config.model_reasoning = metadata(vec!["none".to_owned(), "high".to_owned()]);
-        let policy =
-            resolve_reasoning_policy(&config, &model_profile(ReasoningSupport::Unsupported), None)
-                .expect("an advertised `none` makes off representable");
+        let policy = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Unsupported),
+            None,
+            None,
+        )
+        .expect("an advertised `none` makes off representable");
         assert_eq!(
             policy
                 .request_config()
@@ -800,6 +1083,7 @@ max_output_tokens = 4096
             &config,
             &model_profile(ReasoningSupport::Unsupported),
             Some(OPENROUTER_ENDPOINT),
+            None,
         )
         .expect_err("mandatory reasoning cannot be disabled");
         assert!(error.contains("mandatory-on"), "{error}");

@@ -258,13 +258,23 @@ mode for a provider that returns a successful answer solely as non-redacted
 reasoning. The omitted/default value, `"reasoning"`, preserves the provider's
 classification.
 
-Reasoning presence is separate from reasoning control. A catalog
-`reasoning = true` value means only that reasoning is present and fixed; it
-does not create a toggle or effort selector. Rich
-`[models."provider/model".reasoning]` metadata must name the exact wire
-dialect (`openai-effort`, `openrouter`, or `zai-thinking`), switch behavior,
-and ordered effort values. Unknown OpenAI-compatible endpoints expose no
-inferred controls.
+Reasoning presence is separate from reasoning control. On an unknown
+OpenAI-compatible endpoint a catalog `reasoning = true` value means only that
+reasoning is present and fixed; it does not create a toggle or effort
+selector, and rich `[models."provider/model".reasoning]` metadata must name
+the exact wire dialect (`openai-effort`, `openrouter`, or `zai-thinking`),
+switch behavior, and ordered effort values. Three exact endpoints normalize
+controls themselves and need no per-model metadata: the OpenAI endpoint
+speaks `reasoning_effort`, the OpenRouter endpoint speaks the unified
+`reasoning` object with an on/off switch, and the Z.AI Coding Plan endpoint
+speaks its documented thinking toggle. On those endpoints the frozen
+Models.dev snapshot supplies each model's advertised control shape — its
+exact effort ladder (for example `none…xhigh` on newer OpenAI families,
+`low…high` on older ones) or a bare toggle. On the OpenAI endpoint, `off`
+exists only where the ladder advertises `none`. A reasoning model the
+snapshot has not annotated falls back to the endpoint's universal
+`low`/`medium`/`high` ladder. Explicit per-model metadata still overrides
+everything; token-budget options are not yet consumed.
 
 `[reasoning]` and `[profiles.<name>.reasoning]` select `enabled` and/or one
 advertised `effort`. Omission sends no reasoning option and preserves provider

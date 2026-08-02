@@ -668,9 +668,9 @@ credential = "env:ZAI_API_KEY"
 [context]
 output_reserve = 8192
 "#,
-            "glm-5.1",
-            "GLM-5.1",
-            "zai/glm-5.1",
+            "glm-5-turbo",
+            "GLM-5-Turbo",
+            "zai/glm-5-turbo",
         ),
         (
             r#"

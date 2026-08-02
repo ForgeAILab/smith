@@ -1,6 +1,904 @@
 {
-  "content_digest": "sha256:df6858b4168db74167e20550d87640b441832282e1cc406ca6c699d9ed4cec59",
+  "content_digest": "sha256:bae6ad22f7d393288acd7773e48e2f7210747da6f65f4ea51d48c817e97be75b",
   "providers": {
+    "openai": {
+      "id": "openai",
+      "models": {
+        "chatgpt-image-latest": {
+          "disabled_reason": "catalog model has a zero, missing, or out-of-range limit",
+          "id": "chatgpt-image-latest",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "name": "chatgpt-image-latest",
+          "output_modalities": [
+            "text",
+            "image"
+          ],
+          "reasoning": false,
+          "structured_output": false,
+          "tool_call": false
+        },
+        "gpt-4.1": {
+          "id": "gpt-4.1",
+          "input_modalities": [
+            "text",
+            "image",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 1047576,
+            "max_input_tokens": 1047576,
+            "max_output_tokens": 32768
+          },
+          "name": "GPT-4.1",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": false,
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gpt-4.1-mini": {
+          "id": "gpt-4.1-mini",
+          "input_modalities": [
+            "text",
+            "image",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 1047576,
+            "max_input_tokens": 1047576,
+            "max_output_tokens": 32768
+          },
+          "name": "GPT-4.1 mini",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": false,
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gpt-4o": {
+          "id": "gpt-4o",
+          "input_modalities": [
+            "text",
+            "image",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 128000,
+            "max_input_tokens": 128000,
+            "max_output_tokens": 16384
+          },
+          "name": "GPT-4o",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": false,
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gpt-4o-2024-08-06": {
+          "id": "gpt-4o-2024-08-06",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "limits": {
+            "context_tokens": 128000,
+            "max_input_tokens": 128000,
+            "max_output_tokens": 16384
+          },
+          "name": "GPT-4o (2024-08-06)",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": false,
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gpt-4o-2024-11-20": {
+          "id": "gpt-4o-2024-11-20",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "limits": {
+            "context_tokens": 128000,
+            "max_input_tokens": 128000,
+            "max_output_tokens": 16384
+          },
+          "name": "GPT-4o (2024-11-20)",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": false,
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gpt-4o-mini": {
+          "id": "gpt-4o-mini",
+          "input_modalities": [
+            "text",
+            "image",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 128000,
+            "max_input_tokens": 128000,
+            "max_output_tokens": 16384
+          },
+          "name": "GPT-4o mini",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": false,
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gpt-5": {
+          "id": "gpt-5",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "limits": {
+            "context_tokens": 400000,
+            "max_input_tokens": 272000,
+            "max_output_tokens": 128000
+          },
+          "name": "GPT-5",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gpt-5-mini": {
+          "id": "gpt-5-mini",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "limits": {
+            "context_tokens": 400000,
+            "max_input_tokens": 272000,
+            "max_output_tokens": 128000
+          },
+          "name": "GPT-5 Mini",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gpt-5-nano": {
+          "id": "gpt-5-nano",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "limits": {
+            "context_tokens": 400000,
+            "max_input_tokens": 272000,
+            "max_output_tokens": 128000
+          },
+          "name": "GPT-5 Nano",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gpt-5-pro": {
+          "id": "gpt-5-pro",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "limits": {
+            "context_tokens": 400000,
+            "max_input_tokens": 272000,
+            "max_output_tokens": 272000
+          },
+          "name": "GPT-5 Pro",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "high"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gpt-5.1": {
+          "id": "gpt-5.1",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "limits": {
+            "context_tokens": 400000,
+            "max_input_tokens": 272000,
+            "max_output_tokens": 128000
+          },
+          "name": "GPT-5.1",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gpt-5.2": {
+          "id": "gpt-5.2",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "limits": {
+            "context_tokens": 400000,
+            "max_input_tokens": 272000,
+            "max_output_tokens": 128000
+          },
+          "name": "GPT-5.2",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gpt-5.2-chat-latest": {
+          "id": "gpt-5.2-chat-latest",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "limits": {
+            "context_tokens": 128000,
+            "max_input_tokens": 128000,
+            "max_output_tokens": 16384
+          },
+          "name": "GPT-5.2 Chat",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "medium"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gpt-5.2-pro": {
+          "id": "gpt-5.2-pro",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "limits": {
+            "context_tokens": 400000,
+            "max_input_tokens": 272000,
+            "max_output_tokens": 128000
+          },
+          "name": "GPT-5.2 Pro",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
+          "structured_output": false,
+          "tool_call": true
+        },
+        "gpt-5.3-chat-latest": {
+          "id": "gpt-5.3-chat-latest",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "limits": {
+            "context_tokens": 128000,
+            "max_input_tokens": 128000,
+            "max_output_tokens": 16384
+          },
+          "name": "GPT-5.3 Chat (latest)",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": false,
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gpt-5.3-codex": {
+          "id": "gpt-5.3-codex",
+          "input_modalities": [
+            "text",
+            "image",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 400000,
+            "max_input_tokens": 272000,
+            "max_output_tokens": 128000
+          },
+          "name": "GPT-5.3 Codex",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gpt-5.3-codex-spark": {
+          "id": "gpt-5.3-codex-spark",
+          "input_modalities": [
+            "text",
+            "image",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 128000,
+            "max_input_tokens": 100000,
+            "max_output_tokens": 32000
+          },
+          "name": "GPT-5.3 Codex Spark",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gpt-5.4": {
+          "id": "gpt-5.4",
+          "input_modalities": [
+            "text",
+            "image",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 1050000,
+            "max_input_tokens": 922000,
+            "max_output_tokens": 128000
+          },
+          "name": "GPT-5.4",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gpt-5.4-mini": {
+          "id": "gpt-5.4-mini",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "limits": {
+            "context_tokens": 400000,
+            "max_input_tokens": 272000,
+            "max_output_tokens": 128000
+          },
+          "name": "GPT-5.4 mini",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gpt-5.4-nano": {
+          "id": "gpt-5.4-nano",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "limits": {
+            "context_tokens": 400000,
+            "max_input_tokens": 272000,
+            "max_output_tokens": 128000
+          },
+          "name": "GPT-5.4 nano",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gpt-5.4-pro": {
+          "id": "gpt-5.4-pro",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "limits": {
+            "context_tokens": 1050000,
+            "max_input_tokens": 922000,
+            "max_output_tokens": 128000
+          },
+          "name": "GPT-5.4 Pro",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
+          "structured_output": false,
+          "tool_call": true
+        },
+        "gpt-5.5": {
+          "id": "gpt-5.5",
+          "input_modalities": [
+            "text",
+            "image",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 1050000,
+            "max_input_tokens": 922000,
+            "max_output_tokens": 128000
+          },
+          "name": "GPT-5.5",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gpt-5.5-pro": {
+          "id": "gpt-5.5-pro",
+          "input_modalities": [
+            "text",
+            "image",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 1050000,
+            "max_input_tokens": 922000,
+            "max_output_tokens": 128000
+          },
+          "name": "GPT-5.5 Pro",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gpt-5.6": {
+          "id": "gpt-5.6",
+          "input_modalities": [
+            "text",
+            "image",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 1050000,
+            "max_input_tokens": 922000,
+            "max_output_tokens": 128000
+          },
+          "name": "GPT-5.6",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gpt-5.6-luna": {
+          "id": "gpt-5.6-luna",
+          "input_modalities": [
+            "text",
+            "image",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 1050000,
+            "max_input_tokens": 922000,
+            "max_output_tokens": 128000
+          },
+          "name": "GPT-5.6 Luna",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gpt-5.6-sol": {
+          "id": "gpt-5.6-sol",
+          "input_modalities": [
+            "text",
+            "image",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 1050000,
+            "max_input_tokens": 922000,
+            "max_output_tokens": 128000
+          },
+          "name": "GPT-5.6 Sol",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gpt-5.6-terra": {
+          "id": "gpt-5.6-terra",
+          "input_modalities": [
+            "text",
+            "image",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 1050000,
+            "max_input_tokens": 922000,
+            "max_output_tokens": 128000
+          },
+          "name": "GPT-5.6 Terra",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gpt-image-1-mini": {
+          "disabled_reason": "catalog model has a zero, missing, or out-of-range limit",
+          "id": "gpt-image-1-mini",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "name": "gpt-image-1-mini",
+          "output_modalities": [
+            "text",
+            "image"
+          ],
+          "reasoning": false,
+          "structured_output": false,
+          "tool_call": false
+        },
+        "gpt-image-1.5": {
+          "disabled_reason": "catalog model has a zero, missing, or out-of-range limit",
+          "id": "gpt-image-1.5",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "name": "gpt-image-1.5",
+          "output_modalities": [
+            "text",
+            "image"
+          ],
+          "reasoning": false,
+          "structured_output": false,
+          "tool_call": false
+        },
+        "gpt-image-2": {
+          "disabled_reason": "catalog model has a zero, missing, or out-of-range limit",
+          "id": "gpt-image-2",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "name": "gpt-image-2",
+          "output_modalities": [
+            "image"
+          ],
+          "reasoning": false,
+          "structured_output": false,
+          "tool_call": false
+        },
+        "gpt-realtime-2.1": {
+          "id": "gpt-realtime-2.1",
+          "input_modalities": [
+            "text",
+            "image",
+            "audio"
+          ],
+          "limits": {
+            "context_tokens": 128000,
+            "max_input_tokens": 96000,
+            "max_output_tokens": 32000
+          },
+          "name": "GPT-Realtime-2.1",
+          "output_modalities": [
+            "text",
+            "audio"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
+          "structured_output": false,
+          "tool_call": true
+        },
+        "o3": {
+          "id": "o3",
+          "input_modalities": [
+            "text",
+            "image",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 200000,
+            "max_input_tokens": 200000,
+            "max_output_tokens": 100000
+          },
+          "name": "o3",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "o3-pro": {
+          "id": "o3-pro",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "limits": {
+            "context_tokens": 200000,
+            "max_input_tokens": 200000,
+            "max_output_tokens": 100000
+          },
+          "name": "o3-pro",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "text-embedding-3-large": {
+          "id": "text-embedding-3-large",
+          "input_modalities": [
+            "text"
+          ],
+          "limits": {
+            "context_tokens": 8191,
+            "max_input_tokens": 8191,
+            "max_output_tokens": 3072
+          },
+          "name": "text-embedding-3-large",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": false,
+          "structured_output": false,
+          "tool_call": false
+        },
+        "text-embedding-3-small": {
+          "id": "text-embedding-3-small",
+          "input_modalities": [
+            "text"
+          ],
+          "limits": {
+            "context_tokens": 8191,
+            "max_input_tokens": 8191,
+            "max_output_tokens": 1536
+          },
+          "name": "text-embedding-3-small",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": false,
+          "structured_output": false,
+          "tool_call": false
+        },
+        "text-embedding-ada-002": {
+          "id": "text-embedding-ada-002",
+          "input_modalities": [
+            "text"
+          ],
+          "limits": {
+            "context_tokens": 8192,
+            "max_input_tokens": 8192,
+            "max_output_tokens": 1536
+          },
+          "name": "text-embedding-ada-002",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": false,
+          "structured_output": false,
+          "tool_call": false
+        }
+      },
+      "name": "OpenAI"
+    },
     "openrouter": {
       "id": "openrouter",
       "models": {
@@ -262,6 +1160,15 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -282,6 +1189,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -302,6 +1212,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": false,
           "tool_call": true
         },
@@ -322,6 +1235,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -342,6 +1258,14 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -362,6 +1286,14 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "max"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -382,6 +1314,15 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -402,6 +1343,15 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -422,6 +1372,15 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -442,6 +1401,15 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -462,6 +1430,15 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -482,6 +1459,15 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -502,6 +1488,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": false,
           "tool_call": true
         },
@@ -522,6 +1511,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -542,6 +1534,14 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "max"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -562,6 +1562,15 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -677,6 +1686,14 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -697,6 +1714,14 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -896,6 +1921,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -968,6 +1996,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -986,6 +2017,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -1004,6 +2038,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -1022,7 +2059,38 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "high",
+              "xhigh"
+            ]
+          },
           "structured_output": true,
+          "tool_call": true
+        },
+        "deepseek/deepseek-v4-flash-0731": {
+          "id": "deepseek/deepseek-v4-flash-0731",
+          "input_modalities": [
+            "text"
+          ],
+          "limits": {
+            "context_tokens": 1048576,
+            "max_input_tokens": 1048576,
+            "max_output_tokens": 384000
+          },
+          "name": "DeepSeek V4 Flash 0731",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "high",
+              "max"
+            ]
+          },
+          "structured_output": false,
           "tool_call": true
         },
         "deepseek/deepseek-v4-pro": {
@@ -1040,6 +2108,12 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "high",
+              "xhigh"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -1062,6 +2136,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -1104,6 +2181,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -1191,6 +2271,14 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -1251,6 +2339,12 @@
             "image"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": false
         },
@@ -1271,6 +2365,12 @@
             "image"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": false
         },
@@ -1293,22 +2393,40 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
         "google/gemini-3.1-flash-lite-image": {
-          "disabled_reason": "catalog output limit exceeds its context window",
           "id": "google/gemini-3.1-flash-lite-image",
           "input_modalities": [
             "text",
             "image"
           ],
+          "limits": {
+            "context_tokens": 65536,
+            "max_input_tokens": 65536,
+            "max_output_tokens": 65536
+          },
           "name": "Nano Banana 2 Lite",
           "output_modalities": [
             "text",
             "image"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "high"
+            ]
+          },
           "structured_output": false,
           "tool_call": false
         },
@@ -1331,6 +2449,14 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -1353,6 +2479,13 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -1375,6 +2508,13 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -1397,6 +2537,14 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -1419,6 +2567,14 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -1441,6 +2597,14 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -1547,13 +2711,16 @@
           "limits": {
             "context_tokens": 262144,
             "max_input_tokens": 262144,
-            "max_output_tokens": 262144
+            "max_output_tokens": 16384
           },
           "name": "Gemma 4 26B A4B IT",
           "output_modalities": [
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -1574,6 +2741,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -1594,6 +2764,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -1614,6 +2787,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": false,
           "tool_call": true
         },
@@ -1726,6 +2902,14 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -1780,6 +2964,13 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": false,
           "tool_call": true
         },
@@ -1798,6 +2989,12 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "high",
+              "xhigh"
+            ]
+          },
           "structured_output": false,
           "tool_call": true
         },
@@ -2057,6 +3254,15 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -2414,6 +3620,12 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -2504,6 +3716,12 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -2711,6 +3929,13 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "high",
+              "max"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -2839,6 +4064,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": false,
           "tool_call": false
         },
@@ -2857,6 +4085,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": false,
           "tool_call": false
         },
@@ -2868,7 +4099,7 @@
           "limits": {
             "context_tokens": 262144,
             "max_input_tokens": 262144,
-            "max_output_tokens": 228000
+            "max_output_tokens": 262144
           },
           "name": "Nemotron 3 Nano 30B A3B",
           "output_modalities": [
@@ -2932,6 +4163,12 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -2950,6 +4187,12 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -2968,6 +4211,12 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -2986,6 +4235,12 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": false,
           "tool_call": true
         },
@@ -3362,25 +4617,14 @@
             "text"
           ],
           "reasoning": true,
-          "structured_output": true,
-          "tool_call": true
-        },
-        "openai/gpt-5-codex": {
-          "id": "openai/gpt-5-codex",
-          "input_modalities": [
-            "text",
-            "image"
-          ],
-          "limits": {
-            "context_tokens": 400000,
-            "max_input_tokens": 272000,
-            "max_output_tokens": 128000
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
           },
-          "name": "GPT-5-Codex",
-          "output_modalities": [
-            "text"
-          ],
-          "reasoning": true,
           "structured_output": true,
           "tool_call": true
         },
@@ -3443,6 +4687,14 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -3463,6 +4715,14 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -3483,6 +4743,11 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -3503,26 +4768,14 @@
             "text"
           ],
           "reasoning": true,
-          "structured_output": true,
-          "tool_call": true
-        },
-        "openai/gpt-5.1-chat": {
-          "id": "openai/gpt-5.1-chat",
-          "input_modalities": [
-            "text",
-            "image",
-            "document"
-          ],
-          "limits": {
-            "context_tokens": 128000,
-            "max_input_tokens": 128000,
-            "max_output_tokens": 32000
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high"
+            ]
           },
-          "name": "GPT-5.1 Chat",
-          "output_modalities": [
-            "text"
-          ],
-          "reasoning": false,
           "structured_output": true,
           "tool_call": true
         },
@@ -3542,6 +4795,13 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -3561,6 +4821,14 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -3580,6 +4848,13 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -3600,6 +4875,15 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -3639,6 +4923,14 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -3659,6 +4951,13 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -3699,6 +4998,15 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -3719,6 +5027,15 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -3740,6 +5057,15 @@
             "image"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
           "structured_output": true,
           "tool_call": false
         },
@@ -3760,6 +5086,15 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -3780,6 +5115,15 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -3800,6 +5144,13 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -3820,6 +5171,15 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -3840,6 +5200,13 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -3860,6 +5227,16 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -3880,6 +5257,16 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -3900,6 +5287,16 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -3920,6 +5317,16 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -3940,6 +5347,16 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -3960,6 +5377,16 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -4038,6 +5465,13 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -4056,6 +5490,13 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -4074,6 +5515,13 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -4092,6 +5540,13 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -4112,6 +5567,13 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -4152,26 +5614,13 @@
             "text"
           ],
           "reasoning": true,
-          "structured_output": true,
-          "tool_call": true
-        },
-        "openai/o3-deep-research": {
-          "id": "openai/o3-deep-research",
-          "input_modalities": [
-            "text",
-            "image",
-            "document"
-          ],
-          "limits": {
-            "context_tokens": 200000,
-            "max_input_tokens": 200000,
-            "max_output_tokens": 100000
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high"
+            ]
           },
-          "name": "o3-deep-research",
-          "output_modalities": [
-            "text"
-          ],
-          "reasoning": true,
           "structured_output": true,
           "tool_call": true
         },
@@ -4191,6 +5640,13 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -4210,6 +5666,11 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -4230,6 +5691,13 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -4250,26 +5718,13 @@
             "text"
           ],
           "reasoning": true,
-          "structured_output": true,
-          "tool_call": true
-        },
-        "openai/o4-mini-deep-research": {
-          "id": "openai/o4-mini-deep-research",
-          "input_modalities": [
-            "text",
-            "image",
-            "document"
-          ],
-          "limits": {
-            "context_tokens": 200000,
-            "max_input_tokens": 200000,
-            "max_output_tokens": 100000
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high"
+            ]
           },
-          "name": "o4-mini-deep-research",
-          "output_modalities": [
-            "text"
-          ],
-          "reasoning": true,
           "structured_output": true,
           "tool_call": true
         },
@@ -4290,6 +5745,11 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -4502,42 +5962,6 @@
           "reasoning": true,
           "structured_output": false,
           "tool_call": false
-        },
-        "poolside/laguna-m.1": {
-          "id": "poolside/laguna-m.1",
-          "input_modalities": [
-            "text"
-          ],
-          "limits": {
-            "context_tokens": 262144,
-            "max_input_tokens": 262144,
-            "max_output_tokens": 32768
-          },
-          "name": "Laguna M.1",
-          "output_modalities": [
-            "text"
-          ],
-          "reasoning": true,
-          "structured_output": false,
-          "tool_call": true
-        },
-        "poolside/laguna-m.1:free": {
-          "id": "poolside/laguna-m.1:free",
-          "input_modalities": [
-            "text"
-          ],
-          "limits": {
-            "context_tokens": 262144,
-            "max_input_tokens": 262144,
-            "max_output_tokens": 32768
-          },
-          "name": "Laguna M.1 (free)",
-          "output_modalities": [
-            "text"
-          ],
-          "reasoning": true,
-          "structured_output": false,
-          "tool_call": true
         },
         "poolside/laguna-s-2.1": {
           "id": "poolside/laguna-s-2.1",
@@ -4753,6 +6177,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -4771,6 +6198,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": false,
           "tool_call": true
         },
@@ -4825,7 +6255,10 @@
             "text"
           ],
           "reasoning": true,
-          "structured_output": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
+          "structured_output": false,
           "tool_call": true
         },
         "qwen/qwen3-30b-a3b-instruct-2507": {
@@ -4879,6 +6312,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -4897,6 +6333,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": false,
           "tool_call": true
         },
@@ -4998,7 +6437,7 @@
           "limits": {
             "context_tokens": 262144,
             "max_input_tokens": 262144,
-            "max_output_tokens": 32768
+            "max_output_tokens": 65536
           },
           "name": "Qwen3 Max",
           "output_modalities": [
@@ -5016,7 +6455,7 @@
           "limits": {
             "context_tokens": 262144,
             "max_input_tokens": 262144,
-            "max_output_tokens": 32768
+            "max_output_tokens": 65536
           },
           "name": "Qwen3 Max Thinking",
           "output_modalities": [
@@ -5109,7 +6548,7 @@
           "limits": {
             "context_tokens": 262144,
             "max_input_tokens": 262144,
-            "max_output_tokens": 16384
+            "max_output_tokens": 32768
           },
           "name": "Qwen3 VL 30B A3B Instruct",
           "output_modalities": [
@@ -5212,6 +6651,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -5232,6 +6674,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -5252,6 +6697,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -5272,6 +6720,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -5292,6 +6743,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -5312,6 +6766,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -5332,6 +6789,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -5352,6 +6812,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -5372,6 +6835,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -5392,6 +6858,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -5412,6 +6881,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -5430,6 +6902,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -5450,6 +6925,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -5481,13 +6959,16 @@
           "limits": {
             "context_tokens": 1000000,
             "max_input_tokens": 1000000,
-            "max_output_tokens": 65536
+            "max_output_tokens": 131072
           },
           "name": "Qwen3.7 Max",
           "output_modalities": [
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -5500,13 +6981,16 @@
           "limits": {
             "context_tokens": 1000000,
             "max_input_tokens": 1000000,
-            "max_output_tokens": 65536
+            "max_output_tokens": 131072
           },
           "name": "Qwen3.7 Plus",
           "output_modalities": [
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -5600,6 +7084,13 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -5688,6 +7179,13 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -5724,6 +7222,13 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -5742,6 +7247,13 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "high"
+            ]
+          },
           "structured_output": false,
           "tool_call": true
         },
@@ -5805,8 +7317,8 @@
             "text"
           ],
           "limits": {
-            "context_tokens": 32768,
-            "max_input_tokens": 32768,
+            "context_tokens": 1024000,
+            "max_input_tokens": 1024000,
             "max_output_tokens": 32768
           },
           "name": "UnslopNemo 12B",
@@ -5834,8 +7346,48 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "max"
+            ]
+          },
           "structured_output": false,
           "tool_call": true
+        },
+        "thinkingmachines/inkling-small": {
+          "id": "thinkingmachines/inkling-small",
+          "input_modalities": [
+            "text",
+            "image",
+            "audio"
+          ],
+          "limits": {
+            "context_tokens": 524288,
+            "max_input_tokens": 524288,
+            "max_output_tokens": 262144
+          },
+          "name": "Inkling Small",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "max"
+            ]
+          },
+          "structured_output": false,
+          "tool_call": false
         },
         "undi95/remm-slerp-l2-13b": {
           "id": "undi95/remm-slerp-l2-13b",
@@ -5928,6 +7480,14 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
           "structured_output": true,
           "tool_call": false
         },
@@ -5948,6 +7508,14 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -5968,6 +7536,13 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -6009,6 +7584,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -6027,6 +7605,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -6045,6 +7626,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": false,
           "tool_call": true
         },
@@ -6063,6 +7647,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": false,
           "tool_call": true
         },
@@ -6082,6 +7669,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": false,
           "tool_call": true
         },
@@ -6221,13 +7811,19 @@
           "limits": {
             "context_tokens": 1048576,
             "max_input_tokens": 1048576,
-            "max_output_tokens": 131072
+            "max_output_tokens": 128000
           },
           "name": "GLM-5.2",
           "output_modalities": [
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "high",
+              "xhigh"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -6268,6 +7864,15 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -6288,6 +7893,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -6308,6 +7916,15 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -6328,6 +7945,15 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -6350,6 +7976,14 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -6372,6 +8006,13 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -6391,6 +8032,13 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "high",
+              "max"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -6411,6 +8059,16 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -6431,6 +8089,15 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
@@ -6447,6 +8114,13 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         }
@@ -6456,24 +8130,6 @@
     "zai-coding-plan": {
       "id": "zai-coding-plan",
       "models": {
-        "glm-4.5-air": {
-          "id": "glm-4.5-air",
-          "input_modalities": [
-            "text"
-          ],
-          "limits": {
-            "context_tokens": 131072,
-            "max_input_tokens": 131072,
-            "max_output_tokens": 98304
-          },
-          "name": "GLM-4.5-Air",
-          "output_modalities": [
-            "text"
-          ],
-          "reasoning": true,
-          "structured_output": false,
-          "tool_call": true
-        },
         "glm-4.7": {
           "id": "glm-4.7",
           "input_modalities": [
@@ -6489,6 +8145,9 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
           "structured_output": false,
           "tool_call": true
         },
@@ -6507,24 +8166,9 @@
             "text"
           ],
           "reasoning": true,
-          "structured_output": true,
-          "tool_call": true
-        },
-        "glm-5.1": {
-          "id": "glm-5.1",
-          "input_modalities": [
-            "text"
-          ],
-          "limits": {
-            "context_tokens": 200000,
-            "max_input_tokens": 200000,
-            "max_output_tokens": 131072
+          "reasoning_controls": {
+            "toggle": true
           },
-          "name": "GLM-5.1",
-          "output_modalities": [
-            "text"
-          ],
-          "reasoning": true,
           "structured_output": true,
           "tool_call": true
         },
@@ -6543,37 +8187,46 @@
             "text"
           ],
           "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "high",
+              "max"
+            ]
+          },
           "structured_output": true,
           "tool_call": true
         },
-        "glm-5v-turbo": {
-          "id": "glm-5v-turbo",
+        "glm-5.2-highspeed": {
+          "id": "glm-5.2-highspeed",
           "input_modalities": [
-            "text",
-            "image",
-            "video",
-            "document"
+            "text"
           ],
           "limits": {
-            "context_tokens": 200000,
-            "max_input_tokens": 200000,
+            "context_tokens": 1000000,
+            "max_input_tokens": 1000000,
             "max_output_tokens": 131072
           },
-          "name": "GLM-5V-Turbo",
+          "name": "GLM-5.2 Highspeed",
           "output_modalities": [
             "text"
           ],
           "reasoning": true,
-          "structured_output": false,
+          "reasoning_controls": {
+            "efforts": [
+              "high",
+              "max"
+            ]
+          },
+          "structured_output": true,
           "tool_call": true
         }
       },
       "name": "Z.AI Coding Plan"
     }
   },
-  "retrieved_at_ms": 1785298822000,
+  "retrieved_at_ms": 1785637970000,
   "schema_revision": 1,
-  "source_digest": "sha256:4a3b7f5958f1d7ced48fe2834a258c6bf63723f1944031fc397897f0f61465ea",
-  "source_revision": "sha256:4a3b7f5958f1d7ced48fe2834a258c6bf63723f1944031fc397897f0f61465ea",
+  "source_digest": "sha256:91805c841ce61827396ee6e25bdbaf6593a7e83f5aa13bce910b40304861d8e6",
+  "source_revision": "sha256:91805c841ce61827396ee6e25bdbaf6593a7e83f5aa13bce910b40304861d8e6",
   "source_url": "https://models.dev/api.json"
 }

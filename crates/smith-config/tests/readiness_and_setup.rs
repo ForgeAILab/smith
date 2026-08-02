@@ -110,6 +110,7 @@ fn catalog_snapshot() -> CatalogSnapshot {
         output_modalities: vec![CatalogModality::Text],
         tool_call: true,
         reasoning: true,
+        reasoning_controls: None,
         structured_output: true,
         disabled_reason: None,
     };
@@ -136,6 +137,7 @@ fn catalog_snapshot() -> CatalogSnapshot {
             output_modalities: vec![CatalogModality::Text],
             tool_call: true,
             reasoning: false,
+            reasoning_controls: None,
             structured_output: false,
             disabled_reason: Some("catalog output limit exceeds its context window".to_owned()),
         },

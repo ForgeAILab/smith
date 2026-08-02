@@ -442,19 +442,26 @@ point to `smith setup`; an empty session view says there is nothing to resume.
 Filtering and selection resolve no credential, read no model history, make no
 network request, and spend no provider tokens.
 
-Reasoning presence and reasoning control are different facts. A catalog
-boolean that says a model reasons means only fixed reasoning. Adjustable
-controls require source-explainable switch behavior, ordered effort choices,
-optional token-budget support, a provider wire dialect, defaults, and
-provenance from an exact trusted provider/model binding or explicit trusted
-configuration. Smith snapshots the effective selection at turn acceptance and
+Reasoning presence and reasoning control are different facts. On an unknown
+endpoint a catalog boolean that says a model reasons means only fixed
+reasoning. Adjustable controls require source-explainable switch behavior,
+ordered effort choices, optional token-budget support, a provider wire
+dialect, defaults, and provenance from an exact trusted provider/model
+binding, explicit trusted configuration, or an exact endpoint that normalizes
+controls itself — the OpenAI `reasoning_effort` ladder, the OpenRouter
+unified reasoning API, and the Z.AI Coding Plan thinking switch, which apply
+to every catalog-advertised reasoning model they serve. On those endpoints
+the frozen Models.dev snapshot refines the default ladder with each model's
+advertised control shape; a snapshot annotation is advertised metadata, not
+an entitlement claim, and it never creates controls on an endpoint whose
+wire dialect is unknown. Smith snapshots the effective selection at turn acceptance and
 uses it unchanged for retries and tool continuations. Compatible session
 overrides resume and flow into newly created children; a provider/model switch
 that cannot represent the override clears it with a local notice rather than
 mapping to a nearest value.
 
-For configured OpenRouter and Z.AI Coding Plan endpoints, model rows may come
-from Smith's frozen Models.dev snapshot as well as explicit TOML. The exact
+For configured OpenAI, OpenRouter, and Z.AI Coding Plan endpoints, model rows
+may come from Smith's frozen Models.dev snapshot as well as explicit TOML. The exact
 endpoint binding is a trust boundary; a matching provider name alone is not.
 Catalog rows retain the configured provider alias, show the catalog display
 name and provider-qualified ID, summarize limits and coding capabilities, and

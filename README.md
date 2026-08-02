@@ -221,6 +221,7 @@ endpoints:
 
 | Configured endpoint | Catalog |
 | --- | --- |
+| `https://api.openai.com/v1` | Models.dev `openai` |
 | `https://openrouter.ai/api/v1` | Models.dev `openrouter` |
 | `https://api.z.ai/api/coding/paas/v4` | Models.dev `zai-coding-plan` |
 

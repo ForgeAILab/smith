@@ -21,8 +21,8 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use smith_config::catalog::{
     CATALOG_SCHEMA_REVISION, CatalogLimits, CatalogModality, CatalogModel, CatalogProvider,
-    CatalogSnapshot, MODELS_DEV_SOURCE_URL, OPENROUTER_CATALOG_PROVIDER,
-    ZAI_CODING_PLAN_CATALOG_PROVIDER, catalog_provider_for,
+    CatalogReasoningControls, CatalogSnapshot, MODELS_DEV_SOURCE_URL, OPENAI_CATALOG_PROVIDER,
+    OPENROUTER_CATALOG_PROVIDER, ZAI_CODING_PLAN_CATALOG_PROVIDER, catalog_provider_for,
 };
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
@@ -45,7 +45,11 @@ const MAX_NAME_BYTES: usize = 256;
 const MAX_REVISION_BYTES: usize = 512;
 const MAX_DISABLED_REASON_BYTES: usize = 256;
 const MAX_MODALITIES: usize = 16;
-const EXPECTED_PROVIDERS: [&str; 2] = [
+const MAX_REASONING_OPTION_ENTRIES: usize = 8;
+const MAX_REASONING_EFFORTS: usize = 10;
+const MAX_REASONING_EFFORT_BYTES: usize = 32;
+const EXPECTED_PROVIDERS: [&str; 3] = [
+    OPENAI_CATALOG_PROVIDER,
     OPENROUTER_CATALOG_PROVIDER,
     ZAI_CODING_PLAN_CATALOG_PROVIDER,
 ];
@@ -549,6 +553,27 @@ fn validate_snapshot(snapshot: &CatalogSnapshot) -> Result<(), CatalogError> {
                     "model without limits has no disabled reason",
                 )?;
             }
+            if let Some(controls) = &model.reasoning_controls {
+                invalid_if(
+                    !model.reasoning,
+                    "reasoning controls are present on a non-reasoning model",
+                )?;
+                invalid_if(
+                    !controls.toggle && controls.efforts.is_empty(),
+                    "reasoning controls advertise neither a switch nor efforts",
+                )?;
+                invalid_if(
+                    controls.efforts.len() > MAX_REASONING_EFFORTS,
+                    "model advertises too many reasoning efforts",
+                )?;
+                invalid_if(
+                    !controls.efforts.iter().all(|effort| {
+                        valid_effort_name(effort)
+                            && controls.efforts.iter().filter(|e| *e == effort).count() == 1
+                    }),
+                    "reasoning efforts are not normalized",
+                )?;
+            }
         }
     }
     let value = serde_json::to_value(&snapshot.providers)
@@ -688,9 +713,57 @@ fn normalize_model(model_id: &str, raw: &Value) -> Result<Option<CatalogModel>, 
         output_modalities,
         tool_call,
         reasoning,
+        reasoning_controls: normalize_reasoning_controls(raw, reasoning),
         structured_output,
         disabled_reason,
     }))
+}
+
+/// Keeps only the advertised control shapes Smith can express: an on/off
+/// switch and an ordered effort ladder. `budget_tokens` and unknown option
+/// types grant nothing, and invalid entries are dropped rather than
+/// disabling an otherwise valid model.
+///
+/// `scripts/generate-model-catalog.py` implements the same normalization;
+/// the two must stay byte-identical for the seed reproducibility check.
+fn normalize_reasoning_controls(
+    raw: &serde_json::Map<String, Value>,
+    reasoning: bool,
+) -> Option<CatalogReasoningControls> {
+    if !reasoning {
+        return None;
+    }
+    let entries = raw.get("reasoning_options")?.as_array()?;
+    let mut toggle = false;
+    let mut efforts: Vec<String> = Vec::new();
+    for entry in entries.iter().take(MAX_REASONING_OPTION_ENTRIES) {
+        match entry.get("type").and_then(Value::as_str) {
+            Some("toggle") => toggle = true,
+            Some("effort") => {
+                let values = entry.get("values").and_then(Value::as_array);
+                for value in values.into_iter().flatten() {
+                    if efforts.len() == MAX_REASONING_EFFORTS {
+                        break;
+                    }
+                    let Some(text) = value.as_str() else { continue };
+                    let lowered = text.to_ascii_lowercase();
+                    if valid_effort_name(&lowered) && !efforts.contains(&lowered) {
+                        efforts.push(lowered);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    (toggle || !efforts.is_empty()).then_some(CatalogReasoningControls { toggle, efforts })
+}
+
+fn valid_effort_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_REASONING_EFFORT_BYTES
+        && value
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
 }
 
 fn normalize_limits(raw: Option<&Value>) -> (Option<CatalogLimits>, Option<String>) {
@@ -900,6 +973,20 @@ mod tests {
     fn remote_fixture() -> Vec<u8> {
         serde_json::to_vec(&json!({
             "unrelated": {"id": "unrelated", "models": {}},
+            "openai": {
+                "id": "openai",
+                "name": "OpenAI",
+                "models": {
+                    "gpt-fixture": {
+                        "id": "gpt-fixture",
+                        "name": "GPT Fixture",
+                        "tool_call": true,
+                        "reasoning": true,
+                        "modalities": {"input": ["text"], "output": ["text"]},
+                        "limit": {"context": 400000, "output": 128000}
+                    }
+                }
+            },
             "openrouter": {
                 "id": "openrouter",
                 "name": "OpenRouter",
@@ -979,16 +1066,24 @@ mod tests {
     }
 
     #[test]
-    fn embedded_seed_is_strictly_valid_and_contains_both_supported_catalogs() {
+    fn embedded_seed_is_strictly_valid_and_contains_all_supported_catalogs() {
         let snapshot = parse_snapshot(EMBEDDED_MODELS_DEV_SEED.as_bytes()).unwrap();
 
+        assert_eq!(
+            snapshot
+                .provider(OPENAI_CATALOG_PROVIDER)
+                .unwrap()
+                .models
+                .len(),
+            37
+        );
         assert_eq!(
             snapshot
                 .provider(OPENROUTER_CATALOG_PROVIDER)
                 .unwrap()
                 .models
                 .len(),
-            339
+            335
         );
         assert_eq!(
             snapshot
@@ -996,7 +1091,7 @@ mod tests {
                 .unwrap()
                 .models
                 .len(),
-            6
+            4
         );
     }
 
@@ -1119,7 +1214,7 @@ mod tests {
             std::fs::write(&cache_path, bytes).unwrap();
             let prepared = loader.prepare(false).await.unwrap();
             assert_eq!(prepared.origin, CatalogLoadOrigin::Embedded);
-            assert_eq!(prepared.snapshot.providers.len(), 2);
+            assert_eq!(prepared.snapshot.providers.len(), 3);
         }
     }
 

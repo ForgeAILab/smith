@@ -295,6 +295,10 @@ pub struct RuntimeRequest {
     pub credential_timeout_ms: u64,
     /// Model-metadata layers below Smith's own configuration.
     pub catalog_sources: Vec<Arc<dyn ModelCatalogSource>>,
+    /// The frozen normalized Models.dev snapshot, when the host loaded one.
+    /// Supplies advertised reasoning controls for catalog-mapped endpoints;
+    /// absence only removes that refinement.
+    pub model_catalog: Option<Arc<smith_config::catalog::CatalogSnapshot>>,
     /// Fully resolved child-enabled profiles preflighted before child dispatch.
     pub child_profiles: Vec<ChildProfileRequest>,
     /// The runtime's event broadcast buffer.
@@ -335,6 +339,7 @@ impl RuntimeRequest {
             transport: TransportConfig::default(),
             credential_timeout_ms: DEFAULT_CREDENTIAL_TIMEOUT_MS,
             catalog_sources: Vec::new(),
+            model_catalog: None,
             child_profiles: Vec::new(),
             event_buffer: DEFAULT_EVENT_BUFFER,
             shutdown_timeout_ms: DEFAULT_SHUTDOWN_TIMEOUT_MS,
@@ -1131,6 +1136,7 @@ async fn prepare_child_profile_routes(
         route_request.transport = request.transport.clone();
         route_request.credential_timeout_ms = request.credential_timeout_ms;
         route_request.catalog_sources = child.catalog_sources.clone();
+        route_request.model_catalog = request.model_catalog.clone();
         route_request.persistence_redactor = request.persistence_redactor.clone();
 
         let PreparedFactoryInputs {
@@ -1255,12 +1261,27 @@ async fn prepare_factory_inputs(
             model: model.clone(),
             source,
         })?;
-    let reasoning = resolve_reasoning_policy(config, &profile.profile, endpoint.as_deref())
-        .map_err(|message| FactoryError::Reasoning {
-            provider: provider_name.clone(),
-            model: model.clone(),
-            message,
-        })?;
+    let catalog_controls = request.model_catalog.as_deref().and_then(|snapshot| {
+        let catalog_provider =
+            smith_config::catalog::catalog_provider_for(&provider_kind, endpoint.as_deref())?;
+        snapshot
+            .provider(catalog_provider)?
+            .models
+            .get(model.as_str())?
+            .reasoning_controls
+            .as_ref()
+    });
+    let reasoning = resolve_reasoning_policy(
+        config,
+        &profile.profile,
+        endpoint.as_deref(),
+        catalog_controls,
+    )
+    .map_err(|message| FactoryError::Reasoning {
+        provider: provider_name.clone(),
+        model: model.clone(),
+        message,
+    })?;
     if reasoning.support == agent_runtime_core::provider::ReasoningSupport::Controllable {
         profile.profile.capabilities.reasoning =
             agent_runtime_core::provider::ReasoningSupport::Controllable;
@@ -1749,8 +1770,8 @@ mod tests {
         model_profile.capabilities.reasoning =
             agent_runtime_core::provider::ReasoningSupport::Fixed;
 
-        let policy =
-            resolve_reasoning_policy(&config, &model_profile, None).expect("presence-only profile");
+        let policy = resolve_reasoning_policy(&config, &model_profile, None, None)
+            .expect("presence-only profile");
         assert_eq!(
             policy.support,
             agent_runtime_core::provider::ReasoningSupport::Fixed
@@ -1778,8 +1799,8 @@ mod tests {
         config.reasoning.effort = Some(sourced("high".to_owned()));
         let model_profile = profile(ModelLimits::new(128_000, 124_000, 4_096));
 
-        let policy =
-            resolve_reasoning_policy(&config, &model_profile, None).expect("advertised effort");
+        let policy = resolve_reasoning_policy(&config, &model_profile, None, None)
+            .expect("advertised effort");
         assert_eq!(policy.effective_state(), "on");
         assert_eq!(policy.effective_effort(), "high");
         assert_eq!(
@@ -1790,7 +1811,7 @@ mod tests {
         );
 
         config.reasoning.effort = Some(sourced("extreme".to_owned()));
-        let error = resolve_reasoning_policy(&config, &model_profile, None)
+        let error = resolve_reasoning_policy(&config, &model_profile, None, None)
             .expect_err("unadvertised effort");
         assert!(error.contains("extreme"), "{error}");
         assert!(error.contains("none, low, high"), "{error}");

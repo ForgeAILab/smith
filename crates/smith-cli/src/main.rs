@@ -265,6 +265,7 @@ async fn start_host(
     let mut runtime = RuntimeRequest {
         workspace: Some(Arc::new(workspace)),
         credentials: Some(CredentialResolver::new(&resolution.layout.user_dir)),
+        model_catalog: Some(catalog.clone()),
         ..RuntimeRequest::new(resolution.config.clone(), surface)
     };
     let persistence_redactor = DefaultRedactor::new();
@@ -3191,7 +3192,7 @@ output_reserve = 4096
             &resolution.config.agent,
             &smith_runtime::reasoning::ReasoningRuntimePolicy::default(),
         );
-        assert_eq!(resources.models.len(), 339);
+        assert_eq!(resources.models.len(), 335);
         assert_eq!(
             resources
                 .main_profiles

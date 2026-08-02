@@ -158,7 +158,7 @@ default_profile = "glm"
 
 [profiles.glm]
 provider = "zai"
-model = "glm-5.1"
+model = "glm-5-turbo"
 
 [providers.zai]
 kind = "openai-compatible"
