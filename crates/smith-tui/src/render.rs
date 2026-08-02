@@ -100,6 +100,9 @@ fn draw_surface(
             Some(Overlay::ResourcePicker { picker, .. }) => {
                 draw_compact_resource_picker(frame, compact, picker, theme);
             }
+            Some(Overlay::HistorySearch { query, matched, .. }) => {
+                draw_history_search(frame, compact, query, matched.as_deref(), theme);
+            }
             _ => unreachable!("compact rows require a compact interaction"),
         }
     }
@@ -116,7 +119,11 @@ fn draw_surface(
         Some(Overlay::Questionnaire { state }) => {
             draw_questionnaire(frame, area, state, theme);
         }
-        Some(Overlay::Palette { .. } | Overlay::ResourcePicker { .. }) => {}
+        Some(
+            Overlay::Palette { .. }
+            | Overlay::ResourcePicker { .. }
+            | Overlay::HistorySearch { .. },
+        ) => {}
         Some(Overlay::UndoConfirm { content }) => {
             draw_recovery_confirm(frame, area, "undo last Smith turn", content, theme);
         }
@@ -193,6 +200,7 @@ fn anchored_rows(app: &App, area: Rect, composer_rows: u16) -> AnchoredRows {
     let compact_desired = match &app.overlay {
         Some(Overlay::Palette { error, .. }) => desired_palette_rows(app, error.as_deref()),
         Some(Overlay::ResourcePicker { picker, .. }) => compact_resource_picker_rows(picker),
+        Some(Overlay::HistorySearch { .. }) => 2,
         _ => 0,
     };
     let available = area
@@ -1087,6 +1095,9 @@ fn overlay_hint(app: &App) -> Option<String> {
         Some(Overlay::ResourcePicker { .. }) => {
             Some("type to filter · ↑↓ choose · enter confirm · esc cancel".to_owned())
         }
+        Some(Overlay::HistorySearch { .. }) => {
+            Some("ctrl+r older · enter use · esc cancel".to_owned())
+        }
         Some(Overlay::UndoConfirm { .. }) => Some("y apply undo · n/esc cancel".to_owned()),
         Some(Overlay::RedoConfirm { .. }) => Some("y apply redo · n/esc cancel".to_owned()),
         Some(Overlay::RevertConfirm { .. }) => Some("y apply revert · n/esc cancel".to_owned()),
@@ -1767,6 +1778,42 @@ fn draw_palette(
 fn desired_palette_rows(app: &App, error: Option<&str>) -> u16 {
     let matches = commands::matches(app.composer.text()).len().max(1);
     u16::try_from(matches.saturating_add(usize::from(error.is_some()))).unwrap_or(u16::MAX)
+}
+
+fn draw_history_search(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    query: &str,
+    matched: Option<&str>,
+    theme: Theme,
+) {
+    let query_empty = query.is_empty();
+    let query = if query_empty { "type query" } else { query };
+    let result = matched.map_or_else(
+        || {
+            if query_empty {
+                "  history is unchanged until a query matches".to_owned()
+            } else {
+                "  no matching history".to_owned()
+            }
+        },
+        |entry| format!("› {}", entry.replace('\n', " ↵ ")),
+    );
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("  reverse search  ", theme.style(Tone::Heading)),
+            Span::styled(query.to_owned(), theme.style(Tone::Accent)),
+        ]),
+        Line::from(Span::styled(
+            result,
+            theme.style(if matched.is_some() {
+                Tone::Default
+            } else {
+                Tone::Dim
+            }),
+        )),
+    ];
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn draw_recovery_confirm(
@@ -2518,6 +2565,47 @@ mod tests {
             .expect("path position fits");
         assert_eq!(buffer[(model_x, footer_y)].fg, Color::Cyan);
         assert_eq!(buffer[(path_x, footer_y)].fg, Color::Green);
+    }
+
+    #[test]
+    fn reverse_history_search_is_anchored_labelled_and_bounded_when_narrow() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.composer.replace("fix history\nsecond line");
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        app.composer.replace("scratch draft");
+        app.on_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        for character in "HISTORY".chars() {
+            app.on_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+        }
+
+        for (width, height) in [(MIN_WIDTH, MIN_HEIGHT), (74, 16), (120, 24)] {
+            let screen = render(&app, width, height, Theme::new().without_color());
+            insta_like(
+                &screen,
+                &[
+                    "reverse search",
+                    "HISTORY",
+                    "fix history",
+                    "ctrl+r older",
+                    "enter use",
+                    "esc cancel",
+                ],
+            );
+            assert!(
+                screen.contains("scratch draft"),
+                "{width}×{height}:\n{screen}"
+            );
+            assert!(
+                screen
+                    .lines()
+                    .all(|line| line.width() <= usize::from(width)),
+                "{width}×{height} overflowed:\n{screen}"
+            );
+            assert!(
+                screen.lines().count() <= usize::from(height),
+                "{width}×{height} overflowed vertically:\n{screen}"
+            );
+        }
     }
 
     #[test]

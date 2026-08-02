@@ -200,6 +200,17 @@ pub enum Overlay {
         /// Composer draft restored on cancellation.
         restore_on_escape: String,
     },
+    /// Search bounded process-local composer history in a compact pane.
+    HistorySearch {
+        /// Composer draft restored when search is cancelled.
+        original: String,
+        /// Case-insensitive substring query.
+        query: String,
+        /// Stable history index of the selected match.
+        selected: Option<usize>,
+        /// Exact selected history entry, ready to restore into the composer.
+        matched: Option<String>,
+    },
     /// Exact reverse patch awaiting a no-default confirmation.
     UndoConfirm {
         /// Bounded reverse patch.
@@ -1533,6 +1544,7 @@ impl App {
             Some(Overlay::ResourcePicker { .. }) => {
                 return self.on_resource_picker_key(key);
             }
+            Some(Overlay::HistorySearch { .. }) => return self.on_history_search_key(key),
             Some(Overlay::UndoConfirm { .. }) => {
                 return match key.code {
                     KeyCode::Char('y') => {
@@ -1682,6 +1694,10 @@ impl App {
                 self.follow_newest();
                 None
             }
+            (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
+                self.open_history_search();
+                None
+            }
             (KeyCode::Char('?'), KeyModifiers::NONE) if self.composer.is_empty() => {
                 self.follow_newest();
                 self.dispatch_command(CommandAction::Help)
@@ -1695,7 +1711,7 @@ impl App {
                 self.scroll_down(10);
                 None
             }
-            (KeyCode::Up, _) if self.composer.is_empty() || self.composer.is_recalling() => {
+            (KeyCode::Up, _) => {
                 if self.composer.recall_previous() {
                     None
                 } else {
@@ -1706,9 +1722,7 @@ impl App {
                 self.composer.recall_next();
                 None
             }
-            (KeyCode::Up | KeyCode::Down | KeyCode::Home | KeyCode::End, _) => {
-                self.on_scroll_key(key)
-            }
+            (KeyCode::Down | KeyCode::Home | KeyCode::End, _) => self.on_scroll_key(key),
             _ => self.on_composer_key(key),
         }
     }
@@ -1737,10 +1751,78 @@ impl App {
             Some(Overlay::ResourcePicker {
                 restore_on_escape, ..
             }) => self.composer.replace(restore_on_escape),
+            Some(Overlay::HistorySearch { original, .. }) => self.composer.replace(original),
             other => self.overlay = other,
         }
         self.composer.stash_for_recall();
         None
+    }
+
+    fn open_history_search(&mut self) {
+        self.overlay = Some(Overlay::HistorySearch {
+            original: self.composer.text().to_owned(),
+            query: String::new(),
+            selected: None,
+            matched: None,
+        });
+    }
+
+    fn on_history_search_key(&mut self, key: KeyEvent) -> Option<Action> {
+        match (key.code, key.modifiers) {
+            (KeyCode::Esc, _) => {
+                if let Some(Overlay::HistorySearch { original, .. }) = self.overlay.take() {
+                    self.composer.replace(original);
+                }
+            }
+            (KeyCode::Enter, _) => {
+                let matched = match &self.overlay {
+                    Some(Overlay::HistorySearch { matched, .. }) => matched.clone(),
+                    _ => None,
+                };
+                if let Some(matched) = matched {
+                    self.overlay = None;
+                    self.composer.replace(matched);
+                }
+            }
+            (KeyCode::Backspace, _) => {
+                if let Some(Overlay::HistorySearch { query, .. }) = &mut self.overlay {
+                    query.pop();
+                }
+                self.refresh_history_search(false);
+            }
+            (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
+                self.refresh_history_search(true);
+            }
+            (KeyCode::Char(character), modifiers)
+                if !modifiers.intersects(
+                    KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                ) =>
+            {
+                if let Some(Overlay::HistorySearch { query, .. }) = &mut self.overlay {
+                    query.push(character);
+                }
+                self.refresh_history_search(false);
+            }
+            _ => {}
+        }
+        None
+    }
+
+    fn refresh_history_search(&mut self, cycle: bool) {
+        let (query, after) = match &self.overlay {
+            Some(Overlay::HistorySearch {
+                query, selected, ..
+            }) => (query.clone(), cycle.then_some(*selected).flatten()),
+            _ => return,
+        };
+        let found = self.composer.search_history(&query, after);
+        if let Some(Overlay::HistorySearch {
+            selected, matched, ..
+        }) = &mut self.overlay
+        {
+            (*selected, *matched) =
+                found.map_or((None, None), |(index, entry)| (Some(index), Some(entry)));
+        }
     }
 
     fn request_exit(&mut self) -> Option<Action> {
@@ -2082,12 +2164,12 @@ impl App {
     }
 
     fn direct_model(&mut self, value: &str, restore: String) -> Option<Action> {
-        if self
-            .resources
-            .models
-            .iter()
-            .any(|entry| entry.id == value && entry.disabled_reason.is_none())
-        {
+        if self.resources.models.iter().any(|entry| {
+            entry.id == value
+                && entry.disabled_reason.is_none()
+                && model_pair(&self.resources.providers, &entry.id).is_some()
+        }) {
+            self.accept_composer_input();
             return self.apply_model_id(value);
         }
         let mut matches: Vec<ResourceEntry> = self
@@ -2108,10 +2190,15 @@ impl App {
             })
         {
             let selected = matches.remove(position);
+            self.accept_composer_input();
             return self.apply_model_id(&selected.id);
         }
         match matches.as_slice() {
-            [only] => self.apply_model_id(&only.id),
+            [only] => {
+                let id = only.id.clone();
+                self.accept_composer_input();
+                self.apply_model_id(&id)
+            }
             [] => {
                 self.transcript.push_error(format!(
                     "model `{value}` is not locally selectable; run `smith setup add-model`"
@@ -2122,6 +2209,7 @@ impl App {
                 self.transcript.push_error(format!(
                     "model `{value}` is available from multiple providers; choose a qualified pair"
                 ));
+                self.accept_composer_input();
                 self.open_resource_picker(
                     ResourceTarget::Model,
                     matches,
@@ -2278,6 +2366,7 @@ impl App {
                 // as an ordinary prompt.
                 if let Some(literal) = text.strip_prefix("//") {
                     let literal = format!("/{literal}");
+                    self.composer.record_current();
                     self.composer.clear();
                     self.transcript.push_user(&literal);
                     self.follow_newest();
@@ -2287,6 +2376,7 @@ impl App {
                 // with `!`; one marker is removed and no local process starts.
                 if let Some(literal) = text.strip_prefix("!!") {
                     let literal = format!("!{literal}");
+                    self.composer.record_current();
                     self.composer.clear();
                     self.transcript.push_user(&literal);
                     self.follow_newest();
@@ -2303,6 +2393,7 @@ impl App {
                         return None;
                     }
                     let command = command.to_owned();
+                    self.composer.record_current();
                     self.composer.clear();
                     self.transcript.push_notice("shell", format!("$ {command}"));
                     self.follow_newest();
@@ -2403,6 +2494,7 @@ impl App {
                             Some(provider) => format!("{provider}/{}", self.status.model),
                             None => self.status.model.clone(),
                         };
+                        self.composer.record_current();
                         self.overlay = Some(Overlay::AgentFollowUpConfirm {
                             child_id: agent.clone(),
                             task: task.to_owned(),
@@ -2416,6 +2508,7 @@ impl App {
                         Some(provider) => format!("{provider}/{}", self.status.model),
                         None => self.status.model.clone(),
                     };
+                    self.composer.record_current();
                     self.overlay = Some(Overlay::AgentConfirm {
                         preset: agent.clone(),
                         task: task.to_owned(),
@@ -2425,6 +2518,7 @@ impl App {
                     });
                     return None;
                 }
+                self.composer.record_current();
                 self.composer.clear();
                 self.transcript.push_user(&parsed.text);
                 self.follow_newest();
@@ -2537,12 +2631,12 @@ impl App {
         let restore = self.composer.text().to_owned();
         match command {
             CommandAction::Help => {
-                self.composer.clear();
+                self.accept_composer_input();
                 self.show_local_result("help", commands::help());
                 None
             }
             CommandAction::Details => {
-                self.composer.clear();
+                self.accept_composer_input();
                 self.toggle_work_details();
                 self.transcript.push_notice(
                     "details",
@@ -2555,26 +2649,26 @@ impl App {
                 None
             }
             CommandAction::Quit => {
-                self.composer.clear();
+                self.accept_composer_input();
                 self.request_exit()
             }
             CommandAction::NewSession => {
-                self.composer.clear();
+                self.accept_composer_input();
                 Some(Action::Reconfigure(PaletteCommand::NewSession))
             }
             CommandAction::Resume(None) => {
-                self.composer.clear();
+                self.accept_composer_input();
                 self.open_target_picker(ResourceTarget::Resume, restore);
                 None
             }
             CommandAction::Resume(Some(id)) => {
-                self.composer.clear();
                 let selectable = self
                     .resources
                     .sessions
                     .iter()
                     .any(|entry| entry.id == id && entry.disabled_reason.is_none());
                 if selectable {
+                    self.accept_composer_input();
                     self.apply_resource_selection(ResourceTarget::Resume, id, restore)
                 } else {
                     self.transcript.push_error(format!(
@@ -2584,18 +2678,18 @@ impl App {
                 }
             }
             CommandAction::Profile(None) => {
-                self.composer.clear();
+                self.accept_composer_input();
                 self.open_target_picker(ResourceTarget::Profile, restore);
                 None
             }
             CommandAction::Profile(Some(name)) => {
-                self.composer.clear();
                 let selectable = self
                     .resources
                     .profiles
                     .iter()
                     .any(|entry| entry.id == name && entry.disabled_reason.is_none());
                 if selectable {
+                    self.accept_composer_input();
                     self.apply_resource_selection(ResourceTarget::Profile, name, restore)
                 } else {
                     self.transcript.push_error(format!(
@@ -2605,18 +2699,29 @@ impl App {
                 }
             }
             CommandAction::Provider(None) => {
-                self.composer.clear();
+                self.accept_composer_input();
                 self.open_target_picker(ResourceTarget::Provider, restore);
                 None
             }
             CommandAction::Provider(Some(name)) => {
-                self.composer.clear();
                 let selectable = self
                     .resources
                     .providers
                     .iter()
                     .any(|entry| entry.id == name && entry.disabled_reason.is_none());
                 if selectable {
+                    let has_model = self.resources.models.iter().any(|entry| {
+                        model_pair(&self.resources.providers, &entry.id)
+                            .is_some_and(|(provider, _)| provider == name)
+                    });
+                    if !has_model {
+                        return self.apply_resource_selection(
+                            ResourceTarget::Provider,
+                            name,
+                            restore,
+                        );
+                    }
+                    self.accept_composer_input();
                     self.apply_resource_selection(ResourceTarget::Provider, name, restore)
                 } else {
                     self.transcript.push_error(format!(
@@ -2626,14 +2731,11 @@ impl App {
                 }
             }
             CommandAction::Model(None) => {
-                self.composer.clear();
+                self.accept_composer_input();
                 self.open_target_picker(ResourceTarget::Model, restore);
                 None
             }
-            CommandAction::Model(Some(name)) => {
-                self.composer.clear();
-                self.direct_model(&name, restore)
-            }
+            CommandAction::Model(Some(name)) => self.direct_model(&name, restore),
             CommandAction::AgentResume(child_id) => {
                 if self.is_busy() {
                     self.overlay = None;
@@ -2643,7 +2745,6 @@ impl App {
                     );
                     return None;
                 }
-                self.composer.clear();
                 let Some(summary) = self.children.get(&child_id) else {
                     self.transcript.push_error(format!(
                         "No child named `{child_id}`; use `/agent` to list retained children."
@@ -2660,6 +2761,7 @@ impl App {
                     ));
                     return None;
                 }
+                self.accept_composer_input();
                 self.overlay = Some(Overlay::AgentResumeConfirm {
                     child_id: child_id.clone(),
                     content: format!(
@@ -2669,10 +2771,15 @@ impl App {
                 None
             }
             local => {
-                self.composer.clear();
+                self.accept_composer_input();
                 Some(Action::Command(local))
             }
         }
+    }
+
+    fn accept_composer_input(&mut self) {
+        self.composer.record_current();
+        self.composer.clear();
     }
 
     fn on_scroll_key(&mut self, key: KeyEvent) -> Option<Action> {
@@ -3196,6 +3303,148 @@ mod tests {
     }
 
     #[test]
+    fn accepted_inputs_share_history_while_rejected_input_stays_scratch() {
+        let mut app = app();
+
+        type_text(&mut app, "first prompt");
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Some(Action::Send("first prompt".to_owned()))
+        );
+        type_text(&mut app, "/status");
+        assert!(matches!(
+            app.on_key(key(KeyCode::Enter)),
+            Some(Action::Command(CommandAction::Status))
+        ));
+        type_text(&mut app, "!cargo test");
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Some(Action::RunShell {
+                command: "cargo test".to_owned()
+            })
+        );
+
+        type_text(&mut app, "/model missing");
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert_eq!(app.composer.text(), "/model missing");
+        assert!(app.overlay.is_none());
+
+        app.on_key(key(KeyCode::Up));
+        assert_eq!(app.composer.text(), "!cargo test");
+        app.on_key(key(KeyCode::Up));
+        assert_eq!(app.composer.text(), "/status");
+        app.on_key(key(KeyCode::Up));
+        assert_eq!(app.composer.text(), "first prompt");
+        app.on_key(key(KeyCode::Down));
+        app.on_key(key(KeyCode::Down));
+        app.on_key(key(KeyCode::Down));
+        assert_eq!(app.composer.text(), "/model missing");
+    }
+
+    #[test]
+    fn accepted_child_confirmation_input_enters_history_before_confirmation() {
+        let mut app = agent_first_app();
+        app.composer.replace("@review inspect the diff");
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert!(matches!(&app.overlay, Some(Overlay::AgentConfirm { .. })));
+
+        app.on_key(key(KeyCode::Char('n')));
+        assert!(app.overlay.is_none());
+        app.composer.clear();
+        app.on_key(key(KeyCode::Up));
+        assert_eq!(app.composer.text(), "@review inspect the diff");
+    }
+
+    #[test]
+    fn arrow_history_restores_a_non_empty_composer_scratch() {
+        let mut app = app();
+        type_text(&mut app, "completed input");
+        app.on_key(key(KeyCode::Enter));
+        type_text(&mut app, "work in progress");
+
+        app.on_key(key(KeyCode::Up));
+        assert_eq!(app.composer.text(), "completed input");
+        app.on_key(key(KeyCode::Down));
+        assert_eq!(app.composer.text(), "work in progress");
+    }
+
+    #[test]
+    fn ctrl_r_search_cycles_accepts_and_cancels_losslessly() {
+        let mut app = app();
+        for input in ["fix older", "unrelated", "fix newest"] {
+            type_text(&mut app, input);
+            app.on_key(key(KeyCode::Enter));
+        }
+        type_text(&mut app, "scratch draft");
+
+        app.on_key(ctrl('r'));
+        type_text(&mut app, "FIX");
+        assert!(matches!(
+            &app.overlay,
+            Some(Overlay::HistorySearch { matched, .. })
+                if matched.as_deref() == Some("fix newest")
+        ));
+        app.on_key(ctrl('r'));
+        assert!(matches!(
+            &app.overlay,
+            Some(Overlay::HistorySearch { matched, .. })
+                if matched.as_deref() == Some("fix older")
+        ));
+        app.on_key(key(KeyCode::Esc));
+        assert_eq!(app.composer.text(), "scratch draft");
+
+        app.on_key(ctrl('r'));
+        type_text(&mut app, "fix");
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert!(app.overlay.is_none());
+        assert_eq!(app.composer.text(), "fix newest");
+
+        app.on_key(ctrl('r'));
+        type_text(&mut app, "missing");
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert!(matches!(&app.overlay, Some(Overlay::HistorySearch { .. })));
+        app.on_key(key(KeyCode::Esc));
+        assert_eq!(app.composer.text(), "fix newest");
+    }
+
+    #[test]
+    fn ctrl_c_from_reverse_search_stashes_the_original_draft() {
+        let mut app = app();
+        type_text(&mut app, "recover through search");
+        app.on_key(ctrl('r'));
+        type_text(&mut app, "query");
+
+        assert_eq!(app.on_key(ctrl('c')), None);
+        assert!(app.overlay.is_none());
+        assert!(app.composer.is_empty());
+        app.on_key(key(KeyCode::Up));
+        assert_eq!(app.composer.text(), "recover through search");
+    }
+
+    #[test]
+    fn ctrl_r_does_not_steal_an_existing_overlay() {
+        let mut app = app();
+        type_text(&mut app, "/model");
+        app.on_key(key(KeyCode::Enter));
+        assert!(matches!(
+            &app.overlay,
+            Some(Overlay::ResourcePicker {
+                target: ResourceTarget::Model,
+                ..
+            })
+        ));
+
+        app.on_key(ctrl('r'));
+        assert!(matches!(
+            &app.overlay,
+            Some(Overlay::ResourcePicker {
+                target: ResourceTarget::Model,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn a_non_ctrl_c_key_disarms_the_double_press_exit() {
         let mut app = app();
         assert_eq!(app.on_key(ctrl('c')), None);
@@ -3249,7 +3498,8 @@ mod tests {
             })
             .expect("question mark should render local help");
         assert!(help.contains("Ctrl+C twice"), "{help}");
-        assert!(help.contains("Up recalls"), "{help}");
+        assert!(help.contains("Up/Down browse"), "{help}");
+        assert!(help.contains("Ctrl+R searches"), "{help}");
     }
 
     #[test]

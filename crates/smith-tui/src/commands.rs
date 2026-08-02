@@ -268,8 +268,9 @@ pub fn help() -> String {
          Tab cycles build/plan/review only while empty and idle.\n\
          @ completes exact files and read-only agents; @@ sends a literal @.\n\
          ! runs a prepared local shell action; !! sends a literal !.\n\
-         Up recalls a draft cleared by Ctrl+C; Down returns toward empty.\n\
-         Ctrl+C twice within 1s exits; the first press stashes the draft.\n\
+         Up/Down browse accepted and Ctrl+C-stashed input without losing your draft.\n\
+         Ctrl+R searches composer history; Enter restores a match and Esc cancels.\n\
+         Ctrl+C twice within 1s exits; the first press stashes and clears the draft.\n\
          Start a message with // to send a literal leading slash.",
     );
     output
@@ -297,6 +298,8 @@ mod tests {
         for command in COMMANDS {
             assert!(help.contains(&format!("/{}", command.name)), "{help}");
         }
+        assert!(help.contains("Ctrl+R searches composer history"), "{help}");
+        assert!(help.contains("Up/Down browse accepted"), "{help}");
         assert_eq!(
             matches("/rev")
                 .into_iter()

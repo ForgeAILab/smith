@@ -214,14 +214,15 @@ and the keyboard contract below are sufficient, so it adds no control strip.
 | `Enter` | Send the composer |
 | `Shift+Enter` / `Alt+Enter` | Newline in the composer |
 | `Esc` | Interrupt the running turn; if idle, clear the composer |
-| `Ctrl+C` | Stash and clear the composer; replace the identity footer with `press Ctrl+C again to exit` for the 1s double-press window; a second press exits from any state |
+| `Ctrl+C` | Add a non-blank composer draft to bounded local history and clear it; replace the identity footer with `press Ctrl+C again to exit` for the 1s double-press window; a second press exits from any state |
 | `Ctrl+P` | Open command completion using the shared command registry |
+| `Ctrl+R` | Open incremental reverse search over bounded process-local composer history |
 | `Tab` | Cycle root agent mode only when empty and idle; otherwise complete or move the active overlay selection |
 | `Shift+Tab` | Move the active completion/questionnaire selection backward |
 | `PageUp` / `PageDown` / `Home` / `End` | Scroll transcript or jump to either edge |
 | `Ctrl+L` | Jump to newest and re-enable follow |
 | `?` (empty composer) | Show the same local guide as `/help`; never contact the provider |
-| `Up` / `Down` (draft recall) | Recall drafts stashed by `Ctrl+C` or return toward empty |
+| `Up` / `Down` (composer history) | Browse accepted or `Ctrl+C`-stashed input and return to the exact pre-navigation draft |
 | `y` / `n` / `a` | Approval: allow once / deny / allow for session |
 | `Up` / `Down` or `1`–`9` | Questionnaire: move to or stage a labelled choice |
 | `Space` | Questionnaire: select the highlighted choice; never submit |
@@ -242,6 +243,26 @@ Each result has a command name, one-line description, and argument hint.
 selection backward; `Enter` executes; and `Esc` dismisses the menu while
 preserving the draft. `Ctrl+P` opens the same registry and parser. `//` sends a
 literal leading slash to the provider.
+
+The composer keeps at most 100 exact non-blank history entries from accepted
+provider prompts, local commands/actions, confirmation flows, and drafts
+cleared by the first `Ctrl+C`. Adjacent exact duplicates collapse into one
+entry. Rejected input remains in place and does not enter history. This state
+is process-local UI memory only: it is not canonical conversation history, is
+not persisted in checkpoints, and is never sent to a provider unless the user
+later submits recalled text.
+
+With no overlay open, `Up` begins newest-first history navigation from an empty
+or non-empty composer while preserving the current text as a scratch draft.
+`Down` past the newest entry restores that draft exactly; editing recalled
+text exits navigation without recording the edit. `Ctrl+R` opens a compact
+anchored reverse-search surface over the same history. Typing performs a
+case-insensitive substring search, repeated `Ctrl+R` cycles older matches with
+bounded wrapping, `Enter` restores the selected text without submitting it,
+and `Esc` restores the original draft. Existing pickers, approvals,
+questionnaires, and confirmations retain keyboard ownership. A first
+`Ctrl+C` during reverse search restores, stashes, and clears the original
+draft before applying the existing double-press exit contract.
 
 ### Agent-first composer actions
 
