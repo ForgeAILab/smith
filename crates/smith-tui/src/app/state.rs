@@ -1,0 +1,893 @@
+//! Core application state: the reducer over runtime events and key presses.
+//!
+//! [`App`] is deliberately free of I/O. It folds [`EventEnvelope`]s and
+//! [`KeyEvent`]s into state and returns [`Action`]s for the host loop to
+//! perform. Everything the screen shows is derivable from this struct, which is
+//! what makes the renderer testable against a fake terminal and the key map
+//! testable with no terminal at all.
+
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::time::{Duration, Instant};
+
+use agent_runtime_core::clock::Timestamp;
+use agent_runtime_core::content::{ContentPart, UserInput};
+use agent_runtime_core::event::{PlanItemProjection, PlanSensitivity};
+use agent_runtime_core::ids::{AttemptId, RequestId, TurnId};
+use agent_runtime_core::steer::SteerReceipt;
+use ratatui::layout::Rect;
+use smith_host::approval::ApprovalPrompt;
+use smith_tools::ToolCallDisplay;
+
+use crate::commands::CommandAction;
+use crate::composer::Composer;
+use crate::diff::EditReview;
+use crate::picker::{ResourceEntry, ResourcePicker};
+use crate::questionnaire::{QuestionnaireResolution, QuestionnaireState};
+use crate::status::{Activity, Status};
+use crate::transcript::{ToolStatus, Transcript};
+
+/// How long a second `Ctrl+C` still counts as the exit press.
+pub(super) const FORCE_QUIT_WINDOW: Duration = Duration::from_secs(1);
+
+/// Pastes with at least this many lines collapse to a placeholder chunk.
+pub(super) const PASTE_CHUNK_MIN_LINES: usize = 3;
+/// Single-line pastes longer than this also collapse to a chunk.
+pub(super) const PASTE_CHUNK_MIN_CHARS: usize = 1_000;
+/// Bounded process-local paste storage; the oldest chunk is dropped first.
+pub(super) const MAX_PASTED_CHUNKS: usize = 50;
+
+/// Transcript lines one wheel notch scrolls.
+pub(super) const MOUSE_SCROLL_LINES: u16 = 3;
+
+/// One large paste stored aside so the composer stays editable.
+///
+/// The composer holds only the placeholder text — `[Pasted text #2 +8 lines]`
+/// — which the user can cursor over or delete like ordinary characters. The
+/// stored content re-enters the outgoing text only at submit time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PastedChunk {
+    pub(super) placeholder: String,
+    pub(super) content: String,
+}
+
+/// Bounded clipboard-image storage; the oldest attachment is dropped first.
+pub(super) const MAX_IMAGE_ATTACHMENTS: usize = 16;
+
+/// One clipboard image stored aside behind an `[Image #N W×H]` placeholder.
+///
+/// The same contract as [`PastedChunk`]: the composer holds only the
+/// placeholder, and the encoded image joins the outgoing turn as an image
+/// content part when its placeholder is still present at submit time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ImageAttachment {
+    pub(super) placeholder: String,
+    pub(super) data_uri: String,
+}
+
+/// One validated ordinary composer submission before file materialization.
+///
+/// This process-local value owns everything that may otherwise disappear when
+/// the composer clears. It performs no I/O: canonical file identities are
+/// resolved by the host only when the submission is actually dispatched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedSubmission {
+    pub(super) display_text: String,
+    pub(super) expanded_text: String,
+    pub(super) files: Vec<String>,
+    pub(super) images: Vec<ImageAttachment>,
+    pub(super) pastes: Vec<PastedChunk>,
+}
+
+impl PreparedSubmission {
+    /// Exact compact text shown in the composer, transcript, and queue preview.
+    pub fn display_text(&self) -> &str {
+        &self.display_text
+    }
+
+    /// Canonical workspace-relative files to read at dispatch time.
+    pub fn files(&self) -> &[String] {
+        &self.files
+    }
+
+    /// Model input that does not require file materialization.
+    pub fn input_without_files(&self) -> UserInput {
+        let mut parts = vec![ContentPart::text(self.expanded_text.clone())];
+        parts.extend(self.images.iter().map(|attachment| ContentPart::Image {
+            url: attachment.data_uri.clone(),
+            detail: None,
+        }));
+        UserInput { parts }
+    }
+
+    pub(super) fn merge_fifo(entries: impl IntoIterator<Item = Self>) -> Option<Self> {
+        let mut entries = entries.into_iter();
+        let mut merged = entries.next()?;
+        for entry in entries {
+            merged.display_text.push_str("\n\n");
+            merged.display_text.push_str(&entry.display_text);
+            merged.expanded_text.push_str("\n\n");
+            merged.expanded_text.push_str(&entry.expanded_text);
+            merged.files.extend(entry.files);
+            merged.images.extend(entry.images);
+            merged.pastes.extend(entry.pastes);
+        }
+        Some(merged)
+    }
+}
+
+/// Why the host is dispatching one prepared ordinary submission.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubmissionTarget {
+    /// Start one whole user turn now.
+    WholeTurn,
+    /// Target the tracked serving turn.
+    Steer {
+        /// Expected serving identity, if its start event has already arrived.
+        expected_turn: Option<TurnId>,
+    },
+}
+
+/// Bounded process-local preview exposed to the renderer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingInputPreview {
+    /// Human-readable category label.
+    pub label: &'static str,
+    /// Exact compact draft texts, oldest first.
+    pub entries: Vec<String>,
+    /// Entries hidden by the per-section preview bound.
+    pub overflow: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PendingSteer {
+    pub(super) receipt: SteerReceipt,
+    pub(super) submission: PreparedSubmission,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RejectedFollowup {
+    pub(super) turn: Option<TurnId>,
+    pub(super) interrupt_eligible: bool,
+    pub(super) submission: PreparedSubmission,
+}
+
+/// Process-local user input not yet represented by canonical history.
+#[derive(Debug, Default)]
+pub(super) struct PendingInputState {
+    pub(super) accepted_steers: VecDeque<PendingSteer>,
+    pub(super) rejected_followups: VecDeque<RejectedFollowup>,
+    pub(super) queued_turns: VecDeque<PreparedSubmission>,
+    pub(super) ready_submission: Option<PreparedSubmission>,
+    pub(super) interrupt_for_steer: bool,
+}
+
+pub(super) const MAX_EXPLICIT_QUEUED_TURNS: usize = 16;
+pub(super) const MAX_REJECTED_FOLLOWUPS: usize = 16;
+pub(crate) const MAX_PENDING_PREVIEW_ENTRIES: usize = 3;
+
+/// Collapses a paste onto one line for single-line query surfaces.
+pub(super) fn flatten_paste(text: &str) -> String {
+    text.split('\n')
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Resource-ID namespace for transition-release root-mode adapters.
+pub const LEGACY_AGENT_PROFILE_PREFIX: &str = "legacy-agent:";
+
+/// Something the host loop must do on the app's behalf.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Action {
+    /// Dispatch one already-prepared ordinary input with the stated intent.
+    Submit {
+        /// Exact process-local submission material.
+        submission: PreparedSubmission,
+        /// Whole-turn or active-turn intent.
+        target: SubmissionTarget,
+    },
+    /// Execute one explicit local shell shortcut without provider spend.
+    RunShell {
+        /// Command after the leading `!` marker.
+        command: String,
+    },
+    /// Cancel the running turn.
+    Interrupt,
+    /// Leave the application.
+    Quit,
+    /// Rebuild or replace the hosted session at a safe turn boundary.
+    Reconfigure(PaletteCommand),
+    /// Execute a local product command without sending composer text to the
+    /// provider.
+    Command(CommandAction),
+    /// Apply the already-previewed last-turn undo.
+    ApplyUndo,
+    /// Record that the already-previewed undo was explicitly cancelled.
+    CancelUndo,
+    /// Apply the already-previewed newest exact redo candidate.
+    ApplyRedo,
+    /// Record that the already-previewed redo was explicitly cancelled.
+    CancelRedo,
+    /// Apply an exact file/hunk revert after stale-preview validation.
+    ApplyRevert {
+        /// File or `file#hunk` scope.
+        scope: String,
+        /// Preview fingerprint.
+        fingerprint: String,
+    },
+    /// Record that the already-previewed selective revert was cancelled.
+    CancelRevert {
+        /// File or `file#hunk` scope.
+        scope: String,
+        /// Preview fingerprint.
+        fingerprint: String,
+    },
+    /// Start the already-confirmed provider-backed read-only review.
+    StartReview {
+        /// Review scope.
+        scope: String,
+    },
+    /// Start one confirmed, child-enabled read-only agent profile.
+    StartAgent {
+        /// Registered child-enabled profile.
+        preset: String,
+        /// Bounded task supplied after the reference.
+        task: String,
+    },
+    /// Start a new turn on one existing idle child session.
+    FollowUpAgent {
+        /// Stable existing child identity.
+        child_id: String,
+        /// Bounded new task.
+        task: String,
+    },
+    /// Continue one interrupted child's exact protected checkpoint.
+    ResumeAgent {
+        /// Stable existing child identity.
+        child_id: String,
+    },
+}
+
+/// A command selected from the TUI command palette.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PaletteCommand {
+    /// Create a fresh session with the current selection.
+    NewSession,
+    /// Resume an existing session identity.
+    Resume(String),
+    /// Select a configured profile and clear narrower provider/model flags.
+    Profile(String),
+    /// Select a provider/model pair atomically.
+    Model {
+        /// Serving provider.
+        provider: String,
+        /// Provider model ID.
+        model: String,
+    },
+    /// Select a deprecated legacy root mode at a safe session boundary.
+    Agent(String),
+    /// Select an explicit thinking state; `None` restores provider behavior.
+    Think(Option<bool>),
+    /// Select an advertised effort; `None` restores provider behavior.
+    Effort(Option<String>),
+}
+
+/// Bounded local resources available to runtime pickers.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RuntimeResources {
+    /// Provider-qualified models.
+    pub models: Vec<ResourceEntry>,
+    /// Configured providers.
+    pub providers: Vec<ResourceEntry>,
+    /// Configured profiles.
+    pub profiles: Vec<ResourceEntry>,
+    /// Project-scoped saved sessions.
+    pub sessions: Vec<ResourceEntry>,
+    /// Bounded canonical workspace-file index.
+    pub files: Vec<ResourceEntry>,
+    /// Child-enabled read-only agent profiles.
+    pub child_agents: Vec<ResourceEntry>,
+    /// Main-enabled agent profiles in configured cycle order.
+    pub main_profiles: Vec<ResourceEntry>,
+    /// Bounded thinking-state choices for the active binding.
+    pub thinking: Vec<ResourceEntry>,
+    /// Bounded effort choices for the active binding.
+    pub efforts: Vec<ResourceEntry>,
+    /// Active session ID.
+    pub current_session: Option<String>,
+}
+
+/// Which typed selection one resource picker applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceTarget {
+    /// Provider-qualified model pair.
+    Model,
+    /// Provider, followed by its one model or a filtered model picker.
+    Provider,
+    /// Coherent configured profile.
+    Profile,
+    /// Project session.
+    Resume,
+    /// Thinking state for subsequent turns.
+    Think,
+    /// Advertised effort for subsequent turns.
+    Effort,
+    /// Insert one typed file or child-agent reference into the composer.
+    Reference,
+}
+
+/// A temporary interactive surface. At most one exists at a time.
+///
+/// Consequential variants draw over the transcript; completion and resource
+/// selection reserve a compact pane above the composer.
+#[derive(Debug)]
+pub enum Overlay {
+    /// A tool is waiting for approval.
+    Approval {
+        /// What the runtime is asking to run, and the channel to answer on.
+        prompt: Box<ApprovalPrompt>,
+        /// The reviewable diff, when the request is an `edit` whose arguments
+        /// parse. `None` sends the modal back to rendering raw arguments.
+        review: Option<EditReview>,
+    },
+    /// An authority-free runtime interaction is waiting for an answer.
+    Questionnaire {
+        /// Pure staged-answer and keyboard state.
+        state: QuestionnaireState,
+    },
+    /// Select a session or immutable runtime configuration.
+    Palette {
+        /// Selected filtered result.
+        selected: usize,
+        /// A parse error kept inside the completion pane.
+        error: Option<String>,
+        /// Draft restored when `Ctrl+P` discovery is dismissed.
+        restore_on_escape: Option<String>,
+    },
+    /// Search locally available runtime/session resources in a compact pane.
+    ResourcePicker {
+        /// Pure shared picker state.
+        picker: ResourcePicker,
+        /// Typed application behavior.
+        target: ResourceTarget,
+        /// Composer draft restored on cancellation.
+        restore_on_escape: String,
+    },
+    /// Search bounded process-local composer history in a compact pane.
+    HistorySearch {
+        /// Composer draft restored when search is cancelled.
+        original: String,
+        /// Case-insensitive substring query.
+        query: String,
+        /// Stable history index of the selected match.
+        selected: Option<usize>,
+        /// Exact selected history entry, ready to restore into the composer.
+        matched: Option<String>,
+    },
+    /// Exact reverse patch awaiting a no-default confirmation.
+    UndoConfirm {
+        /// Bounded reverse patch.
+        content: String,
+    },
+    /// Exact forward patch awaiting a no-default confirmation.
+    RedoConfirm {
+        /// Bounded forward patch.
+        content: String,
+    },
+    /// Selective revert awaiting a no-default confirmation.
+    RevertConfirm {
+        /// File or `file#hunk` scope.
+        scope: String,
+        /// Stale-preview fingerprint.
+        fingerprint: String,
+        /// Exact reverse patch.
+        content: String,
+    },
+    /// Provider-backed read-only review awaiting explicit confirmation.
+    ReviewConfirm {
+        /// Review scope.
+        scope: String,
+        /// Spend and scope explanation.
+        content: String,
+    },
+    /// Explicit child invocation awaiting provider-spend confirmation.
+    AgentConfirm {
+        /// Registered preset identity.
+        preset: String,
+        /// Exact bounded task.
+        task: String,
+        /// Inherited model, limits, and posture summary.
+        content: String,
+    },
+    /// Existing-child follow-up awaiting provider-spend confirmation.
+    AgentFollowUpConfirm {
+        /// Stable child identity.
+        child_id: String,
+        /// Exact bounded follow-up task.
+        task: String,
+        /// Continuity, scope, and spend summary.
+        content: String,
+    },
+    /// Exact interrupted-checkpoint continuation awaiting confirmation.
+    AgentResumeConfirm {
+        /// Stable child identity.
+        child_id: String,
+        /// Recovery and spend summary.
+        content: String,
+    },
+    /// Exit was requested while work is live.
+    ExitConfirm {
+        /// An approval hidden by the confirmation and restored if the user
+        /// cancels exit.
+        approval: Option<(Box<ApprovalPrompt>, Option<EditReview>)>,
+        /// A questionnaire hidden by the confirmation and restored if the
+        /// user cancels exit.
+        questionnaire: Option<QuestionnaireState>,
+    },
+}
+
+/// A runtime-originated prompt waiting behind the visible overlay.
+#[derive(Debug)]
+pub(super) enum PendingPrompt {
+    Approval(Box<ApprovalPrompt>, Option<EditReview>),
+    Questionnaire(QuestionnaireState),
+}
+
+/// The latest user-visible state of one child.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChildSummary {
+    /// Current lifecycle label.
+    pub state: String,
+    /// Latest bounded result or detail.
+    pub detail: Option<String>,
+}
+
+/// Latest durable todo-plan projection.
+///
+/// Smith deliberately treats bounded plan text as public working state: it is
+/// rendered in the anchored todo pane and may be reconstructed from the
+/// redacted journal. A sensitive runtime projection retains counts only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanSummary {
+    /// Monotonic plan revision.
+    pub revision: u64,
+    /// Whether bounded item text may be displayed.
+    pub sensitivity: PlanSensitivity,
+    /// Aggregate counts keyed by the stable runtime status spelling.
+    pub counts: BTreeMap<String, u32>,
+    /// Public bounded items, absent for a sensitive plan.
+    pub items: Option<Vec<PlanItemProjection>>,
+}
+
+/// Replaceable, replay-derived evidence for the current turn.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct WorkSummary {
+    pub(super) tools: BTreeMap<String, (String, ToolStatus)>,
+}
+
+/// One provider attempt's speculative presentation identity.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct AttemptOutputKey {
+    pub(super) request: RequestId,
+    pub(super) attempt: AttemptId,
+}
+
+impl AttemptOutputKey {
+    pub(super) fn new(request: &RequestId, attempt: &AttemptId) -> Self {
+        Self {
+            request: request.clone(),
+            attempt: attempt.clone(),
+        }
+    }
+}
+
+/// A delta retained outside the canonical transcript until an explicit commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum SpeculativeChunk {
+    Text(String),
+    Reasoning { text: String, redacted: bool },
+}
+
+/// Buffered output for one in-flight provider attempt.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct SpeculativeAttempt {
+    pub(super) chunks: Vec<SpeculativeChunk>,
+    pub(super) visible_text: String,
+}
+
+impl SpeculativeAttempt {
+    pub(super) fn push_text(&mut self, text: &str) {
+        self.visible_text.push_str(text);
+        if let Some(SpeculativeChunk::Text(previous)) = self.chunks.last_mut() {
+            previous.push_str(text);
+        } else {
+            self.chunks.push(SpeculativeChunk::Text(text.to_owned()));
+        }
+    }
+
+    pub(super) fn push_reasoning(&mut self, text: &str, redacted: bool) {
+        if let Some(SpeculativeChunk::Reasoning {
+            text: previous,
+            redacted: previous_redacted,
+        }) = self.chunks.last_mut()
+            && *previous_redacted == redacted
+        {
+            previous.push_str(text);
+        } else {
+            self.chunks.push(SpeculativeChunk::Reasoning {
+                text: text.to_owned(),
+                redacted,
+            });
+        }
+    }
+}
+
+/// The whole client's state.
+#[derive(Debug)]
+pub struct App {
+    /// The transcript.
+    pub transcript: Transcript,
+    /// Header status.
+    pub status: Status,
+    /// The input buffer.
+    pub composer: Composer,
+    /// The current overlay, if any.
+    pub overlay: Option<Overlay>,
+    /// Runtime prompts waiting behind the one visible overlay, in exact
+    /// cross-type arrival order.
+    pub(super) pending_prompts: VecDeque<PendingPrompt>,
+    /// Questionnaire outcomes the host adapter has not consumed yet.
+    pub(super) questionnaire_resolutions: VecDeque<(String, QuestionnaireResolution)>,
+    /// Latest child states, keyed by stable child id.
+    pub children: BTreeMap<String, ChildSummary>,
+    /// Temporary child inspector selection; the root composer keeps focus.
+    pub inspected_child: Option<String>,
+    /// Latest durable todo plan, projected in the anchored composer pane.
+    pub plan: Option<PlanSummary>,
+    /// Bounded live tool detail available only through `/details`.
+    pub(super) work: Option<WorkSummary>,
+    /// Whether bounded live tool details are expanded.
+    pub work_details: bool,
+    /// Bounded local choices supplied by the host.
+    pub resources: RuntimeResources,
+    /// Whether the transcript follows new output.
+    pub following: bool,
+    /// Lines scrolled up from the bottom when not following.
+    pub scroll_back: u16,
+    /// Most lines the current transcript viewport can scroll.
+    pub(super) scroll_limit: u16,
+    /// The animation tick.
+    pub tick: u64,
+    /// Set once the host loop should exit.
+    pub should_quit: bool,
+    /// Large pastes stored aside behind composer placeholders, oldest first.
+    pub(super) pasted_chunks: Vec<PastedChunk>,
+    /// Monotonic number for `[Pasted text #N …]` labels.
+    pub(super) paste_counter: usize,
+    /// Clipboard images stored aside behind composer placeholders.
+    pub(super) image_attachments: Vec<ImageAttachment>,
+    /// Monotonic number for `[Image #N …]` labels.
+    pub(super) image_counter: usize,
+    /// The composer's text area from the last synced frame, recorded by the
+    /// renderer so mouse clicks can be mapped back to a cursor position.
+    pub(crate) composer_pointer_area: Option<Rect>,
+    /// Ephemeral "Worked for …" summary of the newest completed turn.
+    ///
+    /// Deliberately not a transcript block: one row per historical turn is
+    /// noise in the UI, while the journal keeps the full per-turn record.
+    pub turn_summary: Option<String>,
+    pub(super) turn_started_at: Option<Instant>,
+    pub(super) turn_started_timestamp: Option<Timestamp>,
+    pub(super) last_ctrl_c: Option<Instant>,
+    pub(super) last_event_seq: Option<u64>,
+    pub(super) speculative_attempts: BTreeMap<AttemptOutputKey, SpeculativeAttempt>,
+    pub(super) speculative_order: Vec<AttemptOutputKey>,
+    pub(super) finalized_attempts: BTreeSet<AttemptOutputKey>,
+    /// Serving turn identity from typed runtime envelopes.
+    pub(super) active_turn: Option<TurnId>,
+    /// Process-local, not-yet-canonical user input.
+    pub(super) pending_input: PendingInputState,
+}
+
+impl App {
+    /// A fresh client for `model` rooted at `project`.
+    pub fn new(model: impl Into<String>, project: impl Into<String>) -> Self {
+        Self {
+            transcript: Transcript::new(),
+            status: Status::new(model, project),
+            composer: Composer::new(),
+            overlay: None,
+            pending_prompts: VecDeque::new(),
+            questionnaire_resolutions: VecDeque::new(),
+            children: BTreeMap::new(),
+            inspected_child: None,
+            plan: None,
+            work: None,
+            work_details: false,
+            resources: RuntimeResources::default(),
+            following: true,
+            scroll_back: 0,
+            scroll_limit: 0,
+            tick: 0,
+            should_quit: false,
+            pasted_chunks: Vec::new(),
+            paste_counter: 0,
+            image_attachments: Vec::new(),
+            image_counter: 0,
+            composer_pointer_area: None,
+            turn_summary: None,
+            turn_started_at: None,
+            turn_started_timestamp: None,
+            last_ctrl_c: None,
+            last_event_seq: None,
+            speculative_attempts: BTreeMap::new(),
+            speculative_order: Vec::new(),
+            finalized_attempts: BTreeSet::new(),
+            active_turn: None,
+            pending_input: PendingInputState::default(),
+        }
+    }
+
+    /// Replaces the local, credential-free picker inventory.
+    pub fn set_resources(&mut self, resources: RuntimeResources) {
+        self.resources = resources;
+    }
+
+    /// Seeds one already-persisted child before live event subscription.
+    ///
+    /// Recovery events may be journaled before a terminal client attaches;
+    /// this owner-supplied projection keeps inspection and `@child-id`
+    /// continuation available without replaying or parsing journal prose.
+    pub fn restore_child(
+        &mut self,
+        child_id: impl Into<String>,
+        state: impl Into<String>,
+        detail: Option<String>,
+    ) {
+        self.children.insert(
+            child_id.into(),
+            ChildSummary {
+                state: state.into(),
+                detail,
+            },
+        );
+    }
+
+    /// Whether a turn is in flight.
+    pub fn is_busy(&self) -> bool {
+        matches!(
+            self.status.activity,
+            Activity::Working | Activity::Interrupting
+        )
+    }
+
+    /// Whether anything would be lost by quitting now.
+    pub fn has_live_work(&self) -> bool {
+        self.is_busy()
+            || self.has_pending_input()
+            || !self.pending_prompts.is_empty()
+            || matches!(
+                self.overlay,
+                Some(Overlay::Approval { .. })
+                    | Some(Overlay::Questionnaire { .. })
+                    | Some(Overlay::ExitConfirm {
+                        approval: Some(_),
+                        ..
+                    })
+                    | Some(Overlay::ExitConfirm {
+                        questionnaire: Some(_),
+                        ..
+                    })
+            )
+    }
+
+    /// Number of approval prompts still awaiting one decision each.
+    pub fn pending_approval_count(&self) -> usize {
+        let visible = usize::from(matches!(
+            self.overlay,
+            Some(Overlay::Approval { .. })
+                | Some(Overlay::ExitConfirm {
+                    approval: Some(_),
+                    ..
+                })
+        ));
+        visible.saturating_add(
+            self.pending_prompts
+                .iter()
+                .filter(|prompt| matches!(prompt, PendingPrompt::Approval(..)))
+                .count(),
+        )
+    }
+
+    /// Number of questionnaire requests awaiting one terminal answer each.
+    pub fn pending_questionnaire_count(&self) -> usize {
+        let visible = usize::from(matches!(
+            self.overlay,
+            Some(Overlay::Questionnaire { .. })
+                | Some(Overlay::ExitConfirm {
+                    questionnaire: Some(_),
+                    ..
+                })
+        ));
+        visible.saturating_add(
+            self.pending_prompts
+                .iter()
+                .filter(|prompt| matches!(prompt, PendingPrompt::Questionnaire(_)))
+                .count(),
+        )
+    }
+
+    /// Takes the next questionnaire result for the host interaction adapter.
+    ///
+    /// Every visible or queued request contributes at most one result. Taking
+    /// removes it, so a host loop cannot answer one runtime responder twice.
+    pub fn take_questionnaire_resolution(&mut self) -> Option<(String, QuestionnaireResolution)> {
+        self.questionnaire_resolutions.pop_front()
+    }
+
+    /// Advances the animation clock.
+    pub fn tick(&mut self) {
+        self.tick = self.tick.wrapping_add(1);
+        self.expire_prompts();
+    }
+
+    /// Whether the footer should ask for the confirming `Ctrl+C` press.
+    pub fn ctrl_c_exit_hint_active(&self) -> bool {
+        self.last_ctrl_c
+            .is_some_and(|pressed| pressed.elapsed() < FORCE_QUIT_WINDOW)
+    }
+
+    /// Expires the first-press footer hint after the double-press window.
+    ///
+    /// Returns whether visible footer state changed so the host can request an
+    /// idle redraw without continuously animating the status line.
+    pub fn expire_ctrl_c_exit_hint(&mut self) -> bool {
+        self.expire_ctrl_c_exit_hint_at(Instant::now())
+    }
+
+    pub(crate) fn expire_ctrl_c_exit_hint_at(&mut self, now: Instant) -> bool {
+        let expired = self
+            .last_ctrl_c
+            .is_some_and(|pressed| now.duration_since(pressed) >= FORCE_QUIT_WINDOW);
+        if expired {
+            self.last_ctrl_c = None;
+        }
+        expired
+    }
+
+    /// Monotonic elapsed time for the active turn.
+    pub fn turn_elapsed(&self) -> Option<Duration> {
+        self.turn_started_at.map(|started| started.elapsed())
+    }
+
+    /// Visible text from the newest live provider attempt.
+    ///
+    /// This is presentation-only speculative state. It is never returned from
+    /// [`Transcript::blocks`] and therefore cannot become canonical history or
+    /// journal-replayed output without an explicit runtime commit event.
+    pub fn speculative_text(&self) -> Option<&str> {
+        self.speculative_order.iter().rev().find_map(|key| {
+            self.speculative_attempts
+                .get(key)
+                .map(|attempt| attempt.visible_text.as_str())
+                .filter(|text| !text.is_empty())
+        })
+    }
+
+    /// Number of provider attempts with output awaiting an explicit terminal.
+    pub fn speculative_attempt_count(&self) -> usize {
+        self.speculative_attempts.len()
+    }
+
+    /// Projects metadata-only process-exit reconciliation into the transcript.
+    ///
+    /// Child and monitor identities remain in the protected recovery record;
+    /// the UI only needs deterministic counts and the explicit fact that
+    /// process-owned work was not restarted.
+    pub fn present_recovered_ephemeral_work(
+        &mut self,
+        interrupted_children: usize,
+        interrupted_monitors: usize,
+    ) {
+        let mut work = Vec::new();
+        if interrupted_children > 0 {
+            work.push(format!(
+                "{interrupted_children} prior {}",
+                if interrupted_children == 1 {
+                    "child"
+                } else {
+                    "children"
+                }
+            ));
+        }
+        if interrupted_monitors > 0 {
+            work.push(format!(
+                "{interrupted_monitors} prior {}",
+                if interrupted_monitors == 1 {
+                    "monitor"
+                } else {
+                    "monitors"
+                }
+            ));
+        }
+        if work.is_empty() {
+            return;
+        }
+        self.transcript.push_notice(
+            "recovery",
+            format!(
+                "{} interrupted when the prior Smith process exited · not restarted",
+                work.join(" and ")
+            ),
+        );
+    }
+
+    /// Enriches a protected live tool event with a reviewed local projection.
+    pub fn set_tool_display(&mut self, call_id: &str, display: ToolCallDisplay) {
+        self.transcript.set_tool_display(call_id, display);
+    }
+
+    /// Attaches host-supplied, credential-redacted result lines to a tool row.
+    pub fn set_tool_result_preview(&mut self, call_id: &str, preview: impl AsRef<str>) {
+        self.transcript.set_tool_result_preview(call_id, preview);
+    }
+
+    /// Toggles bounded, redaction-safe tool detail beneath the working row.
+    pub fn toggle_work_details(&mut self) {
+        self.work_details = !self.work_details;
+    }
+
+    /// Render-ready lines for explicitly requested active-work detail.
+    pub(crate) fn work_detail_lines(&self) -> Vec<String> {
+        let Some(work) = &self.work else {
+            return Vec::new();
+        };
+        if !self.work_details {
+            return Vec::new();
+        }
+        work.tools
+            .values()
+            .take(12)
+            .map(|(name, status)| format!("tool {name} · {}", status.label()))
+            .collect()
+    }
+}
+
+/// Finished copy for a child's declared workspace posture.
+pub(super) fn describe_workspace(
+    workspace: &agent_runtime_core::delegation::WorkspacePolicy,
+) -> String {
+    use agent_runtime_core::delegation::WorkspacePolicy;
+    match workspace {
+        WorkspacePolicy::SharedProject => "shared project workspace".to_owned(),
+        WorkspacePolicy::ExplicitDirectory { path } => format!("workspace {path}"),
+        WorkspacePolicy::IsolatedWorktree => "isolated worktree".to_owned(),
+        WorkspacePolicy::ReadOnlyView => "read-only".to_owned(),
+    }
+}
+
+/// Finished copy for why a child stopped.
+pub(super) fn describe_cancel_reason(reason: &agent_runtime_core::cancel::CancelReason) -> String {
+    use agent_runtime_core::cancel::CancelReason;
+    match reason {
+        CancelReason::UserRequested => "stopped by request".to_owned(),
+        CancelReason::Timeout => "deadline elapsed".to_owned(),
+        CancelReason::LimitReached => "limit reached".to_owned(),
+        CancelReason::Shutdown => "session ended".to_owned(),
+        CancelReason::Host(reason) => reason.clone(),
+    }
+}
+
+/// Stable user-facing label for a child request's content-handling posture.
+pub(super) fn describe_interaction_sensitivity(
+    sensitivity: &agent_runtime_core::interaction::InteractionSensitivity,
+) -> &'static str {
+    use agent_runtime_core::interaction::InteractionSensitivity;
+    match sensitivity {
+        InteractionSensitivity::Public => "public",
+        InteractionSensitivity::Sensitive => "sensitive",
+    }
+}
+
+include!("tests/mod.rs");

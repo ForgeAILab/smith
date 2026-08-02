@@ -1,0 +1,56 @@
+//! Small bounded text helpers shared by multiple visual regions.
+
+use ratatui::text::Span;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+use crate::theme::{Theme, Tone, glyph};
+
+pub(super) fn push_segment(spans: &mut Vec<Span<'static>>, theme: Theme, segment: Span<'static>) {
+    spans.push(Span::styled(
+        format!(" {} ", glyph::SEPARATOR),
+        theme.style(Tone::Dim),
+    ));
+    spans.push(segment);
+}
+
+pub(super) fn truncate(spans: Vec<Span<'static>>, width: u16) -> Vec<Span<'static>> {
+    let limit = usize::from(width);
+    let mut used = 0;
+    let mut kept = Vec::new();
+    for span in spans {
+        let span_width = span.content.width();
+        if used + span_width > limit {
+            break;
+        }
+        used += span_width;
+        kept.push(span);
+    }
+    if kept
+        .last()
+        .is_some_and(|span| span.content.as_ref() == " · ")
+    {
+        kept.pop();
+    }
+    kept
+}
+
+pub(super) fn wrap_text(raw: &str, available: usize) -> Vec<String> {
+    if raw.is_empty() {
+        return vec![String::new()];
+    }
+
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    let mut used = 0;
+    for character in raw.chars() {
+        let character_width = character.width().unwrap_or(0);
+        if used > 0 && used + character_width > available {
+            lines.push(std::mem::take(&mut line));
+            used = 0;
+        }
+        line.push(character);
+        used += character_width;
+    }
+    lines.push(line);
+    lines
+}

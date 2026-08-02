@@ -117,7 +117,7 @@ use crate::reasoning::{
     ReasoningDialectProvider, ReasoningInterceptor, ReasoningRuntimePolicy,
     resolve_reasoning_policy,
 };
-use crate::skills::{SkillIndexEntry, SmithSkillSources};
+use crate::skills::{ResolvedSmithSkills, SkillIndexEntry, SmithSkillSources};
 use crate::summary::{
     SemanticSummaryRuntimePolicy, SmithProviderSummaryModel, SmithSemanticSummaryConfig,
 };
@@ -694,6 +694,66 @@ struct PreparedFactoryInputs {
     loop_config: LoopConfig,
 }
 
+/// Product context assembled before the runtime builder is configured.
+struct PromptStage {
+    project_instructions: Option<ProjectInstructionsSnapshot>,
+    contributor: SmithPromptContributor,
+    rendered: String,
+    skills: ResolvedSmithSkills,
+    memory: Option<MemoryContributor>,
+}
+
+/// Model-visible tools plus the stateful components wired around them.
+struct CapabilityStage {
+    tools: Vec<Arc<dyn Tool>>,
+    abilities: SealedAbilities,
+    todo: Arc<TodoComponent>,
+    goal: Option<Arc<GoalComponent>>,
+    delegation_slot:
+        Option<Arc<std::sync::OnceLock<agent_runtime::delegation::DelegationCoordinator>>>,
+}
+
+/// Exact checkpoint state prepared independently of completed-turn storage.
+struct DurabilityStage {
+    root_store: Option<Arc<dyn CheckpointStore>>,
+    child_store: Option<Arc<dyn CheckpointStore>>,
+    status: MidTurnDurability,
+}
+
+type SummaryStage = Option<(
+    Arc<SemanticSummaryCoordinator>,
+    SemanticSummaryRuntimePolicy,
+)>;
+
+/// Display-safe evidence assembled before the runtime builder consumes policy.
+struct PolicyStage {
+    policy: RuntimePolicy,
+}
+
+/// The neutral runtime after the configured builder has accepted every hook.
+struct BuilderStage {
+    runtime: Runtime,
+}
+
+/// Root-only child delegation output assembled after the runtime exists.
+struct DelegationStage {
+    delegation: Option<SmithDelegation>,
+}
+
+fn assemble_policy(policy: RuntimePolicy) -> PolicyStage {
+    PolicyStage { policy }
+}
+
+fn build_runtime(builder: RuntimeBuilder) -> Result<BuilderStage, FactoryError> {
+    Ok(BuilderStage {
+        runtime: builder.build().map_err(FactoryError::Runtime)?,
+    })
+}
+
+fn assemble_delegation(delegation: Option<SmithDelegation>) -> DelegationStage {
+    DelegationStage { delegation }
+}
+
 /// Validates setup through the same factory input derivation used by
 /// [`build`], without crossing the runtime-construction boundary.
 pub async fn preflight(request: &RuntimeRequest) -> Result<FactoryPreflight, FactoryError> {
@@ -712,6 +772,234 @@ pub async fn preflight(request: &RuntimeRequest) -> Result<FactoryPreflight, Fac
         model: prepared.model,
         model_profile: prepared.profile.profile,
         context_policy: prepared.context_policy,
+    })
+}
+
+fn prepare_prompt_stage(
+    request: &RuntimeRequest,
+    loop_config: &mut LoopConfig,
+) -> Result<PromptStage, FactoryError> {
+    let agent_profile = &request.config.agent.profile;
+    let project_instructions = request
+        .system_prompt
+        .is_none()
+        .then(|| request.project_instructions.clone())
+        .flatten();
+    let prompt_context = DynamicPromptContext {
+        project_instructions: project_instructions.clone(),
+        agent_profile: Some(AgentProfilePrompt {
+            name: agent_profile.name.clone(),
+            posture: request.config.agent.active_posture(),
+            instructions: agent_profile
+                .instructions
+                .as_ref()
+                .map(|instructions| instructions.value.clone()),
+            revision: agent_profile.revision.clone(),
+        }),
+        ..DynamicPromptContext::default()
+    };
+    let contributor = match request.system_prompt.clone() {
+        Some(prompt) => SmithPromptContributor::override_prompt(prompt),
+        None => SmithPromptContributor::new(&prompt_context),
+    };
+    let skills = request.skills.resolve().map_err(FactoryError::Runtime)?;
+    let memory = request
+        .memory
+        .clone()
+        .map(|source| {
+            let source: Arc<dyn MemorySource> = source;
+            MemoryContributor::new(source)
+        })
+        .transpose()
+        .map_err(FactoryError::Runtime)?;
+    let rendered = render_fragments(contributor.fragments());
+
+    // Product instructions enter the immutable context plan as independently
+    // versioned fragments. Keeping this compatibility field populated would
+    // send a second, unbudgeted copy through the legacy planner path.
+    loop_config.system_prompt = None;
+
+    Ok(PromptStage {
+        project_instructions,
+        contributor,
+        rendered,
+        skills,
+        memory,
+    })
+}
+
+fn prepare_provider_stage(
+    request: &RuntimeRequest,
+    adapter: Adapter,
+    endpoint: Option<String>,
+    secret: Option<Secret>,
+    profile: &ResolvedModelProfile,
+    reasoning: &ReasoningRuntimePolicy,
+) -> Result<Arc<dyn Provider>, FactoryError> {
+    if let (Some(secret), Some(redactor)) = (&secret, &request.persistence_redactor) {
+        redactor.register_secret(secret);
+    }
+    let provider = match request.provider.clone() {
+        Some(provider) => provider,
+        None => construct(adapter, request, profile, endpoint, secret)?,
+    };
+    let provider = crate::response::apply_response_policy(
+        provider,
+        request
+            .config
+            .provider
+            .response
+            .reasoning_only
+            .as_ref()
+            .map(|policy| policy.value),
+    );
+    Ok(match reasoning.dialect {
+        Some(dialect) => {
+            Arc::new(ReasoningDialectProvider::new(provider, dialect)) as Arc<dyn Provider>
+        }
+        None => provider,
+    })
+}
+
+fn prepare_summary_stage(
+    request: &RuntimeRequest,
+    provider: Arc<dyn Provider>,
+    provider_name: &str,
+    model: &ModelId,
+    clock: Arc<dyn Clock>,
+) -> Result<SummaryStage, FactoryError> {
+    let Some(config) = request.semantic_summary.clone() else {
+        return Ok(None);
+    };
+    config.validate().map_err(FactoryError::Runtime)?;
+    let store = request.artifact_store.clone().ok_or_else(|| {
+        FactoryError::Runtime(RuntimeError::config(
+            "semantic summaries require a protected artifact store for originals",
+        ))
+    })?;
+    let summary_model: Arc<dyn SummaryModel> = match config.model.clone() {
+        Some(model) => model,
+        None => Arc::new(
+            SmithProviderSummaryModel::new(
+                provider,
+                provider_name.to_owned(),
+                model.clone(),
+                clock,
+                config.max_output_tokens,
+                config.timeout_ms,
+            )
+            .map_err(FactoryError::Runtime)?,
+        ),
+    };
+    let policy = SemanticSummaryRuntimePolicy {
+        purpose: agent_runtime::harness::SEMANTIC_SUMMARY_PURPOSE.into(),
+        model: summary_model.id().to_owned(),
+        revision: config.policy.revision.clone(),
+        trigger_turns: config.policy.trigger_turns,
+        retain_turns: config.policy.retain_turns,
+        max_usage_tokens: config.policy.max_usage_tokens,
+        retention: config.policy.retention,
+    };
+    let coordinator = Arc::new(
+        SemanticSummaryCoordinator::new(store, summary_model, config.policy)
+            .map_err(FactoryError::Runtime)?,
+    );
+    Ok(Some((coordinator, policy)))
+}
+
+fn prepare_capability_stage(request: &RuntimeRequest) -> Result<CapabilityStage, FactoryError> {
+    let mut tools = tools(request);
+    let todo = Arc::new(TodoComponent::public());
+    let goal = goal_component_eligible(request).then(|| Arc::new(GoalComponent::public()));
+    if goal.is_some() {
+        tools.extend([
+            Arc::new(GetGoalTool::new()) as Arc<dyn Tool>,
+            Arc::new(CreateGoalTool::new()) as Arc<dyn Tool>,
+            Arc::new(UpdateGoalTool::new()) as Arc<dyn Tool>,
+        ]);
+    }
+    let host_tool_names = request
+        .tools
+        .iter()
+        .map(|tool| tool.spec().name)
+        .collect::<BTreeSet<_>>();
+    let mut ability_sources = tools
+        .iter()
+        .map(|tool| {
+            if host_tool_names.contains(&tool.spec().name) {
+                agent_runtime::registry::RegistrySource::Host
+            } else {
+                agent_runtime::registry::RegistrySource::BuiltIn
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let delegation_slot = if matches!(request.surface, HostSurface::Child) {
+        None
+    } else {
+        let slot = Arc::new(std::sync::OnceLock::new());
+        tools.push(Arc::new(AgentTool::new(slot.clone())) as Arc<dyn Tool>);
+        ability_sources.push(agent_runtime::registry::RegistrySource::BuiltIn);
+        Some(slot)
+    };
+    let abilities = seal_tool_abilities(tools.iter().cloned().zip(ability_sources))
+        .map_err(FactoryError::AbilityRegistry)?;
+
+    Ok(CapabilityStage {
+        tools,
+        abilities,
+        todo,
+        goal,
+        delegation_slot,
+    })
+}
+
+async fn prepare_durability_stage(
+    request: &RuntimeRequest,
+) -> Result<DurabilityStage, FactoryError> {
+    if request.checkpoint_store.is_some() && request.checkpoint_setup.is_some() {
+        return Err(FactoryError::Runtime(RuntimeError::config(
+            "checkpoint_store and checkpoint_setup cannot both be supplied",
+        )));
+    }
+    let store = match (
+        request.checkpoint_store.clone(),
+        request.checkpoint_setup.as_ref(),
+    ) {
+        (Some(store), None) => Some(store),
+        (None, Some(setup)) => match setup.initialize().await {
+            Ok(store) => Some(store),
+            Err(error) => {
+                tracing::warn!(
+                    schema_version = CHECKPOINT_SCHEMA_VERSION,
+                    %error,
+                    "exact mid-turn durability is unavailable; completed-turn persistence remains enabled"
+                );
+                None
+            }
+        },
+        (None, None) => None,
+        (Some(_), Some(_)) => unreachable!("conflicting checkpoint inputs returned above"),
+    };
+    // Child sessions share the protected store, never the root journal
+    // barrier, which is scoped to the root writer.
+    let child_store = store.clone();
+    let root_store = match (store, request.checkpoint_barrier.clone()) {
+        (Some(store), Some(barrier)) => {
+            Some(Arc::new(BarrierCheckpointStore::new(store, barrier)) as Arc<dyn CheckpointStore>)
+        }
+        (store, None) => store,
+        (None, Some(_)) => None,
+    };
+    let status = if root_store.is_some() {
+        MidTurnDurability::Available
+    } else {
+        MidTurnDurability::Unavailable
+    };
+    Ok(DurabilityStage {
+        root_store,
+        child_store,
+        status,
     })
 }
 
@@ -741,209 +1029,36 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
     let agent_posture = request.config.agent.active_posture();
     let agent_profile = request.config.agent.profile.clone();
     let agent_profile_name = agent_profile.name.clone();
-    let project_instructions = if request.system_prompt.is_none() {
-        request.project_instructions.clone()
-    } else {
-        None
-    };
-    let prompt_context = DynamicPromptContext {
-        project_instructions: project_instructions.clone(),
-        agent_profile: Some(AgentProfilePrompt {
-            name: agent_profile_name.clone(),
-            posture: agent_posture,
-            instructions: agent_profile
-                .instructions
-                .as_ref()
-                .map(|instructions| instructions.value.clone()),
-            revision: agent_profile.revision.clone(),
-        }),
-        ..DynamicPromptContext::default()
-    };
-    let prompt_contributor = match request.system_prompt.clone() {
-        Some(prompt) => SmithPromptContributor::override_prompt(prompt),
-        None => SmithPromptContributor::new(&prompt_context),
-    };
-    let resolved_skills = request.skills.resolve().map_err(FactoryError::Runtime)?;
-    let memory_contributor = request
-        .memory
-        .clone()
-        .map(|source| {
-            let source: Arc<dyn MemorySource> = source;
-            MemoryContributor::new(source)
-        })
-        .transpose()
-        .map_err(FactoryError::Runtime)?;
-    let rendered_system_prompt = render_fragments(prompt_contributor.fragments());
-    // Product instructions enter the immutable context plan as independently
-    // versioned fragments. Leaving this compatibility field populated would
-    // send a second, unbudgeted copy through the legacy planner path.
-    loop_config.system_prompt = None;
+    let prompt = prepare_prompt_stage(&request, &mut loop_config)?;
     let config = &request.config;
-    if let (Some(secret), Some(redactor)) = (&secret, &request.persistence_redactor) {
-        redactor.register_secret(secret);
-    }
 
     // The only boundary the secret crosses.
-    let provider = match request.provider.clone() {
-        Some(provider) => provider,
-        None => construct(
-            adapter,
-            &request,
-            &profile.profile,
-            endpoint.clone(),
-            secret,
-        )?,
-    };
-    let provider = crate::response::apply_response_policy(
-        provider,
-        request
-            .config
-            .provider
-            .response
-            .reasoning_only
-            .as_ref()
-            .map(|policy| policy.value),
-    );
-    let provider = match reasoning.dialect {
-        Some(dialect) => {
-            Arc::new(ReasoningDialectProvider::new(provider, dialect)) as Arc<dyn Provider>
-        }
-        None => provider,
-    };
+    let provider = prepare_provider_stage(
+        &request,
+        adapter,
+        endpoint.clone(),
+        secret,
+        &profile.profile,
+        &reasoning,
+    )?;
 
     let clock: Arc<dyn Clock> = request
         .clock
         .clone()
         .unwrap_or_else(|| Arc::new(SystemClock));
     let child_profile_routes =
-        prepare_child_profile_routes(&request, project_instructions.as_ref()).await?;
-    let semantic_summary = match request.semantic_summary.clone() {
-        Some(config) => {
-            config.validate().map_err(FactoryError::Runtime)?;
-            let store = request.artifact_store.clone().ok_or_else(|| {
-                FactoryError::Runtime(RuntimeError::config(
-                    "semantic summaries require a protected artifact store for originals",
-                ))
-            })?;
-            let summary_model: Arc<dyn SummaryModel> = match config.model.clone() {
-                Some(model) => model,
-                None => Arc::new(
-                    SmithProviderSummaryModel::new(
-                        provider.clone(),
-                        provider_name.clone(),
-                        model.clone(),
-                        clock.clone(),
-                        config.max_output_tokens,
-                        config.timeout_ms,
-                    )
-                    .map_err(FactoryError::Runtime)?,
-                ),
-            };
-            let policy = SemanticSummaryRuntimePolicy {
-                purpose: agent_runtime::harness::SEMANTIC_SUMMARY_PURPOSE.into(),
-                model: summary_model.id().to_owned(),
-                revision: config.policy.revision.clone(),
-                trigger_turns: config.policy.trigger_turns,
-                retain_turns: config.policy.retain_turns,
-                max_usage_tokens: config.policy.max_usage_tokens,
-                retention: config.policy.retention,
-            };
-            let coordinator = Arc::new(
-                SemanticSummaryCoordinator::new(store, summary_model, config.policy)
-                    .map_err(FactoryError::Runtime)?,
-            );
-            Some((coordinator, policy))
-        }
-        None => None,
-    };
-    let mut tools = tools(&request);
-    // Smith treats plan text as deliberate user-visible working state: the
-    // bounded public projection may enter the redacted journal and powers the
-    // transcript's compact inline plan block. It never grants tool authority.
-    let todo_component = Arc::new(TodoComponent::public());
-    let goal_component =
-        goal_component_eligible(&request).then(|| Arc::new(GoalComponent::public()));
-    if goal_component.is_some() {
-        tools.extend([
-            Arc::new(GetGoalTool::new()) as Arc<dyn Tool>,
-            Arc::new(CreateGoalTool::new()) as Arc<dyn Tool>,
-            Arc::new(UpdateGoalTool::new()) as Arc<dyn Tool>,
-        ]);
-    }
-    let host_tool_names = request
-        .tools
-        .iter()
-        .map(|tool| tool.spec().name)
-        .collect::<BTreeSet<_>>();
-    let mut ability_sources = tools
-        .iter()
-        .map(|tool| {
-            if host_tool_names.contains(&tool.spec().name) {
-                agent_runtime::registry::RegistrySource::Host
-            } else {
-                agent_runtime::registry::RegistrySource::BuiltIn
-            }
-        })
-        .collect::<Vec<_>>();
+        prepare_child_profile_routes(&request, prompt.project_instructions.as_ref()).await?;
+    let semantic_summary = prepare_summary_stage(
+        &request,
+        provider.clone(),
+        &provider_name,
+        &model,
+        clock.clone(),
+    )?;
+    let capabilities = prepare_capability_stage(&request)?;
+    let durability = prepare_durability_stage(&request).await?;
 
-    // Root surfaces get the model-facing `agent` tool and, below, the
-    // authoritative coverage and child factory behind it. A child runtime
-    // gets none of this: the coordinator strips the tool from child views,
-    // and the child factory simply never registers it.
-    let delegation_slot = if matches!(request.surface, HostSurface::Child) {
-        None
-    } else {
-        let slot: Arc<std::sync::OnceLock<agent_runtime::delegation::DelegationCoordinator>> =
-            Arc::new(std::sync::OnceLock::new());
-        tools.push(Arc::new(AgentTool::new(slot.clone())) as Arc<dyn Tool>);
-        ability_sources.push(agent_runtime::registry::RegistrySource::BuiltIn);
-        Some(slot)
-    };
-    let abilities = seal_tool_abilities(tools.iter().cloned().zip(ability_sources))
-        .map_err(FactoryError::AbilityRegistry)?;
-    if request.checkpoint_store.is_some() && request.checkpoint_setup.is_some() {
-        return Err(FactoryError::Runtime(RuntimeError::config(
-            "checkpoint_store and checkpoint_setup cannot both be supplied",
-        )));
-    }
-    let checkpoint_store = match (
-        request.checkpoint_store.clone(),
-        request.checkpoint_setup.as_ref(),
-    ) {
-        (Some(store), None) => Some(store),
-        (None, Some(setup)) => match setup.initialize().await {
-            Ok(store) => Some(store),
-            Err(error) => {
-                tracing::warn!(
-                    schema_version = CHECKPOINT_SCHEMA_VERSION,
-                    %error,
-                    "exact mid-turn durability is unavailable; completed-turn persistence remains enabled"
-                );
-                None
-            }
-        },
-        (None, None) => None,
-        (Some(_), Some(_)) => unreachable!("conflicting checkpoint inputs returned above"),
-    };
-    // Child sessions share the protected store itself, never the root
-    // journal barrier. The barrier is scoped to the root journal writer and
-    // would otherwise couple a child's exact checkpoints to unrelated root
-    // presentation durability.
-    let child_checkpoint_store = checkpoint_store.clone();
-    let checkpoint_store = match (checkpoint_store, request.checkpoint_barrier.clone()) {
-        (Some(store), Some(barrier)) => {
-            Some(Arc::new(BarrierCheckpointStore::new(store, barrier)) as Arc<dyn CheckpointStore>)
-        }
-        (store, None) => store,
-        (None, Some(_)) => None,
-    };
-    let mid_turn_durability = if checkpoint_store.is_some() {
-        MidTurnDurability::Available
-    } else {
-        MidTurnDurability::Unavailable
-    };
-
-    let policy = RuntimePolicy {
+    let policy = assemble_policy(RuntimePolicy {
         agent_profile: agent_profile_name.clone(),
         agent_profile_revision: agent_profile.revision.clone(),
         agent_profile_uses: agent_profile.uses.value.clone(),
@@ -964,8 +1079,9 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         reasoning: reasoning.clone(),
         context_policy: context_policy.clone(),
         compaction_policy: compaction_policy.clone(),
-        system_prompt: rendered_system_prompt,
-        project_instructions: project_instructions
+        system_prompt: prompt.rendered.clone(),
+        project_instructions: prompt
+            .project_instructions
             .as_ref()
             .map(ProjectInstructionsSnapshot::identity),
         max_attempts: loop_config.retry.max_attempts,
@@ -973,8 +1089,13 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         turn_time_limit_ms: loop_config.turn_time_limit_ms,
         output_limit: loop_config.output_limit,
         max_output_tokens: loop_config.max_output_tokens,
-        tools: tools.iter().map(|tool| tool.spec().name).collect(),
-        skills: resolved_skills
+        tools: capabilities
+            .tools
+            .iter()
+            .map(|tool| tool.spec().name)
+            .collect(),
+        skills: prompt
+            .skills
             .abilities()
             .iter()
             .map(|ability| ability.name().to_owned())
@@ -983,8 +1104,8 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         semantic_summary: semantic_summary.as_ref().map(|(_, policy)| policy.clone()),
         event_buffer: request.event_buffer,
         shutdown_timeout_ms: request.shutdown_timeout_ms,
-        mid_turn_durability,
-    };
+        mid_turn_durability: durability.status,
+    });
 
     let tool_authority = Arc::new(SmithToolAuthority::new(workspace.root()));
     let tool_coverage = tool_authority.coverage().clone();
@@ -1039,28 +1160,28 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         )
         .approval(approval.clone())
         .workspace(workspace.clone())
-        .tools(tools)
+        .tools(capabilities.tools.clone())
         .live_ability_routing()
         .scope_inputs(scope_inputs)
         .capability_resolver(Arc::new(CapabilityResolver::new()))
         .activation_policy(Arc::new(FailClosedPolicy))
         .activation_context(activation_context)
         .activation_budget(activation_budget)
-        .context_contributor(Arc::new(prompt_contributor.clone()))
-        .context_contributor(todo_component.clone())
-        .tool_output_processor(todo_component.clone())
-        .turn_commit_hook(todo_component)
+        .context_contributor(Arc::new(prompt.contributor.clone()))
+        .context_contributor(capabilities.todo.clone())
+        .tool_output_processor(capabilities.todo.clone())
+        .turn_commit_hook(capabilities.todo.clone())
         .clock(clock.clone())
         .event_buffer(request.event_buffer)
         .shutdown_timeout_ms(request.shutdown_timeout_ms);
-    if let Some(component) = &goal_component {
+    if let Some(component) = &capabilities.goal {
         builder = builder
             .context_contributor(component.clone())
             .model_interceptor(component.clone())
             .tool_output_processor(component.clone())
             .turn_commit_hook(component.clone());
     }
-    if let Some(contributor) = memory_contributor.clone() {
+    if let Some(contributor) = prompt.memory.clone() {
         builder = builder.context_contributor(Arc::new(contributor));
     }
     if let Some((coordinator, _)) = &semantic_summary {
@@ -1068,16 +1189,16 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
             .history_projector(coordinator.clone())
             .turn_commit_hook(coordinator.clone());
     }
-    for descriptor in abilities.descriptors() {
+    for descriptor in capabilities.abilities.descriptors() {
         builder = builder.tool_ability_descriptor(descriptor);
     }
-    for skill in resolved_skills.abilities().iter().cloned() {
+    for skill in prompt.skills.abilities().iter().cloned() {
         builder = builder.ability(skill);
     }
     if let Some(interaction) = request.interaction.clone() {
         builder = builder.interaction_broker(interaction);
     }
-    if delegation_slot.is_some() {
+    if capabilities.delegation_slot.is_some() {
         let authority = Arc::new(DelegationAuthority::new());
         let coverage = authority.coverage().clone();
         builder = builder.security_check(
@@ -1090,7 +1211,7 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
     if let Some(store) = request.session_store.clone() {
         builder = builder.session_store(store);
     }
-    if let Some(store) = checkpoint_store.clone() {
+    if let Some(store) = durability.root_store.clone() {
         builder = builder.checkpoint_store(store);
     }
     if let Some(store) = request.secret_store.clone() {
@@ -1106,49 +1227,51 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         builder = builder.observer(observer);
     }
 
-    let runtime = builder.build().map_err(FactoryError::Runtime)?;
-    let delegation = delegation_slot.map(|slot| SmithDelegation {
-        factory: Arc::new(SmithChildFactory {
-            default_route: SmithChildRoute {
-                provider,
-                provider_name,
-                provider_kind,
-                model,
-                model_profile: profile.profile.clone(),
-                context_policy,
-                loop_config,
-                prompt_contributor,
-                agent_profile_name: agent_profile.name.clone(),
-                agent_profile_revision: agent_profile.revision.clone(),
-                agent_profile_posture: agent_profile.posture.value,
-                read_only: true,
-            },
-            profile_routes: child_profile_routes,
-            approval,
-            workspace,
-            clock,
-            artifact_store: request.artifact_store.clone(),
-            session_store: request.session_store.clone(),
-            checkpoint_store: child_checkpoint_store,
-            skills: resolved_skills.abilities().to_vec(),
-            memory: memory_contributor,
-            semantic_summary: semantic_summary
-                .as_ref()
-                .map(|(coordinator, _)| coordinator.clone()),
-        }),
-        slot,
-    });
+    let built = build_runtime(builder)?;
+    let delegation = assemble_delegation(capabilities.delegation_slot.clone().map(|slot| {
+        SmithDelegation {
+            factory: Arc::new(SmithChildFactory {
+                default_route: SmithChildRoute {
+                    provider,
+                    provider_name,
+                    provider_kind,
+                    model,
+                    model_profile: profile.profile.clone(),
+                    context_policy,
+                    loop_config,
+                    prompt_contributor: prompt.contributor.clone(),
+                    agent_profile_name: agent_profile.name.clone(),
+                    agent_profile_revision: agent_profile.revision.clone(),
+                    agent_profile_posture: agent_profile.posture.value,
+                    read_only: true,
+                },
+                profile_routes: child_profile_routes,
+                approval,
+                workspace,
+                clock,
+                artifact_store: request.artifact_store.clone(),
+                session_store: request.session_store.clone(),
+                checkpoint_store: durability.child_store,
+                skills: prompt.skills.abilities().to_vec(),
+                memory: prompt.memory,
+                semantic_summary: semantic_summary
+                    .as_ref()
+                    .map(|(coordinator, _)| coordinator.clone()),
+            }),
+            slot,
+        }
+    }));
     Ok(SmithRuntime {
-        runtime,
-        policy: Arc::new(policy),
+        runtime: built.runtime,
+        policy: Arc::new(policy.policy),
         profile: Arc::new(profile),
-        abilities: Arc::new(abilities),
-        skill_index: Arc::from(resolved_skills.index().to_vec().into_boxed_slice()),
-        checkpoint_store,
+        abilities: Arc::new(capabilities.abilities),
+        skill_index: Arc::from(prompt.skills.index().to_vec().into_boxed_slice()),
+        checkpoint_store: durability.root_store,
         artifact_store: request.artifact_store,
         surface: request.surface,
-        delegation,
-        goal_component,
+        delegation: delegation.delegation,
+        goal_component: capabilities.goal,
     })
 }
 
