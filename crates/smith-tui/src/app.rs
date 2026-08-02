@@ -10,13 +10,15 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use agent_runtime_core::clock::{SystemClock, Timestamp};
+use agent_runtime_core::content::{ContentPart, UserInput};
 #[cfg(test)]
 use agent_runtime_core::event::PlanItemStatus;
 use agent_runtime_core::event::{
     ChildPhase, ChildRecoveryState, EventEnvelope, PlanItemProjection, PlanSensitivity,
     RuntimeEvent, TurnFinish,
 };
-use agent_runtime_core::ids::{AttemptId, RequestId};
+use agent_runtime_core::ids::{AttemptId, RequestId, TurnId};
+use agent_runtime_core::steer::SteerReceipt;
 use crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -51,7 +53,7 @@ const MOUSE_SCROLL_LINES: u16 = 3;
 /// The composer holds only the placeholder text — `[Pasted text #2 +8 lines]`
 /// — which the user can cursor over or delete like ordinary characters. The
 /// stored content re-enters the outgoing text only at submit time.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct PastedChunk {
     placeholder: String,
     content: String,
@@ -65,11 +67,112 @@ const MAX_IMAGE_ATTACHMENTS: usize = 16;
 /// The same contract as [`PastedChunk`]: the composer holds only the
 /// placeholder, and the encoded image joins the outgoing turn as an image
 /// content part when its placeholder is still present at submit time.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ImageAttachment {
     placeholder: String,
     data_uri: String,
 }
+
+/// One validated ordinary composer submission before file materialization.
+///
+/// This process-local value owns everything that may otherwise disappear when
+/// the composer clears. It performs no I/O: canonical file identities are
+/// resolved by the host only when the submission is actually dispatched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedSubmission {
+    display_text: String,
+    expanded_text: String,
+    files: Vec<String>,
+    images: Vec<ImageAttachment>,
+    pastes: Vec<PastedChunk>,
+}
+
+impl PreparedSubmission {
+    /// Exact compact text shown in the composer, transcript, and queue preview.
+    pub fn display_text(&self) -> &str {
+        &self.display_text
+    }
+
+    /// Canonical workspace-relative files to read at dispatch time.
+    pub fn files(&self) -> &[String] {
+        &self.files
+    }
+
+    /// Model input that does not require file materialization.
+    pub fn input_without_files(&self) -> UserInput {
+        let mut parts = vec![ContentPart::text(self.expanded_text.clone())];
+        parts.extend(self.images.iter().map(|attachment| ContentPart::Image {
+            url: attachment.data_uri.clone(),
+            detail: None,
+        }));
+        UserInput { parts }
+    }
+
+    fn merge_fifo(entries: impl IntoIterator<Item = Self>) -> Option<Self> {
+        let mut entries = entries.into_iter();
+        let mut merged = entries.next()?;
+        for entry in entries {
+            merged.display_text.push_str("\n\n");
+            merged.display_text.push_str(&entry.display_text);
+            merged.expanded_text.push_str("\n\n");
+            merged.expanded_text.push_str(&entry.expanded_text);
+            merged.files.extend(entry.files);
+            merged.images.extend(entry.images);
+            merged.pastes.extend(entry.pastes);
+        }
+        Some(merged)
+    }
+}
+
+/// Why the host is dispatching one prepared ordinary submission.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubmissionTarget {
+    /// Start one whole user turn now.
+    WholeTurn,
+    /// Target the tracked serving turn.
+    Steer {
+        /// Expected serving identity, if its start event has already arrived.
+        expected_turn: Option<TurnId>,
+    },
+}
+
+/// Bounded process-local preview exposed to the renderer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingInputPreview {
+    /// Human-readable category label.
+    pub label: &'static str,
+    /// Exact compact draft texts, oldest first.
+    pub entries: Vec<String>,
+    /// Entries hidden by the per-section preview bound.
+    pub overflow: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingSteer {
+    receipt: SteerReceipt,
+    submission: PreparedSubmission,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RejectedFollowup {
+    turn: Option<TurnId>,
+    interrupt_eligible: bool,
+    submission: PreparedSubmission,
+}
+
+/// Process-local user input not yet represented by canonical history.
+#[derive(Debug, Default)]
+struct PendingInputState {
+    accepted_steers: VecDeque<PendingSteer>,
+    rejected_followups: VecDeque<RejectedFollowup>,
+    queued_turns: VecDeque<PreparedSubmission>,
+    ready_submission: Option<PreparedSubmission>,
+    interrupt_for_steer: bool,
+}
+
+const MAX_EXPLICIT_QUEUED_TURNS: usize = 16;
+const MAX_REJECTED_FOLLOWUPS: usize = 16;
+pub(crate) const MAX_PENDING_PREVIEW_ENTRIES: usize = 3;
 
 /// Collapses a paste onto one line for single-line query surfaces.
 fn flatten_paste(text: &str) -> String {
@@ -86,21 +189,12 @@ pub const LEGACY_AGENT_PROFILE_PREFIX: &str = "legacy-agent:";
 /// Something the host loop must do on the app's behalf.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
-    /// Submit this text as a user turn.
-    Send(String),
-    /// Submit a user turn after exact local file reads are attached.
-    SendWithFiles {
-        /// Prompt text, including visible `@path` provenance.
-        text: String,
-        /// Canonical workspace-relative file identities.
-        files: Vec<String>,
-    },
-    /// Submit a user turn carrying clipboard image attachments.
-    SendWithImages {
-        /// Prompt text, including visible `[Image #N …]` provenance.
-        text: String,
-        /// PNG data URIs in placeholder-appearance order.
-        images: Vec<String>,
+    /// Dispatch one already-prepared ordinary input with the stated intent.
+    Submit {
+        /// Exact process-local submission material.
+        submission: PreparedSubmission,
+        /// Whole-turn or active-turn intent.
+        target: SubmissionTarget,
     },
     /// Execute one explicit local shell shortcut without provider spend.
     RunShell {
@@ -499,6 +593,10 @@ pub struct App {
     speculative_attempts: BTreeMap<AttemptOutputKey, SpeculativeAttempt>,
     speculative_order: Vec<AttemptOutputKey>,
     finalized_attempts: BTreeSet<AttemptOutputKey>,
+    /// Serving turn identity from typed runtime envelopes.
+    active_turn: Option<TurnId>,
+    /// Process-local, not-yet-canonical user input.
+    pending_input: PendingInputState,
 }
 
 impl App {
@@ -535,6 +633,8 @@ impl App {
             speculative_attempts: BTreeMap::new(),
             speculative_order: Vec::new(),
             finalized_attempts: BTreeSet::new(),
+            active_turn: None,
+            pending_input: PendingInputState::default(),
         }
     }
 
@@ -574,6 +674,7 @@ impl App {
     /// Whether anything would be lost by quitting now.
     pub fn has_live_work(&self) -> bool {
         self.is_busy()
+            || self.has_pending_input()
             || !self.pending_prompts.is_empty()
             || matches!(
                 self.overlay,
@@ -588,6 +689,186 @@ impl App {
                         ..
                     })
             )
+    }
+
+    /// Whether process-local user input still awaits runtime commitment or
+    /// whole-turn dispatch.
+    pub fn has_pending_input(&self) -> bool {
+        !self.pending_input.accepted_steers.is_empty()
+            || !self.pending_input.rejected_followups.is_empty()
+            || !self.pending_input.queued_turns.is_empty()
+            || self.pending_input.ready_submission.is_some()
+    }
+
+    /// Serving turn identity learned from the typed live event stream.
+    pub fn active_turn(&self) -> Option<&TurnId> {
+        self.active_turn.as_ref()
+    }
+
+    /// Whether automatic goal continuation must remain behind real-user work.
+    pub fn should_defer_goal_continuation(&self) -> bool {
+        self.has_pending_input()
+    }
+
+    /// Whether `Alt+Up` can restore one Smith-owned queued turn.
+    pub fn has_editable_queued_turn(&self) -> bool {
+        !self.pending_input.queued_turns.is_empty()
+    }
+
+    /// Bounded, text-labelled pending-input projections for the anchored pane.
+    pub fn pending_input_previews(&self) -> Vec<PendingInputPreview> {
+        let sections: [(&'static str, Vec<String>); 3] = [
+            (
+                "Pending for this turn",
+                self.pending_input
+                    .accepted_steers
+                    .iter()
+                    .map(|entry| entry.submission.display_text.clone())
+                    .collect(),
+            ),
+            (
+                "First follow-up",
+                self.pending_input
+                    .rejected_followups
+                    .iter()
+                    .map(|entry| entry.submission.display_text.clone())
+                    .collect(),
+            ),
+            (
+                "Queued turns",
+                self.pending_input
+                    .queued_turns
+                    .iter()
+                    .map(|entry| entry.display_text.clone())
+                    .collect(),
+            ),
+        ];
+        sections
+            .into_iter()
+            .filter_map(|(label, entries)| {
+                if entries.is_empty() {
+                    return None;
+                }
+                let overflow = entries.len().saturating_sub(MAX_PENDING_PREVIEW_ENTRIES);
+                Some(PendingInputPreview {
+                    label,
+                    entries: entries
+                        .into_iter()
+                        .take(MAX_PENDING_PREVIEW_ENTRIES)
+                        .collect(),
+                    overflow,
+                })
+            })
+            .collect()
+    }
+
+    /// Records that the runtime accepted one steer. No transcript row is
+    /// appended until the matching committed disposition arrives.
+    pub fn accept_steer(&mut self, receipt: SteerReceipt, submission: PreparedSubmission) {
+        self.pending_input.accepted_steers.push_back(PendingSteer {
+            receipt,
+            submission,
+        });
+    }
+
+    /// Preserves a runtime-declared non-steerable input as the first later
+    /// whole-turn work.
+    pub fn reject_steer_for_followup(
+        &mut self,
+        turn: Option<TurnId>,
+        submission: PreparedSubmission,
+    ) {
+        self.push_rejected_followup(RejectedFollowup {
+            turn,
+            interrupt_eligible: false,
+            submission,
+        });
+    }
+
+    /// Restores an unaccepted prepared input exactly and reports the local
+    /// failure without spending a provider request.
+    pub fn restore_submission(&mut self, submission: PreparedSubmission, error: impl Into<String>) {
+        self.restore_prepared_to_composer(submission);
+        self.transcript.push_error(error);
+    }
+
+    /// Commits one accepted whole-turn submission to visible local history.
+    /// Runtime turn acceptance is the boundary; merely pressing a key is not.
+    pub fn whole_turn_dispatched(&mut self, turn: TurnId, submission: &PreparedSubmission) {
+        self.transcript.push_user(submission.display_text());
+        self.active_turn = Some(turn);
+        self.status.activity = Activity::Working;
+        self.follow_newest();
+    }
+
+    /// Takes the one future turn made eligible by the newest terminal event.
+    pub fn take_ready_submission(&mut self) -> Option<PreparedSubmission> {
+        self.pending_input.ready_submission.take()
+    }
+
+    fn push_rejected_followup(&mut self, entry: RejectedFollowup) {
+        if self.pending_input.rejected_followups.len() < MAX_REJECTED_FOLLOWUPS {
+            self.pending_input.rejected_followups.push_back(entry);
+            return;
+        }
+        // Preserve all text while bounding entry count. Rejected follow-ups are
+        // dispatched as one FIFO batch anyway, so folding only the tail does
+        // not change execution order.
+        if let Some(tail) = self.pending_input.rejected_followups.pop_back() {
+            let RejectedFollowup {
+                turn: tail_turn,
+                interrupt_eligible: tail_interrupt_eligible,
+                submission: tail_submission,
+            } = tail;
+            let RejectedFollowup {
+                turn,
+                interrupt_eligible,
+                submission,
+            } = entry;
+            let merged = PreparedSubmission::merge_fifo([tail_submission, submission])
+                .expect("two rejected submissions merge");
+            self.pending_input
+                .rejected_followups
+                .push_back(RejectedFollowup {
+                    turn: turn.or(tail_turn),
+                    interrupt_eligible: tail_interrupt_eligible || interrupt_eligible,
+                    submission: merged,
+                });
+        }
+    }
+
+    fn restore_prepared_to_composer(&mut self, submission: PreparedSubmission) {
+        for paste in submission.pastes {
+            if !self
+                .pasted_chunks
+                .iter()
+                .any(|known| known.placeholder == paste.placeholder)
+            {
+                if self.pasted_chunks.len() == MAX_PASTED_CHUNKS {
+                    self.pasted_chunks.remove(0);
+                }
+                self.pasted_chunks.push(paste);
+            }
+        }
+        for image in submission.images {
+            if !self
+                .image_attachments
+                .iter()
+                .any(|known| known.placeholder == image.placeholder)
+            {
+                if self.image_attachments.len() == MAX_IMAGE_ATTACHMENTS {
+                    self.image_attachments.remove(0);
+                }
+                self.image_attachments.push(image);
+            }
+        }
+        let current = self.composer.text().to_owned();
+        let restored = if current.trim().is_empty() {
+            submission.display_text
+        } else {
+            format!("{}\n\n{current}", submission.display_text)
+        };
+        self.composer.replace(restored);
     }
 
     /// Number of approval prompts still awaiting one decision each.
@@ -857,6 +1138,79 @@ impl App {
         );
     }
 
+    fn reconcile_pending_terminal(&mut self, turn: Option<&TurnId>, finish: &TurnFinish) {
+        // Disposition events are ordered before the terminal. This drain is a
+        // fail-closed fallback for a live-stream gap: uncommitted text is kept,
+        // never promoted to transcript history.
+        let mut retained = VecDeque::new();
+        while let Some(entry) = self.pending_input.accepted_steers.pop_front() {
+            if turn == Some(&entry.receipt.turn) {
+                self.push_rejected_followup(RejectedFollowup {
+                    turn: Some(entry.receipt.turn),
+                    interrupt_eligible: self.pending_input.interrupt_for_steer,
+                    submission: entry.submission,
+                });
+            } else {
+                retained.push_back(entry);
+            }
+        }
+        self.pending_input.accepted_steers = retained;
+
+        match finish {
+            TurnFinish::Completed => {
+                if self.pending_input.ready_submission.is_none() {
+                    let rejected = self
+                        .pending_input
+                        .rejected_followups
+                        .drain(..)
+                        .map(|entry| entry.submission)
+                        .collect::<Vec<_>>();
+                    self.pending_input.ready_submission = PreparedSubmission::merge_fifo(rejected)
+                        .or_else(|| self.pending_input.queued_turns.pop_front());
+                }
+            }
+            TurnFinish::Cancelled { .. } if self.pending_input.interrupt_for_steer => {
+                let mut resend = Vec::new();
+                let mut keep = VecDeque::new();
+                while let Some(entry) = self.pending_input.rejected_followups.pop_front() {
+                    if entry.interrupt_eligible && entry.turn.as_ref() == turn {
+                        resend.push(entry.submission);
+                    } else {
+                        keep.push_back(entry);
+                    }
+                }
+                self.pending_input.rejected_followups = keep;
+                self.pending_input.ready_submission = PreparedSubmission::merge_fifo(resend);
+            }
+            TurnFinish::Cancelled { .. }
+            | TurnFinish::LimitReached { .. }
+            | TurnFinish::NeedsInput { .. }
+            | TurnFinish::Failed => {
+                let mut restore = Vec::new();
+                restore.extend(
+                    self.pending_input
+                        .accepted_steers
+                        .drain(..)
+                        .map(|entry| entry.submission),
+                );
+                restore.extend(
+                    self.pending_input
+                        .rejected_followups
+                        .drain(..)
+                        .map(|entry| entry.submission),
+                );
+                restore.extend(self.pending_input.queued_turns.drain(..));
+                if let Some(ready) = self.pending_input.ready_submission.take() {
+                    restore.push(ready);
+                }
+                if let Some(submission) = PreparedSubmission::merge_fifo(restore) {
+                    self.restore_prepared_to_composer(submission);
+                }
+            }
+        }
+        self.pending_input.interrupt_for_steer = false;
+    }
+
     /// Folds one runtime event into state.
     pub fn apply(&mut self, envelope: &EventEnvelope) {
         if let Some(previous) = self.last_event_seq
@@ -884,6 +1238,8 @@ impl App {
                 self.speculative_attempts.clear();
                 self.speculative_order.clear();
                 self.finalized_attempts.clear();
+                self.active_turn = None;
+                self.pending_input = PendingInputState::default();
             }
             RuntimeEvent::TurnStarted | RuntimeEvent::InternalTurnStarted { .. } => {
                 self.discard_orphaned_speculative_output("next turn start");
@@ -895,6 +1251,36 @@ impl App {
                 self.turn_started_timestamp =
                     (envelope.timestamp != Timestamp::ZERO).then_some(envelope.timestamp);
                 self.finalized_attempts.clear();
+                self.active_turn.clone_from(&envelope.turn);
+            }
+            RuntimeEvent::TurnSteerCommitted { steer, .. } => {
+                if let Some(index) = self
+                    .pending_input
+                    .accepted_steers
+                    .iter()
+                    .position(|entry| &entry.receipt.id == steer)
+                    && let Some(entry) = self.pending_input.accepted_steers.remove(index)
+                {
+                    self.transcript.push_user(entry.submission.display_text);
+                    self.follow_newest();
+                }
+            }
+            RuntimeEvent::TurnSteerDiscarded { steer, .. } => {
+                if let Some(index) = self
+                    .pending_input
+                    .accepted_steers
+                    .iter()
+                    .position(|entry| &entry.receipt.id == steer)
+                    && let Some(entry) = self.pending_input.accepted_steers.remove(index)
+                {
+                    let interrupt_eligible = self.pending_input.interrupt_for_steer
+                        && envelope.turn.as_ref() == Some(&entry.receipt.turn);
+                    self.push_rejected_followup(RejectedFollowup {
+                        turn: Some(entry.receipt.turn),
+                        interrupt_eligible,
+                        submission: entry.submission,
+                    });
+                }
             }
             RuntimeEvent::ModelProfileResolved {
                 provider, model, ..
@@ -1091,6 +1477,7 @@ impl App {
                 self.transcript.push_error(error.to_string());
             }
             RuntimeEvent::TurnCompleted { finish, .. } => {
+                self.reconcile_pending_terminal(envelope.turn.as_ref(), finish);
                 self.cancel_pending_prompts();
                 // A valid v5 stream has already committed or discarded every
                 // attempt. A gap, corrupt journal, or incompatible producer
@@ -1107,6 +1494,9 @@ impl App {
                 });
                 self.transcript.close_open();
                 self.status.activity = Activity::Idle;
+                if self.active_turn.as_ref() == envelope.turn.as_ref() {
+                    self.active_turn = None;
+                }
                 self.finish_work();
                 match finish {
                     TurnFinish::Cancelled { reason } => {
@@ -1351,6 +1741,8 @@ impl App {
                 self.status.activity = Activity::Ended;
                 self.turn_started_at = None;
                 self.turn_started_timestamp = None;
+                self.active_turn = None;
+                self.pending_input = PendingInputState::default();
             }
             // Planning-lifecycle events carry diagnostics the basic TUI does not
             // surface yet; they are recorded by the session log regardless.
@@ -1702,22 +2094,116 @@ impl App {
         self.composer.insert_str(&placeholder);
     }
 
-    /// Data URIs of attachments whose placeholders survive in `text`, in
-    /// order of first appearance. A deleted placeholder detaches its image.
-    fn referenced_images(&self, text: &str) -> Vec<String> {
-        let mut found: Vec<(usize, &ImageAttachment)> = self
+    fn prepare_ordinary_submission(
+        &self,
+        text: &str,
+    ) -> Result<Option<PreparedSubmission>, String> {
+        let (display_text, parsed_text, files) = if let Some(literal) = text.strip_prefix("//") {
+            let literal = format!("/{literal}");
+            (literal.clone(), literal, Vec::new())
+        } else if let Some(literal) = text.strip_prefix("!!") {
+            let literal = format!("!{literal}");
+            (literal.clone(), literal, Vec::new())
+        } else if text.starts_with('/') || text.starts_with('!') {
+            return Ok(None);
+        } else {
+            let files = self
+                .resources
+                .files
+                .iter()
+                .filter_map(|entry| entry.id.strip_prefix("file:"))
+                .map(str::to_owned)
+                .collect();
+            let agents = self
+                .resources
+                .child_agents
+                .iter()
+                .filter(|entry| entry.disabled_reason.is_none())
+                .filter_map(|entry| entry.id.strip_prefix("agent:"))
+                .map(str::to_owned)
+                .chain(self.children.keys().cloned())
+                .collect();
+            let parsed = parse_references(text, &files, &agents)?;
+            if parsed
+                .references
+                .iter()
+                .any(|reference| matches!(reference, ComposerReference::Agent(_)))
+            {
+                return Ok(None);
+            }
+            let attached_files = parsed
+                .references
+                .iter()
+                .filter_map(|reference| match reference {
+                    ComposerReference::File(path) => Some(path.clone()),
+                    ComposerReference::Agent(_) => None,
+                })
+                .collect::<Vec<_>>();
+            (parsed.text.clone(), parsed.text, attached_files)
+        };
+
+        let expanded_text = self.expand_pasted(&parsed_text);
+        let mut images = self
             .image_attachments
             .iter()
             .filter_map(|attachment| {
-                text.find(&attachment.placeholder)
-                    .map(|position| (position, attachment))
+                expanded_text
+                    .find(&attachment.placeholder)
+                    .map(|position| (position, attachment.clone()))
             })
-            .collect();
-        found.sort_by_key(|(position, _)| *position);
-        found
+            .collect::<Vec<_>>();
+        images.sort_by_key(|(position, _)| *position);
+        let images = images
             .into_iter()
-            .map(|(_, attachment)| attachment.data_uri.clone())
-            .collect()
+            .map(|(_, attachment)| attachment)
+            .collect();
+        let pastes = self
+            .pasted_chunks
+            .iter()
+            .filter(|chunk| display_text.contains(&chunk.placeholder))
+            .cloned()
+            .collect();
+        Ok(Some(PreparedSubmission {
+            display_text,
+            expanded_text,
+            files,
+            images,
+            pastes,
+        }))
+    }
+
+    fn queue_current_ordinary_submission(&mut self) {
+        let text = self.composer.text().trim().to_owned();
+        let submission = match self.prepare_ordinary_submission(&text) {
+            Ok(Some(submission)) => submission,
+            Ok(None) => {
+                self.transcript.push_error(
+                    "only an ordinary user prompt can be queued; commands, shell actions, and child actions keep their explicit paths",
+                );
+                return;
+            }
+            Err(error) => {
+                self.transcript.push_error(error);
+                return;
+            }
+        };
+        if self.pending_input.queued_turns.len() == MAX_EXPLICIT_QUEUED_TURNS {
+            self.transcript.push_error(format!(
+                "the explicit turn queue is full ({MAX_EXPLICIT_QUEUED_TURNS} entries)"
+            ));
+            return;
+        }
+        self.composer.record_current();
+        self.composer.clear();
+        self.pending_input.queued_turns.push_back(submission);
+        self.follow_newest();
+    }
+
+    fn edit_newest_queued_submission(&mut self) {
+        let Some(submission) = self.pending_input.queued_turns.pop_back() else {
+            return;
+        };
+        self.restore_prepared_to_composer(submission);
     }
 
     /// Handles one mouse event, returning whether visible state changed.
@@ -1914,6 +2400,10 @@ impl App {
         }
 
         match (key.code, key.modifiers) {
+            (KeyCode::Tab, _) if self.is_busy() && !self.composer.is_blank() => {
+                self.queue_current_ordinary_submission();
+                None
+            }
             // At the empty idle point of action, Tab cycles only the
             // configured main-agent profiles. Overlay-specific Tab behavior was
             // handled above and a non-empty draft is never changed.
@@ -1955,6 +2445,10 @@ impl App {
             }
             (KeyCode::PageDown, _) => {
                 self.scroll_down(10);
+                None
+            }
+            (KeyCode::Up, modifiers) if modifiers.contains(KeyModifiers::ALT) => {
+                self.edit_newest_queued_submission();
                 None
             }
             (KeyCode::Up, _) => {
@@ -2126,6 +2620,7 @@ impl App {
 
     fn on_escape(&mut self) -> Option<Action> {
         if self.is_busy() {
+            self.pending_input.interrupt_for_steer = !self.pending_input.accepted_steers.is_empty();
             self.status.activity = Activity::Interrupting;
             return Some(Action::Interrupt);
         }
@@ -2690,28 +3185,25 @@ impl App {
                     return None;
                 }
                 let text = self.composer.text().trim().to_owned();
-                // `//…` is the documented escape for a literal leading slash:
-                // exactly one slash is stripped and the rest goes to the model
-                // as an ordinary prompt.
-                if let Some(literal) = text.strip_prefix("//") {
-                    let literal = format!("/{literal}");
-                    self.composer.record_current();
-                    self.composer.clear();
-                    // The transcript keeps the compact placeholder text; only
-                    // the outgoing turn expands stored paste chunks.
-                    self.transcript.push_user(&literal);
-                    self.follow_newest();
-                    return Some(Action::Send(self.expand_pasted(&literal)));
-                }
-                // `!!…` is the literal escape for a provider prompt beginning
-                // with `!`; one marker is removed and no local process starts.
-                if let Some(literal) = text.strip_prefix("!!") {
-                    let literal = format!("!{literal}");
-                    self.composer.record_current();
-                    self.composer.clear();
-                    self.transcript.push_user(&literal);
-                    self.follow_newest();
-                    return Some(Action::Send(self.expand_pasted(&literal)));
+                match self.prepare_ordinary_submission(&text) {
+                    Ok(Some(submission)) => {
+                        let target = if self.is_busy() {
+                            SubmissionTarget::Steer {
+                                expected_turn: self.active_turn.clone(),
+                            }
+                        } else {
+                            SubmissionTarget::WholeTurn
+                        };
+                        self.composer.record_current();
+                        self.composer.clear();
+                        self.follow_newest();
+                        return Some(Action::Submit { submission, target });
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        self.transcript.push_error(error);
+                        return None;
+                    }
                 }
                 // One leading marker is an explicit local prepared shell
                 // action. Keep the draft on validation failure so no command
@@ -2854,34 +3346,7 @@ impl App {
                     });
                     return None;
                 }
-                let outgoing = self.expand_pasted(&parsed.text);
-                let images = self.referenced_images(&outgoing);
-                if !images.is_empty() && !attached_files.is_empty() {
-                    // Prepared file reads and image parts use different send
-                    // paths; refuse honestly instead of dropping one, and
-                    // keep the draft so nothing disappears unaccepted.
-                    self.transcript.push_error(
-                        "image attachments cannot be combined with `@file` attachments yet",
-                    );
-                    return None;
-                }
-                self.composer.record_current();
-                self.composer.clear();
-                self.transcript.push_user(&parsed.text);
-                self.follow_newest();
-                if !images.is_empty() {
-                    Some(Action::SendWithImages {
-                        text: outgoing,
-                        images,
-                    })
-                } else if attached_files.is_empty() {
-                    Some(Action::Send(outgoing))
-                } else {
-                    Some(Action::SendWithFiles {
-                        text: outgoing,
-                        files: attached_files,
-                    })
-                }
+                unreachable!("ordinary input without a child reference was prepared above")
             }
             (KeyCode::Backspace, _) => {
                 self.composer.backspace();
@@ -2970,7 +3435,7 @@ impl App {
             unreachable!("parsed commands always have registry entries");
         };
 
-        if spec.requires_idle && self.is_busy() {
+        if spec.requires_idle && (self.is_busy() || self.has_pending_input()) {
             self.overlay = None;
             self.transcript.push_notice(
                 "smith",
@@ -3388,7 +3853,7 @@ mod tests {
     };
     use agent_runtime_core::ids::{
         AttemptId, ChildId, EventId, GoalId, InteractionRequestId, QuestionId, RequestId,
-        SessionId, ToolCallId, TurnId,
+        SessionId, SteerId, ToolCallId, TurnId,
     };
     use agent_runtime_core::interaction::InteractionSensitivity;
     use agent_runtime_core::manifest::{ActivatedCapability, SegmentKind};
@@ -3441,6 +3906,16 @@ mod tests {
         app
     }
 
+    fn expect_whole_submission(action: Option<Action>) -> PreparedSubmission {
+        match action {
+            Some(Action::Submit {
+                submission,
+                target: SubmissionTarget::WholeTurn,
+            }) => submission,
+            other => panic!("expected a prepared whole-turn submission, got {other:?}"),
+        }
+    }
+
     fn event(payload: RuntimeEvent) -> EventEnvelope {
         event_at(Timestamp::ZERO, payload)
     }
@@ -3452,6 +3927,17 @@ mod tests {
             SessionId::new("s"),
             None,
             timestamp,
+            payload,
+        )
+    }
+
+    fn turn_event(turn: &str, payload: RuntimeEvent) -> EventEnvelope {
+        EventEnvelope::new(
+            0,
+            EventId::new(format!("event-{turn}")),
+            SessionId::new("s"),
+            Some(TurnId::new(turn)),
+            Timestamp::ZERO,
             payload,
         )
     }
@@ -3612,16 +4098,240 @@ mod tests {
     fn sending_records_the_message_and_clears_the_composer() {
         let mut app = app();
         type_text(&mut app, "run the tests");
-        let action = app.on_key(key(KeyCode::Enter));
+        let submission = expect_whole_submission(app.on_key(key(KeyCode::Enter)));
 
-        assert_eq!(action, Some(Action::Send("run the tests".into())));
+        assert_eq!(submission.display_text(), "run the tests");
         assert!(app.composer.is_empty());
+        assert!(app.transcript.blocks().is_empty());
+        app.whole_turn_dispatched(TurnId::new("turn-1"), &submission);
         assert_eq!(
             app.transcript.blocks()[0],
             Block::User {
                 text: "run the tests".into()
             }
         );
+    }
+
+    #[test]
+    fn busy_enter_waits_for_the_matching_steer_commit_before_transcript_history() {
+        let mut app = app();
+        app.apply(&turn_event("turn-1", RuntimeEvent::TurnStarted));
+        type_text(&mut app, "also test cancellation");
+        let action = app.on_key(key(KeyCode::Enter));
+        let submission = match action {
+            Some(Action::Submit {
+                submission,
+                target:
+                    SubmissionTarget::Steer {
+                        expected_turn: Some(turn),
+                    },
+            }) => {
+                assert_eq!(turn, TurnId::new("turn-1"));
+                submission
+            }
+            other => panic!("expected a targeted steer, got {other:?}"),
+        };
+        assert!(app.transcript.blocks().is_empty());
+
+        app.accept_steer(
+            SteerReceipt {
+                id: SteerId::new("steer-1"),
+                turn: TurnId::new("turn-1"),
+                ordinal: 1,
+            },
+            submission,
+        );
+        assert_eq!(
+            app.pending_input_previews()[0].entries,
+            ["also test cancellation"]
+        );
+        app.apply(&turn_event(
+            "turn-1",
+            RuntimeEvent::TurnSteerCommitted {
+                steer: SteerId::new("steer-1"),
+                ordinal: 1,
+            },
+        ));
+        app.apply(&turn_event(
+            "turn-1",
+            RuntimeEvent::TurnSteerCommitted {
+                steer: SteerId::new("steer-1"),
+                ordinal: 1,
+            },
+        ));
+        assert_eq!(
+            app.transcript
+                .blocks()
+                .iter()
+                .filter(|block| matches!(block, Block::User { text } if text == "also test cancellation"))
+                .count(),
+            1
+        );
+        assert!(app.pending_input_previews().is_empty());
+    }
+
+    #[test]
+    fn busy_tab_queues_fifo_and_alt_up_edits_only_the_newest_explicit_turn() {
+        let mut app = app();
+        app.apply(&turn_event("turn-1", RuntimeEvent::TurnStarted));
+        for draft in ["first later turn", "second later turn"] {
+            app.composer.replace(draft);
+            assert_eq!(app.on_key(key(KeyCode::Tab)), None);
+        }
+        assert_eq!(
+            app.pending_input_previews()[0].entries,
+            ["first later turn", "second later turn"]
+        );
+
+        assert_eq!(
+            app.on_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT)),
+            None
+        );
+        assert_eq!(app.composer.text(), "second later turn");
+        assert_eq!(
+            app.pending_input_previews()[0].entries,
+            ["first later turn"]
+        );
+
+        app.composer.replace("/status");
+        assert_eq!(app.on_key(key(KeyCode::Tab)), None);
+        assert_eq!(app.composer.text(), "/status");
+        assert_eq!(
+            app.pending_input_previews()[0].entries,
+            ["first later turn"]
+        );
+    }
+
+    #[test]
+    fn explicit_busy_queue_is_bounded_and_keeps_the_overflow_draft_editable() {
+        let mut app = app();
+        app.apply(&turn_event("turn-1", RuntimeEvent::TurnStarted));
+        for index in 0..MAX_EXPLICIT_QUEUED_TURNS {
+            app.composer.replace(format!("queued {index}"));
+            app.on_key(key(KeyCode::Tab));
+        }
+        app.composer.replace("one too many");
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(app.composer.text(), "one too many");
+        assert_eq!(
+            app.pending_input.queued_turns.len(),
+            MAX_EXPLICIT_QUEUED_TURNS
+        );
+        assert!(app.transcript.blocks().iter().any(|block| matches!(
+            block,
+            Block::Error { message } if message.contains("queue is full")
+        )));
+    }
+
+    #[test]
+    fn rejected_steers_dispatch_before_one_explicit_queue_entry_per_success() {
+        let mut app = app();
+        app.apply(&turn_event("turn-1", RuntimeEvent::TurnStarted));
+        app.composer.replace("explicit later");
+        app.on_key(key(KeyCode::Tab));
+
+        let rejected = app
+            .prepare_ordinary_submission("steer became follow-up")
+            .unwrap()
+            .unwrap();
+        app.reject_steer_for_followup(Some(TurnId::new("turn-1")), rejected);
+        app.apply(&turn_event(
+            "turn-1",
+            RuntimeEvent::TurnCompleted {
+                finish: TurnFinish::Completed,
+                visible_output: false,
+            },
+        ));
+        let first = app.take_ready_submission().expect("rejected follow-up");
+        assert_eq!(first.display_text(), "steer became follow-up");
+        assert!(app.take_ready_submission().is_none());
+
+        app.whole_turn_dispatched(TurnId::new("turn-2"), &first);
+        app.apply(&turn_event(
+            "turn-2",
+            RuntimeEvent::TurnCompleted {
+                finish: TurnFinish::Completed,
+                visible_output: false,
+            },
+        ));
+        assert_eq!(
+            app.take_ready_submission()
+                .expect("one explicit queue entry")
+                .display_text(),
+            "explicit later"
+        );
+    }
+
+    #[test]
+    fn interrupt_for_steer_resends_only_uncommitted_dispositions() {
+        let mut app = app();
+        app.apply(&turn_event("turn-1", RuntimeEvent::TurnStarted));
+        for (ordinal, text) in [(1, "already committed"), (2, "still pending")] {
+            let submission = app.prepare_ordinary_submission(text).unwrap().unwrap();
+            app.accept_steer(
+                SteerReceipt {
+                    id: SteerId::new(format!("steer-{ordinal}")),
+                    turn: TurnId::new("turn-1"),
+                    ordinal,
+                },
+                submission,
+            );
+        }
+        app.apply(&turn_event(
+            "turn-1",
+            RuntimeEvent::TurnSteerCommitted {
+                steer: SteerId::new("steer-1"),
+                ordinal: 1,
+            },
+        ));
+        assert_eq!(app.on_key(key(KeyCode::Esc)), Some(Action::Interrupt));
+        app.apply(&turn_event(
+            "turn-1",
+            RuntimeEvent::TurnSteerDiscarded {
+                steer: SteerId::new("steer-2"),
+                ordinal: 2,
+                reason: agent_runtime_core::steer::SteerDiscardReason::Cancelled,
+            },
+        ));
+        app.apply(&turn_event(
+            "turn-1",
+            RuntimeEvent::TurnCompleted {
+                finish: TurnFinish::Cancelled {
+                    reason: CancelReason::UserRequested,
+                },
+                visible_output: false,
+            },
+        ));
+        assert_eq!(
+            app.take_ready_submission()
+                .expect("discarded steer resubmission")
+                .display_text(),
+            "still pending"
+        );
+    }
+
+    #[test]
+    fn non_success_restores_pastes_and_explicit_queue_without_spend() {
+        let mut app = app();
+        app.apply(&turn_event("turn-1", RuntimeEvent::TurnStarted));
+        app.on_paste("one\ntwo\nthree");
+        type_text(&mut app, " later");
+        app.on_key(key(KeyCode::Tab));
+        app.pasted_chunks.clear();
+
+        app.apply(&turn_event(
+            "turn-1",
+            RuntimeEvent::TurnCompleted {
+                finish: TurnFinish::Failed,
+                visible_output: false,
+            },
+        ));
+        assert_eq!(app.composer.text(), "[Pasted text #1 +3 lines] later");
+        assert_eq!(
+            app.expand_pasted(app.composer.text()),
+            "one\ntwo\nthree later"
+        );
+        assert!(app.take_ready_submission().is_none());
     }
 
     #[test]
@@ -3701,12 +4411,9 @@ mod tests {
     fn a_double_slash_escapes_to_a_literal_prompt() {
         let mut app = app();
         type_text(&mut app, "//help me understand slashes");
-        let action = app.on_key(key(KeyCode::Enter));
-        assert_eq!(
-            action,
-            Some(Action::Send("/help me understand slashes".into())),
-            "the escape sends the literal message to the model"
-        );
+        let submission = expect_whole_submission(app.on_key(key(KeyCode::Enter)));
+        assert_eq!(submission.display_text(), "/help me understand slashes");
+        app.whole_turn_dispatched(TurnId::new("turn-1"), &submission);
         assert_eq!(
             app.transcript.blocks()[0],
             Block::User {
@@ -3784,8 +4491,8 @@ mod tests {
 
         type_text(&mut app, "first prompt");
         assert_eq!(
-            app.on_key(key(KeyCode::Enter)),
-            Some(Action::Send("first prompt".to_owned()))
+            expect_whole_submission(app.on_key(key(KeyCode::Enter))).display_text(),
+            "first prompt"
         );
         type_text(&mut app, "/status");
         assert!(matches!(
@@ -3818,46 +4525,18 @@ mod tests {
     }
 
     #[test]
-    fn accepted_child_confirmation_input_enters_history_before_confirmation() {
-        let mut app = agent_first_app();
-        app.composer.replace("@review inspect the diff");
-        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
-        assert!(matches!(&app.overlay, Some(Overlay::AgentConfirm { .. })));
-
-        app.on_key(key(KeyCode::Char('n')));
-        assert!(app.overlay.is_none());
-        app.composer.clear();
-        app.on_key(key(KeyCode::Up));
-        assert_eq!(app.composer.text(), "@review inspect the diff");
-    }
-
-    #[test]
-    fn arrow_history_restores_a_non_empty_composer_scratch() {
-        let mut app = app();
-        type_text(&mut app, "completed input");
-        app.on_key(key(KeyCode::Enter));
-        type_text(&mut app, "work in progress");
-
-        app.on_key(key(KeyCode::Up));
-        assert_eq!(app.composer.text(), "completed input");
-        app.on_key(key(KeyCode::Down));
-        assert_eq!(app.composer.text(), "work in progress");
-    }
-
-    #[test]
     fn a_large_paste_collapses_to_a_placeholder_and_expands_on_send() {
         let mut app = app();
         app.on_paste("fn main() {\r\n    println!(\"hi\");\r\n}");
         assert_eq!(app.composer.text(), "[Pasted text #1 +3 lines]");
 
         type_text(&mut app, " explain this");
-        let action = app.on_key(key(KeyCode::Enter));
+        let submission = expect_whole_submission(app.on_key(key(KeyCode::Enter)));
         assert_eq!(
-            action,
-            Some(Action::Send(
-                "fn main() {\n    println!(\"hi\");\n} explain this".to_owned()
-            ))
+            submission.input_without_files(),
+            UserInput::text("fn main() {\n    println!(\"hi\");\n} explain this")
         );
+        app.whole_turn_dispatched(TurnId::new("turn-1"), &submission);
         // The transcript keeps the compact placeholder, not the full paste.
         match app.transcript.blocks().last() {
             Some(Block::User { text }) => {
@@ -3895,8 +4574,8 @@ mod tests {
         let mut app = app();
         type_text(&mut app, "[Pasted text #9 +4 lines] check");
         assert_eq!(
-            app.on_key(key(KeyCode::Enter)),
-            Some(Action::Send("[Pasted text #9 +4 lines] check".to_owned()))
+            expect_whole_submission(app.on_key(key(KeyCode::Enter))).input_without_files(),
+            UserInput::text("[Pasted text #9 +4 lines] check")
         );
     }
 
@@ -3936,15 +4615,20 @@ mod tests {
         );
 
         type_text(&mut app, " compare these");
+        let submission = expect_whole_submission(app.on_key(key(KeyCode::Enter)));
         assert_eq!(
-            app.on_key(key(KeyCode::Enter)),
-            Some(Action::SendWithImages {
-                text: "[Image #1 800×600] and [Image #2 32×32] compare these".to_owned(),
-                images: vec![
-                    "data:image/png;base64,FIRST".to_owned(),
-                    "data:image/png;base64,SECOND".to_owned(),
-                ],
-            })
+            submission.input_without_files().parts,
+            vec![
+                ContentPart::text("[Image #1 800×600] and [Image #2 32×32] compare these"),
+                ContentPart::Image {
+                    url: "data:image/png;base64,FIRST".to_owned(),
+                    detail: None,
+                },
+                ContentPart::Image {
+                    url: "data:image/png;base64,SECOND".to_owned(),
+                    detail: None,
+                },
+            ]
         );
     }
 
@@ -3955,8 +4639,8 @@ mod tests {
         app.composer.clear();
         type_text(&mut app, "no image after all");
         assert_eq!(
-            app.on_key(key(KeyCode::Enter)),
-            Some(Action::Send("no image after all".to_owned()))
+            expect_whole_submission(app.on_key(key(KeyCode::Enter))).input_without_files(),
+            UserInput::text("no image after all")
         );
     }
 
@@ -4012,6 +4696,33 @@ mod tests {
         assert_eq!(app.scroll_back, 0);
         assert!(app.following);
         assert!(!app.on_mouse(mouse(MouseEventKind::Moved, 10, 5)));
+    }
+
+    #[test]
+    fn accepted_child_confirmation_input_enters_history_before_confirmation() {
+        let mut app = agent_first_app();
+        app.composer.replace("@review inspect the diff");
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert!(matches!(&app.overlay, Some(Overlay::AgentConfirm { .. })));
+
+        app.on_key(key(KeyCode::Char('n')));
+        assert!(app.overlay.is_none());
+        app.composer.clear();
+        app.on_key(key(KeyCode::Up));
+        assert_eq!(app.composer.text(), "@review inspect the diff");
+    }
+
+    #[test]
+    fn arrow_history_restores_a_non_empty_composer_scratch() {
+        let mut app = app();
+        type_text(&mut app, "completed input");
+        app.on_key(key(KeyCode::Enter));
+        type_text(&mut app, "work in progress");
+
+        app.on_key(key(KeyCode::Up));
+        assert_eq!(app.composer.text(), "completed input");
+        app.on_key(key(KeyCode::Down));
+        assert_eq!(app.composer.text(), "work in progress");
     }
 
     #[test]
@@ -4378,6 +5089,28 @@ mod tests {
             }),
             "the rejected switch was invisible"
         );
+    }
+
+    #[test]
+    fn pending_input_blocks_reconfiguration_after_the_active_turn_ends() {
+        let mut app = app();
+        app.apply(&turn_event("turn-1", RuntimeEvent::TurnStarted));
+        app.composer.replace("queued for later");
+        assert_eq!(app.on_key(key(KeyCode::Tab)), None);
+        app.apply(&turn_event(
+            "turn-1",
+            RuntimeEvent::TurnCompleted {
+                finish: TurnFinish::Completed,
+                visible_output: false,
+            },
+        ));
+        assert!(!app.is_busy());
+        assert!(app.has_pending_input());
+
+        app.composer.replace("/model model-2");
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert_eq!(app.composer.text(), "/model model-2");
+        assert!(app.has_pending_input());
     }
 
     #[tokio::test]
@@ -5547,13 +6280,9 @@ mod tests {
     fn file_reference_submission_is_typed_and_unresolved_drafts_fail_locally() {
         let mut app = agent_first_app();
         app.composer.replace("inspect @src/lib.rs");
-        assert_eq!(
-            app.on_key(key(KeyCode::Enter)),
-            Some(Action::SendWithFiles {
-                text: "inspect @src/lib.rs".to_owned(),
-                files: vec!["src/lib.rs".to_owned()],
-            })
-        );
+        let submission = expect_whole_submission(app.on_key(key(KeyCode::Enter)));
+        assert_eq!(submission.display_text(), "inspect @src/lib.rs");
+        assert_eq!(submission.files(), &["src/lib.rs".to_owned()]);
 
         let mut unresolved = agent_first_app();
         unresolved.composer.replace("inspect @missing.rs");
@@ -5573,8 +6302,8 @@ mod tests {
         at.on_key(key(KeyCode::Char('@')));
         type_text(&mut at, "owner please");
         assert_eq!(
-            at.on_key(key(KeyCode::Enter)),
-            Some(Action::Send("@owner please".to_owned()))
+            expect_whole_submission(at.on_key(key(KeyCode::Enter))).display_text(),
+            "@owner please"
         );
 
         let mut shell = agent_first_app();
@@ -5589,8 +6318,8 @@ mod tests {
         let mut literal_shell = agent_first_app();
         literal_shell.composer.replace("!!explain shell syntax");
         assert_eq!(
-            literal_shell.on_key(key(KeyCode::Enter)),
-            Some(Action::Send("!explain shell syntax".to_owned()))
+            expect_whole_submission(literal_shell.on_key(key(KeyCode::Enter))).display_text(),
+            "!explain shell syntax"
         );
     }
 

@@ -60,6 +60,16 @@ only while this process is running and the session is idle. Real user input
 wins admission, child and ephemeral sessions never receive goal abilities, and
 no daemon or restart-time scheduler is created.
 
+During eligible provider-backed work, ordinary composer input has two explicit
+intents: `Enter` steers the serving turn at its next safe boundary, while
+`Tab` stores a process-local future whole turn. Pending text is not added to
+canonical transcript history until Agent Runtime emits its committed steering
+disposition. `Alt+Up` restores the newest Smith-owned queued turn for editing;
+`Esc` interrupts and resends only steers the runtime actually discarded. File
+identities remain exact and their bytes are read when the queued turn starts.
+Slash commands, shell shortcuts, child operations, approvals, and
+questionnaires are never queued implicitly.
+
 ## Running it
 
 Smith requires Rust 1.88 or newer.

@@ -28,10 +28,10 @@ smith-tui = { path = "crates/smith-tui", version = "0.0.1" }
 # revision. Local sibling-checkout development uses the git-ignored
 # `.cargo/config.toml` patch table; committed manifests never rely on a
 # developer-specific filesystem layout.
-agent-runtime = { git = "https://github.com/mai1015/agent-runtime.git", rev = "7b8166a09f1b6b847728c3f28273f5fdf3d57f2e", version = "=0.1.0" }
-agent-runtime-core = { git = "https://github.com/mai1015/agent-runtime.git", rev = "7b8166a09f1b6b847728c3f28273f5fdf3d57f2e", version = "=0.1.0" }
-agent-runtime-registry = { git = "https://github.com/mai1015/agent-runtime.git", rev = "7b8166a09f1b6b847728c3f28273f5fdf3d57f2e", version = "=0.1.0" }
-agent-runtime-testkit = { git = "https://github.com/mai1015/agent-runtime.git", rev = "7b8166a09f1b6b847728c3f28273f5fdf3d57f2e", version = "=0.1.0" }
+agent-runtime = { git = "https://github.com/mai1015/agent-runtime.git", rev = "b24cc1bec22ffca106591feee9eb4f5bb2a9a9d3", version = "=0.1.0" }
+agent-runtime-core = { git = "https://github.com/mai1015/agent-runtime.git", rev = "b24cc1bec22ffca106591feee9eb4f5bb2a9a9d3", version = "=0.1.0" }
+agent-runtime-registry = { git = "https://github.com/mai1015/agent-runtime.git", rev = "b24cc1bec22ffca106591feee9eb4f5bb2a9a9d3", version = "=0.1.0" }
+agent-runtime-testkit = { git = "https://github.com/mai1015/agent-runtime.git", rev = "b24cc1bec22ffca106591feee9eb4f5bb2a9a9d3", version = "=0.1.0" }
 
 anyhow = "1"
 # Clipboard image capture for composer attachments. `arboard` reads the

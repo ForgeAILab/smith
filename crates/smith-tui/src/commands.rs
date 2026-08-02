@@ -355,6 +355,9 @@ pub fn help() -> String {
         "\nComposer\n\
          ? or /help shows this local guide without contacting the model.\n\
          Tab cycles the configured profile order only while empty and idle.\n\
+         While work is serving, Enter steers an ordinary prompt and Tab queues it.\n\
+         Alt+Up restores the newest explicit queued turn for editing.\n\
+         Esc interrupts; uncommitted steers are resent only after cancellation discards them.\n\
          @ completes exact files and read-only agents; @@ sends a literal @.\n\
          ! runs a prepared local shell action; !! sends a literal !.\n\
          Up/Down browse accepted and Ctrl+C-stashed input without losing your draft.\n\

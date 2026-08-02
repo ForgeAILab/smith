@@ -46,7 +46,9 @@ status-card structure, and compact footer.
 │   Todo                                                                 │
 │   [x] Inspect retry policy                                             │
 │   [>] Fix the flaky test                                               │
-│   [ ] Run focused tests                                                │  anchored pane (0–6 rows)
+│   [ ] Run focused tests                                                │  anchored pane (0–9 rows)
+│   Pending for this turn                                                │
+│   › also cover the cancellation race                               │
 ├────────────────────────────────────────────────────────────────────────┤
 │                                                                        │
 │ › fix the flaky test in retry.rs▏                                      │  composer (1–8 rows + inset)
@@ -61,7 +63,7 @@ Regions, top to bottom:
 | Region | Height | Rule |
 | --- | --- | --- |
 | Transcript | flex | Minimum 3 rows; below that Smith renders a size warning only. |
-| Anchored pane | 0–6 | A compact picker while one is open; otherwise the latest public plan. Hidden when neither exists. |
+| Anchored pane | 0–9 | A compact picker while one is open; otherwise bounded process-local pending input followed by the latest public plan. Hidden when neither exists. |
 | Composer | 3–10 | One-row vertical inset around 1–8 rows of input. |
 | Footer | 1–2 | Identity uses one row; resource pickers and prompts may add controls on the second. Slash completion does not. |
 
@@ -211,14 +213,15 @@ and the keyboard contract below are sufficient, so it adds no control strip.
 
 | Key | Action |
 | --- | --- |
-| `Enter` | Send the composer |
+| `Enter` | Send while idle; steer an eligible serving provider turn while busy |
 | `Shift+Enter` / `Alt+Enter` | Newline in the composer |
-| `Esc` | Interrupt the running turn; if idle, clear the composer |
+| `Esc` | Interrupt the running turn; with uncommitted steers, resubmit only eventual discards after cancellation; if idle, clear the composer |
 | `Ctrl+C` | Add a non-blank composer draft to bounded local history and clear it; replace the identity footer with `press Ctrl+C again to exit` for the 1s double-press window; a second press exits from any state |
 | `Ctrl+P` | Open command completion using the shared command registry |
 | `Ctrl+R` | Open incremental reverse search over bounded process-local composer history |
-| `Tab` | Cycle `profile_order` only when empty and idle; otherwise complete or move the active overlay selection |
+| `Tab` | Queue a non-empty ordinary prompt while busy; cycle `profile_order` only when empty and idle; otherwise complete or move the active overlay selection |
 | `Shift+Tab` | Move the active completion/questionnaire selection backward |
+| `Alt+Up` | Restore the newest explicitly queued future turn for editing; never edit a runtime-accepted steer |
 | `PageUp` / `PageDown` / `Home` / `End` | Scroll transcript or jump to either edge |
 | `Ctrl+L` | Jump to newest and re-enable follow |
 | `?` (empty composer) | Show the same local guide as `/help`; never contact the provider |
@@ -243,6 +246,36 @@ Each result has a command name, one-line description, and argument hint.
 selection backward; `Enter` executes; and `Esc` dismisses the menu while
 preserving the draft. `Ctrl+P` opens the same registry and parser. `//` sends a
 literal leading slash to the provider.
+
+Outside an overlay, a non-empty ordinary prompt has two distinct busy-turn
+intents. `Enter` prepares it once and asks Agent Runtime to steer the tracked
+serving `TurnId`; it remains a labelled process-local preview until the runtime
+emits a matching committed or discarded disposition. Only the committed event
+appends the canonical user transcript row. `Tab` instead stores an editable,
+bounded future whole turn entirely in Smith. Slash commands, `!` shell
+shortcuts, child-agent forms, approvals, questionnaires, confirmations, and
+reconfiguration never enter this queue implicitly.
+
+Pending input is divided into accepted-but-uncommitted steers,
+runtime-rejected steer follow-ups, and explicit future turns. Each entry keeps
+its exact display text, already-expanded paste material, image parts, and
+canonical workspace-relative file identities without reading files or
+contacting a provider. A dispatched queued file observes dequeue-time workspace
+content. The anchored pane labels each category in text, shows at most three
+preview lines plus an overflow count, and shares its remaining bounded height
+with the public todo projection. A compact picker or modal still owns the area
+and its keys first. This state is process-local, counts as live work for exit
+and reconfiguration, and is not presented as journal durability.
+
+At a successful terminal boundary Smith submits at most one future turn:
+runtime-rejected steers first (a rejected batch merged in FIFO order), then the
+oldest explicit queue entry. That real-user admission occurs before automatic
+goal continuation is re-enabled. Cancelled, failed, limited, or needs-input
+boundaries restore uncommitted and queued material for review without provider
+spend, except the explicit interrupt-for-steer path described above. A stale
+expected turn may be retried once against the runtime-reported eligible turn;
+no-active while idle becomes one ordinary send, and other failures restore the
+same prepared material rather than fabricating a queued runtime turn.
 
 The composer keeps at most 100 exact non-blank history entries from accepted
 provider prompts, local commands/actions, confirmation flows, and drafts
@@ -318,12 +351,12 @@ model-requested `shell` call, then renders the committed result locally. It
 does not send a provider request. `!!` sends a normal prompt beginning with one
 literal `!`.
 
-During work, the latest public todo projection replaces itself in a bounded
-pane anchored immediately above the composer. It remains there through the
-turn terminal and clears when the next turn starts. Sensitive plans expose no
-item text and therefore open no pane. A compact picker temporarily replaces
-this pane without mutating the todo projection, which returns when the picker
-closes. The transcript's progress row stays
+During work, the latest public todo projection shares a bounded pane anchored
+immediately above the composer with pending input. It remains there through
+the turn terminal and clears when the next turn starts. Sensitive plans expose
+no item text. A compact picker temporarily replaces this pane without mutating
+either projection, which returns when the picker closes. The transcript's
+progress row stays
 quiet — `Working… · 12s` — while `/details` may explicitly add bounded
 redaction-safe tool lifecycle lines. No aggregate `work` row is committed at
 the terminal. Every terminal boundary still reconciles pending/in-progress

@@ -13,7 +13,8 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use agent_runtime::delegation::ChildDurability;
 use agent_runtime::runtime::{
-    CheckpointRecoveryPolicy, GoalController, GoalControllerConfig, SessionHandle, StartSession,
+    CheckpointRecoveryPolicy, GoalAdmissionGate, GoalController, GoalControllerConfig,
+    SessionHandle, StartSession,
 };
 use agent_runtime_core::checkpoint::{TurnCheckpoint, TurnState};
 use agent_runtime_core::content::{ContentPart, Message};
@@ -117,6 +118,7 @@ pub struct HostSession {
     restored_interaction: Option<RestoredInteraction>,
     recovered_ephemeral_work: Option<EphemeralWorkInterruption>,
     goal_controller: Mutex<Option<GoalController>>,
+    goal_admission_gate: Option<GoalAdmissionGate>,
 }
 
 /// Redaction-safe identity of an exact pending interaction restored from a
@@ -186,6 +188,15 @@ impl HostSession {
             .map(|component| self.session.goal(component))
             .transpose()
             .map(Option::flatten)
+    }
+
+    /// Enables or defers idle-only goal continuation admission. Interactive
+    /// pending input uses this narrow gate; it does not pause or interrupt an
+    /// already-serving goal turn.
+    pub fn set_goal_continuation_enabled(&self, enabled: bool) {
+        if let Some(gate) = &self.goal_admission_gate {
+            gate.set_enabled(enabled);
+        }
     }
 
     /// Applies one typed local goal control through Agent Runtime's serialized
@@ -720,15 +731,20 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         journal.record_ephemeral_interruption(interruption).await?;
     }
 
+    let goal_admission_gate = runtime
+        .goal_component()
+        .map(|_| GoalAdmissionGate::new(true));
     let goal_controller = runtime
         .goal_component()
-        .map(|component| {
+        .zip(goal_admission_gate.clone())
+        .map(|(component, admission_gate)| {
             session.start_goal_controller(
                 (**component).clone(),
                 GoalControllerConfig::new(
                     "Continue the current persistent goal from its canonical state. Stop only by completing it or recording a genuine blocker.",
                 )
-                .with_sensitivity(agent_runtime_core::content::InternalTurnSensitivity::Public),
+                .with_sensitivity(agent_runtime_core::content::InternalTurnSensitivity::Public)
+                .with_admission_gate(admission_gate),
             )
         })
         .transpose()?;
@@ -744,6 +760,7 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         restored_interaction,
         recovered_ephemeral_work,
         goal_controller: Mutex::new(goal_controller),
+        goal_admission_gate,
     })
 }
 

@@ -59,7 +59,8 @@
       "attempt": 11,
       "event": 137,
       "tool_call": 6,
-      "event_seq": 138
+      "event_seq": 138,
+      "steer": 0
     },
     "manifests": [
       {

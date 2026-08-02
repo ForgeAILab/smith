@@ -92,6 +92,7 @@ fn populated_snapshot(id: &SessionId) -> SessionSnapshot {
             attempt: 11,
             event: 137,
             tool_call: 6,
+            steer: 0,
             event_seq: 138,
         },
         manifests: vec![

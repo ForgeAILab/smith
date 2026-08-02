@@ -2785,6 +2785,7 @@ dependencies = [
  "smith-config",
  "smith-host",
  "smith-runtime",
+ "smith-tools",
  "smith-tui",
  "tempfile",
  "thiserror 2.0.19",

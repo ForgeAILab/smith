@@ -32,7 +32,10 @@ pub mod status;
 pub mod theme;
 pub mod transcript;
 
-pub use app::{Action, App, Overlay, PaletteCommand, ResourceTarget, RuntimeResources};
+pub use app::{
+    Action, App, Overlay, PaletteCommand, PendingInputPreview, PreparedSubmission, ResourceTarget,
+    RuntimeResources, SubmissionTarget,
+};
 pub use commands::{COMMANDS, CommandAction, CommandSpec, GoalAction};
 pub use composer::Composer;
 pub use diff::{Change, EditReview, diff_lines};

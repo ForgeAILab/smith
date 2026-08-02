@@ -27,7 +27,9 @@ use agent_runtime_core::event::{EstimationConfidence, EventEnvelope, RuntimeEven
 use agent_runtime_core::goal::{GoalCommand, GoalProjection};
 use agent_runtime_core::ids::{ChildId, SessionId};
 use agent_runtime_core::provider::{ModelId, ReasoningSupport};
+use agent_runtime_core::steer::SteerRejectionReason;
 use agent_runtime_core::usage::CounterKind;
+use agent_runtime_core::workspace::Workspace;
 use anyhow::{Context, Result};
 use cli::{Command, Prompt, RunArgs, Selection};
 use crossterm::event::{Event as TermEvent, EventStream, KeyCode, KeyEventKind, KeyModifiers};
@@ -55,7 +57,9 @@ use smith_runtime::journal::DefaultRedactor;
 use smith_runtime::model_catalog::{CatalogLoader, runtime_catalog_source};
 use smith_runtime::session::{SNAPSHOT_SCHEMA_VERSION, SessionListing};
 use smith_runtime::{ChildDurability, ChildState, ChildStatus, SpawnOutcome};
-use smith_tui::app::{Action, App, LEGACY_AGENT_PROFILE_PREFIX, PaletteCommand};
+use smith_tui::app::{
+    Action, App, LEGACY_AGENT_PROFILE_PREFIX, PaletteCommand, PreparedSubmission, SubmissionTarget,
+};
 use smith_tui::commands::{CommandAction, GoalAction};
 #[cfg(test)]
 use smith_tui::status::ContextPlanUpdate;
@@ -750,32 +754,16 @@ async fn run_tui(
                     }
                     TermEvent::Key(key) => {
                         match app.on_key(key) {
-                            Some(Action::Send(text)) => {
-                                if let Err(error) = session.send(UserInput::text(text)) {
-                                    app.transcript.push_error(format!(
-                                        "turn submission was rejected: {error}"
-                                    ));
-                                }
-                            }
-                            Some(Action::SendWithImages { text, images }) => {
-                                let mut parts = vec![ContentPart::text(text)];
-                                parts.extend(images.into_iter().map(|url| {
-                                    ContentPart::Image { url, detail: None }
-                                }));
-                                if let Err(error) = session.send(UserInput { parts }) {
-                                    app.transcript.push_error(format!(
-                                        "turn submission was rejected: {error}"
-                                    ));
-                                }
-                            }
-                            Some(Action::SendWithFiles { text, files }) => {
-                                start_prepared_send(
-                                    session.clone(),
-                                    text,
-                                    files,
-                                    host.runtime().policy().turn_time_limit_ms.unwrap_or(600_000),
-                                    local_tx.clone(),
-                                );
+                            Some(Action::Submit { submission, target }) => {
+                                host.set_goal_continuation_enabled(false);
+                                dispatch_prepared_with_materialization(
+                                    &mut app,
+                                    session,
+                                    project,
+                                    submission,
+                                    target,
+                                )
+                                .await;
                             }
                             Some(Action::RunShell { command }) => {
                                 start_local_shell(
@@ -948,6 +936,16 @@ async fn run_tui(
                         let completed_tool =
                             matches!(envelope.payload, RuntimeEvent::ToolCallCompleted { .. });
                         app.apply(&envelope);
+                        if let Some(submission) = app.take_ready_submission() {
+                            dispatch_prepared_with_materialization(
+                                &mut app,
+                                session,
+                                project,
+                                submission,
+                                SubmissionTarget::WholeTurn,
+                            )
+                            .await;
+                        }
                         if let Some(call) = tool_call {
                             if let Some(display) = host.tool_call_display(&call) {
                                 app.set_tool_display(call.as_str(), display);
@@ -978,10 +976,6 @@ async fn run_tui(
                                 app.show_local_result("shell", content);
                             }
                         }
-                        LocalOutcome::PreparedSendFailed { text, error } => {
-                            app.composer.replace(text);
-                            app.transcript.push_error(error);
-                        }
                     }
                     dirty = true;
                 }
@@ -1007,6 +1001,7 @@ async fn run_tui(
         }
 
         interactions.drain_answers(&mut app);
+        host.set_goal_continuation_enabled(!app.should_defer_goal_continuation());
         if app.should_quit {
             break InteractiveExit::Quit;
         }
@@ -2048,10 +2043,6 @@ enum LocalOutcome {
         content: String,
         is_error: bool,
     },
-    PreparedSendFailed {
-        text: String,
-        error: String,
-    },
 }
 
 fn start_local_shell(
@@ -2167,68 +2158,152 @@ fn render_byte_size(bytes: usize) -> String {
     }
 }
 
-fn start_prepared_send(
-    session: smith_runtime::SessionHandle,
-    text: String,
-    files: Vec<String>,
-    timeout_ms: u64,
-    outcomes: tokio::sync::mpsc::UnboundedSender<LocalOutcome>,
+async fn dispatch_prepared_with_materialization(
+    app: &mut App,
+    session: &smith_runtime::SessionHandle,
+    project: &std::path::Path,
+    submission: PreparedSubmission,
+    target: SubmissionTarget,
 ) {
-    tokio::spawn(async move {
-        match prepare_attached_input(&session, text.clone(), files, timeout_ms).await {
-            Ok(input) => {
-                if let Err(error) = session.send(input) {
-                    let _ = outcomes.send(LocalOutcome::PreparedSendFailed {
-                        text,
-                        error: format!(
-                            "turn submission was rejected after attachment reads: {error}"
-                        ),
-                    });
-                }
-            }
-            Err(error) => {
-                let _ = outcomes.send(LocalOutcome::PreparedSendFailed { text, error });
-            }
-        }
-    });
+    match materialize_prepared_submission(project, &submission).await {
+        Ok(input) => dispatch_prepared_submission(app, session, submission, target, input),
+        Err(error) => app.restore_submission(submission, error),
+    }
 }
 
-async fn prepare_attached_input(
-    session: &smith_runtime::SessionHandle,
-    text: String,
-    files: Vec<String>,
-    timeout_ms: u64,
+async fn materialize_prepared_submission(
+    project: &std::path::Path,
+    submission: &PreparedSubmission,
 ) -> Result<UserInput, String> {
     const MAX_ATTACHMENT_CHARS: usize = 512 * 1024;
-    let mut parts = vec![ContentPart::text(text)];
+    const MAX_ATTACHMENT_LINES: usize = 2_000;
+
+    let workspace = ProjectWorkspace::new(project)
+        .map_err(|error| format!("attachments could not resolve the project: {error}"))?;
+    let mut input = submission.input_without_files();
     let mut attached_chars = 0usize;
-    for path in files {
-        let block = session
-            .run_local_tool(
-                "read",
-                serde_json::json!({ "path": path, "offset": 1, "limit": 2_000 }),
-                timeout_ms,
-            )
-            .await
+    for path in submission.files() {
+        let canonical = workspace
+            .resolve(path)
             .map_err(|error| format!("attachment `@{path}` was not sent: {error}"))?;
-        if block.is_error {
+        let contents = smith_tools::support::read_bounded(
+            std::path::Path::new(&canonical),
+            smith_tools::support::MAX_READ_BYTES,
+        )
+        .await
+        .map_err(|error| format!("attachment `@{path}` was not sent: {error}"))?;
+        let all = contents.lines().collect::<Vec<_>>();
+        if all.is_empty() {
             return Err(format!(
-                "attachment `@{path}` was not sent: {}",
-                tool_result_text(&block)
+                "attachment `@{path}` was not sent: the file is empty"
             ));
         }
-        let content = tool_result_text(&block);
-        attached_chars = attached_chars.saturating_add(content.chars().count());
+        let end = all.len().min(MAX_ATTACHMENT_LINES);
+        let width = end.to_string().len();
+        let mut rendered = String::new();
+        for (index, line) in all[..end].iter().enumerate() {
+            let number = index + 1;
+            rendered.push_str(&format!("{number:>width$}  {line}\n"));
+        }
+        attached_chars = attached_chars.saturating_add(rendered.chars().count());
         if attached_chars > MAX_ATTACHMENT_CHARS {
             return Err(format!(
                 "prepared attachments exceed the {MAX_ATTACHMENT_CHARS}-character bound"
             ));
         }
-        parts.push(ContentPart::text(format!(
-            "<smith_file_attachment path=\"{path}\" source=\"prepared_read\">\n{content}\n</smith_file_attachment>"
+        input.parts.push(ContentPart::text(format!(
+            "<smith_file_attachment path=\"{path}\" source=\"prepared_read\">\n{rendered}\n</smith_file_attachment>"
         )));
     }
-    Ok(UserInput { parts })
+    Ok(input)
+}
+
+fn dispatch_prepared_submission(
+    app: &mut App,
+    session: &smith_runtime::SessionHandle,
+    submission: PreparedSubmission,
+    target: SubmissionTarget,
+    input: UserInput,
+) {
+    match target {
+        SubmissionTarget::WholeTurn => {
+            dispatch_whole_turn(app, session, submission, input);
+        }
+        SubmissionTarget::Steer { expected_turn } => {
+            dispatch_steer(app, session, submission, expected_turn, input);
+        }
+    }
+}
+
+fn dispatch_whole_turn(
+    app: &mut App,
+    session: &smith_runtime::SessionHandle,
+    submission: PreparedSubmission,
+    input: UserInput,
+) {
+    match session.send(input) {
+        Ok(handle) => app.whole_turn_dispatched(handle.id().clone(), &submission),
+        Err(error) => {
+            app.restore_submission(submission, format!("turn submission was rejected: {error}"))
+        }
+    }
+}
+
+fn dispatch_steer(
+    app: &mut App,
+    session: &smith_runtime::SessionHandle,
+    submission: PreparedSubmission,
+    mut expected_turn: Option<agent_runtime_core::ids::TurnId>,
+    mut input: UserInput,
+) {
+    let mut retried_stale_turn = false;
+    loop {
+        match session.steer_current_turn(expected_turn.as_ref(), input) {
+            Ok(receipt) => {
+                app.accept_steer(receipt, submission);
+                return;
+            }
+            Err(rejection) => {
+                let message = rejection.to_string();
+                let reason = rejection.reason;
+                input = rejection.input;
+                match reason {
+                    SteerRejectionReason::TurnMismatch {
+                        active_turn,
+                        steerable: true,
+                        ..
+                    } if !retried_stale_turn => {
+                        retried_stale_turn = true;
+                        expected_turn = Some(active_turn);
+                    }
+                    SteerRejectionReason::NoActiveTurn => {
+                        dispatch_whole_turn(app, session, submission, input);
+                        return;
+                    }
+                    SteerRejectionReason::TurnMismatch { active_turn, .. }
+                    | SteerRejectionReason::NonSteerable { active_turn } => {
+                        app.reject_steer_for_followup(Some(active_turn), submission);
+                        return;
+                    }
+                    SteerRejectionReason::TurnClosing { turn } => {
+                        app.reject_steer_for_followup(Some(turn), submission);
+                        return;
+                    }
+                    SteerRejectionReason::EmptyInput
+                    | SteerRejectionReason::InputTooLarge { .. }
+                    | SteerRejectionReason::PendingLimit { .. }
+                    | SteerRejectionReason::TurnByteLimit { .. }
+                    | SteerRejectionReason::Shutdown => {
+                        app.restore_submission(
+                            submission,
+                            format!("active-turn steering was rejected: {message}"),
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn tool_result_text(block: &ToolResultBlock) -> String {
@@ -3289,6 +3364,70 @@ max_output_tokens = 4096
 
     #[tokio::test]
     async fn prepared_file_attachment_reads_exactly_without_provider_spend() {
+        let project = tempfile::tempdir().expect("project");
+        std::fs::create_dir_all(project.path().join("src")).expect("source directory");
+        std::fs::write(
+            project.path().join("src/lib.rs"),
+            "pub fn answer() -> u8 { 1 }\n",
+        )
+        .expect("source file");
+        let mut app = App::new("example-model", project.path().display().to_string());
+        app.set_resources(RuntimeResources {
+            files: vec![ResourceEntry::new(
+                "file:src/lib.rs",
+                "src/lib.rs",
+                "workspace file",
+            )],
+            ..RuntimeResources::default()
+        });
+        app.composer.replace("explain @src/lib.rs");
+        let Some(Action::Submit { submission, .. }) =
+            app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        else {
+            panic!("expected a prepared attachment submission");
+        };
+
+        // The identity is frozen at keypress; bytes are read at dispatch.
+        std::fs::write(
+            project.path().join("src/lib.rs"),
+            "pub fn answer() -> u8 { 42 }\n",
+        )
+        .expect("updated source file");
+        let input = materialize_prepared_submission(project.path(), &submission)
+            .await
+            .expect("prepared attachment");
+        assert_eq!(input.parts.len(), 2);
+        let wire = serde_json::to_string(&input).expect("input wire");
+        assert!(wire.contains("source=\\\"prepared_read\\\""), "{wire}");
+        assert!(wire.contains("42"), "{wire}");
+        assert!(!wire.contains("{ 1 }"), "{wire}");
+
+        let outside = tempfile::NamedTempFile::new().expect("outside file");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(outside.path(), project.path().join("src/outside-link"))
+            .expect("outside symlink");
+        app.set_resources(RuntimeResources {
+            files: vec![ResourceEntry::new(
+                "file:src/outside-link",
+                "src/outside-link",
+                "workspace entry",
+            )],
+            ..RuntimeResources::default()
+        });
+        app.composer.replace("do not send @src/outside-link");
+        let Some(Action::Submit { submission, .. }) =
+            app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        else {
+            panic!("expected a prepared symlink submission");
+        };
+        let error = materialize_prepared_submission(project.path(), &submission)
+            .await
+            .expect_err("workspace escape must fail locally");
+        assert!(error.contains("was not sent"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn pending_user_admission_gate_beats_automatic_goal_continuation() {
         let home = tempfile::tempdir().expect("home");
         let project = tempfile::tempdir().expect("project");
         std::fs::create_dir_all(project.path().join(".smith")).expect("config directory");
@@ -3297,19 +3436,20 @@ max_output_tokens = 4096
             LOCAL_COMMAND_CONFIG,
         )
         .expect("config");
-        std::fs::create_dir_all(project.path().join("src")).expect("source directory");
-        std::fs::write(
-            project.path().join("src/lib.rs"),
-            "pub fn answer() -> u8 { 42 }\n",
-        )
-        .expect("source file");
         let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
             .expect("resolution")
             .config;
         let provider = Arc::new(agent_runtime::provider::fake::FakeProvider::new(
             "example-model",
             agent_runtime_core::provider::Capabilities::basic_streaming(),
-            Vec::new(),
+            vec![agent_runtime::provider::fake::ScriptedStream::new(vec![
+                agent_runtime_core::provider::ProviderStreamEvent::TextDelta {
+                    text: "user work completed".to_owned(),
+                },
+                agent_runtime_core::provider::ProviderStreamEvent::Finish {
+                    reason: agent_runtime_core::provider::FinishReason::Stop,
+                },
+            ])],
         ));
         let runtime = RuntimeRequest {
             provider: Some(provider.clone()),
@@ -3325,34 +3465,31 @@ max_output_tokens = 4096
         )
         .await
         .expect("host");
-        let history_before = host.session().history();
 
-        let input = prepare_attached_input(
-            host.session(),
-            "explain this".to_owned(),
-            vec!["src/lib.rs".to_owned()],
-            5_000,
-        )
+        host.set_goal_continuation_enabled(false);
+        host.control_goal(GoalCommand::Create {
+            objective: "finish the goal".to_owned(),
+            token_budget: None,
+        })
         .await
-        .expect("prepared attachment");
-        assert_eq!(input.parts.len(), 2);
-        let wire = serde_json::to_string(&input).expect("input wire");
-        assert!(wire.contains("source=\\\"prepared_read\\\""), "{wire}");
-        assert!(wire.contains("pub fn answer()"), "{wire}");
-        assert_eq!(host.session().history(), history_before);
-        assert!(provider.requests().is_empty());
+        .expect("goal creation");
+        tokio::task::yield_now().await;
+        assert!(
+            provider.requests().is_empty(),
+            "a disabled goal gate admitted automatic work"
+        );
 
-        let error = prepare_attached_input(
-            host.session(),
-            "do not send".to_owned(),
-            vec!["../outside.txt".to_owned()],
-            5_000,
-        )
-        .await
-        .expect_err("workspace escape must fail locally");
-        assert!(error.contains("was not sent"), "{error}");
-        assert!(provider.requests().is_empty());
+        let user = host
+            .session()
+            .send(UserInput::text("real user wins the boundary"))
+            .expect("real-user admission");
+        host.set_goal_continuation_enabled(true);
+        user.completed().await;
+        host.set_goal_continuation_enabled(false);
 
+        let requests = provider.requests();
+        let first = serde_json::to_string(&requests[0].messages).expect("provider request");
+        assert!(first.contains("real user wins the boundary"), "{first}");
         host.shutdown().await.expect("shutdown");
     }
 

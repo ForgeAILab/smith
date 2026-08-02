@@ -31,6 +31,7 @@ serde_json = { workspace = true }
 smith-config = { workspace = true }
 smith-host = { workspace = true }
 smith-runtime = { workspace = true }
+smith-tools = { workspace = true }
 smith-tui = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

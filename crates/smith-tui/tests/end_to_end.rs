@@ -17,7 +17,7 @@ use agent_runtime_testkit::scenarios::fake_model_profile;
 use futures_util::StreamExt;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use smith_tui::app::{Action, App};
+use smith_tui::app::{Action, App, SubmissionTarget};
 use smith_tui::theme::Theme;
 
 /// Drains every event the session has emitted so far into the client.
@@ -83,13 +83,18 @@ async fn a_typed_message_reaches_the_model_and_its_reply_reaches_the_screen() {
         app.on_key(key(ch));
     }
     let action = app.on_key(enter());
-    let Some(Action::Send(text)) = action else {
-        panic!("expected a send action, got {action:?}");
+    let Some(Action::Submit {
+        submission,
+        target: SubmissionTarget::WholeTurn,
+    }) = action
+    else {
+        panic!("expected a prepared whole-turn action, got {action:?}");
     };
-    session
-        .run(UserInput::text(text))
-        .await
-        .expect("the turn runs");
+    let handle = session
+        .send(submission.input_without_files())
+        .expect("the turn is accepted");
+    app.whole_turn_dispatched(handle.id().clone(), &submission);
+    handle.completed().await;
 
     // Drain everything the turn produced into the client.
     drain(&mut events, &mut app).await;

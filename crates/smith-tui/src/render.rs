@@ -18,7 +18,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as WidgetBlock, Borders, Clear, Paragraph, Wrap};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::{App, Overlay};
+use crate::app::{App, MAX_PENDING_PREVIEW_ENTRIES, Overlay};
 use crate::commands;
 use crate::diff::{Change, EditReview};
 use crate::picker::{compact_resource_picker_rows, draw_compact_resource_picker};
@@ -92,9 +92,10 @@ fn draw_surface(
 
     let composer_rows = composer_rows(app, area.width).saturating_add(2);
     let anchored = anchored_rows(app, area, composer_rows);
-    let [transcript, compact, todos, composer, hint] = Layout::vertical([
+    let [transcript, compact, pending, todos, composer, hint] = Layout::vertical([
         Constraint::Min(3),
         Constraint::Length(anchored.compact),
+        Constraint::Length(anchored.pending),
         Constraint::Length(anchored.todos),
         Constraint::Length(composer_rows),
         Constraint::Length(hint_rows(app)),
@@ -114,6 +115,9 @@ fn draw_surface(
             }
             _ => unreachable!("compact rows require a compact interaction"),
         }
+    }
+    if anchored.pending > 0 {
+        draw_pending_input(frame, pending, app, theme);
     }
     if anchored.todos > 0 {
         draw_todos(frame, todos, app, theme);
@@ -190,9 +194,10 @@ fn draw_surface(
 fn surface_rects(area: Rect, app: &App) -> (Rect, Rect) {
     let composer_rows = composer_rows(app, area.width).saturating_add(2);
     let anchored = anchored_rows(app, area, composer_rows);
-    let [transcript, _, _, composer, _] = Layout::vertical([
+    let [transcript, _, _, _, composer, _] = Layout::vertical([
         Constraint::Min(3),
         Constraint::Length(anchored.compact),
+        Constraint::Length(anchored.pending),
         Constraint::Length(anchored.todos),
         Constraint::Length(composer_rows),
         Constraint::Length(hint_rows(app)),
@@ -204,6 +209,7 @@ fn surface_rects(area: Rect, app: &App) -> (Rect, Rect) {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct AnchoredRows {
     compact: u16,
+    pending: u16,
     todos: u16,
 }
 
@@ -219,16 +225,39 @@ fn anchored_rows(app: &App, area: Rect, composer_rows: u16) -> AnchoredRows {
         .saturating_sub(composer_rows)
         .saturating_sub(hint_rows(app))
         .saturating_sub(3);
+    let pending_desired = desired_pending_input_rows(app);
     let todo_desired = desired_todo_rows(app);
-    let (compact, todos) = if compact_desired > 0 {
+    let (compact, pending, todos) = if compact_desired > 0 {
         // Compact interactions temporarily own the anchored pane. The todo
         // projection remains in App state and returns unchanged when the
         // interaction closes.
-        (compact_desired.min(available), 0)
+        (compact_desired.min(available), 0, 0)
     } else {
-        (0, todo_desired.min(available))
+        let anchored_available = available.min(9);
+        if pending_desired > 0 && todo_desired > 0 {
+            let pending = pending_desired.min(5).min(anchored_available);
+            let todos = todo_desired.min(anchored_available.saturating_sub(pending));
+            (0, pending, todos)
+        } else if pending_desired > 0 {
+            (0, pending_desired.min(anchored_available), 0)
+        } else {
+            (0, 0, todo_desired.min(anchored_available))
+        }
     };
-    AnchoredRows { compact, todos }
+    AnchoredRows {
+        compact,
+        pending,
+        todos,
+    }
+}
+
+fn desired_pending_input_rows(app: &App) -> u16 {
+    let rows = app
+        .pending_input_previews()
+        .iter()
+        .map(|section| section.entries.len() + usize::from(section.overflow > 0))
+        .sum::<usize>();
+    u16::try_from(rows.min(9)).unwrap_or(9)
 }
 
 fn desired_todo_rows(app: &App) -> u16 {
@@ -1126,6 +1155,51 @@ fn paste_placeholder_spans(line: &str, app: &App, theme: Theme) -> Vec<Span<'sta
     spans
 }
 
+fn draw_pending_input(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
+    let sections = app.pending_input_previews();
+    let mut lines = Vec::new();
+    for section in &sections {
+        let Some(first) = section.entries.first() else {
+            continue;
+        };
+        let preview = first.split_whitespace().collect::<Vec<_>>().join(" ");
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {}", section.label), theme.style(Tone::Heading)),
+            Span::styled(" · process-local · ", theme.style(Tone::Dim)),
+            Span::styled(preview, theme.style(Tone::Default)),
+        ]));
+    }
+    for index in 1..MAX_PENDING_PREVIEW_ENTRIES {
+        for section in &sections {
+            if let Some(entry) = section.entries.get(index) {
+                lines.push(Line::from(vec![
+                    Span::styled("  › ", theme.style(Tone::Dim)),
+                    Span::styled(
+                        entry.split_whitespace().collect::<Vec<_>>().join(" "),
+                        theme.style(Tone::Default),
+                    ),
+                ]));
+            }
+        }
+    }
+    for section in &sections {
+        if section.overflow > 0 {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "    +{} more {}",
+                    section.overflow,
+                    section.label.to_lowercase()
+                ),
+                theme.style(Tone::Dim),
+            )));
+        }
+    }
+    lines.truncate(usize::from(area.height));
+    // Pending rows are fixed-height composer chrome. They clip horizontally
+    // and never wrap into the composer or claim canonical transcript space.
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
 fn draw_todos(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
     let Some(items) = app.plan.as_ref().and_then(|plan| plan.items.as_ref()) else {
         return;
@@ -1329,6 +1403,21 @@ fn draw_identity_footer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: The
             ),
         ),
     );
+    if app.is_busy() {
+        let mut controls = if app.composer.is_blank() {
+            "Enter steer · Tab queue when typed · Esc interrupt".to_owned()
+        } else {
+            "Enter steer · Tab queue · Esc interrupt".to_owned()
+        };
+        if app.has_editable_queued_turn() {
+            controls.push_str(" · Alt+↑ edit queue");
+        }
+        push_segment(
+            &mut identity,
+            theme,
+            Span::styled(controls, theme.style(Tone::Dim)),
+        );
+    }
 
     frame.render_widget(
         Paragraph::new(Line::from(truncate(identity, area.width))),
@@ -2101,9 +2190,12 @@ mod tests {
     use agent_runtime_core::goal::{
         GoalProjection, GoalStatus, GoalTokenUsage, GoalUsageProvenance,
     };
-    use agent_runtime_core::ids::{AttemptId, EventId, GoalId, RequestId, SessionId, ToolCallId};
+    use agent_runtime_core::ids::{
+        AttemptId, EventId, GoalId, RequestId, SessionId, SteerId, ToolCallId, TurnId,
+    };
     use agent_runtime_core::manifest::SegmentKind;
     use agent_runtime_core::security::{PermissionSet, SecurityResource};
+    use agent_runtime_core::steer::SteerReceipt;
     use agent_runtime_core::tool::{PreparedToolCall, ToolCallDisplay, ToolEffects};
     use agent_runtime_core::usage::{
         CounterKind, Provenance, UsageDelta, UsageRecord, UsageSource,
@@ -2220,6 +2312,64 @@ mod tests {
             },
         }));
         app
+    }
+
+    #[test]
+    fn pending_input_is_bounded_labelled_and_shares_the_anchored_budget_with_todos() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        app.composer.replace("correct the active turn");
+        let submission = match app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)) {
+            Some(crate::app::Action::Submit { submission, .. }) => submission,
+            other => panic!("expected a steer submission, got {other:?}"),
+        };
+        app.accept_steer(
+            SteerReceipt {
+                id: SteerId::new("steer-1"),
+                turn: TurnId::new("turn-1"),
+                ordinal: 1,
+            },
+            submission,
+        );
+        for index in 1..=5 {
+            app.composer.replace(format!("queued turn {index}"));
+            app.on_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        }
+        app.apply(&event(RuntimeEvent::PlanUpdated {
+            revision: 1,
+            sensitivity: PlanSensitivity::Public,
+            counts: std::collections::BTreeMap::new(),
+            items: Some(vec![PlanItemProjection {
+                id: "todo-1".to_owned(),
+                text: "Run the focused tests".to_owned(),
+                status: PlanItemStatus::InProgress,
+                reason: None,
+            }]),
+        }));
+
+        let screen = render(&app, 100, 20, Theme::new().without_color());
+        insta_like(
+            &screen,
+            &[
+                "Pending for this turn",
+                "process-local",
+                "correct the active turn",
+                "Queued turns",
+                "+2 more queued turns",
+                "Todo",
+                "Run the focused tests",
+            ],
+        );
+        assert!(
+            screen.lines().all(|line| line.width() <= 100),
+            "pending input overflowed:\n{screen}"
+        );
+
+        app.composer.clear();
+        app.on_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        let picker = render(&app, 100, 20, Theme::new().without_color());
+        assert!(!picker.contains("Pending for this turn"), "{picker}");
+        assert!(!picker.contains("Todo"), "{picker}");
     }
 
     #[test]
