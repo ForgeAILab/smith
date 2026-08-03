@@ -451,9 +451,11 @@ impl Status {
     /// Input categories are disjoint in the runtime's accounting, so context is
     /// their sum; output and reasoning tokens are not context.
     pub fn record_usage(&mut self, delta: &UsageDelta) {
-        let input = delta
-            .get(CounterKind::InputUncached)
-            .saturating_add(delta.get(CounterKind::InputCached));
+        // Every input category, cache writes included: a provider bills them
+        // differently but each one occupied the window. Anthropic reports the
+        // cacheable prefix as a cache write on the turn that establishes it,
+        // so omitting that counter understates the session's real context.
+        let input = delta.input_tokens();
         // `UsageDelta` cannot distinguish an omitted input counter from an
         // explicitly reported zero. An output-only record therefore provides
         // no evidence about context consumption; keep `?` instead of turning

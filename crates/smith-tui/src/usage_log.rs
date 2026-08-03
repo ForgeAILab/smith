@@ -182,6 +182,46 @@ mod tests {
     }
 
     #[test]
+    fn a_short_session_renders_the_expected_line() {
+        let mut totals = std::collections::BTreeMap::new();
+        totals.insert(CounterKind::InputUncached, 860);
+        totals.insert(CounterKind::Output, 13);
+        let usage = SessionUsage {
+            turns: 1,
+            reported: true,
+            totals,
+            compactions: 0,
+            reclaimed_tokens: 0,
+        };
+        assert_eq!(
+            usage.render().expect("a summary"),
+            "1 turn(s) · input 860 · output 13"
+        );
+    }
+
+    #[test]
+    fn cache_counters_are_named_separately() {
+        // Cache reads and writes are the numbers worth watching: they are the
+        // direct evidence that the stable-prefix ordering is doing its job.
+        let mut totals = std::collections::BTreeMap::new();
+        totals.insert(CounterKind::InputUncached, 1_200);
+        totals.insert(CounterKind::InputCached, 90_000);
+        totals.insert(CounterKind::CacheWrite, 2_000);
+        totals.insert(CounterKind::Output, 400);
+        let usage = SessionUsage {
+            turns: 3,
+            reported: true,
+            totals,
+            compactions: 0,
+            reclaimed_tokens: 0,
+        };
+        assert_eq!(
+            usage.render().expect("a summary"),
+            "3 turn(s) · input 1.2k · cached 90k · cache-write 2k · output 400"
+        );
+    }
+
+    #[test]
     fn an_empty_session_renders_nothing() {
         assert!(SessionUsage::default().render().is_none());
     }

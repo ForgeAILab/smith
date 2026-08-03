@@ -35,7 +35,7 @@ use agent_runtime::harness::{
 use agent_runtime::registry::RegistryRevision;
 use agent_runtime_core::error::RuntimeError;
 use agent_runtime_core::store::{SessionStateSensitivity, VersionedSessionState};
-use agent_runtime_core::usage::{CounterKind, UsageRecord, UsageSource};
+use agent_runtime_core::usage::{UsageRecord, UsageSource};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -101,10 +101,7 @@ impl BudgetNoticeComponent {
         let latest = usage
             .iter()
             .filter(|record| record.source == UsageSource::ProviderAttempt)
-            .map(|record| {
-                record.delta.get(CounterKind::InputUncached)
-                    + record.delta.get(CounterKind::InputCached)
-            })
+            .map(|record| record.delta.input_tokens())
             .rfind(|tokens| *tokens > 0)?;
         Some(self.input_budget_tokens.saturating_sub(latest))
     }
@@ -194,7 +191,7 @@ impl ContextContributor for BudgetNoticeComponent {
 
 #[cfg(test)]
 mod tests {
-    use agent_runtime_core::usage::{Provenance, UsageDelta};
+    use agent_runtime_core::usage::{CounterKind, Provenance, UsageDelta};
 
     use super::*;
 
@@ -245,6 +242,22 @@ mod tests {
             attempt(UsageSource::SemanticSummary, 99_999),
         ];
         assert_eq!(component.remaining(&usage), Some(5_000));
+    }
+
+    #[test]
+    fn cache_written_tokens_count_against_the_budget() {
+        let component = BudgetNoticeComponent::new(100_000, 12_000).expect("valid");
+        let usage = [UsageRecord {
+            source: UsageSource::ProviderAttempt,
+            provenance: Provenance::default(),
+            delta: UsageDelta::new()
+                .with(CounterKind::InputUncached, 1_000)
+                .with(CounterKind::InputCached, 40_000)
+                .with(CounterKind::CacheWrite, 55_000),
+        }];
+        // Ignoring the cache write would report 59k remaining and stay quiet
+        // through a turn that had actually filled the window.
+        assert_eq!(component.remaining(&usage), Some(4_000));
     }
 
     #[tokio::test]

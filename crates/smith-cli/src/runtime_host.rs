@@ -194,11 +194,19 @@ fn report_session_usage(
     session: &str,
     usage: &smith_tui::status::SessionUsage,
 ) {
-    let Some(line) = usage.render() else {
-        return;
-    };
-    println!("{line}");
+    if let Some(line) = usage.render() {
+        println!("{line}");
+    }
+    // Printed even for a session that spent nothing: an empty session is
+    // exactly the one a user is most likely to want to pick back up, and the
+    // id is not recoverable from anywhere else on screen.
+    if host.paths().is_some() {
+        println!("resume with smith --resume {session}");
+    }
 
+    if usage.is_empty() {
+        return;
+    }
     let policy = host.runtime().policy();
     let record = smith_tui::usage_log::SessionUsageRecord::new(
         session,
