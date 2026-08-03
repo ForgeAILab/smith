@@ -1,0 +1,13 @@
+{
+  "change_id": "add-google-gemini-provider",
+  "change_ref": "add-google-gemini-provider-2026-08-02",
+  "created_at": "2026-08-02T21:10:27Z",
+  "updated_at": "2026-08-02T21:42:11Z",
+  "completed_at": null,
+  "status": "approved",
+  "depends_on": [
+    "add-provider-model-catalogs-2026-07-28",
+    "add-provider-connect-and-chatgpt-auth-2026-08-02",
+    "agent-runtime:add-native-gemini-interactions-provider-2026-08-02"
+  ]
+}
