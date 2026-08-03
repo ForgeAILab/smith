@@ -6,7 +6,7 @@
 //! boundary. Smith owns the token bundle and direct HTTP calls; no Codex
 //! executable or auth cache participates.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::future::pending;
 use std::sync::Arc;
@@ -37,6 +37,7 @@ use futures_util::StreamExt;
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use smith_config::credential::{CredentialEnroller, CredentialRef};
 use url::form_urlencoded;
 use zeroize::Zeroize;
@@ -899,13 +900,13 @@ impl<T: HttpTransport> ChatGptProvider<T> {
             .filter(|text| !text.is_empty())
             .collect::<Vec<_>>()
             .join("\n\n");
+        let tool_names = response_tool_names(&request.tools)?;
         let mut input = Vec::new();
         for message in &request.messages {
             if message.role != Role::System {
-                input.extend(response_items(message));
+                input.extend(response_items(message, &tool_names)?);
             }
         }
-        let tool_names = response_tool_names(&request.tools);
         let tools = request
             .tools
             .iter()
@@ -990,8 +991,11 @@ impl<T: HttpTransport> ChatGptProvider<T> {
     }
 }
 
-fn response_items(message: &Message) -> Vec<Value> {
-    match message.role {
+fn response_items(
+    message: &Message,
+    tool_names: &BTreeMap<String, String>,
+) -> Result<Vec<Value>, ProviderError> {
+    Ok(match message.role {
         Role::System => Vec::new(),
         Role::User => vec![json!({
             "type": "message",
@@ -1031,12 +1035,21 @@ fn response_items(message: &Message) -> Vec<Value> {
                         "summary": [],
                         "encrypted_content": signature,
                     })),
-                    ContentPart::ToolCall(call) => items.push(json!({
-                        "type": "function_call",
-                        "call_id": call.id.as_str(),
-                        "name": call.name,
-                        "arguments": call.arguments.to_string(),
-                    })),
+                    ContentPart::ToolCall(call) => {
+                        let wire = response_wire_tool_name(&call.name);
+                        if tool_names
+                            .get(&wire)
+                            .is_some_and(|canonical| canonical != &call.name)
+                        {
+                            return Err(tool_name_collision());
+                        }
+                        items.push(json!({
+                            "type": "function_call",
+                            "call_id": call.id.as_str(),
+                            "name": wire,
+                            "arguments": call.arguments.to_string(),
+                        }));
+                    }
                     _ => {}
                 }
             }
@@ -1054,38 +1067,43 @@ fn response_items(message: &Message) -> Vec<Value> {
                 _ => None,
             })
             .collect(),
-    }
+    })
 }
 
 fn response_tool_names(
     tools: &[agent_runtime_core::provider::ToolSchema],
-) -> BTreeMap<String, String> {
-    let reserved = tools
-        .iter()
-        .filter(|tool| valid_response_tool_name(&tool.name))
-        .map(|tool| tool.name.clone())
-        .collect::<BTreeSet<_>>();
+) -> Result<BTreeMap<String, String>, ProviderError> {
     let mut names = BTreeMap::new();
-    for (index, tool) in tools.iter().enumerate() {
-        let wire = if valid_response_tool_name(&tool.name) {
-            tool.name.clone()
-        } else {
-            let mut suffix = index;
-            loop {
-                let candidate = format!("smith_tool_{suffix}");
-                if !reserved.contains(&candidate) && !names.contains_key(&candidate) {
-                    break candidate;
-                }
-                suffix = suffix.saturating_add(tools.len().max(1));
-            }
-        };
-        names.insert(wire, tool.name.clone());
+    for tool in tools {
+        let wire = response_wire_tool_name(&tool.name);
+        if names
+            .insert(wire, tool.name.clone())
+            .is_some_and(|canonical| canonical != tool.name)
+        {
+            return Err(tool_name_collision());
+        }
     }
-    names
+    Ok(names)
+}
+
+fn response_wire_tool_name(name: &str) -> String {
+    if valid_response_tool_name(name) {
+        return name.to_owned();
+    }
+    let digest = format!("{:x}", Sha256::digest(name.as_bytes()));
+    format!("smith_tool_{}", &digest[..53])
+}
+
+fn tool_name_collision() -> ProviderError {
+    ProviderError::new(
+        ProviderErrorKind::BadRequest,
+        "ChatGPT tool names collide after wire normalization",
+    )
 }
 
 fn valid_response_tool_name(name: &str) -> bool {
     !name.is_empty()
+        && name.len() <= 64
         && name
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || "_-".contains(character))
@@ -1559,7 +1577,8 @@ impl<T: HttpTransport> Provider for ChatGptProvider<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_runtime_core::ids::{AttemptId, RequestId};
+    use agent_runtime_core::content::ToolCall;
+    use agent_runtime_core::ids::{AttemptId, RequestId, ToolCallId};
     use agent_runtime_core::provider::ToolSchema;
     use agent_runtime_core::provider_credential::StaticProviderCredentialSource;
     use agent_runtime_testkit::{
@@ -1777,13 +1796,14 @@ mod tests {
                 input_schema: json!({"type": "object"}),
             },
         ];
-        let names = response_tool_names(&tools);
+        let names = response_tool_names(&tools).expect("distinct tool names");
+        let alias = response_wire_tool_name("tool:registry.search");
         assert_eq!(
             names.get("smith_tool_1").map(String::as_str),
             Some("smith_tool_1")
         );
         assert_eq!(
-            names.get("smith_tool_3").map(String::as_str),
+            names.get(&alias).map(String::as_str),
             Some("tool:registry.search")
         );
         assert!(names.keys().all(|name| valid_response_tool_name(name)));
@@ -1792,8 +1812,48 @@ mod tests {
                 .expect("named choice")
                 .pointer("/name")
                 .and_then(Value::as_str),
-            Some("smith_tool_3")
+            Some(alias.as_str())
         );
+    }
+
+    #[test]
+    fn tool_call_history_keeps_its_wire_name_when_activation_grows() {
+        let registry = ToolSchema {
+            name: "registry.search".into(),
+            description: "Search the tool registry".into(),
+            input_schema: json!({"type": "object"}),
+        };
+        let initial =
+            response_tool_names(std::slice::from_ref(&registry)).expect("initial tool names");
+        let expanded = response_tool_names(&[
+            ToolSchema {
+                name: "artifact.read".into(),
+                description: "Read an artifact".into(),
+                input_schema: json!({"type": "object"}),
+            },
+            ToolSchema {
+                name: "list".into(),
+                description: "List files".into(),
+                input_schema: json!({"type": "object"}),
+            },
+            registry,
+        ])
+        .expect("expanded tool names");
+        let wire = response_wire_tool_name("registry.search");
+        assert_eq!(initial.get(&wire), Some(&"registry.search".to_owned()));
+        assert_eq!(expanded.get(&wire), Some(&"registry.search".to_owned()));
+
+        let history = Message::assistant(vec![ContentPart::ToolCall(ToolCall {
+            id: ToolCallId::new("call-1"),
+            name: "registry.search".into(),
+            arguments: json!({"query": "workspace repository inspection"}),
+        })]);
+        let replayed = response_items(&history, &expanded).expect("history encodes");
+        assert_eq!(
+            replayed[0].get("name").and_then(Value::as_str),
+            Some(wire.as_str())
+        );
+        assert!(valid_response_tool_name(&wire));
     }
 
     #[tokio::test]
@@ -1880,12 +1940,14 @@ mod tests {
 
     #[tokio::test]
     async fn direct_adapter_maps_tools_usage_headers_and_terminal_without_codex() {
+        let wire = response_wire_tool_name("tool:registry.search");
         let sse = [
             "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"smith_tool_0\"}}\n\n",
             "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"delta\":\"{\\\"path\\\":\\\"README.md\\\"}\"}\n\n",
             "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":12,\"input_tokens_details\":{\"cached_tokens\":2},\"output_tokens\":5,\"output_tokens_details\":{\"reasoning_tokens\":1}}}}\n\n",
         ]
-        .concat();
+        .concat()
+        .replace("smith_tool_0", &wire);
         let target = ProviderCredentialTarget::new("chatgpt").expect("target");
         let source = Arc::new(StaticProviderCredentialSource::new(Secret::new(
             "access-token-canary",
@@ -1968,7 +2030,7 @@ mod tests {
         );
         assert_eq!(
             body.pointer("/tools/0/name").and_then(Value::as_str),
-            Some("smith_tool_0")
+            Some(wire.as_str())
         );
     }
 
