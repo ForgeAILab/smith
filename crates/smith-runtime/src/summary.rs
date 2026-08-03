@@ -81,7 +81,14 @@ impl SmithSemanticSummaryConfig {
     pub fn standard() -> Self {
         Self {
             policy: SemanticSummaryPolicy {
-                trigger_turns: 6,
+                // A floor, not a trigger: pressure decides when, this only
+                // prevents summarizing a session too young to be worth it.
+                min_turns: 4,
+                trigger_percent: 85,
+                // Filled in from the resolved model limits by the factory; a
+                // zero budget fails validation rather than silently disabling
+                // summarization.
+                input_budget_tokens: 0,
                 retain_turns: 2,
                 max_summary_chars: 8_000,
                 max_usage_tokens: 32_000,
@@ -118,8 +125,12 @@ pub struct SemanticSummaryRuntimePolicy {
     pub model: String,
     /// Smith policy revision.
     pub revision: RegistryRevision,
-    /// Complete-turn trigger.
-    pub trigger_turns: usize,
+    /// Completed-turn eligibility floor.
+    pub min_turns: usize,
+    /// Share of the post-opening input budget that triggers summarization.
+    pub trigger_percent: u8,
+    /// Resolved input budget the share applies to.
+    pub input_budget_tokens: u64,
     /// Recent turns retained verbatim.
     pub retain_turns: usize,
     /// Maximum separately attributed usage.

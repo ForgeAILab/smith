@@ -4,6 +4,18 @@
 //! Smith owns the actual coding-agent policy. Keeping each policy section in
 //! its own [`ContextFragment`] means a changed skill or project context does
 //! not disguise itself as a change to the stable identity/workflow prefix.
+//!
+//! Sections are ordered by **how often they change, not by topic**. Agent
+//! Runtime computes a provider cache prefix as the longest *leading run* of
+//! [`CacheClass::Stable`] segments, so one variable section placed among the
+//! invariant ones truncates that run for every session — permanently if it is
+//! classified `Ephemeral`, and on every profile switch if it is left `Stable`
+//! while its content varies. [`stable_fragments`] therefore holds only what is
+//! byte-identical for every run, posture, and turn, and every capability-gated
+//! or posture-dependent section is contributed by [`dynamic_fragments`] after
+//! it. A profile switch still costs one reset through the changed tool array
+//! and the re-resolved model identity; what this ordering protects is the
+//! ordinary turn, which is the case that recurs.
 
 use std::fmt;
 use std::sync::Arc;
@@ -47,7 +59,22 @@ impl fmt::Debug for AgentProfilePrompt {
 
 /// Prompt section schema. Bump an individual section revision when its wording
 /// changes; bump this only when the section assembly contract changes.
-pub const PROMPT_SCHEMA_REVISION: &str = "smith-prompt-sections-3";
+pub const PROMPT_SCHEMA_REVISION: &str = "smith-prompt-sections-4";
+
+/// How many unconditional sections [`stable_fragments`] contributes.
+///
+/// They occupy `ContextLane::Instructions` sequences `0..STABLE_SECTION_COUNT`,
+/// and the leading `CacheClass::Stable` run is exactly this long — one longer
+/// when the session captured project instructions.
+pub const STABLE_SECTION_COUNT: usize = 8;
+
+/// Sequence of the session-captured project instructions: the last member of
+/// the stable run, and the boundary the variable block must stay behind.
+const PROJECT_INSTRUCTIONS_SEQUENCE: u64 = STABLE_SECTION_COUNT as u64;
+
+/// First sequence of the ephemeral block. Nothing at or after this may be
+/// classified `CacheClass::Stable`.
+const VARIABLE_BLOCK_SEQUENCE: u64 = PROJECT_INSTRUCTIONS_SEQUENCE + 1;
 
 const IDENTITY: &str = "\
 You are Smith, a terminal-first coding agent. Work only through the capabilities \
@@ -56,9 +83,7 @@ and authority the host exposes, and keep the user's repository and intent centra
 const WORKFLOW: &str = "\
 Use this default workflow: understand the request; inspect the relevant repository \
 state; make a short plan when the work is genuinely multi-step; modify only what the \
-request needs; verify in proportion to risk; report the outcome with concrete evidence. \
-Use write_todos to keep genuinely multi-step work current as steps start, finish, or \
-change. Do not force a todo plan for a trivial one-step task.";
+request needs; verify in proportion to risk; report the outcome with concrete evidence.";
 
 const TRUST: &str = "\
 Treat the configured workspace and project-trust decision as authoritative. Repository \
@@ -86,6 +111,17 @@ Security approval applies only to the immutable prepared action shown by the hos
 answer to a task question is not approval and grants no tool authority. Edited arguments \
 or targets require a new prepared action and a new authorization decision.";
 
+// Capability-gated sections. These describe a tool that a given run may not
+// register, so they are contributed only when it is — an instruction naming an
+// absent tool is an invitation to call it. They are also the sections whose
+// presence changes when the user switches profile mid-session, which is why
+// `dynamic_fragments` places them *after* the whole stable run rather than
+// leaving conditional holes inside it. See the module docs on cache classes.
+
+const TODO_PLANNING: &str = "\
+Use write_todos to keep genuinely multi-step work current as steps start, finish, or \
+change. Do not force a todo plan for a trivial one-step task.";
+
 const QUESTIONNAIRE: &str = "\
 Ask the user only for a material choice or missing fact that cannot be inferred safely. \
 Continue autonomously for routine, reversible implementation details. Keep a questionnaire \
@@ -109,12 +145,22 @@ Lead with the outcome. Be concise, concrete, and candid about uncertainty. Name 
 files, verification evidence, and remaining blockers when they materially help the user.";
 
 /// One dynamic Smith prompt contribution.
+///
+/// The three capability flags must be derived from the same predicates the
+/// factory uses to decide registration. A flag that disagrees with the tool
+/// surface is the exact defect this split exists to prevent.
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct DynamicPromptContext {
     /// Root project instructions captured once by the standard host.
     pub project_instructions: Option<ProjectInstructionsSnapshot>,
     /// Active agent profile. This may narrow but never widen authority.
     pub agent_profile: Option<AgentProfilePrompt>,
+    /// Whether this run registers the todo-planning tool.
+    pub todo_planning: bool,
+    /// Whether this run registers the root questionnaire tool.
+    pub questionnaire: bool,
+    /// Whether the active profile permits delegating to a child agent.
+    pub delegation: bool,
     /// Activated, trusted skill instructions.
     pub activated_skills: Option<String>,
     /// Bounded memory selected by Smith policy.
@@ -135,6 +181,9 @@ impl fmt::Debug for DynamicPromptContext {
                     .map(ProjectInstructionsSnapshot::identity),
             )
             .field("agent_profile", &self.agent_profile)
+            .field("todo_planning", &self.todo_planning)
+            .field("questionnaire", &self.questionnaire)
+            .field("delegation", &self.delegation)
             .field("has_activated_skills", &self.activated_skills.is_some())
             .field("has_memory", &self.memory.is_some())
             .field("has_project_context", &self.project_context.is_some())
@@ -205,6 +254,11 @@ impl ContextContributor for SmithPromptContributor {
 }
 
 /// Returns Smith's required, stable instruction prefix.
+///
+/// Every section here is byte-identical for every run, posture, and turn, so
+/// the whole vector is one uninterrupted `CacheClass::Stable` run. Anything
+/// whose presence or wording depends on the tool surface, the posture, or the
+/// workspace belongs in [`dynamic_fragments`] instead.
 pub fn stable_fragments() -> Vec<ContextFragment> {
     [
         (
@@ -217,7 +271,7 @@ pub fn stable_fragments() -> Vec<ContextFragment> {
             "workflow",
             FragmentKind::DeveloperInstruction,
             WORKFLOW,
-            "smith-prompt-workflow-1",
+            "smith-prompt-workflow-2",
         ),
         (
             "trust",
@@ -250,18 +304,6 @@ pub fn stable_fragments() -> Vec<ContextFragment> {
             "smith-prompt-approval-1",
         ),
         (
-            "questionnaire",
-            FragmentKind::DeveloperInstruction,
-            QUESTIONNAIRE,
-            "smith-prompt-questionnaire-2",
-        ),
-        (
-            "delegation",
-            FragmentKind::DeveloperInstruction,
-            DELEGATION,
-            "smith-prompt-delegation-2",
-        ),
-        (
             "response-style",
             FragmentKind::DeveloperInstruction,
             RESPONSE_STYLE,
@@ -290,6 +332,12 @@ pub fn stable_fragments() -> Vec<ContextFragment> {
 }
 
 /// Returns separately budgeted dynamic Smith sections.
+///
+/// Ordering within [`ContextLane::Instructions`] is load-bearing. Project
+/// instructions are captured once per session and stay `CacheClass::Stable`,
+/// so they extend the leading stable run started by [`stable_fragments`].
+/// Everything after them varies within a session and is `Ephemeral`; nothing
+/// stable may follow, or the run would be cut short of its true length.
 pub fn dynamic_fragments(context: &DynamicPromptContext) -> Vec<ContextFragment> {
     let mut fragments = Vec::new();
     if let Some(instructions) = &context.project_instructions {
@@ -307,8 +355,11 @@ pub fn dynamic_fragments(context: &DynamicPromptContext) -> Vec<ContextFragment>
                     instructions.body()
                 )),
             )
-            .with_position(ContextPosition::new(ContextLane::Instructions, 10))
-            .with_priority(10)
+            .with_position(ContextPosition::new(
+                ContextLane::Instructions,
+                PROJECT_INSTRUCTIONS_SEQUENCE,
+            ))
+            .with_priority(8)
             .with_cache_class(CacheClass::Stable)
             .with_sensitivity(Sensitivity::Internal),
         );
@@ -342,8 +393,52 @@ pub fn dynamic_fragments(context: &DynamicPromptContext) -> Vec<ContextFragment>
                         })
                 )),
             )
-            .with_position(ContextPosition::new(ContextLane::Instructions, 11))
-            .with_priority(11)
+            .with_position(ContextPosition::new(
+                ContextLane::Instructions,
+                VARIABLE_BLOCK_SEQUENCE,
+            ))
+            .with_priority(9)
+            .with_cache_class(CacheClass::Ephemeral)
+            .with_sensitivity(Sensitivity::Internal),
+        );
+    }
+    for (offset, (id, body, revision, enabled)) in [
+        (
+            "todo-planning",
+            TODO_PLANNING,
+            "smith-prompt-todo-planning-1",
+            context.todo_planning,
+        ),
+        (
+            "questionnaire",
+            QUESTIONNAIRE,
+            "smith-prompt-questionnaire-2",
+            context.questionnaire,
+        ),
+        (
+            "delegation",
+            DELEGATION,
+            "smith-prompt-delegation-2",
+            context.delegation,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if !enabled {
+            continue;
+        }
+        let sequence = VARIABLE_BLOCK_SEQUENCE + 1 + u64::try_from(offset).unwrap_or(u64::MAX);
+        fragments.push(
+            ContextFragment::new(
+                format!("smith.prompt.{id}"),
+                FragmentKind::DeveloperInstruction,
+                FragmentSource::Host,
+                RegistryRevision::new(revision),
+                FragmentContent::Text(body.to_owned()),
+            )
+            .with_position(ContextPosition::new(ContextLane::Instructions, sequence))
+            .with_priority(i32::try_from(sequence).unwrap_or(i32::MAX))
             .with_cache_class(CacheClass::Ephemeral)
             .with_sensitivity(Sensitivity::Internal),
         );
@@ -460,6 +555,16 @@ mod tests {
 
     use super::*;
 
+    /// A root run that registers every optional capability.
+    fn fully_capable() -> DynamicPromptContext {
+        DynamicPromptContext {
+            todo_planning: true,
+            questionnaire: true,
+            delegation: true,
+            ..DynamicPromptContext::default()
+        }
+    }
+
     #[test]
     fn stable_sections_have_independent_identity_revision_and_placement() {
         let fragments = stable_fragments();
@@ -472,21 +577,24 @@ mod tests {
             .map(|fragment| fragment.revision.as_str())
             .collect::<BTreeSet<_>>();
 
-        assert_eq!(fragments.len(), 10);
+        assert_eq!(fragments.len(), STABLE_SECTION_COUNT);
         assert_eq!(ids.len(), fragments.len());
         assert_eq!(revisions.len(), fragments.len());
         let priorities = fragments
             .iter()
             .map(|fragment| fragment.priority)
             .collect::<Vec<_>>();
-        assert_eq!(priorities, (0..10).collect::<Vec<_>>());
+        assert_eq!(
+            priorities,
+            (0..STABLE_SECTION_COUNT as i32).collect::<Vec<_>>()
+        );
         let positions = fragments
             .iter()
             .map(|fragment| fragment.position)
             .collect::<Vec<_>>();
         assert_eq!(
             positions,
-            (0..10)
+            (0..STABLE_SECTION_COUNT as u64)
                 .map(|sequence| ContextPosition::new(ContextLane::Instructions, sequence))
                 .collect::<Vec<_>>()
         );
@@ -517,6 +625,7 @@ mod tests {
             activated_skills: Some("Use the Rust migration skill.".into()),
             memory: Some("The project prefers deterministic fixtures.".into()),
             project_context: Some("The current package is smith-runtime.".into()),
+            ..fully_capable()
         });
         let after = stable_fragments()
             .iter()
@@ -524,7 +633,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(before, after);
-        assert_eq!(dynamic.len(), 5);
+        assert_eq!(dynamic.len(), 8);
         assert!(
             dynamic
                 .iter()
@@ -562,7 +671,7 @@ mod tests {
 
     #[test]
     fn default_policy_requires_evidence_and_bounds_questions() {
-        let prompt = legacy_system_prompt(&DynamicPromptContext::default());
+        let prompt = legacy_system_prompt(&fully_capable());
         assert!(prompt.contains("Never say a command, test, build"));
         assert!(prompt.contains("committed successful tool result"));
         assert!(prompt.contains("one through three short questions"));
@@ -633,6 +742,172 @@ mod tests {
     }
 
     #[test]
+    fn a_capability_section_is_absent_when_its_tool_is_not_registered() {
+        let prompt = legacy_system_prompt(&DynamicPromptContext::default());
+
+        assert!(!prompt.contains("Use write_todos"), "{prompt}");
+        assert!(
+            !prompt.contains("one through three short questions"),
+            "{prompt}"
+        );
+        assert!(!prompt.contains("invoke root ask_user"), "{prompt}");
+        assert!(!prompt.contains("Delegate only a bounded"), "{prompt}");
+        // The unconditional policy is untouched by the gating.
+        assert!(
+            prompt.contains("Never say a command, test, build"),
+            "{prompt}"
+        );
+        assert!(prompt.contains("understand the request"), "{prompt}");
+    }
+
+    #[test]
+    fn each_capability_section_is_gated_independently() {
+        for (label, context, expected) in [
+            (
+                "todo only",
+                DynamicPromptContext {
+                    todo_planning: true,
+                    ..DynamicPromptContext::default()
+                },
+                "smith.prompt.todo-planning",
+            ),
+            (
+                "questionnaire only",
+                DynamicPromptContext {
+                    questionnaire: true,
+                    ..DynamicPromptContext::default()
+                },
+                "smith.prompt.questionnaire",
+            ),
+            (
+                "delegation only",
+                DynamicPromptContext {
+                    delegation: true,
+                    ..DynamicPromptContext::default()
+                },
+                "smith.prompt.delegation",
+            ),
+        ] {
+            let ids = dynamic_fragments(&context)
+                .iter()
+                .map(|fragment| fragment.id.to_string())
+                .collect::<Vec<_>>();
+            assert_eq!(ids, vec![expected.to_owned()], "{label}");
+        }
+    }
+
+    #[test]
+    fn conditional_sections_stay_behind_the_stable_run() {
+        let fragments = fragments(&DynamicPromptContext {
+            project_instructions: Some(
+                ProjectInstructionsSnapshot::from_body("Use the repository checks.")
+                    .expect("bounded project instructions"),
+            ),
+            ..fully_capable()
+        });
+
+        for fragment in &fragments {
+            if fragment.position.lane != ContextLane::Instructions {
+                continue;
+            }
+            let conditional = matches!(
+                fragment.id.as_str(),
+                "smith.prompt.todo-planning"
+                    | "smith.prompt.questionnaire"
+                    | "smith.prompt.delegation"
+                    | "smith.prompt.agent-profile"
+            );
+            if conditional {
+                assert!(
+                    fragment.position.sequence >= VARIABLE_BLOCK_SEQUENCE,
+                    "`{}` sits inside the stable run at sequence {}",
+                    fragment.id,
+                    fragment.position.sequence
+                );
+                assert_eq!(
+                    fragment.cache_class,
+                    CacheClass::Ephemeral,
+                    "{}",
+                    fragment.id
+                );
+            } else {
+                assert!(
+                    fragment.position.sequence < VARIABLE_BLOCK_SEQUENCE,
+                    "`{}` follows the stable run at sequence {}",
+                    fragment.id,
+                    fragment.position.sequence
+                );
+                assert_eq!(fragment.cache_class, CacheClass::Stable, "{}", fragment.id);
+            }
+        }
+    }
+
+    #[test]
+    fn no_stable_fragment_follows_a_variable_one() {
+        // Agent Runtime computes the provider cache prefix as the longest
+        // *leading* run of `CacheClass::Stable` segments, so one stable
+        // fragment placed after a variable one is silently uncacheable — and
+        // one variable fragment placed among the stable ones truncates the
+        // run for every session. Both are ordering bugs this catches.
+        let mut fragments = fragments(&DynamicPromptContext {
+            project_instructions: Some(
+                ProjectInstructionsSnapshot::from_body("Use the repository checks.")
+                    .expect("bounded project instructions"),
+            ),
+            agent_profile: Some(AgentProfilePrompt {
+                name: "build".into(),
+                posture: AgentPosture::Build,
+                instructions: None,
+                revision: "test-build-profile-1".into(),
+            }),
+            activated_skills: Some("skill".into()),
+            memory: Some("memory".into()),
+            project_context: Some("project".into()),
+            ..fully_capable()
+        });
+        fragments.sort_by_key(|fragment| fragment.position);
+
+        let mut seen_variable = None;
+        for fragment in &fragments {
+            match (fragment.cache_class, &seen_variable) {
+                (CacheClass::Stable, Some(earlier)) => panic!(
+                    "stable fragment `{}` follows variable `{earlier}`; the cache \
+                     prefix would stop short of it",
+                    fragment.id
+                ),
+                (CacheClass::Stable, None) => {}
+                _ => seen_variable = Some(fragment.id.to_string()),
+            }
+        }
+    }
+
+    #[test]
+    fn the_stable_head_is_byte_identical_across_postures() {
+        let head = |posture, todo_planning| {
+            let fragments = fragments(&DynamicPromptContext {
+                agent_profile: Some(AgentProfilePrompt {
+                    name: "profile".into(),
+                    posture,
+                    instructions: None,
+                    revision: "test-profile-1".into(),
+                }),
+                todo_planning,
+                ..DynamicPromptContext::default()
+            });
+            fragments
+                .into_iter()
+                .filter(|fragment| fragment.position.sequence < VARIABLE_BLOCK_SEQUENCE)
+                .map(|fragment| (fragment.id.clone(), fragment.content_hash()))
+                .collect::<Vec<_>>()
+        };
+
+        let build = head(AgentPosture::Build, true);
+        assert_eq!(build.len(), STABLE_SECTION_COUNT);
+        assert_eq!(build, head(AgentPosture::Plan, false));
+        assert_eq!(build, head(AgentPosture::Review, false));
+    }
+
+    #[test]
     fn changed_project_instructions_keep_smith_prefix_revisions_independent() {
         let stable_before = stable_fragments()
             .iter()
@@ -673,11 +948,13 @@ mod tests {
             activated_skills: Some("Use the approved Rust skill.".into()),
             memory: Some(secret_memory.into()),
             project_context: Some("Package: smith-runtime".into()),
-            ..DynamicPromptContext::default()
+            ..fully_capable()
         });
         let debug = format!("{contributor:?}");
         assert!(!debug.contains(secret_memory), "{debug}");
-        assert_eq!(contributor.fragments().len(), 14);
+        // Eight unconditional sections, project instructions, three gated
+        // capability sections, then skills, memory, and project context.
+        assert_eq!(contributor.fragments().len(), 15);
 
         let patch = contributor
             .contribute(&ContextView {
@@ -693,19 +970,23 @@ mod tests {
             .expect("a context patch");
         assert_eq!(patch.fragments, contributor.fragments());
         assert_eq!(
-            patch.fragments[10].position,
-            ContextPosition::new(ContextLane::Instructions, 10)
+            patch.fragments[8].position,
+            ContextPosition::new(ContextLane::Instructions, PROJECT_INSTRUCTIONS_SEQUENCE)
         );
         assert_eq!(
-            patch.fragments[11].position,
-            ContextPosition::new(ContextLane::Capabilities, 0)
+            patch.fragments[9].position,
+            ContextPosition::new(ContextLane::Instructions, VARIABLE_BLOCK_SEQUENCE + 1)
         );
         assert_eq!(
             patch.fragments[12].position,
-            ContextPosition::new(ContextLane::Memory, 0)
+            ContextPosition::new(ContextLane::Capabilities, 0)
         );
         assert_eq!(
             patch.fragments[13].position,
+            ContextPosition::new(ContextLane::Memory, 0)
+        );
+        assert_eq!(
+            patch.fragments[14].position,
             ContextPosition::new(ContextLane::Memory, 1)
         );
     }

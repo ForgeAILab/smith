@@ -31,6 +31,7 @@ pub mod setup;
 pub mod status;
 pub mod theme;
 pub mod transcript;
+pub mod usage_log;
 
 pub use app::{
     Action, App, Overlay, PaletteCommand, PendingInputPreview, PreparedSubmission, ResourceTarget,

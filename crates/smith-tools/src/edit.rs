@@ -29,10 +29,62 @@ use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
+use crate::read_state::{ReadDefect, ReadRecorder};
 use crate::support::{
-    MAX_READ_BYTES, display_path, invalid, optional_bool, prepare_path_argument, read_bounded,
-    require_str, resolve,
+    MAX_READ_BYTES, display_path, invalid, optional_bool, optional_str, prepare_path_argument,
+    read_bounded, require_str, resolve,
 };
+
+/// What one `edit` call does to its target.
+///
+/// One tool with four verbs rather than four tools, for the same reason
+/// `codex`'s `apply_patch` carries add/update/delete: the base tool surface is
+/// sent on every request, so a peer tool costs tokens forever while an extra
+/// enum variant costs a line of schema. It also keeps one path-resolution and
+/// one approval-display path instead of four.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum EditOperation {
+    /// Replace an exact string. The historical behavior, and the default.
+    #[default]
+    Replace,
+    /// Create a file that does not exist yet.
+    Create,
+    /// Replace an existing file's entire contents.
+    Overwrite,
+    /// Remove a file.
+    Delete,
+}
+
+impl EditOperation {
+    fn parse(value: Option<&str>) -> Result<Self, RuntimeError> {
+        match value {
+            None | Some("replace") => Ok(Self::Replace),
+            Some("create") => Ok(Self::Create),
+            Some("overwrite") => Ok(Self::Overwrite),
+            Some("delete") => Ok(Self::Delete),
+            Some(other) => Err(invalid(format!(
+                "`operation` must be replace, create, overwrite, or delete, not `{other}`"
+            ))),
+        }
+    }
+
+    /// Whether the operation destroys content the call itself does not carry.
+    ///
+    /// `Replace` is excluded deliberately: a stale `old_string` fails to match,
+    /// so an exact replacement proves its own currency. These two do not.
+    pub fn destroys_unseen_content(self) -> bool {
+        matches!(self, Self::Overwrite | Self::Delete)
+    }
+
+    fn verb(self) -> &'static str {
+        match self {
+            Self::Replace => "Edit",
+            Self::Create => "Create",
+            Self::Overwrite => "Overwrite",
+            Self::Delete => "Delete",
+        }
+    }
+}
 
 /// Applies an exact-match edit to a project file.
 #[derive(Debug, Default, Clone, Copy)]
@@ -43,9 +95,11 @@ impl Tool for EditTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec::new(
             "edit",
-            "Edit a project file by replacing an exact string. `old_string` must \
-             appear exactly once unless `replace_all` is set. To create a new file, \
-             pass an empty `old_string`.",
+            "Change a project file. `replace` (the default) swaps an exact \
+             `old_string` that must appear once unless `replace_all` is set; \
+             prefer it for partial changes, since it sends only the diff. \
+             `create`, `overwrite`, and `delete` act on the whole file, and the \
+             last two require having read it first.",
             json!({
                 "type": "object",
                 "properties": {
@@ -53,20 +107,25 @@ impl Tool for EditTool {
                         "type": "string",
                         "description": "Path to the file, relative to the project root."
                     },
+                    "operation": {
+                        "type": "string",
+                        "enum": ["replace", "create", "overwrite", "delete"],
+                        "description": "Defaults to `replace`."
+                    },
                     "old_string": {
                         "type": "string",
-                        "description": "Exact text to replace, including indentation. Empty creates a new file."
+                        "description": "Exact text to replace, including indentation. Required for `replace`."
                     },
                     "new_string": {
                         "type": "string",
-                        "description": "Replacement text."
+                        "description": "Replacement text. Required except for `delete`."
                     },
                     "replace_all": {
                         "type": "boolean",
                         "description": "Replace every occurrence instead of requiring exactly one."
                     }
                 },
-                "required": ["path", "old_string", "new_string"],
+                "required": ["path"],
                 "additionalProperties": false
             }),
             ToolEffects::read_only().with_write("project:files"),
@@ -76,6 +135,7 @@ impl Tool for EditTool {
                 Permission::FsRead,
                 Permission::FsWrite,
                 Permission::FsCreate,
+                Permission::FsDelete,
             ]
             .into_iter()
             .collect(),
@@ -87,38 +147,52 @@ impl Tool for EditTool {
         mut arguments: Value,
         ctx: &PreparationContext,
     ) -> Result<PreparedToolCall, RuntimeError> {
-        let old_string = require_str(&arguments, "old_string")?.to_owned();
-        let new_string = require_str(&arguments, "new_string")?.to_owned();
-        if old_string == new_string {
-            return Err(invalid(
-                "`old_string` and `new_string` are identical; the edit would do nothing",
-            ));
+        let operation = resolve_operation(&arguments)?;
+        if operation != EditOperation::Delete {
+            let new_string = require_str(&arguments, "new_string")?.to_owned();
+            if operation == EditOperation::Replace {
+                let old_string = require_str(&arguments, "old_string")?.to_owned();
+                if old_string == new_string {
+                    return Err(invalid(
+                        "`old_string` and `new_string` are identical; the edit would do nothing",
+                    ));
+                }
+            }
         }
         let path = prepare_path_argument(&mut arguments, "path", None, ctx)?;
-        let creating = old_string.is_empty();
-        if creating {
+        if operation == EditOperation::Create {
             ensure_existing_parent(std::path::Path::new(&path.canonical), &path.display).await?;
         }
-        arguments
+        let object = arguments
             .as_object_mut()
-            .ok_or_else(|| invalid("tool arguments must be a JSON object"))?
-            .entry("replace_all")
-            .or_insert(Value::Bool(false));
-        let permissions = if creating {
-            [Permission::FsCreate, Permission::FsWrite]
+            .ok_or_else(|| invalid("tool arguments must be a JSON object"))?;
+        object.entry("replace_all").or_insert(Value::Bool(false));
+        // Normalize the operation so an observer, a journal, and a replay all
+        // see the same explicit verb the permission set was derived from.
+        object.insert(
+            "operation".to_owned(),
+            Value::String(operation_name(operation).to_owned()),
+        );
+
+        let permissions = match operation {
+            EditOperation::Create => [Permission::FsCreate, Permission::FsWrite]
                 .into_iter()
-                .collect()
-        } else {
-            [Permission::FsRead, Permission::FsWrite]
+                .collect(),
+            EditOperation::Delete => [Permission::FsRead, Permission::FsDelete]
                 .into_iter()
-                .collect()
+                .collect(),
+            EditOperation::Replace | EditOperation::Overwrite => {
+                [Permission::FsRead, Permission::FsWrite]
+                    .into_iter()
+                    .collect()
+            }
         };
-        let effects = if creating {
-            ToolEffects::new(Vec::new()).with_write(path.canonical.clone())
-        } else {
-            ToolEffects::read_only().with_write(path.canonical.clone())
+        let effects = match operation {
+            EditOperation::Create => {
+                ToolEffects::new(Vec::new()).with_write(path.canonical.clone())
+            }
+            _ => ToolEffects::read_only().with_write(path.canonical.clone()),
         };
-        let action = if creating { "Create" } else { "Edit" };
         Ok(PreparedToolCall::new(
             ctx.call_id.clone(),
             "edit",
@@ -126,7 +200,7 @@ impl Tool for EditTool {
             permissions,
             path.resource,
             effects,
-            ToolCallDisplay::new(format!("{action} {}", path.display)),
+            ToolCallDisplay::new(format!("{} {}", operation.verb(), path.display)),
         ))
     }
 
@@ -138,30 +212,71 @@ impl Tool for EditTool {
         let arguments = prepared.into_arguments();
         let raw_path = require_str(&arguments, "path")?;
         let path = resolve(ctx, raw_path)?;
-        let old_string = require_str(&arguments, "old_string")?;
-        let new_string = require_str(&arguments, "new_string")?;
+        let operation = resolve_operation(&arguments)?;
         let replace_all = optional_bool(&arguments, "replace_all").unwrap_or(false);
         let shown = display_path(ctx, &path);
 
+        match operation {
+            EditOperation::Create => {
+                let new_string = require_str(&arguments, "new_string")?;
+                ensure_existing_parent(&path, &shown).await?;
+                write_new(&path, new_string).await?;
+                return Ok(ToolOutcome {
+                    value: json!({"path": shown, "created": true, "replacements": 1}),
+                    content: vec![agent_runtime_core::content::ContentPart::text(format!(
+                        "created `{shown}` ({} lines)",
+                        new_string.lines().count()
+                    ))]
+                    .into(),
+                    is_error: false,
+                });
+            }
+            EditOperation::Overwrite => {
+                let new_string = require_str(&arguments, "new_string")?;
+                if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
+                    return Ok(ToolOutcome::error(format!(
+                        "`{shown}` does not exist; use `create` to make a new file"
+                    )));
+                }
+                write_atomically(&path, new_string).await?;
+                return Ok(ToolOutcome {
+                    value: json!({"path": shown, "created": false, "replacements": 1}),
+                    content: vec![agent_runtime_core::content::ContentPart::text(format!(
+                        "overwrote `{shown}` ({} lines)",
+                        new_string.lines().count()
+                    ))]
+                    .into(),
+                    is_error: false,
+                });
+            }
+            EditOperation::Delete => {
+                match tokio::fs::remove_file(&path).await {
+                    Ok(()) => {}
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                        return Ok(ToolOutcome::error(format!("`{shown}` does not exist")));
+                    }
+                    Err(err) => {
+                        return Err(invalid(format!("cannot delete `{shown}`: {err}")));
+                    }
+                }
+                return Ok(ToolOutcome {
+                    value: json!({"path": shown, "deleted": true}),
+                    content: vec![agent_runtime_core::content::ContentPart::text(format!(
+                        "deleted `{shown}`"
+                    ))]
+                    .into(),
+                    is_error: false,
+                });
+            }
+            EditOperation::Replace => {}
+        }
+
+        let old_string = require_str(&arguments, "old_string")?;
+        let new_string = require_str(&arguments, "new_string")?;
         if old_string == new_string {
             return Err(invalid(
                 "`old_string` and `new_string` are identical; the edit would do nothing",
             ));
-        }
-
-        // Creating a file.
-        if old_string.is_empty() {
-            ensure_existing_parent(&path, &shown).await?;
-            write_new(&path, new_string).await?;
-            return Ok(ToolOutcome {
-                value: json!({"path": shown, "created": true, "replacements": 1}),
-                content: vec![agent_runtime_core::content::ContentPart::text(format!(
-                    "created `{shown}` ({} lines)",
-                    new_string.lines().count()
-                ))]
-                .into(),
-                is_error: false,
-            });
         }
 
         let contents = read_bounded(&path, MAX_READ_BYTES).await?;
@@ -206,6 +321,49 @@ impl Tool for EditTool {
             .into(),
             is_error: false,
         })
+    }
+}
+
+/// Whether a prepared `edit` call fails its read precondition.
+///
+/// Lives here, with the operations it constrains, rather than in the observing
+/// wrapper that happens to hold the state: the rule is part of what `edit`
+/// means, and a reader asking "when can this delete a file" should find the
+/// answer in this module.
+pub fn read_state_defect(arguments: &Value, reads: &ReadRecorder) -> Option<ReadDefect> {
+    let operation = resolve_operation(arguments).ok()?;
+    if !operation.destroys_unseen_content() {
+        return None;
+    }
+    let path = optional_str(arguments, "path")?;
+    reads
+        .authorize_destructive(std::path::Path::new(path))
+        .err()
+}
+
+/// Resolves the operation from arguments, honoring the historical shorthand.
+///
+/// An empty `old_string` with no explicit `operation` has always meant "create",
+/// and recorded transcripts replay through this path, so the shorthand outlives
+/// the argument that made it necessary. An explicit `operation` always wins.
+fn resolve_operation(arguments: &Value) -> Result<EditOperation, RuntimeError> {
+    let explicit = optional_str(arguments, "operation");
+    let operation = EditOperation::parse(explicit)?;
+    if explicit.is_none()
+        && operation == EditOperation::Replace
+        && optional_str(arguments, "old_string").is_some_and(str::is_empty)
+    {
+        return Ok(EditOperation::Create);
+    }
+    Ok(operation)
+}
+
+fn operation_name(operation: EditOperation) -> &'static str {
+    match operation {
+        EditOperation::Replace => "replace",
+        EditOperation::Create => "create",
+        EditOperation::Overwrite => "overwrite",
+        EditOperation::Delete => "delete",
     }
 }
 
@@ -310,6 +468,149 @@ mod tests {
     use crate::testing::{project, text_of};
 
     const SOURCE: &str = "fn main() {\n    println!(\"hello\");\n}\n";
+
+    async fn prepared(
+        arguments: Value,
+        ctx: &agent_runtime_core::tool::InvocationContext,
+    ) -> Result<PreparedToolCall, RuntimeError> {
+        let preparation = PreparationContext {
+            session: ctx.session.clone(),
+            turn: ctx.turn.clone(),
+            call_id: ctx.call_id.clone(),
+            request: ctx.request.clone(),
+            workspace: ctx.workspace.clone(),
+            clock: ctx.clock.clone(),
+            cancel: ctx.cancel.clone(),
+            deadline: ctx.deadline,
+        };
+        EditTool.prepare(arguments, &preparation).await
+    }
+
+    #[tokio::test]
+    async fn each_operation_requests_only_the_authority_it_needs() {
+        let (dir, ctx) = project();
+        std::fs::write(dir.path().join("a.rs"), SOURCE).unwrap();
+
+        for (arguments, expected) in [
+            (
+                json!({"path": "a.rs", "old_string": "hello", "new_string": "world"}),
+                vec![Permission::FsRead, Permission::FsWrite],
+            ),
+            (
+                json!({"path": "new.rs", "operation": "create", "new_string": "fn n() {}\n"}),
+                vec![Permission::FsWrite, Permission::FsCreate],
+            ),
+            (
+                json!({"path": "a.rs", "operation": "overwrite", "new_string": "fn n() {}\n"}),
+                vec![Permission::FsRead, Permission::FsWrite],
+            ),
+            (
+                json!({"path": "a.rs", "operation": "delete"}),
+                vec![Permission::FsRead, Permission::FsDelete],
+            ),
+        ] {
+            let call = prepared(arguments.clone(), &ctx)
+                .await
+                .unwrap_or_else(|error| panic!("prepare {arguments}: {error}"));
+            let mut requested = call
+                .required_permissions()
+                .iter()
+                .map(|permission| permission.as_str().to_owned())
+                .collect::<Vec<_>>();
+            let mut expected = expected
+                .iter()
+                .map(|permission: &Permission| permission.as_str().to_owned())
+                .collect::<Vec<_>>();
+            requested.sort();
+            expected.sort();
+            assert_eq!(requested, expected, "for {arguments}");
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_never_requests_spawn_or_network() {
+        // The whole point of a narrow delete: `shell rm` would carry both, and
+        // Smith's own tool-use policy forbids reaching for the broader tool.
+        let (dir, ctx) = project();
+        std::fs::write(dir.path().join("a.rs"), SOURCE).unwrap();
+
+        let call = prepared(json!({"path": "a.rs", "operation": "delete"}), &ctx)
+            .await
+            .expect("a prepared delete");
+        assert!(!call.effects().spawns_process());
+        assert!(!call.effects().has_network());
+    }
+
+    #[tokio::test]
+    async fn create_still_refuses_an_existing_target() {
+        let (dir, ctx) = project();
+        std::fs::write(dir.path().join("a.rs"), SOURCE).unwrap();
+
+        let error = EditTool
+            .invoke(
+                json!({"path": "a.rs", "operation": "create", "new_string": "replaced\n"}),
+                &ctx,
+            )
+            .await
+            .expect_err("create must not clobber");
+
+        assert!(error.to_string().contains("already exists"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.rs")).unwrap(),
+            SOURCE
+        );
+    }
+
+    #[tokio::test]
+    async fn an_empty_old_string_still_creates() {
+        // Recorded transcripts predate `operation` and replay through here.
+        let (dir, ctx) = project();
+
+        let outcome = EditTool
+            .invoke(
+                json!({"path": "made.rs", "old_string": "", "new_string": "fn made() {}\n"}),
+                &ctx,
+            )
+            .await
+            .expect("the legacy shorthand still creates");
+
+        assert!(!outcome.is_error, "{}", text_of(&outcome));
+        assert_eq!(outcome.value["created"], true);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("made.rs")).unwrap(),
+            "fn made() {}\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unknown_operation_is_rejected_by_name() {
+        let (_dir, ctx) = project();
+        let error = prepared(
+            json!({"path": "a.rs", "operation": "truncate", "new_string": "x"}),
+            &ctx,
+        )
+        .await
+        .expect_err("an unknown verb is refused");
+        assert!(error.to_string().contains("truncate"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn overwrite_refuses_a_missing_file() {
+        let (_dir, ctx) = project();
+        let outcome = EditTool
+            .invoke(
+                json!({"path": "absent.rs", "operation": "overwrite", "new_string": "x\n"}),
+                &ctx,
+            )
+            .await
+            .expect("a missing target is a tool error, not a runtime failure");
+        assert!(outcome.is_error);
+        assert!(
+            text_of(&outcome).contains("use `create`"),
+            "{}",
+            text_of(&outcome)
+        );
+    }
 
     #[tokio::test]
     async fn a_unique_match_is_replaced() {

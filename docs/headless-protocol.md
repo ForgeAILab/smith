@@ -192,7 +192,7 @@ An approval-required payload contains only redaction-safe prepared evidence:
 {
   "call_id": "call-...",
   "tool": "edit",
-  "argument_keys": ["new_string", "old_string", "path"],
+  "argument_keys": ["new_string", "old_string", "operation", "path"],
   "mutates": true,
   "requires_authorization": true,
   "permissions": ["fs.read", "fs.write"],

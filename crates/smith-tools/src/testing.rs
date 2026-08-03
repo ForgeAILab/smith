@@ -38,6 +38,36 @@ pub(crate) fn context(root: &std::path::Path) -> InvocationContext {
     }
 }
 
+/// Prepares and invokes a named tool from a composed set.
+///
+/// Unit tests that call `EditTool.invoke` reach the tool directly, which is the
+/// right scope for its own logic but skips the observing wrapper that holds
+/// session read state. Anything asserting a read precondition has to go through
+/// here instead, because that is the path a real session takes.
+pub(crate) async fn call(
+    tools: &[Arc<dyn Tool>],
+    name: &str,
+    arguments: Value,
+    ctx: &InvocationContext,
+) -> Result<ToolOutcome, RuntimeError> {
+    let tool = tools
+        .iter()
+        .find(|tool| tool.spec().name == name)
+        .unwrap_or_else(|| panic!("no `{name}` tool in the composed set"));
+    let preparation = PreparationContext {
+        session: ctx.session.clone(),
+        turn: ctx.turn.clone(),
+        call_id: ctx.call_id.clone(),
+        request: ctx.request.clone(),
+        workspace: ctx.workspace.clone(),
+        clock: ctx.clock.clone(),
+        cancel: ctx.cancel.clone(),
+        deadline: ctx.deadline,
+    };
+    let prepared = tool.prepare(arguments, &preparation).await?;
+    tool.invoke(prepared, ctx).await
+}
+
 /// The concatenated text content of an outcome.
 pub(crate) fn text_of(outcome: &ToolOutcome) -> String {
     let parts = match &outcome.content {

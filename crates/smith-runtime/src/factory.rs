@@ -106,6 +106,7 @@ use agent_runtime_core::grant::SecurityCheckMode;
 
 use crate::abilities::{INTERACTION_READY_CONFIG, seal_tool_abilities};
 use crate::authority::SmithToolAuthority;
+use crate::budget_notice::{BudgetNoticeComponent, DEFAULT_NOTICE_THRESHOLD_TOKENS};
 use crate::catalog::{CatalogLayers, ProfileResolution};
 use crate::chatgpt::{
     ChatGptCredentialSource, ChatGptProvider, ChatGptProviderConfig, ChatGptTokenBundle,
@@ -723,7 +724,7 @@ struct PromptStage {
 struct CapabilityStage {
     tools: Vec<Arc<dyn Tool>>,
     abilities: SealedAbilities,
-    todo: Arc<TodoComponent>,
+    todo: Option<Arc<TodoComponent>>,
     goal: Option<Arc<GoalComponent>>,
     delegation_slot:
         Option<Arc<std::sync::OnceLock<agent_runtime::delegation::DelegationCoordinator>>>,
@@ -812,6 +813,9 @@ fn prepare_prompt_stage(
                 .map(|instructions| instructions.value.clone()),
             revision: agent_profile.revision.clone(),
         }),
+        todo_planning: todo_planning_eligible(request),
+        questionnaire: questionnaire_eligible(request),
+        delegation: delegation_eligible(request),
         ..DynamicPromptContext::default()
     };
     let contributor = match request.system_prompt.clone() {
@@ -882,11 +886,19 @@ fn prepare_summary_stage(
     provider: Arc<dyn Provider>,
     provider_name: &str,
     model: &ModelId,
+    limits: ModelLimits,
     clock: Arc<dyn Clock>,
 ) -> Result<SummaryStage, FactoryError> {
     let Some(config) = request.semantic_summary.clone() else {
         return Ok(None);
     };
+    // The coordinator measures context pressure against a budget it cannot
+    // discover for itself. Smith already refuses to guess a model's limits, so
+    // the resolved input ceiling is the only honest source for it.
+    let mut config = config;
+    if config.policy.input_budget_tokens == 0 {
+        config.policy.input_budget_tokens = u64::from(limits.max_input_tokens);
+    }
     config.validate().map_err(FactoryError::Runtime)?;
     let store = request.artifact_store.clone().ok_or_else(|| {
         FactoryError::Runtime(RuntimeError::config(
@@ -911,7 +923,9 @@ fn prepare_summary_stage(
         purpose: agent_runtime::harness::SEMANTIC_SUMMARY_PURPOSE.into(),
         model: summary_model.id().to_owned(),
         revision: config.policy.revision.clone(),
-        trigger_turns: config.policy.trigger_turns,
+        min_turns: config.policy.min_turns,
+        trigger_percent: config.policy.trigger_percent,
+        input_budget_tokens: config.policy.input_budget_tokens,
         retain_turns: config.policy.retain_turns,
         max_usage_tokens: config.policy.max_usage_tokens,
         retention: config.policy.retention,
@@ -925,7 +939,9 @@ fn prepare_summary_stage(
 
 fn prepare_capability_stage(request: &RuntimeRequest) -> Result<CapabilityStage, FactoryError> {
     let mut tools = tools(request);
-    let todo = Arc::new(TodoComponent::public());
+    // No tool, no projected plan state: a posture that cannot write a plan
+    // should not carry one in its context either.
+    let todo = todo_planning_eligible(request).then(|| Arc::new(TodoComponent::public()));
     let goal = goal_component_eligible(request).then(|| Arc::new(GoalComponent::public()));
     if goal.is_some() {
         tools.extend([
@@ -1069,8 +1085,20 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         provider.clone(),
         &provider_name,
         &model,
+        profile.profile.limits,
         clock.clone(),
     )?;
+    // Warns the model before the compaction boundary. Only meaningful when
+    // summarization is configured — without it there is no boundary to warn
+    // about, only the structural watermarks, which reclaim silently.
+    let budget_notice = semantic_summary.as_ref().and_then(|_| {
+        BudgetNoticeComponent::new(
+            u64::from(profile.profile.limits.max_input_tokens),
+            DEFAULT_NOTICE_THRESHOLD_TOKENS,
+        )
+        .ok()
+        .map(Arc::new)
+    });
     let capabilities = prepare_capability_stage(&request)?;
     let durability = prepare_durability_stage(&request).await?;
 
@@ -1184,12 +1212,15 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         .activation_context(activation_context)
         .activation_budget(activation_budget)
         .context_contributor(Arc::new(prompt.contributor.clone()))
-        .context_contributor(capabilities.todo.clone())
-        .tool_output_processor(capabilities.todo.clone())
-        .turn_commit_hook(capabilities.todo.clone())
         .clock(clock.clone())
         .event_buffer(request.event_buffer)
         .shutdown_timeout_ms(request.shutdown_timeout_ms);
+    if let Some(component) = &capabilities.todo {
+        builder = builder
+            .context_contributor(component.clone())
+            .tool_output_processor(component.clone())
+            .turn_commit_hook(component.clone());
+    }
     if let Some(component) = &capabilities.goal {
         builder = builder
             .context_contributor(component.clone())
@@ -1204,6 +1235,11 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         builder = builder
             .history_projector(coordinator.clone())
             .turn_commit_hook(coordinator.clone());
+    }
+    if let Some(component) = &budget_notice {
+        builder = builder
+            .context_contributor(component.clone())
+            .turn_commit_hook(component.clone());
     }
     for descriptor in capabilities.abilities.descriptors() {
         builder = builder.tool_ability_descriptor(descriptor);
@@ -1353,6 +1389,11 @@ async fn prepare_child_profile_routes(
                     .map(|instructions| instructions.value.clone()),
                 revision: agent_profile.revision.clone(),
             }),
+            // A child always runs on `HostSurface::Child`, so it registers
+            // neither the root questionnaire nor a delegation tool of its own.
+            todo_planning: !agent_profile.posture.value.is_read_only(),
+            questionnaire: false,
+            delegation: false,
             ..DynamicPromptContext::default()
         };
         let prompt_contributor = SmithPromptContributor::new(&prompt_context);
@@ -1945,13 +1986,15 @@ fn tools(request: &RuntimeRequest) -> Vec<Arc<dyn Tool>> {
     if read_only {
         tools.retain(|tool| tool.spec().effects.is_read_only());
     }
-    if !matches!(request.surface, HostSurface::Child) {
+    if questionnaire_eligible(request) {
         tools.push(Arc::new(QuestionnaireTool::new()));
     }
     if let Some(store) = request.artifact_store.clone() {
         tools.push(Arc::new(ArtifactReadTool::new(store)));
     }
-    tools.push(Arc::new(WriteTodosTool::new()));
+    if todo_planning_eligible(request) {
+        tools.push(Arc::new(WriteTodosTool::new()));
+    }
     tools.extend(
         request
             .tools
@@ -1964,6 +2007,30 @@ fn tools(request: &RuntimeRequest) -> Vec<Arc<dyn Tool>> {
 
 fn goal_component_eligible(request: &RuntimeRequest) -> bool {
     request.config.persistence.enabled.value && !matches!(request.surface, HostSurface::Child)
+}
+
+// The three predicates below decide both whether a tool is registered and
+// whether its instruction section is contributed. They exist as named
+// functions precisely so those two decisions cannot drift apart: a run whose
+// prompt describes a capability it did not register is a run that will try to
+// call a tool that is not there.
+
+/// Whether this run registers the root questionnaire tool.
+fn questionnaire_eligible(request: &RuntimeRequest) -> bool {
+    !matches!(request.surface, HostSurface::Child)
+}
+
+/// Whether this run registers the child-delegation `agent` tool.
+fn delegation_eligible(request: &RuntimeRequest) -> bool {
+    !matches!(request.surface, HostSurface::Child)
+}
+
+/// Whether this run registers the todo-planning tool.
+///
+/// A read-only posture's deliverable *is* a plan or a review, so a second
+/// parallel plan in tool state is redundant with the answer itself.
+fn todo_planning_eligible(request: &RuntimeRequest) -> bool {
+    !request.config.agent.active_posture().is_read_only()
 }
 
 fn read_only_extension(spec: agent_runtime_core::tool::ToolSpec) -> bool {

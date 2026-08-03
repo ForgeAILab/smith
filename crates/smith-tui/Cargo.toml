@@ -16,6 +16,7 @@ agent-runtime-core = { workspace = true }
 agent-runtime-registry = { workspace = true }
 crossterm = { workspace = true }
 ratatui = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 smith-host = { workspace = true }
 smith-tools = { workspace = true }
@@ -26,4 +27,5 @@ unicode-width = "0.2"
 agent-runtime = { workspace = true }
 agent-runtime-testkit = { workspace = true }
 futures-util = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true }

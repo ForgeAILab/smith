@@ -27,6 +27,7 @@ pub mod display;
 pub mod edit;
 pub mod list;
 pub mod read;
+pub mod read_state;
 pub mod search;
 pub mod shell;
 pub mod support;
@@ -39,6 +40,7 @@ pub use display::{ToolCallDisplay, has_tool_call_display_schema, project_tool_ca
 pub use edit::EditTool;
 pub use list::ListTool;
 pub use read::ReadTool;
+pub use read_state::{ReadDefect, ReadObservation, ReadRecorder};
 pub use search::SearchTool;
 pub use shell::ShellTool;
 
@@ -46,11 +48,11 @@ use std::sync::Arc;
 
 use agent_runtime_core::tool::Tool;
 
-/// Every built-in tool, ready to register with a runtime builder.
+/// The bare tools, before any session observation is attached.
 ///
 /// Ordering is stable so the model sees the same tool list across runs — a
 /// changing order needlessly invalidates a provider's prompt cache.
-pub fn all() -> Vec<Arc<dyn Tool>> {
+pub(crate) fn built_in() -> Vec<Arc<dyn Tool>> {
     vec![
         Arc::new(ReadTool),
         Arc::new(ListTool),
@@ -58,6 +60,16 @@ pub fn all() -> Vec<Arc<dyn Tool>> {
         Arc::new(EditTool),
         Arc::new(ShellTool),
     ]
+}
+
+/// Every built-in tool, ready to register with a runtime builder.
+///
+/// The tools are always wrapped, even without a [`ChangeRecorder`], because
+/// `edit`'s destructive operations are gated on what the session has read and
+/// that state has to live somewhere. Tools themselves stay pure functions of
+/// their arguments and the workspace.
+pub fn all() -> Vec<Arc<dyn Tool>> {
+    change::observe(None, ReadRecorder::new())
 }
 
 /// Only the tools that cannot change anything.

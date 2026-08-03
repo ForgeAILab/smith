@@ -618,6 +618,12 @@ async fn persistent_sessions_use_recoverable_semantic_summaries_with_disjoint_us
     ));
     let mut request = fixture.request(HostSurface::Headless);
     request.runtime.provider = Some(provider.clone());
+    // Pinned for the same reason as the fallback test: the scripted sequence
+    // encodes a cadence, and the scripted streams report no usage, so the
+    // completed-turn floor is what decides here.
+    let mut summary_config = smith_runtime::summary::SmithSemanticSummaryConfig::standard();
+    summary_config.policy.min_turns = 6;
+    request.runtime.semantic_summary = Some(summary_config);
     let host = start(request).await.expect("a hosted session");
     let summary_policy = host
         .runtime()
@@ -626,8 +632,12 @@ async fn persistent_sessions_use_recoverable_semantic_summaries_with_disjoint_us
         .as_ref()
         .expect("persistent hosts enable the standard summary policy");
     assert_eq!(summary_policy.purpose, "context.semantic_summary");
-    assert_eq!(summary_policy.trigger_turns, 6);
+    assert_eq!(summary_policy.min_turns, 6);
+    assert_eq!(summary_policy.trigger_percent, 85);
     assert_eq!(summary_policy.retain_turns, 2);
+    // Resolved from the model's declared input ceiling rather than guessed, so
+    // the pressure comparison has something authoritative to measure against.
+    assert_eq!(summary_policy.input_budget_tokens, 124_000);
 
     for index in 0..7 {
         host.session()
@@ -799,6 +809,13 @@ async fn a_failed_semantic_summary_preserves_the_structural_history_plan() {
     let mut request = fixture.request(HostSurface::Headless);
     request.runtime.provider = Some(provider.clone());
     request.runtime.observers.push(observer.clone());
+    // This test scripts an exact provider sequence, so it pins the cadence it
+    // depends on instead of inheriting the product default. Pressure is not
+    // measurable here — the scripted streams report no usage — so the floor is
+    // what decides, and it must match the script.
+    let mut summary_config = smith_runtime::summary::SmithSemanticSummaryConfig::standard();
+    summary_config.policy.min_turns = 6;
+    request.runtime.semantic_summary = Some(summary_config);
     let host = start(request).await.expect("a hosted session");
 
     for index in 0..7 {

@@ -285,6 +285,81 @@ impl Activity {
     }
 }
 
+/// What one session spent, with no conversation content in it.
+///
+/// The counters are the provider's own disjoint categories rather than a single
+/// blended total, because they price differently and a cache read is the number
+/// worth watching: it is the direct evidence that the stable prefix ordering is
+/// doing its job.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionUsage {
+    /// Turns that produced provider usage.
+    pub turns: u32,
+    /// Whether any counter came from the provider rather than an estimate.
+    pub reported: bool,
+    /// Per-counter totals, omitting counters the provider never reported.
+    pub totals: BTreeMap<CounterKind, u64>,
+    /// Context compactions observed.
+    pub compactions: u32,
+    /// Tokens those compactions reclaimed.
+    pub reclaimed_tokens: u64,
+}
+
+impl SessionUsage {
+    /// Whether anything at all was observed.
+    pub fn is_empty(&self) -> bool {
+        self.totals.is_empty() && self.turns == 0
+    }
+
+    /// Every counter's total.
+    pub fn total_tokens(&self) -> u64 {
+        self.totals.values().copied().sum()
+    }
+
+    /// A human-facing summary, or `None` when nothing was observed.
+    ///
+    /// An unreported session is marked as estimated rather than shown as a
+    /// confident zero: "0 tokens" and "the provider told us nothing" are
+    /// different facts, and only one of them is a bill.
+    pub fn render(&self) -> Option<String> {
+        if self.is_empty() {
+            return None;
+        }
+        let mark = if self.reported { "" } else { "~" };
+        let mut parts = Vec::new();
+        for (kind, value) in &self.totals {
+            parts.push(format!(
+                "{} {mark}{}",
+                counter_label(*kind),
+                compact_tokens(*value)
+            ));
+        }
+        let mut line = format!("{} turn(s) · {}", self.turns, parts.join(" · "));
+        if !self.reported {
+            line.push_str(" · estimated");
+        }
+        if self.compactions > 0 {
+            line.push_str(&format!(
+                " · {} compaction(s) reclaiming {}",
+                self.compactions,
+                compact_tokens(self.reclaimed_tokens)
+            ));
+        }
+        Some(line)
+    }
+}
+
+/// A short label for one provider counter.
+pub fn counter_label(kind: CounterKind) -> &'static str {
+    match kind {
+        CounterKind::InputUncached => "input",
+        CounterKind::InputCached => "cached",
+        CounterKind::CacheWrite => "cache-write",
+        CounterKind::Output => "output",
+        CounterKind::Reasoning => "reasoning",
+    }
+}
+
 /// The header's model of session status.
 #[derive(Debug, Clone)]
 pub struct Status {
@@ -312,6 +387,11 @@ pub struct Status {
     pub goal: Option<GoalProjection>,
     /// Whether any provider usage has been reported this session.
     usage_reported: bool,
+    /// Per-counter session totals, kept separately from the cumulative input
+    /// figure the header shows so an exit report can name each counter.
+    totals: BTreeMap<CounterKind, u64>,
+    /// Turns that produced provider usage this session.
+    turns: u32,
 }
 
 impl Status {
@@ -330,6 +410,8 @@ impl Status {
             activity: Activity::Idle,
             goal: None,
             usage_reported: false,
+            totals: BTreeMap::new(),
+            turns: 0,
         }
     }
 
@@ -381,6 +463,30 @@ impl Status {
         }
         self.usage_reported = true;
         self.context = TokenCount::reported(self.context.value.saturating_add(input));
+        self.turns = self.turns.saturating_add(1);
+        for kind in [
+            CounterKind::InputUncached,
+            CounterKind::InputCached,
+            CounterKind::CacheWrite,
+            CounterKind::Output,
+            CounterKind::Reasoning,
+        ] {
+            let value = delta.get(kind);
+            if value > 0 {
+                *self.totals.entry(kind).or_insert(0) += value;
+            }
+        }
+    }
+
+    /// A bounded, content-free summary of what this session spent.
+    pub fn session_usage(&self) -> SessionUsage {
+        SessionUsage {
+            turns: self.turns,
+            reported: self.usage_reported,
+            totals: self.totals.clone(),
+            compactions: self.capabilities.compactions,
+            reclaimed_tokens: self.capabilities.reclaimed_tokens,
+        }
     }
 
     /// Records a cache observation.

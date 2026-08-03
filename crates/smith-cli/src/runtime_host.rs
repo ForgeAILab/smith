@@ -184,6 +184,39 @@ pub(super) async fn start_host(
     })
 }
 
+/// Prints what the session spent and records it for later comparison.
+///
+/// Analytics must never be able to fail a session, so a log that cannot be
+/// written is dropped rather than surfaced: the user is quitting, and there is
+/// nothing useful they could do about it.
+fn report_session_usage(
+    host: &HostSession,
+    session: &str,
+    usage: &smith_tui::status::SessionUsage,
+) {
+    let Some(line) = usage.render() else {
+        return;
+    };
+    println!("{line}");
+
+    let policy = host.runtime().policy();
+    let record = smith_tui::usage_log::SessionUsageRecord::new(
+        session,
+        Some(policy.provider_name.clone()),
+        policy.model.as_str(),
+        policy.agent_profile.clone(),
+        usage,
+    );
+    // Beside this project's session state, so the log inherits whatever
+    // directory the user already trusts with their transcripts.
+    if let Some(paths) = host.paths() {
+        let _ = smith_tui::usage_log::append(
+            &smith_tui::usage_log::default_path(paths.directory()),
+            &record,
+        );
+    }
+}
+
 pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
     let mut resume = args.resume.take();
     let mut frozen_catalog = None;
@@ -248,7 +281,10 @@ pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
         )
         .await?
         {
-            InteractiveExit::Quit => return Ok(0),
+            InteractiveExit::Quit(usage) => {
+                report_session_usage(&host, &current_session, &usage);
+                return Ok(0);
+            }
             InteractiveExit::Reconfigure(command) => {
                 match &command {
                     PaletteCommand::Connect(provider) => {

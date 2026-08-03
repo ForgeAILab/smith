@@ -1851,7 +1851,15 @@ max_output_tokens = 4096
         assert_eq!(result["approval_required"]["tool"], "edit");
         assert_eq!(
             result["approval_required"]["argument_keys"],
-            serde_json::json!(["new_string", "old_string", "path", "replace_all"])
+            // `operation` is normalized in by `edit::prepare`, so the key the
+            // permission set was derived from is visible to the approver.
+            serde_json::json!([
+                "new_string",
+                "old_string",
+                "operation",
+                "path",
+                "replace_all"
+            ])
         );
         assert_eq!(
             result["approval_required"]["permissions"],

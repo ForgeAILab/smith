@@ -369,7 +369,11 @@ mod tests {
             ("read", RiskLevel::Low),
             ("list", RiskLevel::Low),
             ("search", RiskLevel::Low),
-            ("edit", RiskLevel::Medium),
+            // `edit` reaches `High` because its upper bound now includes
+            // `FsDelete`. A descriptor states what an ability could ever do,
+            // and this one can remove a file; the narrower per-call permission
+            // set is what the approval prompt actually shows.
+            ("edit", RiskLevel::High),
             ("shell", RiskLevel::High),
             ("agent", RiskLevel::High),
         ];
@@ -421,6 +425,7 @@ mod tests {
                 Permission::FsRead,
                 Permission::FsWrite,
                 Permission::FsCreate,
+                Permission::FsDelete,
             ])
         );
         assert_eq!(

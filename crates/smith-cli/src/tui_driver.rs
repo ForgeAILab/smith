@@ -3,7 +3,7 @@
 use super::*;
 
 pub(super) enum InteractiveExit {
-    Quit,
+    Quit(smith_tui::status::SessionUsage),
     Reconfigure(PaletteCommand),
 }
 
@@ -252,7 +252,7 @@ pub(super) async fn run_tui(
                                     ));
                                 }
                             }
-                            Some(Action::Quit) => break InteractiveExit::Quit,
+                            Some(Action::Quit) => break InteractiveExit::Quit(app.status.session_usage()),
                             Some(Action::Reconfigure(command)) => {
                                 break InteractiveExit::Reconfigure(command);
                             }
@@ -423,7 +423,7 @@ pub(super) async fn run_tui(
                         }
                         dirty = true;
                     }
-                    None => break InteractiveExit::Quit,
+                    None => break InteractiveExit::Quit(app.status.session_usage()),
                 }
             }
 
@@ -468,7 +468,7 @@ pub(super) async fn run_tui(
         interactions.drain_answers(&mut app);
         host.set_goal_continuation_enabled(!app.should_defer_goal_continuation());
         if app.should_quit {
-            break InteractiveExit::Quit;
+            break InteractiveExit::Quit(app.status.session_usage());
         }
     };
     Ok(exit)

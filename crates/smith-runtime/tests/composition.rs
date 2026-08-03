@@ -494,6 +494,11 @@ async fn a_resolved_fake_configuration_builds_a_runtime_and_runs_a_turn() {
                 instructions: None,
                 revision: policy.agent_profile_revision.clone(),
             }),
+            // A terminal root run on a build posture registers all three
+            // gated capabilities, so all three sections are contributed.
+            todo_planning: true,
+            questionnaire: true,
+            delegation: true,
             ..smith_runtime::prompt::DynamicPromptContext::default()
         })
     );
@@ -579,6 +584,53 @@ async fn runtime_debug_reports_profile_identity_without_instruction_text() {
     }
 }
 
+/// The instruction sections and the tool surface are decided by the same
+/// predicates, so a section describing an unregistered tool is the defect
+/// under test here — not merely wasted prefix tokens.
+#[tokio::test]
+async fn instruction_sections_match_the_registered_tool_surface() {
+    let review = FAKE_CONFIG.replace(
+        "model = \"example-model\"",
+        "model = \"example-model\"\nposture = \"review\"",
+    );
+    let fixture = Fixture::new(&review);
+    let smith = factory::build(request(&fixture, HostSurface::Terminal))
+        .await
+        .expect("a review-mode runtime");
+
+    assert!(!smith.policy().tools.contains(&"write_todos".to_owned()));
+    assert!(!smith.policy().system_prompt.contains("Use write_todos"));
+    // A read-only posture still delegates and still asks the user.
+    assert!(smith.policy().tools.contains(&"ask_user".to_owned()));
+    assert!(
+        smith
+            .policy()
+            .system_prompt
+            .contains("one through three short questions")
+    );
+
+    let fixture = Fixture::new(FAKE_CONFIG);
+    let child = factory::build(request(&fixture, HostSurface::Child))
+        .await
+        .expect("a child runtime");
+
+    let prompt = &child.policy().system_prompt;
+    assert!(!child.policy().tools.contains(&"ask_user".to_owned()));
+    assert!(
+        !prompt.contains("one through three short questions"),
+        "{prompt}"
+    );
+    assert!(!child.policy().tools.contains(&"agent".to_owned()));
+    assert!(!prompt.contains("Delegate only a bounded"), "{prompt}");
+    // A child still plans, and still carries the unconditional policy.
+    assert!(child.policy().tools.contains(&"write_todos".to_owned()));
+    assert!(prompt.contains("Use write_todos"), "{prompt}");
+    assert!(
+        prompt.contains("Never say a command, test, build"),
+        "{prompt}"
+    );
+}
+
 #[tokio::test]
 async fn plan_profile_narrows_the_live_tool_view_despite_widening_instructions() {
     let config = FAKE_CONFIG.replace(
@@ -599,7 +651,8 @@ async fn plan_profile_narrows_the_live_tool_view_despite_widening_instructions()
             "list",
             "search",
             "ask_user",
-            "write_todos",
+            // No `write_todos`: a plan posture's deliverable is the plan, so a
+            // parallel todo plan in tool state would duplicate the answer.
             "get_goal",
             "create_goal",
             "update_goal",
@@ -868,6 +921,9 @@ async fn provider_planning_records_every_versioned_smith_prompt_fragment() {
             instructions: None,
             revision: smith.policy().agent_profile_revision.clone(),
         }),
+        todo_planning: true,
+        questionnaire: true,
+        delegation: true,
         ..smith_runtime::prompt::DynamicPromptContext::default()
     });
     let snapshot = session.snapshot();

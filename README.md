@@ -28,20 +28,33 @@ Every path resolves through the session's workspace, so containment is enforced
 in one place rather than re-implemented per tool. Each invocation is prepared
 before approval: argument validation and canonical resource resolution produce
 the exact permissions, target, deadline, display, and fingerprint that are
-authorized and then executed. `edit` requests authority for its canonical file;
-`shell` conservatively declares broad workspace, process, and network authority.
+authorized and then executed. `edit` requests authority for its canonical file,
+narrowed to the operation it was given — `create` asks to create, `delete` asks
+only to read and delete, and neither asks for process or network authority the
+way routing a removal through `shell rm` would. `shell` conservatively declares
+broad workspace, process, and network authority.
 The read-only three run without asking. Reads, listings, searches, and command
 output are bounded. Oversized output is stored in the session-private artifact
 store and represented to the model by a bounded preview plus a retrievable
 reference.
 
+`edit` carries four operations: `replace` (an exact string that must appear
+once, and the default), `create`, `overwrite`, and `delete`. The two that
+destroy content the call does not itself carry are refused unless the session
+has already read the target in full and its modification time is unchanged —
+so an overwrite cannot silently discard work done in the user's own editor
+between the agent's read and its write. An exact `replace` needs no such
+precondition: a stale `old_string` simply fails to match.
+
 `shell` puts each command in its own process group and signals the group, so a
 build script's background watcher does not outlive the invocation.
 
 Smith's root surface also composes `ask_user`, `write_todos`, and depth-one
-delegation through Agent Runtime's ability registry. Initial activation is
-intent-scoped: a read-only request does not advertise mutation merely because
-`edit` and `shell` are registered. Trusted skills, bounded memory, todo state,
+delegation through Agent Runtime's ability registry — each registered only
+where it applies, and each described in the prompt only where it is registered,
+so a child agent is never instructed to use a tool it does not have. Initial
+activation is intent-scoped: a read-only request does not advertise mutation
+merely because `edit` and `shell` are registered. Trusted skills, bounded memory, todo state,
 artifact offloading, and semantic summarization contribute through the same
 session-scoped harness pipeline.
 

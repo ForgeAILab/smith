@@ -14,6 +14,7 @@
 pub mod abilities;
 pub mod artifact;
 mod authority;
+pub mod budget_notice;
 pub mod built_in_skills;
 pub mod catalog;
 pub mod chatgpt;

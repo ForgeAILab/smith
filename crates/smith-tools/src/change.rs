@@ -11,6 +11,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use crate::read_state::ReadRecorder;
 use agent_runtime_core::error::{ErrorKind, RuntimeError};
 use agent_runtime_core::tool::{
     InvocationContext, PreparationContext, PreparedToolCall, Tool, ToolOutcome, ToolSpec,
@@ -582,12 +583,25 @@ fn coalesce(mutations: Vec<ToolMutation>) -> Vec<ToolMutation> {
 
 /// Wraps built-in tools with mutation attribution.
 pub fn observed_tools(recorder: Arc<ChangeRecorder>) -> Vec<Arc<dyn Tool>> {
-    crate::all()
+    observe(Some(recorder), ReadRecorder::new())
+}
+
+/// Wraps the built-in tools with whatever session state they need.
+///
+/// Mutation attribution is optional — a caller may not want undo — but read
+/// state never is, because `edit`'s `overwrite` and `delete` are refused
+/// without it.
+pub(crate) fn observe(
+    recorder: Option<Arc<ChangeRecorder>>,
+    reads: Arc<ReadRecorder>,
+) -> Vec<Arc<dyn Tool>> {
+    crate::built_in()
         .into_iter()
         .map(|inner| {
             Arc::new(ObservedTool {
                 inner,
                 recorder: recorder.clone(),
+                reads: reads.clone(),
             }) as Arc<dyn Tool>
         })
         .collect()
@@ -596,7 +610,16 @@ pub fn observed_tools(recorder: Arc<ChangeRecorder>) -> Vec<Arc<dyn Tool>> {
 #[derive(Debug)]
 struct ObservedTool {
     inner: Arc<dyn Tool>,
-    recorder: Arc<ChangeRecorder>,
+    recorder: Option<Arc<ChangeRecorder>>,
+    reads: Arc<ReadRecorder>,
+}
+
+impl ObservedTool {
+    fn record(&self, mutation: ToolMutation) {
+        if let Some(recorder) = &self.recorder {
+            recorder.record(mutation);
+        }
+    }
 }
 
 #[async_trait]
@@ -610,7 +633,24 @@ impl Tool for ObservedTool {
         arguments: Value,
         ctx: &PreparationContext,
     ) -> Result<PreparedToolCall, RuntimeError> {
-        self.inner.prepare(arguments, ctx).await
+        let prepared = self.inner.prepare(arguments, ctx).await?;
+        // Enforced after the inner prepare so the operation has been validated
+        // and normalized, and so a doomed destructive call never reaches the
+        // approval prompt. `edit` owns the rule; this supplies the state.
+        if prepared.tool() == "edit"
+            && let Some(defect) = crate::edit::read_state_defect(prepared.arguments(), &self.reads)
+        {
+            let display = prepared
+                .arguments()
+                .get("path")
+                .and_then(Value::as_str)
+                .map_or_else(
+                    || "the target".to_owned(),
+                    |path| display_relative(ctx, path),
+                );
+            return Err(RuntimeError::new(ErrorKind::Tool, defect.message(&display)));
+        }
+        Ok(prepared)
     }
 
     async fn invoke(
@@ -621,25 +661,36 @@ impl Tool for ObservedTool {
         let tool = prepared.tool().to_owned();
         let call_id = prepared.call_id().as_str().to_owned();
         let mutates = prepared.effects().mutates();
-        let edit_path = if tool == "edit" {
-            prepared
-                .arguments()
-                .get("path")
-                .and_then(Value::as_str)
-                .and_then(|path| ctx.workspace.resolve(path).ok())
-                .map(PathBuf::from)
-        } else {
-            None
+        let target = |wanted: &str| {
+            (tool == wanted)
+                .then(|| {
+                    prepared
+                        .arguments()
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .and_then(|path| ctx.workspace.resolve(path).ok())
+                        .map(PathBuf::from)
+                })
+                .flatten()
         };
+        let edit_path = target("edit");
+        let read_path = target("read");
         let before = match &edit_path {
             Some(path) => bounded_image(path),
             None => Ok(None),
         };
         let outcome = self.inner.invoke(prepared, ctx).await;
+        if tool == "read" {
+            self.observe_read(&outcome, &read_path);
+        }
         match (&outcome, edit_path, before) {
             (Ok(outcome), Some(path), Ok(before)) if !outcome.is_error => {
-                match bounded_image(&path) {
-                    Ok(Some(after)) => self.recorder.record(ToolMutation::Exact(EditMutation {
+                // `bounded_image` returns `None` for a path that is not there,
+                // which after a successful call is exactly what a completed
+                // delete looks like. Both images absent is the ambiguous case:
+                // nothing existed before and nothing exists now.
+                match (bounded_image(&path), before.is_some()) {
+                    (Ok(Some(after)), _) => self.record(ToolMutation::Exact(EditMutation {
                         call_id: call_id.clone(),
                         path,
                         before_hash: hash(before.as_deref()),
@@ -648,26 +699,69 @@ impl Tool for ObservedTool {
                         after: Some(after),
                         recovery_path: None,
                     })),
-                    _ => self.recorder.record(ToolMutation::Ambiguous {
+                    (Ok(None), true) => self.record(ToolMutation::Exact(EditMutation {
+                        call_id: call_id.clone(),
+                        path,
+                        before_hash: hash(before.as_deref()),
+                        after_hash: hash(None),
+                        before,
+                        after: None,
+                        recovery_path: None,
+                    })),
+                    _ => self.record(ToolMutation::Ambiguous {
                         call_id: call_id.clone(),
                         tool: tool.clone(),
                     }),
                 }
             }
             (_, Some(_), Err(_)) if tool == "edit" => {
-                self.recorder.record(ToolMutation::Ambiguous {
+                self.record(ToolMutation::Ambiguous {
                     call_id: call_id.clone(),
                     tool: tool.clone(),
                 });
             }
             (_, _, _) if mutates && tool != "edit" => {
-                self.recorder
-                    .record(ToolMutation::Ambiguous { call_id, tool });
+                self.record(ToolMutation::Ambiguous { call_id, tool });
             }
             _ => {}
         }
         outcome
     }
+}
+
+impl ObservedTool {
+    /// Records a completed read, and whether it showed the whole file.
+    ///
+    /// "Whole file" is derived from the outcome the read actually produced
+    /// rather than from the requested arguments: a `limit` larger than the file
+    /// is a full view, and a caller that omits both is only a full view because
+    /// the default happened to cover it.
+    fn observe_read(&self, outcome: &Result<ToolOutcome, RuntimeError>, path: &Option<PathBuf>) {
+        let (Ok(outcome), Some(path)) = (outcome, path) else {
+            return;
+        };
+        if outcome.is_error {
+            return;
+        }
+        let total = outcome.value.get("lines").and_then(Value::as_u64);
+        let shown = outcome
+            .value
+            .get("shown")
+            .and_then(Value::as_array)
+            .and_then(|range| match range.as_slice() {
+                [first, last] => Some((first.as_u64()?, last.as_u64()?)),
+                _ => None,
+            });
+        let full = matches!((total, shown), (Some(total), Some((1, last))) if last == total);
+        self.reads.record(path.clone(), full);
+    }
+}
+
+/// Renders a prepared canonical path the way the tools themselves would.
+fn display_relative(ctx: &PreparationContext, canonical: &str) -> String {
+    std::path::Path::new(canonical)
+        .strip_prefix(ctx.workspace.root())
+        .map_or_else(|_| canonical.to_owned(), |path| path.display().to_string())
 }
 
 fn bounded_image(path: &Path) -> Result<Option<Vec<u8>>, RuntimeError> {
@@ -911,6 +1005,201 @@ fn io_error(error: impl std::fmt::Display) -> RuntimeError {
 
 fn unavailable(message: impl Into<String>) -> RuntimeError {
     RuntimeError::new(ErrorKind::Workspace, message)
+}
+
+#[cfg(test)]
+mod observed_session {
+    use super::*;
+    use crate::testing::{call, context, text_of};
+    use serde_json::json;
+
+    /// A composed session: the real wrapper, the real recorders.
+    fn session() -> (tempfile::TempDir, Vec<Arc<dyn Tool>>, InvocationContext) {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let ctx = context(dir.path());
+        let tools = observe(
+            Some(Arc::new(ChangeRecorder::new(None))),
+            ReadRecorder::new(),
+        );
+        (dir, tools, ctx)
+    }
+
+    async fn read_fully(tools: &[Arc<dyn Tool>], ctx: &InvocationContext, path: &str) {
+        call(tools, "read", json!({ "path": path }), ctx)
+            .await
+            .expect("the read succeeds");
+    }
+
+    #[tokio::test]
+    async fn overwriting_an_unread_file_is_refused() {
+        let (dir, tools, ctx) = session();
+        std::fs::write(dir.path().join("a.rs"), "fn a() {}\n").expect("seed");
+
+        let error = call(
+            &tools,
+            "edit",
+            json!({"path": "a.rs", "operation": "overwrite", "new_string": "gone\n"}),
+            &ctx,
+        )
+        .await
+        .expect_err("an unread file cannot be overwritten");
+
+        assert!(error.to_string().contains("has not been read"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.rs")).expect("still there"),
+            "fn a() {}\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_partial_read_does_not_authorize_an_overwrite() {
+        let (dir, tools, ctx) = session();
+        let body: String = (1..=50).map(|n| format!("line {n}\n")).collect();
+        std::fs::write(dir.path().join("long.txt"), &body).expect("seed");
+
+        call(
+            &tools,
+            "read",
+            json!({"path": "long.txt", "offset": 1, "limit": 5}),
+            &ctx,
+        )
+        .await
+        .expect("the partial read succeeds");
+
+        let error = call(
+            &tools,
+            "edit",
+            json!({"path": "long.txt", "operation": "overwrite", "new_string": "short\n"}),
+            &ctx,
+        )
+        .await
+        .expect_err("a window does not authorize replacing the whole file");
+
+        assert!(error.to_string().contains("only read in part"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("long.txt")).expect("still there"),
+            body
+        );
+    }
+
+    #[tokio::test]
+    async fn an_external_change_invalidates_the_read() {
+        let (dir, tools, ctx) = session();
+        let path = dir.path().join("a.rs");
+        std::fs::write(&path, "fn a() {}\n").expect("seed");
+        read_fully(&tools, &ctx, "a.rs").await;
+
+        // The user edits the file in their own editor.
+        std::fs::write(&path, "fn a() { work_in_progress(); }\n").expect("user edit");
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .and_then(|file| {
+                file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(1))
+            })
+            .expect("retouch");
+
+        let error = call(
+            &tools,
+            "edit",
+            json!({"path": "a.rs", "operation": "overwrite", "new_string": "clobbered\n"}),
+            &ctx,
+        )
+        .await
+        .expect_err("a file changed since the read cannot be overwritten");
+
+        assert!(
+            error.to_string().contains("changed since it was read"),
+            "{error}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("still there"),
+            "fn a() { work_in_progress(); }\n",
+            "the user's work must survive"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_full_read_authorizes_overwrite_and_delete() {
+        let (dir, tools, ctx) = session();
+        std::fs::write(dir.path().join("a.rs"), "fn a() {}\n").expect("seed");
+        read_fully(&tools, &ctx, "a.rs").await;
+
+        let outcome = call(
+            &tools,
+            "edit",
+            json!({"path": "a.rs", "operation": "overwrite", "new_string": "fn b() {}\n"}),
+            &ctx,
+        )
+        .await
+        .expect("the overwrite runs");
+        assert!(!outcome.is_error, "{}", text_of(&outcome));
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.rs")).expect("rewritten"),
+            "fn b() {}\n"
+        );
+
+        // The overwrite changed the file, so the earlier read no longer proves
+        // anything about it — exactly the staleness rule, applied to ourselves.
+        read_fully(&tools, &ctx, "a.rs").await;
+        let outcome = call(
+            &tools,
+            "edit",
+            json!({"path": "a.rs", "operation": "delete"}),
+            &ctx,
+        )
+        .await
+        .expect("the delete runs");
+        assert!(!outcome.is_error, "{}", text_of(&outcome));
+        assert!(!dir.path().join("a.rs").exists());
+    }
+
+    #[tokio::test]
+    async fn exact_replacement_needs_no_prior_read() {
+        let (dir, tools, ctx) = session();
+        std::fs::write(dir.path().join("a.rs"), "fn a() {}\n").expect("seed");
+
+        let outcome = call(
+            &tools,
+            "edit",
+            json!({"path": "a.rs", "old_string": "fn a", "new_string": "fn b"}),
+            &ctx,
+        )
+        .await
+        .expect("an exact replacement proves its own currency");
+        assert!(!outcome.is_error, "{}", text_of(&outcome));
+    }
+
+    #[tokio::test]
+    async fn a_deleted_file_is_recorded_with_its_pre_image() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let ctx = context(dir.path());
+        let recorder = Arc::new(ChangeRecorder::new(None));
+        let tools = observe(Some(recorder.clone()), ReadRecorder::new());
+        std::fs::write(dir.path().join("a.rs"), "fn a() {}\n").expect("seed");
+
+        recorder.start_turn();
+        read_fully(&tools, &ctx, "a.rs").await;
+        call(
+            &tools,
+            "edit",
+            json!({"path": "a.rs", "operation": "delete"}),
+            &ctx,
+        )
+        .await
+        .expect("the delete runs");
+        let set = recorder.finish_turn().expect("a change set");
+
+        assert!(
+            set.is_fully_attributable(),
+            "a delete must be exactly attributed so it can be undone: {set:?}"
+        );
+        let [ToolMutation::Exact(edit)] = set.mutations.as_slice() else {
+            panic!("expected one exact mutation: {set:?}");
+        };
+        assert_eq!(edit.before.as_deref(), Some(b"fn a() {}\n".as_slice()));
+        assert_eq!(edit.after, None, "a removed file has no post-image");
+    }
 }
 
 #[cfg(test)]
