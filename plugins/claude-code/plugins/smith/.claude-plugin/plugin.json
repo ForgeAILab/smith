@@ -1,0 +1,8 @@
+{
+  "name": "smith",
+  "version": "0.1.0",
+  "description": "Hand a task to Smith, a terminal coding agent running on your own configured provider.",
+  "author": {
+    "name": "Smith"
+  }
+}
