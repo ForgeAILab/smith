@@ -463,7 +463,7 @@ impl App {
                 None
             }
             KeyCode::Backspace => {
-                self.composer.backspace();
+                self.composer_backspace_over_attachment();
                 if self.composer.is_empty() {
                     self.overlay = None;
                     return None;
@@ -732,19 +732,19 @@ impl App {
                 unreachable!("ordinary input without a child reference was prepared above")
             }
             (KeyCode::Backspace, _) => {
-                self.composer.backspace();
+                self.composer_backspace_over_attachment();
                 None
             }
             (KeyCode::Delete, _) => {
-                self.composer.delete();
+                self.composer_delete_over_attachment();
                 None
             }
             (KeyCode::Left, _) => {
-                self.composer.move_left();
+                self.composer_move_left_over_attachment();
                 None
             }
             (KeyCode::Right, _) => {
-                self.composer.move_right();
+                self.composer_move_right_over_attachment();
                 None
             }
             (KeyCode::Home, _) => {

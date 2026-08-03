@@ -38,8 +38,8 @@ pub(super) const MAX_PASTED_CHUNKS: usize = 50;
 /// One large paste stored aside so the composer stays editable.
 ///
 /// The composer holds only the placeholder text — `[Pasted text #2 +8 lines]`
-/// — which the user can cursor over or delete like ordinary characters. The
-/// stored content re-enters the outgoing text only at submit time.
+/// — which the user crosses or deletes as one logical unit. The stored content
+/// re-enters provider input and the committed transcript only at submit time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PastedChunk {
     pub(super) placeholder: String,
@@ -68,6 +68,7 @@ pub(super) struct ImageAttachment {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedSubmission {
     pub(super) display_text: String,
+    pub(super) committed_text: String,
     pub(super) expanded_text: String,
     pub(super) files: Vec<String>,
     pub(super) images: Vec<ImageAttachment>,
@@ -75,9 +76,14 @@ pub struct PreparedSubmission {
 }
 
 impl PreparedSubmission {
-    /// Exact compact text shown in the composer, transcript, and queue preview.
+    /// Exact compact text shown in the composer and queue preview.
     pub fn display_text(&self) -> &str {
         &self.display_text
+    }
+
+    /// User text shown once the runtime commits this input.
+    pub fn committed_text(&self) -> &str {
+        &self.committed_text
     }
 
     /// Canonical workspace-relative files to read at dispatch time.
@@ -101,6 +107,8 @@ impl PreparedSubmission {
         for entry in entries {
             merged.display_text.push_str("\n\n");
             merged.display_text.push_str(&entry.display_text);
+            merged.committed_text.push_str("\n\n");
+            merged.committed_text.push_str(&entry.committed_text);
             merged.expanded_text.push_str("\n\n");
             merged.expanded_text.push_str(&entry.expanded_text);
             merged.files.extend(entry.files);

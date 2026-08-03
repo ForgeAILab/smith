@@ -243,7 +243,7 @@ impl App {
                     .position(|entry| &entry.receipt.id == steer)
                     && let Some(entry) = self.pending_input.accepted_steers.remove(index)
                 {
-                    self.transcript.push_user(entry.submission.display_text);
+                    self.transcript.push_user(entry.submission.committed_text);
                     self.follow_newest();
                 }
             }

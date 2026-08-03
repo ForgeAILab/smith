@@ -6,6 +6,7 @@
 //! someone types an accented character into a byte-indexed buffer.
 
 use std::collections::VecDeque;
+use std::ops::Range;
 
 /// Composer history is intentionally bounded, process-local UI state.
 const MAX_HISTORY_ENTRIES: usize = 100;
@@ -62,6 +63,31 @@ impl Composer {
             .map_or(self.text.len(), |(offset, _)| offset)
     }
 
+    /// Character ranges occupied by registered placeholder labels.
+    ///
+    /// The composer remains a plain string; callers provide only labels that
+    /// still own out-of-band material. Returning character offsets keeps every
+    /// later edit on the same Unicode-safe coordinate system as the cursor.
+    pub fn registered_ranges<'a>(
+        &self,
+        placeholders: impl IntoIterator<Item = &'a str>,
+    ) -> Vec<Range<usize>> {
+        let mut ranges = Vec::new();
+        for placeholder in placeholders {
+            if placeholder.is_empty() {
+                continue;
+            }
+            let length = placeholder.chars().count();
+            for (byte_start, _) in self.text.match_indices(placeholder) {
+                let start = self.text[..byte_start].chars().count();
+                ranges.push(start..start + length);
+            }
+        }
+        ranges.sort_unstable_by_key(|range| (range.start, range.end));
+        ranges.dedup();
+        ranges
+    }
+
     /// Inserts a character at the cursor.
     pub fn insert(&mut self, ch: char) {
         self.leave_history_navigation();
@@ -89,6 +115,19 @@ impl Composer {
         self.leave_history_navigation();
     }
 
+    /// Deletes the character or registered atomic range before the cursor.
+    pub fn backspace_over(&mut self, atomic_ranges: &[Range<usize>]) {
+        if let Some(range) = atomic_ranges
+            .iter()
+            .find(|range| range.start < self.cursor && self.cursor <= range.end)
+            .cloned()
+        {
+            self.remove_range(range);
+        } else {
+            self.backspace();
+        }
+    }
+
     /// Deletes the character at the cursor.
     pub fn delete(&mut self) {
         if self.cursor >= self.len() {
@@ -99,14 +138,61 @@ impl Composer {
         self.leave_history_navigation();
     }
 
+    /// Deletes the character or registered atomic range after the cursor.
+    pub fn delete_over(&mut self, atomic_ranges: &[Range<usize>]) {
+        if let Some(range) = atomic_ranges
+            .iter()
+            .find(|range| range.start <= self.cursor && self.cursor < range.end)
+            .cloned()
+        {
+            self.remove_range(range);
+        } else {
+            self.delete();
+        }
+    }
+
     /// Moves the cursor one character left.
     pub fn move_left(&mut self) {
         self.cursor = self.cursor.saturating_sub(1);
     }
 
+    /// Moves left by one character or across one registered atomic range.
+    pub fn move_left_over(&mut self, atomic_ranges: &[Range<usize>]) {
+        if let Some(range) = atomic_ranges
+            .iter()
+            .find(|range| range.start < self.cursor && self.cursor <= range.end)
+        {
+            self.cursor = range.start;
+        } else {
+            self.move_left();
+        }
+    }
+
     /// Moves the cursor one character right.
     pub fn move_right(&mut self) {
         self.cursor = (self.cursor + 1).min(self.len());
+    }
+
+    /// Moves right by one character or across one registered atomic range.
+    pub fn move_right_over(&mut self, atomic_ranges: &[Range<usize>]) {
+        if let Some(range) = atomic_ranges
+            .iter()
+            .find(|range| range.start <= self.cursor && self.cursor < range.end)
+        {
+            self.cursor = range.end;
+        } else {
+            self.move_right();
+        }
+    }
+
+    fn remove_range(&mut self, range: Range<usize>) {
+        debug_assert!(range.start < range.end);
+        debug_assert!(range.end <= self.len());
+        let start = self.byte_offset(range.start);
+        let end = self.byte_offset(range.end);
+        self.text.replace_range(start..end, "");
+        self.cursor = range.start;
+        self.leave_history_navigation();
     }
 
     /// Moves the cursor to the start of the current line.
@@ -331,6 +417,68 @@ mod tests {
         composer.move_left();
         composer.insert('!');
         assert_eq!(composer.text(), "caf!é ");
+    }
+
+    #[test]
+    fn registered_ranges_use_character_offsets_and_ignore_other_text() {
+        let mut composer = Composer::new();
+        let paste = "[Pasted text #1 +3 lines]";
+        let image = "[Image #1 32×32]";
+        composer.insert_str(&format!("é{paste}{image}[Image #9]終"));
+
+        let paste_start = 1;
+        let image_start = paste_start + paste.chars().count();
+        assert_eq!(
+            composer.registered_ranges([paste, image]),
+            [
+                paste_start..image_start,
+                image_start..image_start + image.chars().count()
+            ]
+        );
+    }
+
+    #[test]
+    fn horizontal_movement_crosses_adjacent_registered_ranges() {
+        let mut composer = Composer::new();
+        let paste = "[Pasted text #1 +3 lines]";
+        let image = "[Image #1 32×32]";
+        composer.insert_str(&format!("{paste}{image}"));
+        let ranges = composer.registered_ranges([paste, image]);
+
+        composer.move_left_over(&ranges);
+        assert_eq!(composer.cursor(), paste.chars().count());
+        composer.move_left_over(&ranges);
+        assert_eq!(composer.cursor(), 0);
+        composer.move_right_over(&ranges);
+        assert_eq!(composer.cursor(), paste.chars().count());
+        composer.move_right_over(&ranges);
+        assert_eq!(composer.cursor(), composer.len());
+    }
+
+    #[test]
+    fn deletion_removes_adjacent_registered_ranges_in_key_direction() {
+        let mut composer = Composer::new();
+        let paste = "[Pasted text #1 +3 lines]";
+        let image = "[Image #1 32×32]";
+        composer.insert_str(&format!("{paste}{image}"));
+
+        let ranges = composer.registered_ranges([paste, image]);
+        composer.backspace_over(&ranges);
+        assert_eq!(composer.text(), paste);
+        assert_eq!(composer.cursor(), paste.chars().count());
+        let ranges = composer.registered_ranges([paste, image]);
+        composer.backspace_over(&ranges);
+        assert!(composer.is_empty());
+
+        composer.insert_str(&format!("{paste}{image}"));
+        composer.move_home();
+        let ranges = composer.registered_ranges([paste, image]);
+        composer.delete_over(&ranges);
+        assert_eq!(composer.text(), image);
+        assert_eq!(composer.cursor(), 0);
+        let ranges = composer.registered_ranges([paste, image]);
+        composer.delete_over(&ranges);
+        assert!(composer.is_empty());
     }
 
     #[test]

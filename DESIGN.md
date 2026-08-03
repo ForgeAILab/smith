@@ -233,6 +233,7 @@ enabled independently of pointer reporting.
 | `Tab` | Queue a non-empty ordinary prompt while busy; cycle `profile_order` only when empty and idle; otherwise complete or move the active overlay selection |
 | `Shift+Tab` | Move the active completion/questionnaire selection backward |
 | `Alt+Up` | Restore the newest explicitly queued future turn for editing; never edit a runtime-accepted steer |
+| `Left` / `Right` / `Backspace` / `Delete` | Edit ordinary text by Unicode character; cross or remove a registered paste/image placeholder as one unit |
 | `PageUp` / `PageDown` / `Home` / `End` | Scroll transcript or jump to either edge |
 | `Ctrl+L` | Jump to newest and re-enable follow |
 | `?` (empty composer) | Show the same local guide as `/help`; never contact the provider |
@@ -241,6 +242,16 @@ enabled independently of pointer reporting.
 | `Up` / `Down` or `1`–`9` | Questionnaire: move to or stage a labelled choice |
 | `Space` | Questionnaire: select the highlighted choice; never submit |
 | `Tab` / `Shift+Tab` | Questionnaire: move between answer and explicit actions |
+
+Large text pastes and real clipboard images are registered out of band and
+appear in editable or pending input as accented `[Pasted text #N +L lines]`
+and `[Image #N W×H]` labels. Each registered label has only two horizontal
+cursor stops and one adjacent deletion removes it completely. Typed paths,
+typed label lookalikes, and stale labels with no registered material remain
+ordinary character-addressable text. When input commits, a pasted-text label
+is replaced by its exact stored text in the user transcript; an image label
+remains visible while its registered image is sent as a separate content part.
+Composer history and uncommitted pending previews keep the compact labels.
 
 Approval keys are deliberately *not* `Enter`-defaulted. An approval modal has
 no default action, because a stray `Enter` from the composer must never grant a

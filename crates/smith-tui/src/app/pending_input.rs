@@ -113,7 +113,7 @@ impl App {
     /// Commits one accepted whole-turn submission to visible local history.
     /// Runtime turn acceptance is the boundary; merely pressing a key is not.
     pub fn whole_turn_dispatched(&mut self, turn: TurnId, submission: &PreparedSubmission) {
-        self.transcript.push_user(submission.display_text());
+        self.transcript.push_user(submission.committed_text());
         self.active_turn = Some(turn);
         self.status.activity = Activity::Working;
         self.follow_newest();
@@ -283,6 +283,34 @@ impl App {
             )
     }
 
+    pub(super) fn composer_backspace_over_attachment(&mut self) {
+        let ranges = self
+            .composer
+            .registered_ranges(self.attachment_placeholders());
+        self.composer.backspace_over(&ranges);
+    }
+
+    pub(super) fn composer_delete_over_attachment(&mut self) {
+        let ranges = self
+            .composer
+            .registered_ranges(self.attachment_placeholders());
+        self.composer.delete_over(&ranges);
+    }
+
+    pub(super) fn composer_move_left_over_attachment(&mut self) {
+        let ranges = self
+            .composer
+            .registered_ranges(self.attachment_placeholders());
+        self.composer.move_left_over(&ranges);
+    }
+
+    pub(super) fn composer_move_right_over_attachment(&mut self) {
+        let ranges = self
+            .composer
+            .registered_ranges(self.attachment_placeholders());
+        self.composer.move_right_over(&ranges);
+    }
+
     /// Whether the composer surface currently accepts an image attachment.
     pub fn can_attach_image(&self) -> bool {
         matches!(self.overlay, None | Some(Overlay::Palette { .. }))
@@ -354,11 +382,12 @@ impl App {
         };
 
         let expanded_text = self.expand_pasted(&parsed_text);
+        let committed_text = expanded_text.clone();
         let mut images = self
             .image_attachments
             .iter()
             .filter_map(|attachment| {
-                expanded_text
+                display_text
                     .find(&attachment.placeholder)
                     .map(|position| (position, attachment.clone()))
             })
@@ -376,6 +405,7 @@ impl App {
             .collect();
         Ok(Some(PreparedSubmission {
             display_text,
+            committed_text,
             expanded_text,
             files,
             images,

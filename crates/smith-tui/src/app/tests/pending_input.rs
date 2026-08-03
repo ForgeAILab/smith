@@ -237,6 +237,11 @@
             app.expand_pasted(app.composer.text()),
             "one\ntwo\nthree later"
         );
+        for _ in " later".chars() {
+            app.on_key(key(KeyCode::Left));
+        }
+        app.on_key(key(KeyCode::Left));
+        assert_eq!(app.composer.cursor(), 0);
         assert!(app.take_ready_submission().is_none());
     }
 
@@ -262,13 +267,64 @@
             UserInput::text("fn main() {\n    println!(\"hi\");\n} explain this")
         );
         app.whole_turn_dispatched(TurnId::new("turn-1"), &submission);
-        // The transcript keeps the compact placeholder, not the full paste.
+        // The compact label is an editing token; committed history shows what
+        // was actually sent.
         match app.transcript.blocks().last() {
             Some(Block::User { text }) => {
-                assert_eq!(text, "[Pasted text #1 +3 lines] explain this");
+                assert_eq!(text, "fn main() {\n    println!(\"hi\");\n} explain this");
             }
             other => panic!("expected a user block, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn composer_history_recalls_a_registered_paste_as_one_unit() {
+        let mut app = app();
+        app.on_paste("one\ntwo\nthree");
+        let submission = expect_whole_submission(app.on_key(key(KeyCode::Enter)));
+        assert_eq!(submission.display_text(), "[Pasted text #1 +3 lines]");
+
+        app.on_key(key(KeyCode::Up));
+        assert_eq!(app.composer.text(), "[Pasted text #1 +3 lines]");
+        app.on_key(key(KeyCode::Left));
+        assert_eq!(app.composer.cursor(), 0);
+    }
+
+    #[test]
+    fn a_committed_steer_expands_pasted_text_after_a_compact_preview() {
+        let mut app = app();
+        app.apply(&turn_event("turn-1", RuntimeEvent::TurnStarted));
+        app.on_paste("one\ntwo\nthree");
+        let submission = match app.on_key(key(KeyCode::Enter)) {
+            Some(Action::Submit { submission, .. }) => submission,
+            other => panic!("expected a steer submission, got {other:?}"),
+        };
+        app.accept_steer(
+            SteerReceipt {
+                id: SteerId::new("steer-paste"),
+                turn: TurnId::new("turn-1"),
+                ordinal: 1,
+            },
+            submission,
+        );
+        assert_eq!(
+            app.pending_input_previews()[0].entries,
+            ["[Pasted text #1 +3 lines]"]
+        );
+
+        app.apply(&turn_event(
+            "turn-1",
+            RuntimeEvent::TurnSteerCommitted {
+                steer: SteerId::new("steer-paste"),
+                ordinal: 1,
+            },
+        ));
+        assert_eq!(
+            app.transcript.blocks().last(),
+            Some(&Block::User {
+                text: "one\ntwo\nthree".into()
+            })
+        );
     }
 
     #[test]
@@ -285,6 +341,25 @@
             "[Pasted text #1 +3 lines][Pasted text #2 +4 lines]"
         );
         assert_eq!(app.expand_pasted(app.composer.text()), "a\nb\ncd\ne\nf\ng");
+    }
+
+    #[test]
+    fn registered_paste_and_image_labels_are_atomic_editing_units() {
+        let mut app = app();
+        app.on_paste("one\ntwo\nthree");
+        app.attach_image("data:image/png;base64,IMAGE".into(), 32, 32);
+        let paste = "[Pasted text #1 +3 lines]";
+        assert_eq!(
+            app.composer.text(),
+            "[Pasted text #1 +3 lines][Image #1 32×32]"
+        );
+
+        app.on_key(key(KeyCode::Left));
+        assert_eq!(app.composer.cursor(), paste.chars().count());
+        app.on_key(key(KeyCode::Delete));
+        assert_eq!(app.composer.text(), paste);
+        app.on_key(key(KeyCode::Backspace));
+        assert!(app.composer.is_empty());
     }
 
     #[test]
@@ -355,18 +430,55 @@
                 },
             ]
         );
+        app.whole_turn_dispatched(TurnId::new("turn-images"), &submission);
+        assert_eq!(
+            app.transcript.blocks().last(),
+            Some(&Block::User {
+                text: "[Image #1 800×600] and [Image #2 32×32] compare these".into()
+            })
+        );
     }
 
     #[test]
     fn a_deleted_image_placeholder_detaches_its_image() {
         let mut app = app();
         app.attach_image("data:image/png;base64,GONE".into(), 10, 10);
-        app.composer.clear();
+        app.on_key(key(KeyCode::Left));
+        app.on_key(key(KeyCode::Delete));
         type_text(&mut app, "no image after all");
         assert_eq!(
             expect_whole_submission(app.on_key(key(KeyCode::Enter))).input_without_files(),
             UserInput::text("no image after all")
         );
+    }
+
+    #[test]
+    fn pasted_text_cannot_reattach_a_deleted_image_by_naming_its_label() {
+        let mut app = app();
+        app.attach_image("data:image/png;base64,GONE".into(), 10, 10);
+        app.on_key(key(KeyCode::Left));
+        app.on_key(key(KeyCode::Delete));
+        app.on_paste("[Image #1 10×10]\nliteral mention\nonly text");
+
+        let submission = expect_whole_submission(app.on_key(key(KeyCode::Enter)));
+        assert_eq!(
+            submission.input_without_files(),
+            UserInput::text("[Image #1 10×10]\nliteral mention\nonly text")
+        );
+    }
+
+    #[test]
+    fn typed_image_paths_and_lookalikes_remain_ordinary_text() {
+        let mut app = app();
+        let text = "assets/photo.png [Image #1 10×10]";
+        type_text(&mut app, text);
+        let end = app.composer.cursor();
+        app.on_key(key(KeyCode::Left));
+        assert_eq!(app.composer.cursor(), end - 1);
+        app.on_key(key(KeyCode::Right));
+
+        let submission = expect_whole_submission(app.on_key(key(KeyCode::Enter)));
+        assert_eq!(submission.input_without_files(), UserInput::text(text));
     }
 
     #[test]

@@ -76,6 +76,36 @@
     }
 
     #[test]
+    fn registered_paste_and_image_labels_keep_their_compact_accented_surface() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.on_paste("one\ntwo\nthree");
+        app.attach_image("data:image/png;base64,IMAGE".into(), 32, 32);
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 14)).expect("a test terminal");
+        terminal
+            .draw(|frame| draw(frame, &app, Theme::new()))
+            .expect("a frame");
+        let buffer = terminal.backend().buffer();
+        let row = (0..buffer.area.height)
+            .find(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, *y)].symbol())
+                    .collect::<String>()
+                    .contains("[Pasted text #1 +3 lines][Image #1 32×32]")
+            })
+            .expect("composer attachment row");
+        let rendered = (0..buffer.area.width)
+            .map(|x| buffer[(x, row)].symbol())
+            .collect::<String>();
+        let paste_x = u16::try_from(rendered.find("[Pasted").expect("paste label"))
+            .expect("paste position fits");
+        let image_x = u16::try_from(rendered.find("[Image").expect("image label"))
+            .expect("image position fits");
+        assert_eq!(buffer[(paste_x, row)].fg, Color::Cyan);
+        assert_eq!(buffer[(image_x, row)].fg, Color::Cyan);
+    }
+
+    #[test]
     fn command_completion_renders_above_the_composer_without_a_control_strip() {
         let mut app = App::new("gpt-5.3", "~/work/api");
         app.on_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
