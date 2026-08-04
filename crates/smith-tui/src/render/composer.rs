@@ -174,9 +174,9 @@ pub(super) fn overlay_hint(app: &App) -> Option<String> {
         Some(Overlay::Approval { .. }) => {
             let waiting = app.pending_approval_count().saturating_sub(1);
             Some(if waiting == 0 {
-                "y allow once · a allow for session · n deny".to_owned()
+                "y allow once · a allow this target · n deny".to_owned()
             } else {
-                format!("y allow once · a allow for session · n deny · {waiting} queued")
+                format!("y allow once · a allow this target · n deny · {waiting} queued")
             })
         }
         Some(Overlay::Questionnaire { state }) => {

@@ -16,6 +16,7 @@ use crate::theme::{Theme, Tone, glyph};
 #[cfg(test)]
 use crate::transcript::MAX_LOCAL_RESULT_BYTES;
 
+use super::approval::{desired_approval_rows, draw_approval};
 use super::composer::*;
 use super::modal::*;
 use super::transcript::*;
@@ -74,9 +75,18 @@ fn draw_surface(
 
     let composer_rows = composer_rows(app, area.width).saturating_add(2);
     let anchored = anchored_rows(app, area, composer_rows);
-    let [transcript, compact, pending, todos, composer, hint] = Layout::vertical([
+    let [
+        transcript,
+        compact,
+        approval,
+        pending,
+        todos,
+        composer,
+        hint,
+    ] = Layout::vertical([
         Constraint::Min(3),
         Constraint::Length(anchored.compact),
+        Constraint::Length(anchored.approval),
         Constraint::Length(anchored.pending),
         Constraint::Length(anchored.todos),
         Constraint::Length(composer_rows),
@@ -98,6 +108,11 @@ fn draw_surface(
             _ => unreachable!("compact rows require a compact interaction"),
         }
     }
+    if anchored.approval > 0
+        && let Some(Overlay::Approval { prompt, review }) = &app.overlay
+    {
+        draw_approval(frame, approval, prompt, review.as_ref(), theme);
+    }
     if anchored.pending > 0 {
         draw_pending_input(frame, pending, app, theme);
     }
@@ -108,9 +123,10 @@ fn draw_surface(
     draw_hint(frame, hint, app, theme);
 
     match &app.overlay {
-        Some(Overlay::Approval { prompt, review }) => {
-            draw_approval(frame, area, prompt, review.as_ref(), theme);
-        }
+        // Approvals are anchored above the composer, not floated over the
+        // transcript: the user needs the surrounding work visible to judge the
+        // action, and a box covering it hides the very context being asked about.
+        Some(Overlay::Approval { .. }) => {}
         Some(Overlay::Questionnaire { state }) => {
             draw_questionnaire(frame, area, state, theme);
         }
@@ -191,6 +207,7 @@ fn transcript_rect(area: Rect, app: &App) -> Rect {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct AnchoredRows {
     compact: u16,
+    approval: u16,
     pending: u16,
     todos: u16,
 }
@@ -202,6 +219,12 @@ fn anchored_rows(app: &App, area: Rect, composer_rows: u16) -> AnchoredRows {
         Some(Overlay::HistorySearch { .. }) => 2,
         _ => 0,
     };
+    let approval_desired = match &app.overlay {
+        Some(Overlay::Approval { prompt, review }) => {
+            desired_approval_rows(prompt, review.as_ref())
+        }
+        _ => 0,
+    };
     let available = area
         .height
         .saturating_sub(composer_rows)
@@ -209,6 +232,27 @@ fn anchored_rows(app: &App, area: Rect, composer_rows: u16) -> AnchoredRows {
         .saturating_sub(3);
     let pending_desired = desired_pending_input_rows(app);
     let todo_desired = desired_todo_rows(app);
+    // An approval takes the anchored pane for itself. It is the only thing the
+    // user can act on, and stacking a todo list under a question about running
+    // a command buries the question.
+    //
+    // It is also measured against a taller ceiling than the other anchored
+    // panes, which reserve transcript rows. An approval may borrow them: the
+    // question has to be answerable at the minimum supported size, and the
+    // panel keeps its key bar as the last row it will give up.
+    if approval_desired > 0 {
+        let ceiling = area
+            .height
+            .saturating_sub(composer_rows)
+            .saturating_sub(hint_rows(app))
+            .saturating_sub(1);
+        return AnchoredRows {
+            compact: 0,
+            approval: approval_desired.min(ceiling).max(1.min(ceiling)),
+            pending: 0,
+            todos: 0,
+        };
+    }
     let (compact, pending, todos) = if compact_desired > 0 {
         // Compact interactions temporarily own the anchored pane. The todo
         // projection remains in App state and returns unchanged when the
@@ -228,6 +272,7 @@ fn anchored_rows(app: &App, area: Rect, composer_rows: u16) -> AnchoredRows {
     };
     AnchoredRows {
         compact,
+        approval: 0,
         pending,
         todos,
     }

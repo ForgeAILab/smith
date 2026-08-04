@@ -372,7 +372,7 @@
     }
 
     #[tokio::test]
-    async fn the_approval_modal_names_the_tool_and_its_keys() {
+    async fn the_approval_panel_names_the_tool_and_its_keys() {
         let mut app = conversation();
         app.present_approval(prompt("shell", serde_json::json!({"command": "rm -rf build"})).await);
         let screen = render(&app, 74, 24, Theme::new());
@@ -384,9 +384,8 @@
                 "shell",
                 "rm -rf build",
                 "process execution",
-                "deadline",
-                "fingerprint",
                 "y allow once",
+                "allow this target",
             ],
         );
     }
@@ -462,7 +461,7 @@
     }
 
     #[tokio::test]
-    async fn a_diff_too_tall_for_the_modal_says_how_much_it_hid() {
+    async fn a_diff_too_tall_for_the_panel_says_how_much_it_hid() {
         let old: String = (0..60).map(|n| format!("let x{n} = {n};\n")).collect();
         let new = old.replace("let x", "let y");
         let app = edit_approval(&old, &new).await;
@@ -491,7 +490,7 @@
     }
 
     #[tokio::test]
-    async fn a_short_terminal_still_renders_an_answerable_modal() {
+    async fn a_short_terminal_still_renders_an_answerable_approval() {
         let app = edit_approval("once();\n", "twice();\n").await;
         for (width, height) in [(MIN_WIDTH, MIN_HEIGHT), (44, 12), (52, 14)] {
             let screen = render(&app, width, height, Theme::new());

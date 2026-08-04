@@ -206,8 +206,10 @@ impl App {
             Some(scope) => {
                 prompt.allow(scope);
                 if scope == PromptScope::Session {
-                    self.transcript
-                        .push_notice("approval", format!("{tool} allowed for this session"));
+                    self.transcript.push_notice(
+                        "approval",
+                        format!("{tool} allowed for this target for the session"),
+                    );
                 }
             }
             None => {

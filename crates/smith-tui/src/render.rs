@@ -1,5 +1,6 @@
 //! Rendering facade for the terminal surface.
 
+mod approval;
 mod composer;
 mod helpers;
 mod layout;
