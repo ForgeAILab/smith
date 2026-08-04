@@ -96,20 +96,143 @@
     }
 
     #[test]
+    fn page_keys_scroll_the_transcript_without_touching_the_draft() {
+        let mut app = app();
+        app.sync_scroll_limit(40);
+        type_text(&mut app, "keep drafting");
+
+        app.on_key(key(KeyCode::PageUp));
+        assert_eq!(app.composer.text(), "keep drafting");
+        assert_eq!(app.scroll_back, 10);
+        assert!(!app.following);
+
+        app.on_key(key(KeyCode::PageDown));
+        assert_eq!(app.composer.text(), "keep drafting");
+        assert_eq!(app.scroll_back, 0);
+        assert!(app.following);
+    }
+
+    #[test]
     fn the_mouse_wheel_scrolls_the_transcript_without_touching_the_draft() {
         let mut app = app();
         app.sync_scroll_limit(40);
         type_text(&mut app, "keep drafting");
 
-        assert!(app.on_mouse(mouse(MouseEventKind::ScrollUp)));
+        assert_eq!(
+            app.on_mouse(mouse(MouseEventKind::ScrollUp, 0, 0)),
+            MouseOutcome::Redraw
+        );
         assert_eq!(app.composer.text(), "keep drafting");
         assert_eq!(app.scroll_back, 3);
         assert!(!app.following);
 
-        assert!(app.on_mouse(mouse(MouseEventKind::ScrollDown)));
+        assert_eq!(
+            app.on_mouse(mouse(MouseEventKind::ScrollDown, 0, 0)),
+            MouseOutcome::Redraw
+        );
         assert_eq!(app.scroll_back, 0);
         assert!(app.following);
-        assert!(!app.on_mouse(mouse(MouseEventKind::Moved)));
+    }
+
+    #[test]
+    fn a_left_drag_selects_and_asks_the_host_to_copy_on_release() {
+        let mut app = app();
+
+        assert_eq!(
+            app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 4, 2)),
+            MouseOutcome::Redraw
+        );
+        assert_eq!(
+            app.on_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 9, 3)),
+            MouseOutcome::Redraw
+        );
+        assert_eq!(
+            app.on_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 9, 3)),
+            MouseOutcome::CopySelection
+        );
+
+        let selection = app.selection.expect("a finished selection stays painted");
+        assert!(!selection.dragging());
+        assert_eq!(selection.span_on_row(2, Rect::new(0, 0, 20, 6)), Some((4, 20)));
+        assert_eq!(selection.span_on_row(3, Rect::new(0, 0, 20, 6)), Some((0, 10)));
+    }
+
+    #[test]
+    fn a_release_past_the_last_drag_report_still_selects_through_it() {
+        // A quick flick: the terminal sends the press and the release but
+        // never a drag position in between. Reading only drags would copy
+        // nothing at all.
+        let mut app = app();
+        app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 3, 0));
+
+        assert_eq!(
+            app.on_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 11, 0)),
+            MouseOutcome::CopySelection
+        );
+        let selection = app.selection.expect("the release defines the far end");
+        assert_eq!(
+            selection.span_on_row(0, Rect::new(0, 0, 20, 4)),
+            Some((3, 12))
+        );
+    }
+
+    #[test]
+    fn a_click_that_never_dragged_dismisses_the_highlight_without_copying() {
+        let mut app = app();
+        app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 4, 2));
+        app.on_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 9, 3));
+        app.on_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 9, 3));
+        assert!(app.selection.is_some());
+
+        assert_eq!(
+            app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 1, 1)),
+            MouseOutcome::Redraw
+        );
+        assert_eq!(
+            app.on_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 1, 1)),
+            MouseOutcome::Redraw
+        );
+        assert!(app.selection.is_none(), "a bare click clears the highlight");
+    }
+
+    #[test]
+    fn scrolling_drops_a_selection_that_would_otherwise_mark_moved_text() {
+        let mut app = app();
+        app.sync_scroll_limit(40);
+        app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 2, 1));
+        app.on_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 8, 1));
+        app.on_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 8, 1));
+        assert!(app.selection.is_some());
+
+        app.on_mouse(mouse(MouseEventKind::ScrollUp, 0, 0));
+
+        assert!(app.selection.is_none());
+    }
+
+    #[test]
+    fn a_drag_whose_press_was_never_seen_has_no_anchor_to_grow_from() {
+        let mut app = app();
+
+        assert_eq!(
+            app.on_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 5, 5)),
+            MouseOutcome::Ignored
+        );
+        assert_eq!(
+            app.on_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 5, 5)),
+            MouseOutcome::Ignored
+        );
+        assert!(app.selection.is_none());
+    }
+
+    #[test]
+    fn a_right_button_press_is_left_to_the_terminal() {
+        let mut app = app();
+
+        assert_eq!(
+            app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Right), 3, 3)),
+            MouseOutcome::Ignored
+        );
+        assert!(app.selection.is_none());
     }
 
     #[test]

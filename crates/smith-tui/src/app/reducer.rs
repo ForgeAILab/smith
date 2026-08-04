@@ -257,6 +257,11 @@ impl App {
 
     fn apply_now(&mut self, envelope: &EventEnvelope) {
         self.last_event_seq = Some(envelope.seq);
+        // A pointer selection addresses rendered cells, so any event that can
+        // append or reflow content moves the text out from under the
+        // highlight. Dropping it is honest; repainting it over whatever landed
+        // there instead is not.
+        self.selection = None;
 
         match &envelope.payload {
             RuntimeEvent::SessionStarted => {

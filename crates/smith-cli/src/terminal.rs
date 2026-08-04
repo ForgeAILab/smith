@@ -10,9 +10,7 @@ use std::io::{Stdout, Write, stdout};
 
 use anyhow::Result;
 use crossterm::cursor::MoveTo;
-use crossterm::event::{
-    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-};
+use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::execute;
 use crossterm::terminal::{
     Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -57,9 +55,10 @@ impl Drop for Terminal {
 pub(crate) fn enter() -> Result<Terminal> {
     enable_raw_mode()?;
     // Bracketed paste turns a paste into one `Event::Paste` instead of a
-    // storm of key events. Mouse reporting is needed for wheel events in the
-    // alternate screen; the TUI consumes only wheel events and ignores clicks
-    // and motion.
+    // storm of key events. Mouse reporting stays off: it is terminal-wide, so
+    // enabling it to collect wheel events also swallows the drag the terminal
+    // needs for native selection and copy. Keyboard scrolling covers the
+    // transcript instead.
     if let Err(error) = enter_screen(&mut stdout()) {
         let _ = disable_raw_mode();
         return Err(error.into());
@@ -104,38 +103,44 @@ pub(crate) fn leave() -> Result<()> {
     Ok(())
 }
 
+/// Button presses (`1000`), drag motion while a button is held (`1002`), and
+/// SGR coordinates (`1006`), which lift the 223-column limit of the original
+/// encoding.
+///
+/// Deliberately not crossterm's `EnableMouseCapture`: that also sends `1003`,
+/// which reports every pointer move across the terminal even with no button
+/// down. Smith has nothing to do with a hovering pointer, and the events cost a
+/// wakeup each.
+const ENABLE_MOUSE: &str = "\u{1b}[?1000h\u{1b}[?1002h\u{1b}[?1006h";
+/// The exact inverse of [`ENABLE_MOUSE`], innermost mode first.
+const DISABLE_MOUSE: &str = "\u{1b}[?1006l\u{1b}[?1002l\u{1b}[?1000l";
+
 fn enter_screen(writer: &mut impl Write) -> std::io::Result<()> {
-    execute!(
-        writer,
-        EnterAlternateScreen,
-        EnableBracketedPaste,
-        EnableMouseCapture
-    )
+    execute!(writer, EnterAlternateScreen, EnableBracketedPaste)?;
+    // Selection is Smith's own once these are on: the terminal hands us the
+    // left-button press instead of starting a native drag. See
+    // `smith_tui::selection`, which paints the highlight and yields the text.
+    write!(writer, "{ENABLE_MOUSE}")?;
+    writer.flush()
 }
 
 fn leave_screen(writer: &mut impl Write) -> std::io::Result<()> {
-    execute!(
-        writer,
-        DisableMouseCapture,
-        DisableBracketedPaste,
-        LeaveAlternateScreen
-    )
+    write!(writer, "{DISABLE_MOUSE}")?;
+    execute!(writer, DisableBracketedPaste, LeaveAlternateScreen)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const MOUSE_MODE_CODES: [&str; 5] = ["1000", "1002", "1003", "1015", "1006"];
-
     #[test]
-    fn terminal_screen_modes_enable_and_restore_mouse_reporting() {
+    fn terminal_screen_modes_enable_and_restore_button_and_drag_reporting() {
         let mut entered = Vec::new();
         enter_screen(&mut entered).expect("enter sequences");
         let entered = String::from_utf8(entered).expect("ANSI is UTF-8");
         assert!(entered.contains("\u{1b}[?1049h"), "{entered:?}");
         assert!(entered.contains("\u{1b}[?2004h"), "{entered:?}");
-        for code in MOUSE_MODE_CODES {
+        for code in ["1000", "1002", "1006"] {
             assert!(entered.contains(&format!("?{code}h")), "{entered:?}");
         }
 
@@ -144,8 +149,17 @@ mod tests {
         let left = String::from_utf8(left).expect("ANSI is UTF-8");
         assert!(left.contains("\u{1b}[?2004l"), "{left:?}");
         assert!(left.contains("\u{1b}[?1049l"), "{left:?}");
-        for code in MOUSE_MODE_CODES {
+        for code in ["1000", "1002", "1006"] {
             assert!(left.contains(&format!("?{code}l")), "{left:?}");
         }
+    }
+
+    #[test]
+    fn all_motion_reporting_stays_off() {
+        let mut entered = Vec::new();
+        enter_screen(&mut entered).expect("enter sequences");
+        let entered = String::from_utf8(entered).expect("ANSI is UTF-8");
+        // `1003` would report a bare hover; nothing in Smith consumes one.
+        assert!(!entered.contains("?1003h"), "{entered:?}");
     }
 }

@@ -1061,37 +1061,66 @@ selection hints MUST remain accurate in their respective states.
 - **AND** identifies the configured queued-input edit action when a future turn
   exists
 
-### Requirement: Native terminal text selection
+### Requirement: Smith-owned pointer text selection
 
-Smith terminal surfaces SHALL leave pointer text selection and copying under
-the terminal emulator's ownership by default. Smith MUST NOT enable global
-mouse reporting merely to provide optional click or wheel behavior, and all
-required interactions SHALL remain available from the keyboard.
+Smith terminal surfaces SHALL enable button and drag mouse reporting and SHALL
+own pointer text selection, because terminal mouse reporting is global and
+all-or-nothing on the button: wheel scrolling cannot be received without also
+taking the drag that native selection requires. Smith SHALL therefore provide
+selection and clipboard copy itself, and all required interactions SHALL remain
+available from the keyboard.
+
+Selection SHALL address rendered cells rather than transcript text, and the
+copied text SHALL be read from the rendered frame, so that a drag copies
+exactly the glyphs beneath it.
 
 #### Scenario: User copies visible transcript text
 
 - **GIVEN** Smith is showing stable transcript content in an interactive
   terminal
-- **WHEN** the user drags across visible text and invokes the terminal's copy
-  command
-- **THEN** the terminal can perform native text selection and copy
-- **AND** Smith does not consume the pointer gesture as an application mouse
-  event
+- **WHEN** the user drags across visible text and releases the left button
+- **THEN** Smith highlights the dragged cells and puts their text on the
+  platform clipboard
+- **AND** a successful copy reports nothing, leaving the highlight as its
+  receipt
+- **AND** a failed clipboard write is reported rather than passing silently
 
-#### Scenario: User selects outside the composer
+#### Scenario: User selects outside the transcript
 
-- **GIVEN** Smith is showing footer, picker, modal, or setup text
-- **WHEN** the user begins a pointer selection outside the composer
-- **THEN** Smith does not intercept the initial click or drag
-- **AND** selection behavior is consistent with transcript selection
+- **GIVEN** Smith is showing footer, composer, or picker text
+- **WHEN** the user drags across it
+- **THEN** the selection spans those cells the same way it spans transcript
+  cells
+
+#### Scenario: A drag that selects nothing leaves the clipboard alone
+
+- **GIVEN** the user drags across blank cells, or clicks without moving
+- **WHEN** the button is released
+- **THEN** Smith does not write to the clipboard
+- **AND** a click that never moved dismisses any existing highlight
+
+#### Scenario: Moving content discards a stale highlight
+
+- **GIVEN** a highlight is painted over rendered cells
+- **WHEN** the transcript scrolls, a runtime event appends output, or the
+  terminal is resized past the selection
+- **THEN** Smith clears the highlight rather than marking the text that moved
+  into those cells
 
 #### Scenario: Keyboard operation remains complete
 
-- **GIVEN** Smith does not enable mouse reporting
+- **GIVEN** Smith enables mouse reporting
 - **WHEN** the user edits the composer, scrolls the transcript, navigates a
   picker, or answers a modal
 - **THEN** the documented keyboard controls provide the complete interaction
+- **AND** no interaction requires the pointer
 - **AND** bracketed paste continues to work independently of mouse reporting
+
+#### Scenario: A hovering pointer costs nothing
+
+- **GIVEN** Smith has enabled mouse reporting
+- **WHEN** the user moves the pointer across the terminal with no button held
+- **THEN** Smith does not request all-motion reporting and receives no event
 
 ### Requirement: In-session provider connection
 

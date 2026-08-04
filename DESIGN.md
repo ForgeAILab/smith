@@ -26,9 +26,8 @@ status-card structure, and compact footer.
    the same weight as a provider-reported fact.
 4. **Nothing moves that the user did not cause.** Streaming text appends;
    layout does not reflow, jump, or animate underneath a reader.
-5. **The keyboard is the only required input.** Smith uses the mouse only for
-   optional transcript wheel scrolling; every other interaction remains
-   available from the keyboard.
+5. **The keyboard is sufficient for everything.** The pointer scrolls and
+   selects, but never uniquely: no action requires it.
 
 ## 2. Layout
 
@@ -212,12 +211,24 @@ modal or resource picker owns input and names its controls in the hint row.
 Slash completion is the deliberate quiet exception: its selected-row grammar
 and the keyboard contract below are sufficient, so it adds no control strip.
 
-Smith enables terminal mouse reporting only to receive wheel events. The TUI
-uses wheel-up and wheel-down for transcript scrolling and ignores button and
-motion events; there is no click-to-position or application-owned clipboard
-behavior. Because terminal mouse reporting is global, native drag selection
-may require the terminal's selection modifier. Bracketed paste remains enabled
-independently of pointer handling.
+Smith enables button and drag reporting (`1000`/`1002`, SGR-encoded) and owns
+pointer selection itself. This is forced: mouse reporting is terminal-wide and
+all-or-nothing on the button, so asking for wheel notches also takes away the
+drag the terminal needs for its own selection, and no terminal protocol offers a
+wheel-only mode. Rather than trade one away, Smith paints the selection and
+writes it to the clipboard on release.
+
+Selection is screen-space — a rectangle of *rendered cells*, read back out of
+the frame buffer at copy time rather than mapped through word wrap and scroll
+offset. So a drag copies exactly the glyphs under it, and crosses the
+transcript, composer, and footer indifferently. The cost is that a highlight is
+only valid against the frame it was drawn over: scrolling, new output, or a
+resize clears it rather than marking whatever moved into those cells. A
+successful copy is silent, the highlight being its own receipt; only a failed
+clipboard write reports. All-motion reporting (`1003`) stays off — Smith has
+nothing to do with a hovering pointer.
+
+Bracketed paste remains enabled independently of pointer handling.
 
 | Key | Action |
 | --- | --- |
@@ -233,6 +244,8 @@ independently of pointer handling.
 | `Left` / `Right` / `Backspace` / `Delete` | Edit ordinary text by Unicode character; cross or remove a registered paste/image placeholder as one unit |
 | `PageUp` / `PageDown` / `Home` / `End` | Scroll transcript or jump to either edge |
 | `Mouse wheel` | Scroll transcript without changing composer history |
+| `Left drag` | Select rendered cells; copies to the clipboard on release |
+| `Left click` | Dismiss the current selection |
 | `Ctrl+L` | Jump to newest and re-enable follow |
 | `?` (empty composer) | Show the same local guide as `/help`; never contact the provider |
 | `Up` / `Down` (composer history) | Browse accepted or `Ctrl+C`-stashed input and return to the exact pre-navigation draft |
@@ -794,8 +807,10 @@ Deferred to a later revision, and therefore not to be invented in code:
 
 - Custom extension-drawn widgets beyond a declarative status item.
 - Word-level or intra-line diff highlighting.
-- Split panes, multiple simultaneous sessions on screen, and
-  application-owned mouse selection or clipboard writes.
+- Split panes and multiple simultaneous sessions on screen.
+- Word- or line-granular selection gestures (double- and triple-click), and
+  selection that survives the content moving underneath it. Both need a
+  text-space selection model; §7 uses a screen-space one.
 - Broad reset/revert-all actions, staged commit/push controls, and automatic
   recovery for arbitrary shell side effects.
 - Non-Git change recovery and queued commands during an active turn.

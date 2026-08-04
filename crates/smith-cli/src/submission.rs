@@ -68,6 +68,29 @@ pub(super) fn attach_from_clipboard(app: &mut App) {
     }
 }
 
+/// Puts pointer-selected text on the platform clipboard.
+///
+/// Success is deliberately silent: the highlight stays painted over exactly
+/// what was copied, which is the same feedback the terminal's own selection
+/// gives. A transcript line per copy would be noise, and worse, appending one
+/// would shift the very cells the highlight addresses.
+pub(super) fn copy_selection_to_clipboard(app: &mut App, text: &str) {
+    if let Err(error) = write_clipboard(text) {
+        // The error path may move content and drop the highlight; a silent
+        // failure that leaves the user believing they copied is worse.
+        app.transcript.push_error(error);
+        app.selection = None;
+    }
+}
+
+fn write_clipboard(text: &str) -> Result<(), String> {
+    let mut clipboard =
+        arboard::Clipboard::new().map_err(|error| format!("clipboard unavailable: {error}"))?;
+    clipboard
+        .set_text(text.to_owned())
+        .map_err(|error| format!("clipboard write failed: {error}"))
+}
+
 pub(super) fn read_clipboard() -> Result<ClipboardContent, String> {
     let mut clipboard =
         arboard::Clipboard::new().map_err(|error| format!("clipboard unavailable: {error}"))?;

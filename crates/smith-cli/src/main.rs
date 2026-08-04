@@ -68,7 +68,8 @@ use smith_runtime::model_catalog::{CatalogLoader, runtime_catalog_source};
 use smith_runtime::session::{SNAPSHOT_SCHEMA_VERSION, SessionListing};
 use smith_runtime::{ChildDurability, ChildState, ChildStatus, SpawnOutcome};
 use smith_tui::app::{
-    Action, App, LEGACY_AGENT_PROFILE_PREFIX, PaletteCommand, PreparedSubmission, SubmissionTarget,
+    Action, App, LEGACY_AGENT_PROFILE_PREFIX, MouseOutcome, PaletteCommand, PreparedSubmission,
+    SubmissionTarget,
 };
 use smith_tui::commands::{CommandAction, GoalAction};
 #[cfg(test)]

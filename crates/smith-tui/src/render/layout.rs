@@ -185,6 +185,54 @@ fn draw_surface(
         }
         None => {}
     }
+
+    // Last, over everything: the highlight belongs on whatever the user can
+    // actually see, and painting it before the overlays would let a modal
+    // cover the very cells it marks.
+    paint_selection(frame, app, theme);
+}
+
+/// Reads the highlighted text out of a drawn frame.
+///
+/// Must be called on a frame `draw_synced` has already filled, from inside the
+/// same draw closure: the selection addresses rendered cells, and the buffer is
+/// the only place their text exists. Returns `None` when the drag covered
+/// nothing but blank cells.
+pub fn selected_text(frame: &mut Frame<'_>, app: &App) -> Option<String> {
+    let selection = app.selection.as_ref()?;
+    let area = frame.area();
+    if selection.stale_after_redraw(area) {
+        return None;
+    }
+    crate::selection::text_from_buffer(selection, frame.buffer_mut(), area)
+}
+
+/// Marks the selected cells in place, over the finished frame.
+///
+/// Restyling drawn cells rather than reserving a widget is what lets a
+/// selection cross the transcript, composer, and hint row in one drag: it
+/// applies to the surface as rendered, with no widget needing to know it
+/// exists.
+fn paint_selection(frame: &mut Frame<'_>, app: &App, theme: Theme) {
+    let Some(selection) = &app.selection else {
+        return;
+    };
+    let area = frame.area();
+    if selection.stale_after_redraw(area) {
+        return;
+    }
+    let style = theme.selection();
+    let buffer = frame.buffer_mut();
+    for row in area.y..area.y.saturating_add(area.height) {
+        let Some((from, to)) = selection.span_on_row(row, area) else {
+            continue;
+        };
+        for column in from..to {
+            // Patched, not replaced: the cell keeps its own color and the
+            // highlight reads as a highlight rather than a repaint.
+            buffer[(column, row)].set_style(style);
+        }
+    }
 }
 
 /// The transcript rect under the same vertical layout `draw_surface` renders

@@ -242,3 +242,128 @@
         let screen = render(&app, 44, 14, Theme::new().without_color());
         assert!(screen.contains("newest-entry"), "{screen}");
     }
+
+    /// Draws once, then reads the selection back the way the host loop does:
+    /// from inside the same draw closure, against the frame just filled.
+    fn render_and_copy(app: &mut App, width: u16, height: u16) -> (Buffer, Option<String>) {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("a test terminal");
+        let mut copied = None;
+        terminal
+            .draw(|frame| {
+                draw_synced(frame, app, Theme::new().without_color());
+                copied = selected_text(frame, app);
+            })
+            .expect("a frame");
+        (terminal.backend().buffer().clone(), copied)
+    }
+
+    fn drag(app: &mut App, from: (u16, u16), to: (u16, u16)) {
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: from.0,
+            row: from.1,
+            modifiers: KeyModifiers::NONE,
+        });
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: to.0,
+            row: to.1,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+
+    #[test]
+    fn a_drag_copies_exactly_the_glyphs_it_covered() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.transcript.push_notice("marker", "copy-me-exactly");
+        let (buffer, _) = render_and_copy(&mut app, 60, 12);
+
+        // Locate the marker by cell, not by byte offset into the joined row:
+        // the notice glyph ahead of it is multi-byte, so a `str::find` result
+        // is not a column and would start the drag mid-word.
+        let (row, column) = (0..buffer.area.height)
+            .find_map(|y| {
+                (0..buffer.area.width)
+                    .find(|&x| {
+                        (x..buffer.area.width)
+                            .map(|at| buffer[(at, y)].symbol())
+                            .collect::<String>()
+                            .starts_with("copy-me-exactly")
+                    })
+                    .map(|x| (y, x))
+            })
+            .expect("the marker is on screen");
+
+        let width = u16::try_from("copy-me-exactly".chars().count()).expect("short");
+        let last = column + width - 1;
+        drag(&mut app, (column, row), (last, row));
+        let (_, copied) = render_and_copy(&mut app, 60, 12);
+
+        assert_eq!(copied.as_deref(), Some("copy-me-exactly"));
+    }
+
+    #[test]
+    fn the_highlight_marks_the_selected_cells_and_nothing_else() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.transcript.push_notice("marker", "highlight-target");
+        drag(&mut app, (2, 1), (6, 1));
+        let (buffer, _) = render_and_copy(&mut app, 60, 12);
+
+        for column in 2..=6 {
+            assert!(
+                buffer[(column, 1)].style().add_modifier.contains(Modifier::REVERSED),
+                "column {column} should be highlighted"
+            );
+        }
+        assert!(!buffer[(1, 1)].style().add_modifier.contains(Modifier::REVERSED));
+        assert!(!buffer[(7, 1)].style().add_modifier.contains(Modifier::REVERSED));
+        assert!(!buffer[(4, 0)].style().add_modifier.contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn a_selection_spans_the_composer_and_the_transcript_in_one_drag() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.transcript.push_notice("marker", "transcript-side");
+        // A drag from the first row to the last crosses every pane; the point
+        // is that no widget has to know selection exists.
+        drag(&mut app, (0, 0), (59, 11));
+        let (_, copied) = render_and_copy(&mut app, 60, 12);
+
+        let copied = copied.expect("a full-surface drag copies the surface");
+        assert!(copied.contains("transcript-side"), "{copied}");
+        assert!(copied.lines().count() > 1, "{copied}");
+    }
+
+    #[test]
+    fn new_output_clears_a_highlight_rather_than_marking_what_moved_under_it() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.transcript.push_notice("marker", "first");
+        drag(&mut app, (2, 1), (8, 1));
+        assert!(app.selection.is_some());
+
+        app.apply(&event(RuntimeEvent::SessionStarted));
+
+        assert!(app.selection.is_none());
+        let (_, copied) = render_and_copy(&mut app, 60, 12);
+        assert_eq!(copied, None);
+    }
+
+    #[test]
+    fn a_resize_past_the_selection_drops_it() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.transcript.push_notice("marker", "resize-target");
+        drag(&mut app, (10, 20), (30, 20));
+
+        // The selection was made against a 24-row surface; a 12-row one has no
+        // row 20 to mark.
+        let (buffer, copied) = render_and_copy(&mut app, 60, 12);
+        assert_eq!(copied, None);
+        for column in 0..buffer.area.width {
+            for row in 0..buffer.area.height {
+                assert!(
+                    !buffer[(column, row)].style().add_modifier.contains(Modifier::REVERSED),
+                    "nothing should be highlighted at {column},{row}"
+                );
+            }
+        }
+    }

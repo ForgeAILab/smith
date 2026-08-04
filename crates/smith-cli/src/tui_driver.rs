@@ -355,11 +355,29 @@ pub(super) async fn run_tui(
                         app.on_paste(&text);
                         dirty = true;
                     }
-                    TermEvent::Mouse(mouse) => {
-                        if app.on_mouse(mouse) {
-                            dirty = true;
+                    TermEvent::Mouse(mouse) => match app.on_mouse(mouse) {
+                        MouseOutcome::Ignored => {}
+                        MouseOutcome::Redraw => dirty = true,
+                        MouseOutcome::CopySelection => {
+                            // Drawn here rather than deferred to the frame
+                            // tick: the selected text exists only in the frame
+                            // buffer, and a runtime event arriving in between
+                            // would clear the selection before it could be
+                            // read — a release that silently copied nothing.
+                            let mut selected = None;
+                            terminal.draw(|frame| {
+                                smith_tui::draw_synced(frame, &mut app, theme);
+                                selected = smith_tui::selected_text(frame, &app);
+                            })?;
+                            dirty = false;
+                            // A drag across blank space yields nothing, and
+                            // clobbering the clipboard with an empty string
+                            // would lose whatever the user had there.
+                            if let Some(text) = selected {
+                                copy_selection_to_clipboard(&mut app, &text);
+                            }
                         }
-                    }
+                    },
                     TermEvent::Resize(_, _) => dirty = true,
                     _ => {}
                 }

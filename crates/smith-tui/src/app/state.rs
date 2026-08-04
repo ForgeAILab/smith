@@ -22,6 +22,7 @@ use crate::composer::Composer;
 use crate::diff::EditReview;
 use crate::picker::{ResourceEntry, ResourcePicker};
 use crate::questionnaire::{QuestionnaireResolution, QuestionnaireState};
+use crate::selection::Selection;
 use crate::status::{Activity, Status};
 use crate::transcript::{ToolStatus, Transcript};
 
@@ -604,6 +605,11 @@ pub struct App {
     pub scroll_back: u16,
     /// Most lines the current transcript viewport can scroll.
     pub(super) scroll_limit: u16,
+    /// The live pointer selection, in rendered-cell coordinates.
+    ///
+    /// Smith owns selection because enabling wheel reporting takes the
+    /// terminal's own away; see [`crate::selection`].
+    pub selection: Option<Selection>,
     /// The animation tick.
     pub tick: u64,
     /// Set once the host loop should exit.
@@ -657,6 +663,7 @@ impl App {
             following: true,
             scroll_back: 0,
             scroll_limit: 0,
+            selection: None,
             tick: 0,
             should_quit: false,
             pasted_chunks: Vec::new(),

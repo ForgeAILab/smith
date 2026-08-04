@@ -9,6 +9,8 @@
 //! - [`composer`] — the input buffer.
 //! - [`diff`] — the line differ behind the approval modal's edit review.
 //! - [`theme`] — colors and glyphs.
+//! - [`selection`] — pointer selection, which Smith owns because enabling the
+//!   wheel takes the terminal's own selection away.
 //! - [`render`] — the pure draw function.
 //!
 //! `App` performs no I/O and owns no runtime handle. The host loop in
@@ -27,6 +29,7 @@ pub mod picker;
 pub mod questionnaire;
 pub mod references;
 pub mod render;
+pub mod selection;
 pub mod setup;
 pub mod status;
 pub mod theme;
@@ -34,8 +37,8 @@ pub mod transcript;
 pub mod usage_log;
 
 pub use app::{
-    Action, App, Overlay, PaletteCommand, PendingInputPreview, PreparedSubmission, ResourceTarget,
-    RuntimeResources, SubmissionTarget,
+    Action, App, MouseOutcome, Overlay, PaletteCommand, PendingInputPreview, PreparedSubmission,
+    ResourceTarget, RuntimeResources, SubmissionTarget,
 };
 pub use commands::{COMMANDS, CommandAction, CommandSpec, GoalAction};
 pub use composer::Composer;
@@ -49,7 +52,7 @@ pub use questionnaire::{
 pub use references::{
     ComposerReference, MAX_COMPOSER_REFERENCES, ParsedReferences, parse_references,
 };
-pub use render::{draw, draw_synced};
+pub use render::{draw, draw_synced, selected_text};
 pub use setup::{
     SetupApp, SetupCredential, SetupEffect, SetupMode, SetupModelLimits, SetupSubmission,
     draw_setup,

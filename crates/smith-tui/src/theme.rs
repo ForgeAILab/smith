@@ -189,6 +189,17 @@ impl Theme {
         }
     }
 
+    /// The style marking pointer-selected cells.
+    ///
+    /// Reversed video rather than a background color: it is the one highlight
+    /// that must stay legible over every tone the surface already uses, and it
+    /// survives `--no-color` unchanged because reversal is an attribute, not a
+    /// hue. This is also what terminals use for their own selections, so the
+    /// Smith-owned one looks like the native one it replaced.
+    pub fn selection(self) -> Style {
+        Style::default().add_modifier(Modifier::REVERSED)
+    }
+
     /// The spinner frame for a tick, or the static glyph under reduced motion.
     pub fn spinner(self, tick: u64) -> &'static str {
         if !self.motion {

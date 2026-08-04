@@ -2,35 +2,90 @@
 
 use std::time::Instant;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
+use crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use smith_host::approval::PromptScope;
 
 use crate::commands::{self, CommandAction};
 use crate::questionnaire::QuestionnaireResolution;
 use crate::references::{ComposerReference, parse_references};
+use crate::selection::Selection;
 use crate::status::Activity;
 
 use super::state::*;
 
+/// What the host loop must do after a mouse event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseOutcome {
+    /// Nothing changed on screen.
+    Ignored,
+    /// Visible state changed; redraw.
+    Redraw,
+    /// A drag finished. The host reads the highlighted text out of the frame
+    /// buffer and puts it on the clipboard — `App` performs no I/O and cannot
+    /// see the rendered frame, so it can only ask.
+    CopySelection,
+}
+
 impl App {
-    /// Handles a mouse event, returning whether visible state changed.
+    /// Handles a mouse event, reporting what the host must do next.
     ///
-    /// Mouse reporting is enabled only so terminal wheel events reach the
-    /// application. Button and motion events are intentionally ignored here.
-    pub fn on_mouse(&mut self, mouse: MouseEvent) -> bool {
-        if !matches!(self.overlay, None | Some(Overlay::Palette { .. })) {
-            return false;
-        }
+    /// Smith owns pointer selection here because enabling wheel reporting takes
+    /// native terminal selection away; see [`crate::selection`]. Only the left
+    /// button and the wheel are consumed.
+    pub fn on_mouse(&mut self, mouse: MouseEvent) -> MouseOutcome {
+        // Selection is screen-space, so it stays available under the palette
+        // (which draws inline) but not under a modal that owns the surface.
+        let selectable = matches!(self.overlay, None | Some(Overlay::Palette { .. }));
         match mouse.kind {
-            MouseEventKind::ScrollUp => {
+            MouseEventKind::ScrollUp if selectable => {
+                // Scrolling slides the text under a highlight that addresses
+                // fixed cells, so the selection cannot survive it.
+                self.selection = None;
                 self.scroll_up(MOUSE_SCROLL_LINES);
-                true
+                MouseOutcome::Redraw
             }
-            MouseEventKind::ScrollDown => {
+            MouseEventKind::ScrollDown if selectable => {
+                self.selection = None;
                 self.scroll_down(MOUSE_SCROLL_LINES);
-                true
+                MouseOutcome::Redraw
             }
-            _ => false,
+            MouseEventKind::Down(MouseButton::Left) => {
+                // A press always clears the previous highlight, so a bare click
+                // is how the user dismisses one.
+                self.selection = Some(Selection::begin(mouse.column, mouse.row));
+                MouseOutcome::Redraw
+            }
+            MouseEventKind::Drag(MouseButton::Left) => match &mut self.selection {
+                Some(selection) if selection.dragging() => {
+                    selection.drag_to(mouse.column, mouse.row);
+                    MouseOutcome::Redraw
+                }
+                // A drag whose press we never saw (the button went down before
+                // Smith owned the mouse) has no anchor to grow from.
+                _ => MouseOutcome::Ignored,
+            },
+            MouseEventKind::Up(MouseButton::Left) => match &mut self.selection {
+                Some(selection) if selection.dragging() => {
+                    // The release position is authoritative, not just the last
+                    // drag report: a quick flick can land `Up` well past the
+                    // final `Drag` the terminal bothered to send, and reading
+                    // only the drags would copy short — or, with none sent at
+                    // all, copy nothing.
+                    selection.drag_to(mouse.column, mouse.row);
+                    selection.finish();
+                    if selection.is_empty() {
+                        // A click that never moved: dismiss, do not copy.
+                        self.selection = None;
+                        MouseOutcome::Redraw
+                    } else {
+                        MouseOutcome::CopySelection
+                    }
+                }
+                _ => MouseOutcome::Ignored,
+            },
+            _ => MouseOutcome::Ignored,
         }
     }
 

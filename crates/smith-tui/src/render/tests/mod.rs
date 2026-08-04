@@ -23,9 +23,12 @@ mod tests {
     use agent_runtime_core::usage::{
         CounterKind, Provenance, UsageDelta, UsageRecord, UsageSource,
     };
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
     use ratatui::style::{Color, Modifier};
     use unicode_width::UnicodeWidthStr;
 

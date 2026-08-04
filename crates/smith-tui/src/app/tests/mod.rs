@@ -27,13 +27,15 @@ mod tests {
         CounterKind, Provenance, UsageDelta, UsageRecord, UsageSource,
     };
     use crossterm::event::{
-        KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+        KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
     use smith_host::approval::InteractiveApproval;
 
+    use crate::app::MouseOutcome;
     use crate::commands;
     use crate::questionnaire::{QuestionnaireChoice, QuestionnaireForm, QuestionnaireQuestion};
     use crate::transcript::Block;
+    use ratatui::layout::Rect;
 
     fn fingerprint(seed: &str) -> agent_runtime_registry::Fingerprint {
         agent_runtime_registry::Fingerprint::of(seed)
@@ -168,11 +170,11 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
-    fn mouse(kind: MouseEventKind) -> MouseEvent {
+    fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
         MouseEvent {
             kind,
-            column: 0,
-            row: 0,
+            column,
+            row,
             modifiers: KeyModifiers::NONE,
         }
     }
