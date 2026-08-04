@@ -55,6 +55,8 @@ pub fn project_tool_call_display(name: &str, arguments: &Value) -> Option<ToolCa
         "search" => project_search(arguments),
         "edit" => project_edit(arguments),
         "shell" => project_shell(arguments),
+        "task_output" => project_task_output(arguments),
+        "task_stop" => project_task_stop(arguments),
         "registry.search" => project_registry_search(arguments),
         _ => None,
     }
@@ -64,7 +66,14 @@ pub fn project_tool_call_display(name: &str, arguments: &Value) -> Option<ToolCa
 pub fn has_tool_call_display_schema(name: &str) -> bool {
     matches!(
         name,
-        "read" | "list" | "search" | "edit" | "shell" | "registry.search"
+        "read"
+            | "list"
+            | "search"
+            | "edit"
+            | "shell"
+            | "task_output"
+            | "task_stop"
+            | "registry.search"
     )
 }
 
@@ -158,6 +167,29 @@ fn project_shell(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
     Some(display("Shell", target, qualifiers))
 }
 
+/// `task_output`'s `offset` is 0-based and 0 is its (common) default, unlike
+/// `read`'s 1-based `offset` where 0 is nonsensical — so a bare `0` here is a
+/// legitimate value, not a signal to fall back like
+/// [`optional_positive_integer`] treats it.
+fn project_task_output(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
+    let target = required_target(arguments, "task_id")?;
+    let offset = optional_non_negative_integer(arguments, "offset")?;
+    let limit = optional_positive_integer(arguments, "limit")?;
+    let mut qualifiers = Vec::new();
+    if let Some(offset) = offset.filter(|offset| *offset > 0) {
+        qualifiers.push(format!("offset {offset}"));
+    }
+    if let Some(limit) = limit {
+        qualifiers.push(format!("limit {limit}"));
+    }
+    Some(display("Task Output", target, qualifiers))
+}
+
+fn project_task_stop(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
+    let target = required_target(arguments, "task_id")?;
+    Some(display("Task Stop", target, Vec::new()))
+}
+
 fn display(label: &'static str, target: String, qualifiers: Vec<String>) -> ToolCallDisplay {
     ToolCallDisplay {
         label,
@@ -205,6 +237,14 @@ fn optional_boolean(arguments: &Map<String, Value>, key: &str) -> Option<Option<
 fn optional_positive_integer(arguments: &Map<String, Value>, key: &str) -> Option<Option<u64>> {
     match arguments.get(key) {
         Some(Value::Number(value)) => value.as_u64().filter(|value| *value > 0).map(Some),
+        Some(_) => None,
+        None => Some(None),
+    }
+}
+
+fn optional_non_negative_integer(arguments: &Map<String, Value>, key: &str) -> Option<Option<u64>> {
+    match arguments.get(key) {
+        Some(Value::Number(value)) => value.as_u64().map(Some),
         Some(_) => None,
         None => Some(None),
     }
@@ -463,5 +503,37 @@ mod tests {
                 .is_none()
         );
         assert!(project_tool_call_display("search", &json!({"path": "."})).is_none());
+    }
+
+    #[test]
+    fn task_output_and_task_stop_project_only_the_task_id_and_reviewed_numbers() {
+        assert_eq!(
+            invocation(
+                "task_output",
+                json!({"task_id": "task:1", "offset": 128, "limit": 4096})
+            ),
+            "Task Output(task:1 · offset 128 · limit 4096)"
+        );
+        // Offset 0 is the ordinary default, not a signal to fall back — unlike
+        // `read`'s 1-based offset, it must still project.
+        assert_eq!(
+            invocation("task_output", json!({"task_id": "task:1", "offset": 0})),
+            "Task Output(task:1)"
+        );
+        assert_eq!(
+            invocation("task_output", json!({"task_id": "task:1"})),
+            "Task Output(task:1)"
+        );
+        assert_eq!(
+            invocation(
+                "task_stop",
+                json!({"task_id": "task:2", "result": "TOP_SECRET_RESULT"})
+            ),
+            "Task Stop(task:2)"
+        );
+        assert!(has_tool_call_display_schema("task_output"));
+        assert!(has_tool_call_display_schema("task_stop"));
+        assert!(project_tool_call_display("task_output", &json!({"offset": 1})).is_none());
+        assert!(project_tool_call_display("task_stop", &json!({})).is_none());
     }
 }

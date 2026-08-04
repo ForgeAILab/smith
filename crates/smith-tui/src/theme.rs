@@ -79,6 +79,12 @@ pub mod glyph {
     pub const ELIDED: &str = "…";
     /// The static stand-in for the spinner under reduced motion.
     pub const STILL: &str = "●";
+    /// Marks the agent whose conversation the surface currently shows.
+    pub const AGENT_CURRENT: &str = "●";
+    /// Marks another agent in the delegated-agents panel. `⏺`/`◯` would
+    /// match Claude's marks but are East-Asian Wide/Ambiguous and would
+    /// misalign the panel by a column, as `⚡` would the header.
+    pub const AGENT_OTHER: &str = "○";
     /// Separates header segments.
     pub const SEPARATOR: &str = "·";
     /// Marks system-instruction context.

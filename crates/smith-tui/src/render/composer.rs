@@ -1,13 +1,17 @@
 //! Composer, pending input, todos, hints, and identity footer.
 
-use crate::app::{App, MAX_PENDING_PREVIEW_ENTRIES, Overlay};
+use std::time::Duration;
+
+use crate::app::{App, ChildSummary, MAX_PENDING_PREVIEW_ENTRIES, Overlay, RunningTaskSummary};
+use crate::status::render_elapsed;
 use crate::theme::{Theme, Tone, glyph};
 use agent_runtime_core::event::PlanItemStatus;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::Modifier;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
+use unicode_width::UnicodeWidthStr;
 
 use super::helpers::*;
 use super::layout::*;
@@ -328,6 +332,13 @@ pub(super) fn draw_identity_footer(frame: &mut Frame<'_>, area: Rect, app: &App,
             Span::styled(goal, theme.style(Tone::Accent)),
         );
     }
+    if let Some(tasks) = app.render_running_tasks_footer() {
+        push_segment(
+            &mut identity,
+            theme,
+            Span::styled(tasks, theme.style(Tone::Dim)),
+        );
+    }
     push_segment(
         &mut identity,
         theme,
@@ -370,4 +381,175 @@ pub(super) fn draw_identity_footer(frame: &mut Frame<'_>, area: Rect, app: &App,
         Paragraph::new(Line::from(truncate(identity, area.width))),
         area,
     );
+}
+
+// ---------------------------------------------------------------------------
+// Delegated-agents panel
+// ---------------------------------------------------------------------------
+
+/// Maximum delegated-agent and background-task rows the panel shows before
+/// eliding the rest.
+pub(super) const MAX_VISIBLE_AGENTS: usize = 6;
+
+/// Rows the agents panel wants: a spacer, the main row, one row per child
+/// and running background task, and an elision row on overflow.
+pub(super) fn desired_agents_rows(app: &App) -> u16 {
+    let entries = app.children.len() + app.running_tasks.len();
+    if entries == 0 {
+        return 0;
+    }
+    let rows = 2 + entries.min(MAX_VISIBLE_AGENTS) + usize::from(entries > MAX_VISIBLE_AGENTS);
+    u16::try_from(rows).unwrap_or(u16::MAX)
+}
+
+/// Draws the delegated-work panel beneath the hint row.
+///
+/// One row per agent or background task the session knows about: marker,
+/// identity, latest bounded activity, and a right-aligned clock. The `main`
+/// row anchors the list so delegated work always reads relative to the
+/// conversation the composer serves.
+pub(super) fn draw_agents(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
+    if area.height == 0 || (app.children.is_empty() && app.running_tasks.is_empty()) {
+        return;
+    }
+    let mut lines = vec![Line::default()];
+    let main_current = app.inspected_child.is_none();
+    let (marker, style) = if main_current {
+        (
+            glyph::AGENT_CURRENT,
+            theme.style(Tone::Default).add_modifier(Modifier::BOLD),
+        )
+    } else {
+        (glyph::AGENT_OTHER, theme.style(Tone::Dim))
+    };
+    lines.push(Line::from(Span::styled(format!("  {marker} main"), style)));
+    // Live rows first: when the panel elides, a finished child gives way to
+    // a child or task still working.
+    let (live, settled): (Vec<_>, Vec<_>) = app
+        .children
+        .iter()
+        .partition(|(_, summary)| is_live_child(summary));
+    let rows = live
+        .iter()
+        .map(|(child_id, summary)| agent_row(app, child_id, summary, area.width, theme))
+        .chain(
+            app.running_tasks
+                .iter()
+                .map(|task| task_row(app, task, area.width, theme)),
+        )
+        .chain(
+            settled
+                .iter()
+                .map(|(child_id, summary)| agent_row(app, child_id, summary, area.width, theme)),
+        );
+    lines.extend(rows.take(MAX_VISIBLE_AGENTS));
+    let hidden = (app.children.len() + app.running_tasks.len()).saturating_sub(MAX_VISIBLE_AGENTS);
+    if hidden > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("    {} {hidden} more", glyph::ELIDED),
+            theme.style(Tone::Dim),
+        )));
+    }
+    lines.truncate(usize::from(area.height));
+    // Agent rows are fixed-height chrome; long text clips instead of
+    // wrapping so the composer never moves.
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// Whether a child's lifecycle label describes in-flight work.
+fn is_live_child(summary: &ChildSummary) -> bool {
+    matches!(
+        summary.state.as_str(),
+        "running" | "working" | "resuming" | "needs input"
+    )
+}
+
+fn agent_row(
+    app: &App,
+    child_id: &str,
+    summary: &ChildSummary,
+    width: u16,
+    theme: Theme,
+) -> Line<'static> {
+    let current = app.inspected_child.as_deref() == Some(child_id);
+    let marker = if current {
+        glyph::AGENT_CURRENT
+    } else {
+        glyph::AGENT_OTHER
+    };
+    // While a child works its detail IS the activity; once it settles, the
+    // lifecycle label carries the outcome and the detail explains it.
+    let activity = match (summary.state.as_str(), &summary.detail) {
+        ("running" | "working" | "resuming", Some(detail)) => detail.clone(),
+        (state, Some(detail)) => format!("{state} {} {detail}", glyph::SEPARATOR),
+        (state, None) => state.to_owned(),
+    };
+    let tone = match (current, summary.state.as_str()) {
+        (true, _) => Tone::Default,
+        (_, "failed") => Tone::Danger,
+        (_, "needs input") => Tone::Warning,
+        (_, "running" | "working" | "resuming") => Tone::Default,
+        _ => Tone::Dim,
+    };
+    let mut style = theme.style(tone);
+    if current {
+        style = style.add_modifier(Modifier::BOLD);
+    }
+    panel_row(
+        marker,
+        child_id,
+        &activity,
+        app.child_elapsed(child_id),
+        style,
+        width,
+        theme,
+    )
+}
+
+/// One background shell task's panel row: its stable id and command hint.
+fn task_row(app: &App, task: &RunningTaskSummary, width: u16, theme: Theme) -> Line<'static> {
+    panel_row(
+        glyph::AGENT_OTHER,
+        &task.task_id,
+        &task.command_hint,
+        app.task_elapsed(&task.task_id),
+        theme.style(Tone::Default),
+        width,
+        theme,
+    )
+}
+
+/// Lays out one panel row with the clock docked at the right edge,
+/// Claude-style; the activity clips first so a long result can never push
+/// the time off screen.
+fn panel_row(
+    marker: &str,
+    identity: &str,
+    activity: &str,
+    elapsed: Option<Duration>,
+    style: Style,
+    width: u16,
+    theme: Theme,
+) -> Line<'static> {
+    let activity = activity.split_whitespace().collect::<Vec<_>>().join(" ");
+    let clock = elapsed.map(render_elapsed).unwrap_or_default();
+    let width = usize::from(width);
+    let reserved = if clock.is_empty() {
+        0
+    } else {
+        clock.width() + 2
+    };
+    let left = clip_line(
+        format!("  {marker} {identity}  {activity}"),
+        width.saturating_sub(reserved),
+    );
+    let mut spans = vec![Span::styled(left.clone(), style)];
+    if !clock.is_empty() {
+        let pad = width.saturating_sub(left.width() + clock.width());
+        spans.push(Span::styled(
+            format!("{}{clock}", " ".repeat(pad)),
+            theme.style(Tone::Dim),
+        ));
+    }
+    Line::from(spans)
 }

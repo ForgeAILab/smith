@@ -33,6 +33,21 @@ impl App {
         }
     }
 
+    /// Starts or restarts one child's panel clock for live work.
+    fn run_child_clock(&mut self, child: &str) {
+        self.child_clocks
+            .entry(child.to_owned())
+            .and_modify(|clock| clock.resume())
+            .or_insert_with(ChildClock::started);
+    }
+
+    /// Freezes one child's panel clock at its settled elapsed time.
+    fn settle_child_clock(&mut self, child: &str) {
+        if let Some(clock) = self.child_clocks.get_mut(child) {
+            clock.settle();
+        }
+    }
+
     pub(super) fn begin_speculative_attempt(&mut self, request: &RequestId, attempt: &AttemptId) {
         let key = AttemptOutputKey::new(request, attempt);
         if self.finalized_attempts.contains(&key) {
@@ -625,6 +640,8 @@ impl App {
                         detail: Some(describe_workspace(workspace)),
                     },
                 );
+                self.child_clocks
+                    .insert(child.to_string(), ChildClock::started());
                 self.transcript.push_notice(
                     "sub-agent",
                     format!(
@@ -657,6 +674,9 @@ impl App {
                             detail: Some(detail.clone()),
                         },
                     );
+                    // A recovered record ran in another process; no honest
+                    // wall-clock exists for it.
+                    self.child_clocks.remove(child.as_str());
                     self.transcript
                         .push_notice("sub-agent", format!("{child} recovered {state} · {detail}"));
                 }
@@ -664,6 +684,7 @@ impl App {
                     if let Some(summary) = self.children.get_mut(&child.to_string()) {
                         summary.state = "working".to_owned();
                     }
+                    self.run_child_clock(child.as_str());
                     self.transcript
                         .push_notice("sub-agent", format!("{child} is working"));
                 }
@@ -675,6 +696,7 @@ impl App {
                             detail: Some(format!("exact checkpoint · session {child_session}")),
                         },
                     );
+                    self.run_child_clock(child.as_str());
                     self.transcript.push_notice(
                         "sub-agent",
                         format!("{child} is resuming its exact checkpoint"),
@@ -699,6 +721,7 @@ impl App {
                             detail: Some(detail.clone()),
                         },
                     );
+                    self.settle_child_clock(child.as_str());
                     self.transcript
                         .push_notice("sub-agent", format!("{child} interrupted · {detail}"));
                 }
@@ -755,6 +778,7 @@ impl App {
                         detail: Some(summary.clone()),
                     },
                 );
+                self.settle_child_clock(child.as_str());
                 self.transcript
                     .push_notice("sub-agent", format!("{child} completed: {summary}"));
             }
@@ -767,6 +791,7 @@ impl App {
                         detail: Some(detail.clone()),
                     },
                 );
+                self.settle_child_clock(child.as_str());
                 self.transcript
                     .push_notice("sub-agent", format!("{child} stopped · {detail}"));
             }
@@ -778,11 +803,16 @@ impl App {
                         detail: Some(error.message.clone()),
                     },
                 );
+                self.settle_child_clock(child.as_str());
                 self.transcript
                     .push_error(format!("sub-agent {child} failed: {}", error.message));
             }
             RuntimeEvent::SessionShutdown => {
                 self.provider_phase = None;
+                // The session is over; a still-ticking child clock would lie.
+                for clock in self.child_clocks.values_mut() {
+                    clock.settle();
+                }
                 self.cancel_pending_prompts();
                 self.discard_orphaned_speculative_output("session shutdown");
                 self.transcript.close_open();

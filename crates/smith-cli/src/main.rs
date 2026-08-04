@@ -219,6 +219,7 @@ async fn run_command(mut args: RunArgs) -> Result<u8> {
                 started.headless_interaction.as_deref(),
                 started.headless_rotation.as_deref(),
                 started.credential_pool.as_ref(),
+                args.selection.background_exit.unwrap_or_default(),
             )
             .await
             .map(|outcome| outcome.exit_code)

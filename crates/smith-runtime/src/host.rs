@@ -10,6 +10,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 
 use agent_runtime::delegation::ChildDurability;
 use agent_runtime::runtime::{
@@ -31,6 +32,7 @@ use smith_config::resolve::{Layer, ResolvedConfig, Source};
 use smith_tools::{ToolCallDisplay, project_tool_call_display};
 
 use crate::artifact::SmithArtifactStore;
+use crate::background_tasks::{BackgroundTaskRegistry, TaskStatus};
 use crate::checkpoint::{
     CheckpointBarrier, CheckpointKeyProvider, ConfiguredCheckpointKeyProvider,
     CredentialCheckpointKeyProvider, SmithCheckpointSetup,
@@ -333,6 +335,17 @@ impl HostSession {
             None => Ok(()),
         };
         let session = self.session.shutdown().await;
+
+        // Background tasks are session-owned, process-group work, not runtime
+        // state: nothing else stops them. Signal every running task before
+        // the journal closes, then wait — bounded, never for the task's own
+        // duration — so each worker's kill and terminal journal marker have
+        // a chance to land. A task still running past the bound is abandoned
+        // to `kill_on_drop` rather than allowed to hold up exit.
+        BackgroundTaskRegistry::global()
+            .stop_all_session_tasks(self.session.id(), TaskStatus::Shutdown);
+        wait_for_background_tasks_to_stop(self.session.id()).await;
+
         let journal = match &self.journal {
             Some(journal) => journal.shutdown().await.map(Some),
             None => Ok(None),
@@ -768,6 +781,22 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         journal.record_ephemeral_interruption(interruption).await?;
     }
 
+    // Every session — persisted or not — gets a background-task context so a
+    // `run_in_background` shell call always has somewhere to notify and spool
+    // to. Without persistence there is no session directory to spool under,
+    // so a process-scoped temp directory stands in; it is still cleaned up by
+    // shutdown killing every task before the process exits.
+    let task_spool_dir = match &paths {
+        Some(paths) => paths.tasks_dir(session.id())?,
+        None => std::env::temp_dir().join(format!("smith-tasks-{}", session.id())),
+    };
+    BackgroundTaskRegistry::global().register_session_context(
+        session.id(),
+        Some(session.clone()),
+        journal.clone(),
+        task_spool_dir,
+    );
+
     let goal_admission_gate = runtime
         .goal_component()
         .map(|_| GoalAdmissionGate::new(true));
@@ -1138,6 +1167,29 @@ fn path_bytes(path: &Path) -> &[u8] {
     path.to_str().unwrap_or_default().as_bytes()
 }
 
+/// Bounds how long shutdown waits for a session's background-task workers to
+/// kill their process groups and record their terminal journal marker.
+///
+/// The registry drops a task from `running_tasks` as soon as its worker
+/// records the terminal status, an instant before that worker appends the
+/// journal marker; the trailing poll interval after the list goes empty
+/// exists to close that window instead of racing the journal shutdown that
+/// follows this call against an in-flight marker write.
+const BACKGROUND_TASK_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+const BACKGROUND_TASK_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+async fn wait_for_background_tasks_to_stop(session_id: &SessionId) {
+    let registry = BackgroundTaskRegistry::global();
+    let deadline = Instant::now() + BACKGROUND_TASK_SHUTDOWN_GRACE;
+    while !registry.running_tasks(session_id).is_empty() {
+        if Instant::now() >= deadline {
+            return;
+        }
+        tokio::time::sleep(BACKGROUND_TASK_POLL_INTERVAL).await;
+    }
+    tokio::time::sleep(BACKGROUND_TASK_POLL_INTERVAL).await;
+}
+
 /// Mints an explicit identity so persistence observers can be attached before
 /// Agent Runtime emits `SessionStarted`.
 pub fn mint_session_id() -> SessionId {
@@ -1345,6 +1397,40 @@ mod tests {
             std::slice::from_ref(&running)
         );
         assert!(interruption.children.is_empty());
+
+        let mut reconciled = recovery;
+        reconciled
+            .records
+            .push(JournalLine::new(JournalRecord::EphemeralWorkInterrupted {
+                interruption,
+            }));
+        assert!(
+            unresolved_ephemeral_work(&reconciled).is_none(),
+            "the persisted recovery marker must prevent duplicate interruption"
+        );
+    }
+
+    #[test]
+    fn a_background_task_started_without_a_terminal_marker_is_reported_and_never_duplicated() {
+        let running = "task:build".to_owned();
+        let exited = "task:lint".to_owned();
+        let recovery = JournalRecovery {
+            records: vec![
+                JournalLine::new(JournalRecord::TaskStarted {
+                    task: running.clone(),
+                }),
+                JournalLine::new(JournalRecord::TaskStarted {
+                    task: exited.clone(),
+                }),
+                JournalLine::new(JournalRecord::TaskExited { task: exited }),
+            ],
+            truncated_tail: None,
+        };
+        let interruption = unresolved_ephemeral_work(&recovery)
+            .expect("a task started with no terminal marker is interrupted on recovery");
+        assert_eq!(interruption.tasks.as_slice(), std::slice::from_ref(&running));
+        assert!(interruption.children.is_empty());
+        assert!(interruption.monitors.is_empty());
 
         let mut reconciled = recovery;
         reconciled

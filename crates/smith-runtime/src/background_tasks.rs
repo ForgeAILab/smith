@@ -8,10 +8,11 @@ use std::time::Duration;
 use agent_runtime::runtime::{InjectedContent, SessionHandle};
 use agent_runtime_core::error::{ErrorKind, RuntimeError};
 use agent_runtime_core::ids::SessionId;
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::journal::EventJournal;
 
@@ -190,6 +191,7 @@ impl BackgroundTaskRegistry {
 
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
+        let source = OutputSource::Streams { stdout, stderr };
 
         if let Some(j) = &journal {
             let _ = j.record_task_started(&task_id).await;
@@ -223,8 +225,7 @@ impl BackgroundTaskRegistry {
                 task_id_clone,
                 child,
                 group_pid,
-                stdout,
-                stderr,
+                source,
                 spool_path,
                 0,
                 timeout_ms,
@@ -240,6 +241,17 @@ impl BackgroundTaskRegistry {
     }
 
     /// Adopts an already-running child process as a background task.
+    ///
+    /// The child's stdout/stderr are *not* taken here: by the time a manual
+    /// backgrounding signal fires, the foreground `shell` invocation's own
+    /// reader tasks already took them, and they are still draining into
+    /// `lines`. Taking them again would find nothing and the spool would go
+    /// silent from this point on — this is the fix for that bug. `lines`
+    /// keeps being drained by the worker exactly as if it had opened the
+    /// streams itself.
+    // Every parameter is independently meaningful to the handoff; a wrapper
+    // struct would just relocate the same fields, not simplify them.
+    #[allow(clippy::too_many_arguments)]
     pub async fn adopt_foreground_task(
         &self,
         session_id: &SessionId,
@@ -248,6 +260,7 @@ impl BackgroundTaskRegistry {
         child: Child,
         group_pid: Option<u32>,
         captured_so_far: &str,
+        lines: mpsc::Receiver<String>,
         timeout_ms: Option<u64>,
     ) -> Result<(String, String), RuntimeError> {
         let session = self.get_or_create_session(session_id);
@@ -275,10 +288,6 @@ impl BackgroundTaskRegistry {
             .map_err(|e| {
                 RuntimeError::new(ErrorKind::Internal, format!("cannot write spool header: {e}"))
             })?;
-
-        let mut child = child;
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
 
         if let Some(j) = &journal {
             let _ = j.record_task_started(&task_id).await;
@@ -314,8 +323,7 @@ impl BackgroundTaskRegistry {
                 task_id_clone,
                 child,
                 group_pid,
-                stdout,
-                stderr,
+                OutputSource::Lines(lines),
                 spool_path,
                 initial_bytes,
                 timeout_ms,
@@ -479,6 +487,113 @@ impl BackgroundTaskRegistry {
     }
 }
 
+impl From<TaskStatus> for smith_tools::background::BackgroundTaskStatus {
+    fn from(status: TaskStatus) -> Self {
+        match status {
+            TaskStatus::Running => Self::Running,
+            TaskStatus::Exited { code } => Self::Exited { code },
+            TaskStatus::Stopped => Self::Stopped,
+            TaskStatus::DeadlineKill => Self::DeadlineKill,
+            TaskStatus::Shutdown => Self::Shutdown,
+            TaskStatus::InterruptedByProcessExit => Self::InterruptedByProcessExit,
+        }
+    }
+}
+
+/// Adapts the process-global [`BackgroundTaskRegistry`] to the
+/// [`smith_tools::background::BackgroundTaskHost`] seam, so `smith-tools`'
+/// `shell`, `task_output`, and `task_stop` can reach session-owned background
+/// tasks without depending on this crate.
+///
+/// Installed once, during runtime composition (`factory::prepare_capability_stage`),
+/// via [`smith_tools::background::install`]. Stateless: every method reaches
+/// through to [`BackgroundTaskRegistry::global`], the same singleton the
+/// runtime's own session wiring (`register_session_context`,
+/// `running_tasks`, and friends) already uses.
+#[derive(Debug, Default)]
+pub struct RegistryBackgroundTaskHost;
+
+#[async_trait]
+impl smith_tools::background::BackgroundTaskHost for RegistryBackgroundTaskHost {
+    async fn spawn(
+        &self,
+        session: SessionId,
+        command: String,
+        cwd: PathBuf,
+        timeout_ms: Option<u64>,
+    ) -> Result<smith_tools::background::SpawnedTask, RuntimeError> {
+        let (task_id, spool_ref) = BackgroundTaskRegistry::global()
+            .spawn_background_task(&session, command, cwd, timeout_ms)
+            .await?;
+        Ok(smith_tools::background::SpawnedTask { task_id, spool_ref })
+    }
+
+    async fn adopt(
+        &self,
+        session: SessionId,
+        command: String,
+        cwd: PathBuf,
+        child: Child,
+        group_pid: Option<u32>,
+        captured_so_far: String,
+        lines: mpsc::Receiver<String>,
+    ) -> Result<smith_tools::background::SpawnedTask, RuntimeError> {
+        let (task_id, spool_ref) = BackgroundTaskRegistry::global()
+            .adopt_foreground_task(
+                &session,
+                command,
+                cwd,
+                child,
+                group_pid,
+                &captured_so_far,
+                lines,
+                // Manual backgrounding hands off with no deadline: the
+                // foreground call's own `timeout_ms` governed the call it no
+                // longer is, and background tasks default to none anyway.
+                None,
+            )
+            .await?;
+        Ok(smith_tools::background::SpawnedTask { task_id, spool_ref })
+    }
+
+    async fn output(
+        &self,
+        session: SessionId,
+        task_id: String,
+        offset: usize,
+        limit: usize,
+    ) -> Result<smith_tools::background::BackgroundTaskOutput, RuntimeError> {
+        let result = BackgroundTaskRegistry::global()
+            .get_task_output(&session, &task_id, offset, limit)
+            .await?;
+        Ok(smith_tools::background::BackgroundTaskOutput {
+            status: result.status.into(),
+            exit_code: result.exit_code,
+            offset: result.offset,
+            next_offset: result.next_offset,
+            output: result.output,
+            truncated: result.truncated,
+        })
+    }
+
+    async fn stop(
+        &self,
+        session: SessionId,
+        task_id: String,
+    ) -> Result<smith_tools::background::BackgroundTaskStatus, RuntimeError> {
+        let status = BackgroundTaskRegistry::global()
+            .stop_task(&session, &task_id)
+            .await?;
+        Ok(status.into())
+    }
+
+    fn register_foreground_signal(&self, session: SessionId) -> oneshot::Receiver<()> {
+        let (tx, rx) = oneshot::channel();
+        BackgroundTaskRegistry::global().register_foreground_signal(&session, tx);
+        rx
+    }
+}
+
 fn spawn_shell_cmd(command: &str, cwd: &Path) -> Result<Child, RuntimeError> {
     let mut builder = Command::new("sh");
     builder
@@ -522,13 +637,32 @@ pub async fn stop_process_group(child: &mut Child, _group: Option<u32>) {
     let _ = child.kill().await;
 }
 
+/// Where a task worker's output comes from.
+///
+/// `spawn_background_task` owns a freshly spawned child whose stdout/stderr
+/// have never been read, so it hands over the raw streams and this function
+/// starts its own reader tasks. `adopt_foreground_task` instead hands over a
+/// line channel the foreground `shell` invocation's own reader tasks are
+/// already feeding — the child's streams were taken before adoption, so
+/// there is nothing left to read from them a second time.
+enum OutputSource {
+    Streams {
+        stdout: Option<tokio::process::ChildStdout>,
+        stderr: Option<tokio::process::ChildStderr>,
+    },
+    Lines(mpsc::Receiver<String>),
+}
+
+// One parameter per independently meaningful piece of a task's identity and
+// lifecycle wiring; already reduced by one when `stdout`/`stderr` collapsed
+// into `source` above.
+#[allow(clippy::too_many_arguments)]
 async fn run_task_worker_append(
     session: Arc<Mutex<SessionTaskState>>,
     task_id: String,
     mut child: Child,
     group_pid: Option<u32>,
-    stdout: Option<tokio::process::ChildStdout>,
-    stderr: Option<tokio::process::ChildStderr>,
+    source: OutputSource,
     spool_path: PathBuf,
     initial_bytes: usize,
     timeout_ms: Option<u64>,
@@ -536,31 +670,36 @@ async fn run_task_worker_append(
     journal: Option<Arc<EventJournal>>,
     session_handle: Option<SessionHandle>,
 ) {
-    let (lines_tx, mut lines_rx) = mpsc::channel::<String>(256);
-
-    if let Some(stdout) = stdout {
-        let tx = lines_tx.clone();
-        tokio::spawn(async move {
-            let mut reader = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = reader.next_line().await {
-                if tx.send(line).await.is_err() {
-                    break;
-                }
+    let mut lines_rx = match source {
+        OutputSource::Streams { stdout, stderr } => {
+            let (lines_tx, lines_rx) = mpsc::channel::<String>(256);
+            if let Some(stdout) = stdout {
+                let tx = lines_tx.clone();
+                tokio::spawn(async move {
+                    let mut reader = BufReader::new(stdout).lines();
+                    while let Ok(Some(line)) = reader.next_line().await {
+                        if tx.send(line).await.is_err() {
+                            break;
+                        }
+                    }
+                });
             }
-        });
-    }
 
-    if let Some(stderr) = stderr {
-        let tx = lines_tx;
-        tokio::spawn(async move {
-            let mut reader = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = reader.next_line().await {
-                if tx.send(line).await.is_err() {
-                    break;
-                }
+            if let Some(stderr) = stderr {
+                let tx = lines_tx;
+                tokio::spawn(async move {
+                    let mut reader = BufReader::new(stderr).lines();
+                    while let Ok(Some(line)) = reader.next_line().await {
+                        if tx.send(line).await.is_err() {
+                            break;
+                        }
+                    }
+                });
             }
-        });
-    }
+            lines_rx
+        }
+        OutputSource::Lines(lines_rx) => lines_rx,
+    };
 
     let spool_path_clone = spool_path.clone();
     let writer_handle = tokio::spawn(async move {
@@ -667,5 +806,216 @@ async fn read_spool_tail(path: &Path) -> String {
         trimmed.to_string()
     } else {
         format!("...[truncated]\n{}", &trimmed[trimmed.len() - 2000..])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fresh session ID per test: the registry is a process-global
+    /// singleton, so tests that shared one session ID would see each other's
+    /// tasks.
+    fn unique_session() -> SessionId {
+        SessionId::new(format!("bg-registry-test-{}", uuid::Uuid::new_v4()))
+    }
+
+    /// Polls `get_task_output` until the task reaches a terminal state.
+    ///
+    /// Every worker transition (exit, deadline kill, stop) is asynchronous
+    /// relative to the call that triggers it, so tests assert on the settled
+    /// state rather than racing the registry's own bookkeeping.
+    async fn wait_for_terminal(session: &SessionId, task_id: &str) -> TaskStatus {
+        for _ in 0..500 {
+            let result = BackgroundTaskRegistry::global()
+                .get_task_output(session, task_id, 0, 1)
+                .await
+                .unwrap();
+            if result.status.is_terminal() {
+                return result.status;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("task {task_id} did not reach a terminal state in time");
+    }
+
+    #[tokio::test]
+    async fn a_background_spawn_returns_promptly_and_the_process_keeps_running() {
+        let session = unique_session();
+        let started = std::time::Instant::now();
+        let (task_id, spool_ref) = BackgroundTaskRegistry::global()
+            .spawn_background_task(&session, "sleep 0.5".into(), std::env::temp_dir(), None)
+            .await
+            .unwrap();
+        // The call must not block for anything close to the command's own
+        // runtime — that is the entire point of backgrounding it.
+        assert!(
+            started.elapsed() < Duration::from_millis(300),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(spool_ref.contains(&task_id.replace(':', "_")), "{spool_ref}");
+
+        let running = BackgroundTaskRegistry::global().running_tasks(&session);
+        assert!(
+            running
+                .iter()
+                .any(|t| t.task_id == task_id && t.status == TaskStatus::Running),
+            "the process must still be running right after the call resolves: {running:?}"
+        );
+
+        let status = wait_for_terminal(&session, &task_id).await;
+        assert_eq!(status, TaskStatus::Exited { code: Some(0) });
+    }
+
+    #[tokio::test]
+    async fn an_explicit_deadline_kills_a_background_task() {
+        let session = unique_session();
+        let (task_id, _) = BackgroundTaskRegistry::global()
+            .spawn_background_task(&session, "sleep 30".into(), std::env::temp_dir(), Some(150))
+            .await
+            .unwrap();
+
+        let status = wait_for_terminal(&session, &task_id).await;
+        assert_eq!(status, TaskStatus::DeadlineKill);
+        // This is exactly the word `run_task_worker_append` puts in the
+        // terminal notification's `status` field, so proving it here proves
+        // the notification states a deadline kill too.
+        assert_eq!(status.as_str(), "deadline_kill");
+    }
+
+    #[tokio::test]
+    async fn stop_task_is_idempotent_and_unknown_ids_report_a_stable_error() {
+        let session = unique_session();
+        let (task_id, _) = BackgroundTaskRegistry::global()
+            .spawn_background_task(&session, "sleep 30".into(), std::env::temp_dir(), None)
+            .await
+            .unwrap();
+
+        let _ = BackgroundTaskRegistry::global()
+            .stop_task(&session, &task_id)
+            .await
+            .unwrap();
+        let status = wait_for_terminal(&session, &task_id).await;
+        assert_eq!(status, TaskStatus::Stopped);
+
+        // Now that the task is terminal, stopping it again must report the
+        // existing state rather than erroring or re-signaling a process that
+        // is already gone.
+        let again = BackgroundTaskRegistry::global()
+            .stop_task(&session, &task_id)
+            .await
+            .unwrap();
+        assert_eq!(again, TaskStatus::Stopped);
+
+        let unknown_stop = BackgroundTaskRegistry::global()
+            .stop_task(&session, "task:does-not-exist")
+            .await
+            .unwrap_err();
+        assert!(
+            unknown_stop
+                .message
+                .contains("unknown background task ID: task:does-not-exist"),
+            "{unknown_stop:?}"
+        );
+
+        let unknown_output = BackgroundTaskRegistry::global()
+            .get_task_output(&session, "task:does-not-exist", 0, 100)
+            .await
+            .unwrap_err();
+        assert!(
+            unknown_output
+                .message
+                .contains("unknown background task ID: task:does-not-exist"),
+            "{unknown_output:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn spool_output_is_capped_with_an_explicit_truncation_marker() {
+        let session = unique_session();
+        let bytes = MAX_SPOOL_BYTES + 1024 * 1024;
+        // The spool writer does one file write per *line* (unlike `shell`'s
+        // in-memory collector), so this uses long lines rather than `yes`'s
+        // usual short ones — otherwise ~9MB of ~20-byte lines means hundreds
+        // of thousands of tiny disk writes and a test that times out on
+        // nothing but I/O overhead.
+        let long_line = "a".repeat(8_000);
+        let command = format!("yes '{long_line}' | head -c {bytes}");
+        let (task_id, _) = BackgroundTaskRegistry::global()
+            .spawn_background_task(&session, command, std::env::temp_dir(), None)
+            .await
+            .unwrap();
+
+        let status = wait_for_terminal(&session, &task_id).await;
+        assert!(matches!(status, TaskStatus::Exited { .. }), "{status:?}");
+
+        let result = BackgroundTaskRegistry::global()
+            .get_task_output(&session, &task_id, 0, MAX_SPOOL_BYTES + 65536)
+            .await
+            .unwrap();
+        assert!(result.truncated, "expected the spool to report truncation");
+        assert!(
+            result.output.len() <= MAX_SPOOL_BYTES + 4096,
+            "spool grew past its cap: {} bytes",
+            result.output.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn adoption_carries_the_captured_prefix_and_keeps_draining_the_live_receiver() {
+        let session = unique_session();
+
+        // Stands in for `shell.rs`'s own reader tasks: by the time a real
+        // manual-backgrounding signal fires, the child's stdout has already
+        // been taken and is being drained into a channel exactly like this
+        // one — adoption must keep consuming that channel, not re-take the
+        // (already-empty) stream.
+        let mut child = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg("sleep 0.2; echo after-adopt")
+            .stdout(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (tx, rx) = mpsc::channel::<String>(16);
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(stdout).lines();
+            while let Ok(Some(line)) = reader.next_line().await {
+                if tx.send(line).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let group_pid = child.id();
+
+        let (task_id, _) = BackgroundTaskRegistry::global()
+            .adopt_foreground_task(
+                &session,
+                "sleep 0.2; echo after-adopt".into(),
+                std::env::temp_dir(),
+                child,
+                group_pid,
+                "prefix output already captured\n",
+                rx,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let status = wait_for_terminal(&session, &task_id).await;
+        assert!(matches!(status, TaskStatus::Exited { code: Some(0) }), "{status:?}");
+
+        let result = BackgroundTaskRegistry::global()
+            .get_task_output(&session, &task_id, 0, 65536)
+            .await
+            .unwrap();
+        assert!(
+            result.output.contains("prefix output already captured"),
+            "{}",
+            result.output
+        );
+        assert!(result.output.contains("after-adopt"), "{}", result.output);
     }
 }

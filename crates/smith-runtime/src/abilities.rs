@@ -28,7 +28,7 @@ pub const INTERACTION_READY_CONFIG: &str = "host.interaction";
 
 /// Seals one deterministic ability entry for every registered tool.
 ///
-/// Smith's six product tools have built-in provenance and explicit semantic
+/// Smith's product tools have built-in provenance and explicit semantic
 /// affordances. Extra injected tools remain visible, but correctly carry host
 /// provenance and conservative permission-derived affordances.
 pub fn seal_tool_abilities(
@@ -174,6 +174,16 @@ fn keywords(name: &str) -> Vec<&'static str> {
             "benchmark",
             "build",
         ],
+        "task_output" => vec![
+            "task",
+            "background",
+            "output",
+            "poll",
+            "status",
+            "logs",
+            "progress",
+        ],
+        "task_stop" => vec!["task", "background", "stop", "kill", "terminate", "cancel"],
         AGENT_TOOL_NAME => vec![
             "agent",
             "delegate",
@@ -220,6 +230,8 @@ fn affordances(name: &str, permissions: &[Permission]) -> Vec<&'static str> {
         "search" => vec!["file-search", "file-read"],
         "edit" => vec!["file-edit", "file-read", "file-write", "file-create"],
         "shell" => vec!["shell-command"],
+        "task_output" => vec!["task-read"],
+        "task_stop" => vec!["task-control"],
         AGENT_TOOL_NAME => vec!["agent-delegation"],
         QUESTIONNAIRE_TOOL_NAME => vec!["user-interaction", "task-question"],
         WRITE_TODOS_TOOL_NAME => vec!["plan-management"],
@@ -291,18 +303,18 @@ mod tests {
     use super::*;
     use crate::delegation::AgentTool;
 
-    fn six_tools() -> Vec<Arc<dyn Tool>> {
+    fn built_in_and_agent_tools() -> Vec<Arc<dyn Tool>> {
         let mut tools = smith_tools::all();
         tools.push(Arc::new(AgentTool::new(Arc::new(OnceLock::new()))));
         tools
     }
 
     fn coding_view() -> agent_runtime::registry::RegistryView<AbilityDescriptor> {
-        view_for(six_tools())
+        view_for(built_in_and_agent_tools())
     }
 
     fn workflow_view() -> agent_runtime::registry::RegistryView<AbilityDescriptor> {
-        let mut tools = six_tools();
+        let mut tools = built_in_and_agent_tools();
         tools.push(Arc::new(agent_runtime::harness::WriteTodosTool::new()));
         view_for(tools)
     }
@@ -348,16 +360,25 @@ mod tests {
     }
 
     #[test]
-    fn all_six_smith_tools_have_complete_bounded_descriptors() {
+    fn every_built_in_tool_has_complete_bounded_descriptors() {
         let catalog = seal_tool_abilities(
-            six_tools()
+            built_in_and_agent_tools()
                 .into_iter()
                 .map(|tool| (tool, RegistrySource::BuiltIn)),
         )
         .expect("a sealed catalog");
         assert_eq!(
             catalog.names(),
-            ["read", "list", "search", "edit", "shell", "agent"]
+            [
+                "read",
+                "list",
+                "search",
+                "edit",
+                "shell",
+                "task_output",
+                "task_stop",
+                "agent"
+            ]
         );
         let descriptors: BTreeMap<_, _> = catalog
             .descriptors()
@@ -375,6 +396,11 @@ mod tests {
             // set is what the approval prompt actually shows.
             ("edit", RiskLevel::High),
             ("shell", RiskLevel::High),
+            ("task_output", RiskLevel::Low),
+            // `task_stop` reaches for `Permission::ProcessSpawn` — the closest
+            // fit the fixed vocabulary offers for "controls a process" — which
+            // classifies as `High` the same way `shell`'s does.
+            ("task_stop", RiskLevel::High),
             ("agent", RiskLevel::High),
         ];
         for (name, risk) in expected_risk {
@@ -439,6 +465,14 @@ mod tests {
                 Permission::NetHttp,
                 Permission::DataEgress,
             ])
+        );
+        assert_eq!(
+            permission_sets["task_output"],
+            BTreeSet::from([Permission::FsRead])
+        );
+        assert_eq!(
+            permission_sets["task_stop"],
+            BTreeSet::from([Permission::ProcessSpawn])
         );
         assert_eq!(
             permission_sets["agent"],

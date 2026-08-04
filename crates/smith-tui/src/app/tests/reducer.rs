@@ -686,12 +686,12 @@
             serde_json::from_slice(&journal_bytes).expect("replayable journal events");
 
         let mut live = app();
-        live.present_recovered_ephemeral_work(1, 1);
+        live.present_recovered_ephemeral_work(1, 1, 1);
         for event in &events {
             live.apply(event);
         }
         let mut replayed = app();
-        replayed.present_recovered_ephemeral_work(1, 1);
+        replayed.present_recovered_ephemeral_work(1, 1, 1);
         for event in &replayed_events {
             replayed.apply(event);
         }

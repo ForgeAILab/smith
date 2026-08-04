@@ -203,6 +203,12 @@ pub enum Action {
     },
     /// Cancel the running turn.
     Interrupt,
+    /// Manually background the running foreground shell call (`Ctrl+B`).
+    ///
+    /// Distinct from `Interrupt`: the owned process keeps running and the
+    /// pending call resolves with the output captured so far instead of
+    /// being killed.
+    BackgroundShell,
     /// Leave the application.
     Quit,
     /// Rebuild or replace the hosted session at a safe turn boundary.
@@ -483,6 +489,69 @@ pub struct ChildSummary {
     pub detail: Option<String>,
 }
 
+/// Wall-clock projection for one delegated child's agents-panel row.
+///
+/// Kept beside — not inside — [`ChildSummary`]: summaries are compared
+/// between live application and journal replay, and a live `Instant` can
+/// never replay equal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ChildClock {
+    /// When the live child last started running.
+    started_at: Instant,
+    /// Elapsed frozen at the moment the child settled.
+    settled: Option<Duration>,
+}
+
+impl ChildClock {
+    /// A clock started now.
+    pub(super) fn started() -> Self {
+        Self {
+            started_at: Instant::now(),
+            settled: None,
+        }
+    }
+
+    /// The running or frozen elapsed time.
+    pub(super) fn elapsed(&self) -> Duration {
+        self.settled.unwrap_or_else(|| self.started_at.elapsed())
+    }
+
+    /// Whether the clock is still ticking.
+    pub(super) fn is_live(&self) -> bool {
+        self.settled.is_none()
+    }
+
+    /// Freezes the clock at the moment its child settled.
+    pub(super) fn settle(&mut self) {
+        if self.settled.is_none() {
+            self.settled = Some(self.started_at.elapsed());
+        }
+    }
+
+    /// Restarts a settled clock for a follow-up or resume turn.
+    pub(super) fn resume(&mut self) {
+        if self.settled.is_some() {
+            *self = Self::started();
+        }
+    }
+}
+
+/// One running background shell task, as the host last polled it from
+/// `BackgroundTaskRegistry::running_tasks`.
+///
+/// The TUI never reaches the registry itself — see `DESIGN.md`'s host/TUI
+/// split — so this is the whole fact base it has about background tasks.
+/// Pushed wholesale on every poll: a task absent from the latest push is not
+/// specially removed here, it is simply no longer named, because the
+/// registry itself stops returning a terminal task.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunningTaskSummary {
+    /// Stable session-scoped task identity, e.g. `task:3`.
+    pub task_id: String,
+    /// Bounded, single-line command hint safe to display.
+    pub command_hint: String,
+}
+
 /// Latest durable todo-plan projection.
 ///
 /// Smith deliberately treats bounded plan text as public working state: it is
@@ -609,8 +678,19 @@ pub struct App {
     pub(super) questionnaire_resolutions: VecDeque<(String, QuestionnaireResolution)>,
     /// Latest child states, keyed by stable child id.
     pub children: BTreeMap<String, ChildSummary>,
+    /// Live panel clocks for children, keyed by stable child id.
+    pub(super) child_clocks: BTreeMap<String, ChildClock>,
     /// Temporary child inspector selection; the root composer keeps focus.
     pub inspected_child: Option<String>,
+    /// Running background shell tasks, as of the host's latest registry poll.
+    pub running_tasks: Vec<RunningTaskSummary>,
+    /// When each running task was first seen, keyed by task id.
+    ///
+    /// The registry reports no start timestamp, so the panel clock counts
+    /// from first sight. Polls are frequent enough that the difference is
+    /// display noise, and a wrong-but-ticking clock is never shown for a
+    /// task the registry no longer returns.
+    pub(super) task_clocks: BTreeMap<String, Instant>,
     /// Latest durable todo plan, projected in the anchored composer pane.
     pub plan: Option<PlanSummary>,
     /// Bounded live tool detail available only through `/details`.
@@ -675,7 +755,10 @@ impl App {
             pending_prompts: VecDeque::new(),
             questionnaire_resolutions: VecDeque::new(),
             children: BTreeMap::new(),
+            child_clocks: BTreeMap::new(),
             inspected_child: None,
+            running_tasks: Vec::new(),
+            task_clocks: BTreeMap::new(),
             plan: None,
             work: None,
             work_details: false,
@@ -730,6 +813,62 @@ impl App {
         );
     }
 
+    /// Replaces the running-background-task listing with the host's latest
+    /// registry poll.
+    ///
+    /// A wholesale replace rather than an incremental diff: the registry
+    /// already filters to non-terminal tasks, so a task's disappearance from
+    /// `tasks` is itself the terminal signal — no separate removal path is
+    /// needed.
+    pub fn set_running_tasks(&mut self, tasks: Vec<RunningTaskSummary>) {
+        // First sight starts a task's panel clock; disappearance ends it.
+        // A re-used id restarting at zero is honest: the registry only
+        // returns live tasks, so reappearance means a new run.
+        self.task_clocks = tasks
+            .iter()
+            .map(|task| {
+                let started = self
+                    .task_clocks
+                    .get(&task.task_id)
+                    .copied()
+                    .unwrap_or_else(Instant::now);
+                (task.task_id.clone(), started)
+            })
+            .collect();
+        self.running_tasks = tasks;
+    }
+
+    /// Elapsed time since one running background task was first seen.
+    pub fn task_elapsed(&self, task_id: &str) -> Option<Duration> {
+        self.task_clocks
+            .get(task_id)
+            .map(|started| started.elapsed())
+    }
+
+    /// Compact footer segment naming running background tasks, or `None`
+    /// when none are running.
+    ///
+    /// Bounded to a few identities plus a remainder count so a chatty session
+    /// running many tasks cannot grow the identity footer without limit.
+    pub fn render_running_tasks_footer(&self) -> Option<String> {
+        if self.running_tasks.is_empty() {
+            return None;
+        }
+        const SHOWN: usize = 3;
+        let mut label = self
+            .running_tasks
+            .iter()
+            .take(SHOWN)
+            .map(|task| task.task_id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let remaining = self.running_tasks.len().saturating_sub(SHOWN);
+        if remaining > 0 {
+            label.push_str(&format!(", +{remaining} more"));
+        }
+        Some(format!("bg {label}"))
+    }
+
     /// Whether a turn is in flight.
     pub fn is_busy(&self) -> bool {
         matches!(
@@ -743,6 +882,7 @@ impl App {
         self.is_busy()
             || self.has_pending_input()
             || !self.pending_prompts.is_empty()
+            || !self.running_tasks.is_empty()
             || matches!(
                 self.overlay,
                 Some(Overlay::Approval { .. })
@@ -837,6 +977,22 @@ impl App {
         self.turn_started_at.map(|started| started.elapsed())
     }
 
+    /// The ticking or frozen elapsed time for one delegated child.
+    ///
+    /// Absent for children known only through durable recovery: their live
+    /// runtime was in another process, so no honest wall-clock exists.
+    pub fn child_elapsed(&self, child: &str) -> Option<Duration> {
+        self.child_clocks.get(child).map(ChildClock::elapsed)
+    }
+
+    /// Delegated children whose panel clock is still ticking.
+    pub fn live_child_count(&self) -> usize {
+        self.child_clocks
+            .values()
+            .filter(|clock| clock.is_live())
+            .count()
+    }
+
     /// Takes the parked live-stream gap so the host can replay it from the
     /// canonical journal.
     ///
@@ -875,13 +1031,14 @@ impl App {
 
     /// Projects metadata-only process-exit reconciliation into the transcript.
     ///
-    /// Child and monitor identities remain in the protected recovery record;
-    /// the UI only needs deterministic counts and the explicit fact that
-    /// process-owned work was not restarted.
+    /// Child, monitor, and background-task identities remain in the
+    /// protected recovery record; the UI only needs deterministic counts and
+    /// the explicit fact that process-owned work was not restarted.
     pub fn present_recovered_ephemeral_work(
         &mut self,
         interrupted_children: usize,
         interrupted_monitors: usize,
+        interrupted_tasks: usize,
     ) {
         let mut work = Vec::new();
         if interrupted_children > 0 {
@@ -901,6 +1058,16 @@ impl App {
                     "monitor"
                 } else {
                     "monitors"
+                }
+            ));
+        }
+        if interrupted_tasks > 0 {
+            work.push(format!(
+                "{interrupted_tasks} prior background {}",
+                if interrupted_tasks == 1 {
+                    "task"
+                } else {
+                    "tasks"
                 }
             ));
         }

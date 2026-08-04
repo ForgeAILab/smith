@@ -293,3 +293,117 @@
             );
         }
     }
+
+    #[test]
+    fn running_background_tasks_appear_in_the_footer_and_clear_when_the_poll_reports_none() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.set_running_tasks(vec![crate::app::RunningTaskSummary {
+            task_id: "task:3".to_owned(),
+            command_hint: "npm test".to_owned(),
+        }]);
+
+        let with_task = render(&app, 100, 20, Theme::new().without_color());
+        assert!(with_task.contains("task:3"), "{with_task}");
+
+        app.set_running_tasks(Vec::new());
+        let cleared = render(&app, 100, 20, Theme::new().without_color());
+        assert!(!cleared.contains("task:3"), "{cleared}");
+    }
+
+    #[test]
+    fn delegated_agents_panel_lists_children_under_the_hint_with_clocks() {
+        use agent_runtime_core::delegation::WorkspacePolicy;
+        use agent_runtime_core::ids::ChildId;
+
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        for id in ["child-a", "child-b"] {
+            app.apply(&event(RuntimeEvent::ChildSpawned {
+                child: ChildId::new(id),
+                workspace: WorkspacePolicy::ReadOnlyView,
+                max_turns: 1,
+                max_tokens: None,
+                deadline_ms: None,
+            }));
+        }
+        app.apply(&event(RuntimeEvent::ChildCompleted {
+            child: ChildId::new("child-b"),
+            result: "No findings.".to_owned(),
+        }));
+
+        let screen = render(&app, 80, 24, Theme::new().without_color());
+        insta_like(
+            &screen,
+            &[
+                "● main",
+                "○ child-a  read-only",
+                "○ child-b  completed · No findings.",
+            ],
+        );
+        let clocks = screen
+            .lines()
+            .filter(|line| line.contains("child-") && line.ends_with("0s"))
+            .count();
+        assert_eq!(clocks, 2, "both rows dock a right-aligned clock:\n{screen}");
+        let main_row = screen
+            .lines()
+            .position(|line| line.contains("● main"))
+            .expect("a main row");
+        let composer_row = screen
+            .lines()
+            .position(|line| line.contains("Ask Smith to do anything"))
+            .expect("the composer placeholder");
+        assert!(
+            main_row > composer_row,
+            "the panel sits below the composer:\n{screen}"
+        );
+    }
+
+    #[test]
+    fn the_working_row_counts_live_delegated_agents() {
+        use agent_runtime_core::delegation::WorkspacePolicy;
+        use agent_runtime_core::ids::ChildId;
+
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        for id in ["child-a", "child-b"] {
+            app.apply(&event(RuntimeEvent::ChildSpawned {
+                child: ChildId::new(id),
+                workspace: WorkspacePolicy::ReadOnlyView,
+                max_turns: 1,
+                max_tokens: None,
+                deadline_ms: None,
+            }));
+        }
+        let screen = render(&app, 80, 24, Theme::new().without_color());
+        insta_like(&screen, &["· 2 agents"]);
+
+        app.apply(&event(RuntimeEvent::ChildCompleted {
+            child: ChildId::new("child-b"),
+            result: "done".to_owned(),
+        }));
+        let screen = render(&app, 80, 24, Theme::new().without_color());
+        insta_like(&screen, &["· 1 agent"]);
+    }
+
+    #[test]
+    fn background_tasks_join_the_delegated_panel_with_clocks_and_leave_on_poll() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.set_running_tasks(vec![crate::app::RunningTaskSummary {
+            task_id: "task:3".to_owned(),
+            command_hint: "npm test".to_owned(),
+        }]);
+
+        let screen = render(&app, 80, 24, Theme::new().without_color());
+        insta_like(&screen, &["● main", "○ task:3  npm test"]);
+        assert!(
+            screen
+                .lines()
+                .any(|line| line.contains("task:3") && line.ends_with("0s")),
+            "the task row docks a right-aligned clock:\n{screen}"
+        );
+
+        app.set_running_tasks(Vec::new());
+        let cleared = render(&app, 80, 24, Theme::new().without_color());
+        assert!(!cleared.contains("○ task:3"), "{cleared}");
+        assert!(!cleared.contains("● main"), "an empty panel vanishes:\n{cleared}");
+    }

@@ -38,6 +38,25 @@ pub(crate) fn context(root: &std::path::Path) -> InvocationContext {
     }
 }
 
+/// The preparation-phase counterpart of an invocation context.
+///
+/// `PreparationContext` and `InvocationContext` share almost every field by
+/// construction (an invocation is prepared and then run against the same
+/// session, turn, and workspace), so every caller that needs both derives one
+/// from the other rather than building it by hand.
+pub(crate) fn preparation_context(ctx: &InvocationContext) -> PreparationContext {
+    PreparationContext {
+        session: ctx.session.clone(),
+        turn: ctx.turn.clone(),
+        call_id: ctx.call_id.clone(),
+        request: ctx.request.clone(),
+        workspace: ctx.workspace.clone(),
+        clock: ctx.clock.clone(),
+        cancel: ctx.cancel.clone(),
+        deadline: ctx.deadline,
+    }
+}
+
 /// Prepares and invokes a named tool from a composed set.
 ///
 /// Unit tests that call `EditTool.invoke` reach the tool directly, which is the
@@ -54,16 +73,7 @@ pub(crate) async fn call(
         .iter()
         .find(|tool| tool.spec().name == name)
         .unwrap_or_else(|| panic!("no `{name}` tool in the composed set"));
-    let preparation = PreparationContext {
-        session: ctx.session.clone(),
-        turn: ctx.turn.clone(),
-        call_id: ctx.call_id.clone(),
-        request: ctx.request.clone(),
-        workspace: ctx.workspace.clone(),
-        clock: ctx.clock.clone(),
-        cancel: ctx.cancel.clone(),
-        deadline: ctx.deadline,
-    };
+    let preparation = preparation_context(ctx);
     let prepared = tool.prepare(arguments, &preparation).await?;
     tool.invoke(prepared, ctx).await
 }
@@ -89,16 +99,7 @@ async fn invoke<T: Tool>(
     arguments: Value,
     ctx: &InvocationContext,
 ) -> Result<ToolOutcome, RuntimeError> {
-    let preparation = PreparationContext {
-        session: ctx.session.clone(),
-        turn: ctx.turn.clone(),
-        call_id: ctx.call_id.clone(),
-        request: ctx.request.clone(),
-        workspace: ctx.workspace.clone(),
-        clock: ctx.clock.clone(),
-        cancel: ctx.cancel.clone(),
-        deadline: ctx.deadline,
-    };
+    let preparation = preparation_context(ctx);
     let prepared = tool.prepare(arguments, &preparation).await?;
     tool.invoke(prepared, ctx).await
 }
@@ -122,3 +123,5 @@ test_invoke!(crate::ListTool);
 test_invoke!(crate::SearchTool);
 test_invoke!(crate::EditTool);
 test_invoke!(crate::ShellTool);
+test_invoke!(crate::TaskOutputTool);
+test_invoke!(crate::TaskStopTool);

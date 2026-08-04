@@ -638,6 +638,37 @@ mod tests {
     }
 
     #[test]
+    fn background_exit_is_parsed_and_absent_when_not_supplied() {
+        let Command::Run(run) = command(&[]) else {
+            panic!("expected a run");
+        };
+        // Absence is meaningful: the headless runner applies the
+        // `BackgroundExit` default itself rather than this layer guessing it.
+        assert_eq!(run.selection.background_exit, None);
+
+        for (flag, expected) in [
+            ("error", BackgroundExit::Error),
+            ("wait", BackgroundExit::Wait),
+            ("stop", BackgroundExit::Stop),
+        ] {
+            let Command::Run(run) = command(&["--background-exit", flag]) else {
+                panic!("expected a run");
+            };
+            assert_eq!(run.selection.background_exit, Some(expected));
+        }
+
+        let invalid = parse(["--background-exit", "orphan"].map(OsString::from))
+            .expect_err("an unknown background-exit spelling");
+        assert!(invalid.to_string().contains("invalid background-exit policy"));
+
+        let duplicate = parse(
+            ["--background-exit", "wait", "--background-exit", "stop"].map(OsString::from),
+        )
+        .expect_err("background-exit was supplied twice");
+        assert!(duplicate.to_string().contains("supplied twice"));
+    }
+
+    #[test]
     fn yolo_is_a_valueless_allow_all_alias_and_conflicts_fail_closed() {
         let Command::Run(run) = command(&["--yolo"]) else {
             panic!("expected a run");

@@ -1504,6 +1504,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn task_lifecycle_markers_are_metadata_only_validated_and_durable() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("session.jsonl");
+        let journal = EventJournal::open(&path, JournalConfig::default(), Arc::new(KeepEverything))
+            .await
+            .unwrap();
+
+        journal.record_task_started("task:1").await.unwrap();
+        journal.record_task_exited("task:1").await.unwrap();
+        let error = journal
+            .record_task_started("task id contains spool output")
+            .await
+            .expect_err("free text is not a task identity");
+        assert_eq!(error.kind, ErrorKind::Serialization);
+        journal.shutdown().await.unwrap();
+
+        let recovery = read_journal(&path).await.unwrap();
+        assert_eq!(
+            recovery
+                .records
+                .iter()
+                .map(|line| line.record.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                JournalRecord::TaskStarted {
+                    task: "task:1".into(),
+                },
+                JournalRecord::TaskExited {
+                    task: "task:1".into(),
+                },
+            ]
+        );
+
+        // Metadata-only: each line carries the schema version, the record
+        // tag, and the bare task identity — never a spooled output body.
+        let raw = tokio::fs::read_to_string(&path).await.unwrap();
+        for line in raw.lines() {
+            let value: Value = serde_json::from_str(line).unwrap();
+            let keys: std::collections::BTreeSet<&str> = value
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect();
+            assert_eq!(
+                keys,
+                ["schema_version", "record", "task"].into_iter().collect()
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn journal_reads_reject_unsupported_or_unvalidated_marker_metadata() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("session.jsonl");
@@ -1534,6 +1586,14 @@ mod tests {
                     "monitor": "monitor id with spaces"
                 }),
                 "monitor id must contain",
+            ),
+            (
+                serde_json::json!({
+                    "schema_version": JOURNAL_SCHEMA_VERSION,
+                    "record": "task_started",
+                    "task": "task id with spaces"
+                }),
+                "task id must contain",
             ),
             (
                 serde_json::json!({

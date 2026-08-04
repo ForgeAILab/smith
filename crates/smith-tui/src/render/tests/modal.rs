@@ -567,3 +567,17 @@
             "{narrow}"
         );
     }
+
+    #[test]
+    fn exit_confirmation_names_a_running_background_task_by_id() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.set_running_tasks(vec![crate::app::RunningTaskSummary {
+            task_id: "task:7".to_owned(),
+            command_hint: "cargo build".to_owned(),
+        }]);
+        app.composer.replace("/quit");
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        let screen = render(&app, 74, 20, Theme::new().without_color());
+        assert!(screen.contains("task:7"), "{screen}");
+    }

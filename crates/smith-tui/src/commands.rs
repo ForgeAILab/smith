@@ -388,6 +388,7 @@ pub fn help() -> String {
          While work is serving, Enter steers an ordinary prompt and Tab queues it.\n\
          Alt+Up restores the newest explicit queued turn for editing.\n\
          Esc interrupts; uncommitted steers are resent only after cancellation discards them.\n\
+         Ctrl+B moves a running foreground shell command to the background without killing it.\n\
          @ completes exact files and read-only agents; @@ sends a literal @.\n\
          ! runs a prepared local shell action; !! sends a literal !.\n\
          PageUp/PageDown/Home/End or the mouse wheel scrolls the transcript.\n\

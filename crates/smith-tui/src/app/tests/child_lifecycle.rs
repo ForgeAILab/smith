@@ -282,3 +282,42 @@
             )
         }));
     }
+
+    #[test]
+    fn child_clocks_tick_live_and_freeze_when_the_child_settles() {
+        let mut app = app();
+        let child = ChildId::new("child-clock");
+        app.apply(&event(RuntimeEvent::ChildSpawned {
+            child: child.clone(),
+            workspace: WorkspacePolicy::ReadOnlyView,
+            max_turns: 1,
+            max_tokens: None,
+            deadline_ms: None,
+        }));
+        assert_eq!(app.live_child_count(), 1);
+        assert!(app.child_elapsed(child.as_str()).is_some());
+
+        app.apply(&event(RuntimeEvent::ChildCompleted {
+            child: child.clone(),
+            result: "done".to_owned(),
+        }));
+        assert_eq!(app.live_child_count(), 0);
+        let frozen = app.child_elapsed(child.as_str()).expect("a settled clock");
+        assert_eq!(
+            app.child_elapsed(child.as_str()),
+            Some(frozen),
+            "a settled clock reads the same twice"
+        );
+
+        // A recovered durable record ran in another process; no honest
+        // wall-clock exists for it.
+        app.apply(&event(RuntimeEvent::ChildProgress {
+            child: child.clone(),
+            phase: ChildPhase::Recovered {
+                child_session: SessionId::new("child-session-clock"),
+                state: ChildRecoveryState::Idle,
+                resumable: false,
+            },
+        }));
+        assert_eq!(app.child_elapsed(child.as_str()), None);
+    }

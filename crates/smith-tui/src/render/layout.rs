@@ -74,7 +74,8 @@ fn draw_surface(
     }
 
     let composer_rows = composer_rows(app, area.width).saturating_add(2);
-    let anchored = anchored_rows(app, area, composer_rows);
+    let agents_rows = agents_rows(app, area, composer_rows);
+    let anchored = anchored_rows(app, area, composer_rows, agents_rows);
     let [
         transcript,
         compact,
@@ -83,6 +84,7 @@ fn draw_surface(
         todos,
         composer,
         hint,
+        agents,
     ] = Layout::vertical([
         Constraint::Min(3),
         Constraint::Length(anchored.compact),
@@ -91,6 +93,7 @@ fn draw_surface(
         Constraint::Length(anchored.todos),
         Constraint::Length(composer_rows),
         Constraint::Length(hint_rows(app)),
+        Constraint::Length(agents_rows),
     ])
     .areas(area);
     draw_transcript(frame, transcript, app, theme, transcript_lines.take());
@@ -121,6 +124,9 @@ fn draw_surface(
     }
     draw_composer(frame, composer, app, theme);
     draw_hint(frame, hint, app, theme);
+    if agents_rows > 0 {
+        draw_agents(frame, agents, app, theme);
+    }
 
     match &app.overlay {
         // Approvals are anchored above the composer, not floated over the
@@ -242,14 +248,17 @@ fn paint_selection(frame: &mut Frame<'_>, app: &App, theme: Theme) {
 /// with.
 fn transcript_rect(area: Rect, app: &App) -> Rect {
     let composer_rows = composer_rows(app, area.width).saturating_add(2);
-    let anchored = anchored_rows(app, area, composer_rows);
-    let [transcript, _, _, _, _, _] = Layout::vertical([
+    let agents_rows = agents_rows(app, area, composer_rows);
+    let anchored = anchored_rows(app, area, composer_rows, agents_rows);
+    let [transcript, _, _, _, _, _, _, _] = Layout::vertical([
         Constraint::Min(3),
         Constraint::Length(anchored.compact),
+        Constraint::Length(anchored.approval),
         Constraint::Length(anchored.pending),
         Constraint::Length(anchored.todos),
         Constraint::Length(composer_rows),
         Constraint::Length(hint_rows(app)),
+        Constraint::Length(agents_rows),
     ])
     .areas(area);
     transcript
@@ -263,7 +272,7 @@ struct AnchoredRows {
     todos: u16,
 }
 
-fn anchored_rows(app: &App, area: Rect, composer_rows: u16) -> AnchoredRows {
+fn anchored_rows(app: &App, area: Rect, composer_rows: u16, agents_rows: u16) -> AnchoredRows {
     let compact_desired = match &app.overlay {
         Some(Overlay::Palette { error, .. }) => desired_palette_rows(app, error.as_deref()),
         Some(Overlay::ResourcePicker { picker, .. }) => compact_resource_picker_rows(picker),
@@ -280,6 +289,7 @@ fn anchored_rows(app: &App, area: Rect, composer_rows: u16) -> AnchoredRows {
         .height
         .saturating_sub(composer_rows)
         .saturating_sub(hint_rows(app))
+        .saturating_sub(agents_rows)
         .saturating_sub(3);
     let pending_desired = desired_pending_input_rows(app);
     let todo_desired = desired_todo_rows(app);
@@ -296,6 +306,7 @@ fn anchored_rows(app: &App, area: Rect, composer_rows: u16) -> AnchoredRows {
             .height
             .saturating_sub(composer_rows)
             .saturating_sub(hint_rows(app))
+            .saturating_sub(agents_rows)
             .saturating_sub(1);
         return AnchoredRows {
             compact: 0,
@@ -353,6 +364,16 @@ fn desired_todo_rows(app: &App) -> u16 {
 
 fn hint_rows(app: &App) -> u16 {
     if has_stacked_control_hint(app) { 2 } else { 1 }
+}
+
+/// Agents-panel rows, bounded so the transcript keeps its minimum height.
+fn agents_rows(app: &App, area: Rect, composer_rows: u16) -> u16 {
+    let ceiling = area
+        .height
+        .saturating_sub(composer_rows)
+        .saturating_sub(hint_rows(app))
+        .saturating_sub(3);
+    desired_agents_rows(app).min(ceiling)
 }
 
 pub(super) fn has_stacked_control_hint(app: &App) -> bool {

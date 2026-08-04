@@ -5,6 +5,25 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::theme::{Theme, Tone, glyph};
 
+/// Clips text to a display-cell budget, ending with `…` when it was cut.
+pub(super) fn clip_line(text: String, budget: usize) -> String {
+    if text.width() <= budget {
+        return text;
+    }
+    let mut kept = String::new();
+    let mut used = 0;
+    for ch in text.chars() {
+        let width = ch.width().unwrap_or(0);
+        if used + width > budget.saturating_sub(1) {
+            break;
+        }
+        used += width;
+        kept.push(ch);
+    }
+    kept.push_str(glyph::ELIDED);
+    kept
+}
+
 pub(super) fn push_segment(spans: &mut Vec<Span<'static>>, theme: Theme, segment: Span<'static>) {
     spans.push(Span::styled(
         format!(" {} ", glyph::SEPARATOR),

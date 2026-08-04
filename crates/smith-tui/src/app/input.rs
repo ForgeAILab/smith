@@ -292,6 +292,11 @@ impl App {
                 self.open_history_search();
                 None
             }
+            // The host decides whether a foreground shell call exists to
+            // adopt; the app has no runtime visibility to gate this itself,
+            // and always emitting the action keeps the mapping trivial and
+            // testable without a live host.
+            (KeyCode::Char('b'), KeyModifiers::CONTROL) => Some(Action::BackgroundShell),
             (KeyCode::Char('?'), KeyModifiers::NONE) if self.composer.is_empty() => {
                 self.follow_newest();
                 self.dispatch_command(CommandAction::Help)

@@ -216,6 +216,18 @@ impl SessionPaths {
         Ok(self.directory.join(format!("{}.jsonl", session.as_str())))
     }
 
+    /// The bounded per-task output spool directory for `session`.
+    ///
+    /// Background task output is not conversation content and is never
+    /// replayed into canonical history, so it lives in its own subdirectory
+    /// rather than beside the snapshot and journal files. The directory is
+    /// created lazily by the background-task registry on first spawn, not
+    /// here.
+    pub fn tasks_dir(&self, session: &SessionId) -> Result<PathBuf, RuntimeError> {
+        safe_component(session.as_str(), "session id")?;
+        Ok(self.directory.join(format!("{}.tasks", session.as_str())))
+    }
+
     /// The metadata-only change attribution journal for `session`.
     pub fn changes(&self, session: &SessionId) -> Result<PathBuf, RuntimeError> {
         safe_component(session.as_str(), "session id")?;
@@ -563,6 +575,8 @@ mod tests {
         assert!(snapshot.ends_with("sessions/demo/s-1.snapshot.json"));
         let journal = paths.journal(&SessionId::new("s-1")).expect("a path");
         assert!(journal.ends_with("sessions/demo/s-1.jsonl"));
+        let tasks = paths.tasks_dir(&SessionId::new("s-1")).expect("a path");
+        assert!(tasks.ends_with("sessions/demo/s-1.tasks"));
     }
 
     #[test]
@@ -573,5 +587,6 @@ mod tests {
             .expect_err("an error");
         assert_eq!(err.kind, ErrorKind::Config);
         assert!(paths.journal(&SessionId::new("../../escape")).is_err());
+        assert!(paths.tasks_dir(&SessionId::new("../../escape")).is_err());
     }
 }

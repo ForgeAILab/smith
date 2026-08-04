@@ -646,6 +646,23 @@ pub(super) fn draw_exit_confirm(
     if pending_questionnaire {
         lines.push(Line::from(Span::raw("· a questionnaire is pending")));
     }
+    if !app.running_tasks.is_empty() {
+        let ids = app
+            .running_tasks
+            .iter()
+            .map(|task| task.task_id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(Line::from(Span::raw(format!(
+            "· {} background {} running: {ids}",
+            app.running_tasks.len(),
+            if app.running_tasks.len() == 1 {
+                "task"
+            } else {
+                "tasks"
+            },
+        ))));
+    }
     lines.push(Line::default());
     lines.push(Line::from(vec![
         Span::styled("y", theme.style(Tone::Danger)),

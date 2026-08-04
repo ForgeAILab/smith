@@ -27,11 +27,14 @@ const INSTRUCTION_CEILING: u32 = 700;
 /// The default coding tool schemas, in tokens.
 ///
 /// Names, descriptions, and complete input schemas for `read`, `list`,
-/// `search`, `edit`, and `shell`.
-const TOOL_CEILING: u32 = 950;
+/// `search`, `edit`, `shell`, `task_output`, and `task_stop`. Raised from 950
+/// when background shell tasks added the latter two tools and `shell` grew
+/// its `run_in_background` option — a deliberate, reviewed increase, not
+/// drift.
+const TOOL_CEILING: u32 = 1_350;
 
 /// Instructions plus tools: the floor of any Smith request.
-const BASE_CEILING: u32 = 1_600;
+const BASE_CEILING: u32 = 1_950;
 
 fn sizer() -> CharRatioSizer {
     CharRatioSizer::default()

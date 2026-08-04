@@ -111,6 +111,7 @@ use smith_host::rotation::{HeadlessRotation, RotationPolicy};
 
 use crate::abilities::{INTERACTION_READY_CONFIG, seal_tool_abilities};
 use crate::authority::SmithToolAuthority;
+use crate::background_tasks::RegistryBackgroundTaskHost;
 use crate::pool::CredentialPool;
 use crate::rotation::{HostPoolSecrets, PoolCredentialSource, PooledProvider, SharedPool};
 use crate::budget_notice::{BudgetNoticeComponent, DEFAULT_NOTICE_THRESHOLD_TOKENS};
@@ -1095,6 +1096,13 @@ fn prepare_summary_stage(
 }
 
 fn prepare_capability_stage(request: &RuntimeRequest) -> Result<CapabilityStage, FactoryError> {
+    // The seam `shell`, `task_output`, and `task_stop` reach through to the
+    // background task registry (`smith_tools::background`). Idempotent, like
+    // the registry's own singleton: composing more than one runtime in this
+    // process must not panic, and every session reaches the same registry
+    // regardless of which composition installed the adapter first.
+    smith_tools::background::install(std::sync::Arc::new(RegistryBackgroundTaskHost));
+
     let mut tools = tools(request);
     // No tool, no projected plan state: a posture that cannot write a plan
     // should not carry one in its context either.

@@ -287,4 +287,5 @@ mod tests {
     include!("resources.rs");
     include!("child_lifecycle.rs");
     include!("rotation.rs");
+    include!("background_tasks.rs");
 }

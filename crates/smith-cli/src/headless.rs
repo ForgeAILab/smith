@@ -10,15 +10,18 @@ use agent_runtime_core::event::{
     EventEnvelope, PlanItemProjection, PlanSensitivity, RuntimeEvent, TurnFinish,
 };
 use agent_runtime_core::goal::{GoalProjection, GoalStatus};
+use agent_runtime_core::ids::SessionId;
 use agent_runtime_core::interaction::InteractionOutcomeKind;
 use agent_runtime_core::security::SecurityResource;
 use agent_runtime_core::usage::UsageDelta;
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use serde::Serialize;
+use smith_config::model::BackgroundExit;
 use smith_host::{
     ApprovalRequired, HeadlessApproval, HeadlessInteraction, HeadlessRotation, InteractionRequired,
 };
+use smith_runtime::background_tasks::{BackgroundTaskInfo, BackgroundTaskRegistry, TaskStatus};
 use smith_runtime::host::HostSession;
 use smith_runtime::journal::{EphemeralInterruptionReason, EphemeralWorkInterruption};
 use smith_runtime::rotation::SharedPool;
@@ -33,6 +36,13 @@ const OUTPUT_SCHEMA_VERSION: u32 = 3;
 pub(crate) const APPROVAL_REQUIRED_EXIT: u8 = 4;
 /// Stable process status used when an unattended run needs task input.
 pub(crate) const INTERACTION_REQUIRED_EXIT: u8 = 5;
+
+/// How often `wait`/`stop` re-poll the registry for a terminal state.
+const BACKGROUND_TASK_POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// Ceiling on how long `stop` waits for tasks to acknowledge the stop signal.
+/// Generous relative to the worker's own ~500 ms kill grace period: this
+/// bounds the headless exit, not the kill itself.
+const BACKGROUND_STOP_POLL_BOUND: Duration = Duration::from_secs(5);
 
 /// The result of presenting one non-interactive run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,8 +89,51 @@ struct ResultEnvelope {
     /// what the whole run was billed to.
     #[serde(skip_serializing_if = "Option::is_none")]
     account: Option<AccountOutput>,
+    /// What the background-exit policy did about background shell tasks that
+    /// were still running when the final answer was ready. Absent when none
+    /// were running, regardless of policy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    background_exit: Option<BackgroundExitOutput>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+}
+
+/// One background shell task's state as the background-exit policy last
+/// observed it.
+#[derive(Debug, Serialize)]
+struct BackgroundTaskOutput {
+    task_id: String,
+    status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exit_code: Option<i32>,
+}
+
+impl BackgroundTaskOutput {
+    /// Projects a task the `error` policy reported without waiting on: no
+    /// poll happened, so "running" is the only state actually observed.
+    fn still_running(task: &BackgroundTaskInfo) -> Self {
+        Self {
+            task_id: task.task_id.clone(),
+            status: TaskStatus::Running.as_str(),
+            exit_code: None,
+        }
+    }
+
+    fn terminal(task_id: String, status: &TaskStatus) -> Self {
+        Self {
+            task_id,
+            status: status.as_str(),
+            exit_code: status.exit_code(),
+        }
+    }
+}
+
+/// Report of every background shell task the caller's background-exit policy
+/// acted on, and which policy applied.
+#[derive(Debug, Serialize)]
+struct BackgroundExitOutput {
+    policy: &'static str,
+    tasks: Vec<BackgroundTaskOutput>,
 }
 
 /// The account a headless run used, and whether its window ran out.
@@ -317,6 +370,146 @@ fn account_output(
     })
 }
 
+/// What a background-exit policy requires when the final answer is ready but
+/// background shell tasks are still running. Pure and synchronous so the
+/// policy choice is unit-testable without a live task registry; the async
+/// waiting/stopping itself lives in [`apply_background_exit_policy`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BackgroundExitDecision {
+    /// No running background shell tasks; nothing to do.
+    Clear,
+    /// `error` (the default): report every running task and fail rather than
+    /// let `host.shutdown()` kill them without anyone having been told.
+    Error(String),
+    /// `wait`: block until every running task reaches a terminal state.
+    Wait,
+    /// `stop`: signal every running task to stop, then await termination.
+    Stop,
+}
+
+fn decide_background_exit(
+    policy: BackgroundExit,
+    running: &[BackgroundTaskInfo],
+) -> BackgroundExitDecision {
+    if running.is_empty() {
+        return BackgroundExitDecision::Clear;
+    }
+    match policy {
+        BackgroundExit::Error => BackgroundExitDecision::Error(background_task_error(running)),
+        BackgroundExit::Wait => BackgroundExitDecision::Wait,
+        BackgroundExit::Stop => BackgroundExitDecision::Stop,
+    }
+}
+
+/// Names every running task by ID and command so the caller can act on it
+/// instead of guessing what `host.shutdown()` is about to kill.
+fn background_task_error(running: &[BackgroundTaskInfo]) -> String {
+    let tasks = running
+        .iter()
+        .map(|task| format!("{} (`{}`)", task.task_id, task.command))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "{} background shell task(s) still running at exit: {tasks}; rerun with \
+         `--background-exit wait` to await them, `--background-exit stop` to end them, \
+         or call `task_stop` before the turn ends",
+        running.len()
+    )
+}
+
+/// Applies the background-exit policy to whatever background shell tasks are
+/// still running when the final answer is ready.
+///
+/// `host.shutdown()` kills every registered group regardless of policy — true
+/// orphaning is not possible — so this only decides what gets reported and
+/// how long the process waits before that happens.
+async fn apply_background_exit_policy(
+    session_id: &SessionId,
+    policy: BackgroundExit,
+) -> (Option<String>, Option<BackgroundExitOutput>) {
+    let running = BackgroundTaskRegistry::global().running_tasks(session_id);
+    match decide_background_exit(policy, &running) {
+        BackgroundExitDecision::Clear => (None, None),
+        BackgroundExitDecision::Error(message) => {
+            let tasks = running.iter().map(BackgroundTaskOutput::still_running).collect();
+            (
+                Some(message),
+                Some(BackgroundExitOutput {
+                    policy: policy.as_str(),
+                    tasks,
+                }),
+            )
+        }
+        BackgroundExitDecision::Wait => {
+            let tasks = await_background_tasks(session_id, &running, None).await;
+            (
+                None,
+                Some(BackgroundExitOutput {
+                    policy: policy.as_str(),
+                    tasks,
+                }),
+            )
+        }
+        BackgroundExitDecision::Stop => {
+            BackgroundTaskRegistry::global()
+                .stop_all_session_tasks(session_id, TaskStatus::Stopped);
+            let tasks =
+                await_background_tasks(session_id, &running, Some(BACKGROUND_STOP_POLL_BOUND))
+                    .await;
+            (
+                None,
+                Some(BackgroundExitOutput {
+                    policy: policy.as_str(),
+                    tasks,
+                }),
+            )
+        }
+    }
+}
+
+/// Polls the registry until every named task leaves the running set — or,
+/// under `bound`, until that ceiling passes — then reads back each task's
+/// terminal state. `wait` passes no bound: a background task may legitimately
+/// run as long as the model let it; only `stop` needs a ceiling, since its
+/// signal should resolve within the worker's own kill grace period.
+async fn await_background_tasks(
+    session_id: &SessionId,
+    running: &[BackgroundTaskInfo],
+    bound: Option<Duration>,
+) -> Vec<BackgroundTaskOutput> {
+    let registry = BackgroundTaskRegistry::global();
+    let poll_until_terminal = async {
+        loop {
+            let running_ids: BTreeSet<String> = registry
+                .running_tasks(session_id)
+                .into_iter()
+                .map(|task| task.task_id)
+                .collect();
+            if !running.iter().any(|task| running_ids.contains(&task.task_id)) {
+                return;
+            }
+            tokio::time::sleep(BACKGROUND_TASK_POLL_INTERVAL).await;
+        }
+    };
+    match bound {
+        Some(bound) => {
+            let _ = tokio::time::timeout(bound, poll_until_terminal).await;
+        }
+        None => poll_until_terminal.await,
+    }
+
+    let mut report = Vec::with_capacity(running.len());
+    for task in running {
+        let status = registry
+            .get_task_output(session_id, &task.task_id, 0, 1)
+            .await
+            .map(|result| result.status)
+            .unwrap_or_else(|_| task.status.clone());
+        report.push(BackgroundTaskOutput::terminal(task.task_id.clone(), &status));
+    }
+    report
+}
+
 /// Runs one turn, preserving canonical event order for stream JSON.
 pub(crate) async fn run(
     host: &HostSession,
@@ -326,6 +519,7 @@ pub(crate) async fn run(
     interaction: Option<&HeadlessInteraction>,
     rotation: Option<&HeadlessRotation>,
     credential_pool: Option<&SharedPool>,
+    background_exit: BackgroundExit,
 ) -> Result<Outcome> {
     let stdout = io::stdout();
     let stderr = io::stderr();
@@ -337,6 +531,7 @@ pub(crate) async fn run(
         interaction,
         rotation,
         credential_pool,
+        background_exit,
         &mut stdout.lock(),
         &mut stderr.lock(),
     )
@@ -351,6 +546,7 @@ async fn run_with_io(
     interaction: Option<&HeadlessInteraction>,
     rotation: Option<&HeadlessRotation>,
     credential_pool: Option<&SharedPool>,
+    background_exit: BackgroundExit,
     stdout: &mut impl Write,
     stderr: &mut impl Write,
 ) -> Result<Outcome> {
@@ -568,6 +764,9 @@ async fn run_with_io(
     };
     let goal_continuation_turns = final_goal.as_ref().map(|_| goal_continuation_turns);
 
+    let (background_exit_error, background_exit_output) =
+        apply_background_exit_policy(session.id(), background_exit).await;
+
     let shutdown_error = host.shutdown().await.err().map(|error| error.to_string());
 
     // SessionShutdown is queued before shutdown returns. Include it in the
@@ -609,7 +808,7 @@ async fn run_with_io(
         .and_then(HeadlessInteraction::required)
         .or(event_interaction_required);
     let lifecycle_error = shutdown_error.or(stream_error).or(sequence_error);
-    let error = lifecycle_error.or_else(|| {
+    let error = background_exit_error.or(lifecycle_error).or_else(|| {
         matches!(finish, Some(TurnFinish::Failed))
             .then_some(last_error)
             .flatten()
@@ -645,6 +844,7 @@ async fn run_with_io(
         approval_required: approval_required.map(Into::into),
         interaction_required: interaction_required.map(Into::into),
         recovery: host.recovered_ephemeral_work().map(Into::into),
+        background_exit: background_exit_output,
         error: error.clone(),
     };
 
@@ -722,6 +922,7 @@ async fn write_restored_interaction_required(
         interaction_required: Some(required.into()),
         recovery: host.recovered_ephemeral_work().map(Into::into),
         account: None,
+        background_exit: None,
         error: shutdown_error,
     };
 
@@ -795,6 +996,7 @@ async fn write_submission_failure(
         interaction_required: None,
         recovery: host.recovered_ephemeral_work().map(Into::into),
         account: None,
+        background_exit: None,
         error: Some(error.clone()),
     };
 
@@ -1232,6 +1434,7 @@ mod tests {
             interaction_required: None,
             recovery: None,
             account: None,
+            background_exit: None,
             error: None,
         };
 
@@ -1281,6 +1484,7 @@ mod tests {
             interaction_required: None,
             recovery: None,
             account: None,
+            background_exit: None,
             error: None,
         };
 
@@ -1327,6 +1531,7 @@ mod tests {
             }),
             recovery: None,
             account: None,
+            background_exit: None,
             error: None,
         };
         let actual = serde_json::to_value(result).expect("serializable result");
@@ -1440,6 +1645,7 @@ mod tests {
                 interrupted_monitors: vec!["monitor-1".into()],
                 interrupted_tasks: vec!["task-1".into()],
             }),
+            background_exit: None,
             error: None,
         };
         let mut stderr = Vec::new();
@@ -1544,6 +1750,7 @@ max_output_tokens = 4096
             None,
             None,
             None,
+            BackgroundExit::Error,
             &mut stdout,
             &mut stderr,
         )
@@ -1651,6 +1858,7 @@ max_output_tokens = 4096
             None,
             None,
             None,
+            BackgroundExit::Error,
             &mut stdout,
             &mut stderr,
         )
@@ -1769,6 +1977,7 @@ max_output_tokens = 4096
                 None,
                 None,
             None,
+            BackgroundExit::Error,
             &mut stdout,
                 &mut stderr,
             ),
@@ -1912,6 +2121,7 @@ max_output_tokens = 4096
                 None,
                 None,
             None,
+            BackgroundExit::Error,
             &mut stdout,
                 &mut stderr,
             ),
@@ -2079,6 +2289,7 @@ max_output_tokens = 4096
             None,
             None,
             None,
+            BackgroundExit::Error,
             &mut stdout,
             &mut stderr,
         )
@@ -2229,6 +2440,7 @@ max_output_tokens = 4096
                 Some(interaction.as_ref()),
                 None,
             None,
+            BackgroundExit::Error,
             &mut stdout,
                 &mut stderr,
             ),
@@ -2402,6 +2614,7 @@ max_output_tokens = 4096
                 Some(headless_interaction.as_ref()),
                 None,
             None,
+            BackgroundExit::Error,
             &mut stdout,
                 &mut stderr,
             ),
@@ -2581,5 +2794,307 @@ max_output_tokens = 4096
         assert_eq!(account.resets_at_ms, Some(1_785_866_400_000));
         // The run stayed put: the account is still the one it started on.
         assert_eq!(account.reference, "keychain:smith/personal");
+    }
+
+    fn sample_running_task(task_id: &str, command: &str) -> BackgroundTaskInfo {
+        BackgroundTaskInfo {
+            task_id: task_id.to_owned(),
+            command: command.to_owned(),
+            cwd: std::env::temp_dir(),
+            spool_path: std::env::temp_dir().join("fixture.log"),
+            status: TaskStatus::Running,
+            timeout_ms: None,
+        }
+    }
+
+    /// A fresh session ID every call, so tests that spawn real background
+    /// tasks through the process-wide registry never collide with each other.
+    fn unique_background_test_session(label: &str) -> SessionId {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        SessionId::new(format!(
+            "headless-bg-exit-{label}-{}-{n}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn no_running_tasks_never_needs_a_background_exit_decision() {
+        for policy in [BackgroundExit::Error, BackgroundExit::Wait, BackgroundExit::Stop] {
+            assert_eq!(
+                decide_background_exit(policy, &[]),
+                BackgroundExitDecision::Clear
+            );
+        }
+    }
+
+    #[test]
+    fn the_default_policy_is_error_and_names_the_task_by_id_and_command() {
+        let running = [sample_running_task("task:7", "cargo test --workspace")];
+        let decision = decide_background_exit(BackgroundExit::default(), &running);
+        let BackgroundExitDecision::Error(message) = decision else {
+            panic!("the default policy must fail closed instead of orphaning: {decision:?}");
+        };
+        assert!(message.contains("task:7"), "{message}");
+        assert!(message.contains("cargo test --workspace"), "{message}");
+    }
+
+    #[test]
+    fn wait_and_stop_policies_defer_to_the_async_poll_instead_of_deciding_synchronously() {
+        let running = [sample_running_task("task:8", "sleep 30")];
+        assert_eq!(
+            decide_background_exit(BackgroundExit::Wait, &running),
+            BackgroundExitDecision::Wait
+        );
+        assert_eq!(
+            decide_background_exit(BackgroundExit::Stop, &running),
+            BackgroundExitDecision::Stop
+        );
+    }
+
+    #[test]
+    fn multiple_running_tasks_are_all_named_in_the_error_policy_message() {
+        let running = [
+            sample_running_task("task:1", "make build"),
+            sample_running_task("task:2", "npm test"),
+        ];
+        let decision = decide_background_exit(BackgroundExit::Error, &running);
+        let BackgroundExitDecision::Error(message) = decision else {
+            panic!("expected an error decision: {decision:?}");
+        };
+        assert!(message.starts_with("2 background shell task(s)"), "{message}");
+        assert!(message.contains("task:1") && message.contains("make build"), "{message}");
+        assert!(message.contains("task:2") && message.contains("npm test"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn no_running_tasks_leaves_no_error_and_no_report_under_every_policy() {
+        let session_id = unique_background_test_session("clear");
+        for policy in [BackgroundExit::Error, BackgroundExit::Wait, BackgroundExit::Stop] {
+            let (error, output) = apply_background_exit_policy(&session_id, policy).await;
+            assert!(error.is_none());
+            assert!(output.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn error_policy_reports_a_running_task_without_waiting_for_it() {
+        let session_id = unique_background_test_session("error");
+        let registry = BackgroundTaskRegistry::global();
+        let (task_id, _spool) = registry
+            .spawn_background_task(&session_id, "sleep 2".into(), std::env::temp_dir(), None)
+            .await
+            .expect("a spawned background task");
+
+        let (error, output) =
+            apply_background_exit_policy(&session_id, BackgroundExit::Error).await;
+
+        let error = error.expect("the default policy fails closed");
+        assert!(error.contains(&task_id), "{error}");
+        assert!(error.contains("sleep 2"), "{error}");
+        let output = output.expect("a background-exit report");
+        assert_eq!(output.policy, "error");
+        assert_eq!(output.tasks.len(), 1);
+        assert_eq!(output.tasks[0].task_id, task_id);
+        assert_eq!(output.tasks[0].status, "running");
+        assert_eq!(output.tasks[0].exit_code, None);
+
+        // The policy only reports; it never waits or stops on its own.
+        assert_eq!(registry.running_tasks(&session_id).len(), 1);
+        let _ = registry.stop_task(&session_id, &task_id).await;
+    }
+
+    #[tokio::test]
+    async fn wait_policy_blocks_until_the_task_exits_and_reports_its_exit_code() {
+        let session_id = unique_background_test_session("wait");
+        let registry = BackgroundTaskRegistry::global();
+        let (task_id, _spool) = registry
+            .spawn_background_task(&session_id, "sleep 0.2".into(), std::env::temp_dir(), None)
+            .await
+            .expect("a spawned background task");
+
+        let (error, output) =
+            apply_background_exit_policy(&session_id, BackgroundExit::Wait).await;
+
+        assert!(error.is_none());
+        let output = output.expect("a background-exit report");
+        assert_eq!(output.policy, "wait");
+        assert_eq!(output.tasks.len(), 1);
+        assert_eq!(output.tasks[0].task_id, task_id);
+        assert_eq!(output.tasks[0].status, "exited");
+        assert_eq!(output.tasks[0].exit_code, Some(0));
+        assert!(registry.running_tasks(&session_id).is_empty());
+    }
+
+    #[tokio::test]
+    async fn stop_policy_ends_a_long_running_task_well_before_its_own_deadline() {
+        let session_id = unique_background_test_session("stop");
+        let registry = BackgroundTaskRegistry::global();
+        let (task_id, _spool) = registry
+            .spawn_background_task(&session_id, "sleep 30".into(), std::env::temp_dir(), None)
+            .await
+            .expect("a spawned background task");
+
+        let started = std::time::Instant::now();
+        let (error, output) =
+            apply_background_exit_policy(&session_id, BackgroundExit::Stop).await;
+        let elapsed = started.elapsed();
+
+        assert!(error.is_none());
+        assert!(
+            elapsed < Duration::from_secs(4),
+            "stop should not wait for the 30s command to finish on its own: {elapsed:?}"
+        );
+        let output = output.expect("a background-exit report");
+        assert_eq!(output.policy, "stop");
+        assert_eq!(output.tasks.len(), 1);
+        assert_eq!(output.tasks[0].task_id, task_id);
+        assert_eq!(output.tasks[0].status, "stopped");
+        assert_eq!(output.tasks[0].exit_code, None);
+        assert!(registry.running_tasks(&session_id).is_empty());
+    }
+
+    const BACKGROUND_EXIT_CONFIG: &str = r#"
+default_profile = "dev"
+
+[profiles.dev]
+provider = "local"
+model = "example-model"
+
+[providers.local]
+kind = "fake"
+
+[models."local/example-model"]
+context_tokens = 128000
+max_input_tokens = 124000
+max_output_tokens = 4096
+"#;
+
+    #[tokio::test]
+    async fn default_error_policy_fails_a_headless_run_with_a_running_background_task() {
+        let home = tempfile::tempdir().expect("a home");
+        let project = tempfile::tempdir().expect("a project");
+        let config_dir = project.path().join(".smith");
+        std::fs::create_dir_all(&config_dir).expect("a config directory");
+        std::fs::write(config_dir.join("config.toml"), BACKGROUND_EXIT_CONFIG).expect("a config");
+        let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+            .expect("resolved config")
+            .config;
+        let runtime = RuntimeRequest {
+            workspace: Some(Arc::new(
+                ProjectWorkspace::new(project.path()).expect("a workspace"),
+            )),
+            approval: Some(Arc::new(HeadlessApproval::new())),
+            provider: Some(Arc::new(FakeProvider::text_reply("the answer")) as Arc<dyn Provider>),
+            ..RuntimeRequest::new(config, HostSurface::Headless)
+        };
+        let host = smith_runtime::host::start(host_request(runtime, project.path()))
+            .await
+            .expect("a host");
+        let registry = BackgroundTaskRegistry::global();
+        let (task_id, _spool) = registry
+            .spawn_background_task(
+                host.session().id(),
+                "sleep 1".into(),
+                std::env::temp_dir(),
+                None,
+            )
+            .await
+            .expect("a spawned background task");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let outcome = run_with_io(
+            &host,
+            "hello".into(),
+            OutputFormat::Json,
+            None,
+            None,
+            None,
+            None,
+            BackgroundExit::Error,
+            &mut stdout,
+            &mut stderr,
+        )
+        .await
+        .expect("a structured result");
+
+        assert_eq!(outcome.exit_code, 1);
+        let result: serde_json::Value =
+            serde_json::from_slice(&stdout).expect("a result envelope");
+        assert_eq!(result["status"], "failed");
+        assert_eq!(result["background_exit"]["policy"], "error");
+        assert_eq!(result["background_exit"]["tasks"][0]["task_id"], task_id);
+        assert_eq!(result["background_exit"]["tasks"][0]["status"], "running");
+        assert!(
+            result["error"]
+                .as_str()
+                .is_some_and(|error| error.contains(&task_id)),
+            "{result:#}"
+        );
+
+        let _ = registry.stop_task(host.session().id(), &task_id).await;
+    }
+
+    #[tokio::test]
+    async fn wait_policy_lets_a_headless_run_finish_after_its_background_task_exits() {
+        let home = tempfile::tempdir().expect("a home");
+        let project = tempfile::tempdir().expect("a project");
+        let config_dir = project.path().join(".smith");
+        std::fs::create_dir_all(&config_dir).expect("a config directory");
+        std::fs::write(config_dir.join("config.toml"), BACKGROUND_EXIT_CONFIG).expect("a config");
+        let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+            .expect("resolved config")
+            .config;
+        let runtime = RuntimeRequest {
+            workspace: Some(Arc::new(
+                ProjectWorkspace::new(project.path()).expect("a workspace"),
+            )),
+            approval: Some(Arc::new(HeadlessApproval::new())),
+            provider: Some(Arc::new(FakeProvider::text_reply("the answer")) as Arc<dyn Provider>),
+            ..RuntimeRequest::new(config, HostSurface::Headless)
+        };
+        let host = smith_runtime::host::start(host_request(runtime, project.path()))
+            .await
+            .expect("a host");
+        let registry = BackgroundTaskRegistry::global();
+        let (task_id, _spool) = registry
+            .spawn_background_task(
+                host.session().id(),
+                // Long enough to still be running when the policy check
+                // happens (after host startup and the turn itself), short
+                // enough that `wait` polling it to completion stays fast.
+                "sleep 1".into(),
+                std::env::temp_dir(),
+                None,
+            )
+            .await
+            .expect("a spawned background task");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let outcome = run_with_io(
+            &host,
+            "hello".into(),
+            OutputFormat::Json,
+            None,
+            None,
+            None,
+            None,
+            BackgroundExit::Wait,
+            &mut stdout,
+            &mut stderr,
+        )
+        .await
+        .expect("a structured result");
+
+        assert_eq!(outcome.exit_code, 0);
+        let result: serde_json::Value =
+            serde_json::from_slice(&stdout).expect("a result envelope");
+        assert_eq!(result["status"], "ok");
+        assert_eq!(result["background_exit"]["policy"], "wait");
+        assert_eq!(result["background_exit"]["tasks"][0]["task_id"], task_id);
+        assert_eq!(result["background_exit"]["tasks"][0]["status"], "exited");
+        assert_eq!(result["background_exit"]["tasks"][0]["exit_code"], 0);
     }
 }

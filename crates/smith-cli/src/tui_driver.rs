@@ -2,6 +2,9 @@
 
 use std::collections::VecDeque;
 
+use smith_runtime::background_tasks::BackgroundTaskRegistry;
+use smith_tui::app::RunningTaskSummary;
+
 use super::*;
 
 pub(super) enum InteractiveExit {
@@ -110,6 +113,7 @@ pub(super) async fn run_interactive(
         app.present_recovered_ephemeral_work(
             interruption.children.len(),
             interruption.monitors.len(),
+            interruption.tasks.len(),
         );
     }
     let usage = snapshot.usage.total();
@@ -268,6 +272,25 @@ pub(super) async fn run_tui(
                                     app.transcript.push_error(format!(
                                         "turn interruption failed: {error}"
                                     ));
+                                }
+                            }
+                            Some(Action::BackgroundShell) => {
+                                // Kept distinct from `Action::Interrupt`: this
+                                // never kills the group, it only asks the
+                                // registry to adopt whatever foreground call
+                                // is currently running, if any.
+                                if BackgroundTaskRegistry::global()
+                                    .trigger_manual_backgrounding(session.id())
+                                {
+                                    app.transcript.push_notice(
+                                        "background",
+                                        "command moved to the background",
+                                    );
+                                } else {
+                                    app.transcript.push_notice(
+                                        "background",
+                                        "no foreground shell command is running",
+                                    );
                                 }
                             }
                             Some(Action::Quit) => break InteractiveExit::Quit(app.status.session_usage()),
@@ -608,6 +631,20 @@ pub(super) async fn run_tui(
                     // changed, so this writes on a switch and not on a frame.
                     remember_active_account(credential_pool.as_ref(), &mut accounts).await;
                 }
+                // Same cadence as the account refresh above: the TUI never
+                // reaches the registry itself, so this poll-on-redraw is the
+                // only path by which a task's start or terminal state
+                // reaches operational status and the exit-confirm gate.
+                app.set_running_tasks(
+                    BackgroundTaskRegistry::global()
+                        .running_tasks(session.id())
+                        .into_iter()
+                        .map(|task| RunningTaskSummary {
+                            task_id: task.task_id,
+                            command_hint: compact_command_hint(&task.command),
+                        })
+                        .collect(),
+                );
                 terminal.draw(|frame| smith_tui::draw_synced(frame, &mut app, theme))?;
                 dirty = false;
             }
@@ -620,6 +657,20 @@ pub(super) async fn run_tui(
         }
     };
     Ok(exit)
+}
+
+/// Bounds a background task's command for compact, single-line display.
+///
+/// The registry keeps the exact command for its own purposes; the footer and
+/// exit-confirm modal only need enough to recognize which task is which.
+fn compact_command_hint(command: &str) -> String {
+    const MAX_CHARS: usize = 60;
+    let collapsed = command.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() > MAX_CHARS {
+        format!("{}…", collapsed.chars().take(MAX_CHARS).collect::<String>())
+    } else {
+        collapsed
+    }
 }
 
 pub(super) async fn next_approval(

@@ -11,17 +11,27 @@
 //! | [`SearchTool`] | read-only |
 //! | [`EditTool`] | writes |
 //! | [`ShellTool`] | writes, spawns processes, network |
+//! | [`TaskOutputTool`] | read-only |
+//! | [`TaskStopTool`] | spawns processes (process control) |
 //!
 //! Every tool resolves paths through the session's
 //! [`Workspace`](agent_runtime_core::workspace::Workspace), so containment is
-//! enforced in one place rather than re-implemented five times. The two
+//! enforced in one place rather than re-implemented five times. The
 //! mutating tools declare their effects, which is what makes the runtime route
 //! them through approval before they run.
 //!
 //! Reads, searches, listings, and command output are all bounded. A tool that
 //! can return an unbounded amount of text is a tool that can exhaust a context
 //! window on one call.
+//!
+//! [`ShellTool`] can also hand a command to a session-owned background task
+//! registry instead of waiting for it — see [`background`] for the seam
+//! `TaskOutputTool` and `TaskStopTool` poll and control through. That
+//! registry lives one crate up, in `smith-runtime`; a host that never
+//! installs one still gets a coherent tool surface, just with those three
+//! paths returning a clear error instead of running.
 
+pub mod background;
 pub mod change;
 pub mod display;
 pub mod edit;
@@ -31,6 +41,8 @@ pub mod read_state;
 pub mod search;
 pub mod shell;
 pub mod support;
+pub mod task_output;
+pub mod task_stop;
 
 #[cfg(test)]
 mod testing;
@@ -43,6 +55,8 @@ pub use read::ReadTool;
 pub use read_state::{ReadDefect, ReadObservation, ReadRecorder};
 pub use search::SearchTool;
 pub use shell::ShellTool;
+pub use task_output::TaskOutputTool;
+pub use task_stop::TaskStopTool;
 
 use std::sync::Arc;
 
@@ -59,6 +73,8 @@ pub(crate) fn built_in() -> Vec<Arc<dyn Tool>> {
         Arc::new(SearchTool),
         Arc::new(EditTool),
         Arc::new(ShellTool),
+        Arc::new(TaskOutputTool),
+        Arc::new(TaskStopTool),
     ]
 }
 
@@ -88,7 +104,18 @@ mod tests {
     fn the_built_in_set_has_unique_stable_names() {
         let tools = all();
         let names: Vec<String> = tools.iter().map(|tool| tool.spec().name).collect();
-        assert_eq!(names, ["read", "list", "search", "edit", "shell"]);
+        assert_eq!(
+            names,
+            [
+                "read",
+                "list",
+                "search",
+                "edit",
+                "shell",
+                "task_output",
+                "task_stop"
+            ]
+        );
 
         let mut sorted = names.clone();
         sorted.sort_unstable();
@@ -114,7 +141,7 @@ mod tests {
         // approval gate entirely, so this is a safety check, not a style one.
         for tool in all() {
             let spec = tool.spec();
-            let mutating = matches!(spec.name.as_str(), "edit" | "shell");
+            let mutating = matches!(spec.name.as_str(), "edit" | "shell" | "task_stop");
             assert_eq!(
                 spec.effects.mutates(),
                 mutating,

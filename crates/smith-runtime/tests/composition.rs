@@ -510,6 +510,8 @@ async fn a_resolved_fake_configuration_builds_a_runtime_and_runs_a_turn() {
             "search",
             "edit",
             "shell",
+            "task_output",
+            "task_stop",
             "ask_user",
             "write_todos",
             "get_goal",
@@ -527,6 +529,8 @@ async fn a_resolved_fake_configuration_builds_a_runtime_and_runs_a_turn() {
             "search",
             "edit",
             "shell",
+            "task_output",
+            "task_stop",
             "ask_user",
             "write_todos",
             "get_goal",
@@ -650,6 +654,9 @@ async fn plan_profile_narrows_the_live_tool_view_despite_widening_instructions()
             "read",
             "list",
             "search",
+            // `task_output` is read-only and survives the posture filter;
+            // `task_stop` does not, the same way `edit` and `shell` don't.
+            "task_output",
             "ask_user",
             // No `write_todos`: a plan posture's deliverable is the plan, so a
             // parallel todo plan in tool state would duplicate the answer.
@@ -661,6 +668,7 @@ async fn plan_profile_narrows_the_live_tool_view_despite_widening_instructions()
     );
     assert!(!smith.abilities().names().contains(&"edit"));
     assert!(!smith.abilities().names().contains(&"shell"));
+    assert!(!smith.abilities().names().contains(&"task_stop"));
     assert!(
         smith
             .policy()

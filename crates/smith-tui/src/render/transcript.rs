@@ -256,6 +256,13 @@ pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<
                 format!(" · {marker} {}", render_elapsed(elapsed))
             })
             .unwrap_or_default();
+        // Delegated work is part of "is anything happening?": a silent
+        // parent waiting on children would otherwise look stalled.
+        let agents = match app.live_child_count() {
+            0 => String::new(),
+            1 => " · 1 agent".to_owned(),
+            count => format!(" · {count} agents"),
+        };
         lines.push(Line::from(vec![
             Span::styled(
                 format!("{} ", theme.spinner(app.tick)),
@@ -263,7 +270,7 @@ pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<
             ),
             Span::styled(
                 format!(
-                    "{label}{} · {}{phase}{}",
+                    "{label}{} · {}{phase}{agents}{}",
                     glyph::ELIDED,
                     app.turn_elapsed()
                         .map(render_elapsed)
