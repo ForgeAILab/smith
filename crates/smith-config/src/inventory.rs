@@ -299,10 +299,15 @@ pub fn local_inventory_with_catalog(
             if !provider_valid.get(provider).copied().unwrap_or(false) {
                 continue;
             }
-            let Some(catalog_provider) = catalog_provider_for(
+            let catalog_provider = catalog_provider_for(
                 section.kind.as_deref().unwrap_or_default(),
                 section.base_url.as_deref(),
-            ) else {
+            )
+            .or_else(|| {
+                (section.kind.as_deref() == Some(crate::model::KIND_GEMINI_INTERACTIONS))
+                    .then_some(crate::catalog::GOOGLE_CATALOG_PROVIDER)
+            });
+            let Some(catalog_provider) = catalog_provider else {
                 continue;
             };
             let Some(provider_catalog) = snapshot.provider(catalog_provider) else {
@@ -553,10 +558,13 @@ fn provider_is_selectable(section: &ProviderSection, available: &BTreeSet<&str>)
     {
         return false;
     }
-    section
-        .response
-        .as_ref()
-        .is_none_or(|response| response.reasoning_only.is_none() || kind == KIND_OPENAI_COMPATIBLE)
+    section.response.as_ref().is_none_or(|response| {
+        response.reasoning_only.is_none()
+            || matches!(
+                kind,
+                KIND_OPENAI_COMPATIBLE | crate::model::KIND_GEMINI_INTERACTIONS
+            )
+    })
 }
 
 struct CatalogLimit<'a> {

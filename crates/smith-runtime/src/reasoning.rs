@@ -17,7 +17,8 @@ use agent_runtime_core::store::{SessionStateSensitivity, VersionedSessionState};
 use async_trait::async_trait;
 use serde_json::{Map, Value, json};
 use smith_config::catalog::{
-    CatalogReasoningControls, OPENAI_ENDPOINT, OPENROUTER_ENDPOINT, ZAI_CODING_PLAN_ENDPOINT,
+    CatalogReasoningControls, GEMINI_ENDPOINT, OPENAI_ENDPOINT, OPENROUTER_ENDPOINT,
+    ZAI_CODING_PLAN_ENDPOINT,
 };
 use smith_config::model::ReasoningDialect;
 use smith_config::resolve::{Layer, ResolvedConfig, ResolvedModelReasoning, Source, Sourced};
@@ -257,6 +258,11 @@ impl ReasoningRuntimePolicy {
                     _ => self.selected_effort.clone(),
                 }
             }
+            ReasoningDialect::GeminiThinking => self.selected_effort.clone().or_else(|| {
+                (self.selected_enabled == Some(true))
+                    .then(|| self.default_effort.clone())
+                    .flatten()
+            }),
         }?;
         Some(ReasoningConfig {
             effort: Some(effort),
@@ -381,6 +387,27 @@ pub fn resolve_reasoning_policy(
                 "OpenRouter unified reasoning API (catalog-advertised reasoning model)".to_owned()
             },
         }
+    } else if endpoint == Some(GEMINI_ENDPOINT)
+        && profile.capabilities.reasoning != ReasoningSupport::Unsupported
+        && catalog_controls.is_some_and(|controls| !controls.efforts.is_empty())
+    {
+        // Native Gemini thinking levels are model-specific. Only the frozen
+        // catalog's bounded effort list is enough evidence to expose the
+        // native `thinking_level` field; a reasoning boolean alone remains
+        // fixed and cannot be turned into a guessed request dialect.
+        let efforts = catalog_controls
+            .expect("the branch requires catalog thinking controls")
+            .efforts
+            .clone();
+        ResolvedReasoningControls {
+            support: ReasoningSupport::Controllable,
+            switch: ReasoningSwitch::MandatoryOn,
+            efforts,
+            default_enabled: Some(true),
+            default_effort: None,
+            dialect: Some(ReasoningDialect::GeminiThinking),
+            capability_source: "Models.dev advertised Google Gemini thinking levels".to_owned(),
+        }
     } else {
         // On an unknown endpoint a boolean catalog record grants no control:
         // presence is not evidence of a wire dialect. Normalized endpoints
@@ -455,12 +482,20 @@ pub fn resolve_reasoning_policy(
         ));
     }
     if selected_enabled == Some(true)
-        && dialect == Some(ReasoningDialect::OpenaiEffort)
+        && matches!(
+            dialect,
+            Some(ReasoningDialect::OpenaiEffort | ReasoningDialect::GeminiThinking)
+        )
         && selected_effort.is_none()
         && default_effort.is_none()
     {
+        let binding = if dialect == Some(ReasoningDialect::GeminiThinking) {
+            "Gemini-thinking"
+        } else {
+            "OpenAI-effort"
+        };
         return Err(format!(
-            "`reasoning.enabled = true` needs an explicit supported effort for this OpenAI-effort binding; choose one of {}",
+            "`reasoning.enabled = true` needs an explicit supported effort for this {binding} binding; choose one of {}",
             efforts
                 .iter()
                 .filter(|effort| effort.as_str() != "none")
@@ -683,6 +718,7 @@ fn adapt_request(
                 )?;
             }
         }
+        ReasoningDialect::GeminiThinking => {}
     }
     Ok(())
 }
@@ -914,6 +950,49 @@ max_output_tokens = 4096
             None,
         )
         .expect_err("off is not representable without an advertised `none`");
+        assert!(error.contains("mandatory-on"), "{error}");
+    }
+
+    #[test]
+    fn gemini_catalog_levels_are_sent_as_native_thinking_effort() {
+        let mut config = resolved_config();
+        config.reasoning.effort = Some(Sourced::new(
+            "high".to_owned(),
+            Source::session("reasoning.effort"),
+        ));
+        let controls = CatalogReasoningControls {
+            toggle: false,
+            efforts: ["minimal", "low", "medium", "high"]
+                .map(str::to_owned)
+                .to_vec(),
+        };
+        let policy = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Fixed),
+            Some(GEMINI_ENDPOINT),
+            Some(&controls),
+        )
+        .expect("Gemini thinking levels are catalog-backed");
+        assert_eq!(policy.support, ReasoningSupport::Controllable);
+        assert_eq!(policy.switch, ReasoningSwitch::MandatoryOn);
+        assert_eq!(policy.efforts, controls.efforts);
+        assert_eq!(policy.dialect, Some(ReasoningDialect::GeminiThinking));
+        assert_eq!(
+            policy
+                .request_config()
+                .and_then(|reasoning| reasoning.effort),
+            Some("high".to_owned())
+        );
+
+        config.reasoning.effort = None;
+        config.reasoning.enabled = Some(Sourced::new(false, Source::session("reasoning.enabled")));
+        let error = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Fixed),
+            Some(GEMINI_ENDPOINT),
+            Some(&controls),
+        )
+        .expect_err("native Gemini thinking is mandatory-on");
         assert!(error.contains("mandatory-on"), "{error}");
     }
 

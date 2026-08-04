@@ -28,6 +28,8 @@ pub enum SetupMode {
     AddProvider,
     /// Built-in OpenRouter connection with fixed provider and endpoint.
     OpenRouter,
+    /// Built-in Google Gemini connection with a fixed native endpoint.
+    Google,
     /// Direct `smith setup add-model`.
     AddModel {
         /// Preselected provider, or a picker when absent.
@@ -91,6 +93,13 @@ pub enum SetupSubmission {
     QuickGlm {
         /// Reviewed authentication choice.
         credential: SetupCredential,
+    },
+    /// Native Google Gemini connection and its reviewed catalog model.
+    QuickGoogle {
+        /// Reviewed authentication choice.
+        credential: SetupCredential,
+        /// Exact model selected from the frozen Google catalog.
+        model: String,
     },
     /// A custom OpenAI-compatible provider and its first model.
     AddProvider {
@@ -156,6 +165,7 @@ pub enum SetupEffect {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SetupAction {
     QuickGlm,
+    QuickGoogle,
     AddProvider,
     AddModel,
     ChangeDefault,
@@ -303,6 +313,11 @@ impl SetupApp {
                     "Add provider",
                     "custom OpenAI-compatible endpoint",
                 ),
+                ResourceEntry::new(
+                    "google",
+                    "Connect Google Gemini",
+                    "AI Studio API key · native Gemini Interactions",
+                ),
             ],
             provider_entries,
             model_entries,
@@ -335,6 +350,12 @@ impl SetupApp {
                 app.action = Some(SetupAction::AddProvider);
                 app.provider = "openrouter".into();
                 app.endpoint = "https://openrouter.ai/api/v1".into();
+                app.enter(Step::CredentialMethod, false);
+            }
+            SetupMode::Google => {
+                app.action = Some(SetupAction::QuickGoogle);
+                app.provider = "google".into();
+                app.endpoint = "https://generativelanguage.googleapis.com/v1beta".into();
                 app.enter(Step::CredentialMethod, false);
             }
             SetupMode::AddModel {
@@ -426,6 +447,22 @@ impl SetupApp {
                 "response: reasoning-only success becomes visible text; thinking stays enabled"
                     .into(),
                 "default profile: glm".into(),
+            ],
+            Some(SetupAction::QuickGoogle) => vec![
+                "action: Connect Google Gemini".into(),
+                "provider: google (native gemini-interactions)".into(),
+                "endpoint: fixed Google Gemini Interactions endpoint".into(),
+                format!("credential: {}", self.credential_reference("google")),
+                format!("model: google/{}", self.model),
+                format!(
+                    "limits: context {} · max input {} · max output {} (Models.dev frozen catalog)",
+                    self.context_tokens.unwrap_or_default(),
+                    self.max_input_tokens.unwrap_or_default(),
+                    self.max_output_tokens.unwrap_or_default()
+                ),
+                "request/output reserve: derived from the selected catalog model".into(),
+                "reasoning: native Gemini thinking levels from the selected catalog model".into(),
+                "default profile: gemini".into(),
             ],
             Some(SetupAction::AddProvider) => vec![
                 "action: Add OpenAI-compatible provider".into(),
@@ -712,6 +749,12 @@ impl SetupApp {
                     self.endpoint = "https://openrouter.ai/api/v1".into();
                     self.enter(Step::CredentialMethod, true);
                 }
+                "google" => {
+                    self.action = Some(SetupAction::QuickGoogle);
+                    self.provider = "google".into();
+                    self.endpoint = "https://generativelanguage.googleapis.com/v1beta".into();
+                    self.enter(Step::CredentialMethod, true);
+                }
                 "add-model" => {
                     self.action = Some(SetupAction::AddModel);
                     self.enter(Step::ProviderChoice, true);
@@ -750,7 +793,7 @@ impl SetupApp {
                 _ => {}
             },
             Step::ModelChoice => {
-                if matches!(self.mode, SetupMode::OpenRouter) {
+                if matches!(self.mode, SetupMode::OpenRouter | SetupMode::Google) {
                     let Some(limits) = self.catalog_model_limits.get(&id).copied() else {
                         self.error =
                             Some("the selected catalog model has no enforceable limits".to_owned());
@@ -785,7 +828,7 @@ impl SetupApp {
     }
 
     fn after_credential_step(&self) -> Step {
-        if matches!(self.mode, SetupMode::OpenRouter) {
+        if matches!(self.mode, SetupMode::OpenRouter | SetupMode::Google) {
             return Step::ModelChoice;
         }
         if matches!(
@@ -915,6 +958,10 @@ impl SetupApp {
         match self.action? {
             SetupAction::QuickGlm => Some(SetupSubmission::QuickGlm {
                 credential: credential()?,
+            }),
+            SetupAction::QuickGoogle => Some(SetupSubmission::QuickGoogle {
+                credential: credential()?,
+                model: self.model.clone(),
             }),
             SetupAction::AddProvider => Some(SetupSubmission::AddProvider {
                 provider: self.provider.clone(),
@@ -1255,6 +1302,46 @@ mod tests {
         assert_eq!(app.context_tokens, Some(limits.context_tokens));
         assert_eq!(app.max_input_tokens, Some(limits.max_input_tokens));
         assert_eq!(app.max_output_tokens, Some(limits.max_output_tokens));
+    }
+
+    #[test]
+    fn google_mode_chooses_a_catalog_model_without_collecting_an_endpoint() {
+        let model = "gemini-3.6-flash";
+        let limits = SetupModelLimits {
+            context_tokens: 1_048_576,
+            max_input_tokens: 1_048_576,
+            max_output_tokens: 65_536,
+        };
+        let mut app = SetupApp::new(
+            SetupMode::Google,
+            Vec::new(),
+            vec![ResourceEntry::new(model, "Gemini 3.6 Flash", "catalog limits")],
+        )
+        .with_catalog_model_limits(BTreeMap::from([(model.to_owned(), limits)]));
+        assert_eq!(app.step, Step::CredentialMethod);
+        assert_eq!(app.provider, "google");
+        assert!(app.endpoint.ends_with("/v1beta"));
+
+        choose(&mut app, "environment");
+        for character in "GEMINI_API_KEY".chars() {
+            app.on_key(key(KeyCode::Char(character)));
+        }
+        app.on_key(key(KeyCode::Enter));
+        assert_eq!(app.step, Step::ModelChoice);
+        choose(&mut app, model);
+        choose(&mut app, "yes");
+        assert_eq!(app.step, Step::Review);
+        let review = app.review_lines().join("\n");
+        assert!(review.contains("native gemini-interactions"));
+        assert!(review.contains("Models.dev frozen catalog"));
+        assert!(!review.contains("API base URL"));
+        assert!(matches!(
+            app.on_key(key(KeyCode::Enter)),
+            SetupEffect::Submit {
+                submission: SetupSubmission::QuickGoogle { model: selected, credential: SetupCredential::Environment(variable) },
+                allow_collisions: false,
+            } if selected == model && variable == "GEMINI_API_KEY"
+        ));
     }
 
     #[test]

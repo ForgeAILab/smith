@@ -21,8 +21,9 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use smith_config::catalog::{
     CATALOG_SCHEMA_REVISION, CatalogLimits, CatalogModality, CatalogModel, CatalogProvider,
-    CatalogReasoningControls, CatalogSnapshot, MODELS_DEV_SOURCE_URL, OPENAI_CATALOG_PROVIDER,
-    OPENROUTER_CATALOG_PROVIDER, ZAI_CODING_PLAN_CATALOG_PROVIDER, catalog_provider_for,
+    CatalogReasoningControls, CatalogSnapshot, GOOGLE_CATALOG_PROVIDER, MODELS_DEV_SOURCE_URL,
+    OPENAI_CATALOG_PROVIDER, OPENROUTER_CATALOG_PROVIDER, XAI_CATALOG_PROVIDER,
+    ZAI_CODING_PLAN_CATALOG_PROVIDER, catalog_provider_for,
 };
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
@@ -48,10 +49,12 @@ const MAX_MODALITIES: usize = 16;
 const MAX_REASONING_OPTION_ENTRIES: usize = 8;
 const MAX_REASONING_EFFORTS: usize = 10;
 const MAX_REASONING_EFFORT_BYTES: usize = 32;
-const EXPECTED_PROVIDERS: [&str; 3] = [
+const EXPECTED_PROVIDERS: [&str; 5] = [
     OPENAI_CATALOG_PROVIDER,
     OPENROUTER_CATALOG_PROVIDER,
+    XAI_CATALOG_PROVIDER,
     ZAI_CODING_PLAN_CATALOG_PROVIDER,
+    GOOGLE_CATALOG_PROVIDER,
 ];
 
 /// Why catalog preparation or refresh failed.
@@ -1050,6 +1053,36 @@ mod tests {
                     }
                 }
             },
+            "xai": {
+                "id": "xai",
+                "name": "xAI",
+                "models": {
+                    "grok-fixture": {
+                        "id": "grok-fixture",
+                        "name": "Grok Fixture",
+                        "tool_call": true,
+                        "reasoning": true,
+                        "modalities": {"input": ["text", "image"], "output": ["text"]},
+                        "limit": {"context": 500000, "output": 64000}
+                    }
+                }
+            },
+            "google": {
+                "id": "google",
+                "name": "Google",
+                "models": {
+                    "gemini-fixture": {
+                        "id": "gemini-fixture",
+                        "name": "Gemini Fixture",
+                        "tool_call": true,
+                        "reasoning": true,
+                        "reasoning_options": [{"type": "effort", "values": ["minimal", "low", "medium", "high"]}],
+                        "structured_output": true,
+                        "modalities": {"input": ["text", "image", "video", "audio", "pdf"], "output": ["text"]},
+                        "limit": {"context": 1000000, "output": 65536}
+                    }
+                }
+            },
             "zai-coding-plan": {
                 "id": "zai-coding-plan",
                 "name": "Z.AI Coding Plan",
@@ -1072,22 +1105,19 @@ mod tests {
     fn embedded_seed_is_strictly_valid_and_contains_all_supported_catalogs() {
         let snapshot = parse_snapshot(EMBEDDED_MODELS_DEV_SEED.as_bytes()).unwrap();
 
-        assert_eq!(
-            snapshot
-                .provider(OPENAI_CATALOG_PROVIDER)
-                .unwrap()
-                .models
-                .len(),
-            37
-        );
-        assert_eq!(
-            snapshot
-                .provider(OPENROUTER_CATALOG_PROVIDER)
-                .unwrap()
-                .models
-                .len(),
-            335
-        );
+        // Every supported catalog is present and non-empty. Exact per-provider
+        // counts are deliberately not asserted: the seed is regenerated when
+        // Models.dev is refreshed, and pinning a literal makes every refresh
+        // look like a regression.
+        for provider in EXPECTED_PROVIDERS {
+            let entry = snapshot
+                .provider(provider)
+                .unwrap_or_else(|| panic!("`{provider}` is missing from the embedded seed"));
+            assert!(
+                !entry.models.is_empty(),
+                "`{provider}` contributed no models"
+            );
+        }
         assert_eq!(
             snapshot
                 .provider(ZAI_CODING_PLAN_CATALOG_PROVIDER)
@@ -1127,9 +1157,28 @@ mod tests {
     }
 
     #[test]
+    fn native_gemini_catalog_binding_uses_the_fixed_endpoint_without_user_url() {
+        let snapshot = parse_snapshot(EMBEDDED_MODELS_DEV_SEED.as_bytes()).unwrap();
+        let source =
+            runtime_catalog_source(&snapshot, "google", "gemini-interactions", None).unwrap();
+        let record = source
+            .lookup("google", &ModelId::new("gemini-3.6-flash"))
+            .expect("the embedded Gemini model");
+        assert_eq!(record.max_output_tokens, Some(65_536));
+        assert_eq!(
+            record
+                .capabilities
+                .as_ref()
+                .map(|capabilities| capabilities.reasoning),
+            Some(ReasoningSupport::Fixed)
+        );
+    }
+
+    #[test]
     fn remote_normalization_covers_limits_modalities_status_and_capabilities() {
         let snapshot = normalize_remote(&remote_fixture(), 5_000, Some("etag-r2")).unwrap();
         let openrouter = snapshot.provider("openrouter").unwrap();
+        let google = snapshot.provider("google").unwrap();
 
         assert_eq!(openrouter.models.len(), 6, "deprecated model is omitted");
         let nested = openrouter.models.get("vendor/nested").unwrap();
@@ -1179,6 +1228,19 @@ mod tests {
         assert!(!openrouter.models.contains_key("old"));
         assert_eq!(snapshot.source_revision, "etag-r2");
         assert_eq!(snapshot.retrieved_at_ms, 5_000);
+        let gemini = google.models.get("gemini-fixture").unwrap();
+        assert_eq!(
+            gemini
+                .reasoning_controls
+                .as_ref()
+                .map(|controls| controls.efforts.clone()),
+            Some(vec![
+                "minimal".to_owned(),
+                "low".to_owned(),
+                "medium".to_owned(),
+                "high".to_owned(),
+            ])
+        );
     }
 
     #[test]
@@ -1217,7 +1279,7 @@ mod tests {
             std::fs::write(&cache_path, bytes).unwrap();
             let prepared = loader.prepare(false).await.unwrap();
             assert_eq!(prepared.origin, CatalogLoadOrigin::Embedded);
-            assert_eq!(prepared.snapshot.providers.len(), 3);
+            assert_eq!(prepared.snapshot.providers.len(), EXPECTED_PROVIDERS.len());
         }
     }
 

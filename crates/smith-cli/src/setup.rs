@@ -17,20 +17,24 @@ use smith_config::credential::{
     CredentialEnroller, CredentialEnrollmentError, CredentialRef, EnrollmentReceipt,
     setup_environment_reference, setup_keychain_reference,
 };
-use smith_config::inventory::{SelectionInventory, local_inventory};
+use smith_config::inventory::SelectionInventory;
 use smith_config::model::{
-    AgentPosture, ConfigFile, ConfigSecret, ContextSection, KIND_OPENAI_COMPATIBLE, ModelSection,
-    PersistenceSection, ProfileSection, ProfileUse, ProviderResponseSection, ProviderSection,
-    ReasoningOnlyBehavior,
+    AgentPosture, ConfigFile, ConfigSecret, ContextSection, KIND_GEMINI_INTERACTIONS,
+    KIND_OPENAI_COMPATIBLE, ModelSection, PersistenceSection, ProfileSection, ProfileUse,
+    ProviderResponseSection, ProviderSection, ReasoningOnlyBehavior,
 };
 use smith_config::resolve::{ConfigReadiness, ResolveRequest, inspect};
-use smith_config::setup::{GLM_5_2, GLM_ENDPOINT, GLM_PROFILE, GLM_PROVIDER, provider_descriptors};
+use smith_config::setup::{
+    GLM_5_2, GLM_ENDPOINT, GLM_PROFILE, GLM_PROVIDER, GOOGLE_PROFILE, GOOGLE_PROVIDER,
+    provider_descriptors,
+};
 use smith_config::user_config::{prepare_checkpoint_key_source_removal, prepare_user_config_edit};
 use smith_host::ProjectWorkspace;
 use smith_runtime::checkpoint::{CheckpointKeyProvider, ConfiguredCheckpointKeyProvider};
 use smith_runtime::factory::{
     self, AVAILABLE_ADAPTER_KINDS, FactoryError, HostSurface, RuntimeRequest,
 };
+use smith_runtime::model_catalog::{CatalogLoader, runtime_catalog_source};
 use smith_tui::picker::ResourceEntry;
 use smith_tui::setup::{
     SetupApp, SetupCredential, SetupEffect, SetupMode, SetupModelLimits, SetupSubmission,
@@ -56,6 +60,7 @@ struct SetupContext {
     user_dir: PathBuf,
     project: PathBuf,
     inventory: SelectionInventory,
+    catalog: Arc<smith_config::catalog::CatalogSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -353,12 +358,20 @@ pub(crate) async fn run_surface(
     no_color: bool,
     no_motion: bool,
 ) -> Result<SetupOutcome> {
-    let context = setup_context(selection, &mode)?;
+    let context = setup_context(selection, &mode).await?;
     let providers = provider_entries(&context.inventory);
-    let (models, catalog_model_limits) = if matches!(mode, SetupMode::OpenRouter) {
-        openrouter_model_entries(&context).await?
-    } else {
-        (model_entries(&context.inventory), BTreeMap::new())
+    let (models, catalog_model_limits) = match &mode {
+        SetupMode::OpenRouter => catalog_model_entries(
+            &context,
+            smith_config::catalog::OPENROUTER_CATALOG_PROVIDER,
+            "OpenRouter",
+        )?,
+        SetupMode::Google => catalog_model_entries(
+            &context,
+            smith_config::catalog::GOOGLE_CATALOG_PROVIDER,
+            "Google Gemini",
+        )?,
+        _ => (model_entries(&context.inventory), BTreeMap::new()),
     };
     let provider_actions = provider_action_entries();
     if matches!(mode, SetupMode::AddProvider)
@@ -439,23 +452,15 @@ pub(crate) async fn run_surface(
     }
 }
 
-async fn openrouter_model_entries(
+fn catalog_model_entries(
     context: &SetupContext,
+    catalog_provider: &str,
+    label: &str,
 ) -> Result<(Vec<ResourceEntry>, BTreeMap<String, SetupModelLimits>)> {
-    let catalog = smith_runtime::model_catalog::CatalogLoader::production(&context.user_dir)
-        .map_err(|error| anyhow::anyhow!(error))
-        .context("preparing the OpenRouter model catalog")?
-        // Connection setup consumes only the embedded/last-good reviewed
-        // snapshot. It must not make a provider or catalog network request
-        // while the user is handling a credential.
-        .prepare(false)
-        .await
-        .map_err(|error| anyhow::anyhow!(error))
-        .context("loading the OpenRouter model catalog")?;
-    let provider = catalog
-        .snapshot
-        .provider(smith_config::catalog::OPENROUTER_CATALOG_PROVIDER)
-        .context("the Smith model catalog has no OpenRouter descriptor")?;
+    let provider = context
+        .catalog
+        .provider(catalog_provider)
+        .with_context(|| format!("the Smith model catalog has no {label} descriptor"))?;
     let mut limits_by_model = BTreeMap::new();
     let mut entries = Vec::new();
     for model in provider.models.values().filter(|model| {
@@ -487,7 +492,7 @@ async fn openrouter_model_entries(
         ));
     }
     if entries.is_empty() {
-        anyhow::bail!("the OpenRouter model catalog has no tool-capable text model with limits");
+        anyhow::bail!("the {label} model catalog has no tool-capable text model with limits");
     }
     Ok((entries, limits_by_model))
 }
@@ -506,7 +511,7 @@ fn provider_action_entries() -> Vec<ResourceEntry> {
         .collect()
 }
 
-fn setup_context(mut selection: Selection, mode: &SetupMode) -> Result<SetupContext> {
+async fn setup_context(mut selection: Selection, mode: &SetupMode) -> Result<SetupContext> {
     let start = canonical_start(selection.project.as_deref())?;
     let request = ResolveRequest::new(&start)
         .with_env(std::env::vars())
@@ -522,9 +527,25 @@ fn setup_context(mut selection: Selection, mode: &SetupMode) -> Result<SetupCont
     if matches!(mode, SetupMode::FirstRun) && resolution.is_some() {
         anyhow::bail!("Smith is already configured; run `smith setup` to add or change a choice");
     }
+    let catalog = CatalogLoader::production(&layout.user_dir)
+        .map_err(|error| anyhow::anyhow!(error))
+        .context("preparing the provider model catalog")?
+        // Setup consumes only the embedded/last-good reviewed snapshot. It
+        // never refreshes Models.dev while a credential is being handled.
+        .prepare(false)
+        .await
+        .map_err(|error| anyhow::anyhow!(error))
+        .context("loading the provider model catalog")?
+        .snapshot;
     let inventory = resolution
         .as_ref()
-        .map(|resolution| local_inventory(resolution, AVAILABLE_ADAPTER_KINDS))
+        .map(|resolution| {
+            smith_config::inventory::local_inventory_with_catalog(
+                resolution,
+                AVAILABLE_ADAPTER_KINDS,
+                Some(&catalog),
+            )
+        })
         .transpose()
         .map_err(|error| anyhow::anyhow!("{error}"))?
         .unwrap_or_default();
@@ -560,6 +581,7 @@ fn setup_context(mut selection: Selection, mode: &SetupMode) -> Result<SetupCont
         user_dir: layout.user_dir,
         project,
         inventory,
+        catalog,
     })
 }
 
@@ -791,13 +813,27 @@ async fn preflight(context: &SetupContext) -> Result<(), (String, bool)> {
     }
     let workspace =
         ProjectWorkspace::new(&context.project).map_err(|error| (error.to_string(), false))?;
-    let runtime = RuntimeRequest {
+    let mut runtime = RuntimeRequest {
         workspace: Some(Arc::new(workspace)),
         credentials: Some(smith_config::credential::CredentialResolver::new(
             &resolution.layout.user_dir,
         )),
+        model_catalog: Some(context.catalog.clone()),
         ..RuntimeRequest::new(resolution.config, HostSurface::Terminal)
     };
+    if let Some(source) = runtime_catalog_source(
+        &context.catalog,
+        &runtime.config.provider.name.value,
+        &runtime.config.provider.kind.value,
+        runtime
+            .config
+            .provider
+            .base_url
+            .as_ref()
+            .map(|value| value.value.as_str()),
+    ) {
+        runtime.catalog_sources.push(source);
+    }
     factory::preflight(&runtime)
         .await
         .map(|_| ())
@@ -857,6 +893,41 @@ fn setup_plan(submission: SetupSubmission) -> Result<SetupPlan> {
                 // The trusted catalog contributes the request budget with
                 // provenance; setup should not bake a duplicate into the
                 // user's profile.
+                profile.max_output_tokens = None;
+                profile.context = None;
+            }
+            Ok(SetupPlan {
+                patch,
+                credential_reference: reference,
+                secret: enrollment_secret,
+            })
+        }
+        SetupSubmission::QuickGoogle { credential, model } => {
+            if model.trim().is_empty() {
+                anyhow::bail!("Google setup requires a model selected from the frozen catalog");
+            }
+            let PlannedCredential {
+                reference,
+                api_key,
+                enrollment_secret,
+            } = credential_plan(GOOGLE_PROVIDER, credential)?;
+            let mut patch = ConfigFile {
+                providers: BTreeMap::from([(
+                    GOOGLE_PROVIDER.into(),
+                    ProviderSection {
+                        kind: Some(KIND_GEMINI_INTERACTIONS.into()),
+                        credential: reference.as_ref().map(ToString::to_string),
+                        api_key,
+                        ..ProviderSection::default()
+                    },
+                )]),
+                ..ConfigFile::default()
+            };
+            select_default(&mut patch, GOOGLE_PROFILE, GOOGLE_PROVIDER, &model, 8_192);
+            if let Some(profile) = patch.profiles.get_mut(GOOGLE_PROFILE) {
+                // The frozen Models.dev snapshot supplied to preflight/runtime
+                // owns the model limits; the user config stores no guessed
+                // endpoint or duplicate model metadata.
                 profile.max_output_tokens = None;
                 profile.context = None;
             }
@@ -1181,6 +1252,10 @@ mod tests {
             user_dir,
             project,
             inventory: SelectionInventory::default(),
+            catalog: Arc::new(
+                serde_json::from_str(smith_runtime::model_catalog::EMBEDDED_MODELS_DEV_SEED)
+                    .expect("embedded catalog"),
+            ),
         }
     }
 
@@ -1267,6 +1342,31 @@ mod tests {
         let review_profile = &plan.patch.profiles[&format!("{GLM_PROFILE}-review")];
         assert_eq!(review_profile.extends.as_deref(), Some(GLM_PROFILE));
         assert_eq!(review_profile.posture, Some(AgentPosture::Review));
+    }
+
+    #[test]
+    fn google_plan_uses_the_catalog_model_without_copying_endpoint_or_limits() {
+        let secret = "sk-google-plan-do-not-print";
+        let plan = setup_plan(SetupSubmission::QuickGoogle {
+            credential: SetupCredential::StoreInKeychain(Secret::new(secret)),
+            model: "gemini-3.6-flash".to_owned(),
+        })
+        .expect("a Google plan");
+        let serialized = toml::to_string(&plan.patch).expect("TOML");
+        assert!(!serialized.contains(secret), "{serialized}");
+        assert!(serialized.contains("keychain:smith/google"));
+        assert_eq!(
+            plan.patch.providers[GOOGLE_PROVIDER].kind.as_deref(),
+            Some(KIND_GEMINI_INTERACTIONS)
+        );
+        assert_eq!(plan.patch.providers[GOOGLE_PROVIDER].base_url, None);
+        assert!(plan.patch.models.is_empty());
+        assert_eq!(plan.patch.profiles[GOOGLE_PROFILE].max_output_tokens, None);
+        assert_eq!(plan.patch.profiles[GOOGLE_PROFILE].context, None);
+        assert_eq!(
+            plan.patch.profiles[GOOGLE_PROFILE].model.as_deref(),
+            Some("gemini-3.6-flash")
+        );
     }
 
     #[test]

@@ -403,12 +403,19 @@ pub enum ReasoningDialect {
     Openrouter,
     /// Z.AI's `thinking.type` object.
     ZaiThinking,
+    /// Gemini's native `generation_config.thinking_level` field.
+    GeminiThinking,
 }
 
 impl ReasoningDialect {
     /// Every dialect, in documentation order. Parsing and error messages
     /// derive from this list so a new dialect cannot miss either.
-    pub const ALL: [Self; 3] = [Self::OpenaiEffort, Self::Openrouter, Self::ZaiThinking];
+    pub const ALL: [Self; 4] = [
+        Self::OpenaiEffort,
+        Self::Openrouter,
+        Self::ZaiThinking,
+        Self::GeminiThinking,
+    ];
 
     /// Stable configuration/status spelling.
     pub fn as_str(self) -> &'static str {
@@ -416,6 +423,7 @@ impl ReasoningDialect {
             Self::OpenaiEffort => "openai-effort",
             Self::Openrouter => "openrouter",
             Self::ZaiThinking => "zai-thinking",
+            Self::GeminiThinking => "gemini-thinking",
         }
     }
 }
@@ -643,6 +651,9 @@ pub const KIND_CHATGPT_RESPONSES: &str = "chatgpt-responses";
 /// Responses wire protocol and takes its endpoint from `base_url`. xAI's Grok
 /// is the first fixture-verified deployment, at `https://api.x.ai/v1`.
 pub const KIND_OPENAI_RESPONSES: &str = "openai-responses";
+
+/// The native Google Gemini Interactions adapter.
+pub const KIND_GEMINI_INTERACTIONS: &str = "gemini-interactions";
 
 /// The endpoint an `anthropic-messages` provider uses when none is configured.
 pub const ANTHROPIC_DEFAULT_ENDPOINT: &str = "https://api.anthropic.com/v1";

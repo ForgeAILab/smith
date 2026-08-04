@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 
 use crate::model::{
     ANTHROPIC_DEFAULT_ENDPOINT, KIND_ANTHROPIC_MESSAGES, KIND_CHATGPT_RESPONSES,
-    KIND_OPENAI_COMPATIBLE, ReasoningOnlyBehavior,
+    KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE, ReasoningOnlyBehavior,
 };
 
 /// Revision of the trusted model data shipped with this Smith build.
@@ -40,6 +40,13 @@ pub const XAI_PROVIDER: &str = "xai";
 pub const XAI_ENDPOINT: &str = "https://api.x.ai/v1";
 /// Owner-only auth-file reference for Smith's renewable xAI bundle.
 pub const XAI_CREDENTIAL: &str = "authfile:xai";
+
+/// Provider name used by the native Gemini connection.
+pub const GOOGLE_PROVIDER: &str = "google";
+/// Default profile created by the native Gemini connection.
+pub const GOOGLE_PROFILE: &str = "gemini";
+/// Native Gemini Interactions API-version base URL.
+pub const GOOGLE_ENDPOINT: &str = crate::catalog::GEMINI_ENDPOINT;
 
 /// The credential enrollment paths a setup descriptor permits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,6 +222,18 @@ const DESCRIPTORS: &[ProviderSetupDescriptor] = &[
         models: CHATGPT_MODELS,
         reasoning_only: None,
     },
+    ProviderSetupDescriptor {
+        id: "google",
+        label: "Connect Google Gemini",
+        description: "AI Studio API key with a fixed native Gemini Interactions endpoint",
+        provider: Some(GOOGLE_PROVIDER),
+        profile: Some(GOOGLE_PROFILE),
+        adapter: KIND_GEMINI_INTERACTIONS,
+        endpoint: Some(GOOGLE_ENDPOINT),
+        credentials: CREDENTIAL_METHODS,
+        models: &[],
+        reasoning_only: None,
+    },
 ];
 
 /// Returns setup choices whose adapter is present in the pinned runtime.
@@ -326,6 +345,19 @@ mod tests {
             ),
             (272_000, 255_616, 16_384, 16_384)
         );
+    }
+
+    #[test]
+    fn google_descriptor_uses_native_catalog_backed_setup() {
+        let descriptor = provider_descriptors(&[KIND_GEMINI_INTERACTIONS])
+            .into_iter()
+            .find(|choice| choice.id == GOOGLE_PROVIDER)
+            .expect("Google descriptor");
+        assert_eq!(descriptor.provider, Some(GOOGLE_PROVIDER));
+        assert_eq!(descriptor.profile, Some(GOOGLE_PROFILE));
+        assert_eq!(descriptor.endpoint, Some(GOOGLE_ENDPOINT));
+        assert_eq!(descriptor.adapter, KIND_GEMINI_INTERACTIONS);
+        assert!(descriptor.models.is_empty());
     }
 
     #[test]

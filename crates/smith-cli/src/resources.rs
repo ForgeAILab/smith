@@ -78,6 +78,10 @@ pub(super) fn runtime_resources(
             let authentication =
                 if provider.kind.as_deref() == Some(smith_config::model::KIND_CHATGPT_RESPONSES) {
                     "Smith OAuth · experimental direct Responses"
+                } else if provider.kind.as_deref()
+                    == Some(smith_config::model::KIND_GEMINI_INTERACTIONS)
+                {
+                    "AI Studio API key · native Gemini Interactions"
                 } else {
                     "API key"
                 };
@@ -129,6 +133,13 @@ pub(super) fn runtime_resources(
             "chatgpt",
             "ChatGPT (experimental)",
             "Smith OAuth · direct ChatGPT Responses · unsupported public API boundary",
+        ));
+    }
+    if !connections.iter().any(|entry| entry.id == "google") {
+        connections.push(ResourceEntry::new(
+            "google",
+            "Google Gemini",
+            "AI Studio API key · fixed native Gemini endpoint · catalog-backed model",
         ));
     }
     let providers = inventory

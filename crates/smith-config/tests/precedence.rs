@@ -1232,6 +1232,57 @@ credential = "keychain:smith/acme"
 }
 
 #[test]
+fn native_google_provider_owns_its_endpoint_and_headers() {
+    let resolution = resolve_project(
+        r#"
+default_profile = "gemini"
+
+[profiles.gemini]
+provider = "google"
+model = "gemini-3.6-flash"
+
+[providers.google]
+kind = "gemini-interactions"
+credential = "env:GEMINI_API_KEY"
+"#,
+    )
+    .expect("native Google config without a user endpoint");
+    assert_eq!(resolution.config.provider.name.value, "google");
+    assert_eq!(resolution.config.provider.base_url, None);
+
+    let endpoint = resolve_project(
+        r#"
+default_profile = "gemini"
+[profiles.gemini]
+provider = "google"
+model = "gemini-3.6-flash"
+[providers.google]
+kind = "gemini-interactions"
+base_url = "https://proxy.example.test/v1beta"
+credential = "env:GEMINI_API_KEY"
+"#,
+    )
+    .expect_err("native Google does not accept endpoint overrides");
+    assert!(endpoint.to_string().contains("does not accept `base_url`"));
+
+    let header = resolve_project(
+        r#"
+default_profile = "gemini"
+[profiles.gemini]
+provider = "google"
+model = "gemini-3.6-flash"
+[providers.google]
+kind = "gemini-interactions"
+credential = "env:GEMINI_API_KEY"
+[providers.google.headers]
+X-Trace = "enabled"
+"#,
+    )
+    .expect_err("native Google does not accept custom headers");
+    assert!(header.to_string().contains("does not accept custom headers"));
+}
+
+#[test]
 fn compaction_watermarks_must_leave_room_below_the_one_that_triggers() {
     let error = resolve_project(&format!(
         "{BASE_PROJECT_CONFIG}\n[context]\ncompaction_high_watermark_percent = 60\ncompaction_low_watermark_percent = 80\n"

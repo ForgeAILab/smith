@@ -47,7 +47,16 @@ output_reserve = 4096
             &resolution.config.agent,
             &smith_runtime::reasoning::ReasoningRuntimePolicy::default(),
         );
-        assert_eq!(resources.models.len(), 335);
+        // Derived from the embedded catalog rather than pinned to a literal:
+        // the seed is regenerated whenever Models.dev is refreshed, and a
+        // hard-coded total turns every refresh into a spurious failure.
+        let catalogued = snapshot
+            .providers
+            .get("openrouter")
+            .map(|provider| provider.models.len())
+            .expect("the fixture's provider is in the embedded catalog");
+        assert_eq!(resources.models.len(), catalogued);
+        assert!(catalogued > 0, "the embedded catalog lost its models");
         assert_eq!(
             resources
                 .main_profiles
@@ -88,6 +97,12 @@ output_reserve = 4096
             entry.id == "chatgpt"
                 && entry.detail.contains("Smith OAuth")
                 && entry.detail.contains("direct ChatGPT Responses")
+                && !entry.active
+        }));
+        assert!(resources.connections.iter().any(|entry| {
+            entry.id == "google"
+                && entry.detail.contains("AI Studio API key")
+                && entry.detail.contains("native Gemini endpoint")
                 && !entry.active
         }));
         assert!(!resources.providers.iter().any(|entry| entry.id == "chatgpt"));

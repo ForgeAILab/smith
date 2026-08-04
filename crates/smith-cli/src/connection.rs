@@ -12,8 +12,8 @@ use smith_config::model::{
     ProviderSection, ReasoningDialect,
 };
 use smith_config::setup::{
-    CHATGPT_CREDENTIAL, CHATGPT_ENDPOINT, CHATGPT_PROVIDER, CHATGPT_TERRA, XAI_CREDENTIAL,
-    XAI_ENDPOINT, XAI_PROVIDER,
+    CHATGPT_CREDENTIAL, CHATGPT_ENDPOINT, CHATGPT_PROVIDER, CHATGPT_TERRA, GOOGLE_PROVIDER,
+    XAI_CREDENTIAL, XAI_ENDPOINT, XAI_PROVIDER,
 };
 use smith_config::user_config::{prepare_provider_credential_removal, prepare_user_config_edit};
 use smith_host::ProjectWorkspace;
@@ -41,7 +41,6 @@ pub(super) async fn connect(
     if provider == XAI_PROVIDER {
         return connect_xai(selection, no_motion).await;
     }
-
     let prepared = prepare(&selection)?;
     let inventory = local_inventory(&prepared.resolution, AVAILABLE_ADAPTER_KINDS)
         .map_err(|error| anyhow::anyhow!(error))
@@ -56,6 +55,8 @@ pub(super) async fn connect(
         }
     } else if provider == "openrouter" {
         SetupMode::OpenRouter
+    } else if provider == GOOGLE_PROVIDER {
+        SetupMode::Google
     } else {
         anyhow::bail!(
             "provider `{provider}` is not configured; add custom providers with `smith setup add-provider`"

@@ -1,6 +1,865 @@
 {
-  "content_digest": "sha256:bae6ad22f7d393288acd7773e48e2f7210747da6f65f4ea51d48c817e97be75b",
+  "content_digest": "sha256:33d545328f82e6e16d73912d33c27e3843bdd2b2b904c5102095bdf37cc0634c",
   "providers": {
+    "google": {
+      "id": "google",
+      "models": {
+        "deep-research-max-preview-04-2026": {
+          "id": "deep-research-max-preview-04-2026",
+          "input_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 131072,
+            "max_input_tokens": 131072,
+            "max_output_tokens": 65536
+          },
+          "name": "Deep Research Max Preview (Apr-21-2026)",
+          "output_modalities": [
+            "text",
+            "image"
+          ],
+          "reasoning": true,
+          "structured_output": false,
+          "tool_call": true
+        },
+        "deep-research-preview-04-2026": {
+          "id": "deep-research-preview-04-2026",
+          "input_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 131072,
+            "max_input_tokens": 131072,
+            "max_output_tokens": 65536
+          },
+          "name": "Deep Research Preview (Apr-21-2026)",
+          "output_modalities": [
+            "text",
+            "image"
+          ],
+          "reasoning": true,
+          "structured_output": false,
+          "tool_call": true
+        },
+        "gemini-2.5-computer-use-preview-10-2025": {
+          "id": "gemini-2.5-computer-use-preview-10-2025",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "limits": {
+            "context_tokens": 131072,
+            "max_input_tokens": 131072,
+            "max_output_tokens": 65536
+          },
+          "name": "Gemini 2.5 Computer Use Preview 10-2025",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "structured_output": false,
+          "tool_call": true
+        },
+        "gemini-2.5-flash": {
+          "id": "gemini-2.5-flash",
+          "input_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 1048576,
+            "max_input_tokens": 1048576,
+            "max_output_tokens": 65536
+          },
+          "name": "Gemini 2.5 Flash",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gemini-2.5-flash-image": {
+          "id": "gemini-2.5-flash-image",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "limits": {
+            "context_tokens": 32768,
+            "max_input_tokens": 32768,
+            "max_output_tokens": 32768
+          },
+          "name": "Nano Banana",
+          "output_modalities": [
+            "text",
+            "image"
+          ],
+          "reasoning": true,
+          "structured_output": false,
+          "tool_call": false
+        },
+        "gemini-2.5-flash-lite": {
+          "id": "gemini-2.5-flash-lite",
+          "input_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 1048576,
+            "max_input_tokens": 1048576,
+            "max_output_tokens": 65536
+          },
+          "name": "Gemini 2.5 Flash-Lite",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gemini-2.5-flash-preview-tts": {
+          "disabled_reason": "catalog output limit exceeds its context window",
+          "id": "gemini-2.5-flash-preview-tts",
+          "input_modalities": [
+            "text"
+          ],
+          "name": "Gemini 2.5 Flash Preview TTS",
+          "output_modalities": [
+            "audio"
+          ],
+          "reasoning": false,
+          "structured_output": false,
+          "tool_call": false
+        },
+        "gemini-2.5-pro": {
+          "id": "gemini-2.5-pro",
+          "input_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 1048576,
+            "max_input_tokens": 1048576,
+            "max_output_tokens": 65536
+          },
+          "name": "Gemini 2.5 Pro",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gemini-2.5-pro-preview-tts": {
+          "disabled_reason": "catalog output limit exceeds its context window",
+          "id": "gemini-2.5-pro-preview-tts",
+          "input_modalities": [
+            "text"
+          ],
+          "name": "Gemini 2.5 Pro Preview TTS",
+          "output_modalities": [
+            "audio"
+          ],
+          "reasoning": false,
+          "structured_output": false,
+          "tool_call": false
+        },
+        "gemini-3-flash-preview": {
+          "id": "gemini-3-flash-preview",
+          "input_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 1048576,
+            "max_input_tokens": 1048576,
+            "max_output_tokens": 65536
+          },
+          "name": "Gemini 3 Flash Preview",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gemini-3-pro-image": {
+          "id": "gemini-3-pro-image",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "limits": {
+            "context_tokens": 131072,
+            "max_input_tokens": 131072,
+            "max_output_tokens": 32768
+          },
+          "name": "Nano Banana Pro",
+          "output_modalities": [
+            "text",
+            "image"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "high"
+            ]
+          },
+          "structured_output": false,
+          "tool_call": false
+        },
+        "gemini-3-pro-image-preview": {
+          "id": "gemini-3-pro-image-preview",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "limits": {
+            "context_tokens": 131072,
+            "max_input_tokens": 131072,
+            "max_output_tokens": 32768
+          },
+          "name": "Nano Banana Pro",
+          "output_modalities": [
+            "text",
+            "image"
+          ],
+          "reasoning": true,
+          "structured_output": false,
+          "tool_call": false
+        },
+        "gemini-3.1-flash-image": {
+          "id": "gemini-3.1-flash-image",
+          "input_modalities": [
+            "text",
+            "image",
+            "video",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 65536,
+            "max_input_tokens": 65536,
+            "max_output_tokens": 65536
+          },
+          "name": "Nano Banana 2",
+          "output_modalities": [
+            "text",
+            "image"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "high"
+            ]
+          },
+          "structured_output": false,
+          "tool_call": false
+        },
+        "gemini-3.1-flash-image-preview": {
+          "id": "gemini-3.1-flash-image-preview",
+          "input_modalities": [
+            "text",
+            "image",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 65536,
+            "max_input_tokens": 65536,
+            "max_output_tokens": 65536
+          },
+          "name": "Nano Banana 2",
+          "output_modalities": [
+            "text",
+            "image"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "high"
+            ]
+          },
+          "structured_output": false,
+          "tool_call": false
+        },
+        "gemini-3.1-flash-lite": {
+          "id": "gemini-3.1-flash-lite",
+          "input_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 1048576,
+            "max_input_tokens": 1048576,
+            "max_output_tokens": 65536
+          },
+          "name": "Gemini 3.1 Flash Lite",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gemini-3.1-flash-lite-image": {
+          "id": "gemini-3.1-flash-lite-image",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "limits": {
+            "context_tokens": 65536,
+            "max_input_tokens": 65536,
+            "max_output_tokens": 65536
+          },
+          "name": "Nano Banana 2 Lite",
+          "output_modalities": [
+            "text",
+            "image"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "high"
+            ]
+          },
+          "structured_output": false,
+          "tool_call": true
+        },
+        "gemini-3.1-flash-live-preview": {
+          "id": "gemini-3.1-flash-live-preview",
+          "input_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+          ],
+          "limits": {
+            "context_tokens": 131072,
+            "max_input_tokens": 131072,
+            "max_output_tokens": 65536
+          },
+          "name": "Gemini 3.1 Flash Live Preview",
+          "output_modalities": [
+            "text",
+            "audio"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "structured_output": false,
+          "tool_call": true
+        },
+        "gemini-3.1-flash-tts-preview": {
+          "disabled_reason": "catalog output limit exceeds its context window",
+          "id": "gemini-3.1-flash-tts-preview",
+          "input_modalities": [
+            "text"
+          ],
+          "name": "Gemini 3.1 Flash TTS Preview",
+          "output_modalities": [
+            "audio"
+          ],
+          "reasoning": true,
+          "structured_output": false,
+          "tool_call": false
+        },
+        "gemini-3.1-pro-preview": {
+          "id": "gemini-3.1-pro-preview",
+          "input_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 1048576,
+            "max_input_tokens": 1048576,
+            "max_output_tokens": 65536
+          },
+          "name": "Gemini 3.1 Pro Preview",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gemini-3.1-pro-preview-customtools": {
+          "id": "gemini-3.1-pro-preview-customtools",
+          "input_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 1048576,
+            "max_input_tokens": 1048576,
+            "max_output_tokens": 65536
+          },
+          "name": "Gemini 3.1 Pro Preview Custom Tools",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gemini-3.5-flash": {
+          "id": "gemini-3.5-flash",
+          "input_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 1048576,
+            "max_input_tokens": 1048576,
+            "max_output_tokens": 65536
+          },
+          "name": "Gemini 3.5 Flash",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gemini-3.5-flash-lite": {
+          "id": "gemini-3.5-flash-lite",
+          "input_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 1048576,
+            "max_input_tokens": 1048576,
+            "max_output_tokens": 65536
+          },
+          "name": "Gemini 3.5 Flash Lite",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gemini-3.5-live-translate-preview": {
+          "disabled_reason": "catalog output limit exceeds its context window",
+          "id": "gemini-3.5-live-translate-preview",
+          "input_modalities": [
+            "audio"
+          ],
+          "name": "Gemini 3.5 Live Translate Preview",
+          "output_modalities": [
+            "text",
+            "audio"
+          ],
+          "reasoning": false,
+          "structured_output": false,
+          "tool_call": false
+        },
+        "gemini-3.6-flash": {
+          "id": "gemini-3.6-flash",
+          "input_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 1048576,
+            "max_input_tokens": 1048576,
+            "max_output_tokens": 65536
+          },
+          "name": "Gemini 3.6 Flash",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gemini-embedding-001": {
+          "id": "gemini-embedding-001",
+          "input_modalities": [
+            "text"
+          ],
+          "limits": {
+            "context_tokens": 2048,
+            "max_input_tokens": 2048,
+            "max_output_tokens": 1
+          },
+          "name": "Gemini Embedding 001",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": false,
+          "structured_output": false,
+          "tool_call": false
+        },
+        "gemini-embedding-2": {
+          "id": "gemini-embedding-2",
+          "input_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 8192,
+            "max_input_tokens": 8192,
+            "max_output_tokens": 1
+          },
+          "name": "Gemini Embedding 2",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": false,
+          "structured_output": false,
+          "tool_call": false
+        },
+        "gemini-flash-latest": {
+          "id": "gemini-flash-latest",
+          "input_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 1048576,
+            "max_input_tokens": 1048576,
+            "max_output_tokens": 65536
+          },
+          "name": "Gemini Flash Latest",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gemini-flash-lite-latest": {
+          "id": "gemini-flash-lite-latest",
+          "input_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 1048576,
+            "max_input_tokens": 1048576,
+            "max_output_tokens": 65536
+          },
+          "name": "Gemini Flash-Lite Latest",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gemini-omni-flash-preview": {
+          "id": "gemini-omni-flash-preview",
+          "input_modalities": [
+            "text",
+            "image",
+            "video"
+          ],
+          "limits": {
+            "context_tokens": 131072,
+            "max_input_tokens": 131072,
+            "max_output_tokens": 65536
+          },
+          "name": "Gemini Omni Flash Preview",
+          "output_modalities": [
+            "video"
+          ],
+          "reasoning": true,
+          "structured_output": false,
+          "tool_call": false
+        },
+        "gemini-robotics-er-1.6-preview": {
+          "id": "gemini-robotics-er-1.6-preview",
+          "input_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+          ],
+          "limits": {
+            "context_tokens": 131072,
+            "max_input_tokens": 131072,
+            "max_output_tokens": 65536
+          },
+          "name": "Gemini Robotics-ER 1.6 Preview",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gemma-4-26b-a4b-it": {
+          "id": "gemma-4-26b-a4b-it",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "limits": {
+            "context_tokens": 262144,
+            "max_input_tokens": 262144,
+            "max_output_tokens": 32768
+          },
+          "name": "Gemma 4 26B A4B IT",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "gemma-4-31b-it": {
+          "id": "gemma-4-31b-it",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "limits": {
+            "context_tokens": 262144,
+            "max_input_tokens": 262144,
+            "max_output_tokens": 32768
+          },
+          "name": "Gemma 4 31B IT",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "toggle": true
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "lyria-3-clip-preview": {
+          "id": "lyria-3-clip-preview",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "limits": {
+            "context_tokens": 1048576,
+            "max_input_tokens": 1048576,
+            "max_output_tokens": 65536
+          },
+          "name": "Lyria 3 Clip Preview",
+          "output_modalities": [
+            "text",
+            "audio"
+          ],
+          "reasoning": false,
+          "structured_output": false,
+          "tool_call": false
+        },
+        "lyria-3-pro-preview": {
+          "id": "lyria-3-pro-preview",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "limits": {
+            "context_tokens": 1048576,
+            "max_input_tokens": 1048576,
+            "max_output_tokens": 65536
+          },
+          "name": "Lyria 3 Pro Preview",
+          "output_modalities": [
+            "text",
+            "audio"
+          ],
+          "reasoning": false,
+          "structured_output": false,
+          "tool_call": false
+        },
+        "veo-3.1-fast-generate-preview": {
+          "disabled_reason": "catalog output limit exceeds its context window",
+          "id": "veo-3.1-fast-generate-preview",
+          "input_modalities": [
+            "text",
+            "image",
+            "video"
+          ],
+          "name": "Veo 3.1 fast",
+          "output_modalities": [
+            "video"
+          ],
+          "reasoning": false,
+          "structured_output": false,
+          "tool_call": false
+        },
+        "veo-3.1-generate-preview": {
+          "disabled_reason": "catalog model has an unsupported status",
+          "id": "veo-3.1-generate-preview",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "name": "Veo 3.1",
+          "output_modalities": [
+            "video"
+          ],
+          "reasoning": false,
+          "structured_output": false,
+          "tool_call": false
+        },
+        "veo-3.1-lite-generate-preview": {
+          "disabled_reason": "catalog output limit exceeds its context window",
+          "id": "veo-3.1-lite-generate-preview",
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "name": "Veo 3.1 lite",
+          "output_modalities": [
+            "video"
+          ],
+          "reasoning": false,
+          "structured_output": false,
+          "tool_call": false
+        }
+      },
+      "name": "Google"
+    },
     "openai": {
       "id": "openai",
       "models": {
@@ -2076,7 +2935,7 @@
           "limits": {
             "context_tokens": 1048576,
             "max_input_tokens": 1048576,
-            "max_output_tokens": 384000
+            "max_output_tokens": 65536
           },
           "name": "DeepSeek V4 Flash 0731",
           "output_modalities": [
@@ -2090,7 +2949,7 @@
               "max"
             ]
           },
-          "structured_output": false,
+          "structured_output": true,
           "tool_call": true
         },
         "deepseek/deepseek-v4-pro": {
@@ -3168,7 +4027,7 @@
           "limits": {
             "context_tokens": 131072,
             "max_input_tokens": 131072,
-            "max_output_tokens": 128000
+            "max_output_tokens": 16384
           },
           "name": "Llama-3.3-70B-Instruct",
           "output_modalities": [
@@ -6212,7 +7071,7 @@
           "limits": {
             "context_tokens": 262144,
             "max_input_tokens": 262144,
-            "max_output_tokens": 16384
+            "max_output_tokens": 32768
           },
           "name": "Qwen3 235B A22B Instruct 2507",
           "output_modalities": [
@@ -6473,7 +7332,7 @@
           "limits": {
             "context_tokens": 262144,
             "max_input_tokens": 262144,
-            "max_output_tokens": 262144
+            "max_output_tokens": 16384
           },
           "name": "Qwen3-Next 80B-A3B Instruct",
           "output_modalities": [
@@ -6828,7 +7687,7 @@
           "limits": {
             "context_tokens": 262144,
             "max_input_tokens": 262144,
-            "max_output_tokens": 65536
+            "max_output_tokens": 131072
           },
           "name": "Qwen3.6 27B",
           "output_modalities": [
@@ -6940,7 +7799,7 @@
           ],
           "limits": {
             "context_tokens": 1000000,
-            "max_input_tokens": 1000000,
+            "max_input_tokens": 991000,
             "max_output_tokens": 65536
           },
           "name": "Qwen3.7 Flash",
@@ -6990,6 +7849,35 @@
           "reasoning": true,
           "reasoning_controls": {
             "toggle": true
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "qwen/qwen3.8-max": {
+          "id": "qwen/qwen3.8-max",
+          "input_modalities": [
+            "text",
+            "image",
+            "video"
+          ],
+          "limits": {
+            "context_tokens": 1000000,
+            "max_input_tokens": 1000000,
+            "max_output_tokens": 131072
+          },
+          "name": "Qwen3.8 Max",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
           },
           "structured_output": true,
           "tool_call": true
@@ -7319,7 +8207,7 @@
           "limits": {
             "context_tokens": 1024000,
             "max_input_tokens": 1024000,
-            "max_output_tokens": 32768
+            "max_output_tokens": 1024000
           },
           "name": "UnslopNemo 12B",
           "output_modalities": [
@@ -7387,7 +8275,7 @@
             ]
           },
           "structured_output": false,
-          "tool_call": false
+          "tool_call": true
         },
         "undi95/remm-slerp-l2-13b": {
           "id": "undi95/remm-slerp-l2-13b",
@@ -7811,7 +8699,7 @@
           "limits": {
             "context_tokens": 1048576,
             "max_input_tokens": 1048576,
-            "max_output_tokens": 128000
+            "max_output_tokens": 262144
           },
           "name": "GLM-5.2",
           "output_modalities": [
@@ -7951,6 +8839,31 @@
               "medium",
               "high",
               "xhigh",
+              "max"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "~deepseek/deepseek-v4-flash-latest": {
+          "id": "~deepseek/deepseek-v4-flash-latest",
+          "input_modalities": [
+            "text"
+          ],
+          "limits": {
+            "context_tokens": 1048576,
+            "max_input_tokens": 1048576,
+            "max_output_tokens": 65536
+          },
+          "name": "DeepSeek V4 Flash Latest",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "high",
               "max"
             ]
           },
@@ -8127,6 +9040,223 @@
       },
       "name": "OpenRouter"
     },
+    "xai": {
+      "id": "xai",
+      "models": {
+        "grok-4.20-0309-non-reasoning": {
+          "id": "grok-4.20-0309-non-reasoning",
+          "input_modalities": [
+            "text",
+            "image",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 1000000,
+            "max_input_tokens": 1000000,
+            "max_output_tokens": 30000
+          },
+          "name": "Grok 4.20 (Non-Reasoning)",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": false,
+          "structured_output": true,
+          "tool_call": true
+        },
+        "grok-4.20-0309-reasoning": {
+          "id": "grok-4.20-0309-reasoning",
+          "input_modalities": [
+            "text",
+            "image",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 1000000,
+            "max_input_tokens": 1000000,
+            "max_output_tokens": 30000
+          },
+          "name": "Grok 4.20 (Reasoning)",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "structured_output": true,
+          "tool_call": true
+        },
+        "grok-4.20-multi-agent-0309": {
+          "id": "grok-4.20-multi-agent-0309",
+          "input_modalities": [
+            "text",
+            "image",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 1000000,
+            "max_input_tokens": 1000000,
+            "max_output_tokens": 30000
+          },
+          "name": "Grok 4.20 Multi-Agent",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": false
+        },
+        "grok-4.3": {
+          "id": "grok-4.3",
+          "input_modalities": [
+            "text",
+            "image",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 1000000,
+            "max_input_tokens": 1000000,
+            "max_output_tokens": 30000
+          },
+          "name": "Grok 4.3",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "none",
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "grok-4.5": {
+          "id": "grok-4.5",
+          "input_modalities": [
+            "text",
+            "image",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 500000,
+            "max_input_tokens": 500000,
+            "max_output_tokens": 500000
+          },
+          "name": "Grok 4.5",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "reasoning_controls": {
+            "efforts": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "structured_output": true,
+          "tool_call": true
+        },
+        "grok-build-0.1": {
+          "id": "grok-build-0.1",
+          "input_modalities": [
+            "text",
+            "image",
+            "document"
+          ],
+          "limits": {
+            "context_tokens": 256000,
+            "max_input_tokens": 256000,
+            "max_output_tokens": 256000
+          },
+          "name": "Grok Build 0.1",
+          "output_modalities": [
+            "text"
+          ],
+          "reasoning": true,
+          "structured_output": true,
+          "tool_call": true
+        },
+        "grok-imagine-image": {
+          "disabled_reason": "catalog model has a zero, missing, or out-of-range limit",
+          "id": "grok-imagine-image",
+          "input_modalities": [
+            "text",
+            "image",
+            "document"
+          ],
+          "name": "Grok Imagine Image",
+          "output_modalities": [
+            "image",
+            "document"
+          ],
+          "reasoning": false,
+          "structured_output": false,
+          "tool_call": false
+        },
+        "grok-imagine-image-quality": {
+          "disabled_reason": "catalog model has a zero, missing, or out-of-range limit",
+          "id": "grok-imagine-image-quality",
+          "input_modalities": [
+            "text",
+            "image",
+            "document"
+          ],
+          "name": "Grok Imagine Image Quality",
+          "output_modalities": [
+            "image",
+            "document"
+          ],
+          "reasoning": false,
+          "structured_output": false,
+          "tool_call": false
+        },
+        "grok-imagine-video": {
+          "disabled_reason": "catalog model has a zero, missing, or out-of-range limit",
+          "id": "grok-imagine-video",
+          "input_modalities": [
+            "text",
+            "image",
+            "video",
+            "document"
+          ],
+          "name": "Grok Imagine Video",
+          "output_modalities": [
+            "video"
+          ],
+          "reasoning": false,
+          "structured_output": false,
+          "tool_call": false
+        },
+        "grok-imagine-video-1.5": {
+          "disabled_reason": "catalog model has a zero, missing, or out-of-range limit",
+          "id": "grok-imagine-video-1.5",
+          "input_modalities": [
+            "text",
+            "image",
+            "audio",
+            "document"
+          ],
+          "name": "Grok Imagine Video 1.5",
+          "output_modalities": [
+            "video"
+          ],
+          "reasoning": false,
+          "structured_output": false,
+          "tool_call": false
+        }
+      },
+      "name": "xAI"
+    },
     "zai-coding-plan": {
       "id": "zai-coding-plan",
       "models": {
@@ -8224,9 +9354,9 @@
       "name": "Z.AI Coding Plan"
     }
   },
-  "retrieved_at_ms": 1785637970000,
+  "retrieved_at_ms": 1785810146269,
   "schema_revision": 1,
-  "source_digest": "sha256:91805c841ce61827396ee6e25bdbaf6593a7e83f5aa13bce910b40304861d8e6",
-  "source_revision": "sha256:91805c841ce61827396ee6e25bdbaf6593a7e83f5aa13bce910b40304861d8e6",
+  "source_digest": "sha256:6a24462dba837ff5059222b7feaab50825f7fa765839e41ad34fef871a23553e",
+  "source_revision": "sha256:6a24462dba837ff5059222b7feaab50825f7fa765839e41ad34fef871a23553e",
   "source_url": "https://models.dev/api.json"
 }

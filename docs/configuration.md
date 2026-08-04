@@ -230,14 +230,16 @@ base_url = "https://api.x.ai/v1"
 # CLI already manages — see the credential list below.
 credential = "session-json:~/.grok/auth.json#/access_token"
 
-[models."xai/grok-4.5"]
-context_tokens = 500000
-max_input_tokens = 480000
-max_output_tokens = 32768
 ```
 
-Smith never guesses a context window, so the `[models]` block is required
-unless a catalog source supplies those limits. Extra headers are sent unchanged, but authorization
+No `[models]` block is needed here: Smith's embedded Models.dev catalog
+supplies xAI's limits, and the same is true for OpenAI, OpenRouter, and the
+Z.AI Coding Plan at their exact published endpoints. Declare `[models]` only
+for a model the catalog does not carry, or to override what it says.
+
+A catalog entry is bound to an exact adapter kind *and* endpoint pair. A
+provider you happen to name `xai` pointing somewhere else inherits nothing,
+because a catalog describes a model as one deployment serves it. Extra headers are sent unchanged, but authorization
 header names such as `Authorization`, `X-API-Key`, and `Api-Key` are refused;
 credentials belong in the credential broker.
 

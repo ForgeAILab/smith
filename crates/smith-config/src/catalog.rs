@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::model::KIND_OPENAI_COMPATIBLE;
+use crate::model::{KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES};
 
 /// The only public origin Smith accepts provider model metadata from.
 pub const MODELS_DEV_SOURCE_URL: &str = "https://models.dev/api.json";
@@ -26,11 +26,23 @@ pub const OPENROUTER_CATALOG_PROVIDER: &str = "openrouter";
 /// Models.dev's Z.AI Coding Plan provider identity.
 pub const ZAI_CODING_PLAN_CATALOG_PROVIDER: &str = "zai-coding-plan";
 
+/// Models.dev's xAI provider identity.
+pub const XAI_CATALOG_PROVIDER: &str = "xai";
+
+/// Models.dev's Google provider identity.
+pub const GOOGLE_CATALOG_PROVIDER: &str = "google";
+
 /// The exact normalized OpenAI endpoint Smith binds to its catalog.
 pub const OPENAI_ENDPOINT: &str = "https://api.openai.com/v1";
 
 /// The exact normalized OpenRouter endpoint Smith binds to its catalog.
 pub const OPENROUTER_ENDPOINT: &str = "https://openrouter.ai/api/v1";
+
+/// The exact normalized xAI endpoint Smith binds to its catalog.
+pub const XAI_CATALOG_ENDPOINT: &str = "https://api.x.ai/v1";
+
+/// The fixed API-version base URL for native Gemini Interactions.
+pub const GEMINI_ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1beta";
 
 /// The exact normalized Z.AI Coding Plan endpoint Smith binds to its catalog.
 pub const ZAI_CODING_PLAN_ENDPOINT: &str = "https://api.z.ai/api/coding/paas/v4";
@@ -172,13 +184,23 @@ pub enum CatalogModality {
 /// The local provider name is deliberately absent: aliases remain local, and
 /// a provider with a familiar name but a different endpoint inherits nothing.
 pub fn catalog_provider_for(kind: &str, base_url: Option<&str>) -> Option<&'static str> {
-    if kind != KIND_OPENAI_COMPATIBLE {
-        return None;
+    // Native Gemini owns one fixed endpoint and intentionally omits
+    // `base_url` from ordinary user configuration.
+    if kind == KIND_GEMINI_INTERACTIONS && base_url.is_none() {
+        return Some(GOOGLE_CATALOG_PROVIDER);
     }
-    match normalized_endpoint(base_url?)?.as_str() {
-        OPENAI_ENDPOINT => Some(OPENAI_CATALOG_PROVIDER),
-        OPENROUTER_ENDPOINT => Some(OPENROUTER_CATALOG_PROVIDER),
-        ZAI_CODING_PLAN_ENDPOINT => Some(ZAI_CODING_PLAN_CATALOG_PROVIDER),
+    let endpoint = normalized_endpoint(base_url?)?;
+    // The pairing is exact on both sides. A catalog entry describes a model as
+    // one deployment serves it, so inheriting limits from a matching name at a
+    // different endpoint, or over a different protocol, would be a guess.
+    match (kind, endpoint.as_str()) {
+        (KIND_OPENAI_COMPATIBLE, OPENAI_ENDPOINT) => Some(OPENAI_CATALOG_PROVIDER),
+        (KIND_OPENAI_COMPATIBLE, OPENROUTER_ENDPOINT) => Some(OPENROUTER_CATALOG_PROVIDER),
+        (KIND_OPENAI_COMPATIBLE, ZAI_CODING_PLAN_ENDPOINT) => {
+            Some(ZAI_CODING_PLAN_CATALOG_PROVIDER)
+        }
+        (KIND_OPENAI_RESPONSES, XAI_CATALOG_ENDPOINT) => Some(XAI_CATALOG_PROVIDER),
+        (KIND_GEMINI_INTERACTIONS, GEMINI_ENDPOINT) => Some(GOOGLE_CATALOG_PROVIDER),
         _ => None,
     }
 }
@@ -228,6 +250,14 @@ mod tests {
             Some(OPENAI_CATALOG_PROVIDER)
         );
         assert_eq!(
+            catalog_provider_for(KIND_GEMINI_INTERACTIONS, None),
+            Some(GOOGLE_CATALOG_PROVIDER)
+        );
+        assert_eq!(
+            catalog_provider_for(KIND_GEMINI_INTERACTIONS, Some(GEMINI_ENDPOINT)),
+            Some(GOOGLE_CATALOG_PROVIDER)
+        );
+        assert_eq!(
             catalog_provider_for(
                 KIND_OPENAI_COMPATIBLE,
                 Some("https://openrouter.ai/api/v1/other")
@@ -236,6 +266,10 @@ mod tests {
         );
         assert_eq!(
             catalog_provider_for("fake", Some(OPENROUTER_ENDPOINT)),
+            None
+        );
+        assert_eq!(
+            catalog_provider_for(KIND_OPENAI_COMPATIBLE, Some(GEMINI_ENDPOINT)),
             None
         );
     }

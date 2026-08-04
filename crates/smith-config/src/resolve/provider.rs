@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use crate::model::{
     ApprovalMode, BackgroundExit, KIND_ANTHROPIC_MESSAGES, KIND_CHATGPT_RESPONSES, KIND_FAKE,
-    KIND_OPENAI_COMPATIBLE, ReasoningDialect, ReasoningOnlyBehavior,
+    KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE, ReasoningDialect, ReasoningOnlyBehavior,
 };
 use agent_runtime_core::store::Secret;
 
@@ -100,7 +100,10 @@ pub(super) fn validate_provider(provider: &ResolvedProvider) -> Result<(), Confi
     }
     if !matches!(
         provider.kind.value.as_str(),
-        KIND_OPENAI_COMPATIBLE | KIND_ANTHROPIC_MESSAGES | KIND_CHATGPT_RESPONSES
+        KIND_OPENAI_COMPATIBLE
+            | KIND_ANTHROPIC_MESSAGES
+            | KIND_CHATGPT_RESPONSES
+            | KIND_GEMINI_INTERACTIONS
     ) && let Some(policy) = &provider.response.reasoning_only
     {
         return Err(ConfigError::IncompatibleOption {
@@ -158,6 +161,42 @@ pub(super) fn validate_provider(provider: &ResolvedProvider) -> Result<(), Confi
                     source,
                     message: "the experimental ChatGPT provider requires Smith OAuth at `authfile:chatgpt`"
                         .to_owned(),
+                });
+            }
+        }
+        KIND_GEMINI_INTERACTIONS => {
+            if let Some(base_url) = &provider.base_url {
+                return Err(ConfigError::IncompatibleOption {
+                    source: base_url.source.clone(),
+                    kind: KIND_GEMINI_INTERACTIONS.to_owned(),
+                    message:
+                        "native Gemini uses Smith's fixed endpoint and does not accept `base_url`"
+                            .to_owned(),
+                });
+            }
+            if !provider.headers.is_empty() {
+                let source = provider
+                    .headers
+                    .values()
+                    .next()
+                    .expect("non-empty headers have a first value")
+                    .source
+                    .clone();
+                return Err(ConfigError::IncompatibleOption {
+                    source,
+                    kind: KIND_GEMINI_INTERACTIONS.to_owned(),
+                    message:
+                        "native Gemini uses its API-key header internally and does not accept custom headers"
+                            .to_owned(),
+                });
+            }
+            if let Some(policy) = &provider.response.reasoning_only {
+                return Err(ConfigError::IncompatibleOption {
+                    source: policy.source.clone(),
+                    kind: KIND_GEMINI_INTERACTIONS.to_owned(),
+                    message:
+                        "native Gemini does not accept `response.reasoning_only`; reasoning events are preserved by the adapter"
+                            .to_owned(),
                 });
             }
         }

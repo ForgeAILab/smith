@@ -68,6 +68,7 @@ use agent_runtime::harness::{
 use agent_runtime::hub::{ScopeIdentity, ScopeInputs};
 use agent_runtime::provider::anthropic::{AnthropicConfig, AnthropicProvider};
 use agent_runtime::provider::fake::FakeProvider;
+use agent_runtime::provider::gemini::{GeminiInteractionsConfig, GeminiInteractionsProvider};
 use agent_runtime::provider::openai::{OpenAiConfig, OpenAiProvider};
 use agent_runtime::provider::responses::{ResponsesConfig, ResponsesProvider};
 use agent_runtime::provider::retry::RetryPolicy;
@@ -83,7 +84,7 @@ use agent_runtime_core::clock::{Clock, SystemClock};
 use agent_runtime_core::error::RuntimeError;
 use agent_runtime_core::interaction::{InteractionBroker, InteractionReadiness};
 use agent_runtime_core::observer::EventObserver;
-use agent_runtime_core::provider::{ModelId, Provider, ProviderError};
+use agent_runtime_core::provider::{ModelId, PromptCacheControl, Provider, ProviderError};
 use agent_runtime_core::provider_credential::{
     ProviderCredentialSource, ProviderCredentialTarget, StaticProviderCredentialSource,
 };
@@ -97,7 +98,7 @@ use smith_config::credential::{
 };
 use smith_config::model::{
     AgentPosture, ApprovalMode, KIND_ANTHROPIC_MESSAGES, KIND_CHATGPT_RESPONSES, KIND_FAKE,
-    KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES, ProfileUse,
+    KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES, ProfileUse,
 };
 use smith_config::resolve::{ResolvedConfig, ResolvedProvider};
 use smith_config::setup::trusted_model;
@@ -176,6 +177,7 @@ pub const AVAILABLE_ADAPTER_KINDS: &[&str] = &[
     KIND_OPENAI_RESPONSES,
     KIND_ANTHROPIC_MESSAGES,
     KIND_CHATGPT_RESPONSES,
+    KIND_GEMINI_INTERACTIONS,
     KIND_FAKE,
 ];
 
@@ -574,7 +576,7 @@ pub enum FactoryError {
         "provider `{provider}` selects the `{kind}` adapter, which this build of Agent Runtime \
          does not ship; the available kinds are `{KIND_OPENAI_COMPATIBLE}`, \
          `{KIND_OPENAI_RESPONSES}`, `{KIND_ANTHROPIC_MESSAGES}`, \
-         `{KIND_CHATGPT_RESPONSES}`, and `{KIND_FAKE}`"
+         `{KIND_CHATGPT_RESPONSES}`, `{KIND_GEMINI_INTERACTIONS}`, and `{KIND_FAKE}`"
     )]
     AdapterUnavailable {
         /// The provider that selected it.
@@ -674,6 +676,8 @@ enum Adapter {
     AnthropicMessages,
     /// Smith's experimental direct ChatGPT Codex Responses adapter.
     ChatGptResponses,
+    /// Agent Runtime's native stateless Gemini Interactions adapter.
+    GeminiInteractions,
     /// Agent Runtime's deterministic fake.
     Fake,
 }
@@ -866,7 +870,14 @@ fn prepare_provider_stage(
     }
     let provider = match request.provider.clone() {
         Some(provider) => provider,
-        None => construct(adapter, request, profile, endpoint, secret)?,
+        None => construct(
+            adapter,
+            request,
+            profile,
+            endpoint,
+            secret,
+            &reasoning.efforts,
+        )?,
     };
     let provider = crate::response::apply_response_policy(
         provider,
@@ -1365,7 +1376,14 @@ async fn prepare_child_profile_routes(
         if let (Some(secret), Some(redactor)) = (&secret, &route_request.persistence_redactor) {
             redactor.register_secret(secret);
         }
-        let provider = construct(adapter, &route_request, &profile.profile, endpoint, secret)?;
+        let provider = construct(
+            adapter,
+            &route_request,
+            &profile.profile,
+            endpoint,
+            secret,
+            &reasoning.efforts,
+        )?;
         let provider = crate::response::apply_response_policy(
             provider,
             route_request
@@ -1467,6 +1485,7 @@ async fn prepare_factory_inputs(
             &config.provider,
             Some(smith_config::setup::CHATGPT_ENDPOINT),
         )?),
+        Adapter::GeminiInteractions => Some(smith_config::catalog::GEMINI_ENDPOINT.to_owned()),
         Adapter::Fake => None,
     };
 
@@ -1561,6 +1580,7 @@ fn adapter(provider: &ResolvedProvider) -> Result<Adapter, FactoryError> {
         KIND_OPENAI_RESPONSES => Ok(Adapter::OpenAiResponses),
         KIND_ANTHROPIC_MESSAGES => Ok(Adapter::AnthropicMessages),
         KIND_CHATGPT_RESPONSES => Ok(Adapter::ChatGptResponses),
+        KIND_GEMINI_INTERACTIONS => Ok(Adapter::GeminiInteractions),
         KIND_FAKE => Ok(Adapter::Fake),
         kind => Err(FactoryError::AdapterUnavailable {
             provider: provider.name.value.clone(),
@@ -1667,6 +1687,7 @@ fn construct(
     profile: &ResolvedModelProfile,
     endpoint: Option<String>,
     secret: Option<Secret>,
+    supported_thinking_levels: &[String],
 ) -> Result<Arc<dyn Provider>, FactoryError> {
     match adapter {
         Adapter::Fake => Ok(Arc::new(FakeProvider::text_reply(DEVELOPMENT_REPLY))),
@@ -1808,6 +1829,34 @@ fn construct(
             Ok(Arc::new(ChatGptProvider::new(
                 transport, config, target, source,
             )))
+        }
+        Adapter::GeminiInteractions => {
+            let transport = ReqwestTransport::new(request.transport.clone())
+                .map_err(FactoryError::Transport)?;
+            let secret = secret.ok_or_else(|| {
+                FactoryError::Runtime(RuntimeError::config(
+                    "native Gemini provider credential is not configured",
+                ))
+            })?;
+            let mut config = GeminiInteractionsConfig::new(
+                endpoint.unwrap_or_else(|| smith_config::catalog::GEMINI_ENDPOINT.to_owned()),
+                request.config.model.value.clone(),
+            );
+            config.capabilities = profile.capabilities.clone();
+            // Models.dev describes the model; the native adapter owns the
+            // implicit prefix-cache behavior it actually drives.
+            config.capabilities.prompt_cache = PromptCacheControl::Implicit;
+            config =
+                config.with_supported_thinking_levels(supported_thinking_levels.iter().cloned());
+            let target = ProviderCredentialTarget::new(request.config.provider.name.value.clone())
+                .map_err(|error| FactoryError::Runtime(RuntimeError::config(error.to_string())))?;
+            let source = Arc::new(StaticProviderCredentialSource::new(secret))
+                as Arc<dyn ProviderCredentialSource>;
+            let provider = GeminiInteractionsProvider::with_credential_source(
+                transport, config, target, source,
+            )
+            .map_err(FactoryError::Transport)?;
+            Ok(Arc::new(provider))
         }
     }
 }
@@ -2233,6 +2282,10 @@ mod tests {
             ))
             .expect("a known kind"),
             Adapter::ChatGptResponses
+        );
+        assert_eq!(
+            adapter(&provider(KIND_GEMINI_INTERACTIONS, None)).expect("a known kind"),
+            Adapter::GeminiInteractions
         );
         assert_eq!(
             adapter(&provider(KIND_FAKE, None)).expect("a known kind"),

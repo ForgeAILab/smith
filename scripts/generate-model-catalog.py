@@ -13,7 +13,7 @@ from typing import Any
 
 SOURCE_URL = "https://models.dev/api.json"
 SCHEMA_REVISION = 1
-SUPPORTED_PROVIDERS = ("openai", "openrouter", "zai-coding-plan")
+SUPPORTED_PROVIDERS = ("openai", "openrouter", "xai", "zai-coding-plan", "google")
 MAX_U32 = 2**32 - 1
 MAX_MODELS_PER_PROVIDER = 10_000
 KNOWN_MODALITIES = {
