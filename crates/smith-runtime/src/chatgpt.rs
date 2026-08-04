@@ -879,11 +879,15 @@ impl<T: HttpTransport> ChatGptProvider<T> {
 
     /// Serializes a Responses request, keyed to the session for prefix caching.
     ///
-    /// This endpoint partitions its prefix cache by `prompt_cache_key`. Sending
-    /// none scatters a single conversation across partitions, so the stable
-    /// instruction/tool prefix the planner works to preserve is re-read at full
-    /// price on every turn. Keying by request id would be no better — it
-    /// changes each turn; the session is the thing that persists.
+    /// `prompt_cache_key` is the field the API documents for this, and sending
+    /// none was not defensible. But a live probe of this endpoint showed the
+    /// cache actually keys off **byte-identical prefix content**, not off this
+    /// value: a request carrying a different key still hit a 3,584-token cache
+    /// the moment its instructions and tool schemas matched bytes another
+    /// session had just sent. So the key is worth sending and is not what earns
+    /// the hit — keeping the prefix stable is. That is
+    /// `smith_runtime::prompt`'s job, and the reason its stable sections are
+    /// ordered ahead of everything that varies.
     fn build_payload(
         &self,
         request: &ProviderRequest,
