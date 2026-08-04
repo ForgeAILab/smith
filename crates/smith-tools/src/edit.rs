@@ -105,7 +105,7 @@ impl Tool for EditTool {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Path to the file, relative to the project root."
+                        "description": "Path to the file, relative to the project root. An absolute path outside the project asks the user for permission."
                     },
                     "operation": {
                         "type": "string",
@@ -807,16 +807,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn editing_outside_the_project_is_refused() {
+    async fn editing_outside_the_project_works_once_prepared() {
+        // The refusal moved out of the tool: an out-of-project path prepares
+        // with a host-mounted resource, and the runtime's approval gate — not
+        // preparation — decides it (see tests/through_the_runtime.rs).
         let (_dir, ctx) = project();
-        let err = EditTool
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("escape.rs");
+        std::fs::write(&target, "a\n").unwrap();
+
+        EditTool
             .invoke(
-                json!({"path": "../escape.rs", "old_string": "a", "new_string": "b"}),
+                json!({"path": target.to_str().unwrap(), "old_string": "a", "new_string": "b"}),
                 &ctx,
             )
             .await
-            .unwrap_err();
-        assert_eq!(err.kind, agent_runtime_core::error::ErrorKind::Workspace);
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "b\n");
     }
 
     #[tokio::test]

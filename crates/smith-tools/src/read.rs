@@ -39,7 +39,7 @@ impl Tool for ReadTool {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Path to the file, relative to the project root."
+                        "description": "Path to the file, relative to the project root. An absolute path outside the project asks the user for permission."
                     },
                     "offset": {
                         "type": "integer",
@@ -198,13 +198,53 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reading_outside_the_project_is_refused() {
+    async fn reading_outside_the_project_prepares_an_escaped_resource() {
+        use agent_runtime_core::security::SecurityResource;
+        use agent_runtime_core::tool::PreparationContext;
+
         let (_dir, ctx) = project();
-        let err = ReadTool
-            .invoke(json!({"path": "../../etc/passwd"}), &ctx)
+        let preparation = PreparationContext {
+            session: ctx.session.clone(),
+            turn: ctx.turn.clone(),
+            call_id: ctx.call_id.clone(),
+            request: ctx.request.clone(),
+            workspace: ctx.workspace.clone(),
+            clock: ctx.clock.clone(),
+            cancel: ctx.cancel.clone(),
+            deadline: ctx.deadline,
+        };
+        let prepared = ReadTool
+            .prepare(json!({"path": "../../etc/passwd"}), &preparation)
             .await
-            .unwrap_err();
-        assert_eq!(err.kind, agent_runtime_core::error::ErrorKind::Workspace);
+            .unwrap();
+
+        // Preparation no longer refuses the escape; it must surface it on a
+        // non-workspace resource so authorization routes it to approval
+        // rather than allowing it as an unattended project read.
+        assert!(
+            matches!(
+                prepared.resource(),
+                SecurityResource::Filesystem { mount, .. }
+                    if mount.as_str() != ctx.workspace.root()
+            ),
+            "{:?}",
+            prepared.resource()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_file_outside_the_project_is_read_once_prepared() {
+        let (_dir, ctx) = project();
+        let outside = tempfile::tempdir().unwrap();
+        let path = outside.path().join("outside.txt");
+        std::fs::write(&path, "beyond the boundary\n").unwrap();
+
+        let outcome = ReadTool
+            .invoke(json!({"path": path.to_str().unwrap()}), &ctx)
+            .await
+            .unwrap();
+        let text = crate::testing::text_of(&outcome);
+        assert!(text.contains("beyond the boundary"), "{text}");
     }
 
     #[tokio::test]

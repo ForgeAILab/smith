@@ -3,8 +3,8 @@
 //! Agent Runtime owns composition and enforcement. Smith owns the product
 //! answer for the concrete authority its tools advertise: exact project reads
 //! may proceed unattended, while every write/create/delete, process, network,
-//! or data-egress action remains eligible only after the configured approval
-//! policy answers.
+//! or data-egress action — and any filesystem access outside the project
+//! root — remains eligible only after the configured approval policy answers.
 
 use agent_runtime::harness::ARTIFACT_READ_PERMISSION;
 use agent_runtime::registry::Permission;
@@ -87,15 +87,24 @@ impl SecurityCheck for SmithToolAuthority {
                     | Permission::FsDelete
             )
         });
-        if filesystem_permission
-            && !matches!(
-                &request.resource,
-                SecurityResource::Filesystem { mount, .. } if mount == &self.workspace_mount
-            )
-        {
-            return SecurityCheckOutcome::Deny {
-                code: DecisionCode::other("smith.workspace_resource_mismatch"),
-            };
+        if filesystem_permission {
+            match &request.resource {
+                SecurityResource::Filesystem { mount, .. } => {
+                    if mount != &self.workspace_mount {
+                        // Outside the project boundary: never unattended,
+                        // whatever the permission set. The approval policy —
+                        // a prompt, allow-all, or deny — makes the call.
+                        return SecurityCheckOutcome::RequireApproval {
+                            constraints: GrantConstraints::unconstrained(),
+                        };
+                    }
+                }
+                _ => {
+                    return SecurityCheckOutcome::Deny {
+                        code: DecisionCode::other("smith.workspace_resource_mismatch"),
+                    };
+                }
+            }
         }
 
         let artifact_permission = Permission::other(ARTIFACT_READ_PERMISSION);
@@ -188,12 +197,29 @@ mod tests {
             .evaluate(
                 &request(
                     [Permission::FsRead],
-                    SecurityResource::filesystem("/elsewhere", vec!["secret".into()]),
+                    SecurityResource::filesystem("/", vec!["elsewhere".into(), "secret".into()]),
                 ),
                 &Cancellation::new(),
             )
             .await;
-        assert!(matches!(escaped, SecurityCheckOutcome::Deny { .. }));
+        assert!(
+            matches!(escaped, SecurityCheckOutcome::RequireApproval { .. }),
+            "an out-of-workspace read is the user's call, not an unattended allow or a flat deny"
+        );
+
+        let structural_mismatch = authority
+            .evaluate(
+                &request(
+                    [Permission::FsRead],
+                    SecurityResource::other("project-file", "a-reference"),
+                ),
+                &Cancellation::new(),
+            )
+            .await;
+        assert!(matches!(
+            structural_mismatch,
+            SecurityCheckOutcome::Deny { .. }
+        ));
 
         let artifact = authority
             .evaluate(

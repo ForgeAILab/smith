@@ -43,7 +43,7 @@ impl Tool for ListTool {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Directory to list, relative to the project root. Defaults to the root."
+                        "description": "Directory to list, relative to the project root. Defaults to the root. An absolute path outside the project asks the user for permission."
                     },
                     "recursive": {
                         "type": "boolean",
@@ -258,14 +258,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn listing_outside_the_project_is_refused() {
+    async fn listing_outside_the_project_works_once_prepared() {
         let (_dir, ctx) = project();
-        assert!(
-            ListTool
-                .invoke(json!({"path": "../.."}), &ctx)
-                .await
-                .is_err()
-        );
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("beyond.txt"), "x").unwrap();
+
+        let outcome = ListTool
+            .invoke(json!({"path": outside.path().to_str().unwrap()}), &ctx)
+            .await
+            .unwrap();
+        let text = crate::testing::text_of(&outcome);
+        assert!(text.contains("beyond.txt"), "{text}");
     }
 
     #[tokio::test]

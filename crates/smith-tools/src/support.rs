@@ -5,7 +5,10 @@
 //!
 //! - **Every path goes through the workspace.** [`resolve`] is the only way a
 //!   tool turns an argument into a `PathBuf`, so the boundary check cannot be
-//!   forgotten in one tool and enforced in the rest.
+//!   forgotten in one tool and enforced in the rest. A path outside the
+//!   project is not refused here: it prepares with a host-mounted resource,
+//!   and the authority routes that resource to the approval policy instead of
+//!   allowing it unattended.
 //! - **Reads are bounded before they happen.** [`read_bounded`] refuses a file
 //!   larger than its cap instead of loading it and truncating afterwards; a
 //!   2 GiB file should not become 2 GiB of resident memory on its way to a
@@ -14,7 +17,7 @@
 //!   front, because a screenful of mojibake wastes tokens and tells the model
 //!   nothing.
 
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 use agent_runtime_core::error::{ErrorKind, RuntimeError};
 use agent_runtime_core::security::SecurityResource;
@@ -25,16 +28,35 @@ use serde_json::Value;
 /// The largest file a read-shaped tool will load, regardless of output limits.
 pub const MAX_READ_BYTES: u64 = 4 * 1024 * 1024;
 
+/// The resource mount recorded for a path outside the project: the host
+/// filesystem root, so an out-of-workspace grant can never be mistaken for a
+/// project-relative one.
+pub const HOST_MOUNT: &str = "/";
+
 /// How much of a file is inspected when deciding whether it is binary.
 const SNIFF_BYTES: usize = 8192;
 
 /// Resolves a path argument against the session's workspace boundary.
 ///
-/// This is the choke point for containment: the workspace canonicalizes and
-/// rejects anything outside the project root, so `../../etc/passwd` fails here
-/// rather than in whichever tool forgot to check.
+/// This is the choke point for containment. In-workspace paths defer to the
+/// workspace's canonicalization. A path the workspace refuses is accepted
+/// only when it re-resolves to itself, which is sound because invocation
+/// receives fingerprint-bound prepared arguments: an out-of-workspace path
+/// here was canonicalized by [`prepare_path_argument`] and authorized —
+/// through approval — for exactly that path. The round-trip check keeps this
+/// fail-closed against filesystem drift (a symlink swap) between preparation
+/// and invocation.
 pub fn resolve(ctx: &InvocationContext, path: &str) -> Result<PathBuf, RuntimeError> {
-    ctx.workspace.resolve(path).map(PathBuf::from)
+    match ctx.workspace.resolve(path) {
+        Ok(resolved) => Ok(PathBuf::from(resolved)),
+        Err(err) if err.kind == ErrorKind::Workspace => {
+            match canonicalize_lexically(Path::new(ctx.workspace.root()), path) {
+                Some(resolved) if resolved == Path::new(path) => Ok(resolved),
+                _ => Err(err),
+            }
+        }
+        Err(err) => Err(err),
+    }
 }
 
 /// One workspace path canonicalized before authorization or approval.
@@ -82,7 +104,13 @@ fn prepare_workspace_path(
     workspace: &dyn Workspace,
     raw: &str,
 ) -> Result<PreparedPath, RuntimeError> {
-    let canonical = workspace.resolve(raw)?;
+    let canonical = match workspace.resolve(raw) {
+        Ok(canonical) => canonical,
+        Err(err) if err.kind == ErrorKind::Workspace => {
+            return prepare_outside_path(workspace, raw, err);
+        }
+        Err(err) => return Err(err),
+    };
     let root = std::path::Path::new(workspace.root());
     let path = std::path::Path::new(&canonical);
     let relative = path.strip_prefix(root).map_err(|_| {
@@ -119,6 +147,99 @@ fn prepare_workspace_path(
         resource: SecurityResource::filesystem(workspace.root(), segments),
         display,
     })
+}
+
+/// Prepares a path the workspace refused.
+///
+/// The path is canonicalized the same way the boundary would have, then
+/// carried on a [`HOST_MOUNT`] resource: structurally distinct from every
+/// project-relative resource, so the authority cannot mistake it for an
+/// unattended workspace read and must send it through approval. Display uses
+/// the absolute path — the user deciding the prompt needs to see exactly
+/// what would be touched.
+fn prepare_outside_path(
+    workspace: &dyn Workspace,
+    raw: &str,
+    refusal: RuntimeError,
+) -> Result<PreparedPath, RuntimeError> {
+    let root = Path::new(workspace.root());
+    let Some(resolved) = canonicalize_lexically(root, raw) else {
+        return Err(refusal);
+    };
+    if resolved.starts_with(root) {
+        // The boundary refused something the lexical fallback would place
+        // inside it; the boundary wins.
+        return Err(refusal);
+    }
+    let canonical = resolved.to_string_lossy().into_owned();
+    let mut segments = Vec::new();
+    for component in resolved.components() {
+        match component {
+            Component::RootDir | Component::Prefix(_) => {}
+            Component::Normal(segment) => {
+                segments.push(segment.to_string_lossy().into_owned());
+            }
+            _ => {
+                return Err(RuntimeError::new(
+                    ErrorKind::Workspace,
+                    format!("prepared path `{canonical}` is not structurally canonical"),
+                ));
+            }
+        }
+    }
+    Ok(PreparedPath {
+        display: canonical.clone(),
+        resource: SecurityResource::filesystem(HOST_MOUNT, segments),
+        canonical,
+    })
+}
+
+/// Canonicalizes `raw` against `root` without requiring containment.
+///
+/// Mirrors the workspace's own resolution: an existing path canonicalizes
+/// fully; for one that does not exist yet, the nearest existing ancestor is
+/// canonicalized and the remaining components are applied lexically — `..`
+/// pops, `.` is dropped — so a traversal cannot climb through a
+/// not-yet-created directory.
+fn canonicalize_lexically(root: &Path, raw: &str) -> Option<PathBuf> {
+    let candidate = {
+        let raw = Path::new(raw);
+        if raw.is_absolute() {
+            raw.to_path_buf()
+        } else {
+            root.join(raw)
+        }
+    };
+
+    if let Ok(canonical) = candidate.canonicalize() {
+        return Some(canonical);
+    }
+
+    // Walk down from the deepest ancestor that does exist.
+    let mut existing = candidate.as_path();
+    let mut trailing = Vec::new();
+    loop {
+        match existing.parent() {
+            Some(parent) => {
+                trailing.push(existing.file_name()?.to_owned());
+                existing = parent;
+                if let Ok(canonical) = existing.canonicalize() {
+                    let mut resolved = canonical;
+                    for component in trailing.iter().rev() {
+                        match Path::new(component).components().next() {
+                            Some(Component::ParentDir) => {
+                                resolved.pop();
+                            }
+                            Some(Component::CurDir) => {}
+                            _ => resolved.push(component),
+                        }
+                    }
+                    return Some(resolved);
+                }
+            }
+            None => return None,
+        }
+    }
 }
 
 /// Reads a required string argument.
@@ -299,5 +420,77 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let err = read_bounded(dir.path(), MAX_READ_BYTES).await.unwrap_err();
         assert!(err.message.contains("`list` tool"), "{err:?}");
+    }
+
+    #[test]
+    fn an_outside_path_prepares_with_a_host_resource() {
+        let (_dir, ctx) = crate::testing::project();
+        let outside = tempfile::tempdir().unwrap();
+        let file = outside.path().join("note.txt");
+        std::fs::write(&file, "hi").unwrap();
+
+        let prepared =
+            prepare_workspace_path(ctx.workspace.as_ref(), file.to_str().unwrap()).unwrap();
+        let canonical = file.canonicalize().unwrap();
+        assert_eq!(prepared.canonical, canonical.to_string_lossy());
+        assert_eq!(prepared.display, prepared.canonical);
+
+        let segments: Vec<String> = canonical
+            .components()
+            .filter_map(|component| match component {
+                Component::Normal(segment) => Some(segment.to_string_lossy().into_owned()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            prepared.resource,
+            SecurityResource::filesystem(HOST_MOUNT, segments)
+        );
+    }
+
+    #[test]
+    fn a_relative_traversal_prepares_as_an_outside_path() {
+        let (dir, ctx) = crate::testing::project();
+        let prepared = prepare_workspace_path(ctx.workspace.as_ref(), "../escape.txt").unwrap();
+        let expected = dir
+            .path()
+            .canonicalize()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("escape.txt");
+        assert_eq!(prepared.canonical, expected.to_string_lossy());
+        assert!(matches!(
+            &prepared.resource,
+            SecurityResource::Filesystem { mount, .. } if mount == HOST_MOUNT
+        ));
+    }
+
+    #[test]
+    fn an_approved_outside_path_survives_the_invoke_recheck() {
+        let (_dir, ctx) = crate::testing::project();
+        let outside = tempfile::tempdir().unwrap();
+        let file = outside.path().join("note.txt");
+        std::fs::write(&file, "hi").unwrap();
+        let canonical = file.canonicalize().unwrap();
+
+        let resolved = resolve(&ctx, canonical.to_str().unwrap()).unwrap();
+        assert_eq!(resolved, canonical);
+    }
+
+    #[test]
+    fn a_non_canonical_outside_path_is_refused_at_invoke() {
+        let (_dir, ctx) = crate::testing::project();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir(outside.path().join("real")).unwrap();
+        std::fs::write(outside.path().join("real/file.txt"), "hi").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("real"), outside.path().join("link"))
+            .unwrap();
+
+        // A path through the symlink is not its own canonical form, so the
+        // fail-closed TOCTOU recheck must refuse it.
+        let through_link = outside.path().join("link/file.txt");
+        let err = resolve(&ctx, through_link.to_str().unwrap()).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Workspace);
     }
 }

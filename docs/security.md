@@ -29,9 +29,13 @@ calculation, authorization, optional approval, and execution of that exact
 prepared action. Privileged composition fails closed without an authoritative
 security check.
 
-Filesystem resources are canonical workspace-relative segments, not unchecked
-string prefixes. Traversal, symlink escape, and out-of-workspace paths are
-refused. Reads request read authority; edit preparation identifies its exact
+Filesystem resources are canonical segments over an explicit mount, not
+unchecked string prefixes. Traversal and symlink escape are refused. An
+out-of-workspace path is not refused outright: it canonicalizes onto a
+host-root mount, always requires an approval decision — the runtime rejects
+any escape the composed checks would have allowed unattended — and must
+re-resolve to itself at invocation, so a post-approval symlink swap still
+fails. Reads request read authority; edit preparation identifies its exact
 file and read/write set. Shell cannot be safely narrowed from command text, so
 it declares broad workspace mutation, process execution, and network authority.
 Every shell invocation gets a process group, deadline, bounded output, and
@@ -47,9 +51,10 @@ shutdown.
 Headless `ask` cannot wait for a user and exits 4 with redaction-safe prepared
 metadata. `allow-all` is appropriate only inside an already isolated and
 trusted automation boundary. The explicit `--yolo` alias selects that same
-approval mode; it bypasses approval prompts but does not bypass authorization,
-workspace bounds, or profile capability narrowing. In particular, a `plan`
-profile remains read-only under `--yolo`.
+approval mode; it bypasses approval prompts — including the prompt that gates
+out-of-workspace file access — but does not bypass authorization or profile
+capability narrowing. In particular, a `plan` profile remains read-only under
+`--yolo`.
 
 ## Repository and configuration attacks
 

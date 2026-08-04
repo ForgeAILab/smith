@@ -411,13 +411,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_cwd_outside_the_project_is_refused() {
+    async fn a_cwd_outside_the_project_runs_once_prepared() {
         let (_dir, ctx) = project();
-        let err = ShellTool
-            .invoke(json!({"command": "ls", "cwd": "../.."}), &ctx)
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("beyond-marker.txt"), "x").unwrap();
+
+        let outcome = ShellTool
+            .invoke(
+                json!({"command": "ls", "cwd": outside.path().to_str().unwrap()}),
+                &ctx,
+            )
             .await
-            .unwrap_err();
-        assert_eq!(err.kind, ErrorKind::Workspace);
+            .unwrap();
+        assert!(text_of(&outcome).contains("beyond-marker.txt"));
     }
 
     #[tokio::test]

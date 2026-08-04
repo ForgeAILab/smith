@@ -668,8 +668,7 @@ impl Tool for ObservedTool {
                         .arguments()
                         .get("path")
                         .and_then(Value::as_str)
-                        .and_then(|path| ctx.workspace.resolve(path).ok())
-                        .map(PathBuf::from)
+                        .and_then(|path| crate::support::resolve(ctx, path).ok())
                 })
                 .flatten()
         };

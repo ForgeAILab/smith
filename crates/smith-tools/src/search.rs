@@ -55,7 +55,7 @@ impl Tool for SearchTool {
                     },
                     "path": {
                         "type": "string",
-                        "description": "Directory or file to search. Defaults to the project root."
+                        "description": "Directory or file to search. Defaults to the project root. An absolute path outside the project asks the user for permission."
                     },
                     "extension": {
                         "type": "string",

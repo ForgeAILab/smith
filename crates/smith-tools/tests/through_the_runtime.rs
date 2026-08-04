@@ -85,17 +85,25 @@ impl SecurityCheck for ProjectToolAuthority {
                     | Permission::FsDelete
             )
         });
-        if filesystem_authority
-            && !matches!(
-                &request.resource,
-                SecurityResource::Filesystem { mount, .. } if mount == &self.mount
-            )
-        {
-            return SecurityCheckOutcome::Deny {
-                code: agent_runtime_core::grant::DecisionCode::other(
-                    "test.workspace_resource_mismatch",
-                ),
-            };
+        if filesystem_authority {
+            match &request.resource {
+                SecurityResource::Filesystem { mount, .. } => {
+                    if mount != &self.mount {
+                        // Outside the project: mirrors Smith's authority —
+                        // never unattended, the approval policy decides.
+                        return SecurityCheckOutcome::RequireApproval {
+                            constraints: GrantConstraints::unconstrained(),
+                        };
+                    }
+                }
+                _ => {
+                    return SecurityCheckOutcome::Deny {
+                        code: agent_runtime_core::grant::DecisionCode::other(
+                            "test.workspace_resource_mismatch",
+                        ),
+                    };
+                }
+            }
         }
 
         if request.requested.len() == 1 && request.requested.contains(&Permission::FsRead) {
@@ -430,13 +438,54 @@ async fn shell_reaches_approval_with_broad_workspace_authority_before_execution(
 }
 
 #[tokio::test]
-async fn a_path_outside_the_project_fails_even_when_approved() {
+async fn a_path_outside_the_project_is_blocked_when_approval_denies() {
     let dir = project();
+    let outside = tempfile::tempdir().expect("an outside dir");
+    let secret = outside.path().join("secret.txt");
+    std::fs::write(&secret, "outside-content\n").unwrap();
+
     let runtime = build(
         dir.path(),
-        Arc::new(provider("read", r#"{"path":"../../../../etc/passwd"}"#)),
-        // Approval is not the boundary; the workspace is. Allowing everything
-        // must still not let a tool read outside the project.
+        Arc::new(provider(
+            "read",
+            &format!(r#"{{"path":"{}"}}"#, secret.display()),
+        )),
+        // An out-of-project path reaches the approval policy instead of being
+        // refused at preparation; a denying policy must still block it.
+        Arc::new(DenyAll),
+    );
+    let session = runtime
+        .start_session(StartSession::new())
+        .await
+        .expect("a session");
+
+    session
+        .run(UserInput::text("read the secret"))
+        .await
+        .expect("the turn runs");
+
+    let results = tool_results(&session);
+    assert!(
+        !results.iter().any(|text| text.contains("outside-content")),
+        "no content from outside the project may be returned without approval: {results:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_path_outside_the_project_is_read_once_approved() {
+    let dir = project();
+    let outside = tempfile::tempdir().expect("an outside dir");
+    let notes = outside.path().join("notes.txt");
+    std::fs::write(&notes, "carried across the boundary\n").unwrap();
+
+    let runtime = build(
+        dir.path(),
+        Arc::new(provider(
+            "read",
+            &format!(r#"{{"path":"{}"}}"#, notes.display()),
+        )),
+        // The workspace is no longer a flat refusal: the user's approval —
+        // here an explicit allow-all — is what lets the read proceed.
         Arc::new(AllowAll),
     );
     let session = runtime
@@ -445,7 +494,7 @@ async fn a_path_outside_the_project_fails_even_when_approved() {
         .expect("a session");
 
     session
-        .run(UserInput::text("read the password file"))
+        .run(UserInput::text("read the notes"))
         .await
         .expect("the turn runs");
 
@@ -453,12 +502,8 @@ async fn a_path_outside_the_project_fails_even_when_approved() {
     assert!(
         results
             .iter()
-            .any(|text| text.contains("outside the project")),
-        "the escape must be refused: {results:?}"
-    );
-    assert!(
-        !results.iter().any(|text| text.contains("root:")),
-        "no content from outside the project may be returned"
+            .any(|text| text.contains("carried across the boundary")),
+        "an approved outside read must return the content: {results:?}"
     );
 }
 
