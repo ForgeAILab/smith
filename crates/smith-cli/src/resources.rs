@@ -75,16 +75,19 @@ pub(super) fn runtime_resources(
         .providers
         .iter()
         .map(|provider| {
-            let authentication =
-                if provider.kind.as_deref() == Some(smith_config::model::KIND_CHATGPT_RESPONSES) {
-                    "Smith OAuth · experimental direct Responses"
-                } else if provider.kind.as_deref()
-                    == Some(smith_config::model::KIND_GEMINI_INTERACTIONS)
-                {
-                    "AI Studio API key · native Gemini Interactions"
-                } else {
-                    "API key"
-                };
+            let authentication = if provider.kind.as_deref()
+                == Some(smith_config::model::KIND_CHATGPT_RESPONSES)
+            {
+                "Smith OAuth · experimental direct Responses"
+            } else if provider.kind.as_deref()
+                == Some(smith_config::model::KIND_GEMINI_INTERACTIONS)
+            {
+                "AI Studio API key · native Gemini Interactions"
+            } else if provider.kind.as_deref() == Some(smith_config::model::KIND_OPENAI_RESPONSES) {
+                "browser login or API key · stateless Responses"
+            } else {
+                "API key"
+            };
             let entry = ResourceEntry::new(
                 provider.name.clone(),
                 provider.name.clone(),
@@ -133,6 +136,13 @@ pub(super) fn runtime_resources(
             "chatgpt",
             "ChatGPT (experimental)",
             "Smith OAuth · direct ChatGPT Responses · unsupported public API boundary",
+        ));
+    }
+    if !connections.iter().any(|entry| entry.id == "xai") {
+        connections.push(ResourceEntry::new(
+            "xai",
+            "xAI Grok",
+            "browser login or API key · fixed xAI Responses endpoint · catalog-backed model",
         ));
     }
     if !connections.iter().any(|entry| entry.id == "google") {

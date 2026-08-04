@@ -20,13 +20,13 @@ use smith_config::credential::{
 use smith_config::inventory::SelectionInventory;
 use smith_config::model::{
     AgentPosture, ConfigFile, ConfigSecret, ContextSection, KIND_GEMINI_INTERACTIONS,
-    KIND_OPENAI_COMPATIBLE, ModelSection, PersistenceSection, ProfileSection, ProfileUse,
-    ProviderResponseSection, ProviderSection, ReasoningOnlyBehavior,
+    KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES, ModelSection, PersistenceSection,
+    ProfileSection, ProfileUse, ProviderResponseSection, ProviderSection, ReasoningOnlyBehavior,
 };
 use smith_config::resolve::{ConfigReadiness, ResolveRequest, inspect};
 use smith_config::setup::{
     GLM_5_2, GLM_ENDPOINT, GLM_PROFILE, GLM_PROVIDER, GOOGLE_PROFILE, GOOGLE_PROVIDER,
-    provider_descriptors,
+    XAI_ENDPOINT, XAI_PROFILE, XAI_PROVIDER, provider_descriptors,
 };
 use smith_config::user_config::{prepare_checkpoint_key_source_removal, prepare_user_config_edit};
 use smith_host::ProjectWorkspace;
@@ -902,6 +902,44 @@ fn setup_plan(submission: SetupSubmission) -> Result<SetupPlan> {
                 secret: enrollment_secret,
             })
         }
+        SetupSubmission::QuickXai { credential, model } => {
+            if model.trim().is_empty() {
+                anyhow::bail!("xAI setup requires a model selected from the frozen catalog");
+            }
+            let PlannedCredential {
+                reference,
+                api_key,
+                enrollment_secret,
+            } = credential_plan(XAI_PROVIDER, credential)?;
+            let mut patch = ConfigFile {
+                providers: BTreeMap::from([(
+                    XAI_PROVIDER.into(),
+                    ProviderSection {
+                        kind: Some(KIND_OPENAI_RESPONSES.into()),
+                        // The endpoint is what binds this provider to the
+                        // catalog entry that supplies its limits, so it is
+                        // written rather than left to a default.
+                        base_url: Some(XAI_ENDPOINT.into()),
+                        credential: reference.as_ref().map(ToString::to_string),
+                        api_key,
+                        ..ProviderSection::default()
+                    },
+                )]),
+                ..ConfigFile::default()
+            };
+            select_default(&mut patch, XAI_PROFILE, XAI_PROVIDER, &model, 8_192);
+            if let Some(profile) = patch.profiles.get_mut(XAI_PROFILE) {
+                // The frozen Models.dev snapshot owns the limits; the user
+                // config stores no duplicate model metadata to drift from it.
+                profile.max_output_tokens = None;
+                profile.context = None;
+            }
+            Ok(SetupPlan {
+                patch,
+                credential_reference: reference,
+                secret: enrollment_secret,
+            })
+        }
         SetupSubmission::QuickGoogle { credential, model } => {
             if model.trim().is_empty() {
                 anyhow::bail!("Google setup requires a model selected from the frozen catalog");
@@ -1300,6 +1338,50 @@ mod tests {
         assert!(!protected_checkpoint_exists(&sessions).expect("scan"));
         std::fs::write(sessions.join("project/s.checkpoint.bin"), b"x").expect("checkpoint");
         assert!(protected_checkpoint_exists(&sessions).expect("scan"));
+    }
+
+    #[test]
+    fn xai_plan_writes_the_endpoint_the_catalog_binds_to() {
+        let secret = "sk-xai-do-not-print";
+        let plan = setup_plan(SetupSubmission::QuickXai {
+            credential: SetupCredential::StoreInKeychain(agent_runtime_core::store::Secret::new(
+                secret,
+            )),
+            model: "grok-4.5".into(),
+        })
+        .expect("a plan");
+
+        let serialized = toml::to_string(&plan.patch).expect("TOML");
+        assert!(!serialized.contains(secret), "{serialized}");
+        assert!(serialized.contains("keychain:smith/xai"));
+        assert_eq!(
+            plan.patch.providers[XAI_PROVIDER].kind.as_deref(),
+            Some(KIND_OPENAI_RESPONSES)
+        );
+        // The endpoint is what binds this provider to the catalog entry that
+        // supplies its limits, so a plan omitting it would need a hand-written
+        // `[models]` table to run at all.
+        assert_eq!(
+            plan.patch.providers[XAI_PROVIDER].base_url.as_deref(),
+            Some(XAI_ENDPOINT)
+        );
+        assert!(plan.patch.models.is_empty());
+        assert_eq!(plan.patch.profiles[XAI_PROFILE].max_output_tokens, None);
+        assert_eq!(
+            plan.patch.profiles[XAI_PROFILE].model.as_deref(),
+            Some("grok-4.5")
+        );
+    }
+
+    #[test]
+    fn an_empty_xai_model_is_refused_rather_than_written() {
+        assert!(
+            setup_plan(SetupSubmission::QuickXai {
+                credential: SetupCredential::Environment("XAI_API_KEY".into()),
+                model: "  ".into(),
+            })
+            .is_err()
+        );
     }
 
     #[test]

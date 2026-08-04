@@ -28,6 +28,8 @@ pub enum SetupMode {
     AddProvider,
     /// Built-in OpenRouter connection with fixed provider and endpoint.
     OpenRouter,
+    /// Built-in xAI connection with a fixed Responses endpoint.
+    Xai,
     /// Built-in Google Gemini connection with a fixed native endpoint.
     Google,
     /// Direct `smith setup add-model`.
@@ -93,6 +95,13 @@ pub enum SetupSubmission {
     QuickGlm {
         /// Reviewed authentication choice.
         credential: SetupCredential,
+    },
+    /// xAI connection and its reviewed catalog model.
+    QuickXai {
+        /// Reviewed authentication choice.
+        credential: SetupCredential,
+        /// Exact model selected from the frozen xAI catalog.
+        model: String,
     },
     /// Native Google Gemini connection and its reviewed catalog model.
     QuickGoogle {
@@ -165,6 +174,7 @@ pub enum SetupEffect {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SetupAction {
     QuickGlm,
+    QuickXai,
     QuickGoogle,
     AddProvider,
     AddModel,
@@ -352,6 +362,12 @@ impl SetupApp {
                 app.endpoint = "https://openrouter.ai/api/v1".into();
                 app.enter(Step::CredentialMethod, false);
             }
+            SetupMode::Xai => {
+                app.action = Some(SetupAction::QuickXai);
+                app.provider = "xai".into();
+                app.endpoint = "https://api.x.ai/v1".into();
+                app.enter(Step::CredentialMethod, false);
+            }
             SetupMode::Google => {
                 app.action = Some(SetupAction::QuickGoogle);
                 app.provider = "google".into();
@@ -447,6 +463,21 @@ impl SetupApp {
                 "response: reasoning-only success becomes visible text; thinking stays enabled"
                     .into(),
                 "default profile: glm".into(),
+            ],
+            Some(SetupAction::QuickXai) => vec![
+                "action: Connect xAI Grok".into(),
+                "provider: xai (openai-responses)".into(),
+                "endpoint: fixed xAI Responses endpoint".into(),
+                format!("credential: {}", self.credential_reference("xai")),
+                format!("model: xai/{}", self.model),
+                format!(
+                    "limits: context {} · max input {} · max output {} (Models.dev frozen catalog)",
+                    self.context_tokens.unwrap_or_default(),
+                    self.max_input_tokens.unwrap_or_default(),
+                    self.max_output_tokens.unwrap_or_default()
+                ),
+                "request/output reserve: derived from the selected catalog model".into(),
+                "default profile: grok".into(),
             ],
             Some(SetupAction::QuickGoogle) => vec![
                 "action: Connect Google Gemini".into(),
@@ -749,6 +780,12 @@ impl SetupApp {
                     self.endpoint = "https://openrouter.ai/api/v1".into();
                     self.enter(Step::CredentialMethod, true);
                 }
+                "xai" => {
+                    self.action = Some(SetupAction::QuickXai);
+                    self.provider = "xai".into();
+                    self.endpoint = "https://api.x.ai/v1".into();
+                    self.enter(Step::CredentialMethod, true);
+                }
                 "google" => {
                     self.action = Some(SetupAction::QuickGoogle);
                     self.provider = "google".into();
@@ -958,6 +995,10 @@ impl SetupApp {
         match self.action? {
             SetupAction::QuickGlm => Some(SetupSubmission::QuickGlm {
                 credential: credential()?,
+            }),
+            SetupAction::QuickXai => Some(SetupSubmission::QuickXai {
+                credential: credential()?,
+                model: self.model.clone(),
             }),
             SetupAction::QuickGoogle => Some(SetupSubmission::QuickGoogle {
                 credential: credential()?,
