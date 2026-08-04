@@ -872,9 +872,17 @@ impl<T: HttpTransport> ChatGptProvider<T> {
         &self.transport
     }
 
+    /// Serializes a Responses request, keyed to the session for prefix caching.
+    ///
+    /// This endpoint partitions its prefix cache by `prompt_cache_key`. Sending
+    /// none scatters a single conversation across partitions, so the stable
+    /// instruction/tool prefix the planner works to preserve is re-read at full
+    /// price on every turn. Keying by request id would be no better — it
+    /// changes each turn; the session is the thing that persists.
     fn build_payload(
         &self,
         request: &ProviderRequest,
+        session: &agent_runtime_core::ids::SessionId,
     ) -> Result<(Value, BTreeMap<String, String>), ProviderError> {
         if request.sampling.temperature.is_some()
             || request.sampling.top_p.is_some()
@@ -934,6 +942,7 @@ impl<T: HttpTransport> ChatGptProvider<T> {
             "store": false,
             "stream": true,
             "include": ["reasoning.encrypted_content"],
+            "prompt_cache_key": session.as_str(),
         });
         let object = payload
             .as_object_mut()
@@ -1422,7 +1431,7 @@ impl<T: HttpTransport> Provider for ChatGptProvider<T> {
         request: ProviderRequest,
         ctx: ProviderCallContext,
     ) -> Result<ProviderStream, ProviderError> {
-        let (payload, tool_names) = self.build_payload(&request)?;
+        let (payload, tool_names) = self.build_payload(&request, &ctx.session)?;
         let body = serde_json::to_vec(&payload).map_err(|_| {
             ProviderError::new(
                 ProviderErrorKind::BadRequest,
@@ -1919,6 +1928,7 @@ mod tests {
             .stream(
                 ProviderRequest::new(ModelId::new("gpt-5.6-terra"), vec![Message::user("hello")]),
                 ProviderCallContext {
+                    session: agent_runtime_core::ids::SessionId::new("session-test"),
                     request_id: RequestId::new("request-1"),
                     attempt_id: AttemptId::new("attempt-1"),
                     cancel: Cancellation::new(),
@@ -1974,6 +1984,7 @@ mod tests {
             input_schema: json!({"type": "object"}),
         });
         let ctx = ProviderCallContext {
+            session: agent_runtime_core::ids::SessionId::new("session-test"),
             request_id: RequestId::new("request-1"),
             attempt_id: AttemptId::new("attempt-1"),
             cancel: Cancellation::new(),
@@ -2053,6 +2064,7 @@ mod tests {
             source,
         );
         let ctx = ProviderCallContext {
+            session: agent_runtime_core::ids::SessionId::new("session-test"),
             request_id: RequestId::new("request-1"),
             attempt_id: AttemptId::new("attempt-1"),
             cancel: Cancellation::new(),
@@ -2103,6 +2115,7 @@ mod tests {
         );
         let clock = SystemClock;
         let ctx = ProviderCallContext {
+            session: agent_runtime_core::ids::SessionId::new("session-test"),
             request_id: RequestId::new("smith-live-chatgpt"),
             attempt_id: AttemptId::new("smith-live-chatgpt-1"),
             cancel: Cancellation::new(),

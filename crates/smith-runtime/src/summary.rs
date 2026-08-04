@@ -20,7 +20,7 @@ use agent_runtime_core::cancel::{CancelReason, Cancellation};
 use agent_runtime_core::clock::{Clock, Deadline};
 use agent_runtime_core::content::Message;
 use agent_runtime_core::error::{ErrorKind, RuntimeError};
-use agent_runtime_core::ids::{AttemptId, RequestId};
+use agent_runtime_core::ids::{AttemptId, RequestId, SessionId};
 use agent_runtime_core::provider::{
     FinishReason, ModelId, Provider, ProviderCallContext, ProviderRequest, ProviderStreamEvent,
     ToolChoice,
@@ -234,6 +234,10 @@ impl SummaryModel for SmithProviderSummaryModel {
 
         let cancel = Cancellation::new();
         let context = ProviderCallContext {
+            // Summary work is separately attributed and must not share the
+            // main conversation's cache partition: its prefix is a different
+            // prompt entirely.
+            session: SessionId::new(format!("summary-{}", request.idempotency_key)),
             request_id: RequestId::new(format!("summary-{}", request.idempotency_key)),
             attempt_id: AttemptId::new(format!("summary-{}", request.idempotency_key)),
             cancel: cancel.clone(),

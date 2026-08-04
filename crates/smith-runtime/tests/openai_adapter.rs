@@ -76,6 +76,7 @@ fn request() -> ProviderRequest {
 
 fn call_context(cancel: Cancellation) -> ProviderCallContext {
     ProviderCallContext {
+        session: agent_runtime_core::ids::SessionId::new("session-test"),
         request_id: RequestId::new("req-1"),
         attempt_id: AttemptId::new("att-1"),
         cancel,

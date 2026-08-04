@@ -13,7 +13,7 @@ use agent_runtime_core::catalog::{
     CatalogSource, Modality, ModelCatalogSource, ModelLimits, ModelRecord, StaticSource,
 };
 use agent_runtime_core::clock::{Clock, SystemClock, Timestamp};
-use agent_runtime_core::provider::{AuthKind, Capabilities, ReasoningSupport};
+use agent_runtime_core::provider::{AuthKind, Capabilities, PromptCacheControl, ReasoningSupport};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use reqwest::header::{ETAG, IF_NONE_MATCH};
@@ -341,6 +341,9 @@ pub fn runtime_catalog_source(
                 structured_output: model.structured_output,
                 usage: true,
                 cache: false,
+                // The catalog describes the model; the serving adapter
+                // declares how it drives a prompt cache.
+                prompt_cache: PromptCacheControl::None,
                 auth: AuthKind::ApiKey,
                 continuation: false,
                 max_output_tokens: Some(limits.max_output_tokens),
