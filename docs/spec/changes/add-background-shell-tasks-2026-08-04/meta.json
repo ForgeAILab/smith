@@ -2,8 +2,8 @@
   "change_id": "add-background-shell-tasks",
   "change_ref": "add-background-shell-tasks-2026-08-04",
   "created_at": "2026-08-04T16:55:00Z",
-  "updated_at": "2026-08-04T18:59:45Z",
-  "completed_at": null,
+  "updated_at": "2026-08-04T19:46:09Z",
+  "completed_at": "2026-08-04T19:46:09Z",
   "status": "implementing",
   "depends_on": [],
   "implementation_started_at": "2026-08-04T18:59:45Z"

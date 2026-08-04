@@ -757,6 +757,14 @@ concise attributed transcript notices: `• source · summary`. They never splic
 into a streaming assistant block and never steal composer focus. Terminal
 events (a monitor stopped, a child finished) are never coalesced away.
 
+A background shell task is the quiet sibling of a monitor: it runs to
+completion silently, spools its output to disk, and reports exactly once — a
+terminal notice with a bounded tail through the same safe-boundary inbox.
+While one runs it stays visible rather than ambient: the identity footer and
+delegated-work panel list it by task ID, and the exit confirmation names it as
+active work. Ctrl+B moves a running foreground shell command to the background
+without killing it; Esc keeps its interrupt-and-kill meaning unchanged.
+
 The runtime's bounded safe-boundary inbox remains an internal delivery
 mechanism for child results sent to the parent model. It is not a visible or
 focusable TUI region. `/agent` provides child list, status, and result detail

@@ -26,19 +26,32 @@ pub const MAX_SPOOL_BYTES: usize = 8 * 1024 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
+    /// The process is still running under the session's ownership.
     Running,
-    Exited { code: Option<i32> },
+    /// The process ended on its own, with its exit code when one was
+    /// observable.
+    Exited {
+        /// The process exit code; absent when it was ended by a signal.
+        code: Option<i32>,
+    },
+    /// `task_stop` (or its host action) terminated the owned group.
     Stopped,
+    /// The explicit `timeout_ms` deadline elapsed and the group was killed.
     DeadlineKill,
+    /// Session shutdown terminated the group within the grace period.
     Shutdown,
+    /// A previous Smith process exited while the task was running; the work
+    /// did not survive and was never respawned.
     InterruptedByProcessExit,
 }
 
 impl TaskStatus {
+    /// Whether the task can no longer produce output or change state.
     pub fn is_terminal(&self) -> bool {
         !matches!(self, TaskStatus::Running)
     }
 
+    /// The snake_case status word used in notifications and machine output.
     pub fn as_str(&self) -> &'static str {
         match self {
             TaskStatus::Running => "running",
@@ -50,6 +63,7 @@ impl TaskStatus {
         }
     }
 
+    /// The exit code, present only for a normally exited task.
     pub fn exit_code(&self) -> Option<i32> {
         match self {
             TaskStatus::Exited { code } => *code,
@@ -61,23 +75,36 @@ impl TaskStatus {
 /// Metadata describing a background task.
 #[derive(Debug, Clone)]
 pub struct BackgroundTaskInfo {
+    /// Session-scoped identity, shape `task:<n>`.
     pub task_id: String,
+    /// The command line the task runs.
     pub command: String,
+    /// The working directory it was spawned in.
     pub cwd: PathBuf,
+    /// Where its bounded output spool lives.
     pub spool_path: PathBuf,
+    /// Running, or the terminal state it reached.
     pub status: TaskStatus,
+    /// The explicit deadline, when the caller bounded the task.
     pub timeout_ms: Option<u64>,
 }
 
 /// Outcome of reading a slice of spooled task output.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskOutputResult {
+    /// The task the slice belongs to.
     pub task_id: String,
+    /// Status observed when the slice was read.
     pub status: TaskStatus,
+    /// The exit code, once the task exited normally.
     pub exit_code: Option<i32>,
+    /// Where this slice actually started, clamped to the spool length.
     pub offset: usize,
+    /// Pass this back as `offset` to continue reading incrementally.
     pub next_offset: usize,
+    /// The decoded slice contents.
     pub output: String,
+    /// Whether the spool hit its byte cap and dropped later output.
     pub truncated: bool,
 }
 
@@ -89,7 +116,6 @@ struct TaskEntry {
     spool_path: PathBuf,
     status: TaskStatus,
     timeout_ms: Option<u64>,
-    group_pid: Option<u32>,
     stop_tx: Option<tokio::sync::oneshot::Sender<TaskStatus>>,
 }
 
@@ -130,6 +156,8 @@ pub struct BackgroundTaskRegistry {
 static REGISTRY: OnceLock<BackgroundTaskRegistry> = OnceLock::new();
 
 impl BackgroundTaskRegistry {
+    /// The process-wide registry, keyed by session so concurrent sessions
+    /// never see each other's tasks.
     pub fn global() -> &'static BackgroundTaskRegistry {
         REGISTRY.get_or_init(BackgroundTaskRegistry::default)
     }
@@ -144,6 +172,9 @@ impl BackgroundTaskRegistry {
             .clone()
     }
 
+    /// Binds a session's inbox handle, journal, and spool directory so tasks
+    /// started later can notify and persist; hosts call this at session start,
+    /// before any task can exist.
     pub fn register_session_context(
         &self,
         session_id: &SessionId,
@@ -210,7 +241,6 @@ impl BackgroundTaskRegistry {
                     spool_path: spool_path.clone(),
                     status: TaskStatus::Running,
                     timeout_ms,
-                    group_pid,
                     stop_tx: Some(stop_tx),
                 },
             );
@@ -306,7 +336,6 @@ impl BackgroundTaskRegistry {
                     spool_path: spool_path.clone(),
                     status: TaskStatus::Running,
                     timeout_ms,
-                    group_pid,
                     stop_tx: Some(stop_tx),
                 },
             );
@@ -614,7 +643,7 @@ fn spawn_shell_cmd(command: &str, cwd: &Path) -> Result<Child, RuntimeError> {
 }
 
 #[cfg(unix)]
-pub async fn stop_process_group(child: &mut Child, group: Option<u32>) {
+async fn stop_process_group(child: &mut Child, group: Option<u32>) {
     use nix::sys::signal::{Signal, killpg};
     use nix::unistd::Pid;
 
@@ -633,7 +662,7 @@ pub async fn stop_process_group(child: &mut Child, group: Option<u32>) {
 }
 
 #[cfg(not(unix))]
-pub async fn stop_process_group(child: &mut Child, _group: Option<u32>) {
+async fn stop_process_group(child: &mut Child, _group: Option<u32>) {
     let _ = child.kill().await;
 }
 
