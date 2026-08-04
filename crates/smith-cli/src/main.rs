@@ -18,6 +18,7 @@ mod setup;
 mod submission;
 mod terminal;
 mod tui_driver;
+mod xai;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{IsTerminal, Read};

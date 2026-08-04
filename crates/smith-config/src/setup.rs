@@ -34,6 +34,13 @@ pub const CHATGPT_ENDPOINT: &str = "https://chatgpt.com/backend-api/codex";
 /// Fixed owner-only plaintext auth-file reference for Smith's renewable ChatGPT bundle.
 pub const CHATGPT_CREDENTIAL: &str = "authfile:chatgpt";
 
+/// Provider name for an xAI subscription reached by browser login.
+pub const XAI_PROVIDER: &str = "xai";
+/// xAI's Responses API base URL.
+pub const XAI_ENDPOINT: &str = "https://api.x.ai/v1";
+/// Owner-only auth-file reference for Smith's renewable xAI bundle.
+pub const XAI_CREDENTIAL: &str = "authfile:xai";
+
 /// The credential enrollment paths a setup descriptor permits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CredentialSetupMethod {

@@ -34,6 +34,7 @@ pub mod session;
 pub mod skills;
 pub mod summary;
 pub mod transport;
+pub mod xai;
 
 /// Structured direct-child spawn outcome exposed through Smith's composition
 /// boundary for host surfaces.

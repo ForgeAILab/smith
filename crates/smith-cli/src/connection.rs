@@ -8,10 +8,13 @@ use anyhow::{Context, Result};
 use smith_config::credential::{CredentialEnroller, CredentialRef};
 use smith_config::inventory::local_inventory;
 use smith_config::model::{
-    ConfigFile, KIND_CHATGPT_RESPONSES, ModelReasoningSection, ModelSection, ProviderSection,
-    ReasoningDialect,
+    ConfigFile, KIND_CHATGPT_RESPONSES, KIND_OPENAI_RESPONSES, ModelReasoningSection, ModelSection,
+    ProviderSection, ReasoningDialect,
 };
-use smith_config::setup::{CHATGPT_CREDENTIAL, CHATGPT_ENDPOINT, CHATGPT_PROVIDER, CHATGPT_TERRA};
+use smith_config::setup::{
+    CHATGPT_CREDENTIAL, CHATGPT_ENDPOINT, CHATGPT_PROVIDER, CHATGPT_TERRA, XAI_CREDENTIAL,
+    XAI_ENDPOINT, XAI_PROVIDER,
+};
 use smith_config::user_config::{prepare_provider_credential_removal, prepare_user_config_edit};
 use smith_host::ProjectWorkspace;
 use smith_runtime::factory::{self, HostSurface, RuntimeRequest};
@@ -34,6 +37,9 @@ pub(super) async fn connect(
 ) -> Result<bool> {
     if provider == CHATGPT_PROVIDER {
         return connect_chatgpt(selection, no_color, no_motion).await;
+    }
+    if provider == XAI_PROVIDER {
+        return connect_xai(selection, no_motion).await;
     }
 
     let prepared = prepare(&selection)?;
@@ -120,6 +126,61 @@ pub(super) async fn disconnect(selection: &Selection, provider: &str) -> Result<
     } else {
         Ok(DisconnectOutcome::Completed)
     }
+}
+
+/// Signs in to xAI and writes the provider block that uses the session.
+///
+/// The credential and the configuration are committed together: a stored
+/// session Smith is not configured to use, or a provider block pointing at a
+/// credential that was never stored, are both worse than failing.
+async fn connect_xai(selection: Selection, no_motion: bool) -> Result<bool> {
+    let before = prepare(&selection)?;
+    let bundle = crate::xai::login(no_motion).await?;
+    let reference =
+        CredentialRef::parse(XAI_CREDENTIAL).expect("the fixed xAI credential reference is valid");
+    let secret = bundle
+        .to_secret()
+        .context("encoding the protected xAI credential bundle")?;
+    let patch = ConfigFile {
+        providers: BTreeMap::from([(
+            XAI_PROVIDER.to_owned(),
+            ProviderSection {
+                kind: Some(KIND_OPENAI_RESPONSES.to_owned()),
+                base_url: Some(XAI_ENDPOINT.to_owned()),
+                credential: Some(XAI_CREDENTIAL.to_owned()),
+                ..ProviderSection::default()
+            },
+        )]),
+        ..ConfigFile::default()
+    };
+    let prepared_config = prepare_user_config_edit(&before.resolution.layout.user_dir, &patch)
+        .context("preparing the xAI connection configuration")?;
+    println!("{}", prepared_config.preview());
+
+    let enroller = CredentialEnroller::new();
+    let enrollment_enroller = enroller.clone();
+    let enrollment_reference = reference.clone();
+    let receipt = tokio::task::spawn_blocking(move || {
+        enrollment_enroller.enroll(&enrollment_reference, &secret)
+    })
+    .await
+    .context("the protected xAI credential task stopped")?
+    .context("storing the protected xAI credential bundle")?;
+
+    if let Err(error) = prepared_config.commit(true) {
+        let restore = tokio::task::spawn_blocking(move || enroller.restore(receipt)).await;
+        if !matches!(restore, Ok(Ok(()))) {
+            anyhow::bail!(
+                "publishing xAI configuration failed and protected credential rollback also failed"
+            );
+        }
+        return Err(anyhow::Error::new(error))
+            .context("publishing the xAI connection configuration");
+    }
+    println!(
+        "Connected xAI. Add a model with `[models.\"xai/<model>\"]` limits, or run `smith setup add-model`."
+    );
+    Ok(true)
 }
 
 async fn connect_chatgpt(selection: Selection, no_color: bool, no_motion: bool) -> Result<bool> {
