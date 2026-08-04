@@ -1150,7 +1150,7 @@ fn response_tool_choice(
     })
 }
 
-async fn wait_for_deadline(deadline: Deadline, clock: &dyn Clock) {
+pub(crate) async fn wait_for_deadline(deadline: Deadline, clock: &dyn Clock) {
     match deadline.remaining_millis(clock) {
         Some(0) => {}
         Some(milliseconds) => tokio::time::sleep(Duration::from_millis(milliseconds)).await,

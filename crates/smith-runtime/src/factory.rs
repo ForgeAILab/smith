@@ -98,7 +98,8 @@ use smith_config::credential::{
 };
 use smith_config::model::{
     AgentPosture, ApprovalMode, KIND_ANTHROPIC_MESSAGES, KIND_CHATGPT_RESPONSES, KIND_FAKE,
-    KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES, ProfileUse,
+    KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES, KIND_XAI_RESPONSES,
+    ProfileUse,
 };
 use smith_config::resolve::{ResolvedConfig, ResolvedProvider};
 use smith_config::setup::trusted_model;
@@ -132,6 +133,7 @@ use crate::summary::{
     SemanticSummaryRuntimePolicy, SmithProviderSummaryModel, SmithSemanticSummaryConfig,
 };
 use crate::transport::{ReqwestTransport, TransportConfig};
+use crate::xai::{XaiCredentialSource, XaiTokenBundle};
 
 /// The reply the deterministic development provider gives.
 ///
@@ -177,6 +179,7 @@ pub const AVAILABLE_ADAPTER_KINDS: &[&str] = &[
     KIND_OPENAI_RESPONSES,
     KIND_ANTHROPIC_MESSAGES,
     KIND_CHATGPT_RESPONSES,
+    KIND_XAI_RESPONSES,
     KIND_GEMINI_INTERACTIONS,
     KIND_FAKE,
 ];
@@ -576,7 +579,8 @@ pub enum FactoryError {
         "provider `{provider}` selects the `{kind}` adapter, which this build of Agent Runtime \
          does not ship; the available kinds are `{KIND_OPENAI_COMPATIBLE}`, \
          `{KIND_OPENAI_RESPONSES}`, `{KIND_ANTHROPIC_MESSAGES}`, \
-         `{KIND_CHATGPT_RESPONSES}`, `{KIND_GEMINI_INTERACTIONS}`, and `{KIND_FAKE}`"
+         `{KIND_CHATGPT_RESPONSES}`, `{KIND_XAI_RESPONSES}`, `{KIND_GEMINI_INTERACTIONS}`, and \
+         `{KIND_FAKE}`"
     )]
     AdapterUnavailable {
         /// The provider that selected it.
@@ -619,6 +623,9 @@ pub enum FactoryError {
     /// Smith's protected ChatGPT token bundle or OAuth client is unusable.
     #[error("the experimental ChatGPT connection is unusable: {0}")]
     ChatGptAuth(#[source] crate::chatgpt::ChatGptAuthError),
+    /// The stored xAI login could not be read or renewed.
+    #[error("the configured xAI session is unusable")]
+    XaiAuth(#[source] crate::xai::XaiAuthError),
     /// No layer supplied enforceable limits for the selected model.
     #[error(
         "provider `{provider}` cannot plan against model `{model}`: {source}. Declare \
@@ -676,6 +683,8 @@ enum Adapter {
     AnthropicMessages,
     /// Smith's experimental direct ChatGPT Codex Responses adapter.
     ChatGptResponses,
+    /// The Responses adapter driven by a renewable xAI browser login.
+    XaiResponses,
     /// Agent Runtime's native stateless Gemini Interactions adapter.
     GeminiInteractions,
     /// Agent Runtime's deterministic fake.
@@ -1485,6 +1494,10 @@ async fn prepare_factory_inputs(
             &config.provider,
             Some(smith_config::setup::CHATGPT_ENDPOINT),
         )?),
+        Adapter::XaiResponses => Some(endpoint(
+            &config.provider,
+            Some(smith_config::setup::XAI_ENDPOINT),
+        )?),
         Adapter::GeminiInteractions => Some(smith_config::catalog::GEMINI_ENDPOINT.to_owned()),
         Adapter::Fake => None,
     };
@@ -1549,6 +1562,29 @@ async fn prepare_factory_inputs(
         ))?;
         ChatGptTokenBundle::from_secret(secret).map_err(FactoryError::ChatGptAuth)?;
     }
+    // Rejected here rather than at the first model call, so a login that never
+    // completed is reported while the user is still in setup.
+    if adapter == Adapter::XaiResponses {
+        let secret = secret.as_ref().ok_or(FactoryError::XaiAuth(
+            crate::xai::XaiAuthError::InvalidBundle,
+        ))?;
+        XaiTokenBundle::from_secret(secret).map_err(FactoryError::XaiAuth)?;
+    }
+    // A stored login on the generic Responses kind is the one shape that fails
+    // silently: the adapter would send the whole bundle as the bearer and the
+    // endpoint would answer "incorrect API key", pointing the user at their
+    // key when the fault is the adapter. No real API key parses as a bundle,
+    // so this cannot catch a working configuration.
+    if adapter == Adapter::OpenAiResponses
+        && let Some(secret) = secret.as_ref()
+        && XaiTokenBundle::from_secret(secret).is_ok()
+    {
+        return Err(FactoryError::Runtime(RuntimeError::config(format!(
+            "provider `{}` stores a browser login but uses the `{KIND_OPENAI_RESPONSES}` adapter, \
+             which sends its credential verbatim; change its `kind` to `{KIND_XAI_RESPONSES}`",
+            request.config.provider.name.value
+        ))));
+    }
     let context_policy = context_policy(config, &profile.profile)?;
     let compaction_policy = compaction_policy(config, &profile.profile, &context_policy);
     let mut loop_config = loop_config(request, &model);
@@ -1580,6 +1616,7 @@ fn adapter(provider: &ResolvedProvider) -> Result<Adapter, FactoryError> {
         KIND_OPENAI_RESPONSES => Ok(Adapter::OpenAiResponses),
         KIND_ANTHROPIC_MESSAGES => Ok(Adapter::AnthropicMessages),
         KIND_CHATGPT_RESPONSES => Ok(Adapter::ChatGptResponses),
+        KIND_XAI_RESPONSES => Ok(Adapter::XaiResponses),
         KIND_GEMINI_INTERACTIONS => Ok(Adapter::GeminiInteractions),
         KIND_FAKE => Ok(Adapter::Fake),
         kind => Err(FactoryError::AdapterUnavailable {
@@ -1829,6 +1866,58 @@ fn construct(
             Ok(Arc::new(ChatGptProvider::new(
                 transport, config, target, source,
             )))
+        }
+        Adapter::XaiResponses => {
+            let transport = ReqwestTransport::new(request.transport.clone())
+                .map_err(FactoryError::Transport)?;
+            let mut config = ResponsesConfig::new(
+                endpoint.unwrap_or_default(),
+                request.config.model.value.clone(),
+            );
+            config.capabilities = profile.capabilities.clone();
+            config.extra_headers = request
+                .config
+                .provider
+                .headers
+                .iter()
+                .map(|(name, value)| (name.clone(), value.value.clone()))
+                .collect();
+            let secret = secret.ok_or(FactoryError::XaiAuth(
+                crate::xai::XaiAuthError::InvalidBundle,
+            ))?;
+            // The reference is where the renewed bundle goes back, so a refresh
+            // survives the process rather than being re-earned every launch.
+            let reference = request
+                .config
+                .provider
+                .credential
+                .as_ref()
+                .ok_or(FactoryError::XaiAuth(
+                    crate::xai::XaiAuthError::InvalidBundle,
+                ))
+                .and_then(|reference| {
+                    CredentialRef::parse(&reference.value).map_err(|source| {
+                        FactoryError::CredentialReference {
+                            provider: request.config.provider.name.value.clone(),
+                            source,
+                        }
+                    })
+                })?;
+            let target = ProviderCredentialTarget::new(request.config.provider.name.value.clone())
+                .map_err(|error| FactoryError::Runtime(RuntimeError::config(error.to_string())))?;
+            let source = Arc::new(
+                XaiCredentialSource::production(
+                    target.clone(),
+                    reference,
+                    &secret,
+                    request.persistence_redactor.clone(),
+                )
+                .map_err(FactoryError::XaiAuth)?,
+            ) as Arc<dyn ProviderCredentialSource>;
+            let provider =
+                ResponsesProvider::with_credential_source(transport, config, target, source)
+                    .map_err(FactoryError::Transport)?;
+            Ok(Arc::new(provider))
         }
         Adapter::GeminiInteractions => {
             let transport = ReqwestTransport::new(request.transport.clone())

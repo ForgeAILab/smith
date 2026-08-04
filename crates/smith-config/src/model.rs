@@ -652,6 +652,16 @@ pub const KIND_CHATGPT_RESPONSES: &str = "chatgpt-responses";
 /// is the first fixture-verified deployment, at `https://api.x.ai/v1`.
 pub const KIND_OPENAI_RESPONSES: &str = "openai-responses";
 
+/// The Responses wire protocol carrying a renewable xAI browser login.
+///
+/// Same wire format as `openai-responses`, different credential: a Grok login
+/// yields an OAuth bundle that expires within hours, not a bearer that can be
+/// sent verbatim. Splitting the kind is what lets the factory attach a source
+/// that unwraps the bundle and renews it; an `openai-responses` provider
+/// pointed at a login would put the whole JSON blob in the `Authorization`
+/// header, which is exactly the request xAI rejects.
+pub const KIND_XAI_RESPONSES: &str = "xai-responses";
+
 /// The native Google Gemini Interactions adapter.
 pub const KIND_GEMINI_INTERACTIONS: &str = "gemini-interactions";
 

@@ -42,6 +42,20 @@ pub const XAI_PROFILE: &str = "grok";
 pub const XAI_ENDPOINT: &str = "https://api.x.ai/v1";
 /// Owner-only auth-file reference for Smith's renewable xAI bundle.
 pub const XAI_CREDENTIAL: &str = "authfile:xai";
+/// The model `/connect xai` declares so the connection is usable when it ends.
+///
+/// A provider with no model is configured and unusable at the same time: the
+/// pickers list models, and a model becomes a candidate only by appearing in
+/// `[models]` or by being named in a profile. No limits are written with it —
+/// the endpoint binds this provider to the Models.dev catalog entry, which is
+/// where its context window and capabilities come from.
+///
+/// Not the highest version number available. Grok 4.5 advertises an output
+/// limit equal to its whole context window, so reserving room for its output
+/// leaves no input budget and Smith refuses to select it. This one advertises
+/// a 1M context against a 30k output cap, which is a shape the reserve
+/// arithmetic can actually satisfy.
+pub const XAI_DEFAULT_MODEL: &str = "grok-4.3";
 
 /// Provider name used by the native Gemini connection.
 pub const GOOGLE_PROVIDER: &str = "google";

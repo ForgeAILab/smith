@@ -8,12 +8,12 @@ use anyhow::{Context, Result};
 use smith_config::credential::{CredentialEnroller, CredentialRef};
 use smith_config::inventory::local_inventory;
 use smith_config::model::{
-    ConfigFile, KIND_CHATGPT_RESPONSES, KIND_OPENAI_RESPONSES, ModelReasoningSection, ModelSection,
+    ConfigFile, KIND_CHATGPT_RESPONSES, KIND_XAI_RESPONSES, ModelReasoningSection, ModelSection,
     ProviderSection, ReasoningDialect,
 };
 use smith_config::setup::{
     CHATGPT_CREDENTIAL, CHATGPT_ENDPOINT, CHATGPT_PROVIDER, CHATGPT_TERRA, GOOGLE_PROVIDER,
-    XAI_CREDENTIAL, XAI_ENDPOINT, XAI_PROVIDER,
+    XAI_CREDENTIAL, XAI_DEFAULT_MODEL, XAI_ENDPOINT, XAI_PROVIDER,
 };
 use smith_config::user_config::{prepare_provider_credential_removal, prepare_user_config_edit};
 use smith_host::ProjectWorkspace;
@@ -136,17 +136,30 @@ pub(super) async fn disconnect(selection: &Selection, provider: &str) -> Result<
 /// credential that was never stored, are both worse than failing.
 async fn connect_xai(selection: Selection, no_motion: bool) -> Result<bool> {
     let before = prepare(&selection)?;
+    let inventory = local_inventory(&before.resolution, AVAILABLE_ADAPTER_KINDS)
+        .map_err(|error| anyhow::anyhow!(error))
+        .context("building the provider connection inventory")?;
+    // Whether any xAI model is already selectable, not whether one particular
+    // model is: a user who already chose their own Grok should keep it rather
+    // than have a second one appear beside it.
+    let model_configured = inventory
+        .models
+        .iter()
+        .any(|model| model.provider == XAI_PROVIDER);
     let bundle = crate::xai::login(no_motion).await?;
     let reference =
         CredentialRef::parse(XAI_CREDENTIAL).expect("the fixed xAI credential reference is valid");
     let secret = bundle
         .to_secret()
         .context("encoding the protected xAI credential bundle")?;
-    let patch = ConfigFile {
+    let mut patch = ConfigFile {
         providers: BTreeMap::from([(
             XAI_PROVIDER.to_owned(),
             ProviderSection {
-                kind: Some(KIND_OPENAI_RESPONSES.to_owned()),
+                // The login-backed kind, not the generic Responses one: what
+                // is stored is a renewable bundle, and the generic adapter
+                // would send it verbatim as the bearer.
+                kind: Some(KIND_XAI_RESPONSES.to_owned()),
                 base_url: Some(XAI_ENDPOINT.to_owned()),
                 credential: Some(XAI_CREDENTIAL.to_owned()),
                 ..ProviderSection::default()
@@ -154,6 +167,15 @@ async fn connect_xai(selection: Selection, no_motion: bool) -> Result<bool> {
         )]),
         ..ConfigFile::default()
     };
+    if !model_configured {
+        // Declared with no limits of its own. The endpoint pairs this provider
+        // with its Models.dev entry, so writing limits here would freeze a copy
+        // of numbers the catalog already carries and keeps current.
+        patch.models.insert(
+            format!("{XAI_PROVIDER}/{XAI_DEFAULT_MODEL}"),
+            ModelSection::default(),
+        );
+    }
     let prepared_config = prepare_user_config_edit(&before.resolution.layout.user_dir, &patch)
         .context("preparing the xAI connection configuration")?;
     println!("{}", prepared_config.preview());
@@ -179,7 +201,14 @@ async fn connect_xai(selection: Selection, no_motion: bool) -> Result<bool> {
             .context("publishing the xAI connection configuration");
     }
     println!(
-        "Connected xAI. Add a model with `[models.\"xai/<model>\"]` limits, or run `smith setup add-model`."
+        "Connected xAI. Select it with `smith --provider {XAI_PROVIDER} --model {model}`, or put \
+         `provider = \"{XAI_PROVIDER}\"` in a profile to make it a default. Add other Grok models \
+         with `smith setup add-model`.",
+        model = if model_configured {
+            "<model>"
+        } else {
+            XAI_DEFAULT_MODEL
+        }
     );
     Ok(true)
 }

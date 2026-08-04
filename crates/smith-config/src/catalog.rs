@@ -9,7 +9,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::model::{KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES};
+use crate::model::{
+    KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES, KIND_XAI_RESPONSES,
+};
 
 /// The only public origin Smith accepts provider model metadata from.
 pub const MODELS_DEV_SOURCE_URL: &str = "https://models.dev/api.json";
@@ -199,7 +201,11 @@ pub fn catalog_provider_for(kind: &str, base_url: Option<&str>) -> Option<&'stat
         (KIND_OPENAI_COMPATIBLE, ZAI_CODING_PLAN_ENDPOINT) => {
             Some(ZAI_CODING_PLAN_CATALOG_PROVIDER)
         }
-        (KIND_OPENAI_RESPONSES, XAI_CATALOG_ENDPOINT) => Some(XAI_CATALOG_PROVIDER),
+        // Same deployment either way; the kinds differ only in how the
+        // request is authenticated, which the catalog has no opinion about.
+        (KIND_OPENAI_RESPONSES | KIND_XAI_RESPONSES, XAI_CATALOG_ENDPOINT) => {
+            Some(XAI_CATALOG_PROVIDER)
+        }
         (KIND_GEMINI_INTERACTIONS, GEMINI_ENDPOINT) => Some(GOOGLE_CATALOG_PROVIDER),
         _ => None,
     }

@@ -212,14 +212,36 @@ structure rejects unknown fields.
 | `openai-responses` | OpenAI Responses, stateless | required |
 | `anthropic-messages` | Anthropic Messages | optional, defaults to the public endpoint |
 | `chatgpt-responses` | ChatGPT Codex Responses | optional, defaults to the ChatGPT endpoint |
+| `xai-responses` | Responses, authenticated by a stored xAI login | required |
 | `gemini-interactions` | Google Gemini Interactions, stateless | fixed native endpoint; not configurable |
 | `fake` | deterministic local development | not used |
 
 `openai-responses` is generic over the Responses protocol rather than tied to
 one vendor, so the endpoint decides which deployment is being talked to. xAI's
 Grok is the first fixture-verified one, and `smith setup` offers it as
-**Connect xAI Grok**. Sign in with `/connect xai` for a browser login, or give
-setup an API key from console.x.ai. Either way the written block is:
+**Connect xAI Grok**.
+
+Which kind to write depends on how you sign in, because the two differ in what
+the credential *is*. `openai-responses` sends its credential verbatim as the
+bearer, which is what an API key is. A browser login is not a bearer but a
+bundle — access token, refresh token, and an expiry a few hours out — so it
+needs `xai-responses`, which unwraps the bundle and renews it before expiry.
+Pointing `openai-responses` at a stored login puts the whole JSON bundle in the
+`Authorization` header, and xAI answers `incorrect API key provided`; Smith
+refuses that combination at startup and names the fix.
+
+`/connect xai` performs the browser login and writes:
+
+```toml
+[providers.xai]
+kind = "xai-responses"
+base_url = "https://api.x.ai/v1"
+credential = "authfile:xai"
+```
+
+An API key from console.x.ai — what `smith setup` collects — uses the generic
+kind instead. So does reading the session the separate `grok` CLI already
+manages, because the JSON pointer extracts the token rather than the bundle:
 
 ```toml
 [profiles.grok]
@@ -229,8 +251,8 @@ model = "grok-4.5"
 [providers.xai]
 kind = "openai-responses"
 base_url = "https://api.x.ai/v1"
-# An xAI API key from console.x.ai, or the browser-login session the `grok`
-# CLI already manages — see the credential list below.
+# An xAI API key from console.x.ai, or the token field of the `grok` CLI's own
+# session file — see the credential list below.
 credential = "session-json:~/.grok/auth.json#/access_token"
 
 ```

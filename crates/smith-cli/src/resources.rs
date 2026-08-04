@@ -83,8 +83,10 @@ pub(super) fn runtime_resources(
                 == Some(smith_config::model::KIND_GEMINI_INTERACTIONS)
             {
                 "AI Studio API key · native Gemini Interactions"
+            } else if provider.kind.as_deref() == Some(smith_config::model::KIND_XAI_RESPONSES) {
+                "browser login · renewable session"
             } else if provider.kind.as_deref() == Some(smith_config::model::KIND_OPENAI_RESPONSES) {
-                "browser login or API key · stateless Responses"
+                "API key · stateless Responses"
             } else {
                 "API key"
             };

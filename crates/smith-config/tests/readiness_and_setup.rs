@@ -1065,3 +1065,192 @@ max_output_tokens = 16384
         );
     }
 }
+
+/// A connected xAI login must leave a model behind, or the provider reads as
+/// configured while every picker shows nothing to select — which is what
+/// `/connect xai` produced before it declared one.
+#[test]
+fn a_bare_xai_model_entry_becomes_selectable_from_the_catalog_alone() {
+    let fixture = Fixture::new();
+    fixture.write_user(&format!(
+        r#"
+default_profile = "dev"
+
+[profiles.dev]
+provider = "local"
+model = "example-model"
+
+[providers.local]
+kind = "fake"
+
+[models."local/example-model"]
+context_tokens = 128000
+max_input_tokens = 124000
+max_output_tokens = 4096
+
+[providers.{provider}]
+kind = "{kind}"
+base_url = "{endpoint}"
+credential = "{credential}"
+
+# Exactly what `/connect xai` writes: a name, and no limits of its own.
+[models."{provider}/{model}"]
+"#,
+        provider = smith_config::setup::XAI_PROVIDER,
+        kind = smith_config::model::KIND_XAI_RESPONSES,
+        endpoint = smith_config::setup::XAI_ENDPOINT,
+        credential = smith_config::setup::XAI_CREDENTIAL,
+        model = smith_config::setup::XAI_DEFAULT_MODEL,
+    ));
+    let resolution = resolve(&fixture.request()).expect("a resolvable xAI connection");
+    let snapshot = xai_catalog_snapshot();
+
+    let inventory = local_inventory_with_catalog(
+        &resolution,
+        &["fake", smith_config::model::KIND_XAI_RESPONSES],
+        Some(&snapshot),
+    )
+    .expect("catalog inventory");
+
+    let grok = inventory
+        .models
+        .iter()
+        .find(|model| model.provider == smith_config::setup::XAI_PROVIDER)
+        .expect("the connected provider contributes a model");
+    assert_eq!(grok.model, smith_config::setup::XAI_DEFAULT_MODEL);
+    assert!(
+        grok.selectable,
+        "a listed model a user cannot pick is noise"
+    );
+    // The limits come from the catalog rather than the config, which is why
+    // the written entry can be empty in the first place.
+    assert!(matches!(
+        grok.context_tokens
+            .as_ref()
+            .expect("a context window")
+            .origin,
+        ModelLimitOrigin::Catalog { .. }
+    ));
+    let provider = inventory
+        .providers
+        .iter()
+        .find(|entry| entry.name == smith_config::setup::XAI_PROVIDER)
+        .expect("the connected provider is listed");
+    assert!(provider.selectable);
+    assert_eq!(provider.model_count, 1);
+}
+
+fn xai_catalog_snapshot() -> CatalogSnapshot {
+    CatalogSnapshot {
+        schema_revision: CATALOG_SCHEMA_REVISION,
+        source_url: MODELS_DEV_SOURCE_URL.to_owned(),
+        source_digest: format!("sha256:{}", "1".repeat(64)),
+        content_digest: format!("sha256:{}", "2".repeat(64)),
+        source_revision: "fixture-r1".to_owned(),
+        retrieved_at_ms: 1_000,
+        providers: BTreeMap::from([(
+            smith_config::catalog::XAI_CATALOG_PROVIDER.to_owned(),
+            CatalogProvider {
+                id: smith_config::catalog::XAI_CATALOG_PROVIDER.to_owned(),
+                name: "xAI".to_owned(),
+                models: BTreeMap::from([(
+                    smith_config::setup::XAI_DEFAULT_MODEL.to_owned(),
+                    CatalogModel {
+                        id: smith_config::setup::XAI_DEFAULT_MODEL.to_owned(),
+                        // The real catalog shape for this model: a large
+                        // context against a much smaller output cap.
+                        name: "Grok 4.3".to_owned(),
+                        limits: Some(CatalogLimits {
+                            context_tokens: 1_000_000,
+                            max_input_tokens: 1_000_000,
+                            max_output_tokens: 30_000,
+                        }),
+                        input_modalities: vec![CatalogModality::Text],
+                        output_modalities: vec![CatalogModality::Text],
+                        tool_call: true,
+                        reasoning: true,
+                        reasoning_controls: None,
+                        structured_output: true,
+                        disabled_reason: None,
+                    },
+                )]),
+            },
+        )]),
+    }
+}
+
+/// Guards the model choice itself. Picking the highest version number looks
+/// like an upgrade and is not one: a model whose advertised output limit
+/// equals its context window leaves no input budget once the output is
+/// reserved, so it lists as disabled and the connection is unusable again.
+#[test]
+fn the_default_xai_model_leaves_input_budget_after_its_output_reserve() {
+    let fixture = Fixture::new();
+    fixture.write_user(&format!(
+        r#"
+default_profile = "dev"
+
+[profiles.dev]
+provider = "local"
+model = "example-model"
+
+[providers.local]
+kind = "fake"
+
+[models."local/example-model"]
+context_tokens = 128000
+max_input_tokens = 124000
+max_output_tokens = 4096
+
+[providers.{provider}]
+kind = "{kind}"
+base_url = "{endpoint}"
+credential = "{credential}"
+
+[models."{provider}/output-equals-context"]
+"#,
+        provider = smith_config::setup::XAI_PROVIDER,
+        kind = smith_config::model::KIND_XAI_RESPONSES,
+        endpoint = smith_config::setup::XAI_ENDPOINT,
+        credential = smith_config::setup::XAI_CREDENTIAL,
+    ));
+    let resolution = resolve(&fixture.request()).expect("a resolvable xAI connection");
+    let mut snapshot = xai_catalog_snapshot();
+    let provider = snapshot
+        .providers
+        .get_mut(smith_config::catalog::XAI_CATALOG_PROVIDER)
+        .expect("the fixture provider");
+    let mut squeezed = provider
+        .models
+        .get(smith_config::setup::XAI_DEFAULT_MODEL)
+        .expect("the default model")
+        .clone();
+    squeezed.id = "output-equals-context".to_owned();
+    squeezed.limits = Some(CatalogLimits {
+        context_tokens: 500_000,
+        max_input_tokens: 500_000,
+        max_output_tokens: 500_000,
+    });
+    provider
+        .models
+        .insert("output-equals-context".to_owned(), squeezed);
+
+    let inventory = local_inventory_with_catalog(
+        &resolution,
+        &["fake", smith_config::model::KIND_XAI_RESPONSES],
+        Some(&snapshot),
+    )
+    .expect("catalog inventory");
+
+    let squeezed = inventory
+        .models
+        .iter()
+        .find(|model| model.model == "output-equals-context")
+        .expect("the model is listed");
+    assert!(
+        !squeezed.selectable,
+        "a model whose output reserve consumes its whole context cannot be chosen; \
+         this is why `{}` is the default rather than the highest version",
+        smith_config::setup::XAI_DEFAULT_MODEL
+    );
+}

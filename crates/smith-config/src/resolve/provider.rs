@@ -5,7 +5,8 @@ use std::path::PathBuf;
 
 use crate::model::{
     ApprovalMode, BackgroundExit, KIND_ANTHROPIC_MESSAGES, KIND_CHATGPT_RESPONSES, KIND_FAKE,
-    KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE, ReasoningDialect, ReasoningOnlyBehavior,
+    KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES, KIND_XAI_RESPONSES,
+    ReasoningDialect, ReasoningOnlyBehavior,
 };
 use agent_runtime_core::store::Secret;
 
@@ -103,6 +104,7 @@ pub(super) fn validate_provider(provider: &ResolvedProvider) -> Result<(), Confi
         KIND_OPENAI_COMPATIBLE
             | KIND_ANTHROPIC_MESSAGES
             | KIND_CHATGPT_RESPONSES
+            | KIND_XAI_RESPONSES
             | KIND_GEMINI_INTERACTIONS
     ) && let Some(policy) = &provider.response.reasoning_only
     {
@@ -161,6 +163,43 @@ pub(super) fn validate_provider(provider: &ResolvedProvider) -> Result<(), Confi
                     source,
                     message: "the experimental ChatGPT provider requires Smith OAuth at `authfile:chatgpt`"
                         .to_owned(),
+                });
+            }
+        }
+        // A browser login, not a pasted key. An `api_key` here would be a user
+        // trying to use a console key on the login adapter, which sends a
+        // renewable bundle and would ignore it.
+        KIND_XAI_RESPONSES => {
+            if provider.credential.is_none() || provider.api_key.is_some() {
+                let source = provider.api_key.as_ref().map_or_else(
+                    || provider.kind.source.clone(),
+                    |value| value.source.clone(),
+                );
+                return Err(ConfigError::InvalidValue {
+                    source,
+                    message: format!(
+                        "an `{KIND_XAI_RESPONSES}` provider carries a stored xAI login in \
+                         `credential`; for a console API key use `{KIND_OPENAI_RESPONSES}`"
+                    ),
+                });
+            }
+            // Pinned, because the session this kind carries is issued by xAI's
+            // own authorization server and is not a bearer any other
+            // deployment would accept. A gateway takes an API key over
+            // `openai-responses` instead.
+            if provider.base_url.as_ref().map(|value| value.value.as_str())
+                != Some(crate::setup::XAI_ENDPOINT)
+            {
+                let source = provider.base_url.as_ref().map_or_else(
+                    || provider.kind.source.clone(),
+                    |value| value.source.clone(),
+                );
+                return Err(ConfigError::InvalidValue {
+                    source,
+                    message: format!(
+                        "an `{KIND_XAI_RESPONSES}` provider talks to xAI's own endpoint, \
+                         which is where its login is valid"
+                    ),
                 });
             }
         }
