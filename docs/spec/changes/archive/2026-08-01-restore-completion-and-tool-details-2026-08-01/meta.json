@@ -1,0 +1,14 @@
+{
+  "change_id": "restore-completion-and-tool-details",
+  "change_ref": "restore-completion-and-tool-details-2026-08-01",
+  "created_at": "2026-08-01T20:13:38Z",
+  "updated_at": "2026-08-01T20:43:03Z",
+  "completed_at": "2026-08-01T20:43:03Z",
+  "status": "archived",
+  "approved_at": "2026-08-01T20:21:37Z",
+  "reapproval_required": false,
+  "depends_on": [
+    "add-redaction-safe-tool-summaries-2026-07-28",
+    "add-project-instructions-and-quiet-turns-2026-08-01"
+  ]
+}
