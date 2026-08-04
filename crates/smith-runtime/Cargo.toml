@@ -25,6 +25,7 @@ dirs = { workspace = true }
 futures-core = { workspace = true }
 futures-util = { workspace = true }
 keyring = { workspace = true }
+fs2 = { workspace = true }
 reqwest = { workspace = true }
 rustix = { workspace = true }
 serde = { workspace = true }

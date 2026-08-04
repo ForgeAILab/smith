@@ -293,8 +293,44 @@ impl CatalogLoader {
         })
     }
 
+    /// The advisory lock guarding this cache against other Smith processes.
+    fn lock_path(&self) -> PathBuf {
+        let mut path = self.cache_path.clone();
+        let name = path
+            .file_name()
+            .map(|name| format!("{}.lock", name.to_string_lossy()))
+            .unwrap_or_else(|| "catalog.lock".to_owned());
+        path.set_file_name(name);
+        path
+    }
+
     /// Performs one refresh and atomically publishes it for a later snapshot.
+    ///
+    /// Held under an advisory file lock, because the in-process guard only
+    /// stops one Smith from racing itself. Several agents running side by side
+    /// would otherwise each notice the same stale snapshot and each fetch the
+    /// same bytes. The write was always atomic, so this costs redundant
+    /// requests rather than a corrupt cache — but a public endpoint should not
+    /// see N identical fetches because one machine started N agents.
     pub async fn refresh(&self, current: &CatalogSnapshot) -> Result<(), CatalogError> {
+        let Some(_lock) = CacheLock::try_acquire(&self.lock_path()).await? else {
+            // Another process holds it and is doing this work already.
+            return Ok(());
+        };
+
+        // Re-read under the lock. If someone published while we waited, their
+        // snapshot is newer than the one we were handed and refetching would
+        // only discard it. Deliberately narrower than a freshness test: this
+        // asks "did another process already do this work", not "is the cache
+        // young", so a caller refreshing a snapshot for its own reasons is
+        // still allowed to.
+        if let Ok(bytes) = read_bounded(&self.cache_path).await
+            && let Ok(published) = parse_snapshot(&bytes)
+            && published.retrieved_at_ms > current.retrieved_at_ms
+        {
+            return Ok(());
+        }
+
         let response = self.fetcher.fetch(Some(&current.source_revision)).await?;
         let next = match response {
             CatalogFetchResponse::NotModified => {
@@ -405,6 +441,48 @@ fn schedule_refresh(loader: CatalogLoader, current: CatalogSnapshot) -> bool {
         }
     });
     true
+}
+
+/// An advisory exclusive lock on the catalog cache, released when dropped.
+///
+/// The kernel releases it if the process dies, so a crash mid-refresh cannot
+/// leave a lock nobody can clear — which is exactly the failure a hand-rolled
+/// lockfile with a liveness heuristic would have.
+struct CacheLock {
+    file: std::fs::File,
+}
+
+impl CacheLock {
+    async fn try_acquire(path: &Path) -> Result<Option<Self>, CatalogError> {
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|error| CatalogError::Cache(error.to_string()))?;
+        }
+        let path = path.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            use fs2::FileExt;
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(&path)
+                .map_err(|error| CatalogError::Cache(error.to_string()))?;
+            match file.try_lock_exclusive() {
+                Ok(()) => Ok(Some(Self { file })),
+                Err(_) => Ok(None),
+            }
+        })
+        .await
+        .map_err(|error| CatalogError::Cache(error.to_string()))?
+    }
+}
+
+impl Drop for CacheLock {
+    fn drop(&mut self) {
+        use fs2::FileExt;
+        let _ = FileExt::unlock(&self.file);
+    }
 }
 
 static ACTIVE_REFRESHES: OnceLock<Mutex<BTreeSet<PathBuf>>> = OnceLock::new();
@@ -1291,6 +1369,45 @@ mod tests {
             assert_eq!(prepared.origin, CatalogLoadOrigin::Embedded);
             assert_eq!(prepared.snapshot.providers.len(), EXPECTED_PROVIDERS.len());
         }
+    }
+
+    #[tokio::test]
+    async fn a_second_process_holding_the_lock_skips_the_fetch() {
+        // Several agents on one machine notice the same stale snapshot at the
+        // same moment. Only one of them should reach the network.
+        let directory = tempfile::tempdir().unwrap();
+        let cache_path = directory.path().join("models-dev-v1.json");
+        let counting = Arc::new(ScriptedFetcher::returning(
+            CatalogFetchResponse::NotModified,
+        ));
+        let loader = CatalogLoader::new(
+            cache_path.clone(),
+            Arc::<str>::from(EMBEDDED_MODELS_DEV_SEED),
+            counting.clone(),
+            Arc::new(SystemClock),
+        );
+        let seed = parse_snapshot(EMBEDDED_MODELS_DEV_SEED.as_bytes()).unwrap();
+
+        // Stand in for the other process by holding the same advisory lock.
+        let held = CacheLock::try_acquire(&loader.lock_path())
+            .await
+            .unwrap()
+            .expect("an uncontended lock");
+
+        loader.refresh(&seed).await.unwrap();
+        assert_eq!(
+            counting.calls.load(Ordering::SeqCst),
+            0,
+            "a refresh ran while another process held the lock"
+        );
+
+        drop(held);
+        loader.refresh(&seed).await.unwrap();
+        assert_eq!(
+            counting.calls.load(Ordering::SeqCst),
+            1,
+            "the refresh did not resume once the lock was released"
+        );
     }
 
     #[tokio::test]
