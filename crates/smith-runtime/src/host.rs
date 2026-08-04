@@ -810,6 +810,7 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
 fn unresolved_ephemeral_work(recovery: &JournalRecovery) -> Option<EphemeralWorkInterruption> {
     let mut children = BTreeSet::<ChildId>::new();
     let mut monitors = BTreeSet::<String>::new();
+    let mut tasks = BTreeSet::<String>::new();
     for line in &recovery.records {
         match &line.record {
             JournalRecord::Event { event } => match &event.payload {
@@ -833,6 +834,9 @@ fn unresolved_ephemeral_work(recovery: &JournalRecovery) -> Option<EphemeralWork
                 for monitor in &interruption.monitors {
                     monitors.remove(monitor);
                 }
+                for task in &interruption.tasks {
+                    tasks.remove(task);
+                }
             }
             JournalRecord::MonitorStarted { monitor } => {
                 monitors.insert(monitor.clone());
@@ -840,10 +844,16 @@ fn unresolved_ephemeral_work(recovery: &JournalRecovery) -> Option<EphemeralWork
             JournalRecord::MonitorStopped { monitor } => {
                 monitors.remove(monitor);
             }
+            JournalRecord::TaskStarted { task } => {
+                tasks.insert(task.clone());
+            }
+            JournalRecord::TaskExited { task } => {
+                tasks.remove(task);
+            }
             JournalRecord::Oversized { .. } | JournalRecord::Dropped { .. } => {}
         }
     }
-    let interruption = EphemeralWorkInterruption::process_exit(children, monitors);
+    let interruption = EphemeralWorkInterruption::process_exit(children, monitors, tasks);
     (!interruption.is_empty()).then_some(interruption)
 }
 

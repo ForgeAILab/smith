@@ -82,6 +82,8 @@ pub const JOURNAL_SCHEMA_VERSION: u32 = 1;
 pub const EPHEMERAL_INTERRUPTION_SCHEMA_VERSION: u32 = 1;
 /// Maximum length of one metadata-only monitor identity.
 pub const MAX_MONITOR_ID_CHARS: usize = 128;
+/// Maximum length of one metadata-only background task identity.
+pub const MAX_TASK_ID_CHARS: usize = 128;
 /// Maximum length of one metadata-only child identity in recovery markers.
 pub const MAX_EPHEMERAL_CHILD_ID_CHARS: usize = 128;
 /// Defensive bound on process-owned identities in one recovery marker.
@@ -203,6 +205,16 @@ pub enum JournalRecord {
         /// Stable process-owned monitor identity.
         monitor: String,
     },
+    /// A process-owned background task identity became live.
+    TaskStarted {
+        /// Stable process-owned background task identity.
+        task: String,
+    },
+    /// A process-owned background task reached an orderly terminal boundary.
+    TaskExited {
+        /// Stable process-owned background task identity.
+        task: String,
+    },
 }
 
 /// Why recovered ephemeral work was ended.
@@ -226,6 +238,9 @@ pub struct EphemeralWorkInterruption {
     /// Monitor identities in deterministic order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub monitors: Vec<String>,
+    /// Background task identities in deterministic order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tasks: Vec<String>,
 }
 
 impl EphemeralWorkInterruption {
@@ -233,6 +248,7 @@ impl EphemeralWorkInterruption {
     pub fn process_exit(
         children: impl IntoIterator<Item = ChildId>,
         monitors: impl IntoIterator<Item = String>,
+        tasks: impl IntoIterator<Item = String>,
     ) -> Self {
         let mut children = children.into_iter().collect::<Vec<_>>();
         children.sort();
@@ -240,17 +256,21 @@ impl EphemeralWorkInterruption {
         let mut monitors = monitors.into_iter().collect::<Vec<_>>();
         monitors.sort();
         monitors.dedup();
+        let mut tasks = tasks.into_iter().collect::<Vec<_>>();
+        tasks.sort();
+        tasks.dedup();
         Self {
             schema_version: EPHEMERAL_INTERRUPTION_SCHEMA_VERSION,
             reason: EphemeralInterruptionReason::ProcessExit,
             children,
             monitors,
+            tasks,
         }
     }
 
     /// Whether the marker has no work identities.
     pub fn is_empty(&self) -> bool {
-        self.children.is_empty() && self.monitors.is_empty()
+        self.children.is_empty() && self.monitors.is_empty() && self.tasks.is_empty()
     }
 }
 
@@ -637,6 +657,26 @@ impl EventJournal {
             .await
     }
 
+    /// Appends and syncs one metadata-only task-start marker.
+    pub async fn record_task_started(
+        &self,
+        task: impl Into<String>,
+    ) -> Result<(), RuntimeError> {
+        let task = validate_task_id(task.into())?;
+        self.record_marker(JournalRecord::TaskStarted { task })
+            .await
+    }
+
+    /// Appends and syncs one metadata-only task-exit marker.
+    pub async fn record_task_exited(
+        &self,
+        task: impl Into<String>,
+    ) -> Result<(), RuntimeError> {
+        let task = validate_task_id(task.into())?;
+        self.record_marker(JournalRecord::TaskExited { task })
+            .await
+    }
+
     async fn record_marker(&self, record: JournalRecord) -> Result<(), RuntimeError> {
         let (reply, response) = oneshot::channel();
         self.commands
@@ -981,7 +1021,10 @@ pub async fn reconcile_nonterminal_journal(
                 before_seq: None, ..
             } => false,
             JournalRecord::EphemeralWorkInterrupted { .. } => true,
-            JournalRecord::MonitorStarted { .. } | JournalRecord::MonitorStopped { .. } => true,
+            JournalRecord::MonitorStarted { .. }
+            | JournalRecord::MonitorStopped { .. }
+            | JournalRecord::TaskStarted { .. }
+            | JournalRecord::TaskExited { .. } => true,
         };
         if keep {
             retained.push(line);
@@ -1080,7 +1123,10 @@ fn identity_floor<'a>(records: impl IntoIterator<Item = &'a JournalLine>) -> Ses
                 before_seq: None, ..
             } => {}
             JournalRecord::EphemeralWorkInterrupted { .. } => {}
-            JournalRecord::MonitorStarted { .. } | JournalRecord::MonitorStopped { .. } => {}
+            JournalRecord::MonitorStarted { .. }
+            | JournalRecord::MonitorStopped { .. }
+            | JournalRecord::TaskStarted { .. }
+            | JournalRecord::TaskExited { .. } => {}
         }
     }
     floor
@@ -1089,6 +1135,11 @@ fn identity_floor<'a>(records: impl IntoIterator<Item = &'a JournalLine>) -> Ses
 fn validate_monitor_id(monitor: String) -> Result<String, RuntimeError> {
     validate_ephemeral_id("monitor", &monitor, MAX_MONITOR_ID_CHARS)?;
     Ok(monitor)
+}
+
+fn validate_task_id(task: String) -> Result<String, RuntimeError> {
+    validate_ephemeral_id("task", &task, MAX_TASK_ID_CHARS)?;
+    Ok(task)
 }
 
 fn validate_journal_line(line: &JournalLine) -> Result<(), RuntimeError> {
@@ -1104,6 +1155,9 @@ fn validate_journal_line(line: &JournalLine) -> Result<(), RuntimeError> {
         }
         JournalRecord::MonitorStarted { monitor } | JournalRecord::MonitorStopped { monitor } => {
             validate_ephemeral_id("monitor", monitor, MAX_MONITOR_ID_CHARS)
+        }
+        JournalRecord::TaskStarted { task } | JournalRecord::TaskExited { task } => {
+            validate_ephemeral_id("task", task, MAX_TASK_ID_CHARS)
         }
         JournalRecord::Event { .. }
         | JournalRecord::Oversized { .. }
@@ -1127,6 +1181,7 @@ fn validate_ephemeral_interruption(
         .children
         .len()
         .saturating_add(interruption.monitors.len())
+        .saturating_add(interruption.tasks.len())
         > MAX_INTERRUPTED_WORK_IDS
     {
         return Err(RuntimeError::new(
@@ -1142,7 +1197,13 @@ fn validate_ephemeral_interruption(
     for monitor in &interruption.monitors {
         validate_ephemeral_id("monitor", monitor, MAX_MONITOR_ID_CHARS)?;
     }
-    if !strictly_sorted(&interruption.children) || !strictly_sorted(&interruption.monitors) {
+    for task in &interruption.tasks {
+        validate_ephemeral_id("task", task, MAX_TASK_ID_CHARS)?;
+    }
+    if !strictly_sorted(&interruption.children)
+        || !strictly_sorted(&interruption.monitors)
+        || !strictly_sorted(&interruption.tasks)
+    {
         return Err(RuntimeError::new(
             ErrorKind::Serialization,
             "ephemeral interruption identities must be sorted and unique",

@@ -19,12 +19,16 @@ pub(super) struct InteractiveResources {
     pub(super) inventory: SelectionInventory,
     pub(super) agents: ResolvedAgent,
     pub(super) sessions: Vec<SessionListing>,
+    /// Live credential-pool state, when the provider declares a pool.
+    pub(super) credential_pool: Option<SharedPool>,
 }
 
 pub(super) async fn run_interactive(
     host: &HostSession,
     approvals: Option<ApprovalRequests>,
     interactions: Option<InteractionRequests>,
+    rotations: Option<RotationRequests>,
+    accounts: ActiveAccounts,
     project: &std::path::Path,
     resources: InteractiveResources,
     presentation: PresentationOptions,
@@ -33,6 +37,7 @@ pub(super) async fn run_interactive(
         inventory,
         agents,
         sessions,
+        credential_pool,
     } = resources;
     let policy = host.runtime().policy();
     let snapshot = host.session().snapshot();
@@ -81,7 +86,9 @@ pub(super) async fn run_interactive(
         project,
         &agents,
         &policy.reasoning,
+        credential_pool.as_ref(),
     ));
+    app.status.account = account_status(credential_pool.as_ref());
     app.transcript.replace_from_history(&snapshot.history);
     for (call, display) in host.tool_call_displays() {
         app.set_tool_display(call.as_str(), display);
@@ -152,6 +159,9 @@ pub(super) async fn run_interactive(
             project,
             approvals,
             interactions,
+            rotations,
+            accounts,
+            credential_pool,
             agents: &agents,
             theme,
         },
@@ -174,6 +184,9 @@ pub(super) struct TuiRunInputs<'a> {
     project: &'a std::path::Path,
     approvals: Option<ApprovalRequests>,
     interactions: Option<InteractionRequests>,
+    rotations: Option<RotationRequests>,
+    accounts: ActiveAccounts,
+    credential_pool: Option<SharedPool>,
     agents: &'a ResolvedAgent,
     theme: Theme,
 }
@@ -188,6 +201,9 @@ pub(super) async fn run_tui(
         project,
         mut approvals,
         interactions,
+        mut rotations,
+        mut accounts,
+        credential_pool,
         agents,
         theme,
     } = inputs;
@@ -255,6 +271,30 @@ pub(super) async fn run_tui(
                                 }
                             }
                             Some(Action::Quit) => break InteractiveExit::Quit(app.status.session_usage()),
+                            // An account switch is live pool state, so it is
+                            // applied here rather than by tearing the session
+                            // down and rebuilding it around a new selection.
+                            Some(Action::Reconfigure(PaletteCommand::Account(position))) => {
+                                match switch_account(
+                                    credential_pool.as_ref(),
+                                    &mut accounts,
+                                    position,
+                                )
+                                .await
+                                {
+                                    Some(notice) => {
+                                        app.transcript.push_notice("account", notice);
+                                        app.set_accounts(account_entries(
+                                            credential_pool.as_ref(),
+                                        ));
+                                        app.status.account =
+                                            account_status(credential_pool.as_ref());
+                                    }
+                                    None => app
+                                        .transcript
+                                        .push_notice("account", "already using that account"),
+                                }
+                            }
                             Some(Action::Reconfigure(command)) => {
                                 break InteractiveExit::Reconfigure(command);
                             }
@@ -390,6 +430,16 @@ pub(super) async fn run_tui(
                         dirty = true;
                     }
                     None => approvals = None,
+                }
+            }
+
+            offer = next_rotation(&mut rotations) => {
+                match offer {
+                    Some(prompt) => {
+                        app.present_rotation(prompt);
+                        dirty = true;
+                    }
+                    None => rotations = None,
                 }
             }
 
@@ -565,4 +615,47 @@ pub(super) async fn next_approval(
         Some(approvals) => approvals.recv().await,
         None => std::future::pending().await,
     }
+}
+
+/// Waits for the next rotation offer, or never when the provider has no pool.
+pub(super) async fn next_rotation(
+    rotations: &mut Option<RotationRequests>,
+) -> Option<RotationPrompt> {
+    match rotations {
+        Some(rotations) => rotations.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Applies an account switch to live pool state and remembers it.
+///
+/// Returns the transcript notice, or `None` when nothing changed. No runtime
+/// is rebuilt: the credential source reads the active member on the next
+/// acquisition, so the switch takes effect on the very next attempt.
+pub(super) async fn switch_account(
+    credential_pool: Option<&SharedPool>,
+    accounts: &mut ActiveAccounts,
+    position: usize,
+) -> Option<String> {
+    let pool = credential_pool?;
+    let outgoing = pool.read(|pool| pool.active().map(|member| member.reference.clone()))?;
+    if !pool.write(|pool| pool.set_active(position)) {
+        return None;
+    }
+    let (provider, incoming) = pool.read(|pool| {
+        (
+            pool.provider().to_owned(),
+            pool.active().map(|member| member.reference.clone()),
+        )
+    });
+    let incoming = incoming?;
+    if accounts.remember(&provider, &incoming) {
+        // A failed write costs stickiness, not the switch: the session is
+        // already using the new account either way, so this is reported rather
+        // than escalated.
+        if let Err(error) = accounts.save().await {
+            let _ = error;
+        }
+    }
+    Some(smith_tui::accounts::switch_notice(&outgoing, &incoming, true))
 }

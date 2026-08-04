@@ -300,8 +300,8 @@ fn every_resolved_field_keeps_the_source_that_supplied_it() {
     assert_eq!(
         config
             .provider
-            .credential
-            .as_ref()
+            .credential()
+            
             .expect("a reference")
             .value,
         "keychain:smith/acme"
@@ -602,7 +602,7 @@ credential = "{value}"
             resolution
                 .config
                 .provider
-                .credential
+                .credential()
                 .expect("a reference")
                 .value,
             value
@@ -638,7 +638,7 @@ api_key = "{SECRET}"
         .as_ref()
         .expect("a resolved inline key");
     assert_eq!(api_key.value.expose(), SECRET);
-    assert!(resolution.config.provider.credential.is_none());
+    assert!(resolution.config.provider.credential().is_none());
     assert_eq!(api_key.source.layer, Layer::UserFile);
     assert_eq!(api_key.source.key, "providers.acme.api_key");
 
@@ -1453,7 +1453,7 @@ X-Trace = "$(id)"
         resolution
             .config
             .provider
-            .credential
+            .credential()
             .expect("a reference")
             .value,
         "file:/keys/acme"
@@ -1609,4 +1609,187 @@ fn resolution_reads_only_the_files_it_reports() {
             .layer,
         Layer::UserFile
     );
+}
+
+/// A project declaring `acme` with `settings` appended to the provider table.
+fn resolve_provider_with(settings: &str) -> Result<Resolution, ConfigError> {
+    resolve_project(&format!(
+        r#"
+default_profile = "work"
+
+[profiles.work]
+provider = "acme"
+model = "example-model"
+
+[providers.acme]
+kind = "openai-compatible"
+base_url = "https://api.example.test/v1"
+{settings}
+"#
+    ))
+}
+
+#[test]
+fn a_credential_pool_resolves_in_declared_order_with_its_own_provenance() {
+    let resolution = resolve_provider_with(
+        r#"credentials = ["keychain:smith/personal", "keychain:smith/work"]"#,
+    )
+    .expect("a resolved pool");
+    let provider = &resolution.config.provider;
+
+    let references: Vec<&str> = provider
+        .credentials
+        .iter()
+        .map(|entry| entry.value.as_str())
+        .collect();
+    assert_eq!(
+        references,
+        ["keychain:smith/personal", "keychain:smith/work"]
+    );
+    // The first entry is where a session with no persisted choice starts.
+    assert_eq!(
+        provider.credential().expect("an active member").value,
+        "keychain:smith/personal"
+    );
+    assert!(provider.has_pool());
+    for entry in &provider.credentials {
+        assert_eq!(entry.source.key, "providers.acme.credentials");
+        assert_eq!(entry.source.layer, Layer::ProjectFile);
+    }
+}
+
+#[test]
+fn a_single_credential_resolves_as_a_pool_of_one() {
+    let resolution =
+        resolve_provider_with(r#"credential = "env:ACME_API_KEY""#).expect("a resolved provider");
+    let provider = &resolution.config.provider;
+
+    // The legacy spelling needs no migration and produces no warning: it is
+    // the same declaration, for one account.
+    assert_eq!(provider.credentials.len(), 1);
+    assert_eq!(
+        provider.credential().expect("an active member").value,
+        "env:ACME_API_KEY"
+    );
+    assert_eq!(
+        provider.credentials[0].source.key,
+        "providers.acme.credential"
+    );
+    // One account is not a pool: there is nowhere to rotate to.
+    assert!(!provider.has_pool());
+}
+
+#[test]
+fn an_unparseable_pool_entry_fails_resolution_by_position_without_quoting_it() {
+    const PASTED: &str = "sk-live-4kQm2ZpX8vRt7nLb1cWs9aYe";
+    let error = resolve_provider_with(&format!(
+        r#"credentials = ["keychain:smith/personal", "{PASTED}"]"#
+    ))
+    .expect_err("an unparseable pool entry");
+
+    let rendered = format!("{error} {error:?}");
+    // The offending entry is identified by its position, never by its value:
+    // a reference rejected for looking like a pasted key must not be echoed
+    // into an error message, a log, or a terminal.
+    assert!(rendered.contains("entry 2 of `credentials`"), "{rendered}");
+    assert!(!rendered.contains(PASTED), "{rendered}");
+    match error {
+        ConfigError::PlaintextSecret { ref source, .. }
+        | ConfigError::InvalidValue { ref source, .. } => {
+            assert_eq!(source.key, "providers.acme.credentials");
+        }
+        other => panic!("expected a sourced credential error, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_duplicate_pool_entry_is_rejected_rather_than_collapsed() {
+    let error =
+        resolve_provider_with(r#"credentials = ["keychain:smith/a", "keychain:smith/a"]"#)
+            .expect_err("a duplicate pool entry");
+
+    let rendered = format!("{error}");
+    assert!(rendered.contains("keychain:smith/a"), "{rendered}");
+    assert!(rendered.contains("more than once"), "{rendered}");
+}
+
+#[test]
+fn declaring_both_credential_spellings_is_a_contradiction() {
+    let error = resolve_provider_with(
+        "credential = \"env:ONE\"\ncredentials = [\"env:TWO\", \"env:THREE\"]",
+    )
+    .expect_err("both spellings");
+
+    // There is no defensible order to splice the single entry into the list,
+    // so resolution refuses rather than guessing which account gets billed.
+    assert!(matches!(error, ConfigError::InvalidValue { .. }));
+    assert!(format!("{error}").contains("choose one spelling"));
+}
+
+#[test]
+fn an_empty_pool_reads_as_no_declaration() {
+    // The config round-trips through serde before provenance sees it, and an
+    // empty vector is skipped there, so `credentials = []` and an omitted key
+    // are the same input by the time resolution runs. This test pins that
+    // equivalence so it is a documented property rather than a surprise.
+    let resolution = resolve_provider_with("credentials = []").expect("an empty pool");
+    assert!(resolution.config.provider.credentials.is_empty());
+    assert!(resolution.config.provider.credential().is_none());
+}
+
+#[test]
+fn a_pool_and_an_inline_key_remain_mutually_exclusive() {
+    let fixture = Fixture::new();
+    fixture.write_project(
+        r#"
+default_profile = "work"
+
+[profiles.work]
+provider = "acme"
+model = "example-model"
+
+[providers.acme]
+kind = "openai-compatible"
+base_url = "https://api.example.test/v1"
+credentials = ["keychain:smith/a", "keychain:smith/b"]
+api_key = "sk-inline"
+"#,
+    );
+    let error = resolve(&fixture.request()).expect_err("a pool beside an inline key");
+    // Project files may not carry an inline key at all, which is caught first.
+    assert!(matches!(error, ConfigError::PlaintextSecret { .. }));
+}
+
+#[test]
+fn the_rotation_threshold_resolves_and_is_bounded_to_a_percentage() {
+    let resolution = resolve_provider_with(
+        "credentials = [\"keychain:smith/a\", \"keychain:smith/b\"]\nrotate_at_percent = 90",
+    )
+    .expect("a resolved threshold");
+    let threshold = resolution
+        .config
+        .provider
+        .rotate_at_percent
+        .expect("a threshold");
+    assert_eq!(threshold.value, 90);
+    assert_eq!(threshold.source.key, "providers.acme.rotate_at_percent");
+
+    for out_of_range in ["0", "101", "255"] {
+        let error = resolve_provider_with(&format!(
+            "credentials = [\"keychain:smith/a\", \"keychain:smith/b\"]\nrotate_at_percent = {out_of_range}"
+        ))
+        .expect_err("a threshold outside a percentage");
+        assert!(matches!(error, ConfigError::InvalidValue { .. }));
+    }
+}
+
+#[test]
+fn a_rotation_threshold_without_a_pool_is_rejected() {
+    let error = resolve_provider_with(
+        "credential = \"keychain:smith/only\"\nrotate_at_percent = 90",
+    )
+    .expect_err("a threshold with nowhere to rotate");
+
+    assert!(matches!(error, ConfigError::InvalidValue { .. }));
+    assert!(format!("{error}").contains("another member"));
 }

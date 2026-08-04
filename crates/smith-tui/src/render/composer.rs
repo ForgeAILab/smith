@@ -205,6 +205,11 @@ pub(super) fn overlay_hint(app: &App) -> Option<String> {
         Some(Overlay::RedoConfirm { .. }) => Some("y apply redo · n/esc cancel".to_owned()),
         Some(Overlay::RevertConfirm { .. }) => Some("y apply revert · n/esc cancel".to_owned()),
         Some(Overlay::ReviewConfirm { .. }) => Some("y start review · n/esc cancel".to_owned()),
+        Some(Overlay::RotationConfirm { prompt, .. }) => Some(if prompt.request().eligible.len() > 1 {
+            "y switch and resend · 1-9 choose account · n/esc stay".to_owned()
+        } else {
+            "y switch and resend · n/esc stay".to_owned()
+        }),
         Some(Overlay::AgentConfirm { .. }) => {
             Some("y start read-only child · n/esc cancel".to_owned())
         }
@@ -307,6 +312,13 @@ pub(super) fn draw_identity_footer(frame: &mut Frame<'_>, area: Rect, app: &App,
             &mut identity,
             theme,
             Span::styled(reasoning.clone(), theme.style(Tone::Reasoning)),
+        );
+    }
+    if let Some(account) = app.status.render_account_footer() {
+        push_segment(
+            &mut identity,
+            theme,
+            Span::styled(account, theme.style(Tone::Dim)),
         );
     }
     if let Some(goal) = app.status.render_goal_footer() {

@@ -57,6 +57,16 @@ impl App {
         }
     }
 
+    /// Replaces the credential-pool entries the account picker lists.
+    ///
+    /// Separate from `set_resources` because pool state changes on its own
+    /// clock — a snapshot arrives, a window resets — and rebuilding every
+    /// model, session, and file index to redraw one usage meter would be
+    /// wasteful and would stamp on pickers the user has open.
+    pub fn set_accounts(&mut self, accounts: Vec<ResourceEntry>) {
+        self.resources.accounts = accounts;
+    }
+
     pub(super) fn open_resource_picker(
         &mut self,
         target: ResourceTarget,
@@ -75,6 +85,7 @@ impl App {
             ResourceTarget::Think => "Choose thinking state",
             ResourceTarget::Effort => "Choose reasoning effort",
             ResourceTarget::Reference => "Attach file or invoke agent",
+            ResourceTarget::Account => "Choose account",
         };
         let mut picker = ResourcePicker::new(title, entries, empty_guidance);
         if let Some(query) = initial_query {
@@ -120,6 +131,10 @@ impl App {
             ResourceTarget::Effort => (
                 self.resources.efforts.clone(),
                 "Effort is not adjustable for this provider/model",
+            ),
+            ResourceTarget::Account => (
+                self.resources.accounts.clone(),
+                "This provider declares a single credential · add `credentials` to pool accounts",
             ),
             ResourceTarget::Reference => {
                 let mut entries = self
@@ -191,6 +206,15 @@ impl App {
                         None
                     }
                 }
+            }
+            ResourceTarget::Account => {
+                self.composer.clear();
+                let Ok(position) = id.parse::<usize>() else {
+                    self.transcript
+                        .push_error("the account picker returned an invalid pool position");
+                    return None;
+                };
+                Some(Action::Reconfigure(PaletteCommand::Account(position)))
             }
             ResourceTarget::Connect => {
                 self.composer.clear();
@@ -430,6 +454,7 @@ impl App {
                 CommandAction::Model(_) => "model",
                 CommandAction::Think(_) => "think",
                 CommandAction::Effort(_) => "effort",
+                CommandAction::Account(_) => "account",
                 CommandAction::Agent(_) | CommandAction::AgentResume(_) => "agent",
                 CommandAction::Diff(_) => "diff",
                 CommandAction::Review(_) => "review",
@@ -507,6 +532,47 @@ impl App {
                 self.accept_composer_input();
                 self.open_target_picker(ResourceTarget::Resume, restore);
                 None
+            }
+            CommandAction::Account(None) => {
+                self.accept_composer_input();
+                self.open_target_picker(ResourceTarget::Account, restore);
+                None
+            }
+            CommandAction::Account(Some(value)) => {
+                self.accept_composer_input();
+                // The argument is the number the picker shows, which is
+                // 1-based; pool positions are not.
+                let listed = value.trim().parse::<usize>().ok().filter(|n| *n > 0);
+                let Some(position) = listed.map(|n| n - 1) else {
+                    self.transcript
+                        .push_error("name an account by its number, as `/account 2`");
+                    return None;
+                };
+                let entry = self
+                    .resources
+                    .accounts
+                    .iter()
+                    .find(|entry| entry.id == position.to_string());
+                match entry {
+                    Some(entry) if entry.active => {
+                        self.transcript
+                            .push_notice("account", "already using that account");
+                        None
+                    }
+                    Some(entry) => {
+                        // A spent account stays selectable: the cooldown is
+                        // Smith's estimate, and the user may know better.
+                        if let Some(reason) = &entry.disabled_reason {
+                            self.transcript.push_notice("account", reason.clone());
+                        }
+                        Some(Action::Reconfigure(PaletteCommand::Account(position)))
+                    }
+                    None => {
+                        self.transcript
+                            .push_error(format!("this provider has no account {value}"));
+                        None
+                    }
+                }
             }
             CommandAction::Resume(Some(id)) => {
                 let selectable = self

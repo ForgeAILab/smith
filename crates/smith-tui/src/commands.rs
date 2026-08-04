@@ -25,6 +25,8 @@ pub enum CommandAction {
     Think(Option<String>),
     /// Select an advertised reasoning effort or the provider default.
     Effort(Option<String>),
+    /// Inspect the provider's credential pool, or switch to one account.
+    Account(Option<String>),
     /// Render resolved local status.
     Status,
     /// Inspect or mutate the persistent session goal.
@@ -183,6 +185,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         advanced: false,
     },
     CommandSpec {
+        name: "account",
+        argument_hint: "[N]",
+        description: "show provider accounts and their usage",
+        requires_idle: true,
+        advanced: false,
+    },
+    CommandSpec {
         name: "agent",
         argument_hint: "[ID|resume ID]",
         description: "list, inspect, or resume an existing agent",
@@ -313,6 +322,7 @@ pub fn parse(input: &str) -> Result<CommandAction, String> {
         "model" => CommandAction::Model(argument),
         "think" => CommandAction::Think(argument),
         "effort" => CommandAction::Effort(argument),
+        "account" | "accounts" => CommandAction::Account(argument),
         "agent" => CommandAction::Agent(argument),
         "diff" => CommandAction::Diff(argument),
         "review" => CommandAction::Review(argument),

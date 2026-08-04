@@ -272,6 +272,7 @@ impl SummaryModel for SmithProviderSummaryModel {
                     }
                     ProviderStreamEvent::ReasoningDelta { .. }
                     | ProviderStreamEvent::CacheObservation { .. }
+                    | ProviderStreamEvent::RateLimit { .. }
                     | ProviderStreamEvent::Downgrade { .. }
                     | ProviderStreamEvent::VendorMetadata { .. } => {}
                 }

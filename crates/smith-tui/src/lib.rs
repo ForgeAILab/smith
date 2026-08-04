@@ -21,6 +21,7 @@
 //! The visual contract these modules implement is `DESIGN.md` at the repository
 //! root; section references in the code point there.
 
+pub mod accounts;
 pub mod app;
 pub mod commands;
 pub mod composer;

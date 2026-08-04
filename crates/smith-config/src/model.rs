@@ -303,6 +303,22 @@ pub struct ProviderSection {
     /// `file:` — never the key itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential: Option<String>,
+    /// An ordered pool of credential references, for a provider the user holds
+    /// several accounts on.
+    ///
+    /// Each entry takes the same forms as [`Self::credential`], and the first
+    /// is the default active member. Mutually exclusive with
+    /// [`Self::credential`], which is the same declaration spelled for one
+    /// account and resolves as a pool of one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub credentials: Vec<String>,
+    /// Offer rotation to another pool member once the active member's
+    /// server-reported usage reaches this percentage.
+    ///
+    /// Only meaningful with a pool of more than one. Absent means rotation is
+    /// offered on exhaustion alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotate_at_percent: Option<u8>,
     /// A plaintext API key accepted only from owner-only user configuration.
     ///
     /// This is mutually exclusive with [`Self::credential`].

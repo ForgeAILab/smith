@@ -14,6 +14,7 @@
 pub mod approval;
 pub mod changes;
 pub mod interaction;
+pub mod rotation;
 pub mod workspace;
 
 pub use approval::{
@@ -24,5 +25,9 @@ pub use changes::{AppliedRevert, ChangeView, GitChanges, RevertPreview};
 pub use interaction::{
     HeadlessInteraction, InteractionNotice, InteractionPrompt, InteractionRequests,
     InteractionRequired, InteractiveInteraction, SensitiveValueSink,
+};
+pub use rotation::{
+    HeadlessRotation, InteractiveRotation, RotationDecision, RotationMember, RotationPolicy,
+    RotationPrompt, RotationRequest, RotationRequests, RotationRequired, RotationTrigger,
 };
 pub use workspace::ProjectWorkspace;

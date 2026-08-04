@@ -56,7 +56,8 @@ use smith_config::resolve::{
 };
 use smith_host::{
     ApprovalPrompt, ApprovalRequests, GitChanges, HeadlessApproval, HeadlessInteraction,
-    InteractionRequests, InteractiveApproval, InteractiveInteraction, ProjectWorkspace,
+    HeadlessRotation, InteractionRequests, InteractiveApproval, InteractiveInteraction,
+    InteractiveRotation, ProjectWorkspace, RotationPrompt, RotationRequests,
 };
 use smith_runtime::factory::{
     AVAILABLE_ADAPTER_KINDS, ChildProfileRequest, FactoryError, HostSurface, RuntimePolicy,
@@ -64,6 +65,9 @@ use smith_runtime::factory::{
 };
 use smith_runtime::host::{HostSession, HostSessionRequest};
 use smith_runtime::journal::DefaultRedactor;
+use smith_runtime::pool::CredentialPool;
+use smith_runtime::pool_state::ActiveAccounts;
+use smith_runtime::rotation::SharedPool;
 use smith_runtime::model_catalog::{CatalogLoader, runtime_catalog_source};
 use smith_runtime::session::{SNAPSHOT_SCHEMA_VERSION, SessionListing};
 use smith_runtime::{ChildDurability, ChildState, ChildStatus, SpawnOutcome};
@@ -213,6 +217,8 @@ async fn run_command(mut args: RunArgs) -> Result<u8> {
                 args.output,
                 started.headless_approval.as_deref(),
                 started.headless_interaction.as_deref(),
+                started.headless_rotation.as_deref(),
+                started.credential_pool.as_ref(),
             )
             .await
             .map(|outcome| outcome.exit_code)

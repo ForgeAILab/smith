@@ -28,7 +28,8 @@ pub(super) fn resolve_provider(
             ),
         })?;
     let base_url = text(provenance, &format!("{scope}.base_url"))?;
-    let credential = text(provenance, &format!("{scope}.credential"))?;
+    let credentials = resolve_credential_pool(provenance, &scope)?;
+    let rotate_at_percent = resolve_rotate_at_percent(provenance, &scope)?;
     let api_key = secret(provenance, &format!("{scope}.api_key"))?;
     let reasoning_only = text(provenance, &format!("{scope}.response.reasoning_only"))?
         .map(|value| {
@@ -59,13 +60,89 @@ pub(super) fn resolve_provider(
         name,
         kind,
         base_url,
-        credential,
+        credentials,
+        rotate_at_percent,
         api_key,
         headers,
         response: ResolvedProviderResponse { reasoning_only },
     };
     validate_provider(&provider)?;
     Ok(provider)
+}
+
+/// Resolves the ordered credential pool from either spelling.
+///
+/// `credential` and `credentials` are the same declaration for one account and
+/// several, so naming both is a contradiction rather than a merge: there is no
+/// defensible order to splice a single entry into a list, and guessing one
+/// would silently decide which account a user's turns are billed to.
+fn resolve_credential_pool(
+    provenance: &Provenance,
+    scope: &str,
+) -> Result<Vec<Sourced<String>>, ConfigError> {
+    let single = text(provenance, &format!("{scope}.credential"))?;
+    let pool = list(provenance, &format!("{scope}.credentials"))?;
+
+    let (entries, source) = match (single, pool) {
+        (Some(single), None) => return Ok(vec![single]),
+        (None, Some(pool)) => (pool.value, pool.source),
+        (None, None) => return Ok(Vec::new()),
+        (Some(_), Some(pool)) => {
+            return Err(ConfigError::InvalidValue {
+                source: pool.source,
+                message:
+                    "choose one spelling: `credential` for a single account, or `credentials` for an ordered pool"
+                        .to_owned(),
+            });
+        }
+    };
+
+    // An empty list reads as no declaration rather than as an error: the
+    // config round-trips through serde before provenance sees it, and an empty
+    // vector is skipped there, so `credentials = []` and an omitted key are
+    // already the same input by the time resolution runs. Reporting an error
+    // here would be reporting one this code cannot actually distinguish.
+    if entries.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Rejected rather than deduplicated: a repeated entry means the user
+    // believes they declared two accounts, and silently collapsing it would
+    // leave them with a pool that cannot rotate anywhere.
+    let mut seen = BTreeSet::new();
+    for entry in &entries {
+        if !seen.insert(entry.as_str()) {
+            return Err(ConfigError::InvalidValue {
+                source,
+                message: format!("`credentials` lists `{entry}` more than once"),
+            });
+        }
+    }
+
+    Ok(entries
+        .into_iter()
+        .map(|entry| Sourced::new(entry, source.clone()))
+        .collect())
+}
+
+/// Resolves the proactive rotation threshold, which is a percentage.
+fn resolve_rotate_at_percent(
+    provenance: &Provenance,
+    scope: &str,
+) -> Result<Option<Sourced<u8>>, ConfigError> {
+    let Some(value) = integer(provenance, &format!("{scope}.rotate_at_percent"))? else {
+        return Ok(None);
+    };
+    // A threshold outside 1–100 cannot describe a usage window: 0 would rotate
+    // before the first turn, and above 100 can never be reached.
+    let percent = u8::try_from(value.value).ok().filter(|p| (1..=100).contains(p));
+    match percent {
+        Some(percent) => Ok(Some(Sourced::new(percent, value.source))),
+        None => Err(ConfigError::InvalidValue {
+            source: value.source,
+            message: "`rotate_at_percent` is a usage percentage between 1 and 100".to_owned(),
+        }),
+    }
 }
 
 /// Checks the options against what the adapter kind can use.
@@ -75,7 +152,7 @@ pub(super) fn resolve_provider(
 /// adapter belongs to the step that consults it. The secret rules apply to
 /// every kind, because they protect the file rather than the adapter.
 pub(super) fn validate_provider(provider: &ResolvedProvider) -> Result<(), ConfigError> {
-    if provider.credential.is_some() && provider.api_key.is_some() {
+    if !provider.credentials.is_empty() && provider.api_key.is_some() {
         let source = provider
             .api_key
             .as_ref()
@@ -86,8 +163,28 @@ pub(super) fn validate_provider(provider: &ResolvedProvider) -> Result<(), Confi
             message: "choose exactly one credential source: `credential` or `api_key`".to_owned(),
         });
     }
-    if let Some(credential) = &provider.credential {
-        validate_credential(credential)?;
+    // Every member is checked, not just the active one: a pool whose second
+    // entry is unparseable must fail now, not an hour from now when the first
+    // one is spent and rotation reaches for it.
+    let pooled = provider.credentials.len() > 1;
+    for (position, credential) in provider.credentials.iter().enumerate() {
+        validate_credential(credential).map_err(|error| {
+            if pooled {
+                locate_pool_entry(error, position)
+            } else {
+                error
+            }
+        })?;
+    }
+    if let Some(threshold) = &provider.rotate_at_percent
+        && provider.credentials.len() < 2
+    {
+        return Err(ConfigError::InvalidValue {
+            source: threshold.source.clone(),
+            message:
+                "`rotate_at_percent` needs a `credentials` pool with another member to rotate to"
+                    .to_owned(),
+        });
     }
     for (name, value) in &provider.headers {
         if AUTH_HEADERS.contains(&name.to_ascii_lowercase().as_str()) {
@@ -147,15 +244,13 @@ pub(super) fn validate_provider(provider: &ResolvedProvider) -> Result<(), Confi
                             .to_owned(),
                 });
             }
-            if provider
-                .credential
-                .as_ref()
-                .map(|value| value.value.as_str())
+            if provider.credential().map(|value| value.value.as_str())
                 != Some(crate::setup::CHATGPT_CREDENTIAL)
+                || provider.credentials.len() > 1
                 || provider.api_key.is_some()
                 || !provider.headers.is_empty()
             {
-                let source = provider.credential.as_ref().map_or_else(
+                let source = provider.credential().map_or_else(
                     || provider.kind.source.clone(),
                     |value| value.source.clone(),
                 );
@@ -170,7 +265,10 @@ pub(super) fn validate_provider(provider: &ResolvedProvider) -> Result<(), Confi
         // trying to use a console key on the login adapter, which sends a
         // renewable bundle and would ignore it.
         KIND_XAI_RESPONSES => {
-            if provider.credential.is_none() || provider.api_key.is_some() {
+            if provider.credential().is_none()
+                || provider.credentials.len() > 1
+                || provider.api_key.is_some()
+            {
                 let source = provider.api_key.as_ref().map_or_else(
                     || provider.kind.source.clone(),
                     |value| value.source.clone(),
@@ -242,7 +340,7 @@ pub(super) fn validate_provider(provider: &ResolvedProvider) -> Result<(), Confi
         KIND_FAKE => {
             for (source, option) in [
                 (provider.base_url.as_ref(), "base_url"),
-                (provider.credential.as_ref(), "credential"),
+                (provider.credential(), "credential"),
             ] {
                 if let Some(sourced) = source {
                     return Err(ConfigError::IncompatibleOption {
@@ -278,6 +376,27 @@ pub(super) fn validate_provider(provider: &ResolvedProvider) -> Result<(), Confi
 }
 
 /// Checks that a credential is a reference rather than the secret itself.
+/// Adds a pool position to a credential error.
+///
+/// The source key names the whole `credentials` list, which is not enough to
+/// find the offending entry, and the entry's *value* can never be quoted back
+/// — a rejected reference is usually rejected precisely because it looks like
+/// a pasted secret. The position identifies it and reveals nothing.
+fn locate_pool_entry(error: ConfigError, position: usize) -> ConfigError {
+    let locate = |message: String| format!("entry {} of `credentials`: {message}", position + 1);
+    match error {
+        ConfigError::PlaintextSecret { source, message } => ConfigError::PlaintextSecret {
+            source,
+            message: locate(message),
+        },
+        ConfigError::InvalidValue { source, message } => ConfigError::InvalidValue {
+            source,
+            message: locate(message),
+        },
+        other => other,
+    }
+}
+
 pub(super) fn validate_credential(credential: &Sourced<String>) -> Result<(), ConfigError> {
     let refused = || ConfigError::PlaintextSecret {
         source: credential.source.clone(),

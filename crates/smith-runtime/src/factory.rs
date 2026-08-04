@@ -107,8 +107,12 @@ use smith_config::setup::trusted_model;
 use agent_runtime_core::check_set::ActionClass;
 use agent_runtime_core::grant::SecurityCheckMode;
 
+use smith_host::rotation::{HeadlessRotation, RotationPolicy};
+
 use crate::abilities::{INTERACTION_READY_CONFIG, seal_tool_abilities};
 use crate::authority::SmithToolAuthority;
+use crate::pool::CredentialPool;
+use crate::rotation::{PooledProvider, SharedPool};
 use crate::budget_notice::{BudgetNoticeComponent, DEFAULT_NOTICE_THRESHOLD_TOKENS};
 use crate::catalog::{CatalogLayers, ProfileResolution};
 use crate::chatgpt::{
@@ -269,6 +273,18 @@ pub struct RuntimeRequest {
     /// installed for root runtimes, but its schema is advertised only while
     /// this broker reports readiness.
     pub interaction: Option<Arc<dyn InteractionBroker>>,
+    /// The surface that answers a credential-rotation offer.
+    ///
+    /// Only consulted when the provider declares more than one credential.
+    /// Absent means no surface can answer, which declines: an unattended run
+    /// keeps the account it started on rather than spending another one.
+    pub rotation: Option<Arc<dyn RotationPolicy>>,
+    /// Live pool state, when the host wants to observe or seed it.
+    ///
+    /// A host supplies this to start on a remembered account, to draw usage
+    /// meters, and to persist a switch. Absent, the factory builds its own and
+    /// the choice lasts only for the session.
+    pub credential_pool: Option<SharedPool>,
     /// Tools registered in addition to Smith's built-ins.
     pub tools: Vec<Arc<dyn Tool>>,
     /// Optional host-owned recorder wrapped around built-in mutating tools.
@@ -342,6 +358,8 @@ impl RuntimeRequest {
             workspace: None,
             approval: None,
             interaction: None,
+            rotation: None,
+            credential_pool: None,
             tools: Vec::new(),
             change_recorder: None,
             skills: crate::built_in_skills::built_in_sources(),
@@ -427,8 +445,9 @@ pub struct RuntimePolicy {
     pub project_instructions: Option<ProjectInstructionsIdentity>,
     /// Provider attempts allowed per request, including the first.
     pub max_attempts: u32,
-    /// Tool calls allowed in one turn.
-    pub max_tool_steps: u32,
+    /// Tool calls allowed in one turn. `None` leaves the turn unbounded,
+    /// ending when the model stops calling tools or another limit trips.
+    pub max_tool_steps: Option<u32>,
     /// The wall-clock ceiling for one turn, in milliseconds.
     pub turn_time_limit_ms: Option<u64>,
     /// The model-facing tool output limit.
@@ -706,7 +725,14 @@ pub struct FactoryPreflight {
     /// Normalized endpoint, when the adapter uses one.
     pub endpoint: Option<String>,
     /// Credential reference that successfully resolved, never its value.
+    ///
+    /// With a pool, this is the member preflight would start on.
     pub credential: Option<String>,
+    /// Every declared pool member's reference, in declared order.
+    ///
+    /// References, never values. A single-credential provider reports a pool
+    /// of one, so a consumer needs no separate case.
+    pub credentials: Vec<String>,
     /// Selected model.
     pub model: ModelId,
     /// Immutable limits the eventual runtime will receive.
@@ -793,6 +819,12 @@ fn assemble_delegation(delegation: Option<SmithDelegation>) -> DelegationStage {
 /// [`build`], without crossing the runtime-construction boundary.
 pub async fn preflight(request: &RuntimeRequest) -> Result<FactoryPreflight, FactoryError> {
     require_workspace(request)?;
+    // Every member's reference is parsed before any provider I/O, not just the
+    // one this session starts on. A pool whose second entry is malformed must
+    // fail here, while the user is looking at setup — not in an hour, when the
+    // first account is spent and rotation reaches for a reference that was
+    // never going to work.
+    validate_pool_references(request)?;
     let prepared = prepare_factory_inputs(request).await?;
     Ok(FactoryPreflight {
         provider_name: prepared.provider_name,
@@ -801,9 +833,15 @@ pub async fn preflight(request: &RuntimeRequest) -> Result<FactoryPreflight, Fac
         credential: request
             .config
             .provider
-            .credential
-            .as_ref()
+            .credential()
             .map(|reference| reference.value.clone()),
+        credentials: request
+            .config
+            .provider
+            .credentials
+            .iter()
+            .map(|reference| reference.value.clone())
+            .collect(),
         model: prepared.model,
         model_profile: prepared.profile.profile,
         context_policy: prepared.context_policy,
@@ -898,12 +936,62 @@ fn prepare_provider_stage(
             .as_ref()
             .map(|policy| policy.value),
     );
-    Ok(match reasoning.dialect {
+    let provider = match reasoning.dialect {
         Some(dialect) => {
             Arc::new(ReasoningDialectProvider::new(provider, dialect)) as Arc<dyn Provider>
         }
         None => provider,
-    })
+    };
+    Ok(apply_credential_pool(request, provider))
+}
+
+/// Wraps `provider` so a spent account can offer to move to another one.
+///
+/// Outermost on purpose. Rotation replays the whole attempt, so it has to sit
+/// outside the response-policy and reasoning-dialect decorators — a replay
+/// that skipped them would produce a differently normalized turn than the one
+/// it replaced.
+fn apply_credential_pool(request: &RuntimeRequest, provider: Arc<dyn Provider>) -> Arc<dyn Provider> {
+    // A provider with one account behaves exactly as it did before pools
+    // existed: no wrapper, no offer, no extra state.
+    if !request.config.provider.has_pool() {
+        return provider;
+    }
+    // A host-supplied pool is already seeded with the remembered account and
+    // is the handle the surfaces draw from, so it wins over building a fresh
+    // one that would silently start back at the first member.
+    let pool = request.credential_pool.clone().unwrap_or_else(|| {
+        SharedPool::new(CredentialPool::new(
+            request.config.provider.name.value.clone(),
+            request
+                .config
+                .provider
+                .credentials
+                .iter()
+                .map(|reference| reference.value.clone()),
+            request
+                .config
+                .provider
+                .rotate_at_percent
+                .as_ref()
+                .map(|threshold| threshold.value),
+        ))
+    });
+    // No surface to ask means declining, which `HeadlessRotation` does while
+    // recording the exhaustion for machine output.
+    let policy = request
+        .rotation
+        .clone()
+        .unwrap_or_else(|| Arc::new(HeadlessRotation::new()) as Arc<dyn RotationPolicy>);
+    Arc::new(PooledProvider::new(
+        provider,
+        pool,
+        policy,
+        request
+            .clock
+            .clone()
+            .unwrap_or_else(|| Arc::new(SystemClock) as Arc<dyn Clock>),
+    )) as Arc<dyn Provider>
 }
 
 fn prepare_summary_stage(
@@ -1139,8 +1227,7 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         endpoint,
         credential: config
             .provider
-            .credential
-            .as_ref()
+            .credential()
             .map(|reference| reference.value.clone()),
         approval_mode: config.approval.mode.value,
         model: model.clone(),
@@ -1549,7 +1636,7 @@ async fn prepare_factory_inputs(
     // an invalid effort never opens a keychain prompt.
     let secret = match (
         &request.provider,
-        &config.provider.credential,
+        &config.provider.credential(),
         &config.provider.api_key,
     ) {
         (None, _, Some(api_key)) => Some(api_key.value.clone()),
@@ -1683,6 +1770,24 @@ fn endpoint(provider: &ResolvedProvider, default: Option<&str>) -> Result<String
 /// dedicated thread keeps that wait off the executor; a bounded async receive
 /// lets startup fail actionably even if the platform call itself cannot be
 /// cancelled.
+/// Parses every declared pool member's reference, resolving none of them.
+///
+/// Parsing is free and offline; resolving opens the credential service and can
+/// prompt. Checking shape for all members while reading the value of only the
+/// active one is what lets a misconfigured pool fail early without turning
+/// startup into one keychain prompt per account.
+fn validate_pool_references(request: &RuntimeRequest) -> Result<(), FactoryError> {
+    for reference in &request.config.provider.credentials {
+        CredentialRef::parse(&reference.value).map_err(|source| {
+            FactoryError::CredentialReference {
+                provider: request.config.provider.name.value.clone(),
+                source,
+            }
+        })?;
+    }
+    Ok(())
+}
+
 async fn secret(request: &RuntimeRequest, reference: &str) -> Result<Secret, FactoryError> {
     let provider = request.config.provider.name.value.clone();
     let reference =
@@ -1833,8 +1938,7 @@ fn construct(
             let reference = request
                 .config
                 .provider
-                .credential
-                .as_ref()
+                .credential()
                 .ok_or(FactoryError::ChatGptAuth(
                     crate::chatgpt::ChatGptAuthError::InvalidBundle,
                 ))
@@ -1890,8 +1994,7 @@ fn construct(
             let reference = request
                 .config
                 .provider
-                .credential
-                .as_ref()
+                .credential()
                 .ok_or(FactoryError::XaiAuth(
                     crate::xai::XaiAuthError::InvalidBundle,
                 ))
@@ -2134,7 +2237,7 @@ fn loop_config(request: &RuntimeRequest, model: &ModelId) -> LoopConfig {
     // every section remains independently positioned, fingerprinted, and
     // budgeted. The legacy field stays empty to prevent a duplicate copy.
     loop_config.system_prompt = None;
-    loop_config.max_tool_steps = config.limits.max_tool_steps.value;
+    loop_config.max_tool_steps = Some(config.limits.max_tool_steps.value);
     loop_config.retry = RetryPolicy {
         // Configuration counts retries *after* the first attempt; the shared
         // policy counts attempts including it.
@@ -2249,7 +2352,8 @@ mod tests {
             name: sourced("acme".to_owned()),
             kind: sourced(kind.to_owned()),
             base_url: base_url.map(|url| sourced(url.to_owned())),
-            credential: None,
+            credentials: Vec::new(),
+            rotate_at_percent: None,
             api_key: None,
             headers: Default::default(),
             response: Default::default(),

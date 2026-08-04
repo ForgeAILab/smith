@@ -120,6 +120,21 @@ impl App {
                 return self.on_resource_picker_key(key);
             }
             Some(Overlay::HistorySearch { .. }) => return self.on_history_search_key(key),
+            Some(Overlay::RotationConfirm { .. }) => {
+                return match key.code {
+                    // The first eligible member is what `y` takes, which is
+                    // pool order: the account the user listed next.
+                    KeyCode::Char('y') => self.answer_rotation(Some(0)),
+                    KeyCode::Char('n') | KeyCode::Esc => self.answer_rotation(None),
+                    // A pool wider than two accounts is chosen by the number
+                    // the modal printed beside each one.
+                    KeyCode::Char(digit @ '1'..='9') => {
+                        let listed = digit.to_digit(10).unwrap_or(0) as usize;
+                        self.select_offered_account(listed)
+                    }
+                    _ => None,
+                };
+            }
             Some(Overlay::UndoConfirm { .. }) => {
                 return match key.code {
                     KeyCode::Char('y') => {
@@ -305,6 +320,57 @@ impl App {
             (KeyCode::Home | KeyCode::End, _) => self.on_scroll_key(key),
             _ => self.on_composer_key(key),
         }
+    }
+
+
+    /// Answers a rotation offer.
+    ///
+    /// `offered` is an index into the offer's eligible list, or `None` to
+    /// stay. Either way the prompt is consumed here: leaving it in the overlay
+    /// would keep the runtime blocked on an answer already given.
+    pub(super) fn answer_rotation(&mut self, offered: Option<usize>) -> Option<Action> {
+        let Some(Overlay::RotationConfirm { prompt, .. }) = self.overlay.take() else {
+            return None;
+        };
+        let request = prompt.request().clone();
+        let outgoing = request.outgoing.label.clone();
+
+        match offered.and_then(|index| request.eligible.get(index)) {
+            Some(member) => {
+                let notice = crate::accounts::switch_notice(&outgoing, &member.label, false);
+                prompt.switch_to(member.position);
+                self.transcript.push_notice("account", &notice);
+            }
+            None => {
+                let notice = crate::accounts::declined_notice(
+                    &outgoing,
+                    request.outgoing_resets_at_ms,
+                    crate::accounts::now_ms(),
+                );
+                // Dropping would decline too, but saying so explicitly keeps
+                // the refusal a decision rather than an accident.
+                prompt.decline();
+                self.transcript.push_notice("account", &notice);
+            }
+        }
+        None
+    }
+
+    /// Selects the account the modal printed as `listed` (1-based).
+    ///
+    /// An out-of-range number is ignored rather than treated as a refusal: a
+    /// mistyped digit must not spend the turn.
+    pub(super) fn select_offered_account(&mut self, listed: usize) -> Option<Action> {
+        let Some(Overlay::RotationConfirm { prompt, .. }) = &self.overlay else {
+            return None;
+        };
+        let position = listed.checked_sub(1)?;
+        let index = prompt
+            .request()
+            .eligible
+            .iter()
+            .position(|member| member.position == position)?;
+        self.answer_rotation(Some(index))
     }
 
     pub(super) fn on_ctrl_c(&mut self) -> Option<Action> {

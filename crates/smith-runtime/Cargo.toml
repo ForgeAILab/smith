@@ -38,6 +38,9 @@ uuid = { workspace = true }
 url = { workspace = true }
 zeroize = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", default-features = false, features = ["signal"] }
+
 [dev-dependencies]
 agent-runtime-testkit = { workspace = true }
 tempfile = { workspace = true }

@@ -12,6 +12,20 @@ use crate::transcript::ToolStatus;
 use super::state::*;
 
 impl App {
+    /// Shows a rotation offer as a modal the user answers.
+    ///
+    /// Rendered eagerly rather than queued behind other prompts: the runtime
+    /// is blocked on the answer, and the offer's whole value is that the user
+    /// decides before the turn is resent uncached.
+    pub fn present_rotation(&mut self, prompt: smith_host::rotation::RotationPrompt) {
+        let content =
+            crate::accounts::rotation_prompt_body(prompt.request(), crate::accounts::now_ms());
+        self.overlay = Some(Overlay::RotationConfirm {
+            prompt: Box::new(prompt),
+            content,
+        });
+    }
+
     /// Presents an approval request.
     ///
     /// The diff is derived once here instead of on every redraw.

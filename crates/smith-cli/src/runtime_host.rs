@@ -8,6 +8,14 @@ pub(super) struct StartedHost {
     pub(super) headless_approval: Option<Arc<HeadlessApproval>>,
     pub(super) interactions: Option<InteractionRequests>,
     pub(super) headless_interaction: Option<Arc<HeadlessInteraction>>,
+    /// Rotation offers awaiting a surface, when this host can answer them.
+    pub(super) rotations: Option<RotationRequests>,
+    /// The fail-closed policy an unattended run used, for machine output.
+    pub(super) headless_rotation: Option<Arc<HeadlessRotation>>,
+    /// Live credential-pool state, when the provider declares a pool.
+    pub(super) credential_pool: Option<SharedPool>,
+    /// Remembered accounts, so a switch survives the session.
+    pub(super) accounts: ActiveAccounts,
     pub(super) project: PathBuf,
     pub(super) inventory: SelectionInventory,
     pub(super) agents: ResolvedAgent,
@@ -139,6 +147,58 @@ pub(super) async fn start_host(
             headless_approval = Some(approval);
         }
     }
+    // The pool exists only when the provider declares more than one account;
+    // a single-credential provider gets no pool, no policy, and behaves
+    // exactly as it did before pools existed.
+    let accounts = ActiveAccounts::load(&resolution.layout.user_dir).await;
+    let mut credential_pool = None;
+    let mut rotations = None;
+    let mut headless_rotation = None;
+    if resolution.config.provider.has_pool() {
+        let references: Vec<String> = resolution
+            .config
+            .provider
+            .credentials
+            .iter()
+            .map(|reference| reference.value.clone())
+            .collect();
+        let provider_name = resolution.config.provider.name.value.clone();
+        let mut pool = CredentialPool::new(
+            provider_name.clone(),
+            references.clone(),
+            resolution
+                .config
+                .provider
+                .rotate_at_percent
+                .as_ref()
+                .map(|threshold| threshold.value),
+        );
+        // Resume onto the account the user was last using. A remembered
+        // account that is no longer declared resolves to nothing, which starts
+        // on the first member — the same place a first-ever run starts.
+        if let Some(position) = accounts.position_in(&provider_name, &references) {
+            pool.set_active(position);
+        }
+        let pool = SharedPool::new(pool);
+        runtime.credential_pool = Some(pool.clone());
+        credential_pool = Some(pool);
+
+        match surface {
+            HostSurface::Terminal => {
+                let (policy, requests) = InteractiveRotation::new(4);
+                runtime.rotation = Some(Arc::new(policy));
+                rotations = Some(requests);
+            }
+            // A headless run keeps the account it started on: its credential
+            // must not change under a script, and there is no surface to ask.
+            HostSurface::Headless | HostSurface::Child => {
+                let policy = Arc::new(HeadlessRotation::new());
+                runtime.rotation = Some(policy.clone());
+                headless_rotation = Some(policy);
+            }
+        }
+    }
+
     let (interactions, headless_interaction) = match surface {
         HostSurface::Terminal => {
             let (broker, requests) =
@@ -176,6 +236,10 @@ pub(super) async fn start_host(
         headless_approval,
         interactions,
         headless_interaction,
+        rotations,
+        headless_rotation,
+        credential_pool,
+        accounts,
         project,
         inventory,
         agents,
@@ -268,6 +332,9 @@ pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
             agents,
             sessions,
             catalog,
+            rotations,
+            credential_pool,
+            accounts,
             ..
         } = started;
         let current_session = host.session().id().as_str().to_owned();
@@ -275,8 +342,11 @@ pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
             &host,
             approvals,
             interactions,
+            rotations,
+            accounts,
             &project,
             InteractiveResources {
+                credential_pool: credential_pool.clone(),
                 inventory,
                 agents,
                 sessions,
@@ -372,6 +442,11 @@ pub(super) fn apply_palette_command(
         }
         PaletteCommand::Connect(_) | PaletteCommand::Disconnect(_) => {
             unreachable!("connection commands are handled before selection reconfiguration")
+        }
+        PaletteCommand::Account(_) => {
+            // An account switch is live pool state, not a selection: it needs
+            // no runtime rebuild, so it is applied before this point.
+            unreachable!("account switches are applied to the live pool, not by rebuilding")
         }
         PaletteCommand::Agent(agent) => {
             selection.agent = Some(agent);

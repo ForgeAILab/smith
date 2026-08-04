@@ -178,15 +178,38 @@ pub struct ResolvedProvider {
     pub kind: Sourced<String>,
     /// The endpoint, for kinds that have one.
     pub base_url: Option<Sourced<String>>,
-    /// A validated credential *reference*. Never a secret value: this crate
-    /// checks the shape and hands the reference on.
-    pub credential: Option<Sourced<String>>,
+    /// The ordered pool of validated credential *references*. Never secret
+    /// values: this crate checks the shape and hands the references on.
+    ///
+    /// A declaration naming one `credential` resolves to a pool of one, so
+    /// nothing downstream needs a separate single-credential path. Empty when
+    /// the provider declares no reference at all (an inline `api_key`, or a
+    /// kind that needs no credential).
+    pub credentials: Vec<Sourced<String>>,
+    /// The usage percentage at which rotation is offered before exhaustion.
+    pub rotate_at_percent: Option<Sourced<u8>>,
     /// A plaintext user-config key, kept redaction-safe in memory.
     pub api_key: Option<Sourced<Secret>>,
     /// Extra request headers.
     pub headers: BTreeMap<String, Sourced<String>>,
     /// Provider-specific response normalization.
     pub response: ResolvedProviderResponse,
+}
+
+impl ResolvedProvider {
+    /// The default active pool member: the first declared reference.
+    ///
+    /// Which member is *currently* active is runtime state, not configuration;
+    /// this is only where a session with no persisted choice starts.
+    pub fn credential(&self) -> Option<&Sourced<String>> {
+        self.credentials.first()
+    }
+
+    /// Whether more than one account is declared, which is what makes rotation
+    /// possible at all.
+    pub fn has_pool(&self) -> bool {
+        self.credentials.len() > 1
+    }
 }
 
 /// Resolved response compatibility for one provider.

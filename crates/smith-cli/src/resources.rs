@@ -9,6 +9,7 @@ pub(super) fn runtime_resources(
     project: &std::path::Path,
     agents: &ResolvedAgent,
     reasoning: &smith_runtime::reasoning::ReasoningRuntimePolicy,
+    credential_pool: Option<&SharedPool>,
 ) -> RuntimeResources {
     let model_limits = inventory
         .models
@@ -423,8 +424,37 @@ pub(super) fn runtime_resources(
         main_profiles,
         thinking,
         efforts,
+        accounts: account_entries(credential_pool),
         current_session: Some(current_session.to_owned()),
     }
+}
+
+/// The active account, as the footer shows it.
+pub(super) fn account_status(
+    credential_pool: Option<&SharedPool>,
+) -> Option<smith_tui::status::AccountStatus> {
+    let pool = credential_pool?;
+    pool.read(|pool| {
+        let active = pool.active()?;
+        Some(smith_tui::status::AccountStatus {
+            label: active.reference.clone(),
+            used_percent: pool.used_percent(active.position),
+        })
+    })
+}
+
+/// Builds the account picker's entries from live pool state.
+///
+/// Empty without a pool: a provider with one credential has no accounts to
+/// choose between, and an entry for it would only be a row the user cannot act
+/// on.
+pub(super) fn account_entries(credential_pool: Option<&SharedPool>) -> Vec<ResourceEntry> {
+    let Some(pool) = credential_pool else {
+        return Vec::new();
+    };
+    let now_ms = smith_tui::accounts::now_ms();
+    let (members, active) = pool.read(|pool| (pool.view(now_ms), pool.active_position()));
+    smith_tui::accounts::account_entries(&members, active, now_ms)
 }
 
 pub(super) fn workspace_file_entries(

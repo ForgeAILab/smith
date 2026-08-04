@@ -360,8 +360,18 @@ pub fn counter_label(kind: CounterKind) -> &'static str {
     }
 }
 
+/// The active pool account, as the footer shows it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AccountStatus {
+    /// The credential reference, never its value.
+    pub label: String,
+    /// Server-reported consumption, absent when nothing measured it.
+    pub used_percent: Option<f64>,
+}
+
 /// The header's model of session status.
 #[derive(Debug, Clone)]
+
 pub struct Status {
     /// Active main agent profile.
     pub agent: String,
@@ -371,6 +381,10 @@ pub struct Status {
     pub model: String,
     /// Compact non-default reasoning override, when one is active.
     pub reasoning_hint: Option<String>,
+    /// The credential-pool account serving attempts, when the provider
+    /// declares a pool. Absent for a single-credential provider, which has no
+    /// account to disambiguate.
+    pub account: Option<AccountStatus>,
     /// The project root, shown abbreviated.
     pub project: String,
     /// Cumulative provider-reported input for this session.
@@ -395,6 +409,22 @@ pub struct Status {
 }
 
 impl Status {
+    /// The account segment for the footer, when the provider declares a pool.
+    ///
+    /// Deliberately its own segment rather than part of the context or token
+    /// counters: a rate-limit window is a server-reported percentage of an
+    /// account's plan, and the counters are Smith's disjoint token
+    /// measurement of one session. Adjacent, never merged.
+    pub fn render_account_footer(&self) -> Option<String> {
+        let account = self.account.as_ref()?;
+        Some(match account.used_percent {
+            Some(percent) => format!("{} {}%", account.label, percent.round() as i64),
+            // Unknown stays unknown: the account is named, its consumption is
+            // not guessed at.
+            None => account.label.clone(),
+        })
+    }
+
     /// A status for a session that has not yet run a turn.
     pub fn new(model: impl Into<String>, project: impl Into<String>) -> Self {
         Self {
@@ -402,6 +432,7 @@ impl Status {
             provider: None,
             model: model.into(),
             reasoning_hint: None,
+            account: None,
             project: project.into(),
             context: TokenCount::UNKNOWN,
             context_plan: None,
@@ -738,5 +769,47 @@ mod tests {
         status.switch_model(Some("anthropic".into()), "claude-opus-5");
         assert!(status.context_plan.is_none());
         assert_eq!(status.render_context_footer(), "? ctx");
+    }
+
+    #[test]
+    fn the_account_footer_shows_the_reference_and_its_meter() {
+        let mut status = Status::new("gpt-5.3", "~/work");
+        assert_eq!(status.render_account_footer(), None, "no pool, no segment");
+
+        status.account = Some(AccountStatus {
+            label: "keychain:smith/work".to_owned(),
+            used_percent: Some(82.4),
+        });
+        assert_eq!(
+            status.render_account_footer().as_deref(),
+            Some("keychain:smith/work 82%")
+        );
+    }
+
+    #[test]
+    fn an_unmeasured_account_is_named_without_a_number() {
+        let mut status = Status::new("gpt-5.3", "~/work");
+        status.account = Some(AccountStatus {
+            label: "keychain:smith/work".to_owned(),
+            used_percent: None,
+        });
+        // Naming the account is useful; guessing its consumption is not.
+        assert_eq!(
+            status.render_account_footer().as_deref(),
+            Some("keychain:smith/work")
+        );
+    }
+
+    #[test]
+    fn the_account_meter_is_separate_from_the_context_footer() {
+        let mut status = Status::new("gpt-5.3", "~/work");
+        status.account = Some(AccountStatus {
+            label: "keychain:smith/work".to_owned(),
+            used_percent: Some(82.0),
+        });
+        // A plan percentage and a token count are different measurements and
+        // must never end up in one segment.
+        assert!(!status.render_context_footer().contains("82%"));
+        assert!(!status.render_context_footer().contains("keychain"));
     }
 }

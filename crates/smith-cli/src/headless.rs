@@ -16,9 +16,12 @@ use agent_runtime_core::usage::UsageDelta;
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use serde::Serialize;
-use smith_host::{ApprovalRequired, HeadlessApproval, HeadlessInteraction, InteractionRequired};
+use smith_host::{
+    ApprovalRequired, HeadlessApproval, HeadlessInteraction, HeadlessRotation, InteractionRequired,
+};
 use smith_runtime::host::HostSession;
 use smith_runtime::journal::{EphemeralInterruptionReason, EphemeralWorkInterruption};
+use smith_runtime::rotation::SharedPool;
 use smith_runtime::{ChildDurability, ChildState};
 
 use crate::cli::OutputFormat;
@@ -71,8 +74,35 @@ struct ResultEnvelope {
     interaction_required: Option<InteractionOutput>,
     #[serde(skip_serializing_if = "Option::is_none")]
     recovery: Option<RecoveryOutput>,
+    /// The credential-pool account this run used, when the provider declares
+    /// a pool. A headless run keeps one account start to finish, so this names
+    /// what the whole run was billed to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    account: Option<AccountOutput>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+}
+
+/// The account a headless run used, and whether its window ran out.
+#[derive(Debug, Serialize)]
+struct AccountOutput {
+    /// Zero-based position in the declared pool.
+    position: usize,
+    /// The credential reference, never its value.
+    reference: String,
+    /// Server-reported consumption, absent when nothing measured it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    used_percent: Option<f64>,
+    /// Whether the run ended because this account's window was spent.
+    exhausted: bool,
+    /// When the spent window reopens, in Unix milliseconds, if reported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resets_at_ms: Option<u64>,
+    /// How many other accounts were declared but deliberately not used.
+    ///
+    /// A headless run never rotates, so this is the number of accounts a
+    /// script could have fallen back to had it been interactive.
+    unused_members: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -178,6 +208,7 @@ struct RecoveryOutput {
     reason: &'static str,
     interrupted_children: Vec<String>,
     interrupted_monitors: Vec<String>,
+    interrupted_tasks: Vec<String>,
 }
 
 impl From<&EphemeralWorkInterruption> for RecoveryOutput {
@@ -193,6 +224,7 @@ impl From<&EphemeralWorkInterruption> for RecoveryOutput {
                 .map(ToString::to_string)
                 .collect(),
             interrupted_monitors: interruption.monitors.clone(),
+            interrupted_tasks: interruption.tasks.clone(),
         }
     }
 }
@@ -257,6 +289,34 @@ fn child_session_outputs(host: &HostSession) -> Vec<ChildSessionOutput> {
         .unwrap_or_default()
 }
 
+/// Projects the account a headless run used.
+///
+/// A headless run selects its account once at session start and keeps it, so
+/// this is a property of the whole run rather than of a moment in it. Absent
+/// without a pool: a single-credential provider has no account to choose.
+fn account_output(
+    credential_pool: Option<&SharedPool>,
+    rotation: Option<&HeadlessRotation>,
+) -> Option<AccountOutput> {
+    let pool = credential_pool?;
+    let required = rotation.and_then(HeadlessRotation::required);
+    let now_ms = smith_tui::accounts::now_ms();
+    pool.read(|pool| {
+        let active = pool.active()?;
+        Some(AccountOutput {
+            position: active.position,
+            reference: active.reference.clone(),
+            used_percent: pool.used_percent(active.position),
+            exhausted: required.is_some(),
+            resets_at_ms: required
+                .as_ref()
+                .and_then(|required| required.resets_at_ms)
+                .or_else(|| pool.cooling_until(active.position, now_ms)),
+            unused_members: pool.members().len().saturating_sub(1),
+        })
+    })
+}
+
 /// Runs one turn, preserving canonical event order for stream JSON.
 pub(crate) async fn run(
     host: &HostSession,
@@ -264,6 +324,8 @@ pub(crate) async fn run(
     format: OutputFormat,
     approval: Option<&HeadlessApproval>,
     interaction: Option<&HeadlessInteraction>,
+    rotation: Option<&HeadlessRotation>,
+    credential_pool: Option<&SharedPool>,
 ) -> Result<Outcome> {
     let stdout = io::stdout();
     let stderr = io::stderr();
@@ -273,6 +335,8 @@ pub(crate) async fn run(
         format,
         approval,
         interaction,
+        rotation,
+        credential_pool,
         &mut stdout.lock(),
         &mut stderr.lock(),
     )
@@ -285,6 +349,8 @@ async fn run_with_io(
     format: OutputFormat,
     approval: Option<&HeadlessApproval>,
     interaction: Option<&HeadlessInteraction>,
+    rotation: Option<&HeadlessRotation>,
+    credential_pool: Option<&SharedPool>,
     stdout: &mut impl Write,
     stderr: &mut impl Write,
 ) -> Result<Outcome> {
@@ -575,6 +641,7 @@ async fn run_with_io(
         goal: final_goal,
         goal_continuation_turns,
         artifacts,
+        account: account_output(credential_pool, rotation),
         approval_required: approval_required.map(Into::into),
         interaction_required: interaction_required.map(Into::into),
         recovery: host.recovered_ephemeral_work().map(Into::into),
@@ -654,6 +721,7 @@ async fn write_restored_interaction_required(
         approval_required: None,
         interaction_required: Some(required.into()),
         recovery: host.recovered_ephemeral_work().map(Into::into),
+        account: None,
         error: shutdown_error,
     };
 
@@ -726,6 +794,7 @@ async fn write_submission_failure(
         approval_required: None,
         interaction_required: None,
         recovery: host.recovered_ephemeral_work().map(Into::into),
+        account: None,
         error: Some(error.clone()),
     };
 
@@ -1162,6 +1231,7 @@ mod tests {
             approval_required: None,
             interaction_required: None,
             recovery: None,
+            account: None,
             error: None,
         };
 
@@ -1210,6 +1280,7 @@ mod tests {
             }),
             interaction_required: None,
             recovery: None,
+            account: None,
             error: None,
         };
 
@@ -1255,6 +1326,7 @@ mod tests {
                 question_count: 2,
             }),
             recovery: None,
+            account: None,
             error: None,
         };
         let actual = serde_json::to_value(result).expect("serializable result");
@@ -1270,6 +1342,7 @@ mod tests {
     fn recovery_projection_is_metadata_only_and_keeps_the_monitor_seam_explicit() {
         let interruption = EphemeralWorkInterruption::process_exit(
             [agent_runtime_core::ids::ChildId::new("child-2")],
+            std::iter::empty::<String>(),
             std::iter::empty::<String>(),
         );
         let actual =
@@ -1307,6 +1380,7 @@ mod tests {
     fn text_projection_reports_lifecycle_without_exposing_todo_or_argument_content() {
         let protected_item = "PROTECTED TODO CONTENT";
         let result = ResultEnvelope {
+            account: None,
             schema_version: OUTPUT_SCHEMA_VERSION,
             kind: "result",
             status: ResultStatus::Ok,
@@ -1364,6 +1438,7 @@ mod tests {
                 reason: "process_exit",
                 interrupted_children: vec!["child-1".into()],
                 interrupted_monitors: vec!["monitor-1".into()],
+                interrupted_tasks: vec!["task-1".into()],
             }),
             error: None,
         };
@@ -1465,6 +1540,8 @@ max_output_tokens = 4096
             &host,
             "must be rejected".into(),
             OutputFormat::Json,
+            None,
+            None,
             None,
             None,
             &mut stdout,
@@ -1570,6 +1647,8 @@ max_output_tokens = 4096
             &host,
             "current turn".into(),
             OutputFormat::Json,
+            None,
+            None,
             None,
             None,
             &mut stdout,
@@ -1688,7 +1767,9 @@ max_output_tokens = 4096
                 OutputFormat::Json,
                 None,
                 None,
-                &mut stdout,
+                None,
+            None,
+            &mut stdout,
                 &mut stderr,
             ),
         )
@@ -1829,7 +1910,9 @@ max_output_tokens = 4096
                 OutputFormat::Json,
                 Some(approval.as_ref()),
                 None,
-                &mut stdout,
+                None,
+            None,
+            &mut stdout,
                 &mut stderr,
             ),
         )
@@ -1994,6 +2077,8 @@ max_output_tokens = 4096
             OutputFormat::StreamJson,
             None,
             None,
+            None,
+            None,
             &mut stdout,
             &mut stderr,
         )
@@ -2142,7 +2227,9 @@ max_output_tokens = 4096
                 OutputFormat::Json,
                 None,
                 Some(interaction.as_ref()),
-                &mut stdout,
+                None,
+            None,
+            &mut stdout,
                 &mut stderr,
             ),
         )
@@ -2313,7 +2400,9 @@ max_output_tokens = 4096
                 OutputFormat::Json,
                 None,
                 Some(headless_interaction.as_ref()),
-                &mut stdout,
+                None,
+            None,
+            &mut stdout,
                 &mut stderr,
             ),
         )
@@ -2416,5 +2505,81 @@ max_output_tokens = 4096
             .shutdown()
             .await
             .expect("interactive recovery shutdown");
+    }
+
+    fn pooled(active: usize) -> SharedPool {
+        let mut pool = smith_runtime::pool::CredentialPool::new(
+            "acme",
+            [
+                "keychain:smith/personal".to_owned(),
+                "keychain:smith/work".to_owned(),
+            ],
+            None,
+        );
+        pool.set_active(active);
+        SharedPool::new(pool)
+    }
+
+    #[test]
+    fn a_single_credential_provider_projects_no_account() {
+        // Nothing to disambiguate, so the field is absent rather than a row
+        // naming the only credential there is.
+        assert!(account_output(None, None).is_none());
+    }
+
+    #[test]
+    fn a_headless_run_projects_the_account_it_used() {
+        let pool = pooled(1);
+        let account = account_output(Some(&pool), None).expect("an account");
+
+        assert_eq!(account.position, 1);
+        assert_eq!(account.reference, "keychain:smith/work");
+        // Never measured, so no percentage is invented.
+        assert_eq!(account.used_percent, None);
+        assert!(!account.exhausted);
+        assert_eq!(account.resets_at_ms, None);
+        // One other account existed and was deliberately not used.
+        assert_eq!(account.unused_members, 1);
+
+        let value = serde_json::to_value(&account).expect("the account serializes");
+        assert_eq!(value["reference"], "keychain:smith/work");
+        assert_eq!(value["exhausted"], false);
+        // Absent rather than null: a consumer must not read "unmeasured" as a
+        // number.
+        assert!(value.get("used_percent").is_none());
+    }
+
+    #[tokio::test]
+    async fn an_exhausted_headless_run_reports_the_reset_it_stopped_on() {
+        let pool = pooled(0);
+        let rotation = HeadlessRotation::new();
+        let request = smith_host::rotation::RotationRequest {
+            provider: "acme".to_owned(),
+            trigger: smith_host::rotation::RotationTrigger::Exhausted,
+            outgoing: smith_host::rotation::RotationMember {
+                position: 0,
+                label: "keychain:smith/personal".to_owned(),
+                used_percent: Some(100.0),
+                cooling_until_ms: None,
+            },
+            eligible: vec![smith_host::rotation::RotationMember {
+                position: 1,
+                label: "keychain:smith/work".to_owned(),
+                used_percent: None,
+                cooling_until_ms: None,
+            }],
+            outgoing_resets_at_ms: Some(1_785_866_400_000),
+        };
+        // The policy declines and records, which is what a headless run does.
+        {
+            use smith_host::rotation::RotationPolicy;
+            rotation.decide(&request).await;
+        }
+
+        let account = account_output(Some(&pool), Some(&rotation)).expect("an account");
+        assert!(account.exhausted);
+        assert_eq!(account.resets_at_ms, Some(1_785_866_400_000));
+        // The run stayed put: the account is still the one it started on.
+        assert_eq!(account.reference, "keychain:smith/personal");
     }
 }

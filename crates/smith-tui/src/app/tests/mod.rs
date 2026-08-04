@@ -286,4 +286,5 @@ mod tests {
     include!("prompts.rs");
     include!("resources.rs");
     include!("child_lifecycle.rs");
+    include!("rotation.rs");
 }

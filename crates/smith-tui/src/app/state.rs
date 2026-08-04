@@ -15,6 +15,7 @@ use agent_runtime_core::event::{EventEnvelope, PlanItemProjection, PlanSensitivi
 use agent_runtime_core::ids::{AttemptId, RequestId, TurnId};
 use agent_runtime_core::steer::SteerReceipt;
 use smith_host::approval::ApprovalPrompt;
+use smith_host::rotation::RotationPrompt;
 use smith_tools::ToolCallDisplay;
 
 use crate::commands::CommandAction;
@@ -283,6 +284,8 @@ pub enum PaletteCommand {
     Think(Option<bool>),
     /// Select an advertised effort; `None` restores provider behavior.
     Effort(Option<String>),
+    /// Switch the active provider credential to a pool position.
+    Account(usize),
 }
 
 /// Bounded local resources available to runtime pickers.
@@ -310,6 +313,10 @@ pub struct RuntimeResources {
     pub thinking: Vec<ResourceEntry>,
     /// Bounded effort choices for the active binding.
     pub efforts: Vec<ResourceEntry>,
+    /// Declared credential-pool members for the active provider, with their
+    /// server-reported usage and cooldown state. Empty when the provider
+    /// declares a single credential, which is not a pool.
+    pub accounts: Vec<ResourceEntry>,
     /// Active session ID.
     pub current_session: Option<String>,
 }
@@ -335,6 +342,8 @@ pub enum ResourceTarget {
     Effort,
     /// Insert one typed file or child-agent reference into the composer.
     Reference,
+    /// Credential-pool member serving subsequent attempts.
+    Account,
 }
 
 /// A temporary interactive surface. At most one exists at a time.
@@ -434,6 +443,17 @@ pub enum Overlay {
         /// Stable child identity.
         child_id: String,
         /// Recovery and spend summary.
+        content: String,
+    },
+    /// A spent account is offering to move to another pool member.
+    ///
+    /// Boxed like the approval prompt, and for the same reason: dropping it
+    /// without answering must decline rather than switch, so the channel is
+    /// owned by the overlay.
+    RotationConfirm {
+        /// The offer, and the channel to answer it on.
+        prompt: Box<RotationPrompt>,
+        /// The rendered body, including the prompt-cache cost.
         content: String,
     },
     /// Exit was requested while work is live.

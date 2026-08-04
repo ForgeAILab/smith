@@ -539,7 +539,7 @@ async fn a_resolved_fake_configuration_builds_a_runtime_and_runs_a_turn() {
     // The built-in defaults, mapped: two retries is three attempts, and the
     // reserve falls back to the model's own declared ceiling.
     assert_eq!(policy.max_attempts, 3);
-    assert_eq!(policy.max_tool_steps, 64);
+    assert_eq!(policy.max_tool_steps, Some(64));
     assert_eq!(policy.context_policy.output_reserve, 4_096);
     assert_eq!(policy.context_policy.reasoning_reserve, 0);
 

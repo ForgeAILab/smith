@@ -19,6 +19,11 @@ pub(super) async fn handle_local_command(
     command: CommandAction,
 ) {
     match command {
+        CommandAction::Account(_) => {
+            // Resolved entirely in the TUI against live pool state, which the
+            // host does not need to be consulted about.
+            app.show_local_error("account", "account selection is handled by the picker");
+        }
         CommandAction::Connect(_) | CommandAction::Disconnect(_) => {
             app.show_local_error(
                 "connect",

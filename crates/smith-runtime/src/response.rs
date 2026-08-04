@@ -159,6 +159,7 @@ impl Stream for ReasoningOnlyTextStream {
                         ProviderStreamEvent::Finish { .. } => Action::Preserve,
                         ProviderStreamEvent::Usage { .. }
                         | ProviderStreamEvent::CacheObservation { .. }
+                        | ProviderStreamEvent::RateLimit { .. }
                         | ProviderStreamEvent::Downgrade { .. }
                         | ProviderStreamEvent::VendorMetadata { .. } => Action::Buffer,
                     };
