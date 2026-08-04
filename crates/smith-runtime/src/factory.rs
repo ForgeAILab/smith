@@ -2042,6 +2042,11 @@ fn construct(
                 request.config.model.value.clone(),
             );
             config.capabilities = profile.capabilities.clone();
+            // xAI runs an implicit prefix cache on its own: a repeated-prefix
+            // session reports large cached reads with no request field asked
+            // of the adapter. Declare it so cache planning and reporting
+            // reflect the reuse instead of claiming none exists.
+            config.capabilities.prompt_cache = PromptCacheControl::Implicit;
             config.extra_headers = request
                 .config
                 .provider
