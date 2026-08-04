@@ -637,6 +637,13 @@ pub const KIND_ANTHROPIC_MESSAGES: &str = "anthropic-messages";
 /// Smith's experimental direct ChatGPT Codex Responses adapter.
 pub const KIND_CHATGPT_RESPONSES: &str = "chatgpt-responses";
 
+/// The adapter kind for a stateless OpenAI Responses endpoint.
+///
+/// Deliberately not named for a vendor: the adapter is generic over the
+/// Responses wire protocol and takes its endpoint from `base_url`. xAI's Grok
+/// is the first fixture-verified deployment, at `https://api.x.ai/v1`.
+pub const KIND_OPENAI_RESPONSES: &str = "openai-responses";
+
 /// The endpoint an `anthropic-messages` provider uses when none is configured.
 pub const ANTHROPIC_DEFAULT_ENDPOINT: &str = "https://api.anthropic.com/v1";
 

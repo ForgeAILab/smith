@@ -69,6 +69,7 @@ use agent_runtime::hub::{ScopeIdentity, ScopeInputs};
 use agent_runtime::provider::anthropic::{AnthropicConfig, AnthropicProvider};
 use agent_runtime::provider::fake::FakeProvider;
 use agent_runtime::provider::openai::{OpenAiConfig, OpenAiProvider};
+use agent_runtime::provider::responses::{ResponsesConfig, ResponsesProvider};
 use agent_runtime::provider::retry::RetryPolicy;
 use agent_runtime::registry::Permission;
 use agent_runtime::registry::RegistryRevision;
@@ -96,7 +97,7 @@ use smith_config::credential::{
 };
 use smith_config::model::{
     AgentPosture, ApprovalMode, KIND_ANTHROPIC_MESSAGES, KIND_CHATGPT_RESPONSES, KIND_FAKE,
-    KIND_OPENAI_COMPATIBLE, ProfileUse,
+    KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES, ProfileUse,
 };
 use smith_config::resolve::{ResolvedConfig, ResolvedProvider};
 use smith_config::setup::trusted_model;
@@ -172,6 +173,7 @@ pub const DEFAULT_CREDENTIAL_TIMEOUT_MS: u64 = 30_000;
 /// Setup uses this list to hide descriptors it cannot actually compose.
 pub const AVAILABLE_ADAPTER_KINDS: &[&str] = &[
     KIND_OPENAI_COMPATIBLE,
+    KIND_OPENAI_RESPONSES,
     KIND_ANTHROPIC_MESSAGES,
     KIND_CHATGPT_RESPONSES,
     KIND_FAKE,
@@ -571,7 +573,8 @@ pub enum FactoryError {
     #[error(
         "provider `{provider}` selects the `{kind}` adapter, which this build of Agent Runtime \
          does not ship; the available kinds are `{KIND_OPENAI_COMPATIBLE}`, \
-         `{KIND_ANTHROPIC_MESSAGES}`, `{KIND_CHATGPT_RESPONSES}`, and `{KIND_FAKE}`"
+         `{KIND_OPENAI_RESPONSES}`, `{KIND_ANTHROPIC_MESSAGES}`, \
+         `{KIND_CHATGPT_RESPONSES}`, and `{KIND_FAKE}`"
     )]
     AdapterUnavailable {
         /// The provider that selected it.
@@ -665,6 +668,8 @@ pub enum FactoryError {
 enum Adapter {
     /// Agent Runtime's OpenAI-compatible Chat-Completions adapter.
     OpenAiCompatible,
+    /// Agent Runtime's native stateless OpenAI Responses adapter.
+    OpenAiResponses,
     /// Agent Runtime's native Anthropic Messages API adapter.
     AnthropicMessages,
     /// Smith's experimental direct ChatGPT Codex Responses adapter.
@@ -1451,6 +1456,9 @@ async fn prepare_factory_inputs(
     let adapter = adapter(&config.provider)?;
     let endpoint = match adapter {
         Adapter::OpenAiCompatible => Some(endpoint(&config.provider, None)?),
+        // Generic over the Responses protocol, so there is no default to fall
+        // back to: the endpoint names which deployment is being talked to.
+        Adapter::OpenAiResponses => Some(endpoint(&config.provider, None)?),
         Adapter::AnthropicMessages => Some(endpoint(
             &config.provider,
             Some(smith_config::model::ANTHROPIC_DEFAULT_ENDPOINT),
@@ -1550,6 +1558,7 @@ async fn prepare_factory_inputs(
 fn adapter(provider: &ResolvedProvider) -> Result<Adapter, FactoryError> {
     match provider.kind.value.as_str() {
         KIND_OPENAI_COMPATIBLE => Ok(Adapter::OpenAiCompatible),
+        KIND_OPENAI_RESPONSES => Ok(Adapter::OpenAiResponses),
         KIND_ANTHROPIC_MESSAGES => Ok(Adapter::AnthropicMessages),
         KIND_CHATGPT_RESPONSES => Ok(Adapter::ChatGptResponses),
         KIND_FAKE => Ok(Adapter::Fake),
@@ -1694,6 +1703,41 @@ fn construct(
                     Ok(Arc::new(provider))
                 }
                 None => Ok(Arc::new(OpenAiProvider::new(transport, config))),
+            }
+        }
+        Adapter::OpenAiResponses => {
+            let transport = ReqwestTransport::new(request.transport.clone())
+                .map_err(FactoryError::Transport)?;
+            let mut config = ResponsesConfig::new(
+                endpoint.unwrap_or_default(),
+                request.config.model.value.clone(),
+            );
+            // The resolved profile governs request validation, so the adapter
+            // is told what the profile declared rather than a provider-wide
+            // guess about every model the endpoint might serve.
+            config.capabilities = profile.capabilities.clone();
+            config.extra_headers = request
+                .config
+                .provider
+                .headers
+                .iter()
+                .map(|(name, value)| (name.clone(), value.value.clone()))
+                .collect();
+            let target = ProviderCredentialTarget::new(request.config.provider.name.value.clone())
+                .map_err(|error| FactoryError::Runtime(RuntimeError::config(error.to_string())))?;
+            match secret {
+                Some(secret) => {
+                    let source = Arc::new(StaticProviderCredentialSource::new(secret))
+                        as Arc<dyn ProviderCredentialSource>;
+                    let provider = ResponsesProvider::with_credential_source(
+                        transport, config, target, source,
+                    )
+                    .map_err(FactoryError::Transport)?;
+                    Ok(Arc::new(provider))
+                }
+                None => Ok(Arc::new(
+                    ResponsesProvider::new(transport, config).map_err(FactoryError::Transport)?,
+                )),
             }
         }
         Adapter::AnthropicMessages => {

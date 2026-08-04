@@ -204,9 +204,38 @@ structure rejects unknown fields.
 
 ## Providers, credentials, and models
 
-`providers.<name>.kind` is `openai-compatible` for the production adapter or
-`fake` for deterministic local development. `base_url` is required only where
-the adapter requires it. Extra headers are sent unchanged, but authorization
+`providers.<name>.kind` selects the wire protocol:
+
+| kind | protocol | `base_url` |
+| --- | --- | --- |
+| `openai-compatible` | OpenAI Chat Completions | required |
+| `openai-responses` | OpenAI Responses, stateless | required |
+| `anthropic-messages` | Anthropic Messages | optional, defaults to the public endpoint |
+| `chatgpt-responses` | ChatGPT Codex Responses | optional, defaults to the ChatGPT endpoint |
+| `fake` | deterministic local development | not used |
+
+`openai-responses` is generic over the Responses protocol rather than tied to
+one vendor, so the endpoint decides which deployment is being talked to. xAI's
+Grok is the first fixture-verified one:
+
+```toml
+[profiles.grok]
+provider = "xai"
+model = "grok-4.5"
+
+[providers.xai]
+kind = "openai-responses"
+base_url = "https://api.x.ai/v1"
+credential = "keychain:smith/xai"
+
+[models."xai/grok-4.5"]
+context_tokens = 500000
+max_input_tokens = 480000
+max_output_tokens = 32768
+```
+
+Smith never guesses a context window, so the `[models]` block is required
+unless a catalog source supplies those limits. Extra headers are sent unchanged, but authorization
 header names such as `Authorization`, `X-API-Key`, and `Api-Key` are refused;
 credentials belong in the credential broker.
 

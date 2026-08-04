@@ -1133,6 +1133,51 @@ async fn an_adapter_the_pinned_runtime_does_not_ship_is_reported_as_unavailable(
     // It says which adapters exist rather than quietly picking one.
     assert!(rendered.contains("openai-compatible"), "{rendered}");
     assert!(rendered.contains("anthropic-messages"), "{rendered}");
+    assert!(rendered.contains("openai-responses"), "{rendered}");
+}
+
+/// A stateless Responses endpoint — xAI's Grok is the first verified one.
+const XAI_CONFIG: &str = r#"
+default_profile = "grok"
+
+[profiles.grok]
+provider = "xai"
+model = "grok-4.5"
+
+[providers.xai]
+kind = "openai-responses"
+base_url = "https://api.x.ai/v1"
+
+[models."xai/grok-4.5"]
+context_tokens = 500000
+max_input_tokens = 480000
+max_output_tokens = 32768
+
+[approval]
+mode = "allow-all"
+"#;
+
+#[tokio::test]
+async fn a_responses_provider_composes_from_configuration_alone() {
+    // The adapter is generic over the Responses protocol and takes its
+    // endpoint from `base_url`, so this proves the kind resolves and the
+    // credential reaches it without naming a vendor anywhere in the factory.
+    let fixture = Fixture::new(XAI_CONFIG);
+    let smith = factory::build(request(&fixture, HostSurface::Terminal))
+        .await
+        .expect("a Responses runtime");
+
+    let policy = smith.policy();
+    assert_eq!(policy.provider_name, "xai");
+    assert_eq!(policy.provider_kind, "openai-responses");
+    assert_eq!(policy.model, ModelId::new("grok-4.5"));
+    assert_eq!(
+        policy.model_profile.limits,
+        ModelLimits::new(500_000, 480_000, 32_768)
+    );
+    // Generic over the protocol: nothing in the factory names a vendor, only
+    // the configured endpoint does.
+    assert_eq!(policy.endpoint.as_deref(), Some("https://api.x.ai/v1"));
 }
 
 #[tokio::test]
