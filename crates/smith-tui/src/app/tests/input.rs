@@ -84,6 +84,35 @@
     }
 
     #[test]
+    fn arrow_keys_only_navigate_composer_history() {
+        let mut app = app();
+        app.sync_scroll_limit(40);
+
+        app.on_key(key(KeyCode::Up));
+        app.on_key(key(KeyCode::Down));
+
+        assert!(app.following);
+        assert_eq!(app.scroll_back, 0);
+    }
+
+    #[test]
+    fn the_mouse_wheel_scrolls_the_transcript_without_touching_the_draft() {
+        let mut app = app();
+        app.sync_scroll_limit(40);
+        type_text(&mut app, "keep drafting");
+
+        assert!(app.on_mouse(mouse(MouseEventKind::ScrollUp)));
+        assert_eq!(app.composer.text(), "keep drafting");
+        assert_eq!(app.scroll_back, 3);
+        assert!(!app.following);
+
+        assert!(app.on_mouse(mouse(MouseEventKind::ScrollDown)));
+        assert_eq!(app.scroll_back, 0);
+        assert!(app.following);
+        assert!(!app.on_mouse(mouse(MouseEventKind::Moved)));
+    }
+
+    #[test]
     fn ctrl_r_search_cycles_accepts_and_cancels_losslessly() {
         let mut app = app();
         for input in ["fix older", "unrelated", "fix newest"] {

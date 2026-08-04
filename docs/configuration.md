@@ -212,11 +212,14 @@ structure rejects unknown fields.
 | `openai-responses` | OpenAI Responses, stateless | required |
 | `anthropic-messages` | Anthropic Messages | optional, defaults to the public endpoint |
 | `chatgpt-responses` | ChatGPT Codex Responses | optional, defaults to the ChatGPT endpoint |
+| `gemini-interactions` | Google Gemini Interactions, stateless | fixed native endpoint; not configurable |
 | `fake` | deterministic local development | not used |
 
 `openai-responses` is generic over the Responses protocol rather than tied to
 one vendor, so the endpoint decides which deployment is being talked to. xAI's
-Grok is the first fixture-verified one:
+Grok is the first fixture-verified one, and `smith setup` offers it as
+**Connect xAI Grok**. Sign in with `/connect xai` for a browser login, or give
+setup an API key from console.x.ai. Either way the written block is:
 
 ```toml
 [profiles.grok]
@@ -296,6 +299,29 @@ from Smith's embedded/last-good OpenRouter catalog without network or provider
 I/O during the credential ceremony. Custom endpoints remain a `smith setup
 add-provider` operation.
 
+Google AI Studio is a native, stateless Gemini connection. Create an API key in
+[Google AI Studio](https://ai.google.dev/gemini-api/docs/api-key), then run
+`/connect google` or use this minimal user configuration:
+
+```toml
+default_profile = "gemini"
+
+[profiles.gemini]
+provider = "google"
+model = "gemini-3.6-flash"
+
+[providers.google]
+kind = "gemini-interactions"
+credential = "env:GEMINI_API_KEY"
+```
+
+Smith owns the fixed Google Generative Language endpoint for this adapter and
+rejects `base_url`, custom headers, hosted-tool settings, and guessed model
+limits. Model capabilities and limits come from the same embedded/last-good
+Models.dev snapshot used by `/model` and setup; no `[models]` entry is needed
+for catalog-backed Gemini models. The provider sends native Gemini
+`thinking_level` values when the selected catalog model advertises them.
+
 ChatGPT is a fixed experimental direct provider. `/connect chatgpt` writes only
 the trusted declaration below and stores the renewable bundle in the
 `chatgpt` entry of the fixed plaintext `~/.smith/auth.json` file:
@@ -357,7 +383,8 @@ switch behavior, and ordered effort values. Three exact endpoints normalize
 controls themselves and need no per-model metadata: the OpenAI endpoint
 speaks `reasoning_effort`, the OpenRouter endpoint speaks the unified
 `reasoning` object with an on/off switch, and the Z.AI Coding Plan endpoint
-speaks its documented thinking toggle. On those endpoints the frozen
+speaks its documented thinking toggle; the native Gemini endpoint speaks
+catalog-advertised `thinking_level` values. On those endpoints the frozen
 Models.dev snapshot supplies each model's advertised control shape — its
 exact effort ladder (for example `none…xhigh` on newer OpenAI families,
 `low…high` on older ones) or a bare toggle. On the OpenAI endpoint, `off`
@@ -368,7 +395,9 @@ everything; token-budget options are not yet consumed.
 
 `[reasoning]` and `[profiles.<name>.reasoning]` select `enabled` and/or one
 advertised `effort`. Omission sends no reasoning option and preserves provider
-behavior. The exact Z.AI Coding Plan binding exposes its documented thinking
+behavior. Native Gemini reasoning uses the catalog's `thinking_level` values
+and is mandatory when the model advertises a ladder; `/think off` is rejected
+for that model. The exact Z.AI Coding Plan binding exposes its documented thinking
 toggle but no general effort ladder. `/think [on|off|default]` and
 `/effort [LEVEL|default]` apply session overrides at an idle boundary; omitted
 arguments open local bounded selectors and make no provider request. Invalid

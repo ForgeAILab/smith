@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 
 use crate::model::{
     ANTHROPIC_DEFAULT_ENDPOINT, KIND_ANTHROPIC_MESSAGES, KIND_CHATGPT_RESPONSES,
-    KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE, ReasoningOnlyBehavior,
+    KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES, ReasoningOnlyBehavior,
 };
 
 /// Revision of the trusted model data shipped with this Smith build.
@@ -36,6 +36,8 @@ pub const CHATGPT_CREDENTIAL: &str = "authfile:chatgpt";
 
 /// Provider name for an xAI subscription reached by browser login.
 pub const XAI_PROVIDER: &str = "xai";
+/// Profile name the xAI setup choice writes.
+pub const XAI_PROFILE: &str = "grok";
 /// xAI's Responses API base URL.
 pub const XAI_ENDPOINT: &str = "https://api.x.ai/v1";
 /// Owner-only auth-file reference for Smith's renewable xAI bundle.
@@ -223,6 +225,22 @@ const DESCRIPTORS: &[ProviderSetupDescriptor] = &[
         reasoning_only: None,
     },
     ProviderSetupDescriptor {
+        id: "xai",
+        label: "Connect xAI Grok",
+        description: "Browser login with `/connect xai`, or an API key; catalog-backed Grok limits",
+        provider: Some(XAI_PROVIDER),
+        profile: Some(XAI_PROFILE),
+        adapter: KIND_OPENAI_RESPONSES,
+        endpoint: Some(XAI_ENDPOINT),
+        // An API key is offered here because setup is a one-shot
+        // configuration path. The browser login is the other route and lives
+        // in `/connect xai`, which needs an interactive ceremony setup does
+        // not run.
+        credentials: CREDENTIAL_METHODS,
+        models: &[],
+        reasoning_only: None,
+    },
+    ProviderSetupDescriptor {
         id: "google",
         label: "Connect Google Gemini",
         description: "AI Studio API key with a fixed native Gemini Interactions endpoint",
@@ -272,6 +290,38 @@ mod tests {
             choices
                 .iter()
                 .all(|choice| choice.adapter == KIND_OPENAI_COMPATIBLE)
+        );
+    }
+
+    #[test]
+    fn the_xai_choice_is_offered_and_points_at_the_responses_adapter() {
+        // The kind, endpoint, and profile together are what make the written
+        // provider block usable without a hand-authored `[models]` table: the
+        // catalog binds xAI's limits to exactly this pair.
+        let xai = provider_descriptors(&[KIND_OPENAI_RESPONSES])
+            .into_iter()
+            .find(|choice| choice.id == "xai")
+            .expect("xAI is offered when the Responses adapter ships");
+
+        assert_eq!(xai.adapter, KIND_OPENAI_RESPONSES);
+        assert_eq!(xai.endpoint, Some(XAI_ENDPOINT));
+        assert_eq!(xai.provider, Some(XAI_PROVIDER));
+        assert_eq!(xai.profile, Some(XAI_PROFILE));
+        assert_eq!(xai.endpoint, Some(crate::catalog::XAI_CATALOG_ENDPOINT));
+        assert!(
+            !xai.credentials.is_empty(),
+            "setup must offer a credential path; the browser login lives in /connect"
+        );
+    }
+
+    #[test]
+    fn an_absent_adapter_hides_its_choice() {
+        // A build without the Responses adapter must not advertise xAI, or
+        // setup would write a provider block the runtime then refuses.
+        assert!(
+            provider_descriptors(&[KIND_OPENAI_COMPATIBLE])
+                .iter()
+                .all(|choice| choice.id != "xai")
         );
     }
 

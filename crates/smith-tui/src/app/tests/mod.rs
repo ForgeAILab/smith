@@ -26,7 +26,9 @@ mod tests {
     use agent_runtime_core::usage::{
         CounterKind, Provenance, UsageDelta, UsageRecord, UsageSource,
     };
-    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+    };
     use smith_host::approval::InteractiveApproval;
 
     use crate::commands;
@@ -164,6 +166,15 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn mouse(kind: MouseEventKind) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        }
     }
 
     fn ctrl(ch: char) -> KeyEvent {

@@ -35,6 +35,9 @@ pub(super) const PASTE_CHUNK_MIN_CHARS: usize = 1_000;
 /// Bounded process-local paste storage; the oldest chunk is dropped first.
 pub(super) const MAX_PASTED_CHUNKS: usize = 50;
 
+/// Transcript lines one wheel notch scrolls.
+pub(super) const MOUSE_SCROLL_LINES: u16 = 3;
+
 /// One large paste stored aside so the composer stays editable.
 ///
 /// The composer holds only the placeholder text — `[Pasted text #2 +8 lines]`

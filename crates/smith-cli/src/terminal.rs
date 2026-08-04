@@ -10,7 +10,9 @@ use std::io::{Stdout, Write, stdout};
 
 use anyhow::Result;
 use crossterm::cursor::MoveTo;
-use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
+use crossterm::event::{
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -55,8 +57,9 @@ impl Drop for Terminal {
 pub(crate) fn enter() -> Result<Terminal> {
     enable_raw_mode()?;
     // Bracketed paste turns a paste into one `Event::Paste` instead of a
-    // storm of key events. Mouse reporting deliberately stays disabled so the
-    // terminal retains native drag selection and copy behavior everywhere.
+    // storm of key events. Mouse reporting is needed for wheel events in the
+    // alternate screen; the TUI consumes only wheel events and ignores clicks
+    // and motion.
     if let Err(error) = enter_screen(&mut stdout()) {
         let _ = disable_raw_mode();
         return Err(error.into());
@@ -102,11 +105,21 @@ pub(crate) fn leave() -> Result<()> {
 }
 
 fn enter_screen(writer: &mut impl Write) -> std::io::Result<()> {
-    execute!(writer, EnterAlternateScreen, EnableBracketedPaste)
+    execute!(
+        writer,
+        EnterAlternateScreen,
+        EnableBracketedPaste,
+        EnableMouseCapture
+    )
 }
 
 fn leave_screen(writer: &mut impl Write) -> std::io::Result<()> {
-    execute!(writer, DisableBracketedPaste, LeaveAlternateScreen)
+    execute!(
+        writer,
+        DisableMouseCapture,
+        DisableBracketedPaste,
+        LeaveAlternateScreen
+    )
 }
 
 #[cfg(test)]
@@ -116,14 +129,14 @@ mod tests {
     const MOUSE_MODE_CODES: [&str; 5] = ["1000", "1002", "1003", "1015", "1006"];
 
     #[test]
-    fn terminal_screen_modes_preserve_native_pointer_selection() {
+    fn terminal_screen_modes_enable_and_restore_mouse_reporting() {
         let mut entered = Vec::new();
         enter_screen(&mut entered).expect("enter sequences");
         let entered = String::from_utf8(entered).expect("ANSI is UTF-8");
         assert!(entered.contains("\u{1b}[?1049h"), "{entered:?}");
         assert!(entered.contains("\u{1b}[?2004h"), "{entered:?}");
         for code in MOUSE_MODE_CODES {
-            assert!(!entered.contains(&format!("?{code}h")), "{entered:?}");
+            assert!(entered.contains(&format!("?{code}h")), "{entered:?}");
         }
 
         let mut left = Vec::new();
@@ -132,7 +145,7 @@ mod tests {
         assert!(left.contains("\u{1b}[?2004l"), "{left:?}");
         assert!(left.contains("\u{1b}[?1049l"), "{left:?}");
         for code in MOUSE_MODE_CODES {
-            assert!(!left.contains(&format!("?{code}l")), "{left:?}");
+            assert!(left.contains(&format!("?{code}l")), "{left:?}");
         }
     }
 }

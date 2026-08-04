@@ -2,7 +2,7 @@
 
 use std::time::Instant;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
 use smith_host::approval::PromptScope;
 
 use crate::commands::{self, CommandAction};
@@ -13,6 +13,27 @@ use crate::status::Activity;
 use super::state::*;
 
 impl App {
+    /// Handles a mouse event, returning whether visible state changed.
+    ///
+    /// Mouse reporting is enabled only so terminal wheel events reach the
+    /// application. Button and motion events are intentionally ignored here.
+    pub fn on_mouse(&mut self, mouse: MouseEvent) -> bool {
+        if !matches!(self.overlay, None | Some(Overlay::Palette { .. })) {
+            return false;
+        }
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.scroll_up(MOUSE_SCROLL_LINES);
+                true
+            }
+            MouseEventKind::ScrollDown => {
+                self.scroll_down(MOUSE_SCROLL_LINES);
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Handles a key press, returning an action for the host loop.
     pub fn on_key(&mut self, key: KeyEvent) -> Option<Action> {
         let action = self.reduce_key(key);
@@ -219,17 +240,14 @@ impl App {
                 None
             }
             (KeyCode::Up, _) => {
-                if self.composer.recall_previous() {
-                    None
-                } else {
-                    self.on_scroll_key(key)
-                }
+                self.composer.recall_previous();
+                None
             }
-            (KeyCode::Down, _) if self.composer.is_recalling() => {
+            (KeyCode::Down, _) => {
                 self.composer.recall_next();
                 None
             }
-            (KeyCode::Down | KeyCode::Home | KeyCode::End, _) => self.on_scroll_key(key),
+            (KeyCode::Home | KeyCode::End, _) => self.on_scroll_key(key),
             _ => self.on_composer_key(key),
         }
     }
@@ -796,8 +814,6 @@ impl App {
 
     pub(super) fn on_scroll_key(&mut self, key: KeyEvent) -> Option<Action> {
         match key.code {
-            KeyCode::Up | KeyCode::Char('k') => self.scroll_up(1),
-            KeyCode::Down | KeyCode::Char('j') => self.scroll_down(1),
             KeyCode::Home => self.scroll_up(u16::MAX),
             KeyCode::End => self.follow_newest(),
             _ => {}

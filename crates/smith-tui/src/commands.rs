@@ -380,6 +380,7 @@ pub fn help() -> String {
          Esc interrupts; uncommitted steers are resent only after cancellation discards them.\n\
          @ completes exact files and read-only agents; @@ sends a literal @.\n\
          ! runs a prepared local shell action; !! sends a literal !.\n\
+         PageUp/PageDown/Home/End or the mouse wheel scrolls the transcript.\n\
          Up/Down browse accepted and Ctrl+C-stashed input without losing your draft.\n\
          Ctrl+R searches composer history; Enter restores a match and Esc cancels.\n\
          Ctrl+C twice within 1s exits; the first press stashes and clears the draft.\n\
