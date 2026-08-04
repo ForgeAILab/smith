@@ -99,7 +99,9 @@ have read, changed, or verified content that no committed tool result establishe
 const TOOL_USE: &str = "\
 Use the smallest activated capability set that can complete the task. Review the exact \
 prepared target before requesting authority. A denied or unavailable action is a real \
-constraint; do not route around it through a broader tool.";
+constraint; do not route around it through a broader tool. When several tool calls are \
+independent of each other, request them together in one response; the runtime runs \
+non-conflicting calls concurrently and returns every result in the same step.";
 
 const VERIFICATION: &str = "\
 Never say a command, test, build, deployment, or check succeeded unless a committed \
@@ -289,7 +291,7 @@ pub fn stable_fragments() -> Vec<ContextFragment> {
             "tool-use",
             FragmentKind::DeveloperInstruction,
             TOOL_USE,
-            "smith-prompt-tool-use-1",
+            "smith-prompt-tool-use-2",
         ),
         (
             "verification",
