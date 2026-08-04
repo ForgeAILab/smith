@@ -165,6 +165,12 @@ openrouter` fixes `https://openrouter.ai/api/v1`, offers the normal protected
 credential choices, and hands off to a reviewed catalog-model picker with
 enforceable limits. Existing OpenRouter connections change only authentication.
 
+Google Gemini is also built in. Create an API key in [Google AI Studio](https://ai.google.dev/gemini-api/docs/api-key),
+then run `/connect google`, choose protected API-key storage (or an environment
+reference), and select a catalog-backed Gemini model. Smith uses Google's native
+Gemini Interactions API with a fixed endpoint; it does not ask for an endpoint,
+limits, headers, or hosted-tool settings, and it writes no explicit model record.
+
 ChatGPT subscription login is deliberately different and explicitly
 experimental. `/connect chatgpt` offers Smith-owned browser PKCE or device-code
 login in a bounded popup, stores one renewable token bundle in the `chatgpt`
@@ -289,6 +295,7 @@ endpoints:
 | `https://api.openai.com/v1` | Models.dev `openai` |
 | `https://openrouter.ai/api/v1` | Models.dev `openrouter` |
 | `https://api.z.ai/api/coding/paas/v4` | Models.dev `zai-coding-plan` |
+| native `gemini-interactions` provider | Models.dev `google` |
 
 The configured provider name remains authoritative. A provider named `router`
 at the OpenRouter endpoint therefore exposes choices such as

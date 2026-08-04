@@ -26,10 +26,9 @@ status-card structure, and compact footer.
    the same weight as a provider-reported fact.
 4. **Nothing moves that the user did not cause.** Streaming text appends;
    layout does not reflow, jump, or animate underneath a reader.
-5. **The keyboard is the only required input.** Smith leaves pointer text
-   selection and copying to the terminal instead of enabling application-wide
-   mouse reporting; every Smith interaction remains available from the
-   keyboard.
+5. **The keyboard is the only required input.** Smith uses the mouse only for
+   optional transcript wheel scrolling; every other interaction remains
+   available from the keyboard.
 
 ## 2. Layout
 
@@ -213,14 +212,12 @@ modal or resource picker owns input and names its controls in the hint row.
 Slash completion is the deliberate quiet exception: its selected-row grammar
 and the keyboard contract below are sufficient, so it adds no control strip.
 
-The terminal owns pointer selection and copying across the transcript,
-composer, footer, pickers, modals, setup, and resume surfaces. Smith does not
-enable global mouse reporting: common terminal protocols cannot restrict
-capture to the composer, and consuming the initial press would prevent native
-drag selection everywhere else. Consequently click-to-position and mouse-wheel
-transcript scrolling are not Smith interactions; cursor movement and
-transcript scrolling use the keyboard controls below. Bracketed paste remains
-enabled independently of pointer reporting.
+Smith enables terminal mouse reporting only to receive wheel events. The TUI
+uses wheel-up and wheel-down for transcript scrolling and ignores button and
+motion events; there is no click-to-position or application-owned clipboard
+behavior. Because terminal mouse reporting is global, native drag selection
+may require the terminal's selection modifier. Bracketed paste remains enabled
+independently of pointer handling.
 
 | Key | Action |
 | --- | --- |
@@ -235,6 +232,7 @@ enabled independently of pointer reporting.
 | `Alt+Up` | Restore the newest explicitly queued future turn for editing; never edit a runtime-accepted steer |
 | `Left` / `Right` / `Backspace` / `Delete` | Edit ordinary text by Unicode character; cross or remove a registered paste/image placeholder as one unit |
 | `PageUp` / `PageDown` / `Home` / `End` | Scroll transcript or jump to either edge |
+| `Mouse wheel` | Scroll transcript without changing composer history |
 | `Ctrl+L` | Jump to newest and re-enable follow |
 | `?` (empty composer) | Show the same local guide as `/help`; never contact the provider |
 | `Up` / `Down` (composer history) | Browse accepted or `Ctrl+C`-stashed input and return to the exact pre-navigation draft |
