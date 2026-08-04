@@ -343,10 +343,17 @@ impl ChildRuntimeFactory for SmithChildFactory {
             .model_profile(route.model_profile.clone())
             .loop_config(loop_config)
             .context_policy(route.context_policy.clone())
-            .cache_capability(agent_runtime::context::ProviderCacheCapability::none(
-                RegistryRevision::new(CACHE_CAPABILITY_REVISION),
-                route.provider_kind.clone(),
-            ))
+            .cache_capability(
+                agent_runtime::context::ProviderCacheCapability::from_control(
+                    RegistryRevision::new(CACHE_CAPABILITY_REVISION),
+                    route.provider_kind.clone(),
+                    route
+                        .provider
+                        .capabilities(&route.model)
+                        .map(|capabilities| capabilities.prompt_cache)
+                        .unwrap_or_default(),
+                ),
+            )
             .security_check(
                 tool_authority,
                 SecurityCheckMode::Authoritative,

@@ -94,8 +94,48 @@ struct ResultEnvelope {
     /// were running, regardless of policy.
     #[serde(skip_serializing_if = "Option::is_none")]
     background_exit: Option<BackgroundExitOutput>,
+    /// The effective reasoning selection: what this run actually asked of the
+    /// provider, so a caller reading token counts can tell "max was
+    /// requested" apart from "the provider default applied".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<ReasoningOutput>,
+    /// The final turn's last cache plan, summarizing provider prefix reuse.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache: Option<CacheOutput>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+}
+
+/// Redaction-safe projection of the run's reasoning selection.
+#[derive(Debug, Serialize)]
+struct ReasoningOutput {
+    /// "on", "off", or "provider default".
+    state: &'static str,
+    /// Selected or documented effort, or "provider default".
+    effort: String,
+    /// Bounded description of where the selection came from.
+    source: String,
+}
+
+impl ReasoningOutput {
+    fn of(policy: &smith_runtime::reasoning::ReasoningRuntimePolicy) -> Self {
+        Self {
+            state: policy.effective_state(),
+            effort: policy.effective_effort().to_owned(),
+            source: policy.selection_source.clone(),
+        }
+    }
+}
+
+/// The last cache plan the runtime emitted for the reported turn.
+#[derive(Debug, Serialize)]
+struct CacheOutput {
+    /// Whether the provider can reuse the plan's stable prefix.
+    provider_cache_supported: bool,
+    /// Tokens of prefix carried over from the previous attempt's plan.
+    preserved_prefix_tokens: u32,
+    /// Tokens at or after the first changed segment.
+    invalidated_prefix_tokens: u32,
 }
 
 /// One background shell task's state as the background-exit policy last
@@ -574,6 +614,7 @@ async fn run_with_io(
     let turn_id = turn.id().clone();
     let mut finish = None;
     let mut turn_usage = UsageDelta::new();
+    let mut cache: Option<CacheOutput> = None;
     let mut last_error = None;
     let mut last_sequence = None;
     let mut sequence_error = None;
@@ -605,6 +646,18 @@ async fn run_with_io(
         if belongs_to_turn {
             match &event.payload {
                 RuntimeEvent::Usage { record } => turn_usage.merge(&record.delta),
+                RuntimeEvent::CachePlanChanged {
+                    preserved_prefix_tokens,
+                    invalidated_prefix_tokens,
+                    provider_cache_supported,
+                    ..
+                } => {
+                    cache = Some(CacheOutput {
+                        provider_cache_supported: *provider_cache_supported,
+                        preserved_prefix_tokens: *preserved_prefix_tokens,
+                        invalidated_prefix_tokens: *invalidated_prefix_tokens,
+                    });
+                }
                 RuntimeEvent::Error { error } => last_error = Some(error.to_string()),
                 RuntimeEvent::ProviderAttemptOutputCommitted { .. } => {
                     lifecycle.attempts_committed = lifecycle.attempts_committed.saturating_add(1);
@@ -845,6 +898,8 @@ async fn run_with_io(
         interaction_required: interaction_required.map(Into::into),
         recovery: host.recovered_ephemeral_work().map(Into::into),
         background_exit: background_exit_output,
+        reasoning: Some(ReasoningOutput::of(&host.runtime().policy().reasoning)),
+        cache,
         error: error.clone(),
     };
 
@@ -923,6 +978,8 @@ async fn write_restored_interaction_required(
         recovery: host.recovered_ephemeral_work().map(Into::into),
         account: None,
         background_exit: None,
+        reasoning: Some(ReasoningOutput::of(&host.runtime().policy().reasoning)),
+        cache: None,
         error: shutdown_error,
     };
 
@@ -997,6 +1054,8 @@ async fn write_submission_failure(
         recovery: host.recovered_ephemeral_work().map(Into::into),
         account: None,
         background_exit: None,
+        reasoning: Some(ReasoningOutput::of(&host.runtime().policy().reasoning)),
+        cache: None,
         error: Some(error.clone()),
     };
 
@@ -1435,6 +1494,8 @@ mod tests {
             recovery: None,
             account: None,
             background_exit: None,
+            reasoning: None,
+            cache: None,
             error: None,
         };
 
@@ -1485,6 +1546,8 @@ mod tests {
             recovery: None,
             account: None,
             background_exit: None,
+            reasoning: None,
+            cache: None,
             error: None,
         };
 
@@ -1532,6 +1595,8 @@ mod tests {
             recovery: None,
             account: None,
             background_exit: None,
+            reasoning: None,
+            cache: None,
             error: None,
         };
         let actual = serde_json::to_value(result).expect("serializable result");
@@ -1646,6 +1711,8 @@ mod tests {
                 interrupted_tasks: vec!["task-1".into()],
             }),
             background_exit: None,
+            reasoning: None,
+            cache: None,
             error: None,
         };
         let mut stderr = Vec::new();

@@ -7,15 +7,17 @@
 //!
 //! Sections are ordered by **how often they change, not by topic**. Agent
 //! Runtime computes a provider cache prefix as the longest *leading run* of
-//! [`CacheClass::Stable`] segments, so one variable section placed among the
-//! invariant ones truncates that run for every session — permanently if it is
-//! classified `Ephemeral`, and on every profile switch if it is left `Stable`
-//! while its content varies. [`stable_fragments`] therefore holds only what is
-//! byte-identical for every run, posture, and turn, and every capability-gated
-//! or posture-dependent section is contributed by [`dynamic_fragments`] after
-//! it. A profile switch still costs one reset through the changed tool array
-//! and the re-resolved model identity; what this ordering protects is the
-//! ordinary turn, which is the case that recurs.
+//! [`CacheClass::Stable`] segments, so a section that varies turn to turn
+//! placed among the invariant ones truncates that run for every session.
+//! [`stable_fragments`] holds what is byte-identical for every run, posture,
+//! and turn; capability-gated and posture-dependent sections follow in
+//! [`dynamic_fragments`]. Those are *also* classified `Stable`: they are
+//! byte-stable within an activation epoch, and cache planning compares
+//! content hashes, so the rare profile switch resets the prefix exactly at
+//! the changed section instead of the classification pre-emptively cutting
+//! the run short on every ordinary turn — the case that recurs. Only
+//! genuinely per-turn material (memory, retrieval) is `NoCache`/`Ephemeral`,
+//! and it rides in later lanes.
 
 use std::fmt;
 use std::sync::Arc;
@@ -72,8 +74,13 @@ pub const STABLE_SECTION_COUNT: usize = 8;
 /// the stable run, and the boundary the variable block must stay behind.
 const PROJECT_INSTRUCTIONS_SEQUENCE: u64 = STABLE_SECTION_COUNT as u64;
 
-/// First sequence of the ephemeral block. Nothing at or after this may be
-/// classified `CacheClass::Stable`.
+/// First sequence of the variable block: sections whose *presence or wording*
+/// depends on the profile or tool surface. They are still classified
+/// `CacheClass::Stable` because they are byte-stable within an activation
+/// epoch — a profile switch changes their content hash, and cache planning
+/// already ends the preserved prefix at the first changed segment. What may
+/// not appear here is anything that varies turn to turn; per-turn material
+/// belongs in the `Memory`/`Conversation` lanes behind this block.
 const VARIABLE_BLOCK_SEQUENCE: u64 = PROJECT_INSTRUCTIONS_SEQUENCE + 1;
 
 const IDENTITY: &str = "\
@@ -336,10 +343,12 @@ pub fn stable_fragments() -> Vec<ContextFragment> {
 /// Returns separately budgeted dynamic Smith sections.
 ///
 /// Ordering within [`ContextLane::Instructions`] is load-bearing. Project
-/// instructions are captured once per session and stay `CacheClass::Stable`,
-/// so they extend the leading stable run started by [`stable_fragments`].
-/// Everything after them varies within a session and is `Ephemeral`; nothing
-/// stable may follow, or the run would be cut short of its true length.
+/// instructions are captured once per session; the profile and
+/// capability-gated sections after them hold for an activation epoch. All of
+/// them are `CacheClass::Stable` — cache planning ends the preserved prefix
+/// at the first content-hash change, so a profile switch or re-activation
+/// resets exactly there. Only per-turn material (memory, project context)
+/// is classified `NoCache`/`Ephemeral`, and it rides in later lanes.
 pub fn dynamic_fragments(context: &DynamicPromptContext) -> Vec<ContextFragment> {
     let mut fragments = Vec::new();
     if let Some(instructions) = &context.project_instructions {
@@ -400,7 +409,9 @@ pub fn dynamic_fragments(context: &DynamicPromptContext) -> Vec<ContextFragment>
                 VARIABLE_BLOCK_SEQUENCE,
             ))
             .with_priority(9)
-            .with_cache_class(CacheClass::Ephemeral)
+            // Byte-stable within a session unless the user switches profile;
+            // a switch changes the content hash and resets the prefix there.
+            .with_cache_class(CacheClass::Stable)
             .with_sensitivity(Sensitivity::Internal),
         );
     }
@@ -441,7 +452,9 @@ pub fn dynamic_fragments(context: &DynamicPromptContext) -> Vec<ContextFragment>
             )
             .with_position(ContextPosition::new(ContextLane::Instructions, sequence))
             .with_priority(i32::try_from(sequence).unwrap_or(i32::MAX))
-            .with_cache_class(CacheClass::Ephemeral)
+            // Presence tracks tool registration, which is fixed for an
+            // activation epoch; content is a compile-time constant.
+            .with_cache_class(CacheClass::Stable)
             .with_sensitivity(Sensitivity::Internal),
         );
     }
@@ -456,7 +469,8 @@ pub fn dynamic_fragments(context: &DynamicPromptContext) -> Vec<ContextFragment>
             )
             .with_position(ContextPosition::new(ContextLane::Capabilities, 0))
             .with_priority(10)
-            .with_cache_class(CacheClass::Ephemeral)
+            // Skill activations hold for the epoch; a change re-hashes.
+            .with_cache_class(CacheClass::Stable)
             .with_sensitivity(Sensitivity::Internal),
         );
     }
@@ -667,7 +681,7 @@ mod tests {
         assert_eq!(fragment.revision.as_str(), "audit-profile-revision-7");
         assert_eq!(fragment.kind, FragmentKind::DeveloperInstruction);
         assert_eq!(fragment.source, FragmentSource::Host);
-        assert_eq!(fragment.cache_class, CacheClass::Ephemeral);
+        assert_eq!(fragment.cache_class, CacheClass::Stable);
         assert!(render_fragments(&dynamic).contains(private_instructions));
     }
 
@@ -732,7 +746,7 @@ mod tests {
         assert_eq!(dynamic[0].cache_class, CacheClass::Stable);
         assert!(dynamic[0].is_required());
         assert_eq!(dynamic[1].kind, FragmentKind::AbilityInstruction);
-        assert_eq!(dynamic[1].cache_class, CacheClass::Ephemeral);
+        assert_eq!(dynamic[1].cache_class, CacheClass::Stable);
         assert_eq!(dynamic[2].kind, FragmentKind::Memory);
         assert_eq!(dynamic[2].cache_class, CacheClass::NoCache);
         assert_eq!(dynamic[3].kind, FragmentKind::Retrieval);
@@ -826,12 +840,7 @@ mod tests {
                     fragment.id,
                     fragment.position.sequence
                 );
-                assert_eq!(
-                    fragment.cache_class,
-                    CacheClass::Ephemeral,
-                    "{}",
-                    fragment.id
-                );
+                assert_eq!(fragment.cache_class, CacheClass::Stable, "{}", fragment.id);
             } else {
                 assert!(
                     fragment.position.sequence < VARIABLE_BLOCK_SEQUENCE,

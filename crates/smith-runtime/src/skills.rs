@@ -330,7 +330,18 @@ fn validate_name(name: &str) -> Result<(), RuntimeError> {
     }
 }
 
+/// Connective words a description cannot help using. They must not become
+/// retrieval keywords: activation admits any candidate with a nonzero score,
+/// so one stray "with" in an unrelated prompt would otherwise pull a
+/// multi-thousand-token reference body into every context.
+const KEYWORD_STOPWORDS: &[&str] = &[
+    "activate", "and", "any", "are", "before", "each", "for", "from", "has", "how", "into", "its",
+    "not", "one", "only", "over", "that", "the", "them", "then", "this", "use", "using", "was",
+    "what", "when", "where", "whether", "which", "with", "you", "your",
+];
+
 fn skill_keywords(name: &str, description: &str) -> Vec<String> {
+    let mut seen = BTreeSet::new();
     name.split(['.', '_', '-'])
         .chain(
             description
@@ -339,6 +350,10 @@ fn skill_keywords(name: &str, description: &str) -> Vec<String> {
         .map(str::trim)
         .filter(|term| term.chars().count() >= 3)
         .map(str::to_lowercase)
+        .filter(|term| !KEYWORD_STOPWORDS.contains(&term.as_str()))
+        // Deduplicate before capping so a repeated word cannot crowd
+        // distinctive terms out of the bounded keyword budget.
+        .filter(|term| seen.insert(term.clone()))
         .take(32)
         .collect()
 }

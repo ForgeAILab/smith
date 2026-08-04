@@ -160,8 +160,9 @@ pub const CONTEXT_POLICY_REVISION: &str = "smith-context-policy-1";
 /// the resolved input budget and configured percentage watermarks.
 pub const COMPACTION_POLICY_REVISION: &str = "smith-compaction-policy-1";
 
-/// The revision recorded for a provider that declares no prompt-cache support.
-pub const CACHE_CAPABILITY_REVISION: &str = "smith-no-provider-cache-1";
+/// The revision recorded for the cache capability Smith derives from the
+/// selected adapter's declared [`PromptCacheControl`].
+pub const CACHE_CAPABILITY_REVISION: &str = "smith-provider-cache-2";
 
 /// The default bound on the runtime's event broadcast buffer.
 pub const DEFAULT_EVENT_BUFFER: usize = 1_024;
@@ -1356,9 +1357,16 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         .compactor(StructuralCompactor::new(compaction_policy))
         // Declared explicitly so the shared planner records Smith's answer
         // rather than its own "unspecified" placeholder in plan fingerprints.
-        .cache_capability(ProviderCacheCapability::none(
+        // The answer is the adapter's own declaration: an implicit-prefix
+        // provider caches the stable run, and reporting `none` here made
+        // every plan claim the provider could reuse nothing.
+        .cache_capability(ProviderCacheCapability::from_control(
             RegistryRevision::new(CACHE_CAPABILITY_REVISION),
             provider_kind.clone(),
+            provider
+                .capabilities(&model)
+                .map(|capabilities| capabilities.prompt_cache)
+                .unwrap_or_default(),
         ))
         .security_check(
             tool_authority,
