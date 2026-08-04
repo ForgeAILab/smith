@@ -112,7 +112,7 @@ use smith_host::rotation::{HeadlessRotation, RotationPolicy};
 use crate::abilities::{INTERACTION_READY_CONFIG, seal_tool_abilities};
 use crate::authority::SmithToolAuthority;
 use crate::pool::CredentialPool;
-use crate::rotation::{PooledProvider, SharedPool};
+use crate::rotation::{HostPoolSecrets, PoolCredentialSource, PooledProvider, SharedPool};
 use crate::budget_notice::{BudgetNoticeComponent, DEFAULT_NOTICE_THRESHOLD_TOKENS};
 use crate::catalog::{CatalogLayers, ProfileResolution};
 use crate::chatgpt::{
@@ -915,6 +915,11 @@ fn prepare_provider_stage(
     if let (Some(secret), Some(redactor)) = (&secret, &request.persistence_redactor) {
         redactor.register_secret(secret);
     }
+    // Built before the adapter so both halves share one pool: the credential
+    // source reads the active member from it, and the rotation decorator
+    // writes to it. Two pools would mean rotation changed a member the
+    // adapter never consulted.
+    let pool = credential_pool_for(request);
     let provider = match request.provider.clone() {
         Some(provider) => provider,
         None => construct(
@@ -924,6 +929,7 @@ fn prepare_provider_stage(
             endpoint,
             secret,
             &reasoning.efforts,
+            pool.as_ref(),
         )?,
     };
     let provider = crate::response::apply_response_policy(
@@ -942,25 +948,45 @@ fn prepare_provider_stage(
         }
         None => provider,
     };
-    Ok(apply_credential_pool(request, provider))
+    Ok(apply_credential_pool(request, provider, pool))
 }
 
-/// Wraps `provider` so a spent account can offer to move to another one.
+/// The credential source an adapter leases from.
 ///
-/// Outermost on purpose. Rotation replays the whole attempt, so it has to sit
-/// outside the response-policy and reasoning-dialect decorators — a replay
-/// that skipped them would produce a differently normalized turn than the one
-/// it replaced.
-fn apply_credential_pool(request: &RuntimeRequest, provider: Arc<dyn Provider>) -> Arc<dyn Provider> {
-    // A provider with one account behaves exactly as it did before pools
-    // existed: no wrapper, no offer, no extra state.
+/// With a pool this reads whichever member is active at the moment of the
+/// attempt, which is what makes a rotation take effect without rebuilding the
+/// adapter. The already-resolved secret seeds the cache so the active member
+/// is not read from the credential service twice at startup.
+fn credential_source(
+    request: &RuntimeRequest,
+    pool: Option<&SharedPool>,
+    secret: Secret,
+) -> Arc<dyn ProviderCredentialSource> {
+    match (pool, request.credentials.clone()) {
+        (Some(pool), Some(resolver)) => {
+            let source = PoolCredentialSource::new(
+                pool.clone(),
+                Arc::new(HostPoolSecrets::new(resolver)),
+            );
+            let active = pool.read(CredentialPool::active_position);
+            source.seed(active, secret);
+            Arc::new(source) as Arc<dyn ProviderCredentialSource>
+        }
+        // No pool, or nothing to resolve one with: the session has a single
+        // secret and it is already in hand.
+        _ => Arc::new(StaticProviderCredentialSource::new(secret)) as Arc<dyn ProviderCredentialSource>,
+    }
+}
+
+/// Builds the pool for this provider, or `None` when it declares one account.
+fn credential_pool_for(request: &RuntimeRequest) -> Option<SharedPool> {
     if !request.config.provider.has_pool() {
-        return provider;
+        return None;
     }
     // A host-supplied pool is already seeded with the remembered account and
     // is the handle the surfaces draw from, so it wins over building a fresh
     // one that would silently start back at the first member.
-    let pool = request.credential_pool.clone().unwrap_or_else(|| {
+    Some(request.credential_pool.clone().unwrap_or_else(|| {
         SharedPool::new(CredentialPool::new(
             request.config.provider.name.value.clone(),
             request
@@ -976,7 +1002,25 @@ fn apply_credential_pool(request: &RuntimeRequest, provider: Arc<dyn Provider>) 
                 .as_ref()
                 .map(|threshold| threshold.value),
         ))
-    });
+    }))
+}
+
+/// Wraps `provider` so a spent account can offer to move to another one.
+///
+/// Outermost on purpose. Rotation replays the whole attempt, so it has to sit
+/// outside the response-policy and reasoning-dialect decorators — a replay
+/// that skipped them would produce a differently normalized turn than the one
+/// it replaced.
+fn apply_credential_pool(
+    request: &RuntimeRequest,
+    provider: Arc<dyn Provider>,
+    pool: Option<SharedPool>,
+) -> Arc<dyn Provider> {
+    // A provider with one account behaves exactly as it did before pools
+    // existed: no wrapper, no offer, no extra state.
+    let Some(pool) = pool else {
+        return provider;
+    };
     // No surface to ask means declining, which `HeadlessRotation` does while
     // recording the exhaustion for machine output.
     let policy = request
@@ -1472,6 +1516,9 @@ async fn prepare_child_profile_routes(
         if let (Some(secret), Some(redactor)) = (&secret, &route_request.persistence_redactor) {
             redactor.register_secret(secret);
         }
+        // This is a per-route rebuild, which starts from the route's own
+        // configuration rather than the session's live pool.
+        let route_pool = credential_pool_for(&route_request);
         let provider = construct(
             adapter,
             &route_request,
@@ -1479,6 +1526,7 @@ async fn prepare_child_profile_routes(
             endpoint,
             secret,
             &reasoning.efforts,
+            route_pool.as_ref(),
         )?;
         let provider = crate::response::apply_response_policy(
             provider,
@@ -1830,6 +1878,7 @@ fn construct(
     endpoint: Option<String>,
     secret: Option<Secret>,
     supported_thinking_levels: &[String],
+    pool: Option<&SharedPool>,
 ) -> Result<Arc<dyn Provider>, FactoryError> {
     match adapter {
         Adapter::Fake => Ok(Arc::new(FakeProvider::text_reply(DEVELOPMENT_REPLY))),
@@ -1858,8 +1907,7 @@ fn construct(
                             .map_err(|error| {
                             FactoryError::Runtime(RuntimeError::config(error.to_string()))
                         })?;
-                    let source = Arc::new(StaticProviderCredentialSource::new(secret))
-                        as Arc<dyn ProviderCredentialSource>;
+                    let source = credential_source(request, pool, secret);
                     let provider =
                         OpenAiProvider::with_credential_source(transport, config, target, source)
                             .map_err(FactoryError::Transport)?;
@@ -1890,8 +1938,7 @@ fn construct(
                 .map_err(|error| FactoryError::Runtime(RuntimeError::config(error.to_string())))?;
             match secret {
                 Some(secret) => {
-                    let source = Arc::new(StaticProviderCredentialSource::new(secret))
-                        as Arc<dyn ProviderCredentialSource>;
+                    let source = credential_source(request, pool, secret);
                     let provider = ResponsesProvider::with_credential_source(
                         transport, config, target, source,
                     )
@@ -2042,8 +2089,7 @@ fn construct(
                 config.with_supported_thinking_levels(supported_thinking_levels.iter().cloned());
             let target = ProviderCredentialTarget::new(request.config.provider.name.value.clone())
                 .map_err(|error| FactoryError::Runtime(RuntimeError::config(error.to_string())))?;
-            let source = Arc::new(StaticProviderCredentialSource::new(secret))
-                as Arc<dyn ProviderCredentialSource>;
+            let source = credential_source(request, pool, secret);
             let provider = GeminiInteractionsProvider::with_credential_source(
                 transport, config, target, source,
             )

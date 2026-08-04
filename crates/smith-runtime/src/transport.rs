@@ -31,9 +31,10 @@
 
 use std::fmt;
 use std::pin::Pin;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use agent_runtime::provider::transport::{ByteStream, HttpRequest, HttpTransport};
+use agent_runtime::provider::ratelimit;
+use agent_runtime::provider::transport::{ByteStream, HttpRequest, HttpResponse, HttpTransport};
 use agent_runtime_core::provider::{ProviderError, ProviderErrorKind};
 use async_trait::async_trait;
 use futures_core::Stream;
@@ -155,6 +156,22 @@ impl ReqwestTransport {
 #[async_trait]
 impl HttpTransport for ReqwestTransport {
     async fn post_stream(&self, request: HttpRequest) -> Result<ByteStream, ProviderError> {
+        Ok(self.send(request).await?.body)
+    }
+
+    async fn post_response(&self, request: HttpRequest) -> Result<HttpResponse, ProviderError> {
+        self.send(request).await
+    }
+}
+
+impl ReqwestTransport {
+    /// Performs the request, surfacing what the server reported about itself.
+    ///
+    /// Both trait methods route through here so the header-observing path and
+    /// the body-only one cannot drift: a transport that classified a spent
+    /// window on one and not the other would make rotation depend on which
+    /// method an adapter happened to call.
+    async fn send(&self, request: HttpRequest) -> Result<HttpResponse, ProviderError> {
         // Parsed here rather than inside `reqwest` so that a malformed URL fails
         // with a message this module controls; `reqwest`'s would echo it back.
         let url = Url::parse(&request.url).map_err(|_| {
@@ -190,6 +207,12 @@ impl HttpTransport for ReqwestTransport {
         };
 
         let status = response.status();
+        // Only the rate-limit families are carried forward. Copying every
+        // header would hand the adapter `set-cookie` and whatever else a
+        // gateway attached, none of which it has a use for and some of which
+        // is credential-bearing.
+        let observed = observed_headers(response.headers());
+
         if let Some(err) = classify_status(status, response.headers(), &endpoint) {
             tracing::debug!(
                 status = status.as_u16(),
@@ -199,16 +222,62 @@ impl HttpTransport for ReqwestTransport {
             // `response` is dropped unread on this path, and that is the point:
             // a provider error body commonly echoes the offending request,
             // authorization header included.
-            return Err(err);
+            return Err(exhaustion_aware(err, status.as_u16(), &observed));
         }
 
-        Ok(bounded(
-            response,
-            endpoint,
-            deadline,
-            self.config.stall_timeout,
-            self.config.max_response_bytes,
-        ))
+        Ok(HttpResponse {
+            status: status.as_u16(),
+            headers: observed,
+            body: bounded(
+                response,
+                endpoint,
+                deadline,
+                self.config.stall_timeout,
+                self.config.max_response_bytes,
+            ),
+        })
+    }
+}
+
+/// The rate-limit headers, lowercased, and nothing else.
+fn observed_headers(headers: &HeaderMap) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter(|(name, _)| {
+            let name = name.as_str();
+            name.starts_with("x-ratelimit-")
+                || name.starts_with("anthropic-ratelimit-")
+                || name.starts_with("x-codex-")
+        })
+        .filter_map(|(name, value)| {
+            // A header whose value is not UTF-8 is dropped rather than
+            // lossily decoded: a mangled number is worse than an absent one.
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.as_str().to_owned(), value.to_owned()))
+        })
+        .collect()
+}
+
+/// Re-classifies a rejection as a spent usage window when the headers say so.
+///
+/// The shared classifier owns the judgement — a 429 whose reset is seconds
+/// away is still a throttle the retry policy should handle, and only a window
+/// the provider reports as consumed, or a reset far enough out, means the
+/// account is done until it resets.
+fn exhaustion_aware(
+    err: ProviderError,
+    status: u16,
+    headers: &[(String, String)],
+) -> ProviderError {
+    let snapshot = ratelimit::snapshot_from_headers(headers);
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis() as u64);
+    match ratelimit::classify_rejection(status, &snapshot, err.retry_after_ms, now_ms) {
+        Some(exhaustion) => ratelimit::apply_exhaustion(err, exhaustion),
+        None => err,
     }
 }
 
@@ -552,5 +621,76 @@ mod tests {
         let rendered = format!("{transport:?}");
         assert!(!rendered.contains(TOKEN), "{rendered}");
         assert!(rendered.contains("max_response_bytes"));
+    }
+
+    #[test]
+    fn only_rate_limit_headers_are_carried_to_the_adapter() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-ratelimit-remaining-tokens", HeaderValue::from_static("40"));
+        headers.insert(
+            "anthropic-ratelimit-unified-reset",
+            HeaderValue::from_static("2026-08-04T17:00:00Z"),
+        );
+        headers.insert("x-codex-primary-used-percent", HeaderValue::from_static("82"));
+        headers.insert("set-cookie", HeaderValue::from_static("session=secret"));
+        headers.insert("content-type", HeaderValue::from_static("text/event-stream"));
+
+        let observed = observed_headers(&headers);
+        let names: Vec<&str> = observed.iter().map(|(name, _)| name.as_str()).collect();
+
+        assert!(names.contains(&"x-ratelimit-remaining-tokens"));
+        assert!(names.contains(&"anthropic-ratelimit-unified-reset"));
+        assert!(names.contains(&"x-codex-primary-used-percent"));
+        // A gateway's cookie is credential-bearing and no adapter's business.
+        assert!(!names.contains(&"set-cookie"));
+        assert!(!names.contains(&"content-type"));
+        assert!(!format!("{observed:?}").contains("secret"));
+    }
+
+    #[test]
+    fn a_spent_window_is_reclassified_as_exhaustion() {
+        let rejected = fail(
+            ProviderErrorKind::RateLimited,
+            "the provider rate-limited the request",
+            "https://api.example.test",
+        )
+        .retryable();
+        let headers = vec![
+            ("x-ratelimit-limit-tokens".to_owned(), "10000".to_owned()),
+            ("x-ratelimit-remaining-tokens".to_owned(), "0".to_owned()),
+            ("x-ratelimit-reset-tokens".to_owned(), "1h30m0s".to_owned()),
+        ];
+
+        let err = exhaustion_aware(rejected, 429, &headers);
+        assert_eq!(err.kind, ProviderErrorKind::LimitExhausted);
+        // A spent window does not reopen because a backoff elapsed.
+        assert!(!err.retryable);
+    }
+
+    #[test]
+    fn a_short_throttle_keeps_its_retryable_classification() {
+        let rejected = fail(
+            ProviderErrorKind::RateLimited,
+            "the provider rate-limited the request",
+            "https://api.example.test",
+        )
+        .retry_after(5_000);
+        let headers = vec![("x-ratelimit-reset-tokens".to_owned(), "5s".to_owned())];
+
+        let err = exhaustion_aware(rejected, 429, &headers);
+        // Still the retry policy's business, exactly as before this change.
+        assert_eq!(err.kind, ProviderErrorKind::RateLimited);
+        assert!(err.retryable);
+    }
+
+    #[test]
+    fn a_rejection_without_limit_headers_is_left_alone() {
+        let rejected = fail(
+            ProviderErrorKind::Auth,
+            "the provider rejected the credential",
+            "https://api.example.test",
+        );
+        let err = exhaustion_aware(rejected, 401, &[]);
+        assert_eq!(err.kind, ProviderErrorKind::Auth);
     }
 }

@@ -562,6 +562,32 @@ pub(super) fn draw_review_confirm(frame: &mut Frame<'_>, area: Rect, content: &s
     draw_modal(frame, area, "read-only review", lines, theme, Tone::Accent);
 }
 
+/// The rotation offer: a spent account, and what switching costs.
+///
+/// Its own renderer rather than the recovery one, whose preamble talks about
+/// reverse patches and whose action bar reads "apply undo" — accurate for an
+/// undo, nonsense here, and this modal is asking the user to spend money.
+pub(super) fn draw_rotation_confirm(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    content: &str,
+    theme: Theme,
+) {
+    let mut lines = content
+        .lines()
+        .take(MAX_BODY_LINES.saturating_sub(2))
+        .map(|line| Line::from(line.to_owned()))
+        .collect::<Vec<_>>();
+    lines.push(Line::default());
+    lines.push(Line::from(vec![
+        Span::styled("y", theme.style(Tone::Accent)),
+        Span::styled(" switch account and resend   ", theme.style(Tone::Dim)),
+        Span::styled("n/esc", theme.style(Tone::Success)),
+        Span::styled(" stay", theme.style(Tone::Dim)),
+    ]));
+    draw_modal(frame, area, "switch provider account", lines, theme, Tone::Warning);
+}
+
 pub(super) fn draw_agent_confirm(frame: &mut Frame<'_>, area: Rect, content: &str, theme: Theme) {
     draw_child_continuation_confirm(
         frame,

@@ -148,7 +148,7 @@ fn draw_surface(
             draw_review_confirm(frame, area, content, theme);
         }
         Some(Overlay::RotationConfirm { content, .. }) => {
-            draw_recovery_confirm(frame, area, "switch provider account", content, theme);
+            draw_rotation_confirm(frame, area, content, theme);
         }
         Some(Overlay::AgentConfirm { content, .. }) => {
             draw_agent_confirm(frame, area, content, theme);

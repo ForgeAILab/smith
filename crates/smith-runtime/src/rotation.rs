@@ -129,6 +129,18 @@ impl PoolCredentialSource {
         }
     }
 
+    /// Pre-populates the cache for `position`.
+    ///
+    /// The active member's secret is already resolved by the time the adapter
+    /// is built, and reading it a second time would open the credential
+    /// service — and on some platforms prompt — for a value in hand.
+    pub fn seed(&self, position: usize, secret: Secret) {
+        self.cache
+            .lock()
+            .expect("credential cache poisoned")
+            .insert(position, secret);
+    }
+
     fn cached(&self, position: usize) -> Option<Secret> {
         self.cache
             .lock()

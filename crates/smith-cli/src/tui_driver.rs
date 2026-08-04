@@ -594,6 +594,20 @@ pub(super) async fn run_tui(
             }
 
             _ = frame.tick(), if dirty => {
+                // Re-read on the way to the screen rather than at each site
+                // that could change it: the pool also moves on its own — a
+                // rotation the runtime performed, a snapshot that arrived
+                // mid-turn — and a footer refreshed only on manual switches
+                // would keep naming an account the session had already left.
+                if credential_pool.is_some() {
+                    app.status.account = account_status(credential_pool.as_ref());
+                    app.set_accounts(account_entries(credential_pool.as_ref()));
+                    // Rotation happens inside the runtime, which cannot reach
+                    // user-scope state, so the account it moved to is
+                    // remembered here. `remember` reports whether anything
+                    // changed, so this writes on a switch and not on a frame.
+                    remember_active_account(credential_pool.as_ref(), &mut accounts).await;
+                }
                 terminal.draw(|frame| smith_tui::draw_synced(frame, &mut app, theme))?;
                 dirty = false;
             }
@@ -624,6 +638,29 @@ pub(super) async fn next_rotation(
     match rotations {
         Some(rotations) => rotations.recv().await,
         None => std::future::pending().await,
+    }
+}
+
+/// Persists the active account when it differs from what is remembered.
+///
+/// Covers rotations the runtime performed on its own; a manual switch already
+/// persists at the point of the switch. A failed write costs stickiness, not
+/// the session, so it is swallowed rather than escalated.
+pub(super) async fn remember_active_account(
+    credential_pool: Option<&SharedPool>,
+    accounts: &mut ActiveAccounts,
+) {
+    let Some(pool) = credential_pool else {
+        return;
+    };
+    let Some((provider, active)) = pool.read(|pool| {
+        pool.active()
+            .map(|member| (pool.provider().to_owned(), member.reference.clone()))
+    }) else {
+        return;
+    };
+    if accounts.remember(&provider, &active) {
+        let _ = accounts.save().await;
     }
 }
 

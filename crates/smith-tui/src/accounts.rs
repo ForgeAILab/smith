@@ -79,11 +79,21 @@ pub fn until_label(now_ms: u64, at_ms: u64) -> String {
 }
 
 /// Renders one pool member's one-line context.
+///
+/// A spent member whose consumption was never measured reads as "spent"
+/// alone. "usage unknown · spent" is technically true — the rejection's
+/// headers are dropped on the error path, so no number reached us — but it
+/// reads as a contradiction, and the cooldown already says everything the
+/// user needs. Absence is still never rendered as a number.
 pub fn member_detail(member: &RotationMember, now_ms: u64) -> String {
-    let usage = usage_label(member.used_percent);
-    match member.cooling_until_ms {
-        Some(until) => format!("{usage} · spent, resets {}", until_label(now_ms, until)),
-        None => usage,
+    match (member.cooling_until_ms, member.used_percent) {
+        (Some(until), Some(_)) => format!(
+            "{} · spent, resets {}",
+            usage_label(member.used_percent),
+            until_label(now_ms, until)
+        ),
+        (Some(until), None) => format!("spent, resets {}", until_label(now_ms, until)),
+        (None, _) => usage_label(member.used_percent),
     }
 }
 
@@ -232,6 +242,16 @@ mod tests {
             member_detail(&cooling, NOW),
             "100% used · spent, resets in 1h"
         );
+    }
+
+    #[test]
+    fn an_unmeasured_spent_member_does_not_read_as_a_contradiction() {
+        let mut cooling = member(1, "keychain:smith/work");
+        cooling.cooling_until_ms = Some(NOW + HOUR_MS);
+
+        // Not "usage unknown · spent": the cooldown already says the state,
+        // and no number is invented to fill the gap.
+        assert_eq!(member_detail(&cooling, NOW), "spent, resets in 1h");
     }
 
     #[test]
