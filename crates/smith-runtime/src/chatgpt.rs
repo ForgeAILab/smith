@@ -18,9 +18,9 @@ use agent_runtime_core::cancel::Cancellation;
 use agent_runtime_core::clock::{Clock, Deadline, SystemClock, Timestamp};
 use agent_runtime_core::content::{ContentPart, Message, Role};
 use agent_runtime_core::provider::{
-    AuthKind, Capabilities, FinishReason, ModelDescriptor, ModelId, Provider, ProviderCallContext,
-    ProviderError, ProviderErrorKind, ProviderRequest, ProviderStream, ProviderStreamEvent,
-    ReasoningSupport, ToolChoice,
+    AuthKind, Capabilities, FinishReason, ModelDescriptor, ModelId, PromptCacheControl, Provider,
+    ProviderCallContext, ProviderError, ProviderErrorKind, ProviderRequest, ProviderStream,
+    ProviderStreamEvent, ReasoningSupport, ToolChoice,
 };
 use agent_runtime_core::provider_credential::{
     CredentialInvalidation, ProviderAuthRejection, ProviderCredentialError,
@@ -806,6 +806,11 @@ impl ChatGptProviderConfig {
         capabilities.reasoning = ReasoningSupport::Controllable;
         capabilities.usage = true;
         capabilities.cache = true;
+        // This adapter sends `prompt_cache_key`, so it drives an implicit
+        // prefix cache and must say so. It does not chain `previous_response_id`
+        // — that field exists only on the websocket request shape — so every
+        // turn still uploads the whole history.
+        capabilities.prompt_cache = PromptCacheControl::Implicit;
         Ok(Self {
             model: ModelId::new(model),
             capabilities,
