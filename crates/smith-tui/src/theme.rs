@@ -97,6 +97,10 @@ pub mod glyph {
     pub const CONTEXT_FREE: &str = "·";
     /// Marks output and reasoning capacity reserved outside the input budget.
     pub const CONTEXT_RESERVE: &str = "□";
+    /// Marks a provider request on its way up, with nothing back yet.
+    pub const SENDING: &str = "↑";
+    /// Marks streamed answer text arriving.
+    pub const RECEIVING: &str = "↓";
     /// The spinner frames, 100 ms apart.
     pub const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 }
@@ -233,6 +237,8 @@ mod tests {
             glyph::CONTEXT_OTHER,
             glyph::CONTEXT_FREE,
             glyph::CONTEXT_RESERVE,
+            glyph::SENDING,
+            glyph::RECEIVING,
         ];
         glyphs.extend_from_slice(&glyph::SPINNER);
         for glyph in glyphs {

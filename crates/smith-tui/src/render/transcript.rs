@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::App;
+use crate::app::{App, ProviderPhase};
 use crate::status::{Activity, render_elapsed};
 use crate::theme::{Theme, Tone, glyph};
 use crate::transcript::{Block, LocalResultState, ToolStatus};
@@ -231,11 +231,19 @@ pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<
         };
         let details = app.work_detail_lines();
         // The provider round-trip stage answers "is anything happening?"
-        // during an otherwise silent wait: `sending 45s` is a stall the user
-        // can see, where a bare `Working…` looks identical to progress.
+        // during an otherwise silent wait: `↑ 45s` is a stall the user can
+        // see, where a bare `Working…` looks identical to progress. The
+        // transfer phases read as direction; only thinking keeps its word.
         let phase = app
             .provider_phase()
-            .map(|(phase, elapsed)| format!(" · {} {}", phase.label(), render_elapsed(elapsed)))
+            .map(|(phase, elapsed)| {
+                let marker = match phase {
+                    ProviderPhase::Sending => glyph::SENDING,
+                    ProviderPhase::Thinking => "thinking",
+                    ProviderPhase::Responding => glyph::RECEIVING,
+                };
+                format!(" · {marker} {}", render_elapsed(elapsed))
+            })
             .unwrap_or_default();
         lines.push(Line::from(vec![
             Span::styled(

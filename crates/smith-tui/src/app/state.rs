@@ -513,17 +513,6 @@ pub enum ProviderPhase {
     Responding,
 }
 
-impl ProviderPhase {
-    /// The word shown beside the per-phase timer in the working row.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Sending => "sending",
-            Self::Thinking => "thinking",
-            Self::Responding => "writing",
-        }
-    }
-}
-
 /// One provider attempt's speculative presentation identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct AttemptOutputKey {
