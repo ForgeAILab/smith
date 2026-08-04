@@ -28,11 +28,14 @@
 //! limit — including the ones that lost — each carrying its Smith
 //! configuration source where it has one.
 //!
-//! Nothing here performs I/O, and `CachedRemote` is a seam rather than a
-//! fetcher: Smith has no validated remote-metadata cache yet, so nothing is
-//! registered at that layer today. A layer that contributes nothing is the
-//! honest state; inventing values to fill it would defeat the point of
-//! refusing to guess.
+//! Nothing *here* performs I/O. `CachedRemote` is now populated, but by
+//! [`crate::model_catalog::CatalogLoader`] rather than by this module: it
+//! reads a validated last-good cache under the user state root, falls back to
+//! the embedded seed when that cache is absent or no longer parses, and
+//! schedules a background refresh once a snapshot ages past
+//! [`crate::model_catalog::DEFAULT_CATALOG_MAX_AGE_MS`]. Keeping the fetch out
+//! of this module is what lets layer composition stay a pure function of
+//! already-resolved inputs.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

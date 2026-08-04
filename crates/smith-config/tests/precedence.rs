@@ -1279,7 +1279,11 @@ X-Trace = "enabled"
 "#,
     )
     .expect_err("native Google does not accept custom headers");
-    assert!(header.to_string().contains("does not accept custom headers"));
+    assert!(
+        header
+            .to_string()
+            .contains("does not accept custom headers")
+    );
 }
 
 #[test]

@@ -1315,7 +1315,11 @@ mod tests {
         let mut app = SetupApp::new(
             SetupMode::Google,
             Vec::new(),
-            vec![ResourceEntry::new(model, "Gemini 3.6 Flash", "catalog limits")],
+            vec![ResourceEntry::new(
+                model,
+                "Gemini 3.6 Flash",
+                "catalog limits",
+            )],
         )
         .with_catalog_model_limits(BTreeMap::from([(model.to_owned(), limits)]));
         assert_eq!(app.step, Step::CredentialMethod);

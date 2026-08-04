@@ -16,7 +16,7 @@ use agent_runtime_core::clock::{Clock, SystemClock, Timestamp};
 use agent_runtime_core::provider::{AuthKind, Capabilities, PromptCacheControl, ReasoningSupport};
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use reqwest::header::{ETAG, IF_NONE_MATCH};
+use reqwest::header::{ETAG, IF_NONE_MATCH, USER_AGENT};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use smith_config::catalog::{
@@ -33,6 +33,9 @@ pub const MAX_REMOTE_CATALOG_BYTES: usize = 8 * 1024 * 1024;
 
 /// Maximum accepted normalized seed/cache size.
 pub const MAX_NORMALIZED_CATALOG_BYTES: usize = 2 * 1024 * 1024;
+
+/// How Smith identifies itself when fetching the public catalog.
+pub const CATALOG_USER_AGENT: &str = concat!("smith/", env!("CARGO_PKG_VERSION"));
 
 /// A snapshot older than this schedules a background refresh.
 pub const DEFAULT_CATALOG_MAX_AGE_MS: u64 = 24 * 60 * 60 * 1_000;
@@ -145,7 +148,14 @@ impl CatalogFetcher for ModelsDevFetcher {
         &self,
         if_none_match: Option<&str>,
     ) -> Result<CatalogFetchResponse, CatalogError> {
-        let mut request = self.client.get(MODELS_DEV_SOURCE_URL);
+        // Identify the client. Models.dev filters some agents — `Python-urllib`
+        // is refused with a 403 while an unset agent is served — so sending a
+        // name of our own keeps Smith out of a bucket it did not choose, and
+        // gives the operator something to allow-list.
+        let mut request = self
+            .client
+            .get(MODELS_DEV_SOURCE_URL)
+            .header(USER_AGENT, CATALOG_USER_AGENT);
         if let Some(revision) = if_none_match.filter(|revision| valid_revision(revision)) {
             request = request.header(IF_NONE_MATCH, revision);
         }
