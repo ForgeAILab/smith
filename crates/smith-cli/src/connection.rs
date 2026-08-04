@@ -93,7 +93,11 @@ pub(super) async fn disconnect(selection: &Selection, provider: &str) -> Result<
             CredentialRef::Keychain { .. } | CredentialRef::AuthFile { .. } => {
                 CredentialEnroller::new().cleanup(&reference)
             }
-            CredentialRef::Env { .. } | CredentialRef::File { .. } => Ok(()),
+            // Nothing of Smith's to remove: the environment, another tool's
+            // session file, and an encrypted file all outlive a disconnect.
+            CredentialRef::Env { .. }
+            | CredentialRef::SessionJson { .. }
+            | CredentialRef::File { .. } => Ok(()),
         };
         if let Err(error) = cleanup {
             let rollback = committed.rollback();

@@ -93,6 +93,18 @@ pub enum CredentialRef {
         /// The variable's name.
         variable: String,
     },
+    /// One field of a JSON credential file another tool owns and refreshes.
+    ///
+    /// Smith reads it and never writes it. That keeps a browser-login session
+    /// working without Smith reimplementing another vendor's OAuth client, and
+    /// without Smith becoming a second writer to a file whose refresh cycle it
+    /// does not control.
+    SessionJson {
+        /// Absolute path to the credential file.
+        path: PathBuf,
+        /// The field holding the bearer token, as a `/`-separated path.
+        pointer: String,
+    },
     /// A ciphertext file beneath the user state root, decrypted with key
     /// material kept outside it.
     File {
@@ -133,6 +145,23 @@ impl CredentialRef {
                 }
                 Ok(Self::AuthFile {
                     entry: locator.to_owned(),
+                })
+            }
+            "session-json" => {
+                let (path, pointer) = locator
+                    .split_once('#')
+                    .ok_or(CredentialRefError::SessionJson)?;
+                let path = expand_home(path);
+                if path.as_os_str().is_empty()
+                    || !path.is_absolute()
+                    || pointer.is_empty()
+                    || !pointer.starts_with('/')
+                {
+                    return Err(CredentialRefError::SessionJson);
+                }
+                Ok(Self::SessionJson {
+                    path,
+                    pointer: pointer.to_owned(),
                 })
             }
             "env" => {
@@ -188,9 +217,24 @@ impl fmt::Display for CredentialRef {
             Self::Keychain { service, account } => write!(f, "keychain:{service}/{account}"),
             Self::AuthFile { entry } => write!(f, "authfile:{entry}"),
             Self::Env { variable } => write!(f, "env:{variable}"),
+            Self::SessionJson { path, pointer } => {
+                write!(f, "session-json:{}#{pointer}", path.display())
+            }
             Self::File { path } => write!(f, "file:{}", path.display()),
         }
     }
+}
+
+/// Expands a leading `~` so a config can name a path in the user's home
+/// without hard-coding whose home it is.
+fn expand_home(raw: &str) -> PathBuf {
+    let raw = raw.trim();
+    if let Some(rest) = raw.strip_prefix("~/")
+        && let Some(home) = dirs::home_dir()
+    {
+        return home.join(rest);
+    }
+    PathBuf::from(raw)
 }
 
 impl FromStr for CredentialRef {
@@ -225,11 +269,15 @@ pub enum CredentialRefError {
     /// reference.
     #[error(
         "a credential must be a reference, not a key: write \
-         `keychain:<service>/<account>`, `authfile:<entry>`, `env:<VAR>`, or `file:<path>`"
+         `keychain:<service>/<account>`, `authfile:<entry>`, `env:<VAR>`, \
+         `session-json:<path>#<field>`, or `file:<path>`"
     )]
     Unprefixed,
     /// The prefix is not one Smith knows.
-    #[error("unknown credential scheme: expected `keychain:`, `authfile:`, `env:`, or `file:`")]
+    #[error(
+        "unknown credential scheme: expected `keychain:`, `authfile:`, `env:`, \
+         `session-json:`, or `file:`"
+    )]
     UnknownScheme,
     /// A `keychain:` reference does not name one service and one account.
     #[error("a keychain credential must be written `keychain:<service>/<account>`")]
@@ -240,6 +288,12 @@ pub enum CredentialRefError {
     /// An `env:` reference does not name a variable.
     #[error("an environment credential must name a variable, as `env:ACME_API_KEY`")]
     Env,
+    /// A `session-json:` reference does not name an absolute path and a field.
+    #[error(
+        "a session-json credential must name an absolute file and a field, as \
+         `session-json:~/.grok/auth.json#/access_token`"
+    )]
+    SessionJson,
     /// A `file:` reference is empty, absolute, or climbs out of user state.
     #[error(
         "an encrypted-file credential must name a path inside `~/.smith`, \
@@ -441,7 +495,9 @@ impl CredentialEnroller {
                     }
                 })?
             }
-            CredentialRef::Env { .. } | CredentialRef::File { .. } => {
+            CredentialRef::Env { .. }
+            | CredentialRef::SessionJson { .. }
+            | CredentialRef::File { .. } => {
                 return Err(CredentialEnrollmentError::NotStored {
                     reference: reference.clone(),
                 });
@@ -474,11 +530,11 @@ impl CredentialEnroller {
                 operation: EnrollmentOperation::Restore,
                 cause,
             }),
-            CredentialRef::Env { .. } | CredentialRef::File { .. } => {
-                Err(CredentialEnrollmentError::NotStored {
-                    reference: receipt.reference,
-                })
-            }
+            CredentialRef::Env { .. }
+            | CredentialRef::SessionJson { .. }
+            | CredentialRef::File { .. } => Err(CredentialEnrollmentError::NotStored {
+                reference: receipt.reference,
+            }),
         }
     }
 
@@ -503,11 +559,11 @@ impl CredentialEnroller {
                         cause,
                     })
             }
-            CredentialRef::Env { .. } | CredentialRef::File { .. } => {
-                Err(CredentialEnrollmentError::NotStored {
-                    reference: reference.clone(),
-                })
-            }
+            CredentialRef::Env { .. }
+            | CredentialRef::SessionJson { .. }
+            | CredentialRef::File { .. } => Err(CredentialEnrollmentError::NotStored {
+                reference: reference.clone(),
+            }),
         }
     }
 }
@@ -751,6 +807,9 @@ impl CredentialResolver {
                         reference: reference.clone(),
                     })
             }
+            CredentialRef::SessionJson { path, pointer } => {
+                self.session_json(reference, path, pointer)
+            }
             CredentialRef::File { path } => Err(self.encrypted_file(reference, path)),
         }
     }
@@ -760,6 +819,30 @@ impl CredentialResolver {
     /// The checks run in the order the user can act on them: a misplaced file
     /// is a configuration mistake, a missing one is a setup step, a readable
     /// one is a live exposure, and only then does the absent cipher matter.
+    /// Reads one bearer token out of a JSON session file another tool owns.
+    ///
+    /// Read-only on purpose. The owning tool refreshes that file on its own
+    /// schedule, and a second writer would race it. Re-reading per resolution
+    /// is also what lets a refreshed token be picked up without restarting.
+    fn session_json(
+        &self,
+        reference: &CredentialRef,
+        path: &Path,
+        pointer: &str,
+    ) -> Result<Secret, CredentialError> {
+        let missing = || CredentialError::Missing {
+            reference: reference.clone(),
+        };
+        let text = std::fs::read_to_string(path).map_err(|_| missing())?;
+        let document: serde_json::Value = serde_json::from_str(&text).map_err(|_| missing())?;
+        let value = document.pointer(pointer).ok_or_else(missing)?;
+        let token = value.as_str().ok_or_else(missing)?;
+        if token.trim().is_empty() {
+            return Err(missing());
+        }
+        Ok(Secret::new(token.to_owned()))
+    }
+
     fn encrypted_file(&self, reference: &CredentialRef, path: &Path) -> CredentialError {
         // A canonical root keeps the containment check honest where `~` sits
         // behind a symlink, as `/tmp` does on macOS.
@@ -996,6 +1079,78 @@ mod tests {
                 Err(CredentialRefError::File)
             );
         }
+    }
+
+    #[test]
+    fn a_session_json_reference_names_an_absolute_file_and_a_field() {
+        let parsed = CredentialRef::parse("session-json:/home/u/.grok/auth.json#/access_token")
+            .expect("a session-json reference");
+        assert_eq!(
+            parsed.to_string(),
+            "session-json:/home/u/.grok/auth.json#/access_token"
+        );
+        for rejected in [
+            "session-json:/home/u/.grok/auth.json",          // no field
+            "session-json:#/access_token",                   // no path
+            "session-json:relative/auth.json#/access_token", // not absolute
+            "session-json:/home/u/auth.json#access_token",   // field is not a pointer
+        ] {
+            assert!(
+                CredentialRef::parse(rejected).is_err(),
+                "accepted `{rejected}`"
+            );
+        }
+    }
+
+    #[test]
+    fn a_session_json_credential_reads_the_named_field_each_time() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let path = dir.path().join("auth.json");
+        std::fs::write(&path, r#"{"access_token":"first","refresh_token":"r"}"#).expect("write");
+        let reference =
+            CredentialRef::parse(&format!("session-json:{}#/access_token", path.display()))
+                .expect("a reference");
+        let resolver = CredentialResolver::new(dir.path());
+
+        assert_eq!(
+            resolver
+                .resolve_blocking(&reference)
+                .expect("resolved")
+                .expose(),
+            "first"
+        );
+
+        // The owning tool refreshed the token; the next resolution sees it
+        // without Smith restarting or caching a stale value.
+        std::fs::write(&path, r#"{"access_token":"second","refresh_token":"r"}"#).expect("rewrite");
+        assert_eq!(
+            resolver
+                .resolve_blocking(&reference)
+                .expect("resolved")
+                .expose(),
+            "second"
+        );
+
+        // A field that is absent or empty is missing, not an empty bearer.
+        std::fs::write(&path, r#"{"access_token":""}"#).expect("rewrite");
+        assert!(resolver.resolve_blocking(&reference).is_err());
+    }
+
+    #[test]
+    fn a_session_json_credential_is_never_enrolled_or_removed() {
+        // The owning tool refreshes that file on its own schedule. Smith
+        // writing to it would race a process it does not control.
+        let reference =
+            CredentialRef::parse("session-json:/tmp/auth.json#/access_token").expect("a reference");
+        let enroller = CredentialEnroller::new();
+        assert!(matches!(
+            enroller.enroll(&reference, &Secret::new("t".to_owned())),
+            Err(CredentialEnrollmentError::NotStored { .. })
+        ));
+        assert!(matches!(
+            enroller.cleanup(&reference),
+            Err(CredentialEnrollmentError::NotStored { .. })
+        ));
     }
 
     #[test]

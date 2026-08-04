@@ -226,7 +226,9 @@ model = "grok-4.5"
 [providers.xai]
 kind = "openai-responses"
 base_url = "https://api.x.ai/v1"
-credential = "keychain:smith/xai"
+# An xAI API key from console.x.ai, or the browser-login session the `grok`
+# CLI already manages — see the credential list below.
+credential = "session-json:~/.grok/auth.json#/access_token"
 
 [models."xai/grok-4.5"]
 context_tokens = 500000
@@ -241,6 +243,12 @@ credentials belong in the credential broker.
 
 Choose exactly one credential source:
 
+- `credential = "session-json:<path>#/<field>"` reads one field out of a JSON
+  credential file another tool owns, such as the browser-login session the
+  `grok` CLI writes to `~/.grok/auth.json`. Smith reads it and never writes
+  it: the owning tool refreshes on its own schedule and a second writer would
+  race it. The file is re-read on each resolution, so a refreshed token is
+  picked up without restarting Smith.
 - `credential = "keychain:service/account"` uses the operating-system
   credential service;
 - `credential = "env:VARIABLE"` reads a process environment variable;
