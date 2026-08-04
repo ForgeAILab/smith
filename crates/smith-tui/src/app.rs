@@ -13,6 +13,6 @@ mod state;
 pub(crate) use state::MAX_PENDING_PREVIEW_ENTRIES;
 pub use state::{
     Action, App, ChildSummary, LEGACY_AGENT_PROFILE_PREFIX, Overlay, PaletteCommand,
-    PendingInputPreview, PlanSummary, PreparedSubmission, ResourceTarget, RuntimeResources,
-    SubmissionTarget,
+    PendingInputPreview, PlanSummary, PreparedSubmission, ProviderPhase, ResourceTarget,
+    RuntimeResources, StreamGap, SubmissionTarget,
 };

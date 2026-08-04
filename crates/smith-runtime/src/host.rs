@@ -228,13 +228,46 @@ impl HostSession {
         Ok(recovery.events().into_iter().cloned().collect())
     }
 
+    /// Flushes and returns the canonical redacted events with sequence numbers
+    /// in `first..=last`.
+    ///
+    /// This is the healing path for a lagged live subscriber: the journal
+    /// observes every event synchronously before broadcast, so anything the
+    /// stream skipped is already queued here. A non-persistent session, or a
+    /// journal that dropped the range under its own backpressure, returns
+    /// fewer events than the range names — the caller reports the remainder
+    /// honestly rather than inventing it.
+    pub async fn journal_events_between(
+        &self,
+        first: u64,
+        last: u64,
+    ) -> Result<Vec<EventEnvelope>, RuntimeError> {
+        let (Some(journal), Some(paths)) = (&self.journal, &self.paths) else {
+            return Ok(Vec::new());
+        };
+        journal.flush().await?;
+        let path = paths.journal(self.session.id())?;
+        let recovery = read_journal(path).await?;
+        Ok(recovery
+            .events()
+            .into_iter()
+            .filter(|event| event.seq >= first && event.seq <= last)
+            .cloned()
+            .collect())
+    }
+
     /// Resolves a protected live event to reviewed display metadata.
     ///
     /// Agent Runtime appends the canonical assistant tool call before emitting
     /// `ToolCallRequested`, so this lookup does not require raw arguments in
     /// the event or journal.
     pub fn tool_call_display(&self, call_id: &ToolCallId) -> Option<ToolCallDisplay> {
-        tool_call_display_from_history(&self.session.history(), call_id, &self.display_redactor)
+        // Borrow the history under its lock instead of cloning it: this runs
+        // for every live tool event, and a deep clone of a long session here
+        // is what let the broadcast stream lap the TUI subscriber.
+        self.session.with_history(|history| {
+            tool_call_display_from_history(history, call_id, &self.display_redactor)
+        })
     }
 
     /// Reviewed display projections for every canonical built-in tool call.
@@ -242,7 +275,8 @@ impl HostSession {
     /// Used when rebuilding a local transcript from resumed history. Unknown
     /// tools and malformed calls remain on their honest fallback rows.
     pub fn tool_call_displays(&self) -> Vec<(ToolCallId, ToolCallDisplay)> {
-        tool_call_displays_from_history(&self.session.history(), &self.display_redactor)
+        self.session
+            .with_history(|history| tool_call_displays_from_history(history, &self.display_redactor))
     }
 
     /// Credential-redacted text of one canonical tool result.
@@ -252,24 +286,27 @@ impl HostSession {
     /// Results are model-visible text, so unlike arbitrary tool arguments
     /// they only need the literal-secret scrub before local presentation.
     pub fn tool_result_text(&self, call_id: &ToolCallId) -> Option<String> {
-        tool_result_text_from_history(&self.session.history(), call_id, &self.display_redactor)
+        self.session.with_history(|history| {
+            tool_result_text_from_history(history, call_id, &self.display_redactor)
+        })
     }
 
     /// Credential-redacted result text for every canonical tool call, used
     /// when rebuilding a local transcript from resumed history.
     pub fn tool_result_texts(&self) -> Vec<(ToolCallId, String)> {
-        let history = self.session.history();
-        history
-            .iter()
-            .flat_map(|message| message.content.iter())
-            .filter_map(|part| {
-                let ContentPart::ToolResult(result) = part else {
-                    return None;
-                };
-                redacted_result_text(result, &self.display_redactor)
-                    .map(|text| (result.call_id.clone(), text))
-            })
-            .collect()
+        self.session.with_history(|history| {
+            history
+                .iter()
+                .flat_map(|message| message.content.iter())
+                .filter_map(|part| {
+                    let ContentPart::ToolResult(result) = part else {
+                        return None;
+                    };
+                    redacted_result_text(result, &self.display_redactor)
+                        .map(|text| (result.call_id.clone(), text))
+                })
+                .collect()
+        })
     }
 
     /// Shuts down the runtime first, then drains and syncs its journal.

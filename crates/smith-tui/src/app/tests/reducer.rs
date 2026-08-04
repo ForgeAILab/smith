@@ -164,7 +164,7 @@
     }
 
     #[test]
-    fn a_live_sequence_gap_is_visible_instead_of_silently_losing_output() {
+    fn a_live_sequence_gap_parks_the_envelope_for_journal_replay() {
         let mut app = app();
         let mut first = event(RuntimeEvent::TurnStarted);
         first.seq = 4;
@@ -176,6 +176,116 @@
         later.seq = 7;
         app.apply(&later);
 
+        // The out-of-order terminal must not fold ahead of the missing
+        // events: the turn still reads as live until the host replays.
+        assert_eq!(app.status.activity, Activity::Working);
+        let gap = app.take_stream_gap().expect("a parked stream gap");
+        assert_eq!(gap.first_missing, 5);
+        assert_eq!(gap.last_missing, 6);
+        assert_eq!(gap.deferred.seq, 7);
+        assert!(app.take_stream_gap().is_none(), "taking the gap clears it");
+    }
+
+    #[test]
+    fn journal_replay_heals_a_gap_without_an_error_row() {
+        let mut app = app();
+        let mut first = event(RuntimeEvent::TurnStarted);
+        first.seq = 4;
+        app.apply(&first);
+        let mut later = event(RuntimeEvent::TurnCompleted {
+            finish: TurnFinish::Completed,
+            visible_output: true,
+        });
+        later.seq = 6;
+        app.apply(&later);
+        let gap = app.take_stream_gap().expect("a parked stream gap");
+
+        let mut missing = event(RuntimeEvent::CacheObservation {
+            read_tokens: 128,
+            write_tokens: 0,
+        });
+        missing.seq = 5;
+        app.apply_recovered(&missing);
+        app.apply_recovered(&gap.deferred);
+
+        assert_eq!(app.status.activity, Activity::Idle);
+        assert_eq!(app.status.cache_read, Some(128));
+        assert!(
+            !app.transcript
+                .blocks()
+                .iter()
+                .any(|block| matches!(block, Block::Error { .. })),
+            "a fully replayed gap must not report a skip: {:?}",
+            app.transcript.blocks()
+        );
+    }
+
+    #[test]
+    fn a_replayed_turn_terminal_still_releases_the_queued_turn() {
+        // The wedge this protects against: the live stream lost
+        // `TurnCompleted`, so without journal replay the queued next turn
+        // would never dispatch and the UI would sit "working" forever.
+        let mut app = app();
+        let mut started = turn_event("turn-1", RuntimeEvent::TurnStarted);
+        started.seq = 1;
+        app.apply(&started);
+        app.composer.replace("queued for later");
+        assert_eq!(app.on_key(key(KeyCode::Tab)), None);
+        assert_eq!(app.pending_input_previews()[0].entries, ["queued for later"]);
+
+        let mut after_gap = event(RuntimeEvent::CacheObservation {
+            read_tokens: 1,
+            write_tokens: 0,
+        });
+        after_gap.seq = 4;
+        app.apply(&after_gap);
+        assert!(app.take_ready_submission().is_none(), "still parked");
+        let gap = app.take_stream_gap().expect("a parked stream gap");
+        assert_eq!((gap.first_missing, gap.last_missing), (2, 3));
+
+        let mut usage = event(RuntimeEvent::CacheObservation {
+            read_tokens: 2,
+            write_tokens: 0,
+        });
+        usage.seq = 2;
+        app.apply_recovered(&usage);
+        let mut completed = turn_event(
+            "turn-1",
+            RuntimeEvent::TurnCompleted {
+                finish: TurnFinish::Completed,
+                visible_output: true,
+            },
+        );
+        completed.seq = 3;
+        app.apply_recovered(&completed);
+        app.apply_recovered(&gap.deferred);
+
+        assert_eq!(app.status.activity, Activity::Idle);
+        let submission = app
+            .take_ready_submission()
+            .expect("the replayed terminal releases the queued turn");
+        assert_eq!(submission.display_text(), "queued for later");
+    }
+
+    #[test]
+    fn an_unhealable_gap_is_still_visible_instead_of_silently_losing_output() {
+        let mut app = app();
+        let mut first = event(RuntimeEvent::TurnStarted);
+        first.seq = 4;
+        app.apply(&first);
+        let mut later = event(RuntimeEvent::TurnCompleted {
+            finish: TurnFinish::Completed,
+            visible_output: true,
+        });
+        later.seq = 7;
+        app.apply(&later);
+
+        // The journal had nothing for 5..=6: the parked envelope goes through
+        // the replay path alone and the skip is reported honestly.
+        let gap = app.take_stream_gap().expect("a parked stream gap");
+        app.apply_recovered(&gap.deferred);
+
+        assert_eq!(app.status.activity, Activity::Idle);
         assert!(
             app.transcript.blocks().iter().any(|block| matches!(
                 block,
@@ -183,6 +293,50 @@
             )),
             "{:?}",
             app.transcript.blocks()
+        );
+    }
+
+    #[test]
+    fn provider_phase_tracks_the_round_trip_and_clears_at_the_attempt_end() {
+        let mut app = app();
+        assert!(app.provider_phase().is_none());
+
+        app.apply(&event(RuntimeEvent::ProviderAttemptStarted {
+            request: RequestId::new("request-fixture"),
+            attempt: AttemptId::new("attempt-fixture"),
+            index: 0,
+            model: "gpt-5.3".to_owned(),
+        }));
+        assert_eq!(
+            app.provider_phase().map(|(phase, _)| phase),
+            Some(ProviderPhase::Sending)
+        );
+
+        app.apply(&event(RuntimeEvent::ReasoningDelta {
+            request: RequestId::new("request-fixture"),
+            attempt: AttemptId::new("attempt-fixture"),
+            text: "weighing options".to_owned(),
+            redacted: false,
+        }));
+        assert_eq!(
+            app.provider_phase().map(|(phase, _)| phase),
+            Some(ProviderPhase::Thinking)
+        );
+
+        app.apply(&event(text_delta("the answer")));
+        assert_eq!(
+            app.provider_phase().map(|(phase, _)| phase),
+            Some(ProviderPhase::Responding)
+        );
+
+        app.apply(&event(RuntimeEvent::ProviderAttemptFinished {
+            attempt: AttemptId::new("attempt-fixture"),
+            finish: agent_runtime_core::provider::FinishReason::Stop,
+            retryable: false,
+        }));
+        assert!(
+            app.provider_phase().is_none(),
+            "a finished attempt leaves no live phase to display"
         );
     }
 

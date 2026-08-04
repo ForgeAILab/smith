@@ -1696,6 +1696,47 @@ async fn a_session_is_saved_listed_and_resumed_with_its_canonical_history() {
 }
 
 #[tokio::test]
+async fn journal_events_between_returns_exactly_the_missed_range() {
+    let fixture = Fixture::new();
+    let host = start(fixture.request(HostSurface::Terminal))
+        .await
+        .expect("a new hosted session");
+    host.session()
+        .run(UserInput::text("hello"))
+        .await
+        .expect("the turn runs");
+
+    let all = host.timeline_events().await.expect("timeline events");
+    assert!(all.len() >= 3, "a completed turn appends lifecycle events");
+
+    // A lagged live subscriber asks for an interior range: the healing read
+    // must return exactly those events, in order, and nothing else.
+    let first = all[1].seq;
+    let last = all[all.len() - 2].seq;
+    let range = host
+        .journal_events_between(first, last)
+        .await
+        .expect("a ranged journal read");
+    assert_eq!(
+        range.iter().map(|event| event.seq).collect::<Vec<_>>(),
+        all.iter()
+            .map(|event| event.seq)
+            .filter(|seq| (first..=last).contains(seq))
+            .collect::<Vec<_>>(),
+    );
+
+    let beyond = host
+        .journal_events_between(u64::MAX - 1, u64::MAX)
+        .await
+        .expect("an empty ranged journal read");
+    assert!(
+        beyond.is_empty(),
+        "a range the journal never saw must come back empty, not invented"
+    );
+    host.shutdown().await.expect("a clean shutdown");
+}
+
+#[tokio::test]
 async fn durable_child_follow_up_survives_a_full_smith_host_restart() {
     let fixture = Fixture::new();
     let provider = Arc::new(FakeProvider::new(

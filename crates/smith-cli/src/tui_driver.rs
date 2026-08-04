@@ -1,5 +1,7 @@
 //! Interactive terminal event loop and TUI action routing.
 
+use std::collections::VecDeque;
+
 use super::*;
 
 pub(super) enum InteractiveExit {
@@ -386,44 +388,103 @@ pub(super) async fn run_tui(
             envelope = events.next() => {
                 match envelope {
                     Some(envelope) => {
-                        let tool_call = tool_call_for_display(&envelope.payload);
-                        if matches!(envelope.payload, RuntimeEvent::TurnCompleted { .. })
-                            && let Some(set) = host.changes().latest()
-                            && last_change_turn != Some(set.turn)
-                            && !set.undone
-                        {
-                                    last_change_turn = Some(set.turn);
-                                    let attribution = if set.is_fully_attributable() {
-                                        "undo available"
-                                    } else {
-                                        "contains ambiguous changes; use /diff"
-                                    };
-                                    app.transcript.push_notice(
-                                        "changes",
-                                        format!("Smith turn {} · {attribution}", set.turn),
-                                    );
-                        }
-                        let completed_tool =
-                            matches!(envelope.payload, RuntimeEvent::ToolCallCompleted { .. });
-                        app.apply(&envelope);
-                        if let Some(submission) = app.take_ready_submission() {
-                            dispatch_prepared_with_materialization(
-                                &mut app,
-                                session,
-                                project,
-                                submission,
-                                SubmissionTarget::WholeTurn,
-                            )
-                            .await;
-                        }
-                        if let Some(call) = tool_call {
-                            if let Some(display) = host.tool_call_display(&call) {
-                                app.set_tool_display(call.as_str(), display);
+                        // The live queue is normally this one envelope. When
+                        // applying it reveals a broadcast lag gap, the missing
+                        // range is replayed out of the canonical journal ahead
+                        // of it, so control events (turn terminals, queued-
+                        // input releases) still fold in order instead of
+                        // wedging the UI on a state change it never saw.
+                        let mut pending = VecDeque::from([(envelope, false)]);
+                        while let Some((envelope, recovered)) = pending.pop_front() {
+                            let tool_call = tool_call_for_display(&envelope.payload);
+                            let completed_tool = matches!(
+                                envelope.payload,
+                                RuntimeEvent::ToolCallCompleted { .. }
+                            );
+                            let turn_completed = matches!(
+                                envelope.payload,
+                                RuntimeEvent::TurnCompleted { .. }
+                            );
+                            if recovered {
+                                app.apply_recovered(&envelope);
+                            } else {
+                                app.apply(&envelope);
+                                if let Some(gap) = app.take_stream_gap() {
+                                    // The envelope was parked, not applied.
+                                    // Queue the journal's copy of the missing
+                                    // range first, then retry the parked
+                                    // envelope on the honest replay path.
+                                    match host
+                                        .journal_events_between(
+                                            gap.first_missing,
+                                            gap.last_missing,
+                                        )
+                                        .await
+                                    {
+                                        Ok(events) => {
+                                            if !events.is_empty() {
+                                                app.transcript.push_notice(
+                                                    "stream",
+                                                    format!(
+                                                        "live stream lagged; recovered {} \
+                                                         skipped event(s) from the session \
+                                                         journal",
+                                                        events.len()
+                                                    ),
+                                                );
+                                            }
+                                            pending.push_front((gap.deferred, true));
+                                            for event in events.into_iter().rev() {
+                                                pending.push_front((event, true));
+                                            }
+                                        }
+                                        Err(error) => {
+                                            app.transcript.push_error(format!(
+                                                "replaying skipped events {}–{} from the \
+                                                 session journal failed: {error}",
+                                                gap.first_missing, gap.last_missing
+                                            ));
+                                            pending.push_front((gap.deferred, true));
+                                        }
+                                    }
+                                    continue;
+                                }
                             }
-                            if completed_tool
-                                && let Some(text) = host.tool_result_text(&call)
+                            if turn_completed
+                                && let Some(set) = host.changes().latest()
+                                && last_change_turn != Some(set.turn)
+                                && !set.undone
                             {
-                                app.set_tool_result_preview(call.as_str(), text);
+                                last_change_turn = Some(set.turn);
+                                let attribution = if set.is_fully_attributable() {
+                                    "undo available"
+                                } else {
+                                    "contains ambiguous changes; use /diff"
+                                };
+                                app.transcript.push_notice(
+                                    "changes",
+                                    format!("Smith turn {} · {attribution}", set.turn),
+                                );
+                            }
+                            if let Some(submission) = app.take_ready_submission() {
+                                dispatch_prepared_with_materialization(
+                                    &mut app,
+                                    session,
+                                    project,
+                                    submission,
+                                    SubmissionTarget::WholeTurn,
+                                )
+                                .await;
+                            }
+                            if let Some(call) = tool_call {
+                                if let Some(display) = host.tool_call_display(&call) {
+                                    app.set_tool_display(call.as_str(), display);
+                                }
+                                if completed_tool
+                                    && let Some(text) = host.tool_result_text(&call)
+                                {
+                                    app.set_tool_result_preview(call.as_str(), text);
+                                }
                             }
                         }
                         dirty = true;

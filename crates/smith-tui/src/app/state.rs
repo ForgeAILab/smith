@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use agent_runtime_core::clock::Timestamp;
 use agent_runtime_core::content::{ContentPart, UserInput};
-use agent_runtime_core::event::{PlanItemProjection, PlanSensitivity};
+use agent_runtime_core::event::{EventEnvelope, PlanItemProjection, PlanSensitivity};
 use agent_runtime_core::ids::{AttemptId, RequestId, TurnId};
 use agent_runtime_core::steer::SteerReceipt;
 use smith_host::approval::ApprovalPrompt;
@@ -485,6 +485,45 @@ pub(super) struct WorkSummary {
     pub(super) tools: BTreeMap<String, (String, ToolStatus)>,
 }
 
+/// One live-stream sequence gap awaiting journal replay.
+///
+/// The envelope that revealed the gap is parked here un-applied. Applying it
+/// ahead of the missing range would fold control events out of order — a
+/// skipped `TurnCompleted` could strand queued input behind a turn the UI
+/// still believes is running. The host replays `first_missing..=last_missing`
+/// from the canonical journal, then applies `deferred`.
+#[derive(Debug, Clone)]
+pub struct StreamGap {
+    /// First missing sequence number.
+    pub first_missing: u64,
+    /// Last missing sequence number.
+    pub last_missing: u64,
+    /// The out-of-order envelope, to apply after the replayed range.
+    pub deferred: EventEnvelope,
+}
+
+/// Which stage of one provider round-trip is live right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderPhase {
+    /// The request is dispatched; no output has arrived yet.
+    Sending,
+    /// Reasoning deltas are arriving.
+    Thinking,
+    /// Visible answer text is arriving.
+    Responding,
+}
+
+impl ProviderPhase {
+    /// The word shown beside the per-phase timer in the working row.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Sending => "sending",
+            Self::Thinking => "thinking",
+            Self::Responding => "writing",
+        }
+    }
+}
+
 /// One provider attempt's speculative presentation identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct AttemptOutputKey {
@@ -597,6 +636,10 @@ pub struct App {
     pub(super) turn_started_timestamp: Option<Timestamp>,
     pub(super) last_ctrl_c: Option<Instant>,
     pub(super) last_event_seq: Option<u64>,
+    /// A live-stream sequence gap parked for host-driven journal replay.
+    pub(super) stream_gap: Option<StreamGap>,
+    /// The live provider round-trip stage and when it started.
+    pub(super) provider_phase: Option<(ProviderPhase, Instant)>,
     pub(super) speculative_attempts: BTreeMap<AttemptOutputKey, SpeculativeAttempt>,
     pub(super) speculative_order: Vec<AttemptOutputKey>,
     pub(super) finalized_attempts: BTreeSet<AttemptOutputKey>,
@@ -636,6 +679,8 @@ impl App {
             turn_started_timestamp: None,
             last_ctrl_c: None,
             last_event_seq: None,
+            stream_gap: None,
+            provider_phase: None,
             speculative_attempts: BTreeMap::new(),
             speculative_order: Vec::new(),
             finalized_attempts: BTreeSet::new(),
@@ -774,6 +819,23 @@ impl App {
     /// Monotonic elapsed time for the active turn.
     pub fn turn_elapsed(&self) -> Option<Duration> {
         self.turn_started_at.map(|started| started.elapsed())
+    }
+
+    /// Takes the parked live-stream gap so the host can replay it from the
+    /// canonical journal.
+    ///
+    /// While a gap is parked the envelope that revealed it has **not** been
+    /// applied. The host replays the missing range with
+    /// [`App::apply_recovered`], then applies the gap's `deferred` envelope
+    /// the same way.
+    pub fn take_stream_gap(&mut self) -> Option<StreamGap> {
+        self.stream_gap.take()
+    }
+
+    /// The live provider round-trip stage and how long it has been in it.
+    pub fn provider_phase(&self) -> Option<(ProviderPhase, Duration)> {
+        self.provider_phase
+            .map(|(phase, since)| (phase, since.elapsed()))
     }
 
     /// Visible text from the newest live provider attempt.

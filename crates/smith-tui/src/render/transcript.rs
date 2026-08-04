@@ -230,6 +230,13 @@ pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<
             Activity::Idle | Activity::Ended => unreachable!("activity was filtered above"),
         };
         let details = app.work_detail_lines();
+        // The provider round-trip stage answers "is anything happening?"
+        // during an otherwise silent wait: `sending 45s` is a stall the user
+        // can see, where a bare `Working…` looks identical to progress.
+        let phase = app
+            .provider_phase()
+            .map(|(phase, elapsed)| format!(" · {} {}", phase.label(), render_elapsed(elapsed)))
+            .unwrap_or_default();
         lines.push(Line::from(vec![
             Span::styled(
                 format!("{} ", theme.spinner(app.tick)),
@@ -237,7 +244,7 @@ pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<
             ),
             Span::styled(
                 format!(
-                    "{label}{} · {}{}",
+                    "{label}{} · {}{phase}{}",
                     glyph::ELIDED,
                     app.turn_elapsed()
                         .map(render_elapsed)

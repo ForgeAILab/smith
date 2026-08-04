@@ -19,6 +19,20 @@ impl App {
         self.work = None;
     }
 
+    /// Moves the provider round-trip stage, restarting its timer only on an
+    /// actual stage change so a stream of same-stage deltas reads as one
+    /// continuously running phase.
+    fn set_provider_phase(&mut self, phase: Option<ProviderPhase>) {
+        match phase {
+            Some(next) => {
+                if self.provider_phase.map(|(current, _)| current) != Some(next) {
+                    self.provider_phase = Some((next, Instant::now()));
+                }
+            }
+            None => self.provider_phase = None,
+        }
+    }
+
     pub(super) fn begin_speculative_attempt(&mut self, request: &RequestId, attempt: &AttemptId) {
         let key = AttemptOutputKey::new(request, attempt);
         if self.finalized_attempts.contains(&key) {
@@ -193,8 +207,41 @@ impl App {
         self.pending_input.interrupt_for_steer = false;
     }
 
-    /// Folds one runtime event into state.
+    /// Folds one live runtime event into state.
+    ///
+    /// An envelope that arrives past a sequence gap is **parked**, not
+    /// applied: folding it ahead of the missing events would process control
+    /// transitions out of order — a lost `TurnCompleted` would leave the UI
+    /// working forever and strand queued input. The host drains the gap with
+    /// [`App::take_stream_gap`], replays the missing range from the canonical
+    /// journal through [`App::apply_recovered`], then applies the parked
+    /// envelope the same way.
     pub fn apply(&mut self, envelope: &EventEnvelope) {
+        // Only the host's replay flow should ever leave a gap parked across
+        // two `apply` calls. If it happens anyway, keep ordering: fold the
+        // parked envelope honestly before considering the newer one.
+        if let Some(parked) = self.stream_gap.take() {
+            self.apply_recovered(&parked.deferred);
+        }
+        if let Some(previous) = self.last_event_seq
+            && envelope.seq > previous.saturating_add(1)
+        {
+            self.stream_gap = Some(StreamGap {
+                first_missing: previous.saturating_add(1),
+                last_missing: envelope.seq.saturating_sub(1),
+                deferred: envelope.clone(),
+            });
+            return;
+        }
+        self.apply_now(envelope);
+    }
+
+    /// Folds one journal-replayed (or replay-fallback) event into state.
+    ///
+    /// A sequence still missing here has already been asked of the journal,
+    /// so it is reported instead of parked again: the persisted session
+    /// journal remains canonical, and what it does not have is honestly gone.
+    pub fn apply_recovered(&mut self, envelope: &EventEnvelope) {
         if let Some(previous) = self.last_event_seq
             && envelope.seq > previous.saturating_add(1)
         {
@@ -205,6 +252,10 @@ impl App {
                 envelope.seq.saturating_sub(1)
             ));
         }
+        self.apply_now(envelope);
+    }
+
+    fn apply_now(&mut self, envelope: &EventEnvelope) {
         self.last_event_seq = Some(envelope.seq);
 
         match &envelope.payload {
@@ -222,9 +273,11 @@ impl App {
                 self.finalized_attempts.clear();
                 self.active_turn = None;
                 self.pending_input = PendingInputState::default();
+                self.provider_phase = None;
             }
             RuntimeEvent::TurnStarted | RuntimeEvent::InternalTurnStarted { .. } => {
                 self.discard_orphaned_speculative_output("next turn start");
+                self.provider_phase = None;
                 self.status.activity = Activity::Working;
                 self.turn_summary = None;
                 self.plan = None;
@@ -325,6 +378,7 @@ impl App {
             RuntimeEvent::ProviderAttemptStarted {
                 request, attempt, ..
             } => {
+                self.set_provider_phase(Some(ProviderPhase::Sending));
                 self.begin_speculative_attempt(request, attempt);
             }
             RuntimeEvent::TextDelta {
@@ -332,6 +386,7 @@ impl App {
                 attempt,
                 text,
             } => {
+                self.set_provider_phase(Some(ProviderPhase::Responding));
                 self.buffer_speculative_text(request, attempt, text);
             }
             RuntimeEvent::ReasoningDelta {
@@ -340,7 +395,11 @@ impl App {
                 text,
                 redacted,
             } => {
+                self.set_provider_phase(Some(ProviderPhase::Thinking));
                 self.buffer_speculative_reasoning(request, attempt, text, *redacted);
+            }
+            RuntimeEvent::ProviderAttemptFinished { .. } => {
+                self.set_provider_phase(None);
             }
             RuntimeEvent::ProviderAttemptOutputCommitted { request, attempt } => {
                 self.finish_speculative_attempt(request, attempt, true);
@@ -459,6 +518,7 @@ impl App {
                 self.transcript.push_error(error.to_string());
             }
             RuntimeEvent::TurnCompleted { finish, .. } => {
+                self.provider_phase = None;
                 self.reconcile_pending_terminal(envelope.turn.as_ref(), finish);
                 self.cancel_pending_prompts();
                 // A valid v5 stream has already committed or discarded every
@@ -717,6 +777,7 @@ impl App {
                     .push_error(format!("sub-agent {child} failed: {}", error.message));
             }
             RuntimeEvent::SessionShutdown => {
+                self.provider_phase = None;
                 self.cancel_pending_prompts();
                 self.discard_orphaned_speculative_output("session shutdown");
                 self.transcript.close_open();
