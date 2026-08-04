@@ -181,8 +181,9 @@ grant authority or weaken higher-priority Smith policy.
 
 #### Scenario: Root instructions are present
 
-- **GIVEN** the canonical project root contains a regular non-symlinked UTF-8
-  `AGENTS.md` within the configured size bound
+- **GIVEN** the canonical project root contains an `AGENTS.md` resolving inside
+  that root to a regular UTF-8 file within the configured size bound, whether
+  directly or through an in-project symlink
 - **WHEN** Smith constructs a standard interactive or headless runtime
 - **THEN** the exact bounded snapshot is activated as project instructions
 - **AND** the source and content revision are available as composition evidence
@@ -197,8 +198,9 @@ grant authority or weaken higher-priority Smith policy.
 
 #### Scenario: Present instructions are unsafe to load exactly
 
-- **GIVEN** root `AGENTS.md` is a symlink, non-regular file, unreadable,
-  non-UTF-8, outside the canonical root, or over 32 KiB
+- **GIVEN** root `AGENTS.md` is a broken or escaping symlink, a non-regular
+  file, unreadable, non-UTF-8, resolves outside the canonical root, or is over
+  32 KiB
 - **WHEN** standard host preflight evaluates it
 - **THEN** startup fails with a bounded path-specific diagnostic before provider
   I/O or terminal entry

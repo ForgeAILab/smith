@@ -96,10 +96,11 @@ main-only build profiles.
 After configuration resolves the canonical project root, a standard TUI or
 headless host examines exactly `<project>/AGENTS.md`. It does not search parent
 directories, nested directories, or override filenames in this release. An
-absent file contributes nothing. A present file must be a regular,
-non-symlinked UTF-8 file no larger than 32 KiB; otherwise startup fails before
-provider construction, session state, or terminal entry instead of silently
-skipping or truncating it.
+absent file contributes nothing. A present file must resolve to a regular UTF-8
+file no larger than 32 KiB inside the canonical project root; a symlink such as
+`AGENTS.md -> CLAUDE.md` is followed, one leaving the project is not. Otherwise
+startup fails before provider construction, session state, or terminal entry
+instead of silently skipping or truncating it.
 
 Smith reads the file once per constructed runtime. The immutable snapshot is
 activated as its own required developer-instruction fragment and inherited by

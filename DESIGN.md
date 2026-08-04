@@ -663,8 +663,10 @@ stable non-success results rather than reading stdin or waiting indefinitely.
 
 A standard interactive or headless host examines exactly
 `<canonical-project-root>/AGENTS.md` before runtime construction. Absence is
-ordinary; a present file must be a regular non-symlinked UTF-8 file no larger
-than 32 KiB or startup fails before provider, session, or terminal work. Smith
+ordinary; a present file must resolve inside the project root to a regular UTF-8
+file no larger than 32 KiB — an in-project symlink is followed, one leaving the
+project is refused — or startup fails before provider, session, or terminal
+work. Smith
 captures one immutable snapshot for the constructed runtime and every direct
 child. It does not search parent/nested directories, expand include syntax,
 watch the file, or mutate an active context after an edit.

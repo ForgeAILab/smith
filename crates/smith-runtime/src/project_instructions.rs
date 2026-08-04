@@ -97,7 +97,9 @@ impl fmt::Debug for ProjectInstructionsSnapshot {
 /// Discovers one exact root `AGENTS.md` snapshot.
 ///
 /// Absence is ordinary. A present file fails closed when it cannot be used
-/// exactly; Smith never truncates or silently skips declared instructions.
+/// exactly; Smith never truncates or silently skips declared instructions. A
+/// symlink is followed only while it resolves to a regular file inside the
+/// canonical project root.
 pub fn discover(
     project_root: impl AsRef<Path>,
 ) -> Result<Option<ProjectInstructionsSnapshot>, RuntimeError> {
@@ -110,8 +112,8 @@ pub fn discover(
         ))
     })?;
     let path = root.join(PROJECT_INSTRUCTIONS_FILE);
-    let metadata = match fs::symlink_metadata(&path) {
-        Ok(metadata) => metadata,
+    match fs::symlink_metadata(&path) {
+        Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             return Err(RuntimeError::config(format!(
@@ -119,30 +121,11 @@ pub fn discover(
                 path.display()
             )));
         }
-    };
-
-    if metadata.file_type().is_symlink() {
-        return Err(RuntimeError::config(format!(
-            "project instructions `{}` must be a regular non-symlinked UTF-8 file",
-            path.display()
-        )));
-    }
-    if !metadata.is_file() {
-        return Err(RuntimeError::config(format!(
-            "project instructions `{}` are not a regular file",
-            path.display()
-        )));
-    }
-    let max_bytes = u64::try_from(MAX_PROJECT_INSTRUCTIONS_BYTES).unwrap_or(u64::MAX);
-    if metadata.len() > max_bytes {
-        return Err(RuntimeError::config(format!(
-            "project instructions `{}` are {} bytes, over the \
-             {MAX_PROJECT_INSTRUCTIONS_BYTES}-byte limit",
-            path.display(),
-            metadata.len()
-        )));
     }
 
+    // A link is honored only while it stays inside the project: `AGENTS.md ->
+    // CLAUDE.md` is ordinary repository hygiene, while a link reaching out of
+    // the workspace would activate guidance the project does not own.
     let canonical = path.canonicalize().map_err(|error| {
         RuntimeError::config(format!(
             "project instructions `{}` cannot be resolved: {error}",
@@ -154,6 +137,28 @@ pub fn discover(
             "project instructions `{}` resolve outside project `{}`",
             path.display(),
             root.display()
+        )));
+    }
+
+    let metadata = fs::metadata(&canonical).map_err(|error| {
+        RuntimeError::config(format!(
+            "project instructions `{}` cannot be inspected: {error}",
+            canonical.display()
+        ))
+    })?;
+    if !metadata.is_file() {
+        return Err(RuntimeError::config(format!(
+            "project instructions `{}` are not a regular file",
+            canonical.display()
+        )));
+    }
+    let max_bytes = u64::try_from(MAX_PROJECT_INSTRUCTIONS_BYTES).unwrap_or(u64::MAX);
+    if metadata.len() > max_bytes {
+        return Err(RuntimeError::config(format!(
+            "project instructions `{}` are {} bytes, over the \
+             {MAX_PROJECT_INSTRUCTIONS_BYTES}-byte limit",
+            canonical.display(),
+            metadata.len()
         )));
     }
 
@@ -273,7 +278,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_symlink_is_refused_even_when_its_target_is_readable() {
+    fn a_symlink_leaving_the_project_is_refused() {
         use std::os::unix::fs::symlink;
 
         let root = tempfile::tempdir().expect("a project root");
@@ -282,9 +287,39 @@ mod tests {
         fs::write(&target, "outside guidance").expect("outside instructions");
         symlink(&target, root.path().join(PROJECT_INSTRUCTIONS_FILE)).expect("instruction symlink");
 
-        let error = discover(root.path()).expect_err("symlinked instructions fail");
-        assert!(error.to_string().contains("non-symlinked"));
+        let error = discover(root.path()).expect_err("escaping instructions fail");
+        assert!(error.to_string().contains("resolve outside project"));
         assert!(!error.to_string().contains("outside guidance"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_inside_the_project_is_activated_exactly() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().expect("a project root");
+        fs::write(root.path().join("CLAUDE.md"), "shared guidance").expect("link target");
+        symlink("CLAUDE.md", root.path().join(PROJECT_INSTRUCTIONS_FILE))
+            .expect("instruction symlink");
+
+        let snapshot = discover(root.path())
+            .expect("in-project symlinks are valid")
+            .expect("a snapshot");
+        assert_eq!(snapshot.source(), PROJECT_INSTRUCTIONS_FILE);
+        assert_eq!(snapshot.body(), "shared guidance");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_symlink_fails_closed() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().expect("a project root");
+        symlink("CLAUDE.md", root.path().join(PROJECT_INSTRUCTIONS_FILE))
+            .expect("instruction symlink");
+
+        let error = discover(root.path()).expect_err("a broken link is not absence");
+        assert!(error.to_string().contains("cannot be resolved"));
     }
 
     #[cfg(unix)]

@@ -68,8 +68,10 @@ and bodies are bounded and revision-pinned; front matter cannot promote its own
 trust class.
 
 The standard host deliberately activates root `AGENTS.md` as declarative
-project guidance. It accepts only an exact regular non-symlinked UTF-8 file up
-to 32 KiB, captures it once before runtime construction, and gives direct
+project guidance. It accepts only an exact regular UTF-8 file up to 32 KiB that
+resolves inside the project root — an in-project symlink such as `AGENTS.md ->
+CLAUDE.md` is followed, one escaping the workspace is refused — captures it
+once before runtime construction, and gives direct
 children the same immutable revision. It performs no nested discovery,
 automatic include expansion, or file watching. This activation changes model
 guidance, not authority: instructions cannot register tools, widen the
