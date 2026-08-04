@@ -23,7 +23,7 @@ use crate::diff::EditReview;
 use crate::picker::{ResourceEntry, ResourcePicker};
 use crate::questionnaire::{QuestionnaireResolution, QuestionnaireState};
 use crate::selection::Selection;
-use crate::status::{Activity, Status};
+use crate::status::{Activity, Status, render_elapsed};
 use crate::transcript::{ToolStatus, Transcript};
 
 /// How long a second `Ctrl+C` still counts as the exit press.
@@ -483,7 +483,7 @@ pub struct PlanSummary {
 /// Replaceable, replay-derived evidence for the current turn.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct WorkSummary {
-    pub(super) tools: BTreeMap<String, (String, ToolStatus)>,
+    pub(super) tools: BTreeMap<String, (String, ToolStatus, Option<Instant>)>,
 }
 
 /// One live-stream sequence gap awaiting journal replay.
@@ -922,7 +922,16 @@ impl App {
         work.tools
             .values()
             .take(12)
-            .map(|(name, status)| format!("tool {name} · {}", status.label()))
+            .map(|(name, status, started_at)| match status {
+                ToolStatus::Running => {
+                    if let Some(started) = started_at {
+                        format!("tool {name} · running {}", render_elapsed(started.elapsed()))
+                    } else {
+                        format!("tool {name} · {}", status.label())
+                    }
+                }
+                _ => format!("tool {name} · {}", status.label()),
+            })
             .collect()
     }
 }

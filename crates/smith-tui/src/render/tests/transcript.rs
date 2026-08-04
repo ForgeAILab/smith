@@ -473,3 +473,24 @@
             "an unreviewable edit must not claim a diff:\n{screen}"
         );
     }
+
+    #[test]
+    fn running_tool_call_displays_elapsed_time() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.apply(&event(RuntimeEvent::ToolCallRequested {
+            call: ToolCallId::new("c1"),
+            name: "shell".to_owned(),
+            argument_keys: vec!["command".to_owned(), "cwd".to_owned()],
+            argument_fingerprint: agent_runtime_registry::Fingerprint::of("arguments"),
+            arguments: Some(serde_json::json!({
+                "command": "cargo test",
+                "cwd": "."
+            })),
+        }));
+
+        let screen = render(&app, 74, 16, Theme::new().without_color());
+        assert!(
+            screen.contains("• Shell(cargo test · cwd .) · running 0s"),
+            "{screen}"
+        );
+    }

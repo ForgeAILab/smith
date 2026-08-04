@@ -422,7 +422,7 @@ impl App {
                 if let Some(work) = &mut self.work {
                     work.tools.insert(
                         call.as_str().to_owned(),
-                        (name.clone(), ToolStatus::Running),
+                        (name.clone(), ToolStatus::Running, Some(Instant::now())),
                     );
                 }
                 self.transcript.push_tool_call(
@@ -439,7 +439,7 @@ impl App {
                     ToolStatus::Ok
                 };
                 if let Some(work) = &mut self.work
-                    && let Some((_, work_status)) = work.tools.get_mut(call.as_str())
+                    && let Some((_, work_status, _)) = work.tools.get_mut(call.as_str())
                 {
                     *work_status = status;
                 }

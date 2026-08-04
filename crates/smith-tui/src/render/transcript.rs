@@ -88,6 +88,7 @@ pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<
                 protected_summary,
                 status,
                 result_preview,
+                started_at,
                 ..
             } => {
                 let tone = match status {
@@ -99,6 +100,16 @@ pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<
                     || format!("{}({protected_summary})", safe_tool_name(name)),
                     smith_tools::ToolCallDisplay::invocation,
                 );
+                let status_text = match status {
+                    ToolStatus::Running => {
+                        if let Some(started) = started_at {
+                            format!("running {}", render_elapsed(started.elapsed()))
+                        } else {
+                            status.label().to_owned()
+                        }
+                    }
+                    _ => status.label().to_owned(),
+                };
                 lines.push(Line::from(vec![
                     Span::styled(
                         format!("{} ", glyph::TOOL),
@@ -106,7 +117,7 @@ pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<
                     ),
                     Span::styled(invocation, theme.style(Tone::Heading)),
                     Span::styled(" · ", theme.style(Tone::Dim)),
-                    Span::styled(status.label(), theme.style(tone)),
+                    Span::styled(status_text, theme.style(tone)),
                 ]));
                 if !matches!(status, ToolStatus::Running)
                     && let Some(preview) = result_preview

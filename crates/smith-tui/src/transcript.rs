@@ -13,6 +13,8 @@
 //!   arriving mid-stream gets its own block, so the transcript stays a faithful
 //!   record of the conversation rather than a splice of unrelated output.
 
+use std::time::Instant;
+
 use agent_runtime_core::content::{ContentPart, Message, Role};
 use serde_json::Value;
 use smith_tools::{ToolCallDisplay, has_tool_call_display_schema, project_tool_call_display};
@@ -59,7 +61,7 @@ impl ToolStatus {
 }
 
 /// One addressable unit of transcript history.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Block {
     /// A message the user sent.
     User {
@@ -97,6 +99,8 @@ pub enum Block {
         /// Bounded, credential-redacted first lines of the tool result,
         /// supplied by the host after completion.
         result_preview: Option<String>,
+        /// When the tool call started running.
+        started_at: Option<Instant>,
     },
     /// A structured error.
     Error {
@@ -121,6 +125,82 @@ pub enum Block {
         /// Text-visible result state.
         state: LocalResultState,
     },
+}
+
+impl PartialEq for Block {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::User { text: t1 }, Self::User { text: t2 }) => t1 == t2,
+            (
+                Self::Assistant {
+                    text: t1,
+                    open: o1,
+                },
+                Self::Assistant {
+                    text: t2,
+                    open: o2,
+                },
+            ) => t1 == t2 && o1 == o2,
+            (
+                Self::Reasoning {
+                    text: t1,
+                    redacted: r1,
+                    open: o1,
+                },
+                Self::Reasoning {
+                    text: t2,
+                    redacted: r2,
+                    open: o2,
+                },
+            ) => t1 == t2 && r1 == r2 && o1 == o2,
+            (
+                Self::Tool {
+                    call_id: c1,
+                    name: n1,
+                    display: d1,
+                    protected_summary: p1,
+                    status: s1,
+                    result_preview: r1,
+                    ..
+                },
+                Self::Tool {
+                    call_id: c2,
+                    name: n2,
+                    display: d2,
+                    protected_summary: p2,
+                    status: s2,
+                    result_preview: r2,
+                    ..
+                },
+            ) => {
+                c1 == c2 && n1 == n2 && d1 == d2 && p1 == p2 && s1 == s2 && r1 == r2
+            }
+            (Self::Error { message: m1 }, Self::Error { message: m2 }) => m1 == m2,
+            (
+                Self::Notice {
+                    source: s1,
+                    text: t1,
+                },
+                Self::Notice {
+                    source: s2,
+                    text: t2,
+                },
+            ) => s1 == s2 && t1 == t2,
+            (
+                Self::LocalResult {
+                    title: t1,
+                    content: c1,
+                    state: s1,
+                },
+                Self::LocalResult {
+                    title: t2,
+                    content: c2,
+                    state: s2,
+                },
+            ) => t1 == t2 && c1 == c2 && s1 == s2,
+            _ => false,
+        }
+    }
 }
 
 /// The ordered transcript.
@@ -255,6 +335,7 @@ impl Transcript {
             protected_summary: summarize_unavailable_arguments(name, argument_keys),
             status: ToolStatus::Running,
             result_preview: None,
+            started_at: Some(Instant::now()),
         });
     }
 
@@ -395,6 +476,7 @@ impl Transcript {
                                     // As with `display`, the host supplies a
                                     // redacted preview after rebuilding.
                                     result_preview: None,
+                                    started_at: None,
                                 });
                             }
                             // An assistant message does not carry results;
