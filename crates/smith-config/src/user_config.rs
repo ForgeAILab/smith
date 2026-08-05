@@ -426,7 +426,7 @@ pub fn prepare_provider_credential_removal(
         .and_then(|providers| providers.get_mut(provider))
         .and_then(Item::as_table_mut)
     {
-        for field in ["credential", "api_key"] {
+        for field in ["credential", "credentials", "api_key"] {
             let Some(previous_item) = table.remove(field) else {
                 continue;
             };
@@ -472,11 +472,18 @@ fn remove_alternative_credential_fields(
     collisions: &mut Vec<ConfigCollision>,
 ) {
     for (provider, section) in &patch.providers {
-        let alternative = match (section.credential.is_some(), section.api_key.is_some()) {
-            (true, false) => "api_key",
-            (false, true) => "credential",
-            _ => continue,
-        };
+        // The three spellings are one declaration: a single account, an
+        // ordered pool, or an inline key. A patch that chooses one replaces
+        // the others, and the removal is recorded so the preview shows the
+        // pool or key the new declaration displaces.
+        let spellings = [
+            ("credential", section.credential.is_some()),
+            ("credentials", !section.credentials.is_empty()),
+            ("api_key", section.api_key.is_some()),
+        ];
+        if spellings.iter().filter(|(_, present)| *present).count() != 1 {
+            continue;
+        }
         let Some(provider_table) = candidate
             .get_mut("providers")
             .and_then(Item::as_table_mut)
@@ -485,27 +492,33 @@ fn remove_alternative_credential_fields(
         else {
             continue;
         };
-        let Some(previous_item) = provider_table.remove(alternative) else {
-            continue;
-        };
+        for alternative in spellings
+            .iter()
+            .filter(|(_, present)| !*present)
+            .map(|(name, _)| *name)
+        {
+            let Some(previous_item) = provider_table.remove(alternative) else {
+                continue;
+            };
 
-        let path = vec![
-            "providers".to_owned(),
-            provider.clone(),
-            alternative.to_owned(),
-        ];
-        let key = display_path(&path);
-        let previous = safe_render(&path, &previous_item);
-        changes.push(ConfigChange {
-            key: key.clone(),
-            previous: Some(previous.clone()),
-            proposed: "<removed>".to_owned(),
-        });
-        collisions.push(ConfigCollision {
-            key,
-            existing: previous,
-            proposed: "<removed>".to_owned(),
-        });
+            let path = vec![
+                "providers".to_owned(),
+                provider.clone(),
+                alternative.to_owned(),
+            ];
+            let key = display_path(&path);
+            let previous = safe_render(&path, &previous_item);
+            changes.push(ConfigChange {
+                key: key.clone(),
+                previous: Some(previous.clone()),
+                proposed: "<removed>".to_owned(),
+            });
+            collisions.push(ConfigCollision {
+                key,
+                existing: previous,
+                proposed: "<removed>".to_owned(),
+            });
+        }
     }
 
     let Some(persistence) = &patch.persistence else {
@@ -825,6 +838,88 @@ mod tests {
         assert!(stored.contains("enabled = true"), "{stored}");
         assert!(!stored.contains("checkpoint_key"), "{stored}");
         assert!(!stored.contains(KEY), "{stored}");
+    }
+
+    /// The three credential spellings are one declaration: a patch choosing a
+    /// pool visibly displaces a single credential, and a patch choosing a
+    /// single credential visibly displaces the pool it collapses.
+    #[test]
+    fn a_credential_patch_replaces_the_alternative_spellings_it_displaces() {
+        let directory = tempfile::tempdir().expect("temporary config root");
+        let path = directory.path().join(CONFIG_FILE);
+        fs::write(
+            &path,
+            "[providers.chatgpt]\nkind = \"chatgpt-responses\"\ncredential = \"authfile:chatgpt\"\n",
+        )
+        .expect("seed config");
+
+        // Single → pool: the `credential` key is removed, not left to fight
+        // the pool over which spelling declares the account.
+        let pool_patch = ConfigFile {
+            providers: std::collections::BTreeMap::from([(
+                "chatgpt".to_owned(),
+                crate::model::ProviderSection {
+                    credentials: vec![
+                        "authfile:chatgpt".to_owned(),
+                        "authfile:chatgpt-2".to_owned(),
+                    ],
+                    ..crate::model::ProviderSection::default()
+                },
+            )]),
+            ..ConfigFile::default()
+        };
+        let prepared =
+            prepare_user_config_edit(directory.path(), &pool_patch).expect("prepared pool edit");
+        prepared.commit(true).expect("commit").accept();
+        let stored = fs::read_to_string(&path).expect("stored config");
+        assert!(stored.contains("credentials"), "{stored}");
+        assert!(!stored.contains("credential = "), "{stored}");
+
+        // Pool → single: replacing the login collapses the pool, and the
+        // preview records the pool it removed.
+        let single_patch = ConfigFile {
+            providers: std::collections::BTreeMap::from([(
+                "chatgpt".to_owned(),
+                crate::model::ProviderSection {
+                    credential: Some("authfile:chatgpt".to_owned()),
+                    ..crate::model::ProviderSection::default()
+                },
+            )]),
+            ..ConfigFile::default()
+        };
+        let prepared = prepare_user_config_edit(directory.path(), &single_patch)
+            .expect("prepared single edit");
+        assert!(prepared.preview().contains("<removed>"));
+        prepared.commit(true).expect("commit").accept();
+        let stored = fs::read_to_string(&path).expect("stored config");
+        assert!(
+            stored.contains("credential = \"authfile:chatgpt\""),
+            "{stored}"
+        );
+        assert!(!stored.contains("credentials ="), "{stored}");
+        assert!(!stored.contains("chatgpt-2"), "{stored}");
+    }
+
+    /// Disconnecting a pooled provider strips the whole pool, not just the
+    /// single-credential spelling.
+    #[test]
+    fn provider_disconnect_removes_a_credentials_pool() {
+        let directory = tempfile::tempdir().expect("temporary config root");
+        let path = directory.path().join(CONFIG_FILE);
+        fs::write(
+            &path,
+            "[providers.chatgpt]\nkind = \"chatgpt-responses\"\ncredentials = [\"authfile:chatgpt\", \"authfile:chatgpt-2\"]\n",
+        )
+        .expect("seed config");
+
+        let prepared = prepare_provider_credential_removal(directory.path(), "chatgpt")
+            .expect("prepared disconnect");
+        prepared.commit(true).expect("commit").accept();
+
+        let stored = fs::read_to_string(path).expect("stored config");
+        assert!(stored.contains("chatgpt-responses"), "{stored}");
+        assert!(!stored.contains("credentials"), "{stored}");
+        assert!(!stored.contains("chatgpt-2"), "{stored}");
     }
 
     #[test]

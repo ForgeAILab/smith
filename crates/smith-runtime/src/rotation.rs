@@ -23,6 +23,7 @@
 //! reporting the failure.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use agent_runtime_core::cancel::Cancellation;
@@ -34,9 +35,8 @@ use agent_runtime_core::provider::{
 use agent_runtime_core::provider_credential::{
     CredentialInvalidation, ProviderAuthRejection, ProviderCredentialError,
     ProviderCredentialLease, ProviderCredentialRevision, ProviderCredentialSource,
-    ProviderCredentialTarget,
+    ProviderCredentialTarget, StaticProviderCredentialSource,
 };
-use agent_runtime_core::store::Secret;
 use async_stream::stream;
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -67,84 +67,107 @@ impl SharedPool {
     }
 }
 
-/// Resolves credential references to secrets off the async executor.
+/// Builds the credential source that authorizes one pool member.
 ///
-/// Kept behind a trait so rotation can be tested without a keychain: the
-/// production implementation opens the platform credential service, which is
-/// blocking, prompting, and unavailable in CI.
+/// A member is a *source*, not a secret: an API-key member wraps its resolved
+/// value in a static source, while a browser-login member gets a renewable
+/// source that refreshes and persists to that member's own reference — which
+/// is what keeps a pooled account's token from going stale while another
+/// account serves the session. Kept behind a trait so rotation can be tested
+/// without a keychain: production implementations open the platform credential
+/// service, which is blocking, prompting, and unavailable in CI.
 #[async_trait]
-pub trait PoolSecrets: Send + Sync + std::fmt::Debug {
-    /// Resolves one reference to its secret.
-    async fn resolve(&self, reference: &str) -> Result<Secret, ProviderCredentialError>;
+pub trait PoolMemberSources: Send + Sync + std::fmt::Debug {
+    /// Builds the source leasing `reference`, declared at `position`.
+    async fn build(
+        &self,
+        position: usize,
+        reference: &str,
+    ) -> Result<Arc<dyn ProviderCredentialSource>, ProviderCredentialError>;
 }
 
-/// The production secret resolver, backed by Smith's credential resolver.
+/// Member sources for providers that authenticate with opaque static secrets.
 #[derive(Debug)]
-pub struct HostPoolSecrets {
+pub struct StaticMemberSources {
     resolver: CredentialResolver,
 }
 
-impl HostPoolSecrets {
-    /// Resolves against `resolver`.
+impl StaticMemberSources {
+    /// Resolves members against `resolver`.
     pub fn new(resolver: CredentialResolver) -> Self {
         Self { resolver }
     }
 }
 
 #[async_trait]
-impl PoolSecrets for HostPoolSecrets {
-    async fn resolve(&self, reference: &str) -> Result<Secret, ProviderCredentialError> {
+impl PoolMemberSources for StaticMemberSources {
+    async fn build(
+        &self,
+        _position: usize,
+        reference: &str,
+    ) -> Result<Arc<dyn ProviderCredentialSource>, ProviderCredentialError> {
         let reference =
             CredentialRef::parse(reference).map_err(|_| ProviderCredentialError::Unavailable)?;
         let resolver = self.resolver.clone();
         // The credential service is blocking and may prompt, so it never runs
         // on an executor thread.
-        tokio::task::spawn_blocking(move || resolver.resolve_blocking(&reference))
+        let secret = tokio::task::spawn_blocking(move || resolver.resolve_blocking(&reference))
             .await
             .map_err(|_| ProviderCredentialError::RefreshFailed)?
-            .map_err(|_| ProviderCredentialError::Unavailable)
+            .map_err(|_| ProviderCredentialError::Unavailable)?;
+        Ok(Arc::new(StaticProviderCredentialSource::new(secret)))
     }
 }
 
-/// Leases whichever pool member is active.
+/// Leases whichever pool member is active, through that member's own source.
 ///
-/// Secrets are cached per member after their first resolution, so switching
-/// back to an account does not re-open the credential service and re-prompt.
-/// The cache holds only members the session actually used: an account that is
+/// Member sources are cached after their first construction, so switching back
+/// to an account does not re-open the credential service and re-prompt. The
+/// cache holds only members the session actually used: an account that is
 /// never selected is never read.
 #[derive(Debug)]
 pub struct PoolCredentialSource {
     pool: SharedPool,
-    secrets: Arc<dyn PoolSecrets>,
-    cache: Mutex<BTreeMap<usize, Secret>>,
+    members: Arc<dyn PoolMemberSources>,
+    sources: Mutex<BTreeMap<usize, Arc<dyn ProviderCredentialSource>>>,
+    /// Position → the composed revision last leased and the member revision
+    /// beneath it, so an invalidation can be routed back to the member that
+    /// issued the rejected lease.
+    leases: Mutex<BTreeMap<usize, (ProviderCredentialRevision, ProviderCredentialRevision)>>,
+    /// Distinguishes successive leases of one position, so a rejection of a
+    /// lease that predates a member's renewal is stale rather than a second
+    /// forced refresh of a token that was already replaced.
+    serial: AtomicU64,
 }
 
 impl PoolCredentialSource {
-    /// Leases members of `pool`, resolving them through `secrets`.
-    pub fn new(pool: SharedPool, secrets: Arc<dyn PoolSecrets>) -> Self {
+    /// Leases members of `pool`, building their sources through `members`.
+    pub fn new(pool: SharedPool, members: Arc<dyn PoolMemberSources>) -> Self {
         Self {
             pool,
-            secrets,
-            cache: Mutex::new(BTreeMap::new()),
+            members,
+            sources: Mutex::new(BTreeMap::new()),
+            leases: Mutex::new(BTreeMap::new()),
+            serial: AtomicU64::new(0),
         }
     }
 
-    /// Pre-populates the cache for `position`.
+    /// Pre-populates the member source for `position`.
     ///
     /// The active member's secret is already resolved by the time the adapter
-    /// is built, and reading it a second time would open the credential
+    /// is built, and building the member again would open the credential
     /// service — and on some platforms prompt — for a value in hand.
-    pub fn seed(&self, position: usize, secret: Secret) {
-        self.cache
+    pub fn seed(&self, position: usize, source: Arc<dyn ProviderCredentialSource>) {
+        self.sources
             .lock()
-            .expect("credential cache poisoned")
-            .insert(position, secret);
+            .expect("member sources poisoned")
+            .insert(position, source);
     }
 
-    fn cached(&self, position: usize) -> Option<Secret> {
-        self.cache
+    fn cached(&self, position: usize) -> Option<Arc<dyn ProviderCredentialSource>> {
+        self.sources
             .lock()
-            .expect("credential cache poisoned")
+            .expect("member sources poisoned")
             .get(&position)
             .cloned()
     }
@@ -154,10 +177,10 @@ impl PoolCredentialSource {
 impl ProviderCredentialSource for PoolCredentialSource {
     async fn acquire(
         &self,
-        _target: &ProviderCredentialTarget,
-        _minimum_validity_ms: u64,
+        target: &ProviderCredentialTarget,
+        minimum_validity_ms: u64,
         cancel: &Cancellation,
-        _deadline: Deadline,
+        deadline: Deadline,
     ) -> Result<ProviderCredentialLease, ProviderCredentialError> {
         if cancel.is_cancelled() {
             return Err(ProviderCredentialError::Cancelled);
@@ -170,48 +193,88 @@ impl ProviderCredentialSource for PoolCredentialSource {
         });
         let reference = reference.ok_or(ProviderCredentialError::Unavailable)?;
 
-        let secret = match self.cached(position) {
-            Some(secret) => secret,
+        let source = match self.cached(position) {
+            Some(source) => source,
             None => {
-                let secret = self.secrets.resolve(&reference).await?;
-                self.cache
+                let source = self.members.build(position, &reference).await?;
+                self.sources
                     .lock()
-                    .expect("credential cache poisoned")
-                    .insert(position, secret.clone());
-                secret
+                    .expect("member sources poisoned")
+                    .insert(position, source.clone());
+                source
             }
         };
 
-        // The revision names the pool position, so a rejection of one member's
-        // lease can never invalidate another's. It carries no secret and no
+        let lease = source
+            .acquire(target, minimum_validity_ms, cancel, deadline)
+            .await?;
+        // The composed revision names the pool position and a serial, so a
+        // rejection can be routed to the member that issued the lease — and
+        // only to the exact lease it issued. It carries no secret and no
         // account identity beyond the position the user can already see.
-        let revision = ProviderCredentialRevision::new(format!("pool-{position}"))?;
-        Ok(ProviderCredentialLease::non_expiring(secret, revision))
+        let serial = self.serial.fetch_add(1, Ordering::Relaxed);
+        let composed = ProviderCredentialRevision::new(format!("pool-{position}-{serial}"))?;
+        self.leases
+            .lock()
+            .expect("lease records poisoned")
+            .insert(position, (composed.clone(), lease.revision().clone()));
+        let relabeled = match lease.expires_at() {
+            Some(expires_at) => {
+                ProviderCredentialLease::expiring(lease.secret().clone(), expires_at, composed)
+            }
+            None => ProviderCredentialLease::non_expiring(lease.secret().clone(), composed),
+        };
+        Ok(match lease.account() {
+            Some(account) => relabeled.with_account(account),
+            None => relabeled,
+        })
     }
 
     async fn invalidate(
         &self,
-        _target: &ProviderCredentialTarget,
+        target: &ProviderCredentialTarget,
         rejected_revision: &ProviderCredentialRevision,
-        _rejection: ProviderAuthRejection,
-        _cancel: &Cancellation,
-        _deadline: Deadline,
+        rejection: ProviderAuthRejection,
+        cancel: &Cancellation,
+        deadline: Deadline,
     ) -> Result<CredentialInvalidation, ProviderCredentialError> {
-        // A rejected credential is dropped from the cache so the next attempt
-        // re-reads it: the stored value may have been rotated by whatever tool
-        // owns it. Whether a *replacement* exists is not something a static
-        // reference can promise, so this reports no replacement rather than
-        // inviting an unbounded renewal loop.
-        let position = self.pool.read(CredentialPool::active_position);
-        if format!("pool-{position}") == format!("{rejected_revision:?}") {
-            // Unreachable in practice: revisions are opaque in Debug. Kept as
-            // a no-op branch rather than pretending the comparison is possible.
+        if cancel.is_cancelled() {
+            return Err(ProviderCredentialError::Cancelled);
         }
-        self.cache
-            .lock()
-            .expect("credential cache poisoned")
-            .remove(&position);
-        Ok(CredentialInvalidation::NoReplacement)
+        let record = {
+            let leases = self.leases.lock().expect("lease records poisoned");
+            leases
+                .iter()
+                .find(|(_, (composed, _))| composed == rejected_revision)
+                .map(|(position, (_, inner))| (*position, inner.clone()))
+        };
+        // A rejection naming a lease this pool no longer tracks was already
+        // superseded — by a renewal, or by another attempt on the same member.
+        let Some((position, inner)) = record else {
+            return Ok(CredentialInvalidation::StaleRevision);
+        };
+        let Some(source) = self.cached(position) else {
+            return Ok(CredentialInvalidation::StaleRevision);
+        };
+        let verdict = source
+            .invalidate(target, &inner, rejection, cancel, deadline)
+            .await?;
+        if verdict == CredentialInvalidation::NoReplacement {
+            // The stored value may have been rotated by whatever tool owns it,
+            // so the member is dropped and the next acquisition re-reads it.
+            // Whether a *replacement* exists is not something a static
+            // reference can promise, so the verdict passes through rather than
+            // inviting an unbounded renewal loop.
+            self.sources
+                .lock()
+                .expect("member sources poisoned")
+                .remove(&position);
+            self.leases
+                .lock()
+                .expect("lease records poisoned")
+                .remove(&position);
+        }
+        Ok(verdict)
     }
 }
 
@@ -411,6 +474,7 @@ mod tests {
     use agent_runtime_core::cancel::CancelReason;
     use agent_runtime_core::clock::Timestamp;
     use agent_runtime_core::ids::{AttemptId, RequestId, SessionId};
+    use agent_runtime_core::store::Secret;
     use agent_runtime_core::provider::{
         FinishReason, RateLimitSnapshot, RateLimitWindow, ReasoningSupport,
     };
@@ -960,20 +1024,31 @@ mod tests {
         assert_eq!(policy.asked.load(Ordering::SeqCst), 0);
     }
 
-    #[derive(Debug)]
-    struct FixedSecrets;
+    /// Builds a static member per reference, counting constructions so a test
+    /// can tell a cached member from a rebuilt one.
+    #[derive(Debug, Default)]
+    struct FixedMemberSources {
+        builds: AtomicUsize,
+    }
 
     #[async_trait]
-    impl PoolSecrets for FixedSecrets {
-        async fn resolve(&self, reference: &str) -> Result<Secret, ProviderCredentialError> {
-            Ok(Secret::new(format!("secret-for-{reference}")))
+    impl PoolMemberSources for FixedMemberSources {
+        async fn build(
+            &self,
+            _position: usize,
+            reference: &str,
+        ) -> Result<Arc<dyn ProviderCredentialSource>, ProviderCredentialError> {
+            self.builds.fetch_add(1, Ordering::SeqCst);
+            Ok(Arc::new(StaticProviderCredentialSource::new(Secret::new(
+                format!("secret-for-{reference}"),
+            ))))
         }
     }
 
     #[tokio::test]
     async fn the_credential_source_leases_whichever_member_is_active() {
         let pool = pool(2);
-        let source = PoolCredentialSource::new(pool.clone(), Arc::new(FixedSecrets));
+        let source = PoolCredentialSource::new(pool.clone(), Arc::new(FixedMemberSources::default()));
         let target = ProviderCredentialTarget::new("acme").expect("a target");
 
         let first = source
@@ -993,9 +1068,175 @@ mod tests {
         assert_ne!(first.revision(), second.revision());
     }
 
+    /// A rejection routes to the member that issued the lease, and only for
+    /// the exact lease it issued. A static member cannot renew, so it is
+    /// dropped and rebuilt on the next acquisition — the stored value may have
+    /// been rotated by whatever tool owns it.
+    #[tokio::test]
+    async fn a_rejection_rebuilds_the_member_that_issued_the_lease() {
+        let members = Arc::new(FixedMemberSources::default());
+        let source = PoolCredentialSource::new(pool(2), members.clone());
+        let target = ProviderCredentialTarget::new("acme").expect("a target");
+
+        let lease = source
+            .acquire(&target, 0, &Cancellation::new(), Deadline::never())
+            .await
+            .expect("a lease");
+        assert_eq!(members.builds.load(Ordering::SeqCst), 1);
+
+        let verdict = source
+            .invalidate(
+                &target,
+                lease.revision(),
+                ProviderAuthRejection::Unauthorized,
+                &Cancellation::new(),
+                Deadline::never(),
+            )
+            .await
+            .expect("a verdict");
+        assert_eq!(verdict, CredentialInvalidation::NoReplacement);
+
+        source
+            .acquire(&target, 0, &Cancellation::new(), Deadline::never())
+            .await
+            .expect("a lease");
+        assert_eq!(members.builds.load(Ordering::SeqCst), 2);
+    }
+
+    /// A rejection naming a lease the pool no longer tracks is stale: acting
+    /// on it would punish a member for an attempt that was already superseded.
+    #[tokio::test]
+    async fn a_superseded_lease_rejection_is_stale_and_keeps_the_member() {
+        let members = Arc::new(FixedMemberSources::default());
+        let source = PoolCredentialSource::new(pool(2), members.clone());
+        let target = ProviderCredentialTarget::new("acme").expect("a target");
+
+        let first = source
+            .acquire(&target, 0, &Cancellation::new(), Deadline::never())
+            .await
+            .expect("a lease");
+        let _second = source
+            .acquire(&target, 0, &Cancellation::new(), Deadline::never())
+            .await
+            .expect("a lease");
+
+        let verdict = source
+            .invalidate(
+                &target,
+                first.revision(),
+                ProviderAuthRejection::Unauthorized,
+                &Cancellation::new(),
+                Deadline::never(),
+            )
+            .await
+            .expect("a verdict");
+        assert_eq!(verdict, CredentialInvalidation::StaleRevision);
+
+        // The member survived: the next acquisition reuses it.
+        source
+            .acquire(&target, 0, &Cancellation::new(), Deadline::never())
+            .await
+            .expect("a lease");
+        assert_eq!(members.builds.load(Ordering::SeqCst), 1);
+    }
+
+    /// A renewable member keeps its identity across the pool boundary: the
+    /// lease's expiry and account pass through, an invalidation that can be
+    /// recovered by a refresh reports so, and the member is kept — dropping it
+    /// would discard the very state that can renew.
+    #[tokio::test]
+    async fn a_renewable_member_passes_expiry_account_and_recovery_through() {
+        #[derive(Debug, Default)]
+        struct RenewableMember {
+            invalidations: AtomicUsize,
+        }
+
+        #[async_trait]
+        impl ProviderCredentialSource for RenewableMember {
+            async fn acquire(
+                &self,
+                _target: &ProviderCredentialTarget,
+                _minimum_validity_ms: u64,
+                _cancel: &Cancellation,
+                _deadline: Deadline,
+            ) -> Result<ProviderCredentialLease, ProviderCredentialError> {
+                Ok(ProviderCredentialLease::expiring(
+                    Secret::new("access".to_owned()),
+                    Timestamp::ZERO.plus_millis(RESET),
+                    ProviderCredentialRevision::new("member-v1")?,
+                )
+                .with_account("acct_member"))
+            }
+
+            async fn invalidate(
+                &self,
+                _target: &ProviderCredentialTarget,
+                rejected_revision: &ProviderCredentialRevision,
+                _rejection: ProviderAuthRejection,
+                _cancel: &Cancellation,
+                _deadline: Deadline,
+            ) -> Result<CredentialInvalidation, ProviderCredentialError> {
+                assert_eq!(
+                    rejected_revision,
+                    &ProviderCredentialRevision::new("member-v1")?,
+                    "the pool must hand the member its own revision back"
+                );
+                self.invalidations.fetch_add(1, Ordering::SeqCst);
+                Ok(CredentialInvalidation::ReplacementPossible)
+            }
+        }
+
+        #[derive(Debug, Default)]
+        struct RenewableMembers {
+            member: Arc<RenewableMember>,
+        }
+
+        #[async_trait]
+        impl PoolMemberSources for RenewableMembers {
+            async fn build(
+                &self,
+                _position: usize,
+                _reference: &str,
+            ) -> Result<Arc<dyn ProviderCredentialSource>, ProviderCredentialError> {
+                Ok(self.member.clone())
+            }
+        }
+
+        let members = Arc::new(RenewableMembers::default());
+        let member = members.member.clone();
+        let source = PoolCredentialSource::new(pool(2), members);
+        let target = ProviderCredentialTarget::new("acme").expect("a target");
+
+        let lease = source
+            .acquire(&target, 0, &Cancellation::new(), Deadline::never())
+            .await
+            .expect("a lease");
+        assert_eq!(lease.expires_at(), Some(Timestamp::ZERO.plus_millis(RESET)));
+        assert_eq!(lease.account(), Some("acct_member"));
+
+        let verdict = source
+            .invalidate(
+                &target,
+                lease.revision(),
+                ProviderAuthRejection::Unauthorized,
+                &Cancellation::new(),
+                Deadline::never(),
+            )
+            .await
+            .expect("a verdict");
+        assert_eq!(verdict, CredentialInvalidation::ReplacementPossible);
+        assert_eq!(member.invalidations.load(Ordering::SeqCst), 1);
+
+        // Still leasable through the same member: it was not dropped.
+        source
+            .acquire(&target, 0, &Cancellation::new(), Deadline::never())
+            .await
+            .expect("a lease");
+    }
+
     #[tokio::test]
     async fn an_empty_pool_has_no_credential_to_lease() {
-        let source = PoolCredentialSource::new(pool(0), Arc::new(FixedSecrets));
+        let source = PoolCredentialSource::new(pool(0), Arc::new(FixedMemberSources::default()));
         let target = ProviderCredentialTarget::new("acme").expect("a target");
 
         let error = source
@@ -1007,7 +1248,7 @@ mod tests {
 
     #[tokio::test]
     async fn acquisition_observes_cancellation() {
-        let source = PoolCredentialSource::new(pool(2), Arc::new(FixedSecrets));
+        let source = PoolCredentialSource::new(pool(2), Arc::new(FixedMemberSources::default()));
         let target = ProviderCredentialTarget::new("acme").expect("a target");
         let cancel = Cancellation::new();
         cancel.cancel(CancelReason::UserRequested);

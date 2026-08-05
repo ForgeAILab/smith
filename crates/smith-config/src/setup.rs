@@ -34,6 +34,19 @@ pub const CHATGPT_ENDPOINT: &str = "https://chatgpt.com/backend-api/codex";
 /// Fixed owner-only plaintext auth-file reference for Smith's renewable ChatGPT bundle.
 pub const CHATGPT_CREDENTIAL: &str = "authfile:chatgpt";
 
+/// Whether an owner-only auth-file entry names a Smith ChatGPT login.
+///
+/// The first account lives at the fixed `chatgpt` entry; additional pool
+/// members take a `chatgpt-` prefix (`chatgpt-2`, `chatgpt-work`). The prefix
+/// is what the ChatGPT kind's validation accepts, so a pool cannot smuggle in
+/// a reference some other product owns and rotates underneath Smith.
+pub fn is_chatgpt_auth_entry(entry: &str) -> bool {
+    entry == "chatgpt"
+        || entry
+            .strip_prefix("chatgpt-")
+            .is_some_and(|label| !label.is_empty())
+}
+
 /// Provider name for an xAI subscription reached by browser login.
 pub const XAI_PROVIDER: &str = "xai";
 /// Profile name the xAI setup choice writes.

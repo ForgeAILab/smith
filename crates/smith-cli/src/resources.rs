@@ -720,6 +720,54 @@ pub(super) async fn choose_resume_session(
     result
 }
 
+/// Runs one standalone picker to a selection, cancellation, or input end.
+///
+/// Returns the selected entry's id, or `None` when the user backs out.
+pub(super) async fn pick_one(
+    title: &str,
+    entries: Vec<ResourceEntry>,
+    empty_hint: &str,
+    no_color: bool,
+    no_motion: bool,
+) -> Result<Option<String>> {
+    let mut picker = ResourcePicker::new(title, entries, empty_hint);
+    let mut theme = Theme::from_env();
+    if no_color {
+        theme = theme.without_color();
+    }
+    if no_motion {
+        theme = theme.without_motion();
+    }
+    let mut terminal = terminal::enter().with_context(|| format!("entering the {title} picker"))?;
+    let mut events = EventStream::new();
+    let result = async {
+        loop {
+            terminal.draw(|frame| {
+                let area = standalone_picker_area(frame.area(), picker.entries.len());
+                draw_resource_picker(frame, area, &picker, theme);
+            })?;
+            let Some(event) = events.next().await else {
+                return Ok(None);
+            };
+            match event.context("reading a terminal event")? {
+                TermEvent::Key(key) => match picker.on_key(key) {
+                    PickerOutcome::Pending => {}
+                    PickerOutcome::Cancelled => return Ok(None),
+                    PickerOutcome::Selected(id) => return Ok(Some(id)),
+                },
+                TermEvent::Paste(text) => picker.paste(&text),
+                TermEvent::Resize(_, _) => {}
+                _ => {}
+            }
+        }
+    }
+    .await;
+    terminal
+        .restore()
+        .with_context(|| format!("restoring the terminal after the {title} picker"))?;
+    result
+}
+
 pub(super) fn standalone_picker_area(area: Rect, entry_count: usize) -> Rect {
     if area.width < 24 || area.height < 8 {
         return area;

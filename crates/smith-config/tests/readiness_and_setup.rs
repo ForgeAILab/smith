@@ -1066,6 +1066,88 @@ max_output_tokens = 16384
     }
 }
 
+/// Multi-account ChatGPT: a `credentials` pool of Smith-owned auth-file
+/// entries resolves. `/connect` writes `chatgpt` and numbered additions, but a
+/// hand-renamed `chatgpt-<label>` entry keeps working too.
+#[test]
+fn a_chatgpt_pool_of_smith_authfile_entries_resolves() {
+    let fixture = Fixture::new();
+    fixture.write_user(
+        r#"
+default_profile = "chatgpt"
+[profiles.chatgpt]
+provider = "chatgpt"
+model = "gpt-5.6-terra"
+[providers.chatgpt]
+kind = "chatgpt-responses"
+base_url = "https://chatgpt.com/backend-api/codex"
+credentials = ["authfile:chatgpt", "authfile:chatgpt-2", "authfile:chatgpt-work"]
+[models."chatgpt/gpt-5.6-terra"]
+context_tokens = 272000
+max_input_tokens = 255616
+max_output_tokens = 16384
+"#,
+    );
+    resolve(&fixture.request()).expect("a pooled ChatGPT provider resolves");
+}
+
+/// Every pool member must be a Smith-owned `authfile:chatgpt*` entry: a pool
+/// is not a side door for references some other product owns and rotates.
+#[test]
+fn a_chatgpt_pool_member_outside_smith_entries_is_rejected() {
+    let fixture = Fixture::new();
+    for member in [
+        "authfile:codex",
+        "keychain:smith/chatgpt-2",
+        "env:CHATGPT_TOKEN_2",
+    ] {
+        fixture.write_user(&format!(
+            r#"
+default_profile = "chatgpt"
+[profiles.chatgpt]
+provider = "chatgpt"
+model = "gpt-5.6-terra"
+[providers.chatgpt]
+kind = "chatgpt-responses"
+base_url = "https://chatgpt.com/backend-api/codex"
+credentials = ["authfile:chatgpt", "{member}"]
+[models."chatgpt/gpt-5.6-terra"]
+context_tokens = 272000
+max_input_tokens = 255616
+max_output_tokens = 16384
+"#,
+        ));
+        let error = resolve(&fixture.request()).expect_err("a foreign pool member must fail");
+        assert!(
+            error.to_string().contains("requires Smith OAuth"),
+            "{member}: {error}"
+        );
+    }
+}
+
+/// Multi-account xAI: each pool member is a stored login of its own.
+#[test]
+fn an_xai_pool_of_stored_logins_resolves() {
+    let fixture = Fixture::new();
+    fixture.write_user(
+        r#"
+default_profile = "grok"
+[profiles.grok]
+provider = "xai"
+model = "grok-4.3"
+[providers.xai]
+kind = "xai-responses"
+base_url = "https://api.x.ai/v1"
+credentials = ["authfile:xai", "authfile:xai-2"]
+[models."xai/grok-4.3"]
+context_tokens = 1000000
+max_input_tokens = 970000
+max_output_tokens = 30000
+"#,
+    );
+    resolve(&fixture.request()).expect("a pooled xAI provider resolves");
+}
+
 /// A connected xAI login must leave a model behind, or the provider reads as
 /// configured while every picker shows nothing to select — which is what
 /// `/connect xai` produced before it declared one.

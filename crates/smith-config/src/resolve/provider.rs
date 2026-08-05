@@ -244,9 +244,7 @@ pub(super) fn validate_provider(provider: &ResolvedProvider) -> Result<(), Confi
                             .to_owned(),
                 });
             }
-            if provider.credential().map(|value| value.value.as_str())
-                != Some(crate::setup::CHATGPT_CREDENTIAL)
-                || provider.credentials.len() > 1
+            if provider.credentials.is_empty()
                 || provider.api_key.is_some()
                 || !provider.headers.is_empty()
             {
@@ -260,15 +258,36 @@ pub(super) fn validate_provider(provider: &ResolvedProvider) -> Result<(), Confi
                         .to_owned(),
                 });
             }
+            // Every member — one account or a pool — is a Smith-owned OAuth
+            // login in the owner-only auth file. Entries beyond the first take
+            // a `chatgpt-` prefix, so a pool cannot smuggle in a reference
+            // some other product owns and rotates underneath Smith.
+            for credential in &provider.credentials {
+                let entry = crate::credential::CredentialRef::parse(&credential.value)
+                    .ok()
+                    .and_then(|reference| match reference {
+                        crate::credential::CredentialRef::AuthFile { entry } => Some(entry),
+                        _ => None,
+                    });
+                if !entry
+                    .as_deref()
+                    .is_some_and(crate::setup::is_chatgpt_auth_entry)
+                {
+                    return Err(ConfigError::InvalidValue {
+                        source: credential.source.clone(),
+                        message: "the experimental ChatGPT provider requires Smith OAuth at \
+                                  `authfile:chatgpt` entries (`chatgpt` or `chatgpt-<label>`)"
+                            .to_owned(),
+                    });
+                }
+            }
         }
         // A browser login, not a pasted key. An `api_key` here would be a user
         // trying to use a console key on the login adapter, which sends a
-        // renewable bundle and would ignore it.
+        // renewable bundle and would ignore it. A `credentials` pool is
+        // allowed: each member is a stored login of its own.
         KIND_XAI_RESPONSES => {
-            if provider.credential().is_none()
-                || provider.credentials.len() > 1
-                || provider.api_key.is_some()
-            {
+            if provider.credential().is_none() || provider.api_key.is_some() {
                 let source = provider.api_key.as_ref().map_or_else(
                     || provider.kind.source.clone(),
                     |value| value.source.clone(),

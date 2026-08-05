@@ -8,6 +8,8 @@
 use anyhow::{Context, Result};
 use smith_runtime::xai::{XaiEndpoints, XaiOAuthClient, XaiTokenBundle};
 
+use crate::browser::open_browser;
+
 /// Runs the xAI login and returns a session only after it completes.
 pub(super) async fn login(no_motion: bool) -> Result<XaiTokenBundle> {
     let oauth = XaiOAuthClient::new().context("initializing Smith's xAI OAuth client")?;
@@ -61,31 +63,4 @@ pub(super) fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0)
-}
-
-fn open_browser(url: &str) -> bool {
-    #[cfg(target_os = "macos")]
-    let mut command = std::process::Command::new("open");
-    #[cfg(target_os = "linux")]
-    let mut command = std::process::Command::new("xdg-open");
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = std::process::Command::new("cmd");
-        command.args(["/C", "start", ""]);
-        command
-    };
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    return false;
-
-    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-    {
-        command
-            .arg(url)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false)
-    }
 }

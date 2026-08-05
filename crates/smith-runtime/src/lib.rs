@@ -32,6 +32,7 @@ mod private_storage;
 pub mod project_instructions;
 pub mod prompt;
 pub mod reasoning;
+pub mod renewable;
 pub mod response;
 pub mod rotation;
 pub mod session;

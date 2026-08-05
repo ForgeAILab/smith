@@ -1,7 +1,6 @@
 //! Smith-owned ChatGPT browser and device-code login surfaces.
 
 use std::future::Future;
-use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -20,6 +19,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use uuid::Uuid;
 use zeroize::Zeroizing;
+
+use crate::browser::open_browser;
 
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MAX_CALLBACK_BYTES: usize = 8 * 1024;
@@ -378,29 +379,6 @@ async fn choose_login_method(no_color: bool, no_motion: bool) -> Result<Option<L
         .restore()
         .context("restoring the terminal after ChatGPT login selection")?;
     result
-}
-
-fn open_browser(url: &str) -> bool {
-    #[cfg(target_os = "macos")]
-    let mut command = std::process::Command::new("open");
-    #[cfg(target_os = "linux")]
-    let mut command = std::process::Command::new("xdg-open");
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = std::process::Command::new("cmd");
-        command.args(["/C", "start", ""]);
-        command
-    };
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    return false;
-
-    command
-        .arg(url)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .is_ok()
 }
 
 #[cfg(test)]

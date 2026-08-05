@@ -18,13 +18,8 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use agent_runtime_core::cancel::Cancellation;
-use agent_runtime_core::clock::{Clock, Deadline, SystemClock, Timestamp};
-use agent_runtime_core::provider_credential::{
-    CredentialInvalidation, ProviderAuthRejection, ProviderCredentialError,
-    ProviderCredentialLease, ProviderCredentialRevision, ProviderCredentialSource,
-    ProviderCredentialTarget,
-};
+use agent_runtime_core::clock::{SystemClock, Timestamp};
+use agent_runtime_core::provider_credential::ProviderCredentialTarget;
 use agent_runtime_core::store::Secret;
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -33,8 +28,8 @@ use serde::{Deserialize, Serialize};
 use smith_config::credential::{CredentialEnroller, CredentialRef};
 use zeroize::Zeroize;
 
-use crate::chatgpt::wait_for_deadline;
 use crate::journal::DefaultRedactor;
+use crate::renewable::{BundleRefresher, RenewableBundle, RenewableCredentialSource};
 
 /// xAI's OAuth issuer.
 pub const XAI_ISSUER: &str = "https://auth.x.ai";
@@ -484,20 +479,47 @@ pub fn bundle_from_json(raw: &str) -> Result<XaiTokenBundle, XaiAuthError> {
 /// Default remaining lifetime a caller asks for before a model call.
 pub const XAI_CREDENTIAL_MINIMUM_VALIDITY_MS: u64 = 30_000;
 
-/// The renewal half of the OAuth client, separated so refresh behavior can be
-/// driven deterministically in tests without an issuer.
-#[async_trait]
-pub trait XaiTokenEndpoint: Send + Sync + fmt::Debug {
-    /// Exchanges the stored refresh token for a fresh session.
-    async fn refresh(
-        &self,
-        bundle: &XaiTokenBundle,
-        now_ms: u64,
-    ) -> Result<XaiTokenBundle, XaiAuthError>;
+impl RenewableBundle for XaiTokenBundle {
+    type Error = XaiAuthError;
+
+    fn from_secret(secret: &Secret) -> Result<Self, Self::Error> {
+        XaiTokenBundle::from_secret(secret)
+    }
+
+    fn to_secret(&self) -> Result<Secret, Self::Error> {
+        XaiTokenBundle::to_secret(self)
+    }
+
+    fn access_secret(&self) -> Secret {
+        XaiTokenBundle::access_secret(self)
+    }
+
+    fn expires_at(&self) -> Timestamp {
+        XaiTokenBundle::expires_at(self)
+    }
+
+    fn can_refresh(&self) -> bool {
+        XaiTokenBundle::can_refresh(self)
+    }
+
+    fn needs_refresh(&self, now_ms: u64) -> bool {
+        XaiTokenBundle::needs_refresh(self, now_ms)
+    }
+
+    fn register_secrets(&self, redactor: &DefaultRedactor) {
+        redactor.register_secret(&XaiTokenBundle::access_secret(self));
+        if XaiTokenBundle::can_refresh(self) {
+            redactor.register_secret(&self.refresh_secret());
+        }
+    }
+
+    fn revision_prefix() -> &'static str {
+        "xai"
+    }
 }
 
 #[async_trait]
-impl XaiTokenEndpoint for XaiOAuthClient {
+impl BundleRefresher<XaiTokenBundle> for XaiOAuthClient {
     async fn refresh(
         &self,
         bundle: &XaiTokenBundle,
@@ -508,13 +530,6 @@ impl XaiTokenEndpoint for XaiOAuthClient {
     }
 }
 
-struct XaiCredentialState {
-    bundle: XaiTokenBundle,
-    revision_number: u64,
-    revision: ProviderCredentialRevision,
-    force_refresh: bool,
-}
-
 /// Renewable credential source for a logged-in xAI session.
 ///
 /// The generic Responses adapter sends whatever secret it is handed straight
@@ -522,27 +537,9 @@ struct XaiCredentialState {
 /// token, refresh token, and expiry — so something has to unwrap it and renew
 /// it. That is this: it hands out the access token alone, and refreshes ahead
 /// of expiry so a Grok subscription behaves like a key that never lapses.
-pub struct XaiCredentialSource {
-    target: ProviderCredentialTarget,
-    reference: CredentialRef,
-    enroller: CredentialEnroller,
-    endpoint: Arc<dyn XaiTokenEndpoint>,
-    redactor: Option<DefaultRedactor>,
-    clock: Arc<dyn Clock>,
-    state: tokio::sync::Mutex<XaiCredentialState>,
-}
+pub type XaiCredentialSource = RenewableCredentialSource<XaiTokenBundle>;
 
-impl fmt::Debug for XaiCredentialSource {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("XaiCredentialSource")
-            .field("target", &self.target)
-            .field("reference", &self.reference)
-            .finish_non_exhaustive()
-    }
-}
-
-impl XaiCredentialSource {
+impl RenewableCredentialSource<XaiTokenBundle> {
     /// Builds the production source from a stored bundle.
     pub fn production(
         target: ProviderCredentialTarget,
@@ -560,164 +557,6 @@ impl XaiCredentialSource {
             Arc::new(SystemClock),
         ))
     }
-
-    /// Builds an injectable source for deterministic refresh and storage tests.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        target: ProviderCredentialTarget,
-        reference: CredentialRef,
-        bundle: XaiTokenBundle,
-        enroller: CredentialEnroller,
-        endpoint: Arc<dyn XaiTokenEndpoint>,
-        redactor: Option<DefaultRedactor>,
-        clock: Arc<dyn Clock>,
-    ) -> Self {
-        register_bundle(&redactor, &bundle);
-        Self {
-            target,
-            reference,
-            enroller,
-            endpoint,
-            redactor,
-            clock,
-            state: tokio::sync::Mutex::new(XaiCredentialState {
-                bundle,
-                revision_number: 1,
-                revision: ProviderCredentialRevision::new("xai-v1")
-                    .expect("static revision is valid"),
-                force_refresh: false,
-            }),
-        }
-    }
-
-    async fn refresh_locked(
-        &self,
-        state: &mut XaiCredentialState,
-        cancel: &Cancellation,
-        deadline: Deadline,
-    ) -> Result<(), ProviderCredentialError> {
-        // A session with no refresh token cannot be renewed, and reporting that
-        // as a transport failure would send the user hunting a network problem
-        // instead of signing in again.
-        if !state.bundle.can_refresh() {
-            return Err(ProviderCredentialError::Unavailable);
-        }
-        let now_ms = self.clock.now().0;
-        // Cloned so the in-flight request does not hold a borrow on the state
-        // this function has to write back into.
-        let current = state.bundle.clone();
-        let operation = self.endpoint.refresh(&current, now_ms);
-        tokio::pin!(operation);
-        let bundle = tokio::select! {
-            biased;
-            _ = cancel.cancelled() => return Err(ProviderCredentialError::Cancelled),
-            _ = wait_for_deadline(deadline, self.clock.as_ref()) => {
-                return Err(ProviderCredentialError::Timeout);
-            }
-            result = &mut operation => result.map_err(|_| ProviderCredentialError::RefreshFailed)?,
-        };
-        let serialized = bundle
-            .to_secret()
-            .map_err(|_| ProviderCredentialError::RefreshFailed)?;
-        // Persisting before the lease is handed out means a crash mid-turn
-        // leaves the renewed session on disk rather than a token the next
-        // process cannot renew.
-        let reference = self.reference.clone();
-        let enroller = self.enroller.clone();
-        let persist = tokio::task::spawn_blocking(move || enroller.enroll(&reference, &serialized));
-        let receipt = tokio::select! {
-            biased;
-            _ = cancel.cancelled() => return Err(ProviderCredentialError::Cancelled),
-            _ = wait_for_deadline(deadline, self.clock.as_ref()) => {
-                return Err(ProviderCredentialError::Timeout);
-            }
-            result = persist => result
-                .map_err(|_| ProviderCredentialError::RefreshFailed)?
-                .map_err(|_| ProviderCredentialError::RefreshFailed)?,
-        };
-        drop(receipt);
-        register_bundle(&self.redactor, &bundle);
-        state.revision_number = state.revision_number.saturating_add(1);
-        state.revision = ProviderCredentialRevision::new(format!("xai-v{}", state.revision_number))
-            .map_err(|_| ProviderCredentialError::InvalidRevision)?;
-        state.bundle = bundle;
-        state.force_refresh = false;
-        Ok(())
-    }
-}
-
-fn register_bundle(redactor: &Option<DefaultRedactor>, bundle: &XaiTokenBundle) {
-    if let Some(redactor) = redactor {
-        redactor.register_secret(&bundle.access_secret());
-        if bundle.can_refresh() {
-            redactor.register_secret(&bundle.refresh_secret());
-        }
-    }
-}
-
-#[async_trait]
-impl ProviderCredentialSource for XaiCredentialSource {
-    async fn acquire(
-        &self,
-        target: &ProviderCredentialTarget,
-        minimum_validity_ms: u64,
-        cancel: &Cancellation,
-        deadline: Deadline,
-    ) -> Result<ProviderCredentialLease, ProviderCredentialError> {
-        if target != &self.target {
-            return Err(ProviderCredentialError::Unavailable);
-        }
-        if cancel.is_cancelled() {
-            return Err(ProviderCredentialError::Cancelled);
-        }
-        let mut state = self.state.lock().await;
-        // Two thresholds, and the wider one wins. The caller asks for enough
-        // validity to *start* a call; the skew asks for enough to finish one,
-        // because a token accepted at request time and expiring mid-stream
-        // kills a turn that is already producing output.
-        let now = self.clock.now();
-        if state.force_refresh
-            || state.bundle.needs_refresh(now.0)
-            || state.bundle.expires_at() < now.plus_millis(minimum_validity_ms)
-        {
-            self.refresh_locked(&mut state, cancel, deadline).await?;
-        }
-        if state.bundle.expires_at() < self.clock.now().plus_millis(minimum_validity_ms) {
-            return Err(ProviderCredentialError::InvalidLease);
-        }
-        Ok(ProviderCredentialLease::expiring(
-            state.bundle.access_secret(),
-            state.bundle.expires_at(),
-            state.revision.clone(),
-        ))
-    }
-
-    async fn invalidate(
-        &self,
-        target: &ProviderCredentialTarget,
-        rejected_revision: &ProviderCredentialRevision,
-        _rejection: ProviderAuthRejection,
-        cancel: &Cancellation,
-        _deadline: Deadline,
-    ) -> Result<CredentialInvalidation, ProviderCredentialError> {
-        if target != &self.target {
-            return Err(ProviderCredentialError::Unavailable);
-        }
-        if cancel.is_cancelled() {
-            return Err(ProviderCredentialError::Cancelled);
-        }
-        let mut state = self.state.lock().await;
-        // A rejection naming a superseded revision is a request already in
-        // flight when the renewal landed, not evidence the new token is bad.
-        if &state.revision != rejected_revision {
-            return Ok(CredentialInvalidation::StaleRevision);
-        }
-        if !state.bundle.can_refresh() {
-            return Ok(CredentialInvalidation::NoReplacement);
-        }
-        state.force_refresh = true;
-        Ok(CredentialInvalidation::ReplacementPossible)
-    }
 }
 
 #[cfg(test)]
@@ -725,6 +564,12 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use agent_runtime_core::cancel::Cancellation;
+    use agent_runtime_core::clock::{Clock, Deadline};
+    use agent_runtime_core::provider_credential::{
+        CredentialInvalidation, ProviderAuthRejection, ProviderCredentialError,
+        ProviderCredentialRevision, ProviderCredentialSource,
+    };
     use smith_config::auth_file::{AuthFileBackend, AuthFileError};
     use smith_config::credential::{CredentialEnrollmentBackend, KeychainError};
 
@@ -788,7 +633,7 @@ mod tests {
     struct PanicEndpoint;
 
     #[async_trait]
-    impl XaiTokenEndpoint for PanicEndpoint {
+    impl BundleRefresher<XaiTokenBundle> for PanicEndpoint {
         async fn refresh(
             &self,
             _bundle: &XaiTokenBundle,
@@ -804,7 +649,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl XaiTokenEndpoint for RotatingEndpoint {
+    impl BundleRefresher<XaiTokenBundle> for RotatingEndpoint {
         async fn refresh(
             &self,
             _bundle: &XaiTokenBundle,

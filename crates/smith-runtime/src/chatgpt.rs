@@ -8,7 +8,6 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::future::pending;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -43,6 +42,9 @@ use url::form_urlencoded;
 use zeroize::Zeroize;
 
 use crate::journal::DefaultRedactor;
+use crate::renewable::{
+    BundleRefresher, RenewableBundle, RenewableCredentialSource, wait_for_deadline,
+};
 
 /// Fixed OAuth issuer used by the public Codex native client.
 pub const CHATGPT_ISSUER: &str = "https://auth.openai.com";
@@ -113,6 +115,7 @@ impl Drop for TokenBundleWire {
 ///
 /// Debug output is always redacted. Serialize it only through [`Self::to_secret`]
 /// and persist that secret at Smith's fixed protected credential reference.
+#[derive(Clone)]
 pub struct ChatGptTokenBundle {
     access_token: String,
     refresh_token: String,
@@ -541,24 +544,47 @@ async fn decode_success_json<T: for<'de> Deserialize<'de>>(
     serde_json::from_slice(&body).map_err(|_| ChatGptAuthError::InvalidResponse)
 }
 
-/// Refresh boundary injected into the renewable credential source.
-#[async_trait]
-pub trait ChatGptTokenEndpoint: Send + Sync + fmt::Debug {
-    /// Exchanges the current refresh token for a rotated token set.
-    async fn refresh(
-        &self,
-        refresh_token: &Secret,
-        expected_account: &str,
-    ) -> Result<ChatGptTokenBundle, ChatGptAuthError>;
+impl RenewableBundle for ChatGptTokenBundle {
+    type Error = ChatGptAuthError;
+
+    fn from_secret(secret: &Secret) -> Result<Self, Self::Error> {
+        ChatGptTokenBundle::from_secret(secret)
+    }
+
+    fn to_secret(&self) -> Result<Secret, Self::Error> {
+        ChatGptTokenBundle::to_secret(self)
+    }
+
+    fn access_secret(&self) -> Secret {
+        ChatGptTokenBundle::access_secret(self)
+    }
+
+    fn expires_at(&self) -> Timestamp {
+        ChatGptTokenBundle::expires_at(self)
+    }
+
+    fn account(&self) -> Option<String> {
+        Some(self.account_id.clone())
+    }
+
+    fn register_secrets(&self, redactor: &DefaultRedactor) {
+        redactor.register_secret(&ChatGptTokenBundle::access_secret(self));
+        redactor.register_secret(&self.refresh_secret());
+    }
+
+    fn revision_prefix() -> &'static str {
+        "chatgpt"
+    }
 }
 
 #[async_trait]
-impl ChatGptTokenEndpoint for ChatGptOAuthClient {
+impl BundleRefresher<ChatGptTokenBundle> for ChatGptOAuthClient {
     async fn refresh(
         &self,
-        refresh_token: &Secret,
-        expected_account: &str,
+        bundle: &ChatGptTokenBundle,
+        _now_ms: u64,
     ) -> Result<ChatGptTokenBundle, ChatGptAuthError> {
+        let refresh_token = bundle.refresh_secret();
         let body = form_urlencoded::Serializer::new(String::new())
             .append_pair("grant_type", "refresh_token")
             .append_pair("refresh_token", refresh_token.expose())
@@ -573,39 +599,15 @@ impl ChatGptTokenEndpoint for ChatGptOAuthClient {
             .await
             .map_err(|_| ChatGptAuthError::Transport)?;
         let tokens: TokenResponse = decode_oauth_response(response).await?;
-        bundle_from_response(&tokens, Some(refresh_token), Some(expected_account))
+        bundle_from_response(&tokens, Some(&refresh_token), Some(bundle.account_id()))
     }
 }
 
-struct CredentialState {
-    bundle: ChatGptTokenBundle,
-    revision_number: u64,
-    revision: ProviderCredentialRevision,
-    force_refresh: bool,
-}
+/// Single-flight renewable ChatGPT credential source backed by Smith's
+/// owner-only auth file.
+pub type ChatGptCredentialSource = RenewableCredentialSource<ChatGptTokenBundle>;
 
-/// Single-flight renewable credential source backed by Smith's owner-only auth file.
-pub struct ChatGptCredentialSource {
-    target: ProviderCredentialTarget,
-    reference: CredentialRef,
-    enroller: CredentialEnroller,
-    endpoint: Arc<dyn ChatGptTokenEndpoint>,
-    redactor: Option<DefaultRedactor>,
-    clock: Arc<dyn Clock>,
-    state: tokio::sync::Mutex<CredentialState>,
-}
-
-impl fmt::Debug for ChatGptCredentialSource {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ChatGptCredentialSource")
-            .field("target", &self.target)
-            .field("reference", &self.reference)
-            .finish_non_exhaustive()
-    }
-}
-
-impl ChatGptCredentialSource {
+impl RenewableCredentialSource<ChatGptTokenBundle> {
     /// Builds the production source from a protected serialized bundle.
     pub fn production(
         target: ProviderCredentialTarget,
@@ -622,146 +624,6 @@ impl ChatGptCredentialSource {
             redactor,
             Arc::new(SystemClock),
         ))
-    }
-
-    /// Builds an injectable source for deterministic refresh/storage tests.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        target: ProviderCredentialTarget,
-        reference: CredentialRef,
-        bundle: ChatGptTokenBundle,
-        enroller: CredentialEnroller,
-        endpoint: Arc<dyn ChatGptTokenEndpoint>,
-        redactor: Option<DefaultRedactor>,
-        clock: Arc<dyn Clock>,
-    ) -> Self {
-        register_bundle(&redactor, &bundle);
-        Self {
-            target,
-            reference,
-            enroller,
-            endpoint,
-            redactor,
-            clock,
-            state: tokio::sync::Mutex::new(CredentialState {
-                bundle,
-                revision_number: 1,
-                revision: ProviderCredentialRevision::new("chatgpt-v1")
-                    .expect("static revision is valid"),
-                force_refresh: false,
-            }),
-        }
-    }
-
-    /// Account identity pinned when the protected source was created.
-    pub async fn account_id(&self) -> String {
-        self.state.lock().await.bundle.account_id.clone()
-    }
-
-    async fn refresh_locked(
-        &self,
-        state: &mut CredentialState,
-        cancel: &Cancellation,
-        deadline: Deadline,
-    ) -> Result<(), ProviderCredentialError> {
-        let refresh = state.bundle.refresh_secret();
-        let expected_account = state.bundle.account_id.clone();
-        let operation = self.endpoint.refresh(&refresh, &expected_account);
-        tokio::pin!(operation);
-        let bundle = tokio::select! {
-            biased;
-            _ = cancel.cancelled() => return Err(ProviderCredentialError::Cancelled),
-            _ = wait_for_deadline(deadline, self.clock.as_ref()) => {
-                return Err(ProviderCredentialError::Timeout);
-            }
-            result = &mut operation => result.map_err(|_| ProviderCredentialError::RefreshFailed)?,
-        };
-        let serialized = bundle
-            .to_secret()
-            .map_err(|_| ProviderCredentialError::RefreshFailed)?;
-        let reference = self.reference.clone();
-        let enroller = self.enroller.clone();
-        let persist = tokio::task::spawn_blocking(move || enroller.enroll(&reference, &serialized));
-        let receipt = tokio::select! {
-            biased;
-            _ = cancel.cancelled() => return Err(ProviderCredentialError::Cancelled),
-            _ = wait_for_deadline(deadline, self.clock.as_ref()) => {
-                return Err(ProviderCredentialError::Timeout);
-            }
-            result = persist => result
-                .map_err(|_| ProviderCredentialError::RefreshFailed)?
-                .map_err(|_| ProviderCredentialError::RefreshFailed)?,
-        };
-        drop(receipt);
-        register_bundle(&self.redactor, &bundle);
-        state.revision_number = state.revision_number.saturating_add(1);
-        state.revision =
-            ProviderCredentialRevision::new(format!("chatgpt-v{}", state.revision_number))
-                .map_err(|_| ProviderCredentialError::InvalidRevision)?;
-        state.bundle = bundle;
-        state.force_refresh = false;
-        Ok(())
-    }
-}
-
-fn register_bundle(redactor: &Option<DefaultRedactor>, bundle: &ChatGptTokenBundle) {
-    if let Some(redactor) = redactor {
-        redactor.register_secret(&bundle.access_secret());
-        redactor.register_secret(&bundle.refresh_secret());
-    }
-}
-
-#[async_trait]
-impl ProviderCredentialSource for ChatGptCredentialSource {
-    async fn acquire(
-        &self,
-        target: &ProviderCredentialTarget,
-        minimum_validity_ms: u64,
-        cancel: &Cancellation,
-        deadline: Deadline,
-    ) -> Result<ProviderCredentialLease, ProviderCredentialError> {
-        if target != &self.target {
-            return Err(ProviderCredentialError::Unavailable);
-        }
-        if cancel.is_cancelled() {
-            return Err(ProviderCredentialError::Cancelled);
-        }
-        let mut state = self.state.lock().await;
-        if state.force_refresh
-            || state.bundle.expires_at() < self.clock.now().plus_millis(minimum_validity_ms)
-        {
-            self.refresh_locked(&mut state, cancel, deadline).await?;
-        }
-        if state.bundle.expires_at() < self.clock.now().plus_millis(minimum_validity_ms) {
-            return Err(ProviderCredentialError::InvalidLease);
-        }
-        Ok(ProviderCredentialLease::expiring(
-            state.bundle.access_secret(),
-            state.bundle.expires_at(),
-            state.revision.clone(),
-        ))
-    }
-
-    async fn invalidate(
-        &self,
-        target: &ProviderCredentialTarget,
-        rejected_revision: &ProviderCredentialRevision,
-        _rejection: ProviderAuthRejection,
-        cancel: &Cancellation,
-        _deadline: Deadline,
-    ) -> Result<CredentialInvalidation, ProviderCredentialError> {
-        if target != &self.target {
-            return Err(ProviderCredentialError::Unavailable);
-        }
-        if cancel.is_cancelled() {
-            return Err(ProviderCredentialError::Cancelled);
-        }
-        let mut state = self.state.lock().await;
-        if &state.revision != rejected_revision {
-            return Ok(CredentialInvalidation::StaleRevision);
-        }
-        state.force_refresh = true;
-        Ok(CredentialInvalidation::ReplacementPossible)
     }
 }
 
@@ -1150,14 +1012,6 @@ fn response_tool_choice(
     })
 }
 
-pub(crate) async fn wait_for_deadline(deadline: Deadline, clock: &dyn Clock) {
-    match deadline.remaining_millis(clock) {
-        Some(0) => {}
-        Some(milliseconds) => tokio::time::sleep(Duration::from_millis(milliseconds)).await,
-        None => pending::<()>().await,
-    }
-}
-
 fn credential_error(error: ProviderCredentialError) -> ProviderError {
     let kind = match error {
         ProviderCredentialError::Cancelled => ProviderErrorKind::Cancelled,
@@ -1449,6 +1303,13 @@ impl<T: HttpTransport> Provider for ChatGptProvider<T> {
         })?;
         let lease = self.acquire_credential(&ctx).await?;
         let rejected_revision = lease.revision().clone();
+        // The lease's account wins over the one frozen at construction: a
+        // source that rotates between accounts issues each lease from a
+        // different identity, and the header has to match the token beside it.
+        let account_id = lease
+            .account()
+            .unwrap_or(&self.config.account_id)
+            .to_owned();
         let http = HttpRequest {
             url: CHATGPT_RESPONSES_ENDPOINT.into(),
             headers: vec![
@@ -1458,7 +1319,7 @@ impl<T: HttpTransport> Provider for ChatGptProvider<T> {
                     "authorization".into(),
                     format!("Bearer {}", lease.secret().expose()),
                 ),
-                ("chatgpt-account-id".into(), self.config.account_id.clone()),
+                ("chatgpt-account-id".into(), account_id),
                 ("originator".into(), "smith".into()),
                 ("session-id".into(), ctx.request_id.as_str().to_owned()),
             ],
@@ -1672,13 +1533,13 @@ mod tests {
     }
 
     #[async_trait]
-    impl ChatGptTokenEndpoint for RotatingEndpoint {
+    impl BundleRefresher<ChatGptTokenBundle> for RotatingEndpoint {
         async fn refresh(
             &self,
-            refresh_token: &Secret,
-            expected_account: &str,
+            bundle: &ChatGptTokenBundle,
+            _now_ms: u64,
         ) -> Result<ChatGptTokenBundle, ChatGptAuthError> {
-            assert_eq!(refresh_token.expose(), "refresh-old");
+            assert_eq!(bundle.refresh_secret().expose(), "refresh-old");
             self.calls.fetch_add(1, Ordering::SeqCst);
             tokio::task::yield_now().await;
             Ok(ChatGptTokenBundle {
@@ -1688,7 +1549,7 @@ mod tests {
                     .now()
                     .as_millis()
                     .saturating_add(60 * 60 * 1_000),
-                account_id: expected_account.to_owned(),
+                account_id: bundle.account_id().to_owned(),
             })
         }
     }
@@ -1872,6 +1733,75 @@ mod tests {
             Some(wire.as_str())
         );
         assert!(valid_response_tool_name(&wire));
+    }
+
+    /// The wire pairs a bearer with the account that issued it. When the
+    /// source can name that account, its lease overrides the identity frozen
+    /// into the provider config at construction — otherwise a source that
+    /// changed accounts would send one account's token under another's header.
+    #[tokio::test]
+    async fn the_account_header_follows_the_lease_not_the_frozen_config() {
+        let target = ProviderCredentialTarget::new("chatgpt").expect("target");
+        let source = Arc::new(ChatGptCredentialSource::new(
+            target.clone(),
+            CredentialRef::parse("authfile:chatgpt").expect("reference"),
+            ChatGptTokenBundle {
+                access_token: "access-lease".into(),
+                refresh_token: "refresh".into(),
+                expires_at_ms: u64::MAX,
+                account_id: "acct_lease".into(),
+            },
+            CredentialEnroller::with_backends(
+                Arc::new(PanicKeychainEnrollment),
+                Arc::new(MemoryEnrollment::default()),
+            ),
+            Arc::new(RotatingEndpoint::default()),
+            None,
+            Arc::new(SystemClock),
+        )) as Arc<dyn ProviderCredentialSource>;
+        let provider = ChatGptProvider::new(
+            ReplayTransport::single(
+                "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n",
+            ),
+            ChatGptProviderConfig::new(
+                "gpt-5.6-terra",
+                Capabilities::basic_streaming(),
+                "acct_config",
+            )
+            .expect("config"),
+            target,
+            source,
+        );
+        let ctx = ProviderCallContext {
+            session: agent_runtime_core::ids::SessionId::new("session-test"),
+            request_id: RequestId::new("request-1"),
+            attempt_id: AttemptId::new("attempt-1"),
+            cancel: Cancellation::new(),
+            deadline: Deadline::never(),
+        };
+        let _events = provider
+            .stream(
+                ProviderRequest::new(ModelId::new("gpt-5.6-terra"), vec![Message::user("hello")]),
+                ctx,
+            )
+            .await
+            .expect("stream")
+            .collect::<Vec<_>>()
+            .await;
+        let sent = provider.transport().requests();
+        assert_eq!(sent.len(), 1);
+        assert!(
+            sent[0]
+                .headers
+                .iter()
+                .any(|(name, value)| name == "chatgpt-account-id" && value == "acct_lease")
+        );
+        assert!(
+            !sent[0]
+                .headers
+                .iter()
+                .any(|(_, value)| value == "acct_config")
+        );
     }
 
     #[tokio::test]

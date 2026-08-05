@@ -94,7 +94,7 @@ use agent_runtime_core::workspace::Workspace;
 use async_trait::async_trait;
 use reqwest::Url;
 use smith_config::credential::{
-    CredentialError, CredentialRef, CredentialRefError, CredentialResolver,
+    CredentialEnroller, CredentialError, CredentialRef, CredentialRefError, CredentialResolver,
 };
 use smith_config::model::{
     AgentPosture, ApprovalMode, KIND_ANTHROPIC_MESSAGES, KIND_CHATGPT_RESPONSES, KIND_FAKE,
@@ -112,12 +112,11 @@ use smith_host::rotation::{HeadlessRotation, RotationPolicy};
 use crate::abilities::{INTERACTION_READY_CONFIG, seal_tool_abilities};
 use crate::authority::SmithToolAuthority;
 use crate::background_tasks::RegistryBackgroundTaskHost;
-use crate::pool::CredentialPool;
-use crate::rotation::{HostPoolSecrets, PoolCredentialSource, PooledProvider, SharedPool};
 use crate::budget_notice::{BudgetNoticeComponent, DEFAULT_NOTICE_THRESHOLD_TOKENS};
 use crate::catalog::{CatalogLayers, ProfileResolution};
 use crate::chatgpt::{
-    ChatGptCredentialSource, ChatGptProvider, ChatGptProviderConfig, ChatGptTokenBundle,
+    ChatGptCredentialSource, ChatGptOAuthClient, ChatGptProvider, ChatGptProviderConfig,
+    ChatGptTokenBundle,
 };
 use crate::checkpoint::{BarrierCheckpointStore, CheckpointBarrier, SmithCheckpointSetup};
 use crate::delegation::{
@@ -125,6 +124,7 @@ use crate::delegation::{
 };
 use crate::journal::DefaultRedactor;
 use crate::memory::SmithMemorySource;
+use crate::pool::CredentialPool;
 use crate::project_instructions::{ProjectInstructionsIdentity, ProjectInstructionsSnapshot};
 use crate::prompt::{
     AgentProfilePrompt, DynamicPromptContext, SmithPromptContributor, render_fragments,
@@ -133,12 +133,14 @@ use crate::reasoning::{
     ReasoningDialectProvider, ReasoningInterceptor, ReasoningRuntimePolicy,
     resolve_reasoning_policy,
 };
+use crate::renewable::{BundleRefresher, RenewableBundle, RenewableMemberSources};
+use crate::rotation::{PoolCredentialSource, PooledProvider, SharedPool, StaticMemberSources};
 use crate::skills::{ResolvedSmithSkills, SkillIndexEntry, SmithSkillSources};
 use crate::summary::{
     SemanticSummaryRuntimePolicy, SmithProviderSummaryModel, SmithSemanticSummaryConfig,
 };
 use crate::transport::{ReqwestTransport, TransportConfig};
-use crate::xai::{XaiCredentialSource, XaiTokenBundle};
+use crate::xai::{XaiCredentialSource, XaiOAuthClient, XaiTokenBundle};
 
 /// The reply the deterministic development provider gives.
 ///
@@ -957,7 +959,7 @@ fn prepare_provider_stage(
 ///
 /// With a pool this reads whichever member is active at the moment of the
 /// attempt, which is what makes a rotation take effect without rebuilding the
-/// adapter. The already-resolved secret seeds the cache so the active member
+/// adapter. The already-resolved secret seeds the active member's source so it
 /// is not read from the credential service twice at startup.
 fn credential_source(
     request: &RuntimeRequest,
@@ -968,16 +970,70 @@ fn credential_source(
         (Some(pool), Some(resolver)) => {
             let source = PoolCredentialSource::new(
                 pool.clone(),
-                Arc::new(HostPoolSecrets::new(resolver)),
+                Arc::new(StaticMemberSources::new(resolver)),
             );
             let active = pool.read(CredentialPool::active_position);
-            source.seed(active, secret);
+            source.seed(
+                active,
+                Arc::new(StaticProviderCredentialSource::new(secret)),
+            );
             Arc::new(source) as Arc<dyn ProviderCredentialSource>
         }
         // No pool, or nothing to resolve one with: the session has a single
         // secret and it is already in hand.
-        _ => Arc::new(StaticProviderCredentialSource::new(secret)) as Arc<dyn ProviderCredentialSource>,
+        _ => Arc::new(StaticProviderCredentialSource::new(secret))
+            as Arc<dyn ProviderCredentialSource>,
     }
+}
+
+/// The credential source for a browser-login adapter.
+///
+/// With a pool, each member is its own renewable source persisting to its own
+/// reference; the already-built active source is seeded so the startup secret
+/// is not read from the credential service twice. Without one, the active
+/// source is the whole story — exactly the pre-pool behavior.
+fn renewable_credential_source<B: RenewableBundle>(
+    request: &RuntimeRequest,
+    pool: Option<&SharedPool>,
+    target: &ProviderCredentialTarget,
+    refresher: Arc<dyn BundleRefresher<B>>,
+    active: Arc<dyn ProviderCredentialSource>,
+) -> Arc<dyn ProviderCredentialSource> {
+    match (pool, request.credentials.clone()) {
+        (Some(pool), Some(resolver)) => {
+            let members = RenewableMemberSources::new(
+                resolver,
+                target.clone(),
+                refresher,
+                request.persistence_redactor.clone(),
+            );
+            let source = PoolCredentialSource::new(pool.clone(), Arc::new(members));
+            let position = pool.read(CredentialPool::active_position);
+            source.seed(position, active);
+            Arc::new(source) as Arc<dyn ProviderCredentialSource>
+        }
+        _ => active,
+    }
+}
+
+/// The reference whose secret authorizes this session's first attempt.
+///
+/// With a pool this is the *remembered active* member, not the first declared
+/// one: a session resumed on the second account must authenticate as the
+/// second account, not lease the first account's secret from the active
+/// position until an invalidation happens to correct it.
+fn active_credential_reference(request: &RuntimeRequest) -> Option<String> {
+    if let Some(pool) = credential_pool_for(request)
+        && let Some(reference) =
+            pool.read(|pool| pool.active().map(|member| member.reference.clone()))
+    {
+        return Some(reference);
+    }
+    request
+        .config
+        .provider
+        .credential()
+        .map(|reference| reference.value.clone())
 }
 
 /// Builds the pool for this provider, or `None` when it declares one account.
@@ -1700,11 +1756,11 @@ async fn prepare_factory_inputs(
     // an invalid effort never opens a keychain prompt.
     let secret = match (
         &request.provider,
-        &config.provider.credential(),
+        active_credential_reference(request),
         &config.provider.api_key,
     ) {
         (None, _, Some(api_key)) => Some(api_key.value.clone()),
-        (None, Some(reference), None) => Some(secret(request, &reference.value).await?),
+        (None, Some(reference), None) => Some(secret(request, &reference).await?),
         _ => None,
     };
     if adapter == Adapter::ChatGptResponses {
@@ -1998,15 +2054,15 @@ fn construct(
             let bundle =
                 ChatGptTokenBundle::from_secret(&secret).map_err(FactoryError::ChatGptAuth)?;
             let account_id = bundle.account_id().to_owned();
-            let reference = request
-                .config
-                .provider
-                .credential()
+            // The active member's reference, which is where its renewed bundle
+            // goes back, so a refresh survives the process rather than being
+            // re-earned every launch.
+            let reference = active_credential_reference(request)
                 .ok_or(FactoryError::ChatGptAuth(
                     crate::chatgpt::ChatGptAuthError::InvalidBundle,
                 ))
                 .and_then(|reference| {
-                    CredentialRef::parse(&reference.value).map_err(|source| {
+                    CredentialRef::parse(&reference).map_err(|source| {
                         FactoryError::CredentialReference {
                             provider: request.config.provider.name.value.clone(),
                             source,
@@ -2015,15 +2071,18 @@ fn construct(
                 })?;
             let target = ProviderCredentialTarget::new(request.config.provider.name.value.clone())
                 .map_err(|error| FactoryError::Runtime(RuntimeError::config(error.to_string())))?;
-            let source = Arc::new(
-                ChatGptCredentialSource::production(
-                    target.clone(),
-                    reference,
-                    &secret,
-                    request.persistence_redactor.clone(),
-                )
-                .map_err(FactoryError::ChatGptAuth)?,
-            ) as Arc<dyn ProviderCredentialSource>;
+            let refresher: Arc<dyn BundleRefresher<ChatGptTokenBundle>> =
+                Arc::new(ChatGptOAuthClient::new().map_err(FactoryError::ChatGptAuth)?);
+            let active = Arc::new(ChatGptCredentialSource::new(
+                target.clone(),
+                reference,
+                bundle,
+                CredentialEnroller::new(),
+                refresher.clone(),
+                request.persistence_redactor.clone(),
+                Arc::new(SystemClock),
+            )) as Arc<dyn ProviderCredentialSource>;
+            let source = renewable_credential_source(request, pool, &target, refresher, active);
             let config = ChatGptProviderConfig::new(
                 request.config.model.value.clone(),
                 profile.capabilities.clone(),
@@ -2057,17 +2116,16 @@ fn construct(
             let secret = secret.ok_or(FactoryError::XaiAuth(
                 crate::xai::XaiAuthError::InvalidBundle,
             ))?;
-            // The reference is where the renewed bundle goes back, so a refresh
-            // survives the process rather than being re-earned every launch.
-            let reference = request
-                .config
-                .provider
-                .credential()
+            let bundle = XaiTokenBundle::from_secret(&secret).map_err(FactoryError::XaiAuth)?;
+            // The active member's reference, which is where its renewed bundle
+            // goes back, so a refresh survives the process rather than being
+            // re-earned every launch.
+            let reference = active_credential_reference(request)
                 .ok_or(FactoryError::XaiAuth(
                     crate::xai::XaiAuthError::InvalidBundle,
                 ))
                 .and_then(|reference| {
-                    CredentialRef::parse(&reference.value).map_err(|source| {
+                    CredentialRef::parse(&reference).map_err(|source| {
                         FactoryError::CredentialReference {
                             provider: request.config.provider.name.value.clone(),
                             source,
@@ -2076,15 +2134,18 @@ fn construct(
                 })?;
             let target = ProviderCredentialTarget::new(request.config.provider.name.value.clone())
                 .map_err(|error| FactoryError::Runtime(RuntimeError::config(error.to_string())))?;
-            let source = Arc::new(
-                XaiCredentialSource::production(
-                    target.clone(),
-                    reference,
-                    &secret,
-                    request.persistence_redactor.clone(),
-                )
-                .map_err(FactoryError::XaiAuth)?,
-            ) as Arc<dyn ProviderCredentialSource>;
+            let refresher: Arc<dyn BundleRefresher<XaiTokenBundle>> =
+                Arc::new(XaiOAuthClient::new().map_err(FactoryError::XaiAuth)?);
+            let active = Arc::new(XaiCredentialSource::new(
+                target.clone(),
+                reference,
+                bundle,
+                CredentialEnroller::new(),
+                refresher.clone(),
+                request.persistence_redactor.clone(),
+                Arc::new(SystemClock),
+            )) as Arc<dyn ProviderCredentialSource>;
+            let source = renewable_credential_source(request, pool, &target, refresher, active);
             let provider =
                 ResponsesProvider::with_credential_source(transport, config, target, source)
                     .map_err(FactoryError::Transport)?;
