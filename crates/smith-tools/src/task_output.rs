@@ -90,17 +90,16 @@ impl Tool for TaskOutputTool {
         let arguments = prepared.into_arguments();
         let task_id = require_str(&arguments, "task_id")?.to_owned();
         let offset = optional_usize(&arguments, "offset").unwrap_or(0);
-        let limit = optional_usize(&arguments, "limit").unwrap_or(DEFAULT_LIMIT).max(1);
+        let limit = optional_usize(&arguments, "limit")
+            .unwrap_or(DEFAULT_LIMIT)
+            .max(1);
 
         let host = background::installed().ok_or_else(background::host_unavailable)?;
         let result = host
             .output(ctx.session.clone(), task_id.clone(), offset, limit)
             .await?;
 
-        let mut rendered = format!(
-            "task {task_id}: {}",
-            result.status.as_str()
-        );
+        let mut rendered = format!("task {task_id}: {}", result.status.as_str());
         if let Some(code) = result.exit_code {
             rendered.push_str(&format!(" (exit {code})"));
         }
@@ -141,10 +140,7 @@ mod tests {
             .invoke(json!({"task_id": "task:1"}), &ctx)
             .await
             .unwrap_err();
-        assert!(
-            err.message.contains("no background task host"),
-            "{err:?}"
-        );
+        assert!(err.message.contains("no background task host"), "{err:?}");
     }
 
     #[tokio::test]

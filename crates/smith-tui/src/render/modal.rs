@@ -585,7 +585,14 @@ pub(super) fn draw_rotation_confirm(
         Span::styled("n/esc", theme.style(Tone::Success)),
         Span::styled(" stay", theme.style(Tone::Dim)),
     ]));
-    draw_modal(frame, area, "switch provider account", lines, theme, Tone::Warning);
+    draw_modal(
+        frame,
+        area,
+        "switch provider account",
+        lines,
+        theme,
+        Tone::Warning,
+    );
 }
 
 pub(super) fn draw_agent_confirm(frame: &mut Frame<'_>, area: Rect, content: &str, theme: Theme) {

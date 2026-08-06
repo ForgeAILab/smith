@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use serde_json::{Map, Value, json};
 use smith_config::catalog::{
     CatalogReasoningControls, GEMINI_ENDPOINT, OPENAI_ENDPOINT, OPENROUTER_ENDPOINT,
-    ZAI_CODING_PLAN_ENDPOINT,
+    XAI_CATALOG_ENDPOINT, ZAI_CODING_PLAN_ENDPOINT,
 };
 use smith_config::model::ReasoningDialect;
 use smith_config::resolve::{Layer, ResolvedConfig, ResolvedModelReasoning, Source, Sourced};
@@ -360,6 +360,34 @@ pub fn resolve_reasoning_policy(
                 "Models.dev advertised OpenAI reasoning controls".to_owned()
             } else {
                 "OpenAI reasoning API (catalog-advertised reasoning model)".to_owned()
+            },
+        }
+    } else if endpoint == Some(XAI_CATALOG_ENDPOINT)
+        && profile.capabilities.reasoning != ReasoningSupport::Unsupported
+    {
+        // xAI's Responses endpoint speaks the same typed effort selection the
+        // OpenAI-effort dialect already carries. Catalog ladders refine the
+        // universal fallback; `off` stays unrepresentable without `none`.
+        let (efforts, advertised) = match catalog_controls {
+            Some(controls) if !controls.efforts.is_empty() => (controls.efforts.clone(), true),
+            _ => (OPENAI_EFFORTS.map(str::to_owned).to_vec(), false),
+        };
+        let has_off = efforts.iter().any(|effort| effort == "none");
+        ResolvedReasoningControls {
+            support: ReasoningSupport::Controllable,
+            switch: if has_off {
+                ReasoningSwitch::Optional
+            } else {
+                ReasoningSwitch::MandatoryOn
+            },
+            efforts,
+            default_enabled: (!has_off).then_some(true),
+            default_effort: None,
+            dialect: Some(ReasoningDialect::OpenaiEffort),
+            capability_source: if advertised {
+                "Models.dev advertised xAI reasoning controls".to_owned()
+            } else {
+                "xAI Responses reasoning API (catalog-advertised reasoning model)".to_owned()
             },
         }
     } else if endpoint == Some(OPENROUTER_ENDPOINT)
@@ -948,6 +976,64 @@ max_output_tokens = 4096
             &model_profile(ReasoningSupport::Fixed),
             Some(OPENAI_ENDPOINT),
             None,
+        )
+        .expect_err("off is not representable without an advertised `none`");
+        assert!(error.contains("mandatory-on"), "{error}");
+    }
+
+    #[test]
+    fn xai_endpoint_grants_the_effort_ladder_without_an_off_switch() {
+        let mut config = resolved_config();
+        config.reasoning.effort = Some(Sourced::new(
+            "high".to_owned(),
+            Source::session("reasoning.effort"),
+        ));
+        let grok_ladder = CatalogReasoningControls {
+            toggle: false,
+            efforts: ["low", "medium", "high"].map(str::to_owned).to_vec(),
+        };
+
+        let policy = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Fixed),
+            Some(XAI_CATALOG_ENDPOINT),
+            Some(&grok_ladder),
+        )
+        .expect("xAI reasoning models share the OpenAI-effort control");
+        assert_eq!(policy.support, ReasoningSupport::Controllable);
+        assert_eq!(policy.switch, ReasoningSwitch::MandatoryOn);
+        assert_eq!(policy.efforts, grok_ladder.efforts);
+        assert_eq!(policy.dialect, Some(ReasoningDialect::OpenaiEffort));
+        assert!(policy.capability_source.contains("xAI"), "{policy:?}");
+        assert_eq!(
+            policy
+                .request_config()
+                .and_then(|reasoning| reasoning.effort),
+            Some("high".to_owned())
+        );
+
+        // Without catalog annotation the endpoint still exposes the universal
+        // ladder so a Grok reasoning model is controllable immediately.
+        let fallback = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Fixed),
+            Some(XAI_CATALOG_ENDPOINT),
+            None,
+        )
+        .expect("xAI endpoint fallback ladder");
+        assert_eq!(fallback.efforts, ["low", "medium", "high"]);
+        assert!(
+            fallback.capability_source.contains("xAI Responses"),
+            "{fallback:?}"
+        );
+
+        config.reasoning.effort = None;
+        config.reasoning.enabled = Some(Sourced::new(false, Source::session("reasoning.enabled")));
+        let error = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Fixed),
+            Some(XAI_CATALOG_ENDPOINT),
+            Some(&grok_ladder),
         )
         .expect_err("off is not representable without an advertised `none`");
         assert!(error.contains("mandatory-on"), "{error}");

@@ -77,10 +77,11 @@ use agent_runtime::registry::RegistryRevision;
 use agent_runtime::runtime::{Runtime, RuntimeBuilder};
 use agent_runtime_core::approval::{AllowAll, ApprovalPolicy, DenyAll};
 use agent_runtime_core::artifact::ArtifactStore;
+use agent_runtime_core::cancel::Cancellation;
 use agent_runtime_core::catalog::{ModelCatalogSource, ModelProfileError, ResolvedModelProfile};
 use agent_runtime_core::catalog::{ModelLimits, ModelRecord};
 use agent_runtime_core::checkpoint::{CHECKPOINT_SCHEMA_VERSION, CheckpointStore};
-use agent_runtime_core::clock::{Clock, SystemClock};
+use agent_runtime_core::clock::{Clock, Deadline, SystemClock};
 use agent_runtime_core::error::RuntimeError;
 use agent_runtime_core::interaction::{InteractionBroker, InteractionReadiness};
 use agent_runtime_core::observer::EventObserver;
@@ -134,7 +135,9 @@ use crate::reasoning::{
     resolve_reasoning_policy,
 };
 use crate::renewable::{BundleRefresher, RenewableBundle, RenewableMemberSources};
-use crate::rotation::{PoolCredentialSource, PooledProvider, SharedPool, StaticMemberSources};
+use crate::rotation::{
+    PoolCredentialSource, PoolMemberSources, PooledProvider, SharedPool, StaticMemberSources,
+};
 use crate::skills::{ResolvedSmithSkills, SkillIndexEntry, SmithSkillSources};
 use crate::summary::{
     SemanticSummaryRuntimePolicy, SmithProviderSummaryModel, SmithSemanticSummaryConfig,
@@ -1942,6 +1945,78 @@ async fn secret(request: &RuntimeRequest, reference: &str) -> Result<Secret, Fac
     }
 }
 
+/// Reads every pool member's server-reported usage once at session start and
+/// records it in the credential pool, so the account surfaces can show a
+/// measured number for each account before it has served an attempt.
+///
+/// The active member reuses the source already built for the session; the
+/// others are built from their references, which for this provider are
+/// `authfile:` entries that resolve without prompting. Members run
+/// sequentially so two token refreshes never race on the auth file.
+///
+/// Best-effort by design: a failure leaves that member unmeasured, and the
+/// surfaces already render an unmeasured member honestly as "usage unknown".
+/// Requires a running Tokio runtime; without one there is no session about to
+/// serve attempts, so there is nothing to probe for.
+fn spawn_chatgpt_usage_probe(
+    pool: SharedPool,
+    members: Option<Arc<dyn PoolMemberSources>>,
+    active_source: Arc<dyn ProviderCredentialSource>,
+    target: ProviderCredentialTarget,
+    active_account: String,
+) {
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    handle.spawn(async move {
+        let (active_position, roster) = pool.read(|pool| {
+            (
+                pool.active_position(),
+                pool.members()
+                    .iter()
+                    .map(|member| (member.position, member.reference.clone()))
+                    .collect::<Vec<_>>(),
+            )
+        });
+        for (position, reference) in roster {
+            let source = if position == active_position {
+                active_source.clone()
+            } else if let Some(members) = &members {
+                match members.build(position, &reference).await {
+                    Ok(source) => source,
+                    Err(_) => continue,
+                }
+            } else {
+                continue;
+            };
+            let Ok(lease) = source
+                .acquire(
+                    &target,
+                    crate::chatgpt::CHATGPT_CREDENTIAL_MINIMUM_VALIDITY_MS,
+                    &Cancellation::new(),
+                    Deadline::never(),
+                )
+                .await
+            else {
+                continue;
+            };
+            // Only the active member may fall back to the account identity
+            // frozen at construction: pairing another member's token with it
+            // would query the wrong account's usage.
+            let account = match (lease.account(), position == active_position) {
+                (Some(account), _) => account.to_owned(),
+                (None, true) => active_account.clone(),
+                (None, false) => continue,
+            };
+            if let Ok(snapshot) =
+                crate::chatgpt::fetch_usage_snapshot(lease.secret().expose(), &account).await
+            {
+                pool.write(|pool| pool.record_snapshot(position, snapshot));
+            }
+        }
+    });
+}
+
 /// Constructs the configured provider.
 fn construct(
     adapter: Adapter,
@@ -2082,6 +2157,23 @@ fn construct(
                 request.persistence_redactor.clone(),
                 Arc::new(SystemClock),
             )) as Arc<dyn ProviderCredentialSource>;
+            if let Some(pool) = pool {
+                let members = request.credentials.clone().map(|resolver| {
+                    Arc::new(RenewableMemberSources::new(
+                        resolver,
+                        target.clone(),
+                        refresher.clone(),
+                        request.persistence_redactor.clone(),
+                    )) as Arc<dyn PoolMemberSources>
+                });
+                spawn_chatgpt_usage_probe(
+                    pool.clone(),
+                    members,
+                    active.clone(),
+                    target.clone(),
+                    account_id.clone(),
+                );
+            }
             let source = renewable_credential_source(request, pool, &target, refresher, active);
             let config = ChatGptProviderConfig::new(
                 request.config.model.value.clone(),

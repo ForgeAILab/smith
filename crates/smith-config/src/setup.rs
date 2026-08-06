@@ -52,7 +52,7 @@ pub const XAI_PROVIDER: &str = "xai";
 /// Profile name the xAI setup choice writes.
 pub const XAI_PROFILE: &str = "grok";
 /// xAI's Responses API base URL.
-pub const XAI_ENDPOINT: &str = "https://api.x.ai/v1";
+pub const XAI_ENDPOINT: &str = crate::catalog::XAI_CATALOG_ENDPOINT;
 /// Owner-only auth-file reference for Smith's renewable xAI bundle.
 pub const XAI_CREDENTIAL: &str = "authfile:xai";
 /// The model `/connect xai` declares so the connection is usable when it ends.

@@ -402,15 +402,17 @@ OpenAI-compatible endpoint a catalog `reasoning = true` value means only that
 reasoning is present and fixed; it does not create a toggle or effort
 selector, and rich `[models."provider/model".reasoning]` metadata must name
 the exact wire dialect (`openai-effort`, `openrouter`, or `zai-thinking`),
-switch behavior, and ordered effort values. Three exact endpoints normalize
+switch behavior, and ordered effort values. Four exact endpoints normalize
 controls themselves and need no per-model metadata: the OpenAI endpoint
-speaks `reasoning_effort`, the OpenRouter endpoint speaks the unified
-`reasoning` object with an on/off switch, and the Z.AI Coding Plan endpoint
-speaks its documented thinking toggle; the native Gemini endpoint speaks
-catalog-advertised `thinking_level` values. On those endpoints the frozen
-Models.dev snapshot supplies each model's advertised control shape — its
-exact effort ladder (for example `none…xhigh` on newer OpenAI families,
-`low…high` on older ones) or a bare toggle. On the OpenAI endpoint, `off`
+speaks `reasoning_effort`, the xAI Responses endpoint grants the same
+OpenAI-effort dialect for catalog-backed Grok reasoning models, the
+OpenRouter endpoint speaks the unified `reasoning` object with an on/off
+switch, and the Z.AI Coding Plan endpoint speaks its documented thinking
+toggle; the native Gemini endpoint speaks catalog-advertised
+`thinking_level` values. On those endpoints the frozen Models.dev snapshot
+supplies each model's advertised control shape — its exact effort ladder
+(for example `none…xhigh` on newer OpenAI families, `low…high` on Grok and
+older OpenAI ones) or a bare toggle. On the OpenAI and xAI endpoints, `off`
 exists only where the ladder advertises `none`. A reasoning model the
 snapshot has not annotated falls back to the endpoint's universal
 `low`/`medium`/`high` ladder. Explicit per-model metadata still overrides

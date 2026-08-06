@@ -19,7 +19,7 @@ use agent_runtime_core::content::{ContentPart, Message, Role};
 use agent_runtime_core::provider::{
     AuthKind, Capabilities, FinishReason, ModelDescriptor, ModelId, PromptCacheControl, Provider,
     ProviderCallContext, ProviderError, ProviderErrorKind, ProviderRequest, ProviderStream,
-    ProviderStreamEvent, ReasoningSupport, ToolChoice,
+    ProviderStreamEvent, RateLimitSnapshot, RateLimitWindow, ReasoningSupport, ToolChoice,
 };
 use agent_runtime_core::provider_credential::{
     CredentialInvalidation, ProviderAuthRejection, ProviderCredentialError,
@@ -52,6 +52,9 @@ pub const CHATGPT_ISSUER: &str = "https://auth.openai.com";
 pub const CHATGPT_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 /// Fixed direct Responses endpoint used by the experimental provider.
 pub const CHATGPT_RESPONSES_ENDPOINT: &str = "https://chatgpt.com/backend-api/codex/responses";
+/// The account usage endpoint beside the Responses one, pinned from the
+/// public Codex backend client (`/wham/usage` on `backend-api` hosts).
+pub const CHATGPT_USAGE_ENDPOINT: &str = "https://chatgpt.com/backend-api/wham/usage";
 /// Browser authorization scopes pinned from the public Codex implementation.
 pub const CHATGPT_SCOPES: &str =
     "openid profile email offline_access api.connectors.read api.connectors.invoke";
@@ -542,6 +545,138 @@ async fn decode_success_json<T: for<'de> Deserialize<'de>>(
         body.extend_from_slice(&chunk);
     }
     serde_json::from_slice(&body).map_err(|_| ChatGptAuthError::InvalidResponse)
+}
+
+/// Parses the `x-codex-*` rate-limit header family the Codex backend attaches
+/// to Responses replies.
+///
+/// Consumption arrives as a percentage per window. The backend names the
+/// reset absolutely today (`…-reset-at`, Unix seconds); older gateways
+/// reported a relative `…-reset-after-seconds`. Both are read, so whichever
+/// the server sent survives normalization.
+fn codex_rate_limit_snapshot(headers: &[(String, String)]) -> RateLimitSnapshot {
+    fn value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+        headers
+            .iter()
+            .find(|(header, _)| header.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
+    let mut snapshot = RateLimitSnapshot::new();
+    for category in ["primary", "secondary"] {
+        let prefix = format!("x-codex-{category}");
+        let mut window = RateLimitWindow::new(category);
+        window.used_percent = value(headers, &format!("{prefix}-used-percent"))
+            .and_then(|raw| raw.trim().parse::<f64>().ok())
+            .filter(|percent| percent.is_finite());
+        window.window_seconds = value(headers, &format!("{prefix}-window-minutes"))
+            .and_then(|raw| raw.trim().parse::<u64>().ok())
+            .map(|minutes| minutes.saturating_mul(60));
+        window.resets_at_ms = value(headers, &format!("{prefix}-reset-at"))
+            .and_then(|raw| raw.trim().parse::<u64>().ok())
+            .map(|seconds| seconds.saturating_mul(1_000));
+        window.resets_in_ms = value(headers, &format!("{prefix}-reset-after-seconds"))
+            .and_then(|raw| raw.trim().parse::<u64>().ok())
+            .map(|seconds| seconds.saturating_mul(1_000));
+        snapshot.push(window);
+    }
+    snapshot
+}
+
+/// The subset of the Codex usage payload Smith reads. Everything else the
+/// endpoint reports — plan type, credits, spend controls — is account
+/// commerce, not limit state, and stays unread.
+#[derive(Debug, Deserialize)]
+struct UsageWindowWire {
+    used_percent: Option<f64>,
+    limit_window_seconds: Option<u64>,
+    reset_after_seconds: Option<u64>,
+    reset_at: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UsageRateLimitWire {
+    primary_window: Option<UsageWindowWire>,
+    secondary_window: Option<UsageWindowWire>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UsagePayloadWire {
+    rate_limit: Option<UsageRateLimitWire>,
+}
+
+/// Converts a `/wham/usage` payload into the normalized snapshot the
+/// credential pool records.
+fn usage_snapshot_from_json(body: &[u8]) -> Result<RateLimitSnapshot, ChatGptAuthError> {
+    let payload: UsagePayloadWire =
+        serde_json::from_slice(body).map_err(|_| ChatGptAuthError::InvalidResponse)?;
+    let mut snapshot = RateLimitSnapshot::new();
+    let Some(details) = payload.rate_limit else {
+        return Ok(snapshot);
+    };
+    for (category, wire) in [
+        ("primary", details.primary_window),
+        ("secondary", details.secondary_window),
+    ] {
+        let Some(wire) = wire else { continue };
+        let mut window = RateLimitWindow::new(category);
+        window.used_percent = wire.used_percent.filter(|percent| percent.is_finite());
+        window.window_seconds = wire.limit_window_seconds;
+        window.resets_at_ms = wire.reset_at.map(|seconds| seconds.saturating_mul(1_000));
+        // The payload carries a zero here when the absolute time is the one
+        // that speaks; a zero delay is filler, not a reset happening now.
+        window.resets_in_ms = wire
+            .reset_after_seconds
+            .filter(|seconds| *seconds > 0)
+            .map(|seconds| seconds.saturating_mul(1_000));
+        snapshot.push(window);
+    }
+    Ok(snapshot)
+}
+
+/// Reads the account's server-reported usage without spending a model request.
+///
+/// This is the Codex CLI's usage API — `GET /wham/usage` beside the
+/// `backend-api` Responses endpoint — and the only way to learn an account's
+/// consumption before its first attempt: the Responses stream reports limit
+/// state per attempt, and a fresh session has not made one.
+pub async fn fetch_usage_snapshot(
+    access_token: &str,
+    account_id: &str,
+) -> Result<RateLimitSnapshot, ChatGptAuthError> {
+    let client = Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent(concat!("smith/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|_| ChatGptAuthError::Client)?;
+    let response = client
+        .get(CHATGPT_USAGE_ENDPOINT)
+        .header("authorization", format!("Bearer {access_token}"))
+        .header("chatgpt-account-id", account_id)
+        .header("originator", "smith")
+        .send()
+        .await
+        .map_err(|_| ChatGptAuthError::Transport)?;
+    if !response.status().is_success() {
+        return Err(ChatGptAuthError::Rejected);
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_OAUTH_RESPONSE_BYTES as u64)
+    {
+        return Err(ChatGptAuthError::ResponseTooLarge);
+    }
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| ChatGptAuthError::Transport)?;
+        if body.len().saturating_add(chunk.len()) > MAX_OAUTH_RESPONSE_BYTES {
+            return Err(ChatGptAuthError::ResponseTooLarge);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    usage_snapshot_from_json(&body)
 }
 
 impl RenewableBundle for ChatGptTokenBundle {
@@ -1325,9 +1460,9 @@ impl<T: HttpTransport> Provider for ChatGptProvider<T> {
             ],
             body,
         };
-        let post = self.transport.post_stream(http);
+        let post = self.transport.post_response(http);
         tokio::pin!(post);
-        let mut bytes = tokio::select! {
+        let response = tokio::select! {
             biased;
             _ = ctx.cancel.cancelled() => {
                 return Err(ProviderError::new(ProviderErrorKind::Cancelled, "cancelled"));
@@ -1336,7 +1471,7 @@ impl<T: HttpTransport> Provider for ChatGptProvider<T> {
                 return Err(ProviderError::new(ProviderErrorKind::Timeout, "provider deadline elapsed"));
             }
             result = &mut post => match result {
-                Ok(stream) => stream,
+                Ok(response) => response,
                 Err(error) => {
                     return Err(classify_auth_rejection(
                         error,
@@ -1350,10 +1485,20 @@ impl<T: HttpTransport> Provider for ChatGptProvider<T> {
                 }
             },
         };
+        // Read before the body moves: these headers describe the credential
+        // that served this attempt, and nothing downstream can recover them
+        // once the stream is running.
+        let rate_limits = codex_rate_limit_snapshot(&response.headers);
+        let mut bytes = response.body;
         let cancel = ctx.cancel.clone();
         let deadline = ctx.deadline;
         let clock = self.clock.clone();
         let out = stream! {
+            // Emitted first so a consumer sees the limit state that governed
+            // this attempt before any of its output.
+            if !rate_limits.is_empty() {
+                yield ProviderStreamEvent::RateLimit { snapshot: rate_limits };
+            }
             let mut parser = SseFrameParser::new();
             let mut pending_utf8 = Vec::new();
             let mut state = StreamState {
@@ -1593,6 +1738,81 @@ mod tests {
         let decoded = ChatGptTokenBundle::from_secret(&encoded).expect("decoded");
         assert_eq!(decoded.account_id(), "acct_test");
         assert!(!format!("{decoded:?}").contains("canary"));
+    }
+
+    #[test]
+    fn codex_rate_limit_headers_parse_both_reset_shapes() {
+        let headers = vec![
+            ("x-codex-primary-used-percent".to_owned(), "12.5".to_owned()),
+            (
+                "x-codex-primary-window-minutes".to_owned(),
+                "300".to_owned(),
+            ),
+            (
+                "x-codex-primary-reset-at".to_owned(),
+                "1704069000".to_owned(),
+            ),
+            ("x-codex-secondary-used-percent".to_owned(), "80".to_owned()),
+            (
+                "x-codex-secondary-reset-after-seconds".to_owned(),
+                "3600".to_owned(),
+            ),
+        ];
+        let snapshot = codex_rate_limit_snapshot(&headers);
+        assert_eq!(snapshot.windows.len(), 2);
+        assert_eq!(snapshot.windows[0].id.as_deref(), Some("primary"));
+        assert_eq!(snapshot.windows[0].used_percent, Some(12.5));
+        assert_eq!(snapshot.windows[0].window_seconds, Some(300 * 60));
+        assert_eq!(snapshot.windows[0].resets_at_ms, Some(1_704_069_000_000));
+        assert_eq!(snapshot.windows[1].id.as_deref(), Some("secondary"));
+        assert_eq!(snapshot.windows[1].used_percent, Some(80.0));
+        assert_eq!(snapshot.windows[1].resets_in_ms, Some(3_600_000));
+    }
+
+    #[test]
+    fn absent_rate_limit_headers_yield_an_empty_snapshot_not_zeroes() {
+        let headers = vec![("content-type".to_owned(), "text/event-stream".to_owned())];
+        assert!(codex_rate_limit_snapshot(&headers).is_empty());
+    }
+
+    #[test]
+    fn usage_payload_maps_windows_and_treats_zero_delay_as_filler() {
+        let body = json!({
+            "plan_type": "pro",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 42,
+                    "limit_window_seconds": 300,
+                    "reset_after_seconds": 0,
+                    "reset_at": 1704069000,
+                },
+                "secondary_window": {
+                    "used_percent": 84.5,
+                    "limit_window_seconds": 3600,
+                    "reset_after_seconds": 1800,
+                },
+            },
+            "credits": {"has_credits": true, "unlimited": false},
+        });
+        let snapshot =
+            usage_snapshot_from_json(&serde_json::to_vec(&body).expect("encodes")).expect("parses");
+        assert_eq!(snapshot.windows.len(), 2);
+        assert_eq!(snapshot.windows[0].id.as_deref(), Some("primary"));
+        assert_eq!(snapshot.windows[0].used_percent, Some(42.0));
+        assert_eq!(snapshot.windows[0].window_seconds, Some(300));
+        assert_eq!(snapshot.windows[0].resets_at_ms, Some(1_704_069_000_000));
+        // The zero delay beside an absolute reset is filler, not "resets now".
+        assert_eq!(snapshot.windows[0].resets_in_ms, None);
+        assert_eq!(snapshot.windows[1].used_percent, Some(84.5));
+        assert_eq!(snapshot.windows[1].resets_in_ms, Some(1_800_000));
+    }
+
+    #[test]
+    fn usage_payload_without_rate_limit_reads_as_unmeasured() {
+        let body = json!({"plan_type": "plus"});
+        let snapshot =
+            usage_snapshot_from_json(&serde_json::to_vec(&body).expect("encodes")).expect("parses");
+        assert!(snapshot.is_empty());
     }
 
     #[test]

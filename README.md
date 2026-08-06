@@ -83,9 +83,23 @@ identities remain exact and their bytes are read when the queued turn starts.
 Slash commands, shell shortcuts, child operations, approvals, and
 questionnaires are never queued implicitly.
 
-## Running it
+## Installation
 
-Smith requires Rust 1.88 or newer.
+```sh
+# Run instantly through npm (macOS / Linux)
+npx @forgeailab/smith
+
+# Or install via the curl installer
+curl -fsSL https://raw.githubusercontent.com/ForgeAILab/smith/main/install.sh | bash
+```
+
+Prefer to build from source? Smith requires Rust 1.88 or newer.
+
+```sh
+cargo install --path crates/smith-cli   # or: cargo run -p smith-cli
+```
+
+## Running it
 
 ```sh
 cargo run -p smith-cli --                         # interactive TUI

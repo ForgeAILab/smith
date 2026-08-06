@@ -131,16 +131,9 @@ impl PartialEq for Block {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::User { text: t1 }, Self::User { text: t2 }) => t1 == t2,
-            (
-                Self::Assistant {
-                    text: t1,
-                    open: o1,
-                },
-                Self::Assistant {
-                    text: t2,
-                    open: o2,
-                },
-            ) => t1 == t2 && o1 == o2,
+            (Self::Assistant { text: t1, open: o1 }, Self::Assistant { text: t2, open: o2 }) => {
+                t1 == t2 && o1 == o2
+            }
             (
                 Self::Reasoning {
                     text: t1,
@@ -172,9 +165,7 @@ impl PartialEq for Block {
                     result_preview: r2,
                     ..
                 },
-            ) => {
-                c1 == c2 && n1 == n2 && d1 == d2 && p1 == p2 && s1 == s2 && r1 == r2
-            }
+            ) => c1 == c2 && n1 == n2 && d1 == d2 && p1 == p2 && s1 == s2 && r1 == r2,
             (Self::Error { message: m1 }, Self::Error { message: m2 }) => m1 == m2,
             (
                 Self::Notice {

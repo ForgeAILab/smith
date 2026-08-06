@@ -277,8 +277,9 @@ impl HostSession {
     /// Used when rebuilding a local transcript from resumed history. Unknown
     /// tools and malformed calls remain on their honest fallback rows.
     pub fn tool_call_displays(&self) -> Vec<(ToolCallId, ToolCallDisplay)> {
-        self.session
-            .with_history(|history| tool_call_displays_from_history(history, &self.display_redactor))
+        self.session.with_history(|history| {
+            tool_call_displays_from_history(history, &self.display_redactor)
+        })
     }
 
     /// Credential-redacted text of one canonical tool result.
@@ -1428,7 +1429,10 @@ mod tests {
         };
         let interruption = unresolved_ephemeral_work(&recovery)
             .expect("a task started with no terminal marker is interrupted on recovery");
-        assert_eq!(interruption.tasks.as_slice(), std::slice::from_ref(&running));
+        assert_eq!(
+            interruption.tasks.as_slice(),
+            std::slice::from_ref(&running)
+        );
         assert!(interruption.children.is_empty());
         assert!(interruption.monitors.is_empty());
 

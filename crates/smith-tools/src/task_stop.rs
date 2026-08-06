@@ -105,10 +105,7 @@ mod tests {
             .invoke(json!({"task_id": "task:1"}), &ctx)
             .await
             .unwrap_err();
-        assert!(
-            err.message.contains("no background task host"),
-            "{err:?}"
-        );
+        assert!(err.message.contains("no background task host"), "{err:?}");
     }
 
     #[tokio::test]

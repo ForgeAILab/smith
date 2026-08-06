@@ -300,6 +300,17 @@ pub(super) fn tool_result_text(block: &ToolResultBlock) -> String {
     }
 }
 
+/// Renders a child's turn consumption. An unbounded child shows only what it
+/// has used: the unlimited sentinel is an implementation detail, not a number
+/// anyone should read.
+pub(crate) fn turns_label(used: u32, max: u32) -> String {
+    if max == u32::MAX {
+        used.to_string()
+    } else {
+        format!("{used}/{max}")
+    }
+}
+
 pub(super) fn child_summary_projection(status: &ChildStatus) -> (&'static str, String) {
     let state = match &status.state {
         ChildState::Running => "working",
@@ -314,8 +325,10 @@ pub(super) fn child_summary_projection(status: &ChildStatus) -> (&'static str, S
         ChildDurability::Durable => "durable",
     };
     let mut detail = format!(
-        "{durability} · session {} · {}/{} turns · {} tokens",
-        status.session, status.turns_used, status.max_turns, status.tokens_used
+        "{durability} · session {} · {} turns · {} tokens",
+        status.session,
+        turns_label(status.turns_used, status.max_turns),
+        status.tokens_used
     );
     if status.resumable() {
         detail.push_str(" · resumable");

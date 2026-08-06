@@ -2212,7 +2212,12 @@ async fn a_background_task_terminal_notification_reaches_the_parent_model_at_a_s
     let session_id = host.session().id().clone();
 
     BackgroundTaskRegistry::global()
-        .spawn_background_task(&session_id, "true".to_owned(), fixture.project.path().to_path_buf(), None)
+        .spawn_background_task(
+            &session_id,
+            "true".to_owned(),
+            fixture.project.path().to_path_buf(),
+            None,
+        )
         .await
         .expect("a background task spawns");
 

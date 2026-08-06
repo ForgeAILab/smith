@@ -234,7 +234,7 @@ Bracketed paste remains enabled independently of pointer handling.
 | --- | --- |
 | `Enter` | Send while idle; steer an eligible serving provider turn while busy |
 | `Shift+Enter` / `Alt+Enter` | Newline in the composer |
-| `Esc` | Interrupt the running turn; with uncommitted steers, resubmit only eventual discards after cancellation; if idle, clear the composer |
+| `Esc` | Leave the child inspector for the root timeline; otherwise interrupt the running turn, with uncommitted steers resubmitting only eventual discards after cancellation; if idle, clear the composer |
 | `Ctrl+C` | Add a non-blank composer draft to bounded local history and clear it; replace the identity footer with `press Ctrl+C again to exit` for the 1s double-press window; a second press exits from any state |
 | `Ctrl+P` | Open command completion using the shared command registry |
 | `Ctrl+R` | Open incremental reverse search over bounded process-local composer history |
@@ -249,6 +249,7 @@ Bracketed paste remains enabled independently of pointer handling.
 | `Ctrl+L` | Jump to newest and re-enable follow |
 | `?` (empty composer) | Show the same local guide as `/help`; never contact the provider |
 | `Up` / `Down` (composer history) | Browse accepted or `Ctrl+C`-stashed input and return to the exact pre-navigation draft |
+| `Down` / `Up` (delegated agents) | Past the newest draft, walk the delegated-work panel: each child's read-only log replaces the transcript region, and `Up` from the first child returns to the root timeline |
 | `y` / `n` / `a` | Approval: allow once / deny / allow for session |
 | `Up` / `Down` or `1`–`9` | Questionnaire: move to or stage a labelled choice |
 | `Space` | Questionnaire: select the highlighted choice; never submit |
@@ -515,19 +516,20 @@ reasoning. Adjustable controls require source-explainable switch behavior,
 ordered effort choices, optional token-budget support, a provider wire
 dialect, defaults, and provenance from an exact trusted provider/model
 binding, explicit trusted configuration, or an exact endpoint that normalizes
-controls itself — the OpenAI `reasoning_effort` ladder, the OpenRouter
-unified reasoning API, and the Z.AI Coding Plan thinking switch, which apply
-to every catalog-advertised reasoning model they serve. On those endpoints
-the frozen Models.dev snapshot refines the default ladder with each model's
-advertised control shape; a snapshot annotation is advertised metadata, not
-an entitlement claim, and it never creates controls on an endpoint whose
-wire dialect is unknown. Smith snapshots the effective selection at turn acceptance and
+controls itself — the OpenAI `reasoning_effort` ladder, the xAI Responses
+OpenAI-effort ladder for catalog-backed Grok models, the OpenRouter unified
+reasoning API, and the Z.AI Coding Plan thinking switch, which apply to every
+catalog-advertised reasoning model they serve. On those endpoints the frozen
+Models.dev snapshot refines the default ladder with each model's advertised
+control shape; a snapshot annotation is advertised metadata, not an
+entitlement claim, and it never creates controls on an endpoint whose wire
+dialect is unknown. Smith snapshots the effective selection at turn acceptance and
 uses it unchanged for retries and tool continuations. Compatible session
 overrides resume and flow into newly created children; a provider/model switch
 that cannot represent the override clears it with a local notice rather than
 mapping to a nearest value.
 
-For configured OpenAI, OpenRouter, and Z.AI Coding Plan endpoints, model rows
+For configured OpenAI, xAI, OpenRouter, and Z.AI Coding Plan endpoints, model rows
 may come from Smith's frozen Models.dev snapshot as well as explicit TOML. The exact
 endpoint binding is a trust boundary; a matching provider name alone is not.
 Catalog rows retain the configured provider alias, show the catalog display
@@ -752,10 +754,30 @@ through an independent interaction channel and cannot approve a tool.
 
 ## 8. Background work
 
-Monitor notifications and child-agent progress reach the TUI immediately as
-concise attributed transcript notices: `• source · summary`. They never splice
-into a streaming assistant block and never steal composer focus. Terminal
-events (a monitor stopped, a child finished) are never coalesced away.
+Monitor notifications reach the TUI immediately as concise attributed
+transcript notices: `• source · summary`. They never splice into a streaming
+assistant block and never steal composer focus. Terminal events (a monitor
+stopped, a child finished) are never coalesced away.
+
+Child-agent progress reaches the TUI on the same deadline but not the same
+surface. Only delegation's boundaries are the root conversation's business: a
+child starting, resuming, blocking on input, and ending — completed, stopped,
+interrupted, or failed — enter the transcript as `• sub-agent · summary`. What
+the child does in between is panel state, because the root transcript is a
+record of the work the user asked for, and a child narrating each of its tool
+calls into it buries that record without telling the user anything the panel
+row does not already show.
+
+Nothing is discarded. Every lifecycle event, printed or not, appends to that
+child's bounded log, which is the inspector's content. `Down` past the newest
+composer draft walks the delegated-work panel; the selected child's log
+replaces the transcript region until `Esc`, with the panel marking which row
+the region belongs to. The view is read-only and never takes focus from the
+root composer: while it is open, an ordinary submission is a follow-up to that
+child, a `/command` still addresses the root, and the identity footer is
+replaced by the keys that say so. Turn, token, session, and workspace figures
+in the view's header come from the coordinator on the host's redraw poll, never
+from a client-side guess.
 
 A background shell task is the quiet sibling of a monitor: it runs to
 completion silently, spools its output to disk, and reports exactly once — a
@@ -767,8 +789,8 @@ without killing it; Esc keeps its interrupt-and-kill meaning unchanged.
 
 The runtime's bounded safe-boundary inbox remains an internal delivery
 mechanism for child results sent to the parent model. It is not a visible or
-focusable TUI region. `/agent` provides child list, status, and result detail
-on demand.
+focusable TUI region. `/agent` lists children and opens the same read-only
+inspector the arrows reach, by name rather than by position.
 
 A todo update replaces the bounded anchored pane above the composer. Public
 items show status and text in authored order; sensitive plans show no pane,

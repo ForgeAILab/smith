@@ -166,8 +166,8 @@ impl Tool for ShellTool {
         if run_in_background {
             // No default deadline here, deliberately: `prepare` only carried a
             // `timeout_ms` through if the caller supplied one.
-            let timeout_ms =
-                optional_usize(&arguments, "timeout_ms").map(|ms| (ms as u64).clamp(1, MAX_TIMEOUT_MS));
+            let timeout_ms = optional_usize(&arguments, "timeout_ms")
+                .map(|ms| (ms as u64).clamp(1, MAX_TIMEOUT_MS));
             let host = background::installed().ok_or_else(background::host_unavailable)?;
             let spawned = host
                 .spawn(ctx.session.clone(), command.to_owned(), cwd, timeout_ms)
@@ -619,10 +619,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(
-            err.message.contains("no background task host"),
-            "{err:?}"
-        );
+        assert!(err.message.contains("no background task host"), "{err:?}");
     }
 
     #[tokio::test]

@@ -658,23 +658,16 @@ impl EventJournal {
     }
 
     /// Appends and syncs one metadata-only task-start marker.
-    pub async fn record_task_started(
-        &self,
-        task: impl Into<String>,
-    ) -> Result<(), RuntimeError> {
+    pub async fn record_task_started(&self, task: impl Into<String>) -> Result<(), RuntimeError> {
         let task = validate_task_id(task.into())?;
         self.record_marker(JournalRecord::TaskStarted { task })
             .await
     }
 
     /// Appends and syncs one metadata-only task-exit marker.
-    pub async fn record_task_exited(
-        &self,
-        task: impl Into<String>,
-    ) -> Result<(), RuntimeError> {
+    pub async fn record_task_exited(&self, task: impl Into<String>) -> Result<(), RuntimeError> {
         let task = validate_task_id(task.into())?;
-        self.record_marker(JournalRecord::TaskExited { task })
-            .await
+        self.record_marker(JournalRecord::TaskExited { task }).await
     }
 
     async fn record_marker(&self, record: JournalRecord) -> Result<(), RuntimeError> {

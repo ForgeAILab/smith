@@ -135,7 +135,9 @@ fn resolve_rotate_at_percent(
     };
     // A threshold outside 1–100 cannot describe a usage window: 0 would rotate
     // before the first turn, and above 100 can never be reached.
-    let percent = u8::try_from(value.value).ok().filter(|p| (1..=100).contains(p));
+    let percent = u8::try_from(value.value)
+        .ok()
+        .filter(|p| (1..=100).contains(p));
     match percent {
         Some(percent) => Ok(Some(Sourced::new(percent, value.source))),
         None => Err(ConfigError::InvalidValue {

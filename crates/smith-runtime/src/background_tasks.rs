@@ -316,7 +316,10 @@ impl BackgroundTaskRegistry {
         tokio::fs::write(&spool_path, captured_so_far)
             .await
             .map_err(|e| {
-                RuntimeError::new(ErrorKind::Internal, format!("cannot write spool header: {e}"))
+                RuntimeError::new(
+                    ErrorKind::Internal,
+                    format!("cannot write spool header: {e}"),
+                )
             })?;
 
         if let Some(j) = &journal {
@@ -883,7 +886,10 @@ mod tests {
             "{:?}",
             started.elapsed()
         );
-        assert!(spool_ref.contains(&task_id.replace(':', "_")), "{spool_ref}");
+        assert!(
+            spool_ref.contains(&task_id.replace(':', "_")),
+            "{spool_ref}"
+        );
 
         let running = BackgroundTaskRegistry::global().running_tasks(&session);
         assert!(
@@ -1034,7 +1040,10 @@ mod tests {
             .unwrap();
 
         let status = wait_for_terminal(&session, &task_id).await;
-        assert!(matches!(status, TaskStatus::Exited { code: Some(0) }), "{status:?}");
+        assert!(
+            matches!(status, TaskStatus::Exited { code: Some(0) }),
+            "{status:?}"
+        );
 
         let result = BackgroundTaskRegistry::global()
             .get_task_output(&session, &task_id, 0, 65536)

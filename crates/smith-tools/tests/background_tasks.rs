@@ -95,7 +95,11 @@ impl BackgroundTaskHost for FakeHost {
         })
     }
 
-    async fn stop(&self, _session: SessionId, task_id: String) -> Result<BackgroundTaskStatus, RuntimeError> {
+    async fn stop(
+        &self,
+        _session: SessionId,
+        task_id: String,
+    ) -> Result<BackgroundTaskStatus, RuntimeError> {
         self.stop_calls.lock().unwrap().push(task_id.clone());
         if task_id != KNOWN_TASK_ID {
             return Err(unknown_task_error(&task_id));
@@ -201,7 +205,10 @@ async fn task_output_reports_the_hosts_status_and_output_for_a_known_task() {
     let project = Project::new();
 
     let outcome = project
-        .invoke(&TaskOutputTool, json!({"task_id": KNOWN_TASK_ID, "offset": 3}))
+        .invoke(
+            &TaskOutputTool,
+            json!({"task_id": KNOWN_TASK_ID, "offset": 3}),
+        )
         .await
         .expect("a known task resolves");
     assert!(!outcome.is_error);

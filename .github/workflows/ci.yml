@@ -109,3 +109,24 @@ jobs:
         working-directory: tui
         shell: bash
         run: cargo deny --locked check all
+
+  npm-bootstrapper:
+    name: npm Bootstrapper
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Syntax check
+        run: node --check npx-cli/bin/cli.js
+
+      - name: Pack dry run
+        working-directory: npx-cli
+        run: npm pack --dry-run

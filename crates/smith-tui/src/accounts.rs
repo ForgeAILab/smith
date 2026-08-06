@@ -117,8 +117,10 @@ pub fn account_entries(
             );
             entry.active = member.position == active;
             if let Some(until) = member.cooling_until_ms {
-                entry.disabled_reason =
-                    Some(format!("spent until this window resets {}", until_label(now_ms, until)));
+                entry.disabled_reason = Some(format!(
+                    "spent until this window resets {}",
+                    until_label(now_ms, until)
+                ));
             }
             entry
         })
@@ -223,7 +225,10 @@ mod tests {
         assert_eq!(until_label(NOW, NOW + 30_000), "in under a minute");
         assert_eq!(until_label(NOW, NOW + 42 * MINUTE_MS), "in 42m");
         assert_eq!(until_label(NOW, NOW + HOUR_MS), "in 1h");
-        assert_eq!(until_label(NOW, NOW + HOUR_MS + 30 * MINUTE_MS), "in 1h 30m");
+        assert_eq!(
+            until_label(NOW, NOW + HOUR_MS + 30 * MINUTE_MS),
+            "in 1h 30m"
+        );
         assert_eq!(until_label(NOW, NOW + 3 * DAY_MS), "in 3d");
     }
 
@@ -335,14 +340,8 @@ mod tests {
 
     #[test]
     fn transcript_notices_distinguish_a_manual_switch_from_a_rotation() {
-        assert_eq!(
-            switch_notice("a", "b", true),
-            "switched from a to b"
-        );
-        assert_eq!(
-            switch_notice("a", "b", false),
-            "rotated from a to b"
-        );
+        assert_eq!(switch_notice("a", "b", true), "switched from a to b");
+        assert_eq!(switch_notice("a", "b", false), "rotated from a to b");
     }
 
     #[test]

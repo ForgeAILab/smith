@@ -82,8 +82,15 @@ pub const AGENT_TOOL_NAME: &str = "agent";
 /// Schema of Smith's model-facing delegated task outcome envelope.
 const CHILD_TASK_OUTCOME_SCHEMA_VERSION: u32 = 1;
 
-/// The default cap on tasks (spawn plus follow-ups) per child.
-pub const DEFAULT_CHILD_MAX_TURNS: u32 = 4;
+/// The limits a spawned child runs under: none. Smith deliberately spawns
+/// children unbounded — the coordinator's concurrency cap is the only brake.
+/// `ChildLimits::max_turns` is a required count in the shared runtime, so
+/// "no limit" is expressed as the counter's full range.
+pub const UNLIMITED_CHILD_LIMITS: ChildLimits = ChildLimits {
+    max_turns: u32::MAX,
+    max_tokens: None,
+    deadline_ms: None,
+};
 
 /// The default cap on concurrently alive children per root session.
 pub const DEFAULT_MAX_RUNNING_CHILDREN: usize = 4;
@@ -554,12 +561,6 @@ enum AgentAction {
         tools: ToolScopeArg,
         #[serde(default)]
         workspace: Option<WorkspaceArg>,
-        #[serde(default)]
-        max_turns: Option<u32>,
-        #[serde(default)]
-        max_tokens: Option<u64>,
-        #[serde(default)]
-        deadline_ms: Option<u64>,
     },
     /// List every child and its status.
     List,
@@ -612,7 +613,8 @@ fn status_json(status: &ChildStatus) -> Value {
         "state": state,
         "resumable": status.resumable(),
         "turns_used": status.turns_used,
-        "max_turns": status.max_turns,
+        // Unlimited reads as null, not as the sentinel's absurd number.
+        "max_turns": (status.max_turns != u32::MAX).then_some(status.max_turns),
         "tokens_used": status.tokens_used,
         "incompatibility": status.incompatibility,
         "result": status.last_result,
@@ -682,18 +684,6 @@ impl Tool for AgentTool {
                                         \"read_only\", or {\"directory\": {\"path\": \"…\"}}. \
                                         Defaults to read_only."
                     },
-                    "max_turns": {
-                        "type": "integer",
-                        "description": "Tasks the child may run in total. Defaults to 4."
-                    },
-                    "max_tokens": {
-                        "type": "integer",
-                        "description": "Optional total token budget for the child."
-                    },
-                    "deadline_ms": {
-                        "type": "integer",
-                        "description": "Optional lifetime deadline in milliseconds."
-                    }
                 },
                 "required": ["action"],
                 "additionalProperties": false
@@ -790,9 +780,6 @@ impl Tool for AgentTool {
                 task,
                 tools,
                 workspace,
-                max_turns,
-                max_tokens,
-                deadline_ms,
             } => {
                 let workspace = match workspace {
                     None | Some(WorkspaceArg::ReadOnly) => WorkspacePolicy::ReadOnlyView,
@@ -804,11 +791,7 @@ impl Tool for AgentTool {
                 let spec = ChildSpec {
                     task: UserInput::text(task),
                     model: ChildModelSelection::Inherit,
-                    limits: ChildLimits {
-                        max_turns: max_turns.unwrap_or(DEFAULT_CHILD_MAX_TURNS),
-                        max_tokens,
-                        deadline_ms,
-                    },
+                    limits: UNLIMITED_CHILD_LIMITS,
                     tools: match tools {
                         ToolScopeArg::ReadOnly => ToolViewScope::ReadOnly,
                         ToolScopeArg::All => ToolViewScope::All,

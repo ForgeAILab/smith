@@ -659,12 +659,15 @@ mod tests {
 
         let invalid = parse(["--background-exit", "orphan"].map(OsString::from))
             .expect_err("an unknown background-exit spelling");
-        assert!(invalid.to_string().contains("invalid background-exit policy"));
+        assert!(
+            invalid
+                .to_string()
+                .contains("invalid background-exit policy")
+        );
 
-        let duplicate = parse(
-            ["--background-exit", "wait", "--background-exit", "stop"].map(OsString::from),
-        )
-        .expect_err("background-exit was supplied twice");
+        let duplicate =
+            parse(["--background-exit", "wait", "--background-exit", "stop"].map(OsString::from))
+                .expect_err("background-exit was supplied twice");
         assert!(duplicate.to_string().contains("supplied twice"));
     }
 

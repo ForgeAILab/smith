@@ -209,11 +209,13 @@ pub(super) fn overlay_hint(app: &App) -> Option<String> {
         Some(Overlay::RedoConfirm { .. }) => Some("y apply redo · n/esc cancel".to_owned()),
         Some(Overlay::RevertConfirm { .. }) => Some("y apply revert · n/esc cancel".to_owned()),
         Some(Overlay::ReviewConfirm { .. }) => Some("y start review · n/esc cancel".to_owned()),
-        Some(Overlay::RotationConfirm { prompt, .. }) => Some(if prompt.request().eligible.len() > 1 {
-            "y switch and resend · 1-9 choose account · n/esc stay".to_owned()
-        } else {
-            "y switch and resend · n/esc stay".to_owned()
-        }),
+        Some(Overlay::RotationConfirm { prompt, .. }) => {
+            Some(if prompt.request().eligible.len() > 1 {
+                "y switch and resend · 1-9 choose account · n/esc stay".to_owned()
+            } else {
+                "y switch and resend · n/esc stay".to_owned()
+            })
+        }
         Some(Overlay::AgentConfirm { .. }) => {
             Some("y start read-only child · n/esc cancel".to_owned())
         }
@@ -224,7 +226,14 @@ pub(super) fn overlay_hint(app: &App) -> Option<String> {
             Some("y resume exact checkpoint · n/esc cancel".to_owned())
         }
         Some(Overlay::ExitConfirm { .. }) => Some("y quit · n keep working".to_owned()),
-        None => None,
+        // The inspector is a read-only view, not an overlay, but it owns the
+        // same keys the identity footer would otherwise explain: while it is
+        // open, the hint row says how to leave it and how to reply to the
+        // child being read.
+        None => app
+            .inspected_child
+            .as_ref()
+            .map(|child| format!("↑↓ agents · esc back to main · enter continues {child}")),
     }
 }
 
@@ -428,7 +437,7 @@ pub(super) fn draw_agents(frame: &mut Frame<'_>, area: Rect, app: &App, theme: T
     let (live, settled): (Vec<_>, Vec<_>) = app
         .children
         .iter()
-        .partition(|(_, summary)| is_live_child(summary));
+        .partition(|(_, summary)| summary.is_live());
     let rows = live
         .iter()
         .map(|(child_id, summary)| agent_row(app, child_id, summary, area.width, theme))
@@ -454,14 +463,6 @@ pub(super) fn draw_agents(frame: &mut Frame<'_>, area: Rect, app: &App, theme: T
     // Agent rows are fixed-height chrome; long text clips instead of
     // wrapping so the composer never moves.
     frame.render_widget(Paragraph::new(lines), area);
-}
-
-/// Whether a child's lifecycle label describes in-flight work.
-fn is_live_child(summary: &ChildSummary) -> bool {
-    matches!(
-        summary.state.as_str(),
-        "running" | "working" | "resuming" | "needs input"
-    )
 }
 
 fn agent_row(

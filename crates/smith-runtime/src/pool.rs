@@ -312,7 +312,10 @@ mod tests {
     fn a_new_pool_starts_on_its_first_member() {
         let pool = pool();
         assert_eq!(pool.active_position(), 0);
-        assert_eq!(pool.active().expect("a member").label(), "keychain:smith/personal");
+        assert_eq!(
+            pool.active().expect("a member").label(),
+            "keychain:smith/personal"
+        );
         assert!(pool.has_pool());
     }
 
@@ -374,10 +377,7 @@ mod tests {
         pool.exhaust(0, None, NOW);
 
         // Not "resets now", and not forever.
-        assert_eq!(
-            pool.cooling_until(0, NOW),
-            Some(NOW + DEFAULT_COOLDOWN_MS)
-        );
+        assert_eq!(pool.cooling_until(0, NOW), Some(NOW + DEFAULT_COOLDOWN_MS));
     }
 
     #[test]
@@ -425,7 +425,10 @@ mod tests {
         let mut pool = pool();
         assert!(pool.set_active(1));
         assert_eq!(pool.active_position(), 1);
-        assert_eq!(pool.active().expect("a member").label(), "keychain:smith/work");
+        assert_eq!(
+            pool.active().expect("a member").label(),
+            "keychain:smith/work"
+        );
 
         // Selecting the current member, or one that does not exist, is a no-op.
         assert!(!pool.set_active(1));

@@ -298,12 +298,7 @@ fn every_resolved_field_keeps_the_source_that_supplied_it() {
     );
     assert_eq!(config.provider.kind.source.key, "providers.acme.kind");
     assert_eq!(
-        config
-            .provider
-            .credential()
-            
-            .expect("a reference")
-            .value,
+        config.provider.credential().expect("a reference").value,
         "keychain:smith/acme"
     );
 
@@ -1704,9 +1699,8 @@ fn an_unparseable_pool_entry_fails_resolution_by_position_without_quoting_it() {
 
 #[test]
 fn a_duplicate_pool_entry_is_rejected_rather_than_collapsed() {
-    let error =
-        resolve_provider_with(r#"credentials = ["keychain:smith/a", "keychain:smith/a"]"#)
-            .expect_err("a duplicate pool entry");
+    let error = resolve_provider_with(r#"credentials = ["keychain:smith/a", "keychain:smith/a"]"#)
+        .expect_err("a duplicate pool entry");
 
     let rendered = format!("{error}");
     assert!(rendered.contains("keychain:smith/a"), "{rendered}");
@@ -1785,10 +1779,9 @@ fn the_rotation_threshold_resolves_and_is_bounded_to_a_percentage() {
 
 #[test]
 fn a_rotation_threshold_without_a_pool_is_rejected() {
-    let error = resolve_provider_with(
-        "credential = \"keychain:smith/only\"\nrotate_at_percent = 90",
-    )
-    .expect_err("a threshold with nowhere to rotate");
+    let error =
+        resolve_provider_with("credential = \"keychain:smith/only\"\nrotate_at_percent = 90")
+            .expect_err("a threshold with nowhere to rotate");
 
     assert!(matches!(error, ConfigError::InvalidValue { .. }));
     assert!(format!("{error}").contains("another member"));

@@ -626,14 +626,23 @@ mod tests {
     #[test]
     fn only_rate_limit_headers_are_carried_to_the_adapter() {
         let mut headers = HeaderMap::new();
-        headers.insert("x-ratelimit-remaining-tokens", HeaderValue::from_static("40"));
+        headers.insert(
+            "x-ratelimit-remaining-tokens",
+            HeaderValue::from_static("40"),
+        );
         headers.insert(
             "anthropic-ratelimit-unified-reset",
             HeaderValue::from_static("2026-08-04T17:00:00Z"),
         );
-        headers.insert("x-codex-primary-used-percent", HeaderValue::from_static("82"));
+        headers.insert(
+            "x-codex-primary-used-percent",
+            HeaderValue::from_static("82"),
+        );
         headers.insert("set-cookie", HeaderValue::from_static("session=secret"));
-        headers.insert("content-type", HeaderValue::from_static("text/event-stream"));
+        headers.insert(
+            "content-type",
+            HeaderValue::from_static("text/event-stream"),
+        );
 
         let observed = observed_headers(&headers);
         let names: Vec<&str> = observed.iter().map(|(name, _)| name.as_str()).collect();

@@ -474,10 +474,10 @@ mod tests {
     use agent_runtime_core::cancel::CancelReason;
     use agent_runtime_core::clock::Timestamp;
     use agent_runtime_core::ids::{AttemptId, RequestId, SessionId};
-    use agent_runtime_core::store::Secret;
     use agent_runtime_core::provider::{
         FinishReason, RateLimitSnapshot, RateLimitWindow, ReasoningSupport,
     };
+    use agent_runtime_core::store::Secret;
     use smith_host::rotation::{
         HeadlessRotation, InteractiveRotation, RotationRequest, RotationTrigger,
     };
@@ -532,11 +532,10 @@ mod tests {
         ) -> Result<ProviderStream, ProviderError> {
             let index = self.attempts.fetch_add(1, Ordering::SeqCst);
             if index < self.exhaust {
-                return Err(ProviderError::new(
-                    ProviderErrorKind::LimitExhausted,
-                    "spent",
-                )
-                .limit_resets_at(RESET));
+                return Err(
+                    ProviderError::new(ProviderErrorKind::LimitExhausted, "spent")
+                        .limit_resets_at(RESET),
+                );
             }
             Ok(Box::pin(stream! {
                 yield ProviderStreamEvent::TextDelta { text: "ok".into() };
@@ -670,7 +669,6 @@ mod tests {
         ProviderRequest::new(ModelId::new("m"), Vec::new())
     }
 
-
     /// `expect_err` needs the success type to be `Debug`, and a boxed stream
     /// is not. This keeps the assertion without weakening the stream type.
     fn expect_exhausted(result: Result<ProviderStream, ProviderError>) -> ProviderError {
@@ -705,7 +703,9 @@ mod tests {
 
         assert!(events.iter().any(|event| matches!(
             event,
-            ProviderStreamEvent::Finish { reason: FinishReason::Stop }
+            ProviderStreamEvent::Finish {
+                reason: FinishReason::Stop
+            }
         )));
         // Exactly two attempts: the spent one, and the replay.
         assert_eq!(inner.attempts.load(Ordering::SeqCst), 2);
@@ -827,7 +827,11 @@ mod tests {
         assert!(matches!(events[1], ProviderStreamEvent::Error { .. }));
         assert_eq!(inner.attempts.load(Ordering::SeqCst), 1);
         pool.read(|pool| {
-            assert_eq!(pool.active_position(), 0, "no switch after an accepted stream");
+            assert_eq!(
+                pool.active_position(),
+                0,
+                "no switch after an accepted stream"
+            );
             // The next attempt still avoids the spent account.
             assert_eq!(pool.cooling_until(0, NOW), Some(RESET));
         });
@@ -1048,7 +1052,8 @@ mod tests {
     #[tokio::test]
     async fn the_credential_source_leases_whichever_member_is_active() {
         let pool = pool(2);
-        let source = PoolCredentialSource::new(pool.clone(), Arc::new(FixedMemberSources::default()));
+        let source =
+            PoolCredentialSource::new(pool.clone(), Arc::new(FixedMemberSources::default()));
         let target = ProviderCredentialTarget::new("acme").expect("a target");
 
         let first = source

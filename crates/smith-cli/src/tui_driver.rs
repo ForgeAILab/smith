@@ -645,6 +645,25 @@ pub(super) async fn run_tui(
                         })
                         .collect(),
                 );
+                // Same reason, for the open child inspector: turns, tokens,
+                // and lifecycle live in the coordinator, which the TUI cannot
+                // reach. A child selected by arrow key gets the same card as
+                // one opened by `/agent <id>`, and it stays current while the
+                // child works.
+                if let Some(inspected) = app.inspected_child.clone() {
+                    let card = host
+                        .runtime()
+                        .delegation()
+                        .and_then(|delegation| delegation.coordinator())
+                        .and_then(|coordinator| {
+                            coordinator
+                                .list()
+                                .iter()
+                                .find(|status| status.child.as_str() == inspected)
+                                .map(crate::local_command::child_status_card)
+                        });
+                    app.set_inspected_detail(&inspected, card);
+                }
                 terminal.draw(|frame| smith_tui::draw_synced(frame, &mut app, theme))?;
                 dirty = false;
             }
@@ -745,5 +764,7 @@ pub(super) async fn switch_account(
             let _ = error;
         }
     }
-    Some(smith_tui::accounts::switch_notice(&outgoing, &incoming, true))
+    Some(smith_tui::accounts::switch_notice(
+        &outgoing, &incoming, true,
+    ))
 }

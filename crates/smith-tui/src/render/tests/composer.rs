@@ -359,6 +359,66 @@
     }
 
     #[test]
+    fn inspecting_a_child_swaps_the_transcript_for_its_log_and_returns_it_on_escape() {
+        use agent_runtime_core::delegation::WorkspacePolicy;
+        use agent_runtime_core::event::ChildPhase;
+        use agent_runtime_core::ids::ChildId;
+
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.transcript.push_user("explain the retry policy");
+        let child = ChildId::new("child-a");
+        app.apply(&event(RuntimeEvent::ChildSpawned {
+            child: child.clone(),
+            workspace: WorkspacePolicy::ReadOnlyView,
+            max_turns: 3,
+            max_tokens: None,
+            deadline_ms: None,
+        }));
+        app.apply(&event(RuntimeEvent::ChildProgress {
+            child: child.clone(),
+            phase: ChildPhase::ToolCall {
+                name: "Grep".to_owned(),
+            },
+        }));
+
+        let root = render(&app, 80, 24, Theme::new().without_color());
+        assert!(
+            root.contains("explain the retry policy"),
+            "the root timeline is what the transcript shows:\n{root}"
+        );
+        assert!(
+            !root.contains("sub-agent · child-a ran"),
+            "a child's tool call is panel activity, not a transcript notice:\n{root}"
+        );
+
+        app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        let inspected = render(&app, 80, 24, Theme::new().without_color());
+        insta_like(
+            &inspected,
+            &[
+                "child-a · running",
+                "started · read-only · up to 3 turns",
+                "ran Grep",
+                "esc back to main",
+            ],
+        );
+        assert!(
+            !inspected.contains("explain the retry policy"),
+            "the inspector borrows the whole transcript region:\n{inspected}"
+        );
+        // The panel marks which row the region belongs to.
+        insta_like(&inspected, &["○ main", "● child-a"]);
+
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let restored = render(&app, 80, 24, Theme::new().without_color());
+        assert!(
+            restored.contains("explain the retry policy")
+                && !restored.contains("child-a · running"),
+            "esc gives the region back unchanged:\n{restored}"
+        );
+    }
+
+    #[test]
     fn the_working_row_counts_live_delegated_agents() {
         use agent_runtime_core::delegation::WorkspacePolicy;
         use agent_runtime_core::ids::ChildId;

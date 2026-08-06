@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "scripts": {
+    "check:npx-cli": "node --check npx-cli/bin/cli.js",
+    "pack:npx-cli": "cd npx-cli && npm pack --dry-run"
+  }
+}

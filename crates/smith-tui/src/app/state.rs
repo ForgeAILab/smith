@@ -489,6 +489,25 @@ pub struct ChildSummary {
     pub detail: Option<String>,
 }
 
+impl ChildSummary {
+    /// Whether this child's lifecycle label describes in-flight work.
+    ///
+    /// Both the panel's row order and the inspector's keyboard order read
+    /// this, so a live child can never sort one way and select another.
+    pub fn is_live(&self) -> bool {
+        matches!(
+            self.state.as_str(),
+            "running" | "working" | "resuming" | "needs input"
+        )
+    }
+}
+
+/// Most retained log lines per child.
+///
+/// The child's own journal keeps the whole record; this is the bounded tail
+/// the inspector can show without growing without limit in a long session.
+pub(super) const MAX_CHILD_LOG_LINES: usize = 200;
+
 /// Wall-clock projection for one delegated child's agents-panel row.
 ///
 /// Kept beside — not inside — [`ChildSummary`]: summaries are compared
@@ -680,8 +699,22 @@ pub struct App {
     pub children: BTreeMap<String, ChildSummary>,
     /// Live panel clocks for children, keyed by stable child id.
     pub(super) child_clocks: BTreeMap<String, ChildClock>,
+    /// Bounded per-child progress log, keyed by stable child id.
+    ///
+    /// Child progress no longer narrates itself into the root transcript, so
+    /// this is where "what has that agent been doing" lives. Plain text, never
+    /// timestamps: summaries are compared between live application and journal
+    /// replay, and a wall-clock reading can never replay equal.
+    pub(super) child_logs: BTreeMap<String, Vec<String>>,
     /// Temporary child inspector selection; the root composer keeps focus.
     pub inspected_child: Option<String>,
+    /// The host's latest coordinator card for [`Self::inspected_child`].
+    ///
+    /// The client has no delegation access of its own, so authoritative
+    /// session, turn, token, and workspace figures arrive from the host on the
+    /// same poll-on-redraw cadence as background tasks. Absent until that poll
+    /// answers, which is honest: the client never invents child accounting.
+    pub(super) inspected_detail: Option<String>,
     /// Running background shell tasks, as of the host's latest registry poll.
     pub running_tasks: Vec<RunningTaskSummary>,
     /// When each running task was first seen, keyed by task id.
@@ -756,7 +789,9 @@ impl App {
             questionnaire_resolutions: VecDeque::new(),
             children: BTreeMap::new(),
             child_clocks: BTreeMap::new(),
+            child_logs: BTreeMap::new(),
             inspected_child: None,
+            inspected_detail: None,
             running_tasks: Vec::new(),
             task_clocks: BTreeMap::new(),
             plan: None,
@@ -985,6 +1020,131 @@ impl App {
         self.child_clocks.get(child).map(ChildClock::elapsed)
     }
 
+    /// Appends one bounded line to a child's retained progress log.
+    ///
+    /// Every child lifecycle event lands here, including the ones the root
+    /// transcript deliberately stays quiet about: the inspector is the only
+    /// place that record still exists in the client.
+    pub(super) fn push_child_log(&mut self, child: &str, line: impl Into<String>) {
+        let log = self.child_logs.entry(child.to_owned()).or_default();
+        log.push(line.into());
+        if log.len() > MAX_CHILD_LOG_LINES {
+            log.remove(0);
+        }
+    }
+
+    /// One child's retained progress log, oldest line first.
+    pub fn child_log(&self, child: &str) -> &[String] {
+        self.child_logs
+            .get(child)
+            .map_or(&[] as &[String], Vec::as_slice)
+    }
+
+    /// Children in the order the delegated-work panel lists them: live work
+    /// first, settled children after, so keyboard order matches what the eye
+    /// reads. Background shell tasks are not children and are skipped — they
+    /// have no child session, log, or follow-up.
+    pub fn inspectable_children(&self) -> Vec<&str> {
+        let (live, settled): (Vec<_>, Vec<_>) = self
+            .children
+            .iter()
+            .partition(|(_, summary)| summary.is_live());
+        live.into_iter()
+            .chain(settled)
+            .map(|(child, _)| child.as_str())
+            .collect()
+    }
+
+    /// Moves the inspector one row down the panel: the root timeline first,
+    /// then each child. Stops at the last child rather than wrapping, so a
+    /// held key settles somewhere predictable.
+    ///
+    /// Returns whether the selection moved.
+    pub fn inspect_next_child(&mut self) -> bool {
+        let children = self.inspectable_children();
+        let next = match &self.inspected_child {
+            None => children.first().map(|child| (*child).to_owned()),
+            Some(current) => children
+                .iter()
+                .position(|child| child == current)
+                .and_then(|index| children.get(index + 1))
+                .map(|child| (*child).to_owned()),
+        };
+        match next {
+            Some(child) => {
+                self.inspect_child(child);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Opens the read-only inspector on one child.
+    pub fn inspect_child(&mut self, child: impl Into<String>) {
+        let child = child.into();
+        if self.inspected_child.as_deref() != Some(child.as_str()) {
+            // The card belongs to the child it was polled for; carrying it
+            // across a selection would report one child's turns under
+            // another's name until the next redraw.
+            self.inspected_detail = None;
+        }
+        self.inspected_child = Some(child);
+        // The two views scroll independently; carrying one's offset into the
+        // other would open a log part-way up for no reason the user can see.
+        self.follow_newest();
+    }
+
+    /// The host's latest coordinator card for the inspected child.
+    pub fn inspected_detail(&self) -> Option<&str> {
+        self.inspected_detail.as_deref()
+    }
+
+    /// Records the host's latest coordinator card for the inspected child.
+    ///
+    /// Ignored unless it names the child currently on screen: a poll that
+    /// answered after the user moved on describes a view that is gone.
+    pub fn set_inspected_detail(&mut self, child: &str, detail: Option<String>) {
+        if self.inspected_child.as_deref() == Some(child) {
+            self.inspected_detail = detail;
+        }
+    }
+
+    /// Moves the inspector one row up the panel, returning to the root
+    /// timeline from the first child.
+    ///
+    /// Returns whether the selection moved.
+    pub fn inspect_previous_child(&mut self) -> bool {
+        let Some(current) = self.inspected_child.clone() else {
+            return false;
+        };
+        let children = self.inspectable_children();
+        match children
+            .iter()
+            .position(|child| *child == current)
+            .and_then(|index| index.checked_sub(1))
+            .and_then(|index| children.get(index))
+            .map(|child| (*child).to_owned())
+        {
+            Some(previous) => self.inspect_child(previous),
+            None => {
+                self.leave_child_inspection();
+            }
+        }
+        true
+    }
+
+    /// Leaves the child inspector for the root timeline.
+    ///
+    /// Returns whether a child was being inspected.
+    pub fn leave_child_inspection(&mut self) -> bool {
+        let inspected = self.inspected_child.take().is_some();
+        self.inspected_detail = None;
+        if inspected {
+            self.follow_newest();
+        }
+        inspected
+    }
+
     /// Delegated children whose panel clock is still ticking.
     pub fn live_child_count(&self) -> usize {
         self.child_clocks
@@ -1112,7 +1272,10 @@ impl App {
             .map(|(name, status, started_at)| match status {
                 ToolStatus::Running => {
                     if let Some(started) = started_at {
-                        format!("tool {name} · running {}", render_elapsed(started.elapsed()))
+                        format!(
+                            "tool {name} · running {}",
+                            render_elapsed(started.elapsed())
+                        )
                     } else {
                         format!("tool {name} · {}", status.label())
                     }

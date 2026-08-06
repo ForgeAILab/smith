@@ -12,6 +12,32 @@ pub(super) fn tool_call_for_display(
     }
 }
 
+/// The coordinator's authoritative card for one child, as the inspector's
+/// header shows it.
+///
+/// Kept beside the `/agent` handler because both the command and the host's
+/// poll-on-redraw refresh render the same card: an inspector opened by arrow
+/// key must not report less than one opened by name.
+pub(super) fn child_status_card(status: &smith_runtime::ChildStatus) -> String {
+    format!(
+        "session {} · {:?} · {:?} · {} · {} tokens · {:?}\nresumable {}{}\ncontinue: type a follow-up below · exact recovery: /agent resume {}\nresult: {}",
+        status.session,
+        status.durability,
+        status.state,
+        crate::submission::turns_label(status.turns_used, status.max_turns),
+        status.tokens_used,
+        status.workspace,
+        status.resumable(),
+        status
+            .incompatibility
+            .as_deref()
+            .map(|reason| format!(" · incompatible: {reason}"))
+            .unwrap_or_default(),
+        status.child,
+        status.last_result.as_deref().unwrap_or("not available"),
+    )
+}
+
 pub(super) async fn handle_local_command(
     app: &mut App,
     host: &HostSession,
@@ -69,14 +95,13 @@ pub(super) async fn handle_local_command(
                         .filter(|child| !timeline.children.contains(&child.child))
                         .map(|child| {
                             format!(
-                                "child {} · session {} · {:?} · {:?} · resumable {} · {}/{} turns",
+                                "child {} · session {} · {:?} · {:?} · resumable {} · {} turns",
                                 child.child,
                                 child.session,
                                 child.durability,
                                 child.state,
                                 child.resumable(),
-                                child.turns_used,
-                                child.max_turns,
+                                crate::submission::turns_label(child.turns_used, child.max_turns),
                             )
                         }),
                 );
@@ -305,7 +330,7 @@ pub(super) async fn handle_local_command(
             let children = coordinator.list();
             let selected = match selected.as_deref() {
                 Some("parent") => {
-                    app.inspected_child = None;
+                    app.leave_child_inspection();
                     app.show_local_result(
                         "agent",
                         "Returned to the root timeline; the root composer remained focused.",
@@ -341,26 +366,13 @@ pub(super) async fn handle_local_command(
                     app.show_local_error("agents", format!("No child named `{selected}`."));
                     return;
                 };
-                app.inspected_child = Some(selected);
-                app.show_local_result(
-                    "agent",
-                    format!(
-                        "child: {}\nchild session: {}\ndurability: {:?}\nstate: {:?}\nresumable: {}\nturns: {}/{}\ntokens: {}\nworkspace: {:?}\nincompatibility: {}\nresult: {}\n\ncontinue: @{} <new follow-up task>\nexact recovery: /agent resume {}\nnavigation: /agent previous · /agent next · /agent parent",
-                        status.child,
-                        status.session,
-                        status.durability,
-                        status.state,
-                        status.resumable(),
-                        status.turns_used,
-                        status.max_turns,
-                        status.tokens_used,
-                        status.workspace,
-                        status.incompatibility.as_deref().unwrap_or("none"),
-                        status.last_result.as_deref().unwrap_or("not available"),
-                        status.child,
-                        status.child,
-                    ),
-                );
+                // Inspection swaps the transcript region for the child's own
+                // view, which carries this card and the child's log. Printing
+                // the same detail into the root timeline would write it where
+                // the user cannot see it and leave a duplicate behind on Esc.
+                let detail = child_status_card(status);
+                app.inspect_child(selected.clone());
+                app.set_inspected_detail(&selected, Some(detail));
             } else if children.is_empty() {
                 app.show_local_empty("agents", "No child agents in this session.");
             } else {
@@ -370,13 +382,12 @@ pub(super) async fn handle_local_command(
                         .iter()
                         .map(|status| {
                             format!(
-                                "{} · {:?} · {:?} · resumable {} · {}/{} turns · {} tokens",
+                                "{} · {:?} · {:?} · resumable {} · {} turns · {} tokens",
                                 status.child,
                                 status.durability,
                                 status.state,
                                 status.resumable(),
-                                status.turns_used,
-                                status.max_turns,
+                                crate::submission::turns_label(status.turns_used, status.max_turns),
                                 status.tokens_used,
                             )
                         })
@@ -557,9 +568,11 @@ pub(super) fn render_runtime_timeline(events: &[EventEnvelope]) -> RuntimeTimeli
                 ..
             } => {
                 timeline.children.insert(child.clone());
-                timeline.lines.push(format!(
-                    "child {child} · started · {workspace:?} · {max_turns} turn limit"
-                ));
+                timeline.lines.push(if *max_turns == u32::MAX {
+                    format!("child {child} · started · {workspace:?}")
+                } else {
+                    format!("child {child} · started · {workspace:?} · {max_turns} turn limit")
+                });
             }
             RuntimeEvent::ChildNeedsInput { child, .. } => {
                 timeline.children.insert(child.clone());

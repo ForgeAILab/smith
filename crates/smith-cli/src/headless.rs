@@ -269,7 +269,9 @@ struct ChildSessionOutput {
     state: &'static str,
     resumable: bool,
     turns_used: u32,
-    max_turns: u32,
+    /// Absent for an unbounded child.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_turns: Option<u32>,
     tokens_used: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     incompatibility: Option<String>,
@@ -373,7 +375,7 @@ fn child_session_outputs(host: &HostSession) -> Vec<ChildSessionOutput> {
                     },
                     resumable: status.resumable(),
                     turns_used: status.turns_used,
-                    max_turns: status.max_turns,
+                    max_turns: (status.max_turns != u32::MAX).then_some(status.max_turns),
                     tokens_used: status.tokens_used,
                     incompatibility: status.incompatibility,
                 })
@@ -471,7 +473,10 @@ async fn apply_background_exit_policy(
     match decide_background_exit(policy, &running) {
         BackgroundExitDecision::Clear => (None, None),
         BackgroundExitDecision::Error(message) => {
-            let tasks = running.iter().map(BackgroundTaskOutput::still_running).collect();
+            let tasks = running
+                .iter()
+                .map(BackgroundTaskOutput::still_running)
+                .collect();
             (
                 Some(message),
                 Some(BackgroundExitOutput {
@@ -525,7 +530,10 @@ async fn await_background_tasks(
                 .into_iter()
                 .map(|task| task.task_id)
                 .collect();
-            if !running.iter().any(|task| running_ids.contains(&task.task_id)) {
+            if !running
+                .iter()
+                .any(|task| running_ids.contains(&task.task_id))
+            {
                 return;
             }
             tokio::time::sleep(BACKGROUND_TASK_POLL_INTERVAL).await;
@@ -545,7 +553,10 @@ async fn await_background_tasks(
             .await
             .map(|result| result.status)
             .unwrap_or_else(|_| task.status.clone());
-        report.push(BackgroundTaskOutput::terminal(task.task_id.clone(), &status));
+        report.push(BackgroundTaskOutput::terminal(
+            task.task_id.clone(),
+            &status,
+        ));
     }
     report
 }
@@ -1427,7 +1438,7 @@ mod tests {
                 state: "interrupted",
                 resumable: true,
                 turns_used: 1,
-                max_turns: 4,
+                max_turns: None,
                 tokens_used: 42,
                 incompatibility: None,
             }],
@@ -1438,6 +1449,8 @@ mod tests {
         assert_eq!(value["children"][0]["child_session_id"], "child-session-3");
         assert_eq!(value["children"][0]["durability"], "durable");
         assert_eq!(value["children"][0]["resumable"], true);
+        // An unbounded child reports no cap at all rather than a sentinel.
+        assert!(value["children"][0].get("max_turns").is_none());
         assert!(
             !value.to_string().contains("task"),
             "child task content entered the machine status projection"
@@ -2187,9 +2200,9 @@ max_output_tokens = 4096
                 Some(approval.as_ref()),
                 None,
                 None,
-            None,
-            BackgroundExit::Error,
-            &mut stdout,
+                None,
+                BackgroundExit::Error,
+                &mut stdout,
                 &mut stderr,
             ),
         )
@@ -2506,9 +2519,9 @@ max_output_tokens = 4096
                 None,
                 Some(interaction.as_ref()),
                 None,
-            None,
-            BackgroundExit::Error,
-            &mut stdout,
+                None,
+                BackgroundExit::Error,
+                &mut stdout,
                 &mut stderr,
             ),
         )
@@ -2680,9 +2693,9 @@ max_output_tokens = 4096
                 None,
                 Some(headless_interaction.as_ref()),
                 None,
-            None,
-            BackgroundExit::Error,
-            &mut stdout,
+                None,
+                BackgroundExit::Error,
+                &mut stdout,
                 &mut stderr,
             ),
         )
@@ -2887,7 +2900,11 @@ max_output_tokens = 4096
 
     #[test]
     fn no_running_tasks_never_needs_a_background_exit_decision() {
-        for policy in [BackgroundExit::Error, BackgroundExit::Wait, BackgroundExit::Stop] {
+        for policy in [
+            BackgroundExit::Error,
+            BackgroundExit::Wait,
+            BackgroundExit::Stop,
+        ] {
             assert_eq!(
                 decide_background_exit(policy, &[]),
                 BackgroundExitDecision::Clear
@@ -2929,15 +2946,28 @@ max_output_tokens = 4096
         let BackgroundExitDecision::Error(message) = decision else {
             panic!("expected an error decision: {decision:?}");
         };
-        assert!(message.starts_with("2 background shell task(s)"), "{message}");
-        assert!(message.contains("task:1") && message.contains("make build"), "{message}");
-        assert!(message.contains("task:2") && message.contains("npm test"), "{message}");
+        assert!(
+            message.starts_with("2 background shell task(s)"),
+            "{message}"
+        );
+        assert!(
+            message.contains("task:1") && message.contains("make build"),
+            "{message}"
+        );
+        assert!(
+            message.contains("task:2") && message.contains("npm test"),
+            "{message}"
+        );
     }
 
     #[tokio::test]
     async fn no_running_tasks_leaves_no_error_and_no_report_under_every_policy() {
         let session_id = unique_background_test_session("clear");
-        for policy in [BackgroundExit::Error, BackgroundExit::Wait, BackgroundExit::Stop] {
+        for policy in [
+            BackgroundExit::Error,
+            BackgroundExit::Wait,
+            BackgroundExit::Stop,
+        ] {
             let (error, output) = apply_background_exit_policy(&session_id, policy).await;
             assert!(error.is_none());
             assert!(output.is_none());
@@ -2980,8 +3010,7 @@ max_output_tokens = 4096
             .await
             .expect("a spawned background task");
 
-        let (error, output) =
-            apply_background_exit_policy(&session_id, BackgroundExit::Wait).await;
+        let (error, output) = apply_background_exit_policy(&session_id, BackgroundExit::Wait).await;
 
         assert!(error.is_none());
         let output = output.expect("a background-exit report");
@@ -3003,8 +3032,7 @@ max_output_tokens = 4096
             .expect("a spawned background task");
 
         let started = std::time::Instant::now();
-        let (error, output) =
-            apply_background_exit_policy(&session_id, BackgroundExit::Stop).await;
+        let (error, output) = apply_background_exit_policy(&session_id, BackgroundExit::Stop).await;
         let elapsed = started.elapsed();
 
         assert!(error.is_none());
@@ -3087,8 +3115,7 @@ max_output_tokens = 4096
         .expect("a structured result");
 
         assert_eq!(outcome.exit_code, 1);
-        let result: serde_json::Value =
-            serde_json::from_slice(&stdout).expect("a result envelope");
+        let result: serde_json::Value = serde_json::from_slice(&stdout).expect("a result envelope");
         assert_eq!(result["status"], "failed");
         assert_eq!(result["background_exit"]["policy"], "error");
         assert_eq!(result["background_exit"]["tasks"][0]["task_id"], task_id);
@@ -3156,8 +3183,7 @@ max_output_tokens = 4096
         .expect("a structured result");
 
         assert_eq!(outcome.exit_code, 0);
-        let result: serde_json::Value =
-            serde_json::from_slice(&stdout).expect("a result envelope");
+        let result: serde_json::Value = serde_json::from_slice(&stdout).expect("a result envelope");
         assert_eq!(result["status"], "ok");
         assert_eq!(result["background_exit"]["policy"], "wait");
         assert_eq!(result["background_exit"]["tasks"][0]["task_id"], task_id);

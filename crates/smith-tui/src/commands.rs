@@ -393,6 +393,8 @@ pub fn help() -> String {
          ! runs a prepared local shell action; !! sends a literal !.\n\
          PageUp/PageDown/Home/End or the mouse wheel scrolls the transcript.\n\
          Up/Down browse accepted and Ctrl+C-stashed input without losing your draft.\n\
+         Down past the newest draft walks the delegated agents; the transcript shows\n\
+         that agent's log, Enter continues it, and Esc returns to the root timeline.\n\
          Ctrl+R searches composer history; Enter restores a match and Esc cancels.\n\
          Ctrl+C twice within 1s exits; the first press stashes and clears the draft.\n\
          Start a message with // to send a literal leading slash.",

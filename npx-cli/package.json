@@ -1,0 +1,35 @@
+{
+  "name": "@forgeailab/smith",
+  "version": "0.0.0",
+  "description": "NPX bootstrapper for the Smith terminal-first coding agent",
+  "license": "(MIT OR Apache-2.0)",
+  "homepage": "https://github.com/ForgeAILab/smith#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ForgeAILab/smith.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ForgeAILab/smith/issues"
+  },
+  "bin": {
+    "smith": "bin/cli.js"
+  },
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "cli",
+    "coding-agent",
+    "smith",
+    "tui"
+  ]
+}

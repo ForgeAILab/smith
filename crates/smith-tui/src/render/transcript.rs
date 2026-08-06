@@ -54,6 +54,12 @@ pub(super) fn rendered_rows(lines: &[Line<'static>], width: u16) -> usize {
 }
 
 pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<'static>> {
+    // The inspector borrows the transcript region rather than floating over
+    // it: a child's log is read, scrolled, and selected exactly like the root
+    // timeline, and one Esc gives the region back unchanged.
+    if let Some(child) = &app.inspected_child {
+        return child_log_lines(app, child, theme);
+    }
     let mut lines = Vec::new();
     for block in app.transcript.blocks() {
         // Reasoning is canonical model state, not a second assistant answer.
@@ -291,6 +297,73 @@ pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<
         }
     }
 
+    lines
+}
+
+/// The inspected child's read-only view: one identity heading, then its
+/// retained progress log oldest line first.
+///
+/// Nothing here is model history. The child owns its own transcript; this is
+/// the bounded lifecycle record the client kept so delegated work stays
+/// legible without narrating itself into the root conversation.
+fn child_log_lines(app: &App, child: &str, theme: Theme) -> Vec<Line<'static>> {
+    let summary = app.children.get(child);
+    let state = summary.map_or("unknown", |summary| summary.state.as_str());
+    let elapsed = app
+        .child_elapsed(child)
+        .map(|elapsed| format!(" · {}", render_elapsed(elapsed)))
+        .unwrap_or_default();
+    let tone = match state {
+        "failed" => Tone::Danger,
+        "needs input" => Tone::Warning,
+        _ => Tone::Dim,
+    };
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(
+                format!("{} ", glyph::AGENT_CURRENT),
+                theme.style(Tone::Accent),
+            ),
+            Span::styled(
+                child.to_owned(),
+                theme.style(Tone::Heading).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!(" · {state}{elapsed}"), theme.style(tone)),
+        ]),
+        Line::default(),
+    ];
+    if let Some(detail) = app.inspected_detail() {
+        for raw in detail.lines() {
+            lines.push(Line::from(Span::styled(
+                format!("  {raw}"),
+                theme.style(Tone::Dim),
+            )));
+        }
+        lines.push(Line::default());
+    }
+
+    let log = app.child_log(child);
+    if log.is_empty() {
+        // A child restored from a durable record has a state but no live
+        // history in this process. Saying so beats an empty pane.
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  no activity recorded in this session{}",
+                summary
+                    .and_then(|summary| summary.detail.as_deref())
+                    .map(|detail| format!(" · {detail}"))
+                    .unwrap_or_default()
+            ),
+            theme.style(Tone::Dim),
+        )));
+        return lines;
+    }
+    for entry in log {
+        lines.push(Line::from(vec![
+            Span::styled(format!("{} ", glyph::NOTICE), theme.style(Tone::Dim)),
+            Span::styled(entry.clone(), theme.style(Tone::Default)),
+        ]));
+    }
     lines
 }
 

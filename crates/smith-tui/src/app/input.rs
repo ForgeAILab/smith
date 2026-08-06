@@ -314,19 +314,26 @@ impl App {
                 self.edit_newest_queued_submission();
                 None
             }
+            // The arrows serve two lists that never overlap: composer history
+            // above the prompt, delegated agents below it. History wins while
+            // it has somewhere to go, so recall behavior is unchanged for a
+            // session with no children.
             (KeyCode::Up, _) => {
-                self.composer.recall_previous();
+                if !self.inspect_previous_child() {
+                    self.composer.recall_previous();
+                }
                 None
             }
             (KeyCode::Down, _) => {
-                self.composer.recall_next();
+                if !self.composer.recall_next() {
+                    self.inspect_next_child();
+                }
                 None
             }
             (KeyCode::Home | KeyCode::End, _) => self.on_scroll_key(key),
             _ => self.on_composer_key(key),
         }
     }
-
 
     /// Answers a rotation offer.
     ///
@@ -530,6 +537,12 @@ impl App {
     }
 
     pub(super) fn on_escape(&mut self) -> Option<Action> {
+        // Leaving a read-only view is the cheapest thing Esc can mean, so it
+        // goes first: a user reading a child's log must not interrupt the root
+        // turn by pressing Esc to get back.
+        if self.leave_child_inspection() {
+            return None;
+        }
         if self.is_busy() {
             self.pending_input.interrupt_for_steer = !self.pending_input.accepted_steers.is_empty();
             self.status.activity = Activity::Interrupting;
@@ -712,6 +725,21 @@ impl App {
                     return None;
                 }
                 let text = self.composer.text().trim().to_owned();
+                // While a child is inspected, an ordinary submission addresses
+                // that child: the user is reading its log, and sending the
+                // root a message from there would answer the wrong agent. A
+                // local command, a shell shortcut, and an explicit `@` target
+                // still mean exactly what they say.
+                let text = match &self.inspected_child {
+                    Some(child)
+                        if !text.starts_with('/')
+                            && !text.starts_with('!')
+                            && !text.starts_with('@') =>
+                    {
+                        format!("@{child} {text}")
+                    }
+                    _ => text,
+                };
                 match self.prepare_ordinary_submission(&text) {
                     Ok(Some(submission)) => {
                         let target = if self.is_busy() {
@@ -832,15 +860,23 @@ impl App {
                             existing.state.as_str(),
                             "idle" | "completed" | "needs input"
                         ) {
+                            // The error goes to the root transcript, which the
+                            // inspector is covering, so it also has to be
+                            // visible where the user typed: the panel row and
+                            // the child's own view carry the same state.
                             self.transcript.push_error(format!(
-                                "`{agent}` is {}; use `/agent {agent}` to inspect it{}",
+                                "`{agent}` is {}; it takes a follow-up once it settles{}",
                                 existing.state,
                                 if existing.state == "interrupted" {
-                                    " and `/agent resume <id>` for exact continuation"
+                                    ", and `/agent resume <id>` continues its exact checkpoint"
                                 } else {
                                     ""
                                 }
                             ));
+                            self.push_child_log(
+                                agent,
+                                format!("follow-up refused while {}", existing.state),
+                            );
                             return None;
                         }
                         let model = match &self.status.provider {

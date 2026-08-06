@@ -280,6 +280,10 @@ impl App {
 
         match &envelope.payload {
             RuntimeEvent::SessionStarted => {
+                // A new session's children are new children; leaving the
+                // inspector pointed at a name from the last one would show an
+                // empty log under a stale identity.
+                self.inspected_child = None;
                 self.status.activity = Activity::Idle;
                 self.status.goal = None;
                 self.status.capabilities = Default::default();
@@ -624,9 +628,16 @@ impl App {
                     }
                 }
             }
-            // Child lifecycle appears immediately, before the parent model is
-            // told anything: results reach the model only at a safe boundary,
-            // but the user watches the child work in real time.
+            // Child lifecycle reaches the panel and the child's own log
+            // immediately, before the parent model is told anything: results
+            // reach the model only at a safe boundary, but the user watches
+            // the child work in real time.
+            //
+            // Only delegation's boundaries — a child starting, and a child
+            // ending — are the root conversation's business. Mid-flight
+            // progress is panel state and inspector history: a running child
+            // narrating every tool call buries the transcript it was spawned
+            // to serve.
             RuntimeEvent::ChildSpawned {
                 child,
                 workspace,
@@ -642,13 +653,19 @@ impl App {
                 );
                 self.child_clocks
                     .insert(child.to_string(), ChildClock::started());
-                self.transcript.push_notice(
-                    "sub-agent",
+                // An unbounded child names no turn budget rather than the
+                // sentinel's absurd number.
+                let started = if *max_turns == u32::MAX {
+                    format!("started · {}", describe_workspace(workspace))
+                } else {
                     format!(
-                        "{child} started · {} · up to {max_turns} turns",
+                        "started · {} · up to {max_turns} turns",
                         describe_workspace(workspace)
-                    ),
-                );
+                    )
+                };
+                self.push_child_log(child.as_str(), started.clone());
+                self.transcript
+                    .push_notice("sub-agent", format!("{child} {started}"));
             }
             RuntimeEvent::ChildProgress { child, phase } => match phase {
                 ChildPhase::Recovered {
@@ -677,16 +694,17 @@ impl App {
                     // A recovered record ran in another process; no honest
                     // wall-clock exists for it.
                     self.child_clocks.remove(child.as_str());
-                    self.transcript
-                        .push_notice("sub-agent", format!("{child} recovered {state} · {detail}"));
+                    // Recovery is bookkeeping about a child that already
+                    // exists, and a resumed session recovers all of them at
+                    // once. The panel lists them; the transcript stays quiet.
+                    self.push_child_log(child.as_str(), format!("recovered {state} · {detail}"));
                 }
                 ChildPhase::TurnStarted => {
                     if let Some(summary) = self.children.get_mut(&child.to_string()) {
                         summary.state = "working".to_owned();
                     }
                     self.run_child_clock(child.as_str());
-                    self.transcript
-                        .push_notice("sub-agent", format!("{child} is working"));
+                    self.push_child_log(child.as_str(), "is working");
                 }
                 ChildPhase::ResumeStarted { child_session } => {
                     self.children.insert(
@@ -697,6 +715,10 @@ impl App {
                         },
                     );
                     self.run_child_clock(child.as_str());
+                    self.push_child_log(
+                        child.as_str(),
+                        format!("resuming exact checkpoint · session {child_session}"),
+                    );
                     self.transcript.push_notice(
                         "sub-agent",
                         format!("{child} is resuming its exact checkpoint"),
@@ -722,6 +744,7 @@ impl App {
                         },
                     );
                     self.settle_child_clock(child.as_str());
+                    self.push_child_log(child.as_str(), format!("interrupted · {detail}"));
                     self.transcript
                         .push_notice("sub-agent", format!("{child} interrupted · {detail}"));
                 }
@@ -729,8 +752,7 @@ impl App {
                     if let Some(summary) = self.children.get_mut(&child.to_string()) {
                         summary.detail = Some(format!("ran {name}"));
                     }
-                    self.transcript
-                        .push_notice("sub-agent", format!("{child} ran {name}"));
+                    self.push_child_log(child.as_str(), format!("ran {name}"));
                 }
                 // The completed/stopped notice that follows says everything a
                 // bare "finished a turn" would.
@@ -760,6 +782,9 @@ impl App {
                         detail: Some(detail.clone()),
                     },
                 );
+                self.push_child_log(child.as_str(), format!("needs input · {detail}"));
+                // A blocked child is waiting on the user, not working: this
+                // one is an ask, not progress, so it stays in the transcript.
                 self.transcript
                     .push_notice("sub-agent", format!("{child} needs input · {detail}"));
             }
@@ -779,6 +804,7 @@ impl App {
                     },
                 );
                 self.settle_child_clock(child.as_str());
+                self.push_child_log(child.as_str(), format!("completed: {summary}"));
                 self.transcript
                     .push_notice("sub-agent", format!("{child} completed: {summary}"));
             }
@@ -792,6 +818,7 @@ impl App {
                     },
                 );
                 self.settle_child_clock(child.as_str());
+                self.push_child_log(child.as_str(), format!("stopped · {detail}"));
                 self.transcript
                     .push_notice("sub-agent", format!("{child} stopped · {detail}"));
             }
@@ -804,6 +831,7 @@ impl App {
                     },
                 );
                 self.settle_child_clock(child.as_str());
+                self.push_child_log(child.as_str(), format!("failed: {}", error.message));
                 self.transcript
                     .push_error(format!("sub-agent {child} failed: {}", error.message));
             }
