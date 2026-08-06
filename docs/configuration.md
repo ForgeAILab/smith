@@ -156,7 +156,7 @@ idle_compaction_ms = 3600000
 
 [profiles.work.limits]
 max_retries = 2
-max_tool_steps = 64
+max_tool_steps = 0
 turn_time_limit_ms = 0
 tool_output_limit_bytes = 65536
 
@@ -441,7 +441,7 @@ reserve, capability budget, or estimated-count slack.
 | `context.compaction_low_watermark_percent` | `60` | Post-compaction target |
 | `context.idle_compaction_ms` | `3600000` | Idle compaction interval |
 | `limits.max_retries` | `2` | Retries after the first provider attempt |
-| `limits.max_tool_steps` | `64` | Tool-loop ceiling per turn |
+| `limits.max_tool_steps` | `0` | Tool-loop ceiling per turn; `0` removes it |
 | `limits.turn_time_limit_ms` | `0` | Whole-turn deadline; `0` removes it |
 | `limits.tool_output_limit_bytes` | `65536` | Inline output/offload threshold |
 | `persistence.enabled` | `true` | Save project-partitioned sessions |

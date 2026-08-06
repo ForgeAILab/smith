@@ -1,0 +1,9 @@
+{
+  "change_id": "unlimited-tool-steps-default",
+  "change_ref": "unlimited-tool-steps-default-2026-08-06",
+  "created_at": "2026-08-06T00:00:00Z",
+  "updated_at": "2026-08-06T00:00:00Z",
+  "completed_at": null,
+  "status": "approved",
+  "depends_on": ["unlimited-turn-time-default"]
+}

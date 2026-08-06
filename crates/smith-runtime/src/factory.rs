@@ -2458,7 +2458,11 @@ fn loop_config(request: &RuntimeRequest, model: &ModelId) -> LoopConfig {
     // every section remains independently positioned, fingerprinted, and
     // budgeted. The legacy field stays empty to prevent a duplicate copy.
     loop_config.system_prompt = None;
-    loop_config.max_tool_steps = Some(config.limits.max_tool_steps.value);
+    // A configured value of 0 removes the tool-loop ceiling, the same way it
+    // removes the wall-clock one below: the limit is optional on the shared
+    // loop, and `None` lets a turn run as many steps as the model asks for.
+    loop_config.max_tool_steps =
+        (config.limits.max_tool_steps.value != 0).then_some(config.limits.max_tool_steps.value);
     loop_config.retry = RetryPolicy {
         // Configuration counts retries *after* the first attempt; the shared
         // policy counts attempts including it.
@@ -2965,7 +2969,7 @@ mod tests {
     fn limits() -> smith_config::resolve::ResolvedLimits {
         smith_config::resolve::ResolvedLimits {
             max_retries: sourced(2),
-            max_tool_steps: sourced(64),
+            max_tool_steps: sourced(0),
             turn_time_limit_ms: sourced(0),
             tool_output_limit_bytes: sourced(65_536),
         }

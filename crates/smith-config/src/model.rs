@@ -509,7 +509,8 @@ pub struct LimitsSection {
     /// Retries allowed per provider attempt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_retries: Option<u32>,
-    /// Tool calls one turn may make before the loop stops.
+    /// Tool calls one turn may make before the loop stops. A value of `0`
+    /// removes the ceiling, leaving the tool loop bounded only by the model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tool_steps: Option<u32>,
     /// Wall-clock ceiling for one turn, in milliseconds. A value of `0`
