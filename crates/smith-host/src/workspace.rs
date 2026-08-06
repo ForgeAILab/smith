@@ -66,25 +66,21 @@ impl ProjectWorkspace {
         let mut existing = candidate.as_path();
         let mut trailing = Vec::new();
         loop {
-            match existing.parent() {
-                Some(parent) => {
-                    trailing.push(existing.file_name()?.to_owned());
-                    existing = parent;
-                    if let Ok(canonical) = existing.canonicalize() {
-                        let mut resolved = canonical;
-                        for component in trailing.iter().rev() {
-                            match Path::new(component).components().next() {
-                                Some(Component::ParentDir) => {
-                                    resolved.pop();
-                                }
-                                Some(Component::CurDir) => {}
-                                _ => resolved.push(component),
-                            }
+            let parent = existing.parent()?;
+            trailing.push(existing.file_name()?.to_owned());
+            existing = parent;
+            if let Ok(canonical) = existing.canonicalize() {
+                let mut resolved = canonical;
+                for component in trailing.iter().rev() {
+                    match Path::new(component).components().next() {
+                        Some(Component::ParentDir) => {
+                            resolved.pop();
                         }
-                        return Some(resolved);
+                        Some(Component::CurDir) => {}
+                        _ => resolved.push(component),
                     }
                 }
-                None => return None,
+                return Some(resolved);
             }
         }
     }

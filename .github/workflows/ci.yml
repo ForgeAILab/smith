@@ -34,32 +34,44 @@ jobs:
             dependency_policy: true
 
     steps:
-      - name: Require an exact Agent Runtime source
-        shell: bash
-        env:
-          RUNTIME_REPOSITORY: ${{ vars.AGENT_RUNTIME_REPOSITORY }}
-          RUNTIME_REVISION: ${{ vars.AGENT_RUNTIME_REVISION }}
-        run: |
-          if [[ ! "${RUNTIME_REPOSITORY}" =~ ^[^/]+/[^/]+$ ]]; then
-            echo "::error::Set AGENT_RUNTIME_REPOSITORY to owner/repository."
-            exit 2
-          fi
-          if [[ ! "${RUNTIME_REVISION}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Set AGENT_RUNTIME_REVISION to an exact lowercase 40-character SHA."
-            exit 2
-          fi
-
       - name: Check out Smith
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           path: tui
           persist-credentials: false
 
+      # Cargo.lock records the runtime source exactly as the build resolves
+      # it, so the checkout target is read from there rather than from a
+      # variable that has to be re-set on every runtime bump -- and that fails
+      # confusingly against the wrong revision when someone forgets. There is
+      # one source of truth and CI cannot disagree with it.
+      - name: Resolve the pinned Agent Runtime source
+        id: runtime
+        shell: bash
+        working-directory: tui
+        run: |
+          sources="$(grep -oE 'git\+https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\?rev=[0-9a-f]{40}' Cargo.lock | sort -u)"
+          if [[ -z "${sources}" ]]; then
+            echo "::error::Cargo.lock records no git-pinned Agent Runtime source."
+            exit 2
+          fi
+          if [[ "$(wc -l <<<"${sources}")" -ne 1 ]]; then
+            echo "::error::Cargo.lock pins more than one Agent Runtime revision:"
+            echo "${sources}"
+            exit 2
+          fi
+          repository="$(sed -E 's#^git\+https://github\.com/(.+)\?rev=.*$#\1#' <<<"${sources}")"
+          repository="${repository%.git}"
+          revision="$(sed -E 's#^.*\?rev=([0-9a-f]{40})$#\1#' <<<"${sources}")"
+          echo "repository=${repository}" >> "${GITHUB_OUTPUT}"
+          echo "revision=${revision}" >> "${GITHUB_OUTPUT}"
+          echo "Agent Runtime pinned to ${repository}@${revision}"
+
       - name: Check out Agent Runtime
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          repository: ${{ vars.AGENT_RUNTIME_REPOSITORY }}
-          ref: ${{ vars.AGENT_RUNTIME_REVISION }}
+          repository: ${{ steps.runtime.outputs.repository }}
+          ref: ${{ steps.runtime.outputs.revision }}
           token: ${{ secrets.AGENT_RUNTIME_TOKEN || github.token }}
           path: agent-runtime
           persist-credentials: false
@@ -85,7 +97,7 @@ jobs:
         working-directory: agent-runtime
         shell: bash
         env:
-          RUNTIME_REVISION: ${{ vars.AGENT_RUNTIME_REVISION }}
+          RUNTIME_REVISION: ${{ steps.runtime.outputs.revision }}
         run: |
           actual_revision="$(git rev-parse HEAD)"
           test "${actual_revision}" = "${RUNTIME_REVISION}"
@@ -95,7 +107,7 @@ jobs:
         working-directory: tui
         shell: bash
         env:
-          SMITH_AGENT_RUNTIME_REVISION: ${{ vars.AGENT_RUNTIME_REVISION }}
+          SMITH_AGENT_RUNTIME_REVISION: ${{ steps.runtime.outputs.revision }}
         run: bash scripts/ci.sh
 
       - name: Install cargo-deny

@@ -28,6 +28,12 @@ smith-tui = { path = "crates/smith-tui", version = "0.0.1" }
 # revision. Local sibling-checkout development uses the git-ignored
 # `.cargo/config.toml` patch table; committed manifests never rely on a
 # developer-specific filesystem layout.
+#
+# The `version` requirements are what keep these off `deny.toml`'s
+# `wildcards = "deny"` list; a git dependency without one is a wildcard. Note
+# that `agent-runtime` on crates.io is an unrelated crate that publishes its
+# own 0.1.0, so the `git`/`rev` keys -- not the version -- are what identify
+# the dependency. Never relax them to a bare version requirement.
 agent-runtime = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "1ea7147e4eb463d7893091fc30d157a701da4b51", version = "=0.1.0" }
 agent-runtime-core = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "1ea7147e4eb463d7893091fc30d157a701da4b51", version = "=0.1.0" }
 agent-runtime-registry = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "1ea7147e4eb463d7893091fc30d157a701da4b51", version = "=0.1.0" }

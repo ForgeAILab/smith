@@ -52,7 +52,12 @@ skip-tree = []
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+# The shared runtime is the one git source Smith builds against. Naming it
+# here is also what keeps the name collision honest: `agent-runtime` on
+# crates.io is an unrelated crate, so should the dependency ever resolve to
+# the registry instead of this URL, `check sources` fails rather than
+# building a stranger's code.
+allow-git = ["https://github.com/ForgeAILab/agent-runtime.git"]
 
 [sources.allow-org]
 github = []
