@@ -90,7 +90,16 @@ pub fn parse_references(
                         bounded_identity(&token)
                     ));
                 }
-                (false, false) => return Err(unresolved(&token)),
+                (false, false) => {
+                    // An unresolvable bare @token is literal text, not an
+                    // error. This lets users type npm scope names
+                    // (@forgeailab/smith) or any @ mention that is not a
+                    // workspace file or child agent. Explicit typed prefixes
+                    // (@file:, @agent:) and ambiguous collisions still error.
+                    text.extend(chars[index..end].iter());
+                    index = end;
+                    continue;
+                }
             }
         };
         if seen.insert((reference_kind(&reference), identity.clone())) {
@@ -182,10 +191,29 @@ mod tests {
     }
 
     #[test]
-    fn unresolved_and_outside_workspace_references_fail_locally() {
-        let error = parse_references("inspect @../secret", &files(), &agents()).unwrap_err();
+    fn bare_unresolved_at_token_is_literal_text() {
+        let parsed = parse_references("inspect @../secret", &files(), &agents()).unwrap();
+        assert!(parsed.references.is_empty());
+        assert_eq!(parsed.text, "inspect @../secret");
+    }
+
+    #[test]
+    fn npm_scoped_package_name_is_literal_text() {
+        let parsed = parse_references("run npx @forgeailab/smith", &files(), &agents()).unwrap();
+        assert!(parsed.references.is_empty());
+        assert_eq!(parsed.text, "run npx @forgeailab/smith");
+    }
+
+    #[test]
+    fn explicit_typed_unresolved_references_still_fail() {
+        let error = parse_references("@file:missing.rs", &files(), &agents()).unwrap_err();
         assert!(
-            error.contains("unresolved reference `@../secret`"),
+            error.contains("unresolved reference `@file:missing.rs`"),
+            "{error}"
+        );
+        let error = parse_references("@agent:ghost", &files(), &agents()).unwrap_err();
+        assert!(
+            error.contains("unresolved reference `@agent:ghost`"),
             "{error}"
         );
     }

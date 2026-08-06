@@ -547,7 +547,7 @@
     }
 
     #[test]
-    fn file_reference_submission_is_typed_and_unresolved_drafts_fail_locally() {
+    fn file_reference_submission_is_typed_and_unresolved_bare_tokens_are_text() {
         let mut app = agent_first_app();
         app.composer.replace("inspect @src/lib.rs");
         let submission = expect_whole_submission(app.on_key(key(KeyCode::Enter)));
@@ -556,10 +556,8 @@
 
         let mut unresolved = agent_first_app();
         unresolved.composer.replace("inspect @missing.rs");
-        assert_eq!(unresolved.on_key(key(KeyCode::Enter)), None);
-        assert_eq!(unresolved.composer.text(), "inspect @missing.rs");
-        assert!(unresolved.transcript.blocks().iter().any(|block| matches!(
-            block,
-            Block::Error { message } if message.contains("unresolved reference")
-        )));
+        let submission = expect_whole_submission(unresolved.on_key(key(KeyCode::Enter)));
+        assert_eq!(submission.display_text(), "inspect @missing.rs");
+        assert!(submission.files().is_empty());
+        assert!(unresolved.composer.is_empty());
     }
