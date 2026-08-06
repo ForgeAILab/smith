@@ -20,18 +20,23 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # `clippy_warnings_only` marks the leg whose toolchain floats: it
+          # reads new lints without letting a Rust release fail the build.
           - name: Linux · Rust 1.88
             os: ubuntu-24.04
             rust: 1.88.0
             dependency_policy: false
+            clippy_warnings_only: false
           - name: macOS · Rust 1.88
             os: macos-14
             rust: 1.88.0
             dependency_policy: false
+            clippy_warnings_only: false
           - name: Linux · stable + dependency policy
             os: ubuntu-24.04
             rust: stable
             dependency_policy: true
+            clippy_warnings_only: true
 
     steps:
       - name: Check out Smith
@@ -108,6 +113,7 @@ jobs:
         shell: bash
         env:
           SMITH_AGENT_RUNTIME_REVISION: ${{ steps.runtime.outputs.revision }}
+          SMITH_CI_CLIPPY_WARNINGS_ONLY: ${{ matrix.clippy_warnings_only }}
         run: bash scripts/ci.sh
 
       - name: Install cargo-deny
