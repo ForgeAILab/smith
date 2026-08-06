@@ -277,7 +277,7 @@ pub(super) fn built_in_defaults(user_dir: &Path) -> ConfigFile {
         limits: Some(LimitsSection {
             max_retries: Some(2),
             max_tool_steps: Some(64),
-            turn_time_limit_ms: Some(10 * 60 * 1000),
+            turn_time_limit_ms: Some(0),
             tool_output_limit_bytes: Some(64 * 1024),
         }),
         persistence: Some(PersistenceSection {

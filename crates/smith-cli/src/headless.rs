@@ -2134,6 +2134,12 @@ kind = "fake"
 context_tokens = 128000
 max_input_tokens = 124000
 max_output_tokens = 4096
+
+# A turn carries no wall-clock ceiling by default. This test covers the
+# deadline reaching the approval envelope end to end, so it opts back in to
+# one; the absent case is covered where the envelope is built directly.
+[limits]
+turn_time_limit_ms = 600000
 "#;
         const PROTECTED: &str = "TOP-SECRET-REPLACEMENT";
 
@@ -2252,10 +2258,14 @@ max_output_tokens = 4096
                 .map(str::len),
             Some(32)
         );
+        // The configured ceiling above must survive the whole path into the
+        // approval envelope: an approver that cannot see when its window
+        // closes has to guess.
         assert!(
             result["approval_required"]["deadline_at_ms"]
                 .as_u64()
-                .is_some()
+                .is_some(),
+            "{result}"
         );
     }
 

@@ -512,7 +512,8 @@ pub struct LimitsSection {
     /// Tool calls one turn may make before the loop stops.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tool_steps: Option<u32>,
-    /// Wall-clock ceiling for one turn, in milliseconds.
+    /// Wall-clock ceiling for one turn, in milliseconds. A value of `0`
+    /// removes the ceiling, leaving the turn without a wall-clock deadline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_time_limit_ms: Option<u64>,
     /// Bytes of tool output kept inline before it is truncated or spilled to a

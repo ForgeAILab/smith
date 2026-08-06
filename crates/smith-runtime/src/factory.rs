@@ -455,7 +455,8 @@ pub struct RuntimePolicy {
     /// Tool calls allowed in one turn. `None` leaves the turn unbounded,
     /// ending when the model stops calling tools or another limit trips.
     pub max_tool_steps: Option<u32>,
-    /// The wall-clock ceiling for one turn, in milliseconds.
+    /// The wall-clock ceiling for one turn, in milliseconds. `None` leaves the
+    /// turn without a wall-clock deadline.
     pub turn_time_limit_ms: Option<u64>,
     /// The model-facing tool output limit.
     pub output_limit: usize,
@@ -2464,7 +2465,10 @@ fn loop_config(request: &RuntimeRequest, model: &ModelId) -> LoopConfig {
         max_attempts: config.limits.max_retries.value.saturating_add(1),
         ..RetryPolicy::default()
     };
-    loop_config.turn_time_limit_ms = Some(config.limits.turn_time_limit_ms.value);
+    // A configured value of 0 removes the wall-clock ceiling: the limit is
+    // optional on the shared loop, and `None` leaves a turn unbounded by time.
+    loop_config.turn_time_limit_ms = (config.limits.turn_time_limit_ms.value != 0)
+        .then_some(config.limits.turn_time_limit_ms.value);
     loop_config.output_limit =
         usize::try_from(config.limits.tool_output_limit_bytes.value).unwrap_or(usize::MAX);
     loop_config.max_output_tokens = config.max_output_tokens.as_ref().map(|s| s.value);
@@ -2962,7 +2966,7 @@ mod tests {
         smith_config::resolve::ResolvedLimits {
             max_retries: sourced(2),
             max_tool_steps: sourced(64),
-            turn_time_limit_ms: sourced(600_000),
+            turn_time_limit_ms: sourced(0),
             tool_output_limit_bytes: sourced(65_536),
         }
     }
