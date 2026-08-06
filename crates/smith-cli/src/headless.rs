@@ -561,15 +561,23 @@ async fn await_background_tasks(
     report
 }
 
+/// The out-of-band brokers a headless turn consults when the runtime asks for
+/// something stdin would normally supply. Each is absent when the surface was
+/// started without that capability; a headless turn never blocks on one.
+#[derive(Default, Clone, Copy)]
+pub(crate) struct HeadlessBrokers<'a> {
+    pub(crate) approval: Option<&'a HeadlessApproval>,
+    pub(crate) interaction: Option<&'a HeadlessInteraction>,
+    pub(crate) rotation: Option<&'a HeadlessRotation>,
+    pub(crate) credential_pool: Option<&'a SharedPool>,
+}
+
 /// Runs one turn, preserving canonical event order for stream JSON.
 pub(crate) async fn run(
     host: &HostSession,
     prompt: String,
     format: OutputFormat,
-    approval: Option<&HeadlessApproval>,
-    interaction: Option<&HeadlessInteraction>,
-    rotation: Option<&HeadlessRotation>,
-    credential_pool: Option<&SharedPool>,
+    brokers: HeadlessBrokers<'_>,
     background_exit: BackgroundExit,
 ) -> Result<Outcome> {
     let stdout = io::stdout();
@@ -578,10 +586,7 @@ pub(crate) async fn run(
         host,
         prompt,
         format,
-        approval,
-        interaction,
-        rotation,
-        credential_pool,
+        brokers,
         background_exit,
         &mut stdout.lock(),
         &mut stderr.lock(),
@@ -593,14 +598,17 @@ async fn run_with_io(
     host: &HostSession,
     prompt: String,
     format: OutputFormat,
-    approval: Option<&HeadlessApproval>,
-    interaction: Option<&HeadlessInteraction>,
-    rotation: Option<&HeadlessRotation>,
-    credential_pool: Option<&SharedPool>,
+    brokers: HeadlessBrokers<'_>,
     background_exit: BackgroundExit,
     stdout: &mut impl Write,
     stderr: &mut impl Write,
 ) -> Result<Outcome> {
+    let HeadlessBrokers {
+        approval,
+        interaction,
+        rotation,
+        credential_pool,
+    } = brokers;
     if let Some(restored) = host.restored_interaction() {
         let required = interaction
             .and_then(HeadlessInteraction::required)
@@ -1826,10 +1834,7 @@ max_output_tokens = 4096
             &host,
             "must be rejected".into(),
             OutputFormat::Json,
-            None,
-            None,
-            None,
-            None,
+            HeadlessBrokers::default(),
             BackgroundExit::Error,
             &mut stdout,
             &mut stderr,
@@ -1934,10 +1939,7 @@ max_output_tokens = 4096
             &host,
             "current turn".into(),
             OutputFormat::Json,
-            None,
-            None,
-            None,
-            None,
+            HeadlessBrokers::default(),
             BackgroundExit::Error,
             &mut stdout,
             &mut stderr,
@@ -2053,12 +2055,9 @@ max_output_tokens = 4096
                 &host,
                 "Use create_goal to create an explicit persistent multi-turn goal, then continue it until complete".into(),
                 OutputFormat::Json,
-                None,
-                None,
-                None,
-            None,
-            BackgroundExit::Error,
-            &mut stdout,
+                HeadlessBrokers::default(),
+                BackgroundExit::Error,
+                &mut stdout,
                 &mut stderr,
             ),
         )
@@ -2203,10 +2202,10 @@ turn_time_limit_ms = 600000
                 &host,
                 "edit the file".into(),
                 OutputFormat::Json,
-                Some(approval.as_ref()),
-                None,
-                None,
-                None,
+                HeadlessBrokers {
+                    approval: Some(approval.as_ref()),
+                    ..HeadlessBrokers::default()
+                },
                 BackgroundExit::Error,
                 &mut stdout,
                 &mut stderr,
@@ -2375,10 +2374,7 @@ max_output_tokens = 4096
             &host,
             "Use write_todos, then shell, for this multi-step diagnostic.".into(),
             OutputFormat::StreamJson,
-            None,
-            None,
-            None,
-            None,
+            HeadlessBrokers::default(),
             BackgroundExit::Error,
             &mut stdout,
             &mut stderr,
@@ -2526,10 +2522,10 @@ max_output_tokens = 4096
                 &host,
                 "ask me for the codename".into(),
                 OutputFormat::Json,
-                None,
-                Some(interaction.as_ref()),
-                None,
-                None,
+                HeadlessBrokers {
+                    interaction: Some(interaction.as_ref()),
+                    ..HeadlessBrokers::default()
+                },
                 BackgroundExit::Error,
                 &mut stdout,
                 &mut stderr,
@@ -2700,10 +2696,10 @@ max_output_tokens = 4096
                 &recovered,
                 NEW_PROMPT.into(),
                 OutputFormat::Json,
-                None,
-                Some(headless_interaction.as_ref()),
-                None,
-                None,
+                HeadlessBrokers {
+                    interaction: Some(headless_interaction.as_ref()),
+                    ..HeadlessBrokers::default()
+                },
                 BackgroundExit::Error,
                 &mut stdout,
                 &mut stderr,
@@ -3113,10 +3109,7 @@ max_output_tokens = 4096
             &host,
             "hello".into(),
             OutputFormat::Json,
-            None,
-            None,
-            None,
-            None,
+            HeadlessBrokers::default(),
             BackgroundExit::Error,
             &mut stdout,
             &mut stderr,
@@ -3181,10 +3174,7 @@ max_output_tokens = 4096
             &host,
             "hello".into(),
             OutputFormat::Json,
-            None,
-            None,
-            None,
-            None,
+            HeadlessBrokers::default(),
             BackgroundExit::Wait,
             &mut stdout,
             &mut stderr,

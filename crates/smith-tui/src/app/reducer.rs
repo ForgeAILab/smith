@@ -52,8 +52,7 @@ impl App {
         let key = AttemptOutputKey::new(request, attempt);
         if self.finalized_attempts.contains(&key) {
             self.transcript.push_error(format!(
-                "provider attempt {} for request {} restarted after its output terminal",
-                attempt, request
+                "provider attempt {attempt} for request {request} restarted after its output terminal"
             ));
             return;
         }
@@ -101,8 +100,7 @@ impl App {
         let Some(output) = self.speculative_attempts.remove(&key) else {
             if !self.finalized_attempts.contains(&key) {
                 self.transcript.push_error(format!(
-                    "provider attempt {} for request {} ended without a start",
-                    attempt, request
+                    "provider attempt {attempt} for request {request} ended without a start"
                 ));
                 self.finalized_attempts.insert(key);
             }

@@ -218,10 +218,12 @@ async fn run_command(mut args: RunArgs) -> Result<u8> {
                 &started.host,
                 prompt,
                 args.output,
-                started.headless_approval.as_deref(),
-                started.headless_interaction.as_deref(),
-                started.headless_rotation.as_deref(),
-                started.credential_pool.as_ref(),
+                headless::HeadlessBrokers {
+                    approval: started.headless_approval.as_deref(),
+                    interaction: started.headless_interaction.as_deref(),
+                    rotation: started.headless_rotation.as_deref(),
+                    credential_pool: started.credential_pool.as_ref(),
+                },
                 args.selection.background_exit.unwrap_or_default(),
             )
             .await

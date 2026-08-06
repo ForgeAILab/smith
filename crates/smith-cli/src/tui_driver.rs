@@ -26,16 +26,29 @@ pub(super) struct InteractiveResources {
     pub(super) credential_pool: Option<SharedPool>,
 }
 
+/// The runtime's out-of-band request streams, plus the accounts they rotate
+/// between. Each stream is absent when the surface was started without that
+/// capability.
+pub(super) struct InteractiveRequests {
+    pub(super) approvals: Option<ApprovalRequests>,
+    pub(super) interactions: Option<InteractionRequests>,
+    pub(super) rotations: Option<RotationRequests>,
+    pub(super) accounts: ActiveAccounts,
+}
+
 pub(super) async fn run_interactive(
     host: &HostSession,
-    approvals: Option<ApprovalRequests>,
-    interactions: Option<InteractionRequests>,
-    rotations: Option<RotationRequests>,
-    accounts: ActiveAccounts,
+    requests: InteractiveRequests,
     project: &std::path::Path,
     resources: InteractiveResources,
     presentation: PresentationOptions,
 ) -> Result<InteractiveExit> {
+    let InteractiveRequests {
+        approvals,
+        interactions,
+        rotations,
+        accounts,
+    } = requests;
     let InteractiveResources {
         inventory,
         agents,

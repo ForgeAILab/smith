@@ -341,10 +341,12 @@ pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
         let current_session = host.session().id().as_str().to_owned();
         match run_interactive(
             &host,
-            approvals,
-            interactions,
-            rotations,
-            accounts,
+            InteractiveRequests {
+                approvals,
+                interactions,
+                rotations,
+                accounts,
+            },
             &project,
             InteractiveResources {
                 credential_pool: credential_pool.clone(),

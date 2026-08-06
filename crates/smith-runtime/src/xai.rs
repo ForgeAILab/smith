@@ -867,7 +867,9 @@ mod tests {
     fn the_client_id_is_overridable_for_a_separately_issued_client() {
         // Anyone with their own registration should not have to patch Smith.
         assert_eq!(XAI_CLIENT_ID_ENV, "XAI_OAUTH_CLIENT_ID");
-        assert!(!XAI_CLIENT_ID.is_empty());
+        // The baked-in default is what callers fall back to when the env var
+        // is unset, so an empty one would strand them with no registration.
+        assert!(!XAI_CLIENT_ID.trim().is_empty());
         assert!(XAI_SCOPES.contains(&"offline_access"));
     }
 }

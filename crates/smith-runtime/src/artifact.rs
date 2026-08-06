@@ -235,10 +235,7 @@ impl ArtifactStore for SmithArtifactStore {
 fn validate_write(write: &ArtifactWrite) -> Result<(), ArtifactError> {
     if write.bytes.len() > MAX_SMITH_ARTIFACT_BYTES {
         return Err(ArtifactError::Unavailable {
-            detail: format!(
-                "artifact exceeds Smith's {} byte hard limit",
-                MAX_SMITH_ARTIFACT_BYTES
-            ),
+            detail: format!("artifact exceeds Smith's {MAX_SMITH_ARTIFACT_BYTES} byte hard limit"),
         });
     }
     if write.media_type.is_empty()
