@@ -514,15 +514,14 @@ pub(super) async fn run_tui(
                                     {
                                         Ok(events) => {
                                             if !events.is_empty() {
-                                                app.transcript.push_notice(
-                                                    "stream",
-                                                    format!(
-                                                        "live stream lagged; recovered {} \
-                                                         skipped event(s) from the session \
-                                                         journal",
-                                                        events.len()
-                                                    ),
-                                                );
+                                                // Accumulated, not shown yet: a
+                                                // broadcast overrun produces a
+                                                // run of these gaps back to
+                                                // back, and `App` collapses the
+                                                // whole run into one line once
+                                                // it sees a contiguous event
+                                                // again.
+                                                app.note_recovered_events(events.len());
                                             }
                                             pending.push_front((gap.deferred, true));
                                             for event in events.into_iter().rev() {

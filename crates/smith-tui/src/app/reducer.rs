@@ -248,26 +248,82 @@ impl App {
             });
             return;
         }
+        // Reaching here with no gap means the stream is caught up: any run
+        // of gaps that was in progress just ended, so this is where it gets
+        // reported.
+        self.flush_gap_notices();
         self.apply_now(envelope);
     }
 
     /// Folds one journal-replayed (or replay-fallback) event into state.
     ///
-    /// A sequence still missing here has already been asked of the journal,
-    /// so it is reported instead of parked again: the persisted session
-    /// journal remains canonical, and what it does not have is honestly gone.
+    /// A sequence still missing here has already been asked of the journal
+    /// (or the ring behind it) and it did not have the range either, so this
+    /// is the honest "permanently gone" case, not a new gap to park. A
+    /// broadcast-channel overrun does not produce one clean gap — it produces
+    /// a burst of them in a row — so this does not report immediately: it
+    /// merges the missing span into [`Self::pending_lost_range`] and returns,
+    /// letting [`Self::flush_gap_notices`] emit exactly one line once the
+    /// stream is caught up, however many gaps that took.
     pub fn apply_recovered(&mut self, envelope: &EventEnvelope) {
         if let Some(previous) = self.last_event_seq
             && envelope.seq > previous.saturating_add(1)
         {
-            self.transcript.push_error(format!(
-                "live event stream skipped sequence {} through {}; \
-                 the persisted session journal remains canonical",
-                previous.saturating_add(1),
-                envelope.seq.saturating_sub(1)
-            ));
+            let first = previous.saturating_add(1);
+            let last = envelope.seq.saturating_sub(1);
+            self.pending_lost_range = Some(match self.pending_lost_range {
+                Some((lowest, highest)) => (lowest.min(first), highest.max(last)),
+                None => (first, last),
+            });
+        } else {
+            self.flush_gap_notices();
         }
         self.apply_now(envelope);
+    }
+
+    /// Accumulates events recovered from the journal for the run of gaps
+    /// currently being replayed, without emitting a transcript line yet.
+    ///
+    /// The terminal event loop calls this once per gap, right after a
+    /// successful host-side journal read and before folding the recovered
+    /// events in through [`Self::apply_recovered`]. Before this method
+    /// existed that call site pushed its own notice immediately, so a burst
+    /// of several gaps in a row — the exact pattern a broadcast-channel
+    /// overrun produces — read as a wall of identical-looking lines.
+    /// [`Self::flush_gap_notices`] reports the accumulated total as one line
+    /// instead, once the run ends.
+    pub fn note_recovered_events(&mut self, count: usize) {
+        self.pending_recovered_events += count;
+    }
+
+    /// Emits at most one transcript line for the run of gaps that just ended.
+    ///
+    /// `push_notice`, never `push_error`: the user cannot act on a stream gap
+    /// either way, and `Transcript::push_error` closes the open assistant
+    /// block. Firing one of those per gap — instead of one per *run* of
+    /// gaps, which is what this collapses to — was what fragmented a single
+    /// streamed reply into several pieces.
+    fn flush_gap_notices(&mut self) {
+        if self.pending_recovered_events > 0 {
+            self.transcript.push_notice(
+                "stream",
+                format!(
+                    "live stream lagged; recovered {} skipped event(s) from the session journal",
+                    self.pending_recovered_events
+                ),
+            );
+            self.pending_recovered_events = 0;
+        }
+        if let Some((first, last)) = self.pending_lost_range.take() {
+            self.transcript.push_notice(
+                "stream",
+                format!(
+                    "live event stream sequence {first} through {last} is permanently gone — \
+                     the session journal does not have it either, so the displayed history is \
+                     now incomplete"
+                ),
+            );
+        }
     }
 
     fn apply_now(&mut self, envelope: &EventEnvelope) {

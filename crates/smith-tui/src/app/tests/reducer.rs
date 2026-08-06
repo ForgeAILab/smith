@@ -281,17 +281,138 @@
         app.apply(&later);
 
         // The journal had nothing for 5..=6: the parked envelope goes through
-        // the replay path alone and the skip is reported honestly.
+        // the replay path alone. The loss is merged, not reported yet — it
+        // only becomes a transcript line once the run of gaps ends.
         let gap = app.take_stream_gap().expect("a parked stream gap");
         app.apply_recovered(&gap.deferred);
+        assert!(
+            app.transcript.is_empty(),
+            "a loss is not reported until its run of gaps ends: {:?}",
+            app.transcript.blocks()
+        );
+
+        let mut caught_up = event(RuntimeEvent::CacheObservation {
+            read_tokens: 1,
+            write_tokens: 0,
+        });
+        caught_up.seq = 8;
+        app.apply(&caught_up);
 
         assert_eq!(app.status.activity, Activity::Idle);
         assert!(
             app.transcript.blocks().iter().any(|block| matches!(
                 block,
-                Block::Error { message } if message.contains("sequence 5 through 6")
+                Block::Notice { source, text }
+                    if source == "stream" && text.contains("sequence 5 through 6")
             )),
             "{:?}",
+            app.transcript.blocks()
+        );
+        // The old wording claimed the journal remained canonical for exactly
+        // the range it had just failed to supply; the honest replacement
+        // must never say that.
+        let rendered = format!("{:?}", app.transcript.blocks());
+        assert!(!rendered.contains("canonical"), "{rendered}");
+        assert!(
+            !app.transcript
+                .blocks()
+                .iter()
+                .any(|block| matches!(block, Block::Error { .. })),
+            "an unrecoverable gap is something the user cannot act on: {:?}",
+            app.transcript.blocks()
+        );
+    }
+
+    #[test]
+    fn a_run_of_consecutive_gaps_reports_exactly_one_notice() {
+        // The scenario this guards against: a broadcast-channel overrun that
+        // outruns the journal too produces several gaps in a row with real
+        // content in between each one — exactly what fragmented a single
+        // assistant reply into eight pieces before this collapsed.
+        let mut app = app();
+        let mut turn_started = event(RuntimeEvent::TurnStarted);
+        turn_started.seq = 1;
+        app.apply(&turn_started);
+
+        for (deferred_seq, gap) in [(4u64, (2u64, 3u64)), (7, (5, 6)), (10, (8, 9))] {
+            let mut envelope = event(RuntimeEvent::CacheObservation {
+                read_tokens: 1,
+                write_tokens: 0,
+            });
+            envelope.seq = deferred_seq;
+            app.apply(&envelope);
+            let parked = app.take_stream_gap().expect("a parked stream gap");
+            assert_eq!((parked.first_missing, parked.last_missing), gap);
+            app.apply_recovered(&parked.deferred);
+        }
+        assert!(
+            app.transcript.is_empty(),
+            "still mid-run: nothing should be reported yet: {:?}",
+            app.transcript.blocks()
+        );
+
+        let mut turn_completed = event(RuntimeEvent::TurnCompleted {
+            finish: TurnFinish::Completed,
+            visible_output: true,
+        });
+        turn_completed.seq = 11;
+        app.apply(&turn_completed);
+
+        let stream_notices = app
+            .transcript
+            .blocks()
+            .iter()
+            .filter(|block| matches!(block, Block::Notice { source, .. } if source == "stream"))
+            .count();
+        assert_eq!(
+            stream_notices,
+            1,
+            "three back-to-back gaps must collapse into one line: {:?}",
+            app.transcript.blocks()
+        );
+        assert!(
+            app.transcript.blocks().iter().any(|block| matches!(
+                block,
+                Block::Notice { source, text }
+                    if source == "stream" && text.contains("sequence 2 through 9")
+            )),
+            "the merged notice must span the whole run: {:?}",
+            app.transcript.blocks()
+        );
+    }
+
+    #[test]
+    fn a_run_of_recovered_gaps_reports_one_recovery_notice() {
+        let mut app = app();
+        let mut turn_started = event(RuntimeEvent::TurnStarted);
+        turn_started.seq = 1;
+        app.apply(&turn_started);
+
+        // The host calls this once per gap in a run, before folding the
+        // recovered events back in through `apply_recovered`.
+        app.note_recovered_events(2);
+        app.note_recovered_events(3);
+
+        let mut caught_up = event(RuntimeEvent::CacheObservation {
+            read_tokens: 1,
+            write_tokens: 0,
+        });
+        caught_up.seq = 2;
+        app.apply_recovered(&caught_up);
+
+        let stream_notices: Vec<_> = app
+            .transcript
+            .blocks()
+            .iter()
+            .filter_map(|block| match block {
+                Block::Notice { source, text } if source == "stream" => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            stream_notices,
+            vec!["live stream lagged; recovered 5 skipped event(s) from the session journal"],
+            "two accumulated recoveries must collapse into one line: {:?}",
             app.transcript.blocks()
         );
     }

@@ -766,6 +766,13 @@ pub struct App {
     pub(super) last_event_seq: Option<u64>,
     /// A live-stream sequence gap parked for host-driven journal replay.
     pub(super) stream_gap: Option<StreamGap>,
+    /// Events recovered from the journal during the run of gaps currently
+    /// being collapsed into one notice; see [`App::note_recovered_events`].
+    pub(super) pending_recovered_events: usize,
+    /// Merged span of sequence numbers permanently lost during the run of
+    /// gaps currently being collapsed into one notice; see
+    /// [`App::flush_gap_notices`].
+    pub(super) pending_lost_range: Option<(u64, u64)>,
     /// The live provider round-trip stage and when it started.
     pub(super) provider_phase: Option<(ProviderPhase, Instant)>,
     pub(super) speculative_attempts: BTreeMap<AttemptOutputKey, SpeculativeAttempt>,
@@ -814,6 +821,8 @@ impl App {
             last_ctrl_c: None,
             last_event_seq: None,
             stream_gap: None,
+            pending_recovered_events: 0,
+            pending_lost_range: None,
             provider_phase: None,
             speculative_attempts: BTreeMap::new(),
             speculative_order: Vec::new(),

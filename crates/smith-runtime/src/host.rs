@@ -7,7 +7,7 @@
 //! not render a terminal or choose an output format, so `smith` and `smith -p`
 //! cannot drift in their persistence behavior.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
@@ -115,6 +115,7 @@ pub struct HostSession {
     display_redactor: DefaultRedactor,
     journal: Option<Arc<EventJournal>>,
     paths: Option<SessionPaths>,
+    ring: Option<Arc<EventRing>>,
     changes: Arc<smith_tools::ChangeRecorder>,
     lifecycle_lease: Mutex<Option<PrivateFileLock>>,
     restored_interaction: Option<RestoredInteraction>,
@@ -230,12 +231,17 @@ impl HostSession {
         Ok(recovery.events().into_iter().cloned().collect())
     }
 
-    /// Flushes and returns the canonical redacted events with sequence numbers
-    /// in `first..=last`.
+    /// Returns the canonical redacted events with sequence numbers in
+    /// `first..=last`.
     ///
-    /// This is the healing path for a lagged live subscriber: the journal
-    /// observes every event synchronously before broadcast, so anything the
-    /// stream skipped is already queued here. A non-persistent session, or a
+    /// This is the healing path for a lagged live subscriber: the ring and
+    /// the journal both observe every event synchronously before broadcast,
+    /// so anything the stream skipped is already captured by one of them. The
+    /// bounded in-memory ring — populated the same way as the journal, see
+    /// [`EventRing`] — serves the common case without touching disk; a range
+    /// it cannot cover (a resumed process, or a gap wider than
+    /// [`EVENT_RING_CAPACITY`]) falls back to a flushed full journal read,
+    /// exactly as before this ring existed. A non-persistent session, or a
     /// journal that dropped the range under its own backpressure, returns
     /// fewer events than the range names — the caller reports the remainder
     /// honestly rather than inventing it.
@@ -247,15 +253,72 @@ impl HostSession {
         let (Some(journal), Some(paths)) = (&self.journal, &self.paths) else {
             return Ok(Vec::new());
         };
-        journal.flush().await?;
-        let path = paths.journal(self.session.id())?;
-        let recovery = read_journal(path).await?;
-        Ok(recovery
-            .events()
-            .into_iter()
-            .filter(|event| event.seq >= first && event.seq <= last)
-            .cloned()
-            .collect())
+        let events = match self
+            .ring
+            .as_ref()
+            .and_then(|ring| ring.events_between(first, last))
+        {
+            Some(events) => events
+                .into_iter()
+                .map(|event| self.redact_ring_event(event))
+                .collect::<Result<Vec<_>, _>>()?,
+            None => {
+                // Only the fallback needs the disk at all: a presentation-only
+                // replay does not need the durability an fsync buys, and this
+                // is exactly the await that used to starve the subscriber and
+                // the journal writer on every gap, producing the next one.
+                journal.flush().await?;
+                let path = paths.journal(self.session.id())?;
+                let recovery = read_journal(path).await?;
+                recovery
+                    .events()
+                    .into_iter()
+                    .filter(|event| event.seq >= first && event.seq <= last)
+                    .cloned()
+                    .collect()
+            }
+        };
+        let requested = last.saturating_sub(first).saturating_add(1);
+        if (events.len() as u64) < requested {
+            // The UI collapses a run of these into one line for the person
+            // looking at the transcript; this is the full, ungrouped detail
+            // for whoever has to find out why, in the log the TUI can never
+            // corrupt by writing to stdout/stderr itself.
+            tracing::warn!(
+                session = %self.session.id(),
+                first,
+                last,
+                requested,
+                recovered = events.len(),
+                "a live-stream gap could not be fully replayed from durable history; the \
+                 missing events are permanently gone"
+            );
+        }
+        Ok(events)
+    }
+
+    /// Applies the same credential redaction the journal writer applies
+    /// before a record reaches disk, so an event served from the in-memory
+    /// ring is exactly as safe to display as one read back from the journal
+    /// file.
+    ///
+    /// The ring stores raw envelopes (see [`EventRing::observe`]) precisely
+    /// so its hot path never pays for this; the cost lands here instead, on
+    /// the rare gap-replay call rather than every event's emission.
+    fn redact_ring_event(&self, event: EventEnvelope) -> Result<EventEnvelope, RuntimeError> {
+        let value = serde_json::to_value(&event).map_err(|err| {
+            RuntimeError::new(
+                ErrorKind::Serialization,
+                format!("a ring-served event could not be serialized for redaction: {err}"),
+            )
+        })?;
+        let redacted = self.display_redactor.redacted_clone(&value);
+        serde_json::from_value(redacted).map_err(|err| {
+            RuntimeError::new(
+                ErrorKind::Serialization,
+                format!("a redacted ring event could not be parsed back: {err}"),
+            )
+        })
     }
 
     /// Resolves a protected live event to reviewed display metadata.
@@ -517,7 +580,7 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
     request.runtime.persistence_redactor = Some(persistence_redactor.clone());
 
     let mut resume_snapshot_exists = false;
-    let (paths, journal_slot, checkpoint_barrier) = if persistence {
+    let (paths, journal_slot, checkpoint_barrier, ring) = if persistence {
         let paths = paths(&config, &request.project_root)?;
         if request.runtime.artifact_store.is_none() {
             request.runtime.artifact_store = Some(Arc::new(SmithArtifactStore::new(paths.clone())));
@@ -575,19 +638,24 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
             });
         }
 
-        let (slot, barrier) = if config.persistence.journal_events.value {
+        let (slot, barrier, ring) = if config.persistence.journal_events.value {
             let slot = Arc::new(DeferredObserver::default());
             request.runtime.observers.push(slot.clone());
             let barrier = Arc::new(JournalCheckpointBarrier::default());
             request.runtime.checkpoint_barrier =
                 Some(barrier.clone() as Arc<dyn CheckpointBarrier>);
-            (Some(slot), Some(barrier))
+            // Unlike the journal, the ring has no later resource to bind: it
+            // is its own complete observer from the moment it is built, so it
+            // attaches directly instead of through the deferred slot above.
+            let ring = Arc::new(EventRing::default());
+            request.runtime.observers.push(ring.clone());
+            (Some(slot), Some(barrier), Some(ring))
         } else {
-            (None, None)
+            (None, None, None)
         };
-        (Some(paths), slot, barrier)
+        (Some(paths), slot, barrier, ring)
     } else {
-        (None, None, None)
+        (None, None, None, None)
     };
 
     let change_journal = paths
@@ -822,6 +890,7 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         display_redactor: persistence_redactor,
         journal,
         paths,
+        ring,
         changes,
         lifecycle_lease: Mutex::new(lifecycle_lease),
         restored_interaction,
@@ -1224,6 +1293,77 @@ impl EventObserver for DeferredObserver {
         let target = self.target.read().ok().and_then(|target| target.clone());
         if let Some(target) = target {
             target.observe(event);
+        }
+    }
+}
+
+/// How many recent event envelopes [`EventRing`] retains.
+///
+/// Token deltas are coalesced before emission now, so a real burst is on the
+/// order of tens of events per millisecond rather than the 1046-in-one-
+/// millisecond burst that first overran the journal and broadcast channel
+/// (see [`crate::journal::JournalConfig`]'s default). A gap is queried the
+/// instant it is detected, not minutes later, so this bound only has to
+/// outlast the time between a burst landing and the lagged subscriber asking
+/// for it — a few thousand envelopes is generous headroom for that, without
+/// keeping unbounded session history in memory. The case this bound does not
+/// cover — a gap that predates process start on a resumed session, or a
+/// session old enough to have scrolled the range out — is exactly what the
+/// journal-read fallback in `Host::journal_events_between` exists for.
+const EVENT_RING_CAPACITY: usize = 4096;
+
+/// A bounded, in-memory record of the most recently emitted session events.
+///
+/// `Host::journal_events_between` used to answer every lagged-subscriber gap
+/// by fsyncing and re-parsing the entire multi-megabyte journal file, on the
+/// TUI's own event-loop task. That await starved the subscriber and the
+/// journal writer alike, which produced the *next* gap — a self-reinforcing
+/// cascade. This ring is populated by an observer installed the same way as
+/// the journal's (see `start`, beside where the journal's `DeferredObserver`
+/// slot is installed), so it sees the same synchronous, pre-broadcast event
+/// stream the journal does, and answers the common case — a lag that just
+/// happened — from memory instead of disk.
+#[derive(Debug, Default)]
+struct EventRing {
+    events: Mutex<VecDeque<EventEnvelope>>,
+}
+
+impl EventRing {
+    /// Returns the requested inclusive range when every event in it is still
+    /// held, `None` when any part of the range has been evicted or was never
+    /// observed — the signal for the caller to fall back to the journal.
+    ///
+    /// Events come back raw, not redacted: redaction is a JSON round trip,
+    /// deliberately kept off the synchronous `observe` hot path (see there),
+    /// so it is the caller's job to redact before this reaches a display.
+    fn events_between(&self, first: u64, last: u64) -> Option<Vec<EventEnvelope>> {
+        let events = self.events.lock().expect("event ring lock poisoned");
+        let oldest = events.front()?.seq;
+        let newest = events.back()?.seq;
+        if first < oldest || last > newest {
+            return None;
+        }
+        Some(
+            events
+                .iter()
+                .filter(|event| event.seq >= first && event.seq <= last)
+                .cloned()
+                .collect(),
+        )
+    }
+}
+
+impl EventObserver for EventRing {
+    fn observe(&self, event: &EventEnvelope) {
+        // Non-blocking by construction, matching the journal observer this
+        // is installed beside: a clone and a bounded push, nothing that can
+        // stall the runtime's emission path. Redaction is deliberately not
+        // done here — see `events_between` — so a burst of arrivals never
+        // pays for a JSON round trip on this synchronous path.
+        let mut events = self.events.lock().expect("event ring lock poisoned");
+        events.push_back(event.clone());
+        if events.len() > EVENT_RING_CAPACITY {
+            events.pop_front();
         }
     }
 }
