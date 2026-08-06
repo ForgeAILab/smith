@@ -25,7 +25,7 @@ use crate::picker::{ResourceEntry, ResourcePicker};
 use crate::questionnaire::{QuestionnaireResolution, QuestionnaireState};
 use crate::selection::Selection;
 use crate::status::{Activity, Status, render_elapsed};
-use crate::transcript::{ToolStatus, Transcript};
+use crate::transcript::{Block, ToolStatus, Transcript};
 
 /// How long a second `Ctrl+C` still counts as the exit press.
 pub(super) const FORCE_QUIT_WINDOW: Duration = Duration::from_secs(1);
@@ -500,13 +500,37 @@ impl ChildSummary {
             "running" | "working" | "resuming" | "needs input"
         )
     }
+
+    /// Whether this child's lifecycle label describes work that finished
+    /// cleanly, with nothing left for the user to decide.
+    ///
+    /// Only these read as success and only these retire on their own. A
+    /// failure, a stop, or an interrupted checkpoint is a row the user has
+    /// not dealt with yet, and it stays until they do.
+    pub fn retires_when_read(&self) -> bool {
+        matches!(self.state.as_str(), "completed" | "idle")
+    }
 }
 
-/// Most retained log lines per child.
+/// Most retained transcript blocks per child.
 ///
 /// The child's own journal keeps the whole record; this is the bounded tail
 /// the inspector can show without growing without limit in a long session.
-pub(super) const MAX_CHILD_LOG_LINES: usize = 200;
+pub(super) const MAX_CHILD_BLOCKS: usize = 200;
+
+/// Longest child answer the client retains, in characters.
+///
+/// The answer is the one block worth reading in full, so the budget is
+/// generous rather than a one-line summary — but it is still a budget, and
+/// the `…` says so when it bites.
+pub(super) const MAX_CHILD_ANSWER_CHARS: usize = 8_000;
+
+/// How long a cleanly finished child keeps its panel row after settling.
+///
+/// Long enough to read the green outcome, short enough that a busy session
+/// does not accumulate rows nobody is looking at. Any further activity from
+/// that child brings the row straight back.
+pub(super) const COMPLETED_CHILD_LINGER: Duration = Duration::from_secs(6);
 
 /// Wall-clock projection for one delegated child's agents-panel row.
 ///
@@ -699,13 +723,29 @@ pub struct App {
     pub children: BTreeMap<String, ChildSummary>,
     /// Live panel clocks for children, keyed by stable child id.
     pub(super) child_clocks: BTreeMap<String, ChildClock>,
-    /// Bounded per-child progress log, keyed by stable child id.
+    /// Bounded per-child transcript, keyed by stable child id.
     ///
-    /// Child progress no longer narrates itself into the root transcript, so
-    /// this is where "what has that agent been doing" lives. Plain text, never
-    /// timestamps: summaries are compared between live application and journal
-    /// replay, and a wall-clock reading can never replay equal.
-    pub(super) child_logs: BTreeMap<String, Vec<String>>,
+    /// Deliberately the same [`Transcript`] the root conversation uses. Child
+    /// progress no longer narrates itself into the root timeline, so this is
+    /// where "what has that agent been doing" lives — and it holds blocks, not
+    /// prose, so the one renderer draws both. What the runtime reports about a
+    /// child is thinner than what it reports about the root turn; that is a
+    /// difference in the events, not in the client.
+    pub(super) child_transcripts: BTreeMap<String, Transcript>,
+    /// When each cleanly finished child's panel row is due to retire.
+    ///
+    /// Armed when a child completes and nobody is inspecting it, disarmed the
+    /// moment it does anything else. Kept beside — not inside —
+    /// [`ChildSummary`] for the same reason [`ChildClock`] is: summaries are
+    /// compared between live application and journal replay, and a live
+    /// `Instant` can never replay equal.
+    pub(super) child_dismiss_at: BTreeMap<String, Instant>,
+    /// Children whose panel row has retired.
+    ///
+    /// Display state only. The child itself is still known — it still takes a
+    /// follow-up, and any new activity puts its row back — because a row that
+    /// scrolled off is not a child that stopped existing.
+    pub(super) retired_children: BTreeSet<String>,
     /// Temporary child inspector selection; the root composer keeps focus.
     pub inspected_child: Option<String>,
     /// The host's latest coordinator card for [`Self::inspected_child`].
@@ -796,7 +836,9 @@ impl App {
             questionnaire_resolutions: VecDeque::new(),
             children: BTreeMap::new(),
             child_clocks: BTreeMap::new(),
-            child_logs: BTreeMap::new(),
+            child_transcripts: BTreeMap::new(),
+            child_dismiss_at: BTreeMap::new(),
+            retired_children: BTreeSet::new(),
             inspected_child: None,
             inspected_detail: None,
             running_tasks: Vec::new(),
@@ -1034,33 +1076,128 @@ impl App {
     /// Every child lifecycle event lands here, including the ones the root
     /// transcript deliberately stays quiet about: the inspector is the only
     /// place that record still exists in the client.
-    pub(super) fn push_child_log(&mut self, child: &str, line: impl Into<String>) {
-        let log = self.child_logs.entry(child.to_owned()).or_default();
-        log.push(line.into());
-        if log.len() > MAX_CHILD_LOG_LINES {
-            log.remove(0);
-        }
+    /// One child's transcript, ready to be written to.
+    ///
+    /// Every child lifecycle event goes through here, which makes it the one
+    /// honest place to say "this child is not finished being interesting": a
+    /// retired row comes back, and a pending retirement is called off.
+    pub(super) fn child_transcript_mut(&mut self, child: &str) -> &mut Transcript {
+        self.child_dismiss_at.remove(child);
+        self.retired_children.remove(child);
+        self.child_transcripts.entry(child.to_owned()).or_default()
     }
 
-    /// One child's retained progress log, oldest line first.
-    pub fn child_log(&self, child: &str) -> &[String] {
-        self.child_logs
+    /// Records one child lifecycle milestone, sourced to the phase it names.
+    pub(super) fn push_child_notice(&mut self, child: &str, source: &str, text: impl Into<String>) {
+        let transcript = self.child_transcript_mut(child);
+        transcript.push_notice(source, text);
+        transcript.retain_newest(MAX_CHILD_BLOCKS);
+    }
+
+    /// Records one tool call the child made, outcome unknown.
+    pub(super) fn push_child_tool_call(&mut self, child: &str, name: &str) {
+        let transcript = self.child_transcript_mut(child);
+        transcript.push_unreported_tool_call(name);
+        transcript.retain_newest(MAX_CHILD_BLOCKS);
+    }
+
+    /// Records the child's answer as the assistant prose it is.
+    pub(super) fn push_child_answer(&mut self, child: &str, text: &str) {
+        let bounded: String = if text.chars().count() > MAX_CHILD_ANSWER_CHARS {
+            text.chars()
+                .take(MAX_CHILD_ANSWER_CHARS)
+                .chain(std::iter::once('…'))
+                .collect()
+        } else {
+            text.to_owned()
+        };
+        let transcript = self.child_transcript_mut(child);
+        transcript.push_text_delta(&bounded);
+        transcript.close_open();
+        transcript.retain_newest(MAX_CHILD_BLOCKS);
+    }
+
+    /// Records a failure the child reported.
+    pub(super) fn push_child_error(&mut self, child: &str, message: impl Into<String>) {
+        let transcript = self.child_transcript_mut(child);
+        transcript.push_error(message);
+        transcript.retain_newest(MAX_CHILD_BLOCKS);
+    }
+
+    /// Starts the linger countdown for a child that just finished cleanly.
+    ///
+    /// A child under inspection never retires out from under the reader; the
+    /// countdown is armed again when they look away.
+    pub(super) fn arm_child_dismissal(&mut self, child: &str) {
+        if self.inspected_child.as_deref() == Some(child) {
+            return;
+        }
+        if !self
+            .children
             .get(child)
-            .map_or(&[] as &[String], Vec::as_slice)
+            .is_some_and(ChildSummary::retires_when_read)
+        {
+            return;
+        }
+        self.child_dismiss_at
+            .insert(child.to_owned(), Instant::now() + COMPLETED_CHILD_LINGER);
+    }
+
+    /// Retires the panel rows whose linger window has closed.
+    ///
+    /// Returns whether anything left the screen, so the host can redraw once
+    /// on the change instead of animating an idle panel.
+    pub fn expire_child_rows(&mut self) -> bool {
+        self.expire_child_rows_at(Instant::now())
+    }
+
+    pub(crate) fn expire_child_rows_at(&mut self, now: Instant) -> bool {
+        let due: Vec<String> = self
+            .child_dismiss_at
+            .iter()
+            .filter(|(_, at)| now >= **at)
+            .map(|(child, _)| child.clone())
+            .collect();
+        for child in &due {
+            self.child_dismiss_at.remove(child);
+            self.retired_children.insert(child.clone());
+        }
+        !due.is_empty()
+    }
+
+    /// One child's retained transcript blocks, oldest first.
+    pub fn child_blocks(&self, child: &str) -> &[Block] {
+        self.child_transcripts
+            .get(child)
+            .map_or(&[] as &[Block], Transcript::blocks)
     }
 
     /// Children in the order the delegated-work panel lists them: live work
-    /// first, settled children after, so keyboard order matches what the eye
-    /// reads. Background shell tasks are not children and are skipped — they
-    /// have no child session, log, or follow-up.
-    pub fn inspectable_children(&self) -> Vec<&str> {
+    /// first, settled children after, retired rows not at all.
+    ///
+    /// The panel draws this and [`Self::inspectable_children`] reads it, so a
+    /// child can never sort one way and select another — or, worse, be
+    /// selectable while invisible.
+    pub fn visible_children(&self) -> Vec<(&str, &ChildSummary)> {
         let (live, settled): (Vec<_>, Vec<_>) = self
             .children
             .iter()
+            .filter(|(child, _)| !self.retired_children.contains(*child))
             .partition(|(_, summary)| summary.is_live());
         live.into_iter()
             .chain(settled)
-            .map(|(child, _)| child.as_str())
+            .map(|(child, summary)| (child.as_str(), summary))
+            .collect()
+    }
+
+    /// Children the inspector can reach with the keyboard, in panel order.
+    ///
+    /// Background shell tasks are not children and are skipped — they have no
+    /// child session, log, or follow-up.
+    pub fn inspectable_children(&self) -> Vec<&str> {
+        self.visible_children()
+            .into_iter()
+            .map(|(child, _)| child)
             .collect()
     }
 
@@ -1096,7 +1233,13 @@ impl App {
             // across a selection would report one child's turns under
             // another's name until the next redraw.
             self.inspected_detail = None;
+            if let Some(left) = self.inspected_child.take() {
+                self.arm_child_dismissal(&left);
+            }
         }
+        // Reading a row is the opposite of ignoring it: whatever countdown it
+        // was under stops here and restarts when the reader moves on.
+        self.child_dismiss_at.remove(child.as_str());
         self.inspected_child = Some(child);
         // The two views scroll independently; carrying one's offset into the
         // other would open a log part-way up for no reason the user can see.
@@ -1146,12 +1289,13 @@ impl App {
     ///
     /// Returns whether a child was being inspected.
     pub fn leave_child_inspection(&mut self) -> bool {
-        let inspected = self.inspected_child.take().is_some();
+        let left = self.inspected_child.take();
         self.inspected_detail = None;
-        if inspected {
+        if let Some(left) = &left {
+            self.arm_child_dismissal(left);
             self.follow_newest();
         }
-        inspected
+        left.is_some()
     }
 
     /// Delegated children whose panel clock is still ticking.

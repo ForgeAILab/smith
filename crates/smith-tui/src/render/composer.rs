@@ -403,7 +403,7 @@ pub(super) const MAX_VISIBLE_AGENTS: usize = 6;
 /// Rows the agents panel wants: a spacer, the main row, one row per child
 /// and running background task, and an elision row on overflow.
 pub(super) fn desired_agents_rows(app: &App) -> u16 {
-    let entries = app.children.len() + app.running_tasks.len();
+    let entries = app.visible_children().len() + app.running_tasks.len();
     if entries == 0 {
         return 0;
     }
@@ -418,7 +418,7 @@ pub(super) fn desired_agents_rows(app: &App) -> u16 {
 /// row anchors the list so delegated work always reads relative to the
 /// conversation the composer serves.
 pub(super) fn draw_agents(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
-    if area.height == 0 || (app.children.is_empty() && app.running_tasks.is_empty()) {
+    if area.height == 0 || (desired_agents_rows(app) == 0) {
         return;
     }
     let mut lines = vec![Line::default()];
@@ -434,10 +434,9 @@ pub(super) fn draw_agents(frame: &mut Frame<'_>, area: Rect, app: &App, theme: T
     lines.push(Line::from(Span::styled(format!("  {marker} main"), style)));
     // Live rows first: when the panel elides, a finished child gives way to
     // a child or task still working.
-    let (live, settled): (Vec<_>, Vec<_>) = app
-        .children
-        .iter()
-        .partition(|(_, summary)| summary.is_live());
+    let children = app.visible_children();
+    let (live, settled): (Vec<_>, Vec<_>) =
+        children.iter().partition(|(_, summary)| summary.is_live());
     let rows = live
         .iter()
         .map(|(child_id, summary)| agent_row(app, child_id, summary, area.width, theme))
@@ -452,7 +451,7 @@ pub(super) fn draw_agents(frame: &mut Frame<'_>, area: Rect, app: &App, theme: T
                 .map(|(child_id, summary)| agent_row(app, child_id, summary, area.width, theme)),
         );
     lines.extend(rows.take(MAX_VISIBLE_AGENTS));
-    let hidden = (app.children.len() + app.running_tasks.len()).saturating_sub(MAX_VISIBLE_AGENTS);
+    let hidden = (children.len() + app.running_tasks.len()).saturating_sub(MAX_VISIBLE_AGENTS);
     if hidden > 0 {
         lines.push(Line::from(Span::styled(
             format!("    {} {hidden} more", glyph::ELIDED),
@@ -485,13 +484,9 @@ fn agent_row(
         (state, Some(detail)) => format!("{state} {} {detail}", glyph::SEPARATOR),
         (state, None) => state.to_owned(),
     };
-    let tone = match (current, summary.state.as_str()) {
-        (true, _) => Tone::Default,
-        (_, "failed") => Tone::Danger,
-        (_, "needs input") => Tone::Warning,
-        (_, "running" | "working" | "resuming") => Tone::Default,
-        _ => Tone::Dim,
-    };
+    // The selected row is already bold and marked; letting it keep its state
+    // colour means the eye does not lose a failure by landing on it.
+    let tone = child_state_tone(summary.state.as_str());
     let mut style = theme.style(tone);
     if current {
         style = style.add_modifier(Modifier::BOLD);

@@ -34,11 +34,28 @@ mod tests {
     use crate::app::MouseOutcome;
     use crate::commands;
     use crate::questionnaire::{QuestionnaireChoice, QuestionnaireForm, QuestionnaireQuestion};
-    use crate::transcript::Block;
+    use crate::transcript::{Block, ToolStatus};
     use ratatui::layout::Rect;
 
     fn fingerprint(seed: &str) -> agent_runtime_registry::Fingerprint {
         agent_runtime_registry::Fingerprint::of(seed)
+    }
+
+    /// One child's transcript rendered back to comparable one-liners.
+    ///
+    /// The child's history is [`Block`]s, exactly like the root timeline's;
+    /// this only flattens them so an assertion can read as a list.
+    fn child_log(app: &App, child: &str) -> Vec<String> {
+        app.child_blocks(child)
+            .iter()
+            .map(|block| match block {
+                Block::Notice { source, text } => format!("{source} · {text}"),
+                Block::Tool { name, status, .. } => format!("{} {name}", status.label()),
+                Block::Assistant { text, .. } => format!("completed: {text}"),
+                Block::Error { message } => format!("failed: {message}"),
+                other => format!("{other:?}"),
+            })
+            .collect()
     }
 
     fn app() -> App {

@@ -45,6 +45,12 @@ pub enum ToolStatus {
     Failed,
     /// Denied by the approval gate.
     Denied,
+    /// The call finished and its outcome was never reported.
+    ///
+    /// A delegated child's progress crosses the runtime boundary as
+    /// identifiers only, so the parent learns that a tool ran and nothing
+    /// about how it ended. Claiming `ok` there would invent a result.
+    Unreported,
 }
 
 impl ToolStatus {
@@ -56,6 +62,7 @@ impl ToolStatus {
             Self::Ok => "ok",
             Self::Failed => "failed",
             Self::Denied => "denied",
+            Self::Unreported => "ran",
         }
     }
 }
@@ -328,6 +335,37 @@ impl Transcript {
             result_preview: None,
             started_at: Some(Instant::now()),
         });
+    }
+
+    /// Records a tool call that is already over and whose outcome nobody
+    /// reported.
+    ///
+    /// This is how a delegated child's tool activity enters a transcript: the
+    /// runtime carries the name across the boundary and nothing else, so
+    /// there is no call id to match a completion against and no arguments to
+    /// project. It is a finished row on arrival.
+    pub fn push_unreported_tool_call(&mut self, name: &str) {
+        self.close_open();
+        self.blocks.push(Block::Tool {
+            call_id: String::new(),
+            name: name.to_owned(),
+            display: None,
+            protected_summary: String::new(),
+            status: ToolStatus::Unreported,
+            result_preview: None,
+            started_at: None,
+        });
+    }
+
+    /// Drops the oldest blocks until at most `max` remain.
+    ///
+    /// The root transcript is the session and is never trimmed. A child's is
+    /// a bounded tail the client keeps in memory on the child's behalf, so it
+    /// has a ceiling.
+    pub fn retain_newest(&mut self, max: usize) {
+        if self.blocks.len() > max {
+            self.blocks.drain(..self.blocks.len() - max);
+        }
     }
 
     /// Adds a reviewed local display projection to an existing live call.

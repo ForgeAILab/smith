@@ -59,7 +59,7 @@
     }
 
     #[test]
-    fn disabled_child_profile_fails_locally_and_preserves_the_draft() {
+    fn disabled_child_profile_name_is_sent_as_literal_text() {
         let mut app = agent_first_app();
         app.resources.child_agents.push(
             ResourceEntry::new(
@@ -71,12 +71,10 @@
         );
         app.composer.replace("@main-only inspect the diff");
 
-        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
-        assert_eq!(app.composer.text(), "@main-only inspect the diff");
-        assert!(app.transcript.blocks().iter().any(|block| matches!(
-            block,
-            Block::Error { message } if message.contains("unresolved reference")
-        )));
+        let submission = expect_whole_submission(app.on_key(key(KeyCode::Enter)));
+        assert_eq!(submission.display_text(), "@main-only inspect the diff");
+        assert!(submission.files().is_empty());
+        assert!(app.composer.is_empty());
         assert!(app.overlay.is_none());
     }
 
@@ -230,12 +228,11 @@
             "mid-flight progress must not narrate itself into the root transcript"
         );
 
-        let log = app.child_log(child.as_str());
         assert_eq!(
-            log,
+            child_log(&app, child.as_str()),
             [
                 "started · read-only · up to 3 turns",
-                "is working",
+                "turn · working",
                 "ran Grep",
                 "completed: Two call sites.",
             ],
@@ -254,7 +251,7 @@
             max_tokens: None,
             deadline_ms: None,
         }));
-        for index in 0..MAX_CHILD_LOG_LINES + 50 {
+        for index in 0..MAX_CHILD_BLOCKS + 50 {
             app.apply(&event(RuntimeEvent::ChildProgress {
                 child: child.clone(),
                 phase: ChildPhase::ToolCall {
@@ -263,11 +260,11 @@
             }));
         }
 
-        let log = app.child_log(child.as_str());
-        assert_eq!(log.len(), MAX_CHILD_LOG_LINES);
+        let log = child_log(&app, child.as_str());
+        assert_eq!(log.len(), MAX_CHILD_BLOCKS);
         assert_eq!(
             log.last().map(String::as_str),
-            Some(format!("ran Read{}", MAX_CHILD_LOG_LINES + 49).as_str()),
+            Some(format!("ran Read{}", MAX_CHILD_BLOCKS + 49).as_str()),
             "the newest activity is what a bounded tail keeps"
         );
     }
@@ -359,7 +356,7 @@
             Block::Error { message } if message.contains("takes a follow-up once it settles")
         )));
         assert!(
-            app.child_log("child-1")
+            child_log(&app, "child-1")
                 .iter()
                 .any(|line| line.contains("follow-up refused")),
             "the refusal is also visible in the view the user is reading"
@@ -545,4 +542,154 @@
             },
         }));
         assert_eq!(app.child_elapsed(child.as_str()), None);
+    }
+
+    fn spawned_child(app: &mut App, id: &str) -> ChildId {
+        let child = ChildId::new(id);
+        app.apply(&event(RuntimeEvent::ChildSpawned {
+            child: child.clone(),
+            workspace: WorkspacePolicy::ReadOnlyView,
+            max_turns: 3,
+            max_tokens: None,
+            deadline_ms: None,
+        }));
+        child
+    }
+
+    #[test]
+    fn a_cleanly_finished_row_retires_itself_but_the_child_stays_known() {
+        let mut app = app();
+        let child = spawned_child(&mut app, "child-tidy");
+        app.apply(&event(RuntimeEvent::ChildCompleted {
+            child: child.clone(),
+            result: "done".to_owned(),
+        }));
+
+        let due = Instant::now() + COMPLETED_CHILD_LINGER;
+        assert!(
+            !app.expire_child_rows_at(due - Duration::from_millis(1)),
+            "the outcome stays up long enough to read"
+        );
+        assert_eq!(app.inspectable_children(), [child.as_str()]);
+
+        assert!(app.expire_child_rows_at(due), "the linger window closed");
+        assert!(app.visible_children().is_empty());
+        assert!(
+            app.inspectable_children().is_empty(),
+            "a row the eye cannot see must not be reachable by keyboard either"
+        );
+        assert!(
+            app.children.contains_key(child.as_str()),
+            "retiring a row must not forget the child: it still takes a follow-up"
+        );
+        assert_eq!(child_log(&app, child.as_str()).len(), 2);
+    }
+
+    #[test]
+    fn only_an_outcome_nobody_has_to_act_on_retires_on_its_own() {
+        let mut app = app();
+        let failed = spawned_child(&mut app, "child-failed");
+        app.apply(&event(RuntimeEvent::ChildFailed {
+            child: failed.clone(),
+            error: RuntimeError::internal("provider refused"),
+        }));
+        let stopped = spawned_child(&mut app, "child-stopped");
+        app.apply(&event(RuntimeEvent::ChildStopped {
+            child: stopped.clone(),
+            reason: CancelReason::UserRequested,
+        }));
+
+        assert!(
+            !app.expire_child_rows_at(Instant::now() + COMPLETED_CHILD_LINGER * 10),
+            "a failure or a stop is unfinished business and stays on the panel"
+        );
+        assert_eq!(
+            app.inspectable_children(),
+            [failed.as_str(), stopped.as_str()]
+        );
+    }
+
+    #[test]
+    fn a_row_under_inspection_never_retires_out_from_under_the_reader() {
+        let mut app = app();
+        let child = spawned_child(&mut app, "child-read");
+        app.inspect_child(child.to_string());
+        app.apply(&event(RuntimeEvent::ChildCompleted {
+            child: child.clone(),
+            result: "done".to_owned(),
+        }));
+
+        let long_read = Instant::now() + COMPLETED_CHILD_LINGER * 10;
+        assert!(!app.expire_child_rows_at(long_read));
+        assert_eq!(app.inspectable_children(), [child.as_str()]);
+
+        // Looking away starts the countdown, it does not skip it: a row must
+        // not vanish in the same frame the reader pressed Esc.
+        assert!(app.leave_child_inspection());
+        assert!(!app.expire_child_rows_at(Instant::now()));
+        assert!(app.expire_child_rows_at(Instant::now() + COMPLETED_CHILD_LINGER));
+        assert!(app.inspectable_children().is_empty());
+    }
+
+    #[test]
+    fn any_further_activity_brings_a_retired_row_back() {
+        let mut app = app();
+        let child = spawned_child(&mut app, "child-again");
+        app.apply(&event(RuntimeEvent::ChildCompleted {
+            child: child.clone(),
+            result: "done".to_owned(),
+        }));
+        assert!(app.expire_child_rows_at(Instant::now() + COMPLETED_CHILD_LINGER));
+        assert!(app.inspectable_children().is_empty());
+
+        app.apply(&event(RuntimeEvent::ChildProgress {
+            child: child.clone(),
+            phase: ChildPhase::TurnStarted,
+        }));
+        assert_eq!(
+            app.inspectable_children(),
+            [child.as_str()],
+            "a follow-up turn is exactly the activity the panel exists to show"
+        );
+    }
+
+    #[test]
+    fn the_inspector_keeps_the_whole_answer_the_panel_row_clips() {
+        let mut app = app();
+        let child = spawned_child(&mut app, "child-verbose");
+        let result = format!("## report\n\n{}", "detail ".repeat(100));
+        app.apply(&event(RuntimeEvent::ChildCompleted {
+            child: child.clone(),
+            result: result.clone(),
+        }));
+
+        assert_eq!(
+            child_log(&app, child.as_str()).last().map(String::as_str),
+            Some(format!("completed: {result}").as_str()),
+            "the inspector is where delegated work is read, so it keeps it whole"
+        );
+        let summary = app.children[child.as_str()]
+            .detail
+            .clone()
+            .expect("a completed child names its outcome");
+        assert!(
+            summary.chars().count() <= 201 && summary.ends_with('…'),
+            "the one-line panel row still clips: {summary}"
+        );
+    }
+
+    #[test]
+    fn an_enormous_child_answer_is_still_bounded() {
+        let mut app = app();
+        let child = spawned_child(&mut app, "child-flood");
+        app.apply(&event(RuntimeEvent::ChildCompleted {
+            child: child.clone(),
+            result: "x".repeat(MAX_CHILD_ANSWER_CHARS * 2),
+        }));
+
+        let Some(Block::Assistant { text, .. }) = app.child_blocks(child.as_str()).last() else {
+            panic!("the answer is assistant prose");
+        };
+        assert_eq!(text.chars().count(), MAX_CHILD_ANSWER_CHARS + 1);
+        assert!(text.ends_with('…'), "the clip says that it clipped");
     }

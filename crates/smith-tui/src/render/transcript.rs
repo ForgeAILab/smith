@@ -55,13 +55,111 @@ pub(super) fn rendered_rows(lines: &[Line<'static>], width: u16) -> usize {
 
 pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<'static>> {
     // The inspector borrows the transcript region rather than floating over
-    // it: a child's log is read, scrolled, and selected exactly like the root
-    // timeline, and one Esc gives the region back unchanged.
+    // it: a child's history is read, scrolled, and selected exactly like the
+    // root timeline, and one Esc gives the region back unchanged.
     if let Some(child) = &app.inspected_child {
-        return child_log_lines(app, child, theme);
+        return child_lines(app, child, theme, width);
     }
+    let mut lines = block_lines(app.transcript.blocks(), theme, width);
+
+    if let Some(text) = app.speculative_text() {
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
+        lines.extend(render_speculative_lines(text, theme));
+    }
+
+    if let Some(summary) = &app.turn_summary
+        && !matches!(
+            app.status.activity,
+            Activity::Working | Activity::Interrupting
+        )
+    {
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
+        lines.push(Line::from(Span::styled(
+            format!("  {summary}"),
+            theme.style(Tone::Dim),
+        )));
+    }
+
+    if matches!(
+        app.status.activity,
+        Activity::Working | Activity::Interrupting
+    ) {
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
+        let label = match app.status.activity {
+            Activity::Working => "Working",
+            Activity::Interrupting => "Interrupting",
+            Activity::Idle | Activity::Ended => unreachable!("activity was filtered above"),
+        };
+        let details = app.work_detail_lines();
+        // The provider round-trip stage answers "is anything happening?"
+        // during an otherwise silent wait: `↑ 45s` is a stall the user can
+        // see, where a bare `Working…` looks identical to progress. The
+        // transfer phases read as direction; only thinking keeps its word.
+        let phase = app
+            .provider_phase()
+            .map(|(phase, elapsed)| {
+                let marker = match phase {
+                    ProviderPhase::Sending => glyph::SENDING,
+                    ProviderPhase::Thinking => "thinking",
+                    ProviderPhase::Responding => glyph::RECEIVING,
+                };
+                format!(" · {marker} {}", render_elapsed(elapsed))
+            })
+            .unwrap_or_default();
+        // Delegated work is part of "is anything happening?": a silent
+        // parent waiting on children would otherwise look stalled.
+        let agents = match app.live_child_count() {
+            0 => String::new(),
+            1 => " · 1 agent".to_owned(),
+            count => format!(" · {count} agents"),
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{} ", theme.spinner(app.tick)),
+                theme.style(Tone::Accent),
+            ),
+            Span::styled(
+                format!(
+                    "{label}{} · {}{phase}{agents}{}",
+                    glyph::ELIDED,
+                    app.turn_elapsed()
+                        .map(render_elapsed)
+                        .unwrap_or_else(|| "?".to_owned()),
+                    details
+                        .first()
+                        .map(|line| format!(" · {line}"))
+                        .unwrap_or_default(),
+                ),
+                theme.style(Tone::Reasoning),
+            ),
+        ]));
+        for detail in details.iter().skip(1) {
+            lines.push(Line::from(vec![
+                Span::styled("  ", theme.style(Tone::Dim)),
+                Span::styled(detail.clone(), theme.style(Tone::Reasoning)),
+            ]));
+        }
+    }
+
+    lines
+}
+
+/// Every transcript block as rendered rows.
+///
+/// The root timeline and a delegated child's history both come through
+/// here. A child is an agent that reports back, not a different kind of
+/// thing, so it must not get a second, thinner renderer that drifts from
+/// this one — whatever the runtime chooses to report about it lands in the
+/// same blocks and draws the same way.
+fn block_lines(blocks: &[Block], theme: Theme, width: u16) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    for block in app.transcript.blocks() {
+    for block in blocks {
         // Reasoning is canonical model state, not a second assistant answer.
         // The turn-level working row below represents progress without
         // exposing raw provider reasoning as transcript prose.
@@ -98,7 +196,7 @@ pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<
                 ..
             } => {
                 let tone = match status {
-                    ToolStatus::Running => Tone::Dim,
+                    ToolStatus::Running | ToolStatus::Unreported => Tone::Dim,
                     ToolStatus::Ok => Tone::Success,
                     ToolStatus::Failed | ToolStatus::Denied => Tone::Danger,
                 };
@@ -211,113 +309,24 @@ pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<
             }
         }
     }
-
-    if let Some(text) = app.speculative_text() {
-        if !lines.is_empty() {
-            lines.push(Line::default());
-        }
-        lines.extend(render_speculative_lines(text, theme));
-    }
-
-    if let Some(summary) = &app.turn_summary
-        && !matches!(
-            app.status.activity,
-            Activity::Working | Activity::Interrupting
-        )
-    {
-        if !lines.is_empty() {
-            lines.push(Line::default());
-        }
-        lines.push(Line::from(Span::styled(
-            format!("  {summary}"),
-            theme.style(Tone::Dim),
-        )));
-    }
-
-    if matches!(
-        app.status.activity,
-        Activity::Working | Activity::Interrupting
-    ) {
-        if !lines.is_empty() {
-            lines.push(Line::default());
-        }
-        let label = match app.status.activity {
-            Activity::Working => "Working",
-            Activity::Interrupting => "Interrupting",
-            Activity::Idle | Activity::Ended => unreachable!("activity was filtered above"),
-        };
-        let details = app.work_detail_lines();
-        // The provider round-trip stage answers "is anything happening?"
-        // during an otherwise silent wait: `↑ 45s` is a stall the user can
-        // see, where a bare `Working…` looks identical to progress. The
-        // transfer phases read as direction; only thinking keeps its word.
-        let phase = app
-            .provider_phase()
-            .map(|(phase, elapsed)| {
-                let marker = match phase {
-                    ProviderPhase::Sending => glyph::SENDING,
-                    ProviderPhase::Thinking => "thinking",
-                    ProviderPhase::Responding => glyph::RECEIVING,
-                };
-                format!(" · {marker} {}", render_elapsed(elapsed))
-            })
-            .unwrap_or_default();
-        // Delegated work is part of "is anything happening?": a silent
-        // parent waiting on children would otherwise look stalled.
-        let agents = match app.live_child_count() {
-            0 => String::new(),
-            1 => " · 1 agent".to_owned(),
-            count => format!(" · {count} agents"),
-        };
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("{} ", theme.spinner(app.tick)),
-                theme.style(Tone::Accent),
-            ),
-            Span::styled(
-                format!(
-                    "{label}{} · {}{phase}{agents}{}",
-                    glyph::ELIDED,
-                    app.turn_elapsed()
-                        .map(render_elapsed)
-                        .unwrap_or_else(|| "?".to_owned()),
-                    details
-                        .first()
-                        .map(|line| format!(" · {line}"))
-                        .unwrap_or_default(),
-                ),
-                theme.style(Tone::Reasoning),
-            ),
-        ]));
-        for detail in details.iter().skip(1) {
-            lines.push(Line::from(vec![
-                Span::styled("  ", theme.style(Tone::Dim)),
-                Span::styled(detail.clone(), theme.style(Tone::Reasoning)),
-            ]));
-        }
-    }
-
     lines
 }
 
-/// The inspected child's read-only view: one identity heading, then its
-/// retained progress log oldest line first.
+/// The inspected child's read-only view: one identity heading, then the
+/// history the client kept for it.
 ///
-/// Nothing here is model history. The child owns its own transcript; this is
-/// the bounded lifecycle record the client kept so delegated work stays
-/// legible without narrating itself into the root conversation.
-fn child_log_lines(app: &App, child: &str, theme: Theme) -> Vec<Line<'static>> {
+/// Nothing here is invented. The child owns its own canonical transcript in
+/// the runtime; what the parent process receives about it is bounded, so
+/// what this draws is bounded too — but it is drawn by the same renderer as
+/// the root timeline, because a delegated child is an agent that reports
+/// back, not a different kind of thing.
+fn child_lines(app: &App, child: &str, theme: Theme, width: u16) -> Vec<Line<'static>> {
     let summary = app.children.get(child);
     let state = summary.map_or("unknown", |summary| summary.state.as_str());
     let elapsed = app
         .child_elapsed(child)
-        .map(|elapsed| format!(" · {}", render_elapsed(elapsed)))
+        .map(|elapsed| format!(" \u{b7} {}", render_elapsed(elapsed)))
         .unwrap_or_default();
-    let tone = match state {
-        "failed" => Tone::Danger,
-        "needs input" => Tone::Warning,
-        _ => Tone::Dim,
-    };
     let mut lines = vec![
         Line::from(vec![
             Span::styled(
@@ -328,7 +337,10 @@ fn child_log_lines(app: &App, child: &str, theme: Theme) -> Vec<Line<'static>> {
                 child.to_owned(),
                 theme.style(Tone::Heading).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(format!(" · {state}{elapsed}"), theme.style(tone)),
+            Span::styled(
+                format!(" \u{b7} {state}{elapsed}"),
+                theme.style(child_state_tone(state)),
+            ),
         ]),
         Line::default(),
     ];
@@ -342,8 +354,8 @@ fn child_log_lines(app: &App, child: &str, theme: Theme) -> Vec<Line<'static>> {
         lines.push(Line::default());
     }
 
-    let log = app.child_log(child);
-    if log.is_empty() {
+    let blocks = app.child_blocks(child);
+    if blocks.is_empty() {
         // A child restored from a durable record has a state but no live
         // history in this process. Saying so beats an empty pane.
         lines.push(Line::from(Span::styled(
@@ -351,19 +363,14 @@ fn child_log_lines(app: &App, child: &str, theme: Theme) -> Vec<Line<'static>> {
                 "  no activity recorded in this session{}",
                 summary
                     .and_then(|summary| summary.detail.as_deref())
-                    .map(|detail| format!(" · {detail}"))
+                    .map(|detail| format!(" \u{b7} {detail}"))
                     .unwrap_or_default()
             ),
             theme.style(Tone::Dim),
         )));
         return lines;
     }
-    for entry in log {
-        lines.push(Line::from(vec![
-            Span::styled(format!("{} ", glyph::NOTICE), theme.style(Tone::Dim)),
-            Span::styled(entry.clone(), theme.style(Tone::Default)),
-        ]));
-    }
+    lines.extend(block_lines(blocks, theme, width));
     lines
 }
 

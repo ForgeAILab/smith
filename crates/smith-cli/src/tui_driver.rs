@@ -604,11 +604,16 @@ pub(super) async fn run_tui(
 
             _ = spinner.tick() => {
                 let exit_hint_expired = app.expire_ctrl_c_exit_hint();
+                // Rows retire while the session is idle — that is the whole
+                // point of them retiring — so this cannot ride on `tick`,
+                // which only advances while there is work to animate.
+                let rows_retired = app.expire_child_rows();
                 let busy = app.is_busy();
                 if busy {
                     app.tick();
                 }
                 if exit_hint_expired
+                    || rows_retired
                     || (busy && (theme.uses_motion() || app.tick.is_multiple_of(10)))
                 {
                     dirty = true;

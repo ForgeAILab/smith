@@ -5,6 +5,22 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::theme::{Theme, Tone, glyph};
 
+/// The tone one child's lifecycle label reads in, wherever it is shown.
+///
+/// The panel row and the inspector heading name the same state, so they read
+/// it through the same function: a child cannot be green in one place and
+/// grey in the other. Work that needs the user stands out, a clean finish
+/// reads as success, and a settled outcome nobody has to act on recedes.
+pub(super) fn child_state_tone(state: &str) -> Tone {
+    match state {
+        "failed" => Tone::Danger,
+        "needs input" => Tone::Warning,
+        "completed" | "idle" => Tone::Success,
+        "running" | "working" | "resuming" => Tone::Default,
+        _ => Tone::Dim,
+    }
+}
+
 /// Clips text to a display-cell budget, ending with `…` when it was cut.
 pub(super) fn clip_line(text: String, budget: usize) -> String {
     if text.width() <= budget {

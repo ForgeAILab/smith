@@ -873,7 +873,7 @@ impl App {
                                     ""
                                 }
                             ));
-                            self.push_child_log(
+                            self.push_child_error(
                                 agent,
                                 format!("follow-up refused while {}", existing.state),
                             );
