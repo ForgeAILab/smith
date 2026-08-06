@@ -21,6 +21,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime"
 version = "0.1.0"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=1ea7147e4eb463d7893091fc30d157a701da4b51#1ea7147e4eb463d7893091fc30d157a701da4b51"
 dependencies = [
  "agent-runtime-ability",
  "agent-runtime-context",
@@ -43,6 +44,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-ability"
 version = "0.1.0"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=1ea7147e4eb463d7893091fc30d157a701da4b51#1ea7147e4eb463d7893091fc30d157a701da4b51"
 dependencies = [
  "agent-runtime-core",
  "agent-runtime-registry",
@@ -54,6 +56,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-context"
 version = "0.1.0"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=1ea7147e4eb463d7893091fc30d157a701da4b51#1ea7147e4eb463d7893091fc30d157a701da4b51"
 dependencies = [
  "agent-runtime-core",
  "agent-runtime-registry",
@@ -64,6 +67,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-core"
 version = "0.1.0"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=1ea7147e4eb463d7893091fc30d157a701da4b51#1ea7147e4eb463d7893091fc30d157a701da4b51"
 dependencies = [
  "agent-runtime-registry",
  "async-trait",
@@ -80,6 +84,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-provider"
 version = "0.1.0"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=1ea7147e4eb463d7893091fc30d157a701da4b51#1ea7147e4eb463d7893091fc30d157a701da4b51"
 dependencies = [
  "agent-runtime-core",
  "async-stream",
@@ -94,6 +99,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-registry"
 version = "0.1.0"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=1ea7147e4eb463d7893091fc30d157a701da4b51#1ea7147e4eb463d7893091fc30d157a701da4b51"
 dependencies = [
  "serde",
 ]
@@ -101,6 +107,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-testkit"
 version = "0.1.0"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=1ea7147e4eb463d7893091fc30d157a701da4b51#1ea7147e4eb463d7893091fc30d157a701da4b51"
 dependencies = [
  "agent-runtime",
  "agent-runtime-core",
