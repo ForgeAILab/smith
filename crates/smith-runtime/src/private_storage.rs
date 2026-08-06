@@ -443,6 +443,81 @@ pub(crate) async fn write_private_atomically(
     }
 }
 
+/// Opens (creating if necessary) an owner-only file for continuous
+/// appending, such as a diagnostic log.
+///
+/// [`write_private_atomically`] is wrong for this: it replaces a file
+/// wholesale by renaming a finished temporary over it, but a log is appended
+/// to across the life of a process rather than produced in one shot. The
+/// owner-only mode is therefore enforced on open instead of by construction,
+/// and re-checked the same way [`read_private_bounded`] repairs a permissive
+/// mode on an existing file — a log reopened across Smith runs must not have
+/// quietly drifted off `0600`. A symlink is refused for the same reason
+/// [`read_private`] refuses one: process output must never land at a path
+/// selected indirectly outside the reviewed user-state tree.
+pub(crate) async fn open_private_append(path: &Path) -> Result<tokio::fs::File, RuntimeError> {
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = path;
+        return Err(RuntimeError::new(
+            ErrorKind::Config,
+            "owner-only Smith persistence is unavailable on this platform",
+        ));
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        match tokio::fs::symlink_metadata(path).await {
+            Ok(metadata)
+                if metadata.file_type().is_symlink() || !metadata.file_type().is_file() =>
+            {
+                return Err(io_error(format!(
+                    "private path `{}` is not a regular file",
+                    path.display()
+                )));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(io_error(format!(
+                    "cannot inspect private file `{}`: {error}",
+                    path.display()
+                )));
+            }
+        }
+
+        let mut options = tokio::fs::OpenOptions::new();
+        options.create(true).append(true).mode(0o600);
+        let file = options.open(path).await.map_err(|error| {
+            io_error(format!(
+                "cannot open private file `{}`: {error}",
+                path.display()
+            ))
+        })?;
+
+        // `mode(0o600)` only governs a freshly created file; a log reopened
+        // from an earlier run keeps whatever permissions it already had
+        // until this repairs them, exactly as `read_private_bounded` does.
+        let metadata = file.metadata().await.map_err(|error| {
+            io_error(format!(
+                "cannot inspect private file `{}`: {error}",
+                path.display()
+            ))
+        })?;
+        if metadata.permissions().mode() & 0o777 != 0o600 {
+            tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+                .await
+                .map_err(|error| {
+                    io_error(format!(
+                        "cannot protect private file `{}`: {error}",
+                        path.display()
+                    ))
+                })?;
+        }
+        Ok(file)
+    }
+}
+
 fn temporary_path(path: &Path) -> PathBuf {
     let directory = path.parent().unwrap_or_else(|| Path::new("."));
     directory.join(format!(

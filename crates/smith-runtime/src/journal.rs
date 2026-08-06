@@ -18,9 +18,12 @@
 //!   that outruns the disk must go somewhere. Blocking the runtime is not an
 //!   option and growing without limit is not either, so the overflow policy is
 //!   to drop and *count*: the next record written is preceded by a
-//!   [`JournalRecord::Dropped`] marker naming how many were lost and which
-//!   sequence number resumes the record. A reader can always tell a complete
-//!   journal from a lossy one.
+//!   [`JournalRecord::Dropped`] marker naming how many were lost, which
+//!   sequence number resumes the record, and — since the queue is FIFO, so an
+//!   overflow always rejects the newest arrivals rather than anything already
+//!   queued — the lowest and highest sequence actually rejected. A reader can
+//!   always tell a complete journal from a lossy one, and locate exactly what
+//!   the loss removed.
 //! - **A record is written whole or not at all.** The line is serialized
 //!   completely, then written in a single `write_all` of `record + "\n"`. A
 //!   record too large for the configured bound is replaced by a
@@ -183,6 +186,23 @@ pub enum JournalRecord {
         /// shutdown with no record following it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         before_seq: Option<u64>,
+        /// The lowest sequence number `observe` actually rejected since the
+        /// previous marker.
+        ///
+        /// `before_seq` names where the journal *resumes* — an old record
+        /// still draining from a full queue — never the sequence of anything
+        /// that was lost. The queue is FIFO, so an overflow always rejects
+        /// the newest arrivals, the tail of the burst; this field and
+        /// `highest_dropped_seq` locate that tail directly, from the
+        /// sequence numbers `observe` saw rejected. `None` on a marker a
+        /// build before this field existed wrote, or when no rejected event
+        /// carried a usable sequence.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lowest_dropped_seq: Option<u64>,
+        /// The highest sequence number `observe` actually rejected since the
+        /// previous marker. See `lowest_dropped_seq`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        highest_dropped_seq: Option<u64>,
     },
     /// A prior process owned ephemeral work that cannot survive resume.
     ///
@@ -291,7 +311,11 @@ pub struct JournalConfig {
     /// How many records may be queued before `observe` starts dropping.
     ///
     /// This is the entire back-pressure budget: it buys the writer time to
-    /// absorb a burst without ever making the runtime wait on a disk.
+    /// absorb a burst without ever making the runtime wait on a disk. Each
+    /// queued item is a boxed [`EventEnvelope`], so raising this bound costs
+    /// one pointer-sized slot per unit — not a copy of the record inline in
+    /// the channel — which is why it can be sized for a real burst rather
+    /// than trimmed to save memory.
     pub queue_capacity: usize,
     /// The largest serialized record written verbatim.
     pub max_record_bytes: usize,
@@ -300,7 +324,12 @@ pub struct JournalConfig {
 impl Default for JournalConfig {
     fn default() -> Self {
         Self {
-            queue_capacity: 1024,
+            // Measured provider streams have bursted to 1046 events in a
+            // single millisecond, and the previous bound of 1024 measured
+            // 52% event loss on one real session — the queue was full before
+            // the writer got a turn. Boxing each queued item (see
+            // `queue_capacity`'s doc) keeps this bound cheap to raise.
+            queue_capacity: 16_384,
             // Large enough for a realistic tool-call payload, small enough
             // that one pathological event cannot dominate a session's file.
             max_record_bytes: 64 * 1024,
@@ -503,6 +532,12 @@ enum JournalCommand {
 pub struct EventJournal {
     commands: mpsc::Sender<JournalCommand>,
     dropped: Arc<AtomicU64>,
+    /// The `(lowest, highest)` sequence rejected since the writer last drained
+    /// it into a marker. A `Mutex` rather than a pair of atomics: the two
+    /// numbers must update together, and only the already-exceptional
+    /// overflow branch of `observe` ever takes the lock, so it never contends
+    /// with the accepted-path clone-and-`try_send`.
+    dropped_seq_range: Arc<Mutex<Option<(u64, u64)>>>,
     failure: Arc<Mutex<Option<RuntimeError>>>,
     recovered_tail: Option<TruncatedTail>,
     /// Cached so a second `shutdown` reports the same result instead of
@@ -553,12 +588,14 @@ impl EventJournal {
 
         let (commands, receiver) = mpsc::channel(config.queue_capacity);
         let dropped = Arc::new(AtomicU64::new(0));
+        let dropped_seq_range = Arc::new(Mutex::new(None));
         let failure = Arc::new(Mutex::new(None));
         let writer = Writer {
             file,
             config,
             redactor,
             dropped: Arc::clone(&dropped),
+            dropped_seq_range: Arc::clone(&dropped_seq_range),
             failure: Arc::clone(&failure),
             stats: JournalStats::default(),
         };
@@ -567,6 +604,7 @@ impl EventJournal {
         Ok(Self {
             commands,
             dropped,
+            dropped_seq_range,
             failure,
             recovered_tail,
             finished: Mutex::new(None),
@@ -739,6 +777,18 @@ impl EventObserver for EventJournal {
             .is_err()
         {
             self.dropped.fetch_add(1, Ordering::Relaxed);
+            // `event.seq` is exactly the identity a `Dropped` marker needs to
+            // name what was actually lost — the queue is FIFO, so this
+            // rejected send is always the newest arrival, never one already
+            // sitting in the channel.
+            let mut range = self
+                .dropped_seq_range
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *range = Some(match *range {
+                Some((lowest, highest)) => (lowest.min(event.seq), highest.max(event.seq)),
+                None => (event.seq, event.seq),
+            });
         }
     }
 }
@@ -757,6 +807,7 @@ struct Writer {
     config: JournalConfig,
     redactor: Arc<dyn Redactor>,
     dropped: Arc<AtomicU64>,
+    dropped_seq_range: Arc<Mutex<Option<(u64, u64)>>>,
     failure: Arc<Mutex<Option<RuntimeError>>>,
     stats: JournalStats,
 }
@@ -852,7 +903,27 @@ impl Writer {
             return Ok(());
         }
         self.stats.dropped += count;
-        let marker = self.render(JournalRecord::Dropped { count, before_seq })?;
+        // Draining the range here, right beside the counter reset above, is
+        // best-effort rather than linearizable with it — nothing locks the
+        // two together against a concurrent `observe` landing in between —
+        // but that only risks a rejected seq attributed to the marker one
+        // burst early, never a wrong or missing range for a burst that
+        // actually happened.
+        let range = self
+            .dropped_seq_range
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        let (lowest_dropped_seq, highest_dropped_seq) = match range {
+            Some((lowest, highest)) => (Some(lowest), Some(highest)),
+            None => (None, None),
+        };
+        let marker = self.render(JournalRecord::Dropped {
+            count,
+            before_seq,
+            lowest_dropped_seq,
+            highest_dropped_seq,
+        })?;
         self.write_line(marker).await
     }
 
@@ -1448,6 +1519,8 @@ mod tests {
         let line = JournalLine::new(JournalRecord::Dropped {
             count: 3,
             before_seq: Some(9),
+            lowest_dropped_seq: Some(6),
+            highest_dropped_seq: Some(8),
         });
         let json = serde_json::to_value(&line).expect("serializable");
         assert_eq!(json["schema_version"], JOURNAL_SCHEMA_VERSION);
@@ -1646,12 +1719,16 @@ mod tests {
             JournalLine::new(JournalRecord::Dropped {
                 count: 1,
                 before_seq: Some(3),
+                lowest_dropped_seq: Some(2),
+                highest_dropped_seq: Some(2),
             }),
             JournalLine::new(JournalRecord::Event { event: retained }),
             JournalLine::new(JournalRecord::Event { event: discarded }),
             JournalLine::new(JournalRecord::Dropped {
                 count: 2,
                 before_seq: None,
+                lowest_dropped_seq: Some(5),
+                highest_dropped_seq: Some(6),
             }),
         ];
         let mut bytes = Vec::new();
@@ -1710,6 +1787,7 @@ mod tests {
             .await
             .unwrap();
         journal.dropped.store(3, Ordering::Relaxed);
+        *journal.dropped_seq_range.lock().unwrap() = Some((12, 14));
 
         journal.flush_before(9).await.unwrap();
         journal.shutdown().await.unwrap();
@@ -1720,7 +1798,9 @@ mod tests {
                 line.record,
                 JournalRecord::Dropped {
                     count: 3,
-                    before_seq: Some(9)
+                    before_seq: Some(9),
+                    lowest_dropped_seq: Some(12),
+                    highest_dropped_seq: Some(14),
                 }
             )
         }));

@@ -45,7 +45,9 @@ use agent_runtime_core::store::{SessionSnapshot, SessionStateSensitivity, Sessio
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::private_storage::{ensure_private_directory, read_private, write_private_atomically};
+use crate::private_storage::{
+    ensure_private_directory, open_private_append, read_private, write_private_atomically,
+};
 
 /// The on-disk schema version of a persisted snapshot record.
 ///
@@ -158,13 +160,7 @@ impl SessionPaths {
     /// back to the working directory: writing session state into whatever
     /// directory the user happened to launch from is worse than not starting.
     pub fn under_home(project: &ProjectId) -> Result<Self, RuntimeError> {
-        let home = dirs::home_dir().ok_or_else(|| {
-            RuntimeError::new(
-                ErrorKind::Config,
-                "no home directory is available for Smith's session state",
-            )
-        })?;
-        Ok(Self::new(home.join(DEFAULT_STATE_DIR), project))
+        Ok(Self::new(state_root_under_home()?, project))
     }
 
     /// The directory sessions for this project are stored in.
@@ -249,6 +245,84 @@ impl SessionPaths {
     pub async fn ensure_directory(&self) -> Result<(), RuntimeError> {
         ensure_private_directory(&self.directory).await
     }
+}
+
+/// Resolves the user's `~/.smith` state root.
+///
+/// Fails when the home directory cannot be determined, rather than falling
+/// back to the working directory: writing session state into whatever
+/// directory the user happened to launch from is worse than not starting.
+/// Shared by [`SessionPaths::under_home`] and [`open_session_log_under_home`]
+/// so the two never disagree about where `~/.smith` is.
+fn state_root_under_home() -> Result<PathBuf, RuntimeError> {
+    dirs::home_dir()
+        .map(|home| home.join(DEFAULT_STATE_DIR))
+        .ok_or_else(|| {
+            RuntimeError::new(
+                ErrorKind::Config,
+                "no home directory is available for Smith's session state",
+            )
+        })
+}
+
+/// The directory Smith's process-scoped diagnostic logs are written under,
+/// relative to a state root.
+///
+/// Kept beside `sessions/` rather than inside a project's session directory:
+/// [`FileSessionStore::list`] enumerates every file under a project directory
+/// by suffix, and a log is operational exhaust, not session content, that
+/// must never be mistaken for one of the records it lists.
+const LOG_DIR: &str = "logs";
+
+/// The diagnostic log file for `session`, rooted at `state_root`.
+///
+/// Mirrors [`SessionPaths::new`]'s injection point: production passes the
+/// user's `~/.smith`, tests pass a temporary directory, so a test never has
+/// to touch a real home directory to exercise this path.
+pub fn session_log_path(
+    state_root: impl AsRef<Path>,
+    session: &SessionId,
+) -> Result<PathBuf, RuntimeError> {
+    safe_component(session.as_str(), "session id")?;
+    Ok(state_root
+        .as_ref()
+        .join(LOG_DIR)
+        .join(format!("{}.log", session.as_str())))
+}
+
+/// Opens (creating if necessary) the owner-only diagnostic log file for
+/// `session` under `state_root`, ready for a subscriber to append to.
+///
+/// The file gets the same owner-only mode `0600` every other private Smith
+/// file uses — a log line can carry the same tool arguments and provider
+/// metadata the journal redacts — but unlike a snapshot it is appended to for
+/// the life of a process rather than replaced wholesale in one shot, so it
+/// goes through [`open_private_append`] rather than
+/// [`write_private_atomically`].
+pub async fn open_session_log(
+    state_root: impl AsRef<Path>,
+    session: &SessionId,
+) -> Result<std::fs::File, RuntimeError> {
+    let path = session_log_path(state_root, session)?;
+    let directory = path.parent().ok_or_else(|| {
+        RuntimeError::new(
+            ErrorKind::Config,
+            "the diagnostic log path has no parent directory",
+        )
+    })?;
+    ensure_private_directory(directory).await?;
+    let file = open_private_append(&path).await?;
+    Ok(file.into_std().await)
+}
+
+/// Opens `session`'s diagnostic log under the user's `~/.smith` state root.
+///
+/// See [`SessionPaths::under_home`] for why a missing home directory fails
+/// outright instead of falling back to the working directory.
+pub async fn open_session_log_under_home(
+    session: &SessionId,
+) -> Result<std::fs::File, RuntimeError> {
+    open_session_log(state_root_under_home()?, session).await
 }
 
 /// One entry of [`FileSessionStore::list`].
@@ -588,5 +662,63 @@ mod tests {
         assert_eq!(err.kind, ErrorKind::Config);
         assert!(paths.journal(&SessionId::new("../../escape")).is_err());
         assert!(paths.tasks_dir(&SessionId::new("../../escape")).is_err());
+    }
+
+    #[test]
+    fn the_session_log_sits_beside_sessions_not_inside_a_project_directory() {
+        let path = session_log_path("/state", &SessionId::new("s-1")).expect("a path");
+        assert_eq!(path, Path::new("/state/logs/s-1.log"));
+        // Not under `sessions/`: `FileSessionStore::list` enumerates that
+        // tree by suffix and must never trip over a log file.
+        assert!(!path.starts_with("/state/sessions"));
+    }
+
+    #[test]
+    fn a_session_id_that_would_escape_its_directory_is_refused_for_the_log_too() {
+        let err =
+            session_log_path("/state", &SessionId::new("../../escape")).expect_err("an error");
+        assert_eq!(err.kind, ErrorKind::Config);
+    }
+
+    #[tokio::test]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    async fn a_session_log_is_owner_only_and_appended_to_across_opens() {
+        use std::io::Write as _;
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().expect("a temp dir");
+        let session = SessionId::new("s-1");
+
+        let mut file = open_session_log(root.path(), &session)
+            .await
+            .expect("an owner-only log file");
+        file.write_all(b"first\n").expect("a write");
+        drop(file);
+
+        let path = session_log_path(root.path(), &session).expect("a path");
+        let directory_mode = std::fs::metadata(path.parent().expect("a parent"))
+            .expect("the logs directory")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(directory_mode, 0o700);
+        let file_mode = std::fs::metadata(&path)
+            .expect("the log file")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(file_mode, 0o600);
+
+        // A resumed process reopens the same session's log rather than
+        // truncating it: the subscriber must keep appending across restarts,
+        // the same way the journal resumes instead of overwriting.
+        let mut file = open_session_log(root.path(), &session)
+            .await
+            .expect("reopening the same log");
+        file.write_all(b"second\n").expect("a second write");
+        drop(file);
+
+        let contents = std::fs::read_to_string(&path).expect("a readable log");
+        assert_eq!(contents, "first\nsecond\n");
     }
 }

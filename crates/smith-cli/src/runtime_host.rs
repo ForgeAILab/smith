@@ -323,6 +323,7 @@ pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
             }
             Err(error) => return Err(error),
         };
+        crate::logging::init(started.host.session().id()).await;
         let StartedHost {
             host,
             approvals,

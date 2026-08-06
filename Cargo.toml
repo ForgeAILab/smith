@@ -69,6 +69,10 @@ tokio-util = { version = "0.7", features = ["io"] }
 toml = "0.9"
 toml_edit = "0.23"
 tracing = "0.1"
+# `env-filter` reads the process log level from an environment variable
+# (`smith-cli` maps `SMITH_LOG` onto it) without Smith having to parse
+# directive syntax itself.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 zeroize = "1.8"

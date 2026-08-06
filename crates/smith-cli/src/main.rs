@@ -13,6 +13,7 @@ mod connection;
 mod headless;
 mod interaction;
 mod local_command;
+mod logging;
 mod resources;
 mod runtime_host;
 mod setup;
@@ -212,6 +213,7 @@ async fn run_command(mut args: RunArgs) -> Result<u8> {
                 None,
             )
             .await?;
+            logging::init(started.host.session().id()).await;
             headless::run(
                 &started.host,
                 prompt,

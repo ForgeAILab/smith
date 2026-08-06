@@ -703,6 +703,53 @@ async fn queue_overflow_is_recorded_as_a_marker_rather_than_lost_silently() {
 }
 
 #[tokio::test]
+async fn queue_overflow_marker_names_the_seq_range_actually_lost() {
+    let directory = tempfile::tempdir().expect("a temp dir");
+    let (path, journal) = open_journal(
+        &directory,
+        JournalConfig {
+            queue_capacity: 4,
+            ..JournalConfig::default()
+        },
+        DefaultRedactor::new(),
+    )
+    .await;
+
+    // Same trick as the sibling overflow test: a current-thread runtime
+    // never lets the writer run during this loop, so sequences 0..4 fill the
+    // bounded queue and 4..20 overflow it.
+    for seq in 0..20 {
+        journal.observe(&text(seq, "burst"));
+    }
+    let stats = journal.shutdown().await.expect("a clean shutdown");
+    assert_eq!(stats.written, 4);
+    assert_eq!(stats.dropped, 16);
+
+    let recovery = read_journal(&path).await.expect("a readable journal");
+    let (lowest, highest) = recovery
+        .records
+        .iter()
+        .find_map(|line| match &line.record {
+            JournalRecord::Dropped {
+                lowest_dropped_seq,
+                highest_dropped_seq,
+                ..
+            } => Some((*lowest_dropped_seq, *highest_dropped_seq)),
+            _ => None,
+        })
+        .expect("an overflow marker");
+
+    // The four retained records are seq 0..4, so `before_seq` (checked above
+    // by the sibling test) names 0 — an old record still draining from the
+    // queue, not anything that was lost. What actually overflowed is the
+    // tail: seq 4..20. The marker has to name that range, not the position
+    // it happens to be written in front of.
+    assert_eq!((lowest, highest), (Some(4), Some(19)));
+    let retained: Vec<u64> = recovery.events().iter().map(|event| event.seq).collect();
+    assert_eq!(retained, [0, 1, 2, 3]);
+}
+
+#[tokio::test]
 async fn flush_makes_queued_records_readable_without_ending_the_session() {
     let directory = tempfile::tempdir().expect("a temp dir");
     let (path, journal) =
