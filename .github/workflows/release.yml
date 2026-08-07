@@ -22,8 +22,11 @@ jobs:
         # feature needs libdbus at build time, which is not trivially
         # cross-compilable for static musl. Add them once that is resolved.
         include:
+          # macos-13 was retired in December 2025; macos-15-intel is the
+          # remaining x86_64 macOS image. GitHub drops Intel macOS entirely
+          # when macOS 15 retires in autumn 2027.
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-15-intel
             artifact: smith-x86_64-macos
             builder: cargo
           - target: aarch64-apple-darwin
@@ -60,6 +63,30 @@ jobs:
       - name: Install cross-compilation toolchain (Linux ARM64)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
+          # Ubuntu's archive and security hosts carry amd64/i386 only; every
+          # other architecture lives on ports.ubuntu.com. Enabling arm64
+          # without repointing it there makes `apt-get update` 404 on the
+          # arm64 indexes, and apt treats a missing index as fatal. Pin the
+          # stock sources to the host architecture, then give arm64 a source
+          # that actually carries it.
+          . /etc/os-release
+          if compgen -G "/etc/apt/sources.list.d/*.sources" > /dev/null; then
+            sudo sed -i '/^Architectures:/d' /etc/apt/sources.list.d/*.sources
+            sudo sed -i '/^Types:/a Architectures: amd64' /etc/apt/sources.list.d/*.sources
+          fi
+          for legacy in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do
+            [[ -f "${legacy}" ]] || continue
+            sudo sed -i -E 's|^deb(-src)? +(\[[^]]*\] *)?|deb\1 [arch=amd64] |' "${legacy}"
+          done
+          sudo tee /etc/apt/sources.list.d/arm64-ports.sources > /dev/null <<EOF
+          Types: deb
+          URIs: http://ports.ubuntu.com/ubuntu-ports
+          Suites: ${VERSION_CODENAME} ${VERSION_CODENAME}-updates ${VERSION_CODENAME}-backports ${VERSION_CODENAME}-security
+          Components: main universe restricted multiverse
+          Architectures: arm64
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
+
           sudo dpkg --add-architecture arm64
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
@@ -67,17 +94,23 @@ jobs:
             pkg-config \
             libdbus-1-dev:arm64
 
+          # Only this leg cross-compiles. Exporting the cross environment here
+          # rather than on the shared build step is what keeps the native
+          # x86_64 build from being pointed at an arm64 pkg-config path that
+          # does not exist on its runner.
+          {
+            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc"
+            echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc"
+            echo "PKG_CONFIG_ALLOW_CROSS=1"
+            echo "PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig"
+          } >> "${GITHUB_ENV}"
+
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
 
       - name: Build smith binary
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
-          PKG_CONFIG_ALLOW_CROSS: "1"
-          PKG_CONFIG_LIBDIR: /usr/lib/aarch64-linux-gnu/pkgconfig
         run: ${{ matrix.builder }} build -p smith-cli --release --locked --target ${{ matrix.target }}
 
       - name: Package binary
