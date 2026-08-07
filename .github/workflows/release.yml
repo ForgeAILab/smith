@@ -124,30 +124,50 @@ jobs:
             artifacts/**/*.tar.gz
             SHA256SUMS
 
+  # Publishes through npm trusted publishing: the registry trusts this exact
+  # workflow by name, and the npm CLI exchanges the job's OIDC token for a
+  # short-lived credential. There is no npm token to store, leak, or rotate --
+  # which is also why `id-token: write` below is load-bearing rather than
+  # decorative.
   publish-npm:
     name: Publish npm Bootstrapper
     needs: release
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           persist-credentials: false
 
+      # Trusted publishing needs Node >= 22.14 and npm >= 11.5.1; the npm that
+      # ships with Node is what actually performs the OIDC exchange, so the
+      # version below is a requirement, not a preference.
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Require an npm that can mint OIDC credentials
+        run: |
+          npm --version
+          node --version
+          npm install --global npm@latest
+          npm --version
 
       - name: Set package version from tag
         working-directory: npx-cli
         run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version --allow-same-version
 
+      # No NODE_AUTH_TOKEN: the CLI detects the OIDC environment on its own.
+      # Provenance is generated automatically under trusted publishing, so
+      # passing --provenance would be redundant.
       - name: Publish package
         working-directory: npx-cli
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           package_name=$(node -p "require('./package.json').name")
           version="${GITHUB_REF_NAME#v}"
@@ -160,4 +180,4 @@ jobs:
           if [[ "$version" == *-* ]]; then
             npm_tag=next
           fi
-          npm publish --access public --provenance --tag "$npm_tag"
+          npm publish --access public --tag "$npm_tag"
