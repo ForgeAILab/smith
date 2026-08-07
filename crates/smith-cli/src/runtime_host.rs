@@ -248,18 +248,57 @@ pub(super) async fn start_host(
     })
 }
 
+/// The exit report's cost line, or `None` when the catalog carries no price
+/// entry for the active model.
+///
+/// Per `usage-accounting`'s "A model the catalog does not price": the exit
+/// report prints the token lines and no cost line at all in that case — a
+/// bare `None` return, never a price substituted from another model,
+/// provider, or a hard-coded default. This differs from `/status`, which
+/// reports the same absence as `unknown` rather than omitting it (see
+/// `local_command::render_status_cost`); the two surfaces share the
+/// `SessionCost` computation but not this presentation choice.
+fn render_exit_cost_line(
+    usage: &smith_tui::status::SessionUsage,
+    price: Option<&smith_tui::status::PriceReference>,
+) -> Option<String> {
+    let price = price?;
+    let cost = smith_tui::status::SessionCost::compute(usage, price);
+    Some(format!(
+        "{} {} · {}/{}",
+        cost.render(),
+        cost.label.as_str(),
+        price.provider,
+        price.model,
+    ))
+}
+
 /// Prints what the session spent and records it for later comparison.
 ///
 /// Analytics must never be able to fail a session, so a log that cannot be
 /// written is dropped rather than surfaced: the user is quitting, and there is
 /// nothing useful they could do about it.
+///
+/// `price` is the identical reference `/status` priced against during the
+/// session (see `Status::set_price`), not a fresh catalog lookup performed
+/// here — and it is `None` whenever the catalog carries no price entry for
+/// the active model. Per `usage-accounting`'s "A model the catalog does not
+/// price", that case prints the token lines and no cost line at all: never a
+/// price substituted from another model, provider, or a hard-coded default.
+/// Cost never reaches [`smith_tui::usage_log::SessionUsageRecord`] below —
+/// it is presentation only, printed and discarded, and carries no field
+/// there for a price to leak into.
 fn report_session_usage(
     host: &HostSession,
     session: &str,
     usage: &smith_tui::status::SessionUsage,
+    price: Option<&smith_tui::status::PriceReference>,
 ) {
     if let Some(line) = usage.render() {
         println!("{line}");
+        if let Some(cost_line) = render_exit_cost_line(usage, price) {
+            println!("{cost_line}");
+        }
     }
     // Printed even for a session that spent nothing: an empty session is
     // exactly the one a user is most likely to want to pick back up, and the
@@ -353,6 +392,7 @@ pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
                 inventory,
                 agents,
                 sessions,
+                catalog: catalog.clone(),
             },
             PresentationOptions {
                 no_color: args.no_color,
@@ -362,8 +402,8 @@ pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
         )
         .await?
         {
-            InteractiveExit::Quit(usage) => {
-                report_session_usage(&host, &current_session, &usage);
+            InteractiveExit::Quit(usage, price) => {
+                report_session_usage(&host, &current_session, &usage, price.as_ref());
                 return Ok(0);
             }
             InteractiveExit::Reconfigure(command) => {
@@ -481,4 +521,61 @@ pub(super) fn read_prompt(reader: impl Read) -> Result<String> {
         anyhow::bail!("stdin did not contain a prompt");
     }
     Ok(prompt)
+}
+
+#[cfg(test)]
+mod tests {
+    use smith_tui::status::{PriceReference, PriceTable, SessionUsage};
+
+    use super::*;
+
+    fn usage(reported: bool, tokens: &[(CounterKind, u64)]) -> SessionUsage {
+        let mut totals = BTreeMap::new();
+        for (kind, value) in tokens {
+            totals.insert(*kind, *value);
+        }
+        SessionUsage {
+            turns: 1,
+            reported,
+            totals,
+            ..SessionUsage::default()
+        }
+    }
+
+    fn price() -> PriceReference {
+        PriceReference {
+            provider: "openai".to_owned(),
+            model: "gpt-5.3".to_owned(),
+            table: PriceTable {
+                input: Some(2_000_000),
+                output: Some(8_000_000),
+                cache_read: None,
+                cache_write: None,
+            },
+        }
+    }
+
+    #[test]
+    fn an_exact_session_prints_one_labelled_figure_naming_its_binding() {
+        let usage = usage(true, &[(CounterKind::InputUncached, 1_000_000)]);
+        let line = render_exit_cost_line(&usage, Some(&price())).expect("a priced line");
+        assert_eq!(line, "$2.000 exact · openai/gpt-5.3");
+    }
+
+    #[test]
+    fn an_estimated_session_prints_the_estimated_glyph_and_word() {
+        let usage = usage(false, &[(CounterKind::InputUncached, 1_000_000)]);
+        let line = render_exit_cost_line(&usage, Some(&price())).expect("a priced line");
+        assert_eq!(line, "~$2.000 estimated · openai/gpt-5.3");
+    }
+
+    #[test]
+    fn an_unpriced_model_prints_no_cost_line_at_all() {
+        // usage-accounting: "A model the catalog does not price" — the exit
+        // report prints the token lines and no cost line, never a price
+        // substituted from another model, provider, or a hard-coded
+        // default.
+        let usage = usage(true, &[(CounterKind::InputUncached, 1_000_000)]);
+        assert_eq!(render_exit_cost_line(&usage, None), None);
+    }
 }

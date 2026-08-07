@@ -303,17 +303,38 @@ pub struct SessionUsage {
     pub compactions: u32,
     /// Tokens those compactions reclaimed.
     pub reclaimed_tokens: u64,
+    /// Per-counter usage delegated children reported on their own streams
+    /// this process observed. Kept separate from `totals` rather than
+    /// blended into it, per `usage-accounting`'s "Delegated usage is
+    /// accounted separately" — the approval boundary explicitly forbids
+    /// blending child counters into the root counters so the two cannot be
+    /// told apart.
+    pub delegated_totals: BTreeMap<CounterKind, u64>,
+    /// Distinct children that reported any delegated usage.
+    pub delegated_contributors: u32,
 }
 
 impl SessionUsage {
-    /// Whether anything at all was observed.
+    /// Whether anything at all was observed, including a delegated-only
+    /// session that never accumulated any root usage of its own.
     pub fn is_empty(&self) -> bool {
-        self.totals.is_empty() && self.turns == 0
+        self.totals.is_empty() && self.turns == 0 && self.delegated_totals.is_empty()
     }
 
-    /// Every counter's total.
+    /// The root session's own counter total.
+    ///
+    /// Deliberately root-only and unchanged in meaning: every existing
+    /// caller of this method expects the session's own spend, not a figure
+    /// blended with delegated usage. [`Self::merged_total_tokens`] is the
+    /// explicit combined figure for callers that want the sum this
+    /// method's own doc used to imply before delegation existed.
     pub fn total_tokens(&self) -> u64 {
         self.totals.values().copied().sum()
+    }
+
+    /// Every counter's total across both root and delegated usage.
+    pub fn merged_total_tokens(&self) -> u64 {
+        self.total_tokens() + self.delegated_totals.values().copied().sum::<u64>()
     }
 
     /// A human-facing summary, or `None` when nothing was observed.
@@ -321,32 +342,98 @@ impl SessionUsage {
     /// An unreported session is marked as estimated rather than shown as a
     /// confident zero: "0 tokens" and "the provider told us nothing" are
     /// different facts, and only one of them is a bill.
+    ///
+    /// When nothing was delegated this is exactly the root's own one-line
+    /// summary, unchanged from before delegated accounting existed. When
+    /// something was, a merged total line leads, followed by indented
+    /// `root` and `agents` sub-lines that break it down — the `agents` line
+    /// names how many children contributed.
+    ///
+    /// The merged line carries counters only, never a turn count. A child's
+    /// turns belong to the delegation coordinator and never enter this
+    /// projection, so the only turn figure available here is the root's —
+    /// and printing merged tokens beside the root's turn count would read as
+    /// a claim that those turns spent those tokens. Compactions stay on the
+    /// root line for the same reason: they are a root context event, and
+    /// repeating them against a merged figure would double-attribute them.
     pub fn render(&self) -> Option<String> {
         if self.is_empty() {
             return None;
         }
         let mark = if self.reported { "" } else { "~" };
-        let mut parts = Vec::new();
-        for (kind, value) in &self.totals {
-            parts.push(format!(
-                "{} {mark}{}",
-                counter_label(*kind),
-                compact_tokens(*value)
-            ));
+        let root_parts = render_counter_parts(&self.totals, mark);
+        let root_line = format_usage_line(
+            self.turns,
+            &root_parts,
+            self.reported,
+            self.compactions,
+            self.reclaimed_tokens,
+        );
+        if self.delegated_totals.is_empty() {
+            return Some(root_line);
         }
-        let mut line = format!("{} turn(s) · {}", self.turns, parts.join(" · "));
+
+        let merged = merge_counter_totals(&self.totals, &self.delegated_totals);
+        let mut merged_line = format!(
+            "total · {}",
+            render_counter_parts(&merged, mark).join(" · ")
+        );
         if !self.reported {
-            line.push_str(" · estimated");
+            merged_line.push_str(" · estimated");
         }
-        if self.compactions > 0 {
-            line.push_str(&format!(
-                " · {} compaction(s) reclaiming {}",
-                self.compactions,
-                compact_tokens(self.reclaimed_tokens)
-            ));
-        }
-        Some(line)
+        let agent_parts = render_counter_parts(&self.delegated_totals, mark);
+        Some(format!(
+            "{merged_line}\n  root: {root_line}\n  agents: {} agent(s) · {}",
+            self.delegated_contributors,
+            agent_parts.join(" · "),
+        ))
     }
+}
+
+/// Renders one counter/value pair per entry, e.g. `input ~12.4k`.
+fn render_counter_parts(totals: &BTreeMap<CounterKind, u64>, mark: &str) -> Vec<String> {
+    totals
+        .iter()
+        .map(|(kind, value)| format!("{} {mark}{}", counter_label(*kind), compact_tokens(*value)))
+        .collect()
+}
+
+/// Sums two per-counter total maps without mutating either input.
+fn merge_counter_totals(
+    root: &BTreeMap<CounterKind, u64>,
+    delegated: &BTreeMap<CounterKind, u64>,
+) -> BTreeMap<CounterKind, u64> {
+    let mut merged = root.clone();
+    for (kind, value) in delegated {
+        *merged.entry(*kind).or_insert(0) += value;
+    }
+    merged
+}
+
+/// The shared `N turn(s) · … [· estimated] [· N compaction(s) …]` shape
+/// both the root line and the merged total line render.
+fn format_usage_line(
+    turns: u32,
+    parts: &[String],
+    reported: bool,
+    compactions: u32,
+    reclaimed_tokens: u64,
+) -> String {
+    let mut line = if parts.is_empty() {
+        format!("{turns} turn(s)")
+    } else {
+        format!("{turns} turn(s) · {}", parts.join(" · "))
+    };
+    if !reported {
+        line.push_str(" · estimated");
+    }
+    if compactions > 0 {
+        line.push_str(&format!(
+            " · {compactions} compaction(s) reclaiming {}",
+            compact_tokens(reclaimed_tokens)
+        ));
+    }
+    line
 }
 
 /// A short label for one provider counter.
@@ -358,6 +445,178 @@ pub fn counter_label(kind: CounterKind) -> &'static str {
         CounterKind::Output => "output",
         CounterKind::Reasoning => "reasoning",
     }
+}
+
+/// One counter's price, in micro-USD (1e-6 USD) per million tokens.
+///
+/// Mirrors `smith_config::catalog::CatalogModelCost` in shape but is
+/// deliberately its own type: `smith-tui` has no dependency on
+/// `smith-config`, and pricing here is a presentation concern applied to a
+/// value `smith-cli` — which depends on both crates — already resolved
+/// against the catalog snapshot using the exact binding the runtime factory
+/// itself resolves models against (`RuntimePolicy`'s
+/// `provider_kind`/`endpoint`/`model`; see
+/// `crates/smith-runtime/src/factory.rs`'s `prepare_factory_inputs`).
+/// Pricing any other entry would price the wrong model, which is exactly
+/// what `usage-accounting`'s "Labelled cost calculation" forbids.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PriceTable {
+    /// Micro-USD per million uncached input tokens.
+    pub input: Option<u64>,
+    /// Micro-USD per million output tokens.
+    pub output: Option<u64>,
+    /// Micro-USD per million cache-read tokens.
+    pub cache_read: Option<u64>,
+    /// Micro-USD per million cache-write tokens.
+    pub cache_write: Option<u64>,
+}
+
+impl PriceTable {
+    /// The micro-USD-per-million price for one counter, absent when the
+    /// catalog never published it.
+    ///
+    /// `CounterKind::Reasoning` always resolves to `None`. Reasoning tokens
+    /// are billed separately from output tokens, not folded into them —
+    /// `agent_runtime_core::usage::CounterKind::Reasoning`'s own doc says so
+    /// — and Models.dev, the catalog's only source, publishes no distinct
+    /// reasoning price. Charging reasoning tokens at the output rate would
+    /// present a price the source never published as if it had: exactly
+    /// what `usage-accounting`'s "Labelled cost calculation" forbids
+    /// ("Smith SHALL calculate cost only from a versioned price reference
+    /// and compatible usage counters"). A nonzero reasoning counter is
+    /// therefore unpriceable everywhere in this table, which downgrades a
+    /// session's cost label to estimated rather than contributing silently
+    /// as zero — see [`SessionCost::compute`].
+    fn price_for(self, kind: CounterKind) -> Option<u64> {
+        match kind {
+            CounterKind::InputUncached => self.input,
+            CounterKind::InputCached => self.cache_read,
+            CounterKind::CacheWrite => self.cache_write,
+            CounterKind::Output => self.output,
+            CounterKind::Reasoning => None,
+        }
+    }
+}
+
+/// The catalog price one session is billed against, and who it names.
+///
+/// Resolved once by `crates/smith-cli` at startup (and on a provider/model
+/// change) and stored on [`Status`], so `/status` and the exit report price
+/// from the identical reference instead of each re-deriving it — the same
+/// discipline [`Status::switch_model`] already applies to cache evidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PriceReference {
+    /// The serving provider's name, so a rendered cost can say where the
+    /// price came from.
+    pub provider: String,
+    /// The model identity the price describes.
+    pub model: String,
+    /// Per-counter micro-USD-per-million prices.
+    pub table: PriceTable,
+}
+
+/// Whether a computed session cost is trustworthy as a bill or only a useful
+/// approximation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CostLabel {
+    /// Every contributing counter was provider-reported and priced.
+    Exact,
+    /// At least one contributing counter was unreported, or the catalog
+    /// published no price for it.
+    Estimated,
+}
+
+impl CostLabel {
+    /// Stable lowercase label, matching `DESIGN.md` §7's `$0.031`/`~$0.031`
+    /// convention in words.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::Estimated => "estimated",
+        }
+    }
+}
+
+/// A session's computed price: an honest amount, never a guess presented as
+/// a fact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionCost {
+    /// The total in micro-USD (1e-6 USD), summed from every counter this
+    /// session accumulated that the price reference actually prices.
+    pub micro_usd: u128,
+    /// Whether every contributing counter was both provider-reported and
+    /// priced.
+    pub label: CostLabel,
+}
+
+impl SessionCost {
+    /// Prices `usage` — root and delegated totals alike — against `price`,
+    /// using the identical per-counter reference for both.
+    ///
+    /// Delegated tokens are priced by the root's own reference even though a
+    /// child may have run a different model, per `usage-accounting`'s
+    /// "Delegated counters keep their categories": "the delegated totals are
+    /// priced by the same per-counter reference the root totals are."
+    /// Pricing each child by its own model would need a price reference per
+    /// child rather than the one binding this session resolved, which is a
+    /// larger feature this task does not add.
+    ///
+    /// Uses a `u128` intermediate for the multiply so a long session's token
+    /// counts cannot overflow the arithmetic before the division back down
+    /// to micro-USD.
+    pub fn compute(usage: &SessionUsage, price: &PriceReference) -> Self {
+        let mut micro_usd: u128 = 0;
+        let mut all_priced = true;
+        for (kind, tokens) in usage.totals.iter().chain(usage.delegated_totals.iter()) {
+            if *tokens == 0 {
+                continue;
+            }
+            match price.table.price_for(*kind) {
+                Some(rate) => {
+                    micro_usd += u128::from(*tokens) * u128::from(rate) / 1_000_000;
+                }
+                None => all_priced = false,
+            }
+        }
+        // `usage.reported` is the provider-reported signal for the whole
+        // session (`SessionUsage`'s own doc: "Whether any counter came from
+        // the provider rather than an estimate"); an unpriced contributing
+        // counter downgrades the label independently, per
+        // `usage-accounting`'s "An estimated counter downgrades the label".
+        let label = if usage.reported && all_priced {
+            CostLabel::Exact
+        } else {
+            CostLabel::Estimated
+        };
+        Self { micro_usd, label }
+    }
+
+    /// Renders the amount with its honesty glyph: `$0.031` exact, `~$0.031`
+    /// estimated (`DESIGN.md` §7).
+    pub fn render(&self) -> String {
+        let amount = format_usd(self.micro_usd);
+        match self.label {
+            CostLabel::Exact => amount,
+            CostLabel::Estimated => format!("~{amount}"),
+        }
+    }
+}
+
+/// Formats a micro-USD amount at Smith's established cost precision: three
+/// decimal places (`$0.031`, `DESIGN.md` §7) for anything at or above a
+/// tenth of a cent. Below that, three decimals would round every real,
+/// nonzero spend down to the same `$0.000` a literally free session
+/// renders — the dollar-figure version of the zero/unknown collapse this
+/// module exists to prevent — so that range widens to full micro-USD
+/// precision instead, keeping a genuine sub-cent spend visibly distinct from
+/// nothing at all.
+fn format_usd(micro_usd: u128) -> String {
+    let dollars = micro_usd / 1_000_000;
+    let thousandths = (micro_usd / 1_000) % 1_000;
+    if micro_usd > 0 && dollars == 0 && thousandths == 0 {
+        return format!("$0.{:06}", micro_usd % 1_000_000);
+    }
+    format!("${dollars}.{thousandths:03}")
 }
 
 /// The active pool account, as the footer shows it.
@@ -406,6 +665,12 @@ pub struct Status {
     totals: BTreeMap<CounterKind, u64>,
     /// Turns that produced provider usage this session.
     turns: u32,
+    /// The active provider/model's catalog price, resolved once by
+    /// `crates/smith-cli` against the exact binding the runtime factory
+    /// used, or `None` when the catalog carries no price entry for it.
+    /// Never filled in from another model, provider, or a hard-coded
+    /// default. See [`Self::set_price`] and [`Self::switch_model`].
+    price: Option<PriceReference>,
 }
 
 impl Status {
@@ -443,6 +708,7 @@ impl Status {
             usage_reported: false,
             totals: BTreeMap::new(),
             turns: 0,
+            price: None,
         }
     }
 
@@ -512,6 +778,11 @@ impl Status {
     }
 
     /// A bounded, content-free summary of what this session spent.
+    ///
+    /// Root-only: `Status` has no visibility into delegated children, so a
+    /// caller that wants the whole session's usage — root plus delegated —
+    /// goes through `App::session_usage` instead, which fills in the
+    /// delegated fields this leaves at their empty default.
     pub fn session_usage(&self) -> SessionUsage {
         SessionUsage {
             turns: self.turns,
@@ -519,7 +790,28 @@ impl Status {
             totals: self.totals.clone(),
             compactions: self.capabilities.compactions,
             reclaimed_tokens: self.capabilities.reclaimed_tokens,
+            delegated_totals: BTreeMap::new(),
+            delegated_contributors: 0,
         }
+    }
+
+    /// Resolves the price this session bills against.
+    ///
+    /// `Status` has no catalog access of its own: `crates/smith-cli` looks
+    /// up the catalog entry using the exact binding the runtime factory
+    /// resolved the model against and hands the result here once, so
+    /// `/status` and the exit report both read this identical reference
+    /// instead of each re-deriving it from the catalog. Pass `None` when the
+    /// catalog carries no price entry for the active model — never a price
+    /// substituted from another model, provider, or a hard-coded default.
+    pub fn set_price(&mut self, price: Option<PriceReference>) {
+        self.price = price;
+    }
+
+    /// The resolved price reference, when the catalog prices this session's
+    /// active model.
+    pub fn price(&self) -> Option<&PriceReference> {
+        self.price.as_ref()
     }
 
     /// Records a cache observation.
@@ -571,13 +863,20 @@ impl Status {
     ///
     /// The old provider's cache does not transfer and its token accounting does
     /// not describe the new one, so context drops back to estimated and cache
-    /// evidence is cleared rather than carried over.
+    /// evidence is cleared rather than carried over. The resolved price is
+    /// cleared for the same reason: it described the old binding, this
+    /// method has no catalog access to re-resolve one for the new binding,
+    /// and a stale price would misprice the session exactly as badly as a
+    /// stale cache figure would misreport it. The caller that does have
+    /// catalog access (`crates/smith-cli`, at startup) calls
+    /// [`Self::set_price`] right after switching.
     pub fn switch_model(&mut self, provider: Option<String>, model: impl Into<String>) {
         self.provider = provider;
         self.model = model.into();
         self.cache_read = None;
         self.context_plan = None;
         self.usage_reported = false;
+        self.price = None;
         if self.context.confidence == Confidence::Reported {
             self.context.confidence = Confidence::Estimated;
         }
@@ -811,5 +1110,242 @@ mod tests {
         // must never end up in one segment.
         assert!(!status.render_context_footer().contains("82%"));
         assert!(!status.render_context_footer().contains("keychain"));
+    }
+
+    fn priced(input: u64, output: u64, cache_read: u64, cache_write: u64) -> PriceReference {
+        PriceReference {
+            provider: "openai".to_owned(),
+            model: "gpt-5.3".to_owned(),
+            table: PriceTable {
+                input: Some(input),
+                output: Some(output),
+                cache_read: Some(cache_read),
+                cache_write: Some(cache_write),
+            },
+        }
+    }
+
+    #[test]
+    fn a_priced_model_with_reported_counters_renders_one_exact_figure() {
+        // usage-accounting: "A priced model with reported counters" — every
+        // counter the session accumulated is priced and provider-reported,
+        // so the figure is exact.
+        let mut totals = BTreeMap::new();
+        totals.insert(CounterKind::InputUncached, 1_000_000); // 1M tokens
+        totals.insert(CounterKind::Output, 500_000); // 0.5M tokens
+        let usage = SessionUsage {
+            turns: 1,
+            reported: true,
+            totals,
+            ..SessionUsage::default()
+        };
+        // $2/million input, $8/million output.
+        let price = priced(2_000_000, 8_000_000, 0, 0);
+        let cost = SessionCost::compute(&usage, &price);
+        assert_eq!(cost.label, CostLabel::Exact);
+        // 1M * $2 + 0.5M * $8 = $2 + $4 = $6.
+        assert_eq!(cost.micro_usd, 6_000_000);
+        assert_eq!(cost.render(), "$6.000");
+    }
+
+    #[test]
+    fn an_unreported_session_downgrades_the_cost_label() {
+        // usage-accounting: "An estimated counter downgrades the label" — a
+        // tokenizer-estimated session must not present its cost as exact
+        // just because the price reference itself is exact.
+        let mut totals = BTreeMap::new();
+        totals.insert(CounterKind::InputUncached, 1_000_000);
+        let usage = SessionUsage {
+            turns: 1,
+            reported: false,
+            totals,
+            ..SessionUsage::default()
+        };
+        let price = priced(2_000_000, 8_000_000, 0, 0);
+        let cost = SessionCost::compute(&usage, &price);
+        assert_eq!(cost.label, CostLabel::Estimated);
+        assert_eq!(cost.render(), "~$2.000");
+    }
+
+    #[test]
+    fn an_unpriced_contributing_counter_downgrades_the_label_but_still_prices_what_it_can() {
+        // A cache-write counter with no catalog price must not be silently
+        // folded in as zero without consequence: it downgrades the label,
+        // per the task's explicit rule for `CounterKind::Reasoning` applied
+        // here to any unpriced counter.
+        let mut totals = BTreeMap::new();
+        totals.insert(CounterKind::InputUncached, 1_000_000);
+        totals.insert(CounterKind::CacheWrite, 1_000_000);
+        let usage = SessionUsage {
+            turns: 1,
+            reported: true,
+            totals,
+            ..SessionUsage::default()
+        };
+        // No cache_write price configured.
+        let price = priced(2_000_000, 8_000_000, 0, 0);
+        let price = PriceReference {
+            table: PriceTable {
+                cache_write: None,
+                ..price.table
+            },
+            ..price
+        };
+        let cost = SessionCost::compute(&usage, &price);
+        assert_eq!(cost.label, CostLabel::Estimated);
+        // Only the priced input counter contributes; the unpriced cache
+        // write contributes nothing rather than being guessed at.
+        assert_eq!(cost.micro_usd, 2_000_000);
+    }
+
+    #[test]
+    fn reasoning_tokens_are_never_priced_and_downgrade_the_label() {
+        // Models.dev publishes no reasoning price, and reasoning tokens are
+        // billed separately from output tokens (disjoint counters, per
+        // `agent_runtime_core::usage::CounterKind::Reasoning`'s own doc), so
+        // a nonzero reasoning counter can never be exact even when every
+        // other counter is fully priced and provider-reported.
+        let mut totals = BTreeMap::new();
+        totals.insert(CounterKind::InputUncached, 1_000_000);
+        totals.insert(CounterKind::Reasoning, 200_000);
+        let usage = SessionUsage {
+            turns: 1,
+            reported: true,
+            totals,
+            ..SessionUsage::default()
+        };
+        let price = priced(2_000_000, 8_000_000, 4_000_000, 1_000_000);
+        let cost = SessionCost::compute(&usage, &price);
+        assert_eq!(cost.label, CostLabel::Estimated);
+        // Reasoning tokens contribute nothing to the dollar figure — never a
+        // price the catalog did not publish — but the priced input still
+        // counts.
+        assert_eq!(cost.micro_usd, 2_000_000);
+    }
+
+    #[test]
+    fn delegated_totals_are_priced_by_the_same_reference_as_root() {
+        // usage-accounting: "Delegated counters keep their categories" — the
+        // delegated totals are priced by the same per-counter reference the
+        // root totals are, not by a different (possibly cheaper or more
+        // expensive) child model.
+        let mut totals = BTreeMap::new();
+        totals.insert(CounterKind::InputUncached, 1_000_000);
+        let mut delegated_totals = BTreeMap::new();
+        delegated_totals.insert(CounterKind::Output, 500_000);
+        let usage = SessionUsage {
+            turns: 1,
+            reported: true,
+            totals,
+            delegated_totals,
+            delegated_contributors: 2,
+            ..SessionUsage::default()
+        };
+        let price = priced(2_000_000, 8_000_000, 0, 0);
+        let cost = SessionCost::compute(&usage, &price);
+        assert_eq!(cost.label, CostLabel::Exact);
+        // Root: 1M * $2 = $2. Delegated: 0.5M * $8 = $4. Total $6, from one
+        // reference.
+        assert_eq!(cost.micro_usd, 6_000_000);
+    }
+
+    #[test]
+    fn sub_cent_costs_render_distinctly_from_a_free_session() {
+        // A session that spent a real but tiny amount must never render
+        // identically to one that spent nothing — the dollar-figure version
+        // of the zero/unknown collapse this module exists to prevent.
+        let tiny = SessionCost {
+            micro_usd: 400, // $0.0004
+            label: CostLabel::Exact,
+        };
+        assert_eq!(tiny.render(), "$0.000400");
+        let free = SessionCost {
+            micro_usd: 0,
+            label: CostLabel::Exact,
+        };
+        assert_eq!(free.render(), "$0.000");
+        assert_ne!(tiny.render(), free.render());
+    }
+
+    #[test]
+    fn the_established_three_decimal_rendering_matches_design_doc() {
+        // DESIGN.md §7: "$0.031" exact, "~$0.031" estimated.
+        assert_eq!(
+            SessionCost {
+                micro_usd: 31_000,
+                label: CostLabel::Exact,
+            }
+            .render(),
+            "$0.031"
+        );
+        assert_eq!(
+            SessionCost {
+                micro_usd: 31_000,
+                label: CostLabel::Estimated,
+            }
+            .render(),
+            "~$0.031"
+        );
+    }
+
+    #[test]
+    fn a_large_session_does_not_overflow_or_panic() {
+        // Extreme (not merely large) token and price magnitudes: `u64::MAX`
+        // tokens at a `u64::MAX` micro-USD-per-million rate. The
+        // intermediate product overflows `u64` (debug builds panic on
+        // overflow), which is exactly why `SessionCost::compute` widens to
+        // `u128` before dividing back down to micro-USD.
+        let mut totals = BTreeMap::new();
+        totals.insert(CounterKind::InputUncached, u64::MAX);
+        let usage = SessionUsage {
+            turns: 1,
+            reported: true,
+            totals,
+            ..SessionUsage::default()
+        };
+        let price = priced(u64::MAX, 0, 0, 0);
+        let cost = SessionCost::compute(&usage, &price);
+        let expected = u128::from(u64::MAX) * u128::from(u64::MAX) / 1_000_000;
+        assert_eq!(cost.micro_usd, expected);
+        assert_eq!(cost.label, CostLabel::Exact);
+    }
+
+    #[test]
+    fn resolving_a_price_does_not_change_the_recorded_usage_shape() {
+        // usage-accounting: "Cost changes no decision" — pinned at the one
+        // artifact that actually reaches persistence and every tool-facing
+        // surface. `SessionUsage` is what `SessionUsageRecord::new` records
+        // and what `App::session_usage` hands to every other surface; it
+        // carries no price field at all, so resolving (or clearing) a price
+        // on `Status` cannot change what gets recorded or read back,
+        // regardless of what the price is.
+        let mut status = Status::new("gpt-5.3", "~/work/api");
+        status.record_usage(
+            &UsageDelta::new()
+                .with(CounterKind::InputUncached, 1_000)
+                .with(CounterKind::Output, 200),
+        );
+        let usage_without_price = status.session_usage();
+
+        status.set_price(Some(priced(2_000_000, 8_000_000, 0, 0)));
+        let usage_with_price = status.session_usage();
+
+        assert_eq!(
+            usage_without_price, usage_with_price,
+            "a resolved price must not change the recorded usage shape"
+        );
+    }
+
+    #[test]
+    fn switching_models_clears_a_price_that_no_longer_describes_the_binding() {
+        let mut status = Status::new("gpt-5.3", "~/work/api");
+        status.set_price(Some(priced(2_000_000, 8_000_000, 0, 0)));
+        assert!(status.price().is_some());
+
+        status.switch_model(Some("anthropic".into()), "claude-opus-5");
+        assert!(
+            status.price().is_none(),
+            "the old provider's price does not describe the new binding"
+        );
     }
 }

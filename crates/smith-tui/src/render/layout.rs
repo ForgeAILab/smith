@@ -4,7 +4,7 @@
 //! mutates state or caches across frames, which is what makes resize correct by
 //! construction: every wrap is recomputed at the new width.
 
-use agent_runtime_core::event::PlanSensitivity;
+use agent_runtime_core::event::{PlanItemStatus, PlanSensitivity};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::Line;
@@ -359,7 +359,33 @@ fn desired_todo_rows(app: &App) -> u16 {
     let Some(items) = plan.items.as_ref().filter(|items| !items.is_empty()) else {
         return 0;
     };
-    u16::try_from(items.len().min(MAX_VISIBLE_TODOS).saturating_add(1)).unwrap_or(u16::MAX)
+    // The pane retires once every item is completed and the turn is no
+    // longer running. `draw_todos` in `composer.rs` reaches the same verdict
+    // from the same two facts, so this reserves no row it would leave blank.
+    if !app.is_busy()
+        && items
+            .iter()
+            .all(|item| item.status == PlanItemStatus::Completed)
+    {
+        return 0;
+    }
+    // The collapsed completed row is charged against the same budget an
+    // uncollapsed item would have used, so the anchored row budget stays
+    // exactly what it costs today: open items plus at most one row standing
+    // in for every completed item, capped at `MAX_VISIBLE_TODOS`.
+    let open_count = items
+        .iter()
+        .filter(|item| item.status != PlanItemStatus::Completed)
+        .count();
+    let collapsed_row = usize::from(
+        items
+            .iter()
+            .any(|item| item.status == PlanItemStatus::Completed),
+    );
+    let visible = open_count
+        .saturating_add(collapsed_row)
+        .min(MAX_VISIBLE_TODOS);
+    u16::try_from(visible.saturating_add(1)).unwrap_or(u16::MAX)
 }
 
 fn hint_rows(app: &App) -> u16 {

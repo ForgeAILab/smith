@@ -19,7 +19,12 @@ use serde::{Deserialize, Serialize};
 use crate::status::{SessionUsage, counter_label};
 
 /// Record wire version.
-pub const USAGE_RECORD_SCHEMA_VERSION: u32 = 1;
+///
+/// Bumped to 2 for delegated usage: `delegated_totals` and
+/// `delegated_contributors` are new fields. Both carry `#[serde(default)]`
+/// so [`read_all`] stays tolerant of version-1 lines, which simply have no
+/// delegated usage to report.
+pub const USAGE_RECORD_SCHEMA_VERSION: u32 = 2;
 
 /// One session's bounded usage record.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,6 +49,14 @@ pub struct SessionUsageRecord {
     pub compactions: u32,
     /// Tokens those compactions reclaimed.
     pub reclaimed_tokens: u64,
+    /// Per-counter usage delegated children reported, keyed by the same
+    /// stable counter labels as `totals`. Kept separate rather than merged
+    /// into `totals`, matching `SessionUsage`'s own separation.
+    #[serde(default)]
+    pub delegated_totals: std::collections::BTreeMap<String, u64>,
+    /// Distinct children that reported delegated usage.
+    #[serde(default)]
+    pub delegated_contributors: u32,
 }
 
 impl SessionUsageRecord {
@@ -70,6 +83,12 @@ impl SessionUsageRecord {
                 .collect(),
             compactions: usage.compactions,
             reclaimed_tokens: usage.reclaimed_tokens,
+            delegated_totals: usage
+                .delegated_totals
+                .iter()
+                .map(|(kind, value)| (counter_label(*kind).to_owned(), *value))
+                .collect(),
+            delegated_contributors: usage.delegated_contributors,
         }
     }
 }
@@ -125,6 +144,7 @@ mod tests {
             totals,
             compactions: 1,
             reclaimed_tokens: 40_000,
+            ..SessionUsage::default()
         }
     }
 
@@ -192,6 +212,7 @@ mod tests {
             totals,
             compactions: 0,
             reclaimed_tokens: 0,
+            ..SessionUsage::default()
         };
         assert_eq!(
             usage.render().expect("a summary"),
@@ -214,6 +235,7 @@ mod tests {
             totals,
             compactions: 0,
             reclaimed_tokens: 0,
+            ..SessionUsage::default()
         };
         assert_eq!(
             usage.render().expect("a summary"),
@@ -224,5 +246,128 @@ mod tests {
     #[test]
     fn an_empty_session_renders_nothing() {
         assert!(SessionUsage::default().render().is_none());
+    }
+
+    #[test]
+    fn delegated_usage_renders_a_merged_total_then_root_and_agents_sub_lines() {
+        let mut totals = std::collections::BTreeMap::new();
+        totals.insert(CounterKind::InputUncached, 860);
+        totals.insert(CounterKind::Output, 13);
+        let mut delegated_totals = std::collections::BTreeMap::new();
+        delegated_totals.insert(CounterKind::InputUncached, 140);
+        delegated_totals.insert(CounterKind::Output, 7);
+        let usage = SessionUsage {
+            turns: 1,
+            reported: true,
+            totals,
+            compactions: 0,
+            reclaimed_tokens: 0,
+            delegated_totals,
+            delegated_contributors: 4,
+        };
+        // The merged line names no turn count. A child's turns live with the
+        // delegation coordinator, so the only one available here is the
+        // root's — and printing it beside merged tokens would claim those
+        // turns spent those tokens.
+        assert_eq!(
+            usage.render().expect("a summary"),
+            "total · input 1k · output 20\n\
+             \u{20}\u{20}root: 1 turn(s) · input 860 · output 13\n\
+             \u{20}\u{20}agents: 4 agent(s) · input 140 · output 7"
+        );
+        assert_eq!(usage.total_tokens(), 873);
+        assert_eq!(usage.merged_total_tokens(), 1_020);
+        assert!(!usage.is_empty());
+    }
+
+    #[test]
+    fn a_root_compaction_is_not_repeated_against_the_merged_total() {
+        let mut totals = std::collections::BTreeMap::new();
+        totals.insert(CounterKind::InputUncached, 860);
+        let mut delegated_totals = std::collections::BTreeMap::new();
+        delegated_totals.insert(CounterKind::InputUncached, 140);
+        let usage = SessionUsage {
+            turns: 2,
+            reported: true,
+            totals,
+            compactions: 1,
+            reclaimed_tokens: 40_000,
+            delegated_totals,
+            delegated_contributors: 1,
+        };
+        let rendered = usage.render().expect("a summary");
+        assert_eq!(
+            rendered.matches("compaction(s)").count(),
+            1,
+            "a compaction is a root context event and is attributed once: {rendered}"
+        );
+        assert!(
+            rendered
+                .lines()
+                .next()
+                .is_some_and(|line| !line.contains("compaction(s)")),
+            "the merged line carries counters only: {rendered}"
+        );
+    }
+
+    #[test]
+    fn a_delegated_only_session_is_not_empty_even_without_root_usage() {
+        let mut delegated_totals = std::collections::BTreeMap::new();
+        delegated_totals.insert(CounterKind::InputUncached, 500);
+        let usage = SessionUsage {
+            delegated_totals,
+            delegated_contributors: 1,
+            ..SessionUsage::default()
+        };
+        assert!(!usage.is_empty());
+        let rendered = usage
+            .render()
+            .expect("a delegated-only session still renders");
+        assert!(rendered.contains("agents: 1 agent(s)"), "{rendered}");
+    }
+
+    #[test]
+    fn a_dormant_recovered_child_never_reaches_the_delegated_totals() {
+        // A recovered child with no live stream in this process is not a
+        // contributor: `App::apply_child` is never called for it, so
+        // nothing ever reaches `SessionUsage::delegated_totals` on its
+        // behalf. This is pinned at the record layer: a record built from a
+        // no-delegation `SessionUsage` carries an empty delegated section
+        // regardless of how many children the session's panel lists.
+        let record = SessionUsageRecord::new(
+            "session-1",
+            Some("local".to_owned()),
+            "example-model",
+            "build",
+            &usage(),
+        );
+        assert!(record.delegated_totals.is_empty());
+        assert_eq!(record.delegated_contributors, 0);
+    }
+
+    #[test]
+    fn a_version_one_record_reads_back_with_no_delegated_usage() {
+        // A record written before delegated accounting existed has no
+        // `delegated_totals`/`delegated_contributors` keys at all.
+        let legacy = serde_json::json!({
+            "schema_version": 1,
+            "session": "session-old",
+            "provider": "local",
+            "model": "example-model",
+            "agent": "build",
+            "turns": 2,
+            "reported": true,
+            "totals": {"input": 500},
+            "compactions": 0,
+            "reclaimed_tokens": 0,
+        });
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let path = default_path(dir.path());
+        std::fs::write(&path, format!("{legacy}\n")).expect("seed a legacy line");
+
+        let all = read_all(&path);
+        assert_eq!(all.len(), 1);
+        assert!(all[0].delegated_totals.is_empty());
+        assert_eq!(all[0].delegated_contributors, 0);
     }
 }

@@ -20,10 +20,10 @@ use reqwest::header::{ETAG, IF_NONE_MATCH, USER_AGENT};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use smith_config::catalog::{
-    CATALOG_SCHEMA_REVISION, CatalogLimits, CatalogModality, CatalogModel, CatalogProvider,
-    CatalogReasoningControls, CatalogSnapshot, GOOGLE_CATALOG_PROVIDER, MODELS_DEV_SOURCE_URL,
-    OPENAI_CATALOG_PROVIDER, OPENROUTER_CATALOG_PROVIDER, XAI_CATALOG_PROVIDER,
-    ZAI_CODING_PLAN_CATALOG_PROVIDER, catalog_provider_for,
+    CATALOG_SCHEMA_REVISION, CatalogLimits, CatalogModality, CatalogModel, CatalogModelCost,
+    CatalogProvider, CatalogReasoningControls, CatalogSnapshot, GOOGLE_CATALOG_PROVIDER,
+    MODELS_DEV_SOURCE_URL, OPENAI_CATALOG_PROVIDER, OPENROUTER_CATALOG_PROVIDER,
+    XAI_CATALOG_PROVIDER, ZAI_CODING_PLAN_CATALOG_PROVIDER, catalog_provider_for,
 };
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
@@ -809,6 +809,10 @@ fn normalize_model(model_id: &str, raw: &Value) -> Result<Option<CatalogModel>, 
         reasoning,
         reasoning_controls: normalize_reasoning_controls(raw, reasoning),
         structured_output,
+        // Deliberately outside the `disabled_reason` chain above: a price is
+        // additive-only and must never disable an otherwise-valid model, so
+        // `normalize_cost` has no error path to feed into it.
+        cost: normalize_cost(raw.get("cost")),
         disabled_reason,
     }))
 }
@@ -899,6 +903,57 @@ fn normalize_limits(raw: Option<&Value>) -> (Option<CatalogLimits>, Option<Strin
         }),
         None,
     )
+}
+
+/// Normalizes the Models.dev `cost` block into a per-counter price.
+///
+/// Unlike every other normalized field, an invalid or missing price is never
+/// a reason to disable a model — a price only ever adds information, it
+/// never withholds a model that was otherwise selectable. So, unlike
+/// `normalize_limits` and its neighbours, this returns no error string and
+/// feeds no `disabled_reason`: each counter (`input`, `output`,
+/// `cache_read`, `cache_write`) is converted independently, and a negative,
+/// infinite, non-numeric, or absent counter is simply dropped rather than
+/// invalidating the whole block or the model. An entry whose every counter
+/// is invalid or absent normalizes to `None`, identical to a source that
+/// published no `cost` block at all.
+///
+/// `scripts/generate-model-catalog.py` implements the same normalization;
+/// the two must stay byte-identical for the seed reproducibility check.
+fn normalize_cost(raw: Option<&Value>) -> Option<CatalogModelCost> {
+    let raw = raw?.as_object()?;
+    let cost = CatalogModelCost {
+        input: micro_usd_per_million(raw.get("input")),
+        output: micro_usd_per_million(raw.get("output")),
+        cache_read: micro_usd_per_million(raw.get("cache_read")),
+        cache_write: micro_usd_per_million(raw.get("cache_write")),
+    };
+    (cost.input.is_some()
+        || cost.output.is_some()
+        || cost.cache_read.is_some()
+        || cost.cache_write.is_some())
+    .then_some(cost)
+}
+
+/// Converts one Models.dev USD-per-million-token counter into micro-USD
+/// (1e-6 USD) per million tokens, Smith's fixed-point price unit.
+///
+/// Rejects a missing or `null` counter, a non-numeric value, and a negative
+/// or non-finite (`NaN`/infinite) number. Uses "add a half unit, then floor"
+/// rather than `f64::round` so the rounding rule is the exact same
+/// floating-point operation Python's `math.floor` performs in
+/// `scripts/generate-model-catalog.py`, keeping the two implementations
+/// byte-identical for every value Models.dev actually publishes.
+fn micro_usd_per_million(raw: Option<&Value>) -> Option<u64> {
+    let value = raw?.as_f64()?;
+    if !value.is_finite() || value < 0.0 {
+        return None;
+    }
+    let micro = (value * 1_000_000.0 + 0.5).floor();
+    if micro > u64::MAX as f64 {
+        return None;
+    }
+    Some(micro as u64)
 }
 
 fn normalize_modalities(
@@ -1077,7 +1132,8 @@ mod tests {
                         "tool_call": true,
                         "reasoning": true,
                         "modalities": {"input": ["text"], "output": ["text"]},
-                        "limit": {"context": 400000, "output": 128000}
+                        "limit": {"context": 400000, "output": 128000},
+                        "cost": {"input": 5, "output": 30, "cache_read": 1.25, "cache_write": 6.25}
                     }
                 }
             },
@@ -1101,7 +1157,8 @@ mod tests {
                         "name": "Separate Input",
                         "tool_call": true,
                         "modalities": {"input": ["text"], "output": ["text"]},
-                        "limit": {"context": 128000, "input": 64000, "output": 8000}
+                        "limit": {"context": 128000, "input": 64000, "output": 8000},
+                        "cost": {"input": 2.5}
                     },
                     "no-tools": {
                         "id": "no-tools",
@@ -1265,8 +1322,46 @@ mod tests {
     #[test]
     fn remote_normalization_covers_limits_modalities_status_and_capabilities() {
         let snapshot = normalize_remote(&remote_fixture(), 5_000, Some("etag-r2")).unwrap();
+        let openai = snapshot.provider("openai").unwrap();
         let openrouter = snapshot.provider("openrouter").unwrap();
         let google = snapshot.provider("google").unwrap();
+
+        // A complete published price is normalized on every counter, through
+        // the full remote-normalization-and-validation pipeline, not just
+        // `normalize_model` in isolation: `validate_snapshot` must not treat
+        // a priced model any differently than an unpriced one.
+        assert_eq!(
+            openai.models.get("gpt-fixture").unwrap().cost,
+            Some(CatalogModelCost {
+                input: Some(5_000_000),
+                output: Some(30_000_000),
+                cache_read: Some(1_250_000),
+                cache_write: Some(6_250_000),
+            })
+        );
+        // A partial price keeps only the published counter; nothing is
+        // inferred for the others, and the model stays selectable.
+        let separate_input = openrouter.models.get("separate-input").unwrap();
+        assert_eq!(
+            separate_input.cost,
+            Some(CatalogModelCost {
+                input: Some(2_500_000),
+                output: None,
+                cache_read: None,
+                cache_write: None,
+            })
+        );
+        assert!(separate_input.disabled_reason.is_none());
+        // A model that publishes no `cost` at all is selectable exactly as
+        // it was before prices existed.
+        assert!(
+            openrouter
+                .models
+                .get("vendor/nested")
+                .unwrap()
+                .cost
+                .is_none()
+        );
 
         assert_eq!(openrouter.models.len(), 6, "deprecated model is omitted");
         let nested = openrouter.models.get("vendor/nested").unwrap();
@@ -1338,6 +1433,120 @@ mod tests {
         assert!(normalize_remote(&serde_json::to_vec(&malformed).unwrap(), 1, None).is_err());
         assert!(normalize_remote(&vec![b' '; MAX_REMOTE_CATALOG_BYTES + 1], 1, None).is_err());
         assert!(normalize_remote(b"{", 1, None).is_err());
+    }
+
+    fn priced_model_json(cost: Value) -> Value {
+        json!({
+            "id": "priced",
+            "name": "Priced",
+            "tool_call": true,
+            "modalities": {"input": ["text"], "output": ["text"]},
+            "limit": {"context": 128000, "output": 8000},
+            "cost": cost,
+        })
+    }
+
+    #[test]
+    fn cost_drops_negative_out_of_range_and_non_numeric_counters_individually() {
+        // `serde_json::Number` cannot represent a literal non-finite `f64`
+        // at all — parsing an out-of-`f64`-range exponent like `1e400`
+        // fails the document, and `Number::from_f64` refuses `NaN`/infinite
+        // inputs outright — so `micro_usd_per_million`'s `is_finite` guard
+        // is exercised directly below rather than through a `Value`. Here,
+        // an absurdly large but syntactically ordinary finite price stands
+        // in for "unusable" by overflowing the micro-USD `u64` bound.
+        let raw = priced_model_json(json!({
+            "input": -1.0,
+            "output": "expensive",
+            "cache_read": 1e30,
+            "cache_write": 4.5
+        }));
+        let model = normalize_model("priced", &raw).unwrap().unwrap();
+        assert_eq!(
+            model.cost,
+            Some(CatalogModelCost {
+                input: None,
+                output: None,
+                cache_read: None,
+                cache_write: Some(4_500_000),
+            }),
+            "only the individually valid counter survives"
+        );
+        assert!(
+            model.disabled_reason.is_none(),
+            "a price, however invalid, must never disable the model"
+        );
+    }
+
+    #[test]
+    fn micro_usd_per_million_rejects_absent_negative_non_numeric_and_overflow() {
+        assert_eq!(micro_usd_per_million(None), None, "an absent counter");
+        assert_eq!(
+            micro_usd_per_million(Some(&Value::Null)),
+            None,
+            "a null counter"
+        );
+        assert_eq!(
+            micro_usd_per_million(Some(&json!("free"))),
+            None,
+            "a non-numeric counter"
+        );
+        assert_eq!(
+            micro_usd_per_million(Some(&json!(-0.0001))),
+            None,
+            "a negative counter"
+        );
+        assert_eq!(
+            micro_usd_per_million(Some(&json!(1e30))),
+            None,
+            "a finite but unrepresentable counter overflows the micro-USD u64 bound"
+        );
+        assert_eq!(
+            micro_usd_per_million(Some(&json!(0))),
+            Some(0),
+            "zero is a valid, free price"
+        );
+        assert_eq!(micro_usd_per_million(Some(&json!(2.5))), Some(2_500_000));
+
+        // `serde_json::Value` cannot represent a literal NaN or infinite
+        // `f64` at all: `Value::from(f64::NAN)` and `Value::from(f64::INFINITY)`
+        // both collapse to `Value::Null` rather than a `Number`, so the
+        // `is_finite` guard in `micro_usd_per_million` is unreachable
+        // through any real `Value` — it exists as documented defense in
+        // depth against a caller constructing a `Number` some other way.
+        assert_eq!(Value::from(f64::NAN), Value::Null);
+        assert_eq!(Value::from(f64::INFINITY), Value::Null);
+    }
+
+    #[test]
+    fn cost_block_with_every_counter_invalid_normalizes_like_no_cost_at_all() {
+        let raw = priced_model_json(json!({"input": -1, "output": "nope"}));
+        let with_bad_cost = normalize_model("priced", &raw).unwrap().unwrap();
+
+        let mut without_cost = raw.clone();
+        without_cost
+            .as_object_mut()
+            .unwrap()
+            .remove("cost")
+            .unwrap();
+        let without_cost = normalize_model("priced", &without_cost).unwrap().unwrap();
+
+        assert!(with_bad_cost.cost.is_none());
+        assert_eq!(with_bad_cost.cost, without_cost.cost);
+        assert_eq!(with_bad_cost.disabled_reason, without_cost.disabled_reason);
+        assert!(without_cost.disabled_reason.is_none());
+    }
+
+    #[test]
+    fn absent_cost_leaves_a_model_selectable_with_no_diagnostic() {
+        let mut raw = priced_model_json(json!({}));
+        raw.as_object_mut().unwrap().remove("cost").unwrap();
+        let model = normalize_model("priced", &raw).unwrap().unwrap();
+        assert!(model.cost.is_none());
+        assert!(
+            model.disabled_reason.is_none(),
+            "the absence of a price is not a validation diagnostic"
+        );
     }
 
     #[tokio::test]
@@ -1464,6 +1673,55 @@ mod tests {
         .await
         .expect("background refresh");
         assert_eq!(fetcher.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn revision_one_cache_is_rejected_as_stale_and_falls_back_to_the_seed() {
+        // `CatalogModelCost` was added at schema revision 2. A cache file
+        // written at revision 1 predates `cost` entirely, so loading it
+        // unchanged would silently and permanently under-report every model
+        // as unpriced. Nothing new needs to reject it: the existing
+        // `schema_revision != CATALOG_SCHEMA_REVISION` check in
+        // `validate_snapshot` already fails to parse it, which is exactly
+        // the same path an unrelated stale/corrupt cache takes.
+        assert_eq!(CATALOG_SCHEMA_REVISION, 2, "the revision bump itself");
+
+        let directory = tempfile::tempdir().unwrap();
+        let cache_path = directory.path().join("models-dev-v1.json");
+        let seed = parse_snapshot(EMBEDDED_MODELS_DEV_SEED.as_bytes()).unwrap();
+        let mut prior_revision = seed.clone();
+        prior_revision.schema_revision = 1;
+        std::fs::write(&cache_path, serde_json::to_vec(&prior_revision).unwrap()).unwrap();
+
+        let fetcher = Arc::new(ScriptedFetcher::returning(
+            CatalogFetchResponse::NotModified,
+        ));
+        let loader = CatalogLoader::new(
+            cache_path.clone(),
+            Arc::<str>::from(EMBEDDED_MODELS_DEV_SEED),
+            fetcher.clone(),
+            Arc::new(FixedClock(seed.retrieved_at_ms + 2)),
+        )
+        .with_max_age_ms(1);
+
+        let prepared = loader.prepare(true).await.unwrap();
+        assert_eq!(
+            prepared.origin,
+            CatalogLoadOrigin::Embedded,
+            "a revision-1 cache is rejected as stale, so the embedded seed loads instead"
+        );
+        assert_eq!(prepared.snapshot.schema_revision, CATALOG_SCHEMA_REVISION);
+        assert!(
+            prepared.refresh_scheduled,
+            "falling back still schedules a refresh, as for any stale snapshot"
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while fetcher.calls.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("background refresh");
     }
 
     #[tokio::test]

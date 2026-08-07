@@ -567,11 +567,23 @@ impl App {
                 max_turns,
                 ..
             } => {
+                // Correlates back to the spawn row by tool-call id — see
+                // `App::note_pending_spawn` — popped once and reused for
+                // both the panel's profile and the transcript row's
+                // enrichment, so the two never disagree about which spawn
+                // this is.
+                let spawn = self.pending_spawns.pop_front();
+                let profile = spawn
+                    .as_ref()
+                    .and_then(|spawn| spawn.profile.clone())
+                    .unwrap_or_else(|| self.status.agent.clone());
+
                 self.children.insert(
                     child.to_string(),
                     ChildSummary {
                         state: "running".to_owned(),
                         detail: Some(describe_workspace(workspace)),
+                        profile: Some(profile),
                     },
                 );
                 self.child_clocks
@@ -587,8 +599,35 @@ impl App {
                     )
                 };
                 self.push_child_notice(child.as_str(), "started", terms.clone());
-                self.transcript
-                    .push_notice("sub-agent", format!("{child} started · {terms}"));
+                // The reviewed spawn row is now the one place a spawn is
+                // announced in the transcript — see `child-agents`'s "Safe
+                // parent reporting": "A spawn SHALL announce itself exactly
+                // once". The per-child log entry above and the panel row
+                // still carry the same facts.
+                if let Some(spawn) = spawn {
+                    // Only what the row does not already say. The reviewed
+                    // projection has already named the workspace from the
+                    // call's own argument — and named it more precisely, since
+                    // an explicit directory shows its path there — so
+                    // re-appending the resolved posture here would print one
+                    // fact twice in two spellings (`workspace read only` from
+                    // the projector, `read-only` from `describe_workspace`).
+                    // Printing delegation twice is the thing this change
+                    // exists to stop.
+                    let mut enrichment = vec![child.to_string()];
+                    if *max_turns != u32::MAX {
+                        enrichment.push(format!("up to {max_turns} turns"));
+                    }
+                    // The projector already emitted a `profile <name>`
+                    // qualifier when the spawn selected one; only an absent
+                    // selection gets a qualifier here, explicitly labelled
+                    // inherited, so the row never claims the call chose a
+                    // profile it did not.
+                    if spawn.profile.is_none() {
+                        enrichment.push(format!("profile {} (inherited)", self.status.agent));
+                    }
+                    self.transcript.enrich_tool_call(&spawn.call_id, enrichment);
+                }
             }
             RuntimeEvent::ChildProgress { child, phase } => match phase {
                 ChildPhase::Recovered {
@@ -607,11 +646,13 @@ impl App {
                         "durable · session {child_session}{}",
                         if *resumable { " · resumable" } else { "" }
                     );
+                    let profile = self.carried_child_profile(child.as_str());
                     self.children.insert(
                         child.to_string(),
                         ChildSummary {
                             state: state.to_owned(),
                             detail: Some(detail.clone()),
+                            profile,
                         },
                     );
                     // A recovered record ran in another process; no honest
@@ -636,11 +677,13 @@ impl App {
                     self.push_child_notice(child.as_str(), "turn", "working");
                 }
                 ChildPhase::ResumeStarted { child_session } => {
+                    let profile = self.carried_child_profile(child.as_str());
                     self.children.insert(
                         child.to_string(),
                         ChildSummary {
                             state: "resuming".to_owned(),
                             detail: Some(format!("exact checkpoint · session {child_session}")),
+                            profile,
                         },
                     );
                     self.run_child_clock(child.as_str());
@@ -666,11 +709,13 @@ impl App {
                             " · no compatible checkpoint"
                         }
                     );
+                    let profile = self.carried_child_profile(child.as_str());
                     self.children.insert(
                         child.to_string(),
                         ChildSummary {
                             state: "interrupted".to_owned(),
                             detail: Some(detail.clone()),
+                            profile,
                         },
                     );
                     self.settle_child_clock(child.as_str());
@@ -700,11 +745,13 @@ impl App {
                     },
                     describe_interaction_sensitivity(sensitivity),
                 );
+                let profile = self.carried_child_profile(child.as_str());
                 self.children.insert(
                     child.to_string(),
                     ChildSummary {
                         state: "needs input".to_owned(),
                         detail: Some(detail.clone()),
+                        profile,
                     },
                 );
                 self.push_child_notice(child.as_str(), "needs input", detail.clone());
@@ -721,11 +768,13 @@ impl App {
                 if summary.is_empty() {
                     summary = "(no visible answer)".to_owned();
                 }
+                let profile = self.carried_child_profile(child.as_str());
                 self.children.insert(
                     child.to_string(),
                     ChildSummary {
                         state: "completed".to_owned(),
                         detail: Some(summary.clone()),
+                        profile,
                     },
                 );
                 self.settle_child_clock(child.as_str());
@@ -741,11 +790,13 @@ impl App {
             }
             RuntimeEvent::ChildStopped { child, reason } => {
                 let detail = describe_cancel_reason(reason);
+                let profile = self.carried_child_profile(child.as_str());
                 self.children.insert(
                     child.to_string(),
                     ChildSummary {
                         state: "stopped".to_owned(),
                         detail: Some(detail.clone()),
+                        profile,
                     },
                 );
                 self.settle_child_clock(child.as_str());
@@ -755,11 +806,13 @@ impl App {
                     .push_notice("sub-agent", format!("{child} stopped · {detail}"));
             }
             RuntimeEvent::ChildFailed { child, error } => {
+                let profile = self.carried_child_profile(child.as_str());
                 self.children.insert(
                     child.to_string(),
                     ChildSummary {
                         state: "failed".to_owned(),
                         detail: Some(error.message.clone()),
+                        profile,
                     },
                 );
                 self.settle_child_clock(child.as_str());

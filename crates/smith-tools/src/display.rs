@@ -41,6 +41,39 @@ impl ToolCallDisplay {
         details.extend(self.qualifiers.iter().map(String::as_str));
         format!("{}({})", self.label, details.join(" · "))
     }
+
+    /// Appends one more qualifier to an already-projected row.
+    ///
+    /// This exists for enrichment after the fact: a delegation spawn row is
+    /// projected from the call's own arguments before the runtime confirms
+    /// the child, so the projector cannot yet know the child's id, its
+    /// resolved workspace posture, or its turn ceiling. Once the runtime
+    /// reports those facts, the caller correlates them back to this row by
+    /// call id and enriches it in place rather than rendering a second row
+    /// for the same spawn. The qualifier is normalized and bounded exactly
+    /// like every projector's own qualifiers, so a caller enriching a row
+    /// from event data — not from a reviewed schema — cannot smuggle
+    /// unbounded text or line, terminal, and bidi control characters onto
+    /// the transcript. A qualifier that normalizes to nothing (empty, or
+    /// only control/whitespace) is dropped rather than appended.
+    pub fn with_qualifier(mut self, qualifier: impl Into<String>) -> Self {
+        let qualifier = qualifier.into();
+        if let Some(normalized) = normalize_value(&qualifier) {
+            self.qualifiers.push(normalized);
+        }
+        self
+    }
+
+    /// Appends several qualifiers in order; see [`Self::with_qualifier`].
+    pub fn with_qualifiers<I, S>(self, qualifiers: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        qualifiers
+            .into_iter()
+            .fold(self, |built, qualifier| built.with_qualifier(qualifier))
+    }
 }
 
 /// Projects canonical arguments into a display-safe built-in invocation.
@@ -58,6 +91,7 @@ pub fn project_tool_call_display(name: &str, arguments: &Value) -> Option<ToolCa
         "task_output" => project_task_output(arguments),
         "task_stop" => project_task_stop(arguments),
         "registry.search" => project_registry_search(arguments),
+        "agent" => project_agent(arguments),
         _ => None,
     }
 }
@@ -74,6 +108,7 @@ pub fn has_tool_call_display_schema(name: &str) -> bool {
             | "task_output"
             | "task_stop"
             | "registry.search"
+            | "agent"
     )
 }
 
@@ -188,6 +223,120 @@ fn project_task_output(arguments: &Map<String, Value>) -> Option<ToolCallDisplay
 fn project_task_stop(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
     let target = required_target(arguments, "task_id")?;
     Some(display("Task Stop", target, Vec::new()))
+}
+
+/// The delegation tool (`agent`) is dispatched on its own tagged `action`
+/// rather than a fixed operation per tool name, so it gets one projector per
+/// action instead of one projector per tool. `task` is model-authored free
+/// text like `shell`'s command or `search`'s pattern, so it is bounded,
+/// control-normalized, and quoted the same way. `action`, `tools`, and the
+/// two labelled `workspace` variants come from the small fixed vocabulary
+/// the tool schema itself declares, so once validated against that
+/// vocabulary they are safe to display verbatim. A `workspace` naming a
+/// directory displays its (already-canonicalized) path bounded the same way
+/// `project_read` displays a path — this crate does not invent a new
+/// convention for showing a location the user already has filesystem-level
+/// visibility into. An `action` outside the schema's enum has no reviewed
+/// meaning here and falls back like an unknown tool would.
+fn project_agent(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
+    match require_string_field(arguments, "action")? {
+        "spawn" => project_agent_spawn(arguments),
+        "list" => Some(display("Agent", "list".to_owned(), Vec::new())),
+        "wait" => project_agent_child_action(arguments, "wait"),
+        "result" => project_agent_child_action(arguments, "result"),
+        "follow_up" => project_agent_follow_up(arguments),
+        "resume" => project_agent_child_action(arguments, "resume"),
+        "stop" => project_agent_child_action(arguments, "stop"),
+        _ => None,
+    }
+}
+
+/// A spawn names its task, its child's tool scope, and its child's
+/// workspace posture, in that order, matching the order the lifecycle
+/// notice used to carry them. `profile` names a registered child-enabled
+/// agent profile the runtime validates on its own; this projector does not
+/// re-validate it, and instead treats it as reviewed free text exactly like
+/// `task`, so a stale or third-party call cannot smuggle unbounded or
+/// control text through an unvalidated `profile` value. An absent profile
+/// means the call selected none and contributes no qualifier — the caller
+/// (the interactive transcript) is the one that labels an inherited profile
+/// as inherited, because this projector cannot see what the parent's
+/// profile actually is.
+///
+/// The scope and workspace qualifiers are labelled rather than bare. Both
+/// vocabularies contain `read only`, and the common spawn declares it for
+/// both, so unlabelled they render as `… · read only · read only` — two
+/// adjacent identical tokens a reader cannot tell apart, let alone match
+/// back to the argument each came from.
+fn project_agent_spawn(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
+    let task = required_value(arguments, "task")?;
+    let excerpt = serde_json::to_string(&task).ok()?;
+    let tool_scope = agent_tool_scope(arguments)?;
+    let workspace = agent_workspace(arguments)?;
+    let mut qualifiers = vec![
+        excerpt,
+        format!("tools {tool_scope}"),
+        format!("workspace {workspace}"),
+    ];
+    if let Some(profile) = optional_value(arguments, "profile")? {
+        qualifiers.push(format!("profile {profile}"));
+    }
+    Some(display("Agent", "spawn".to_owned(), qualifiers))
+}
+
+/// `follow_up` is the one addressed action that also carries free-form task
+/// text, so it names its child and then excerpts the task the same way a
+/// spawn does.
+fn project_agent_follow_up(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
+    let child_id = required_target(arguments, "child_id")?;
+    let task = required_value(arguments, "task")?;
+    let excerpt = serde_json::to_string(&task).ok()?;
+    Some(display(
+        "Agent",
+        "follow_up".to_owned(),
+        vec![child_id, excerpt],
+    ))
+}
+
+/// `wait`, `result`, `resume`, and `stop` each address exactly one child and
+/// carry no other reviewed argument.
+fn project_agent_child_action(
+    arguments: &Map<String, Value>,
+    action: &'static str,
+) -> Option<ToolCallDisplay> {
+    let child_id = required_target(arguments, "child_id")?;
+    Some(display("Agent", action.to_owned(), vec![child_id]))
+}
+
+/// `tools` selects a fixed vocabulary (`read_only` defaulting, or `all`), so
+/// it is matched rather than normalized: a value outside that vocabulary is
+/// ill-typed for this field, not free text to pass through.
+fn agent_tool_scope(arguments: &Map<String, Value>) -> Option<String> {
+    match arguments.get("tools") {
+        None => Some("read only".to_owned()),
+        Some(Value::String(value)) if value == "read_only" => Some("read only".to_owned()),
+        Some(Value::String(value)) if value == "all" => Some("all".to_owned()),
+        _ => None,
+    }
+}
+
+/// `workspace` is either one of two fixed labels or a `{"directory": {"path":
+/// …}}` object; a value outside that shape is ill-typed for this field.
+fn agent_workspace(arguments: &Map<String, Value>) -> Option<String> {
+    match arguments.get("workspace") {
+        None => Some("read only".to_owned()),
+        Some(Value::String(value)) if value == "shared" => Some("shared".to_owned()),
+        Some(Value::String(value)) if value == "read_only" => Some("read only".to_owned()),
+        Some(Value::Object(object)) => {
+            let path = object
+                .get("directory")?
+                .as_object()?
+                .get("path")?
+                .as_str()?;
+            normalize_value(path)
+        }
+        _ => None,
+    }
 }
 
 fn display(label: &'static str, target: String, qualifiers: Vec<String>) -> ToolCallDisplay {
@@ -535,5 +684,191 @@ mod tests {
         assert!(has_tool_call_display_schema("task_stop"));
         assert!(project_tool_call_display("task_output", &json!({"offset": 1})).is_none());
         assert!(project_tool_call_display("task_stop", &json!({})).is_none());
+    }
+
+    #[test]
+    fn agent_spawn_renders_every_reviewed_field() {
+        assert_eq!(
+            invocation(
+                "agent",
+                json!({
+                    "action": "spawn",
+                    "task": "explore the autoloads and data layer",
+                    "tools": "all",
+                    "workspace": "shared",
+                    "profile": "explore"
+                })
+            ),
+            "Agent(spawn · \"explore the autoloads and data layer\" · tools all · workspace shared · profile explore)"
+        );
+        assert!(has_tool_call_display_schema("agent"));
+    }
+
+    #[test]
+    fn agent_spawn_defaults_to_read_only_scope_and_workspace() {
+        assert_eq!(
+            invocation("agent", json!({"action": "spawn", "task": "look around"})),
+            "Agent(spawn · \"look around\" · tools read only · workspace read only)"
+        );
+    }
+
+    #[test]
+    fn agent_spawn_directory_workspace_shows_a_bounded_path() {
+        assert_eq!(
+            invocation(
+                "agent",
+                json!({
+                    "action": "spawn",
+                    "task": "build the feature",
+                    "workspace": {"directory": {"path": "/repo/crates/smith-tools"}}
+                })
+            ),
+            "Agent(spawn · \"build the feature\" · tools read only · workspace /repo/crates/smith-tools)"
+        );
+        assert!(
+            project_tool_call_display(
+                "agent",
+                &json!({
+                    "action": "spawn",
+                    "task": "build the feature",
+                    "workspace": {"directory": {}}
+                })
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn agent_spawn_excerpt_normalizes_control_terminal_and_bidi_characters() {
+        let display = project_tool_call_display(
+            "agent",
+            &json!({
+                "action": "spawn",
+                "task": "line one\nline two\rcarriage \u{1b}[31mred\u{202e}reversed"
+            }),
+        )
+        .expect("spawn should project");
+        let rendered = display.invocation();
+        assert!(!rendered.contains('\n'));
+        assert!(!rendered.contains('\r'));
+        assert!(!rendered.contains('\u{1b}'));
+        assert!(!rendered.contains('\u{202e}'));
+        assert!(rendered.contains("line one"));
+        assert!(rendered.contains("reversed"));
+    }
+
+    #[test]
+    fn agent_spawn_excerpt_is_bounded_to_one_line() {
+        let long_task = "word ".repeat(MAX_VALUE_CHARS);
+        let display =
+            project_tool_call_display("agent", &json!({"action": "spawn", "task": long_task}))
+                .expect("spawn should project");
+        let rendered = display.invocation();
+        assert!(!rendered.contains('\n'));
+        assert!(rendered.contains('…'));
+        // The excerpt itself (inside the quotes) must not exceed the shared
+        // bound; the surrounding quotes and label are not part of that bound.
+        let excerpt = &display.qualifiers()[0];
+        assert!(excerpt.chars().count() <= MAX_VALUE_CHARS + 2);
+    }
+
+    #[test]
+    fn agent_addressed_actions_name_their_child() {
+        assert_eq!(
+            invocation(
+                "agent",
+                json!({"action": "follow_up", "child_id": "child-1", "task": "keep going"})
+            ),
+            "Agent(follow_up · child-1 · \"keep going\")"
+        );
+        assert_eq!(
+            invocation("agent", json!({"action": "stop", "child_id": "child-1"})),
+            "Agent(stop · child-1)"
+        );
+        assert_eq!(
+            invocation("agent", json!({"action": "wait", "child_id": "child-2"})),
+            "Agent(wait · child-2)"
+        );
+        assert_eq!(
+            invocation("agent", json!({"action": "result", "child_id": "child-2"})),
+            "Agent(result · child-2)"
+        );
+        assert_eq!(
+            invocation("agent", json!({"action": "resume", "child_id": "child-3"})),
+            "Agent(resume · child-3)"
+        );
+    }
+
+    #[test]
+    fn agent_list_names_no_child_and_no_task() {
+        assert_eq!(
+            invocation("agent", json!({"action": "list"})),
+            "Agent(list)"
+        );
+    }
+
+    #[test]
+    fn agent_rejects_ill_typed_arguments_and_unknown_actions() {
+        assert!(project_tool_call_display("agent", &json!({})).is_none());
+        assert!(project_tool_call_display("agent", &json!({"action": 1})).is_none());
+        assert!(project_tool_call_display("agent", &json!({"action": "teleport"})).is_none());
+        assert!(project_tool_call_display("agent", &json!({"action": "spawn"})).is_none());
+        assert!(
+            project_tool_call_display(
+                "agent",
+                &json!({"action": "spawn", "task": "ok", "tools": "sudo"})
+            )
+            .is_none()
+        );
+        assert!(
+            project_tool_call_display(
+                "agent",
+                &json!({"action": "spawn", "task": "ok", "workspace": "everywhere"})
+            )
+            .is_none()
+        );
+        assert!(
+            project_tool_call_display("agent", &json!({"action": "stop", "child_id": 5})).is_none()
+        );
+        assert!(
+            project_tool_call_display(
+                "agent",
+                &json!({"action": "follow_up", "child_id": "child-1"})
+            )
+            .is_none()
+        );
+        assert!(project_tool_call_display("agent", &json!({"action": "wait"})).is_none());
+    }
+
+    #[test]
+    fn with_qualifier_appends_and_normalizes() {
+        let display = display("Agent", "spawn".to_owned(), Vec::new())
+            .with_qualifier("child-1")
+            .with_qualifier("turns 12\nnext line")
+            .with_qualifier("");
+
+        assert_eq!(
+            display.qualifiers(),
+            &["child-1".to_owned(), "turns 12 next line".to_owned()]
+        );
+        assert_eq!(
+            display.invocation(),
+            "Agent(spawn · child-1 · turns 12 next line)"
+        );
+    }
+
+    #[test]
+    fn with_qualifiers_appends_several_in_order() {
+        let display = display("Agent", "spawn".to_owned(), Vec::new())
+            .with_qualifiers(["child-1", "shared", "turns 12"]);
+
+        assert_eq!(
+            display.qualifiers(),
+            &[
+                "child-1".to_owned(),
+                "shared".to_owned(),
+                "turns 12".to_owned()
+            ]
+        );
     }
 }

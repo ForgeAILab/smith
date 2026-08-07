@@ -109,6 +109,17 @@ pub enum Block {
         result_preview: Option<String>,
         /// When the tool call started running.
         started_at: Option<Instant>,
+        /// Host-confirmed facts appended after the projector's own
+        /// qualifiers, kept in a field [`Transcript::set_tool_display`]
+        /// never touches.
+        ///
+        /// A delegation spawn row is projected before the runtime confirms
+        /// the child, and the host re-projects `display` from canonical
+        /// arguments again when the tool completes. Storing enrichment here
+        /// instead of folding it into `display`'s own qualifiers means that
+        /// second projection can never silently drop it — see
+        /// [`Transcript::enrich_tool_call`].
+        enrichment: Vec<String>,
     },
     /// A structured error.
     Error {
@@ -162,6 +173,7 @@ impl PartialEq for Block {
                     protected_summary: p1,
                     status: s1,
                     result_preview: r1,
+                    enrichment: e1,
                     ..
                 },
                 Self::Tool {
@@ -171,9 +183,10 @@ impl PartialEq for Block {
                     protected_summary: p2,
                     status: s2,
                     result_preview: r2,
+                    enrichment: e2,
                     ..
                 },
-            ) => c1 == c2 && n1 == n2 && d1 == d2 && p1 == p2 && s1 == s2 && r1 == r2,
+            ) => c1 == c2 && n1 == n2 && d1 == d2 && p1 == p2 && s1 == s2 && r1 == r2 && e1 == e2,
             (Self::Error { message: m1 }, Self::Error { message: m2 }) => m1 == m2,
             (
                 Self::Notice {
@@ -335,6 +348,7 @@ impl Transcript {
             status: ToolStatus::Running,
             result_preview: None,
             started_at: Some(Instant::now()),
+            enrichment: Vec::new(),
         });
     }
 
@@ -370,7 +384,11 @@ impl Transcript {
     ///
     /// This is deliberately separate from [`RuntimeEvent`](agent_runtime_core::event::RuntimeEvent)
     /// folding so protected event and journal payloads do not need to carry
-    /// argument values.
+    /// argument values. The host calls this again when a tool completes, to
+    /// re-project from canonical arguments — that second call replaces
+    /// `display` wholesale, which is exactly why enrichment lives in its own
+    /// `enrichment` field this method never touches; see
+    /// [`Self::enrich_tool_call`].
     pub fn set_tool_display(&mut self, call_id: &str, display: ToolCallDisplay) {
         for block in self.blocks.iter_mut().rev() {
             if let Block::Tool {
@@ -381,6 +399,50 @@ impl Transcript {
                 && id == call_id
             {
                 *slot = Some(display);
+                return;
+            }
+        }
+    }
+
+    /// Appends host-confirmed facts to an existing call's row, independent
+    /// of its reviewed `display` projection.
+    ///
+    /// A delegation spawn row is projected from the call's own arguments
+    /// before the runtime confirms the child, so the projector cannot yet
+    /// know the child's id, its resolved workspace posture, or its turn
+    /// ceiling. Once the runtime reports those facts, the caller correlates
+    /// them back to this row by call id and enriches it here rather than
+    /// rendering a second row for the same spawn — and because this is a
+    /// field of its own, a later [`Self::set_tool_display`] re-projection at
+    /// tool completion cannot silently drop it.
+    ///
+    /// Qualifiers are normalized and bounded the same way a projector's own
+    /// qualifiers are, by borrowing the row's current display to do it: this
+    /// enrichment is host/event-sourced, not from a reviewed schema, so a
+    /// caller cannot smuggle unbounded text or line, terminal, and bidi
+    /// control characters onto the transcript through it either. Does
+    /// nothing for an unknown call id or a row with no display yet, since
+    /// there is nothing safe to bound enrichment against.
+    pub fn enrich_tool_call(
+        &mut self,
+        call_id: &str,
+        qualifiers: impl IntoIterator<Item = String>,
+    ) {
+        for block in self.blocks.iter_mut().rev() {
+            if let Block::Tool {
+                call_id: id,
+                display,
+                enrichment,
+                ..
+            } = block
+                && id == call_id
+            {
+                let Some(current) = display.clone() else {
+                    return;
+                };
+                let before = current.qualifiers().len();
+                let bounded = current.with_qualifiers(qualifiers);
+                enrichment.extend(bounded.qualifiers()[before..].iter().cloned());
                 return;
             }
         }
@@ -504,6 +566,11 @@ impl Transcript {
                                     // redacted preview after rebuilding.
                                     result_preview: None,
                                     started_at: None,
+                                    // A resumed call has no enrichment to
+                                    // recover: the correlation that would
+                                    // have produced it is process-local, not
+                                    // part of canonical history.
+                                    enrichment: Vec::new(),
                                 });
                             }
                             // An assistant message does not carry results;
@@ -630,8 +697,37 @@ fn bound_local_result(content: String) -> String {
     bounded
 }
 
+/// A single-line, control-free tool name safe to interpolate into a
+/// fallback row.
+///
+/// `pub(crate)` so the delegated-work panel names a child's current tool the
+/// same way the transcript's own unknown-tool fallback does; see
+/// `App::apply_child`.
+pub(crate) fn safe_tool_name(name: &str) -> String {
+    let name = name
+        .chars()
+        .take(64)
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    if name.is_empty() {
+        "tool".to_owned()
+    } else {
+        name
+    }
+}
+
 /// A stable, value-free fallback when no reviewed projection is available.
-fn summarize_unavailable_arguments(name: &str, argument_keys: &[String]) -> String {
+///
+/// `pub(crate)` so the delegated-work panel can show the identical honest
+/// label — never raw argument values — when a child's tool call has no
+/// reviewed projection either; see `App::apply_child`.
+pub(crate) fn summarize_unavailable_arguments(name: &str, argument_keys: &[String]) -> String {
     let reason = if has_tool_call_display_schema(name) {
         "details unavailable"
     } else {

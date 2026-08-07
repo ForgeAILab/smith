@@ -17,7 +17,14 @@ use crate::model::{
 pub const MODELS_DEV_SOURCE_URL: &str = "https://models.dev/api.json";
 
 /// The normalized cache/seed schema revision.
-pub const CATALOG_SCHEMA_REVISION: u32 = 1;
+///
+/// Bumped from `1` to `2` when `CatalogModel::cost` was added: a cached
+/// snapshot written before prices existed carries no `cost` field, and
+/// letting it load unchanged would silently under-report every model as
+/// unpriced. The existing revision check rejects it as stale, so it falls
+/// back to the embedded seed and schedules a refresh, exactly as it does for
+/// any other stale revision.
+pub const CATALOG_SCHEMA_REVISION: u32 = 2;
 
 /// Models.dev's OpenAI provider identity.
 pub const OPENAI_CATALOG_PROVIDER: &str = "openai";
@@ -125,6 +132,12 @@ pub struct CatalogModel {
     pub reasoning_controls: Option<CatalogReasoningControls>,
     /// Whether the source advertises schema-constrained output.
     pub structured_output: bool,
+    /// Per-counter Models.dev price, absent when the source published no
+    /// individually valid counter. A price is purely additive: its absence,
+    /// or the absence of any one counter within it, is never a reason this
+    /// model is disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<CatalogModelCost>,
     /// A bounded validation reason that keeps an advertised entry visible.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disabled_reason: Option<String>,
@@ -151,6 +164,36 @@ impl CatalogModel {
     pub fn has_text_output(&self) -> bool {
         self.output_modalities.contains(&CatalogModality::Text)
     }
+}
+
+/// A catalog model's per-counter price, in USD per million tokens.
+///
+/// Stored as micro-USD (1e-6 USD) per million tokens, in a fixed-point `u64`,
+/// rather than as `f64`. `CatalogModel` and `CatalogSnapshot` both derive
+/// `Eq` so a snapshot can be compared and content-digested exactly; `f64` has
+/// no total equality under IEEE 754 (`NaN != NaN`, and `-0.0 == 0.0` despite
+/// differing bit patterns), so an `f64` field would force `CatalogModel` to
+/// drop `Eq` or to hand-roll a comparison that quietly disagrees with what
+/// gets serialized. A micro-USD integer keeps `Eq` for free, round-trips
+/// through serde byte-for-byte with no float re-parsing drift feeding into
+/// `content_digest`, and losslessly represents the up-to-six-decimal-place
+/// granularity Models.dev actually publishes (for example `0.083333`
+/// USD/million tokens for a cache write).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogModelCost {
+    /// Input token price, in micro-USD per million tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<u64>,
+    /// Output token price, in micro-USD per million tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<u64>,
+    /// Cache-read token price, in micro-USD per million tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read: Option<u64>,
+    /// Cache-write token price, in micro-USD per million tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write: Option<u64>,
 }
 
 /// The three limits Agent Runtime requires before provider I/O.
@@ -234,6 +277,63 @@ fn normalized_endpoint(raw: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn priced_model() -> CatalogModel {
+        CatalogModel {
+            id: "priced-model".to_owned(),
+            name: "Priced Model".to_owned(),
+            limits: None,
+            input_modalities: Vec::new(),
+            output_modalities: Vec::new(),
+            tool_call: true,
+            reasoning: false,
+            reasoning_controls: None,
+            structured_output: false,
+            cost: Some(CatalogModelCost {
+                input: Some(5_000_000),
+                output: Some(30_000_000),
+                cache_read: Some(1_250_000),
+                cache_write: Some(83_333),
+            }),
+            disabled_reason: None,
+        }
+    }
+
+    #[test]
+    fn priced_model_round_trips_and_serializes_byte_stably() {
+        let model = priced_model();
+        let first = serde_json::to_string(&model).expect("serialize");
+        let second = serde_json::to_string(&model).expect("serialize again");
+        assert_eq!(first, second, "serialization must be byte-stable");
+
+        let decoded: CatalogModel = serde_json::from_str(&first).expect("deserialize");
+        assert_eq!(decoded, model, "round trip must be exact under Eq");
+
+        let cost_json = serde_json::to_value(model.cost.unwrap()).unwrap();
+        assert_eq!(
+            cost_json,
+            serde_json::json!({
+                "input": 5_000_000,
+                "output": 30_000_000,
+                "cache_read": 1_250_000,
+                "cache_write": 83_333,
+            }),
+            "each counter round-trips as a plain JSON integer, not a float"
+        );
+    }
+
+    #[test]
+    fn absent_cost_is_not_serialized() {
+        let model = CatalogModel {
+            cost: None,
+            ..priced_model()
+        };
+        let value = serde_json::to_value(&model).unwrap();
+        assert!(
+            value.as_object().unwrap().get("cost").is_none(),
+            "an absent price must not appear in the serialized model at all"
+        );
+    }
 
     #[test]
     fn binding_uses_adapter_and_exact_normalized_endpoint() {

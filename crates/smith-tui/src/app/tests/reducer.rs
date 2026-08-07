@@ -1021,3 +1021,112 @@
         assert!(app.work_detail_lines().is_empty());
         assert!(!format!("{:?}", app.transcript.blocks()).contains(PROTECTED_ITEM));
     }
+
+    // -- Delegated usage is accounted separately (usage-accounting group 7) --
+
+    fn usage_event(delta: UsageDelta) -> RuntimeEvent {
+        RuntimeEvent::Usage {
+            record: UsageRecord {
+                source: UsageSource::ProviderAttempt,
+                provenance: Provenance::default(),
+                delta,
+            },
+        }
+    }
+
+    #[test]
+    fn delegated_usage_from_a_live_child_stream_stays_separate_from_the_root_counters() {
+        let mut app = app();
+        app.apply(&event(RuntimeEvent::Usage {
+            record: UsageRecord {
+                source: UsageSource::ProviderAttempt,
+                provenance: Provenance::default(),
+                delta: UsageDelta::new()
+                    .with(CounterKind::InputUncached, 1_000)
+                    .with(CounterKind::Output, 50),
+            },
+        }));
+
+        app.apply_child(
+            "child-1",
+            &event(usage_event(
+                UsageDelta::new()
+                    .with(CounterKind::InputUncached, 300)
+                    .with(CounterKind::Output, 20),
+            )),
+        );
+        app.apply_child(
+            "child-2",
+            &event(usage_event(
+                UsageDelta::new()
+                    .with(CounterKind::InputUncached, 100)
+                    .with(CounterKind::Output, 5),
+            )),
+        );
+        // A second qualifying record from the same child must not
+        // double-count it as a contributor.
+        app.apply_child(
+            "child-1",
+            &event(usage_event(
+                UsageDelta::new()
+                    .with(CounterKind::InputUncached, 50)
+                    .with(CounterKind::Output, 15),
+            )),
+        );
+
+        let usage = app.session_usage();
+        assert_eq!(usage.totals[&CounterKind::InputUncached], 1_000);
+        assert_eq!(usage.totals[&CounterKind::Output], 50);
+        assert_eq!(usage.delegated_totals[&CounterKind::InputUncached], 450);
+        assert_eq!(usage.delegated_totals[&CounterKind::Output], 40);
+        assert_eq!(
+            usage.delegated_contributors, 2,
+            "each contributing child is counted once"
+        );
+        assert_eq!(usage.total_tokens(), 1_050, "total_tokens stays root-only");
+        assert_eq!(
+            usage.merged_total_tokens(),
+            1_540,
+            "the merged figure is the explicit combined total"
+        );
+    }
+
+    #[test]
+    fn an_output_only_delegated_record_reports_no_usable_evidence_and_no_contributor() {
+        // Mirrors `Status::record_usage`'s own rule: without an input
+        // counter there is nothing usable to attribute to the session, so
+        // the reporting child is not even counted as a contributor.
+        let mut app = app();
+        app.apply_child(
+            "child-1",
+            &event(usage_event(UsageDelta::new().with(CounterKind::Output, 40))),
+        );
+
+        let usage = app.session_usage();
+        assert!(usage.delegated_totals.is_empty());
+        assert_eq!(usage.delegated_contributors, 0);
+    }
+
+    #[test]
+    fn a_dormant_recovered_child_contributes_no_delegated_usage() {
+        // A resumed session recovers a durable child whose work happened in
+        // an earlier process: it gets a panel row via `ChildProgress`, but
+        // `App::apply_child` — the only path that can ever feed the
+        // delegated totals — is never called for it, because it has no live
+        // stream in this process.
+        let mut app = app();
+        app.apply(&event(RuntimeEvent::ChildProgress {
+            child: ChildId::new("child-recovered"),
+            phase: ChildPhase::Recovered {
+                child_session: SessionId::new("child-session-recovered"),
+                state: ChildRecoveryState::Idle,
+                resumable: false,
+            },
+        }));
+
+        assert!(app.children.contains_key("child-recovered"));
+        let usage = app.session_usage();
+        assert!(usage.delegated_totals.is_empty());
+        assert_eq!(usage.delegated_contributors, 0);
+        assert!(usage.is_empty(), "nothing was ever observed this process");
+    }

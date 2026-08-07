@@ -44,9 +44,9 @@ status-card structure, and compact footer.
 │                                                                        │
 ├────────────────────────────────────────────────────────────────────────┤
 │   Todo                                                                 │
-│   [x] Inspect retry policy                                             │
 │   [>] Fix the flaky test                                               │
-│   [ ] Run focused tests                                                │  anchored pane (0–9 rows)
+│   [ ] Run focused tests                                                │
+│   [x] Inspect retry policy (+2 done)  ← struck + dim                   │  anchored pane (0–9 rows)
 │   Pending for this turn                                                │
 │   › also cover the cancellation race                               │
 ├────────────────────────────────────────────────────────────────────────┤
@@ -63,7 +63,7 @@ Regions, top to bottom:
 | Region | Height | Rule |
 | --- | --- | --- |
 | Transcript | flex | Minimum 3 rows; below that Smith renders a size warning only. |
-| Anchored pane | 0–9 | A compact picker while one is open; otherwise bounded process-local pending input followed by the latest public plan. Hidden when neither exists. |
+| Anchored pane | 0–9 | A compact picker while one is open; otherwise bounded process-local pending input followed by the latest public plan. Hidden when neither exists, and once a plan's every item is completed and its turn has stopped. |
 | Composer | 3–10 | One-row vertical inset around 1–8 rows of input. |
 | Footer | 1–2 | Identity uses one row; resource pickers and prompts may add controls on the second. Slash completion does not. |
 
@@ -713,7 +713,44 @@ plan, while provider-reported cumulative input appears only in `/status`:
 
 Switching provider or model renders a one-line transcript notice —
 `provider changed · openai → anthropic · prior cache not transferable` — and
-the context segment falls back to `~` until the new provider reports usage.
+the context segment falls back to `~` until the new provider reports usage. It
+also clears the resolved price, because a price describes one model and
+carrying it across a switch would bill the new one at the old one's rate.
+
+Delegated tokens are counted, kept separate from the root's, and reported at
+exit and in `/status`. A session that delegated nothing renders exactly the
+line it always did. One that delegated breaks the total down:
+
+```text
+total · input 143k · cached 90k · output 2.7k
+  root: 12 turn(s) · input 121k · cached 90k · output 2.4k
+  agents: 4 agent(s) · input 22k · output 302
+$0.031 exact · openai/gpt-5.3
+```
+
+The merged line carries counters only and never a turn count. A child's turns
+belong to the delegation coordinator and never enter this projection, so the
+only turn figure available is the root's — printing merged tokens beside it
+would claim those turns spent those tokens. Compactions stay on the root line
+for the same reason. Only what this process observed is counted: a child
+recovered from an earlier process contributes nothing and is not a
+contributor, because inventing counters for it would be worse than admitting
+they are unknown.
+
+Cost is computed from the catalog's per-counter price for the exact
+provider/model binding the session resolved, and root and delegated counters
+are priced by that same reference. It is labelled `exact` only when every
+contributing counter was both provider-reported and priced; anything
+tokenizer-estimated, provider-derived, or unpriced downgrades it to
+`estimated`. Reasoning tokens are billed separately from output and Models.dev
+publishes no reasoning price, so they are never priced at the output rate —
+a nonzero reasoning counter downgrades the label rather than being charged a
+rate the source never published. When the catalog carries no price for the
+model, `/status` reports the cost as unknown and names the binding it has no
+price for, while the exit report prints its token lines and no cost line at
+all: never a price substituted from another model, provider, or a hard-coded
+default. Cost is presentation only. It never enters routing, approval,
+context, or budget decisions, and never reaches the model.
 
 ### Tool argument visibility
 
@@ -744,6 +781,21 @@ raw event arguments. Resumed transcripts derive the same projection from
 canonical history, so live and replayed rows disclose the same reviewed
 metadata.
 
+A small reviewed set of rows is suppressed entirely, and only when the call
+succeeded: `write_todos`, whose effect the anchored pane already renders;
+`registry.search`, a capability bootstrap the user did not ask for; and the
+`agent` actions delegation's own lifecycle lines already report — `wait`,
+`result`, `resume`, and `stop`. `agent spawn` always renders, because it is
+the one row that announces a spawn, and `agent follow_up` and `agent list`
+render because nothing else reports them. The set is enumerated in code, never
+inferred from a call's name, arguments, or result size, and the delegation
+action comes from the reviewed projection's own vocabulary rather than a scan
+of free text. A failed, denied, or unreported call always renders its row: a
+hidden row is a claim that something else already said this, and a failure is
+redundant with nothing. Suppression is presentation only — the call, its
+arguments, and its result stay in canonical history, the journal, and machine
+output — and it applies identically live and after resume.
+
 The approval modal is the deliberate exception: it receives the runtime's
 immutable prepared action through the separate approval channel because the
 user cannot make an informed safety decision from key names alone. Edit calls
@@ -760,13 +812,52 @@ assistant block and never steal composer focus. Terminal events (a monitor
 stopped, a child finished) are never coalesced away.
 
 Child-agent progress reaches the TUI on the same deadline but not the same
-surface. Only delegation's boundaries are the root conversation's business: a
-child starting, resuming, blocking on input, and ending — completed, stopped,
-interrupted, or failed — enter the transcript as `• sub-agent · summary`. What
-the child does in between is panel state, because the root transcript is a
-record of the work the user asked for, and a child narrating each of its tool
-calls into it buries that record without telling the user anything the panel
-row does not already show.
+surface. Only delegation's boundaries are the root conversation's business.
+A spawn announces itself exactly once, on its own tool row rather than a
+separate notice repeating it:
+
+```text
+Agent(spawn · "explore the autoloads and data layer" · read only · shared
+      · child-9 · shared project workspace · profile build (inherited)) · ok
+```
+
+The reviewed projection supplies the action, the bounded task excerpt, the
+tool scope, and the workspace the call declared; the runtime's own
+`ChildSpawned` then enriches that same row in place with the child's id, its
+resolved workspace posture, and its turn ceiling — omitted entirely when the
+child is unbounded, rather than printed as the sentinel's absurd number. The
+profile is named either way, marked `(inherited)` when the spawn selected
+none, so the row never implies the call chose something it did not. Because
+`ChildSpawned` carries no originating call id, that correlation is host-side
+and live-only: a resumed transcript keeps the projection's own terms and does
+not invent the rest.
+
+Every terminal outcome — resuming, blocking on input, completed, stopped,
+interrupted, failed — still enters the transcript as `• sub-agent · summary`,
+where it occurred in time. Those are new information, not a repetition of the
+spawn, so they are never folded back into its row. What the child does in
+between is panel state, because the root transcript is a record of the work
+the user asked for, and a child narrating each of its tool calls into it
+buries that record without telling the user anything the panel row does not
+already show.
+
+The panel row says what a child is actually doing, using the same reviewed
+tool projection the transcript uses rather than a bare tool name, beside the
+profile it runs and the turn and token counts the delegation coordinator owns:
+
+```text
+  ○ child-1  review · Read(src/retry.rs) · 2/5 turns · 12.4k tokens    1m04s
+```
+
+Those counts come from the coordinator on the host's redraw poll, for every
+visible child rather than only the inspected one; Smith derives none of them
+from the event stream. Everything past the child's id lives in the activity
+text, which clips first, so no projection or count can push the docked clock
+off screen. A tool with no reviewed display schema falls back to its name plus
+the same honest unavailable label the transcript uses, never raw argument
+values. A child recovered from a durable record has no profile to name — the
+coordinator's status carries none — and says so by omission rather than
+guessing.
 
 Nothing is discarded. Every lifecycle event, printed or not, appends to that
 child's bounded log, which is the inspector's content. `Down` past the newest
@@ -787,16 +878,52 @@ delegated-work panel list it by task ID, and the exit confirmation names it as
 active work. Ctrl+B moves a running foreground shell command to the background
 without killing it; Esc keeps its interrupt-and-kill meaning unchanged.
 
+The root model may name one registered child-enabled agent profile per spawn,
+and it resolves through the same preflighted route a user-invoked `/agent
+<preset>` resolves — the routes already exist per child-enabled profile, so
+this is the model reaching what the user could already reach, not a new
+authority. The tool enumerates the available names in its own schema so the
+model chooses rather than guesses, and an unregistered, non-child-enabled, or
+unrouted name fails the call with an error naming the available ones, creating
+no child and no lifecycle event. A spawn that names no profile inherits the
+parent's, exactly as it did before selection existed.
+
+A child's write access follows from its resolved profile's posture rather than
+a constant, and needs three things together: a posture that is not read-only,
+a spawn that asked for the full tool scope, and a workspace policy that is not
+the read-only view. Any one of them failing leaves the child read-only. The
+workspace key is load bearing rather than belt-and-braces — a read-only view
+resolves to the same workspace handle a shared project does, so the tool set
+is the only thing withholding a write from it, and the read-only view is what
+a spawn that names no workspace gets. A writing child is built from the
+parent's own approval policy and workspace, holds no permission the root does
+not hold, and cannot spawn a child of its own.
+
 The runtime's bounded safe-boundary inbox remains an internal delivery
 mechanism for child results sent to the parent model. It is not a visible or
 focusable TUI region. `/agent` lists children and opens the same read-only
 inspector the arrows reach, by name rather than by position.
 
-A todo update replaces the bounded anchored pane above the composer. Public
-items show status and text in authored order; sensitive plans show no pane,
-even if an invalid replay payload attempts to attach text. The pane is not
-focusable and never enters canonical model history. A compact picker replaces
-the todo presentation while open and restores it unchanged on close.
+A todo update replaces the bounded anchored pane above the composer. Open
+items — pending, in progress, and cancelled — show status and text in authored
+order, and every completed item collapses into a single struck row beneath
+them naming the most recently completed one, with `(+N done)` when more than
+one is finished. A cancelled item is not done and keeps its own row. The
+collapsed row is charged against the same visible-item budget an uncollapsed
+item would have used, so the pane never grows: the plan's tail shrinks as the
+work lands instead of spending a row per finished step.
+
+Once every item is completed and the turn is no longer running, the pane
+retires rather than pinning a finished list until the next turn — a completed
+plan is otherwise the most persistent thing on screen and the least useful. It
+stays while the turn still works, so the user sees the plan land. A terminal
+turn with work still outstanding keeps its reconciled todo, because that is
+unfinished business rather than a result.
+
+Sensitive plans show no pane, even if an invalid replay payload attempts to
+attach text. The pane is not focusable and never enters canonical model
+history. A compact picker replaces the todo presentation while open and
+restores it unchanged on close.
 Oversized tool output appears as a
 bounded preview plus an opaque artifact reference. Artifact bodies remain in
 user state and are fetched only through authorized, paginated reads.

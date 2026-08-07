@@ -121,7 +121,8 @@ use crate::chatgpt::{
 };
 use crate::checkpoint::{BarrierCheckpointStore, CheckpointBarrier, SmithCheckpointSetup};
 use crate::delegation::{
-    AgentTool, DelegationAuthority, SmithChildFactory, SmithChildRoute, SmithDelegation,
+    AgentTool, AgentToolProfile, DelegationAuthority, SmithChildFactory, SmithChildRoute,
+    SmithDelegation,
 };
 use crate::journal::DefaultRedactor;
 use crate::memory::SmithMemorySource;
@@ -1156,7 +1157,10 @@ fn prepare_summary_stage(
     Ok(Some((coordinator, policy)))
 }
 
-fn prepare_capability_stage(request: &RuntimeRequest) -> Result<CapabilityStage, FactoryError> {
+fn prepare_capability_stage(
+    request: &RuntimeRequest,
+    agent_tool_profiles: Vec<AgentToolProfile>,
+) -> Result<CapabilityStage, FactoryError> {
     // The seam `shell`, `task_output`, and `task_stop` reach through to the
     // background task registry (`smith_tools::background`). Idempotent, like
     // the registry's own singleton: composing more than one runtime in this
@@ -1196,7 +1200,10 @@ fn prepare_capability_stage(request: &RuntimeRequest) -> Result<CapabilityStage,
         None
     } else {
         let slot = Arc::new(std::sync::OnceLock::new());
-        tools.push(Arc::new(AgentTool::new(slot.clone())) as Arc<dyn Tool>);
+        tools.push(
+            Arc::new(AgentTool::new(slot.clone()).with_profiles(agent_tool_profiles))
+                as Arc<dyn Tool>,
+        );
         ability_sources.push(agent_runtime::registry::RegistrySource::BuiltIn);
         Some(slot)
     };
@@ -1306,6 +1313,18 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         .unwrap_or_else(|| Arc::new(SystemClock));
     let child_profile_routes =
         prepare_child_profile_routes(&request, prompt.project_instructions.as_ref()).await?;
+    // Built from the exact same routes `SmithChildFactory.profile_routes`
+    // resolves below, so the model-facing `agent` tool can never advertise or
+    // accept a profile name the factory would fail to route.
+    let agent_tool_profiles: Vec<AgentToolProfile> = child_profile_routes
+        .values()
+        .map(|route| AgentToolProfile {
+            name: route.agent_profile_name.clone(),
+            revision: route.agent_profile_revision.clone(),
+            provider: route.provider_name.clone(),
+            model: route.model.clone(),
+        })
+        .collect();
     let semantic_summary = prepare_summary_stage(
         &request,
         provider.clone(),
@@ -1325,7 +1344,7 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         .ok()
         .map(Arc::new)
     });
-    let capabilities = prepare_capability_stage(&request)?;
+    let capabilities = prepare_capability_stage(&request, agent_tool_profiles)?;
     let durability = prepare_durability_stage(&request).await?;
 
     let policy = assemble_policy(RuntimePolicy {
@@ -1527,7 +1546,7 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
                     agent_profile_name: agent_profile.name.clone(),
                     agent_profile_revision: agent_profile.revision.clone(),
                     agent_profile_posture: agent_profile.posture.value,
-                    read_only: true,
+                    read_only: agent_profile.posture.value.is_read_only(),
                 },
                 profile_routes: child_profile_routes,
                 approval,
@@ -1657,7 +1676,7 @@ async fn prepare_child_profile_routes(
                 agent_profile_name: agent_profile.name.clone(),
                 agent_profile_revision: agent_profile.revision.clone(),
                 agent_profile_posture: agent_profile.posture.value,
-                read_only: true,
+                read_only: agent_profile.posture.value.is_read_only(),
             },
         );
         if replaced.is_some() {

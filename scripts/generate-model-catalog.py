@@ -6,15 +6,21 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import pathlib
 import sys
 import urllib.request
 from typing import Any
 
 SOURCE_URL = "https://models.dev/api.json"
-SCHEMA_REVISION = 1
+# Bumped from 1 to 2 when the per-model `cost` block was added (see `cost`
+# below): a cache written at revision 1 predates prices entirely, and
+# Smith's existing stale-revision check rejects it and falls back to the
+# embedded seed rather than silently loading a permanently unpriced catalog.
+SCHEMA_REVISION = 2
 SUPPORTED_PROVIDERS = ("openai", "openrouter", "xai", "zai-coding-plan", "google")
 MAX_U32 = 2**32 - 1
+MAX_U64 = 2**64 - 1
 MAX_MODELS_PER_PROVIDER = 10_000
 KNOWN_MODALITIES = {
     "text": "text",
@@ -102,6 +108,58 @@ def limits(entry: dict[str, Any]) -> tuple[dict[str, int] | None, str | None]:
         "max_input_tokens": input_limit,
         "max_output_tokens": output,
     }, None
+
+
+COST_COUNTERS = ("input", "output", "cache_read", "cache_write")
+
+
+def micro_usd_per_million(value: Any) -> int | None:
+    """Converts one Models.dev USD-per-million-token counter into micro-USD
+    (1e-6 USD) per million tokens, Smith's fixed-point price unit.
+
+    Mirrors `micro_usd_per_million` in
+    crates/smith-runtime/src/model_catalog.rs byte for byte: rejects a
+    missing/null counter, a non-numeric value (`bool` is explicitly excluded
+    since Python's `bool` is an `int` subtype), and a negative or non-finite
+    number. Rounds by adding a half unit and flooring rather than using
+    `round()`, so the rounding rule is the exact same IEEE-754 double
+    operation `f64`'s `(value * 1_000_000.0 + 0.5).floor()` performs in Rust,
+    keeping the two implementations byte-identical for every value
+    Models.dev actually publishes."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        # A JSON integer has arbitrary precision in Python but not in
+        # `f64`; `float()` raises `OverflowError` rather than saturating to
+        # infinity the way Rust's `as f64` cast would. Treated the same as
+        # any other unrepresentable price: dropped, not a crash.
+        value = float(value)
+    except OverflowError:
+        return None
+    if not math.isfinite(value) or value < 0.0:
+        return None
+    micro = math.floor(value * 1_000_000.0 + 0.5)
+    return micro if micro <= MAX_U64 else None
+
+
+def cost(entry: dict[str, Any]) -> dict[str, int] | None:
+    """Mirrors `normalize_cost` in
+    crates/smith-runtime/src/model_catalog.rs byte for byte: unlike every
+    other normalizer here, an invalid or missing price is never a reason to
+    disable a model, so this has no error return. Each counter is converted
+    independently and a negative, non-finite, non-numeric, or absent counter
+    is simply dropped. An entry whose every counter is invalid or absent
+    normalizes to `None`, identical to a source that published no `cost`
+    block at all."""
+    raw = entry.get("cost")
+    if not isinstance(raw, dict):
+        return None
+    result = {
+        counter: priced
+        for counter in COST_COUNTERS
+        if (priced := micro_usd_per_million(raw.get(counter))) is not None
+    }
+    return result or None
 
 
 EFFORT_CHARSET = set("abcdefghijklmnopqrstuvwxyz0123456789-_")
@@ -199,6 +257,11 @@ def normalize_model(key: str, raw: Any) -> dict[str, Any] | None:
     controls = reasoning_controls(raw, reasoning)
     if controls is not None:
         result["reasoning_controls"] = controls
+    # Deliberately outside the `disabled_reason` chain above: a price is
+    # additive-only and must never disable an otherwise-valid model.
+    normalized_cost = cost(raw)
+    if normalized_cost is not None:
+        result["cost"] = normalized_cost
     if disabled_reason is not None:
         result["disabled_reason"] = disabled_reason
     return result

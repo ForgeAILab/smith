@@ -11,6 +11,7 @@ use crate::app::{App, ProviderPhase};
 use crate::status::{Activity, render_elapsed};
 use crate::theme::{Theme, Tone, glyph};
 use crate::transcript::{Block, LocalResultState, ToolStatus};
+use smith_tools::ToolCallDisplay;
 
 use super::helpers::*;
 
@@ -166,6 +167,21 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16) -> Vec<Line<'static>>
         if matches!(block, Block::Reasoning { .. }) {
             continue;
         }
+        // A row whose effect a better surface already reports is dropped
+        // whole, before the blank-line separator below ever considers it —
+        // that is what keeps a suppression from leaving a doubled or
+        // leading blank line, and it drops the result preview for free,
+        // since the preview lives inside this same block.
+        if let Block::Tool {
+            name,
+            display,
+            status,
+            ..
+        } = block
+            && is_redundant_tool_row(name, *status, display.as_ref())
+        {
+            continue;
+        }
         if !lines.is_empty() {
             lines.push(Line::default());
         }
@@ -193,6 +209,7 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16) -> Vec<Line<'static>>
                 status,
                 result_preview,
                 started_at,
+                enrichment,
                 ..
             } => {
                 let tone = match status {
@@ -200,10 +217,8 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16) -> Vec<Line<'static>>
                     ToolStatus::Ok => Tone::Success,
                     ToolStatus::Failed | ToolStatus::Denied => Tone::Danger,
                 };
-                let invocation = display.as_ref().map_or_else(
-                    || format!("{}({protected_summary})", safe_tool_name(name)),
-                    smith_tools::ToolCallDisplay::invocation,
-                );
+                let invocation =
+                    tool_invocation(name, display.as_ref(), enrichment, protected_summary);
                 let status_text = match status {
                     ToolStatus::Running => {
                         if let Some(started) = started_at {
@@ -408,24 +423,68 @@ pub(super) fn render_speculative_lines(text: &str, theme: Theme) -> Vec<Line<'st
         .collect()
 }
 
-pub(super) fn safe_tool_name(name: &str) -> String {
-    let name = name
-        .chars()
-        .take(64)
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.') {
-                character
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
-    if name.is_empty() {
-        "tool".to_owned()
-    } else {
-        name
+/// Whether a successful tool call's row is already reported in full by a
+/// named non-transcript surface, and can therefore be dropped.
+///
+/// The set is enumerated explicitly here, never inferred from the call's
+/// name shape, argument count, or result size — see `tool-call-display`'s
+/// "Reviewed redundant-row suppression". Only a successful call ever
+/// qualifies: a failure, a denial, or a call whose outcome never arrived is
+/// not redundant with anything, so any status other than
+/// [`ToolStatus::Ok`] always renders. `agent`'s action is read from the
+/// projector's own `target()` (`"spawn"`, `"wait"`, …) — a call with no
+/// reviewed display cannot be matched against that vocabulary at all, so it
+/// renders rather than being guessed at.
+fn is_redundant_tool_row(
+    name: &str,
+    status: ToolStatus,
+    display: Option<&ToolCallDisplay>,
+) -> bool {
+    if status != ToolStatus::Ok {
+        return false;
+    }
+    match name {
+        "write_todos" => true,
+        "registry.search" => true,
+        // Delegation's own lifecycle line reports `wait`, `result`,
+        // `resume`, and `stop`. `spawn` is the one row that announces the
+        // spawn, so it is never suppressed, and nothing else reports
+        // `follow_up` or `list`, so they render too.
+        "agent" => matches!(
+            display.map(ToolCallDisplay::target),
+            Some("wait" | "result" | "resume" | "stop")
+        ),
+        _ => false,
     }
 }
+
+/// The compact invocation portion of a tool row, with any host-confirmed
+/// enrichment appended after the projector's own qualifiers.
+///
+/// Enrichment is kept in a field of its own on `Block::Tool` rather than
+/// folded into `display`'s qualifiers, specifically so a later
+/// re-projection at tool completion cannot silently drop it; this is where
+/// the two are joined back together, freshly on every draw.
+fn tool_invocation(
+    name: &str,
+    display: Option<&ToolCallDisplay>,
+    enrichment: &[String],
+    protected_summary: &str,
+) -> String {
+    let Some(display) = display else {
+        return format!("{}({protected_summary})", safe_tool_name(name));
+    };
+    if enrichment.is_empty() {
+        return display.invocation();
+    }
+    let mut details = Vec::with_capacity(display.qualifiers().len() + enrichment.len() + 1);
+    details.push(display.target());
+    details.extend(display.qualifiers().iter().map(String::as_str));
+    details.extend(enrichment.iter().map(String::as_str));
+    format!("{}({})", display.label(), details.join(" · "))
+}
+
+pub(super) use crate::transcript::safe_tool_name;
 
 pub(super) fn render_assistant_lines(text: &str, theme: Theme) -> Vec<Line<'static>> {
     let mut lines = Vec::new();

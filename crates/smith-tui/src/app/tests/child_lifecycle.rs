@@ -231,16 +231,20 @@
                 _ => None,
             })
             .collect::<Vec<_>>();
+        // The reviewed spawn row is now the one place a spawn is announced
+        // (there is no `agent` tool call here to carry one, since this test
+        // drives lifecycle events directly), so only the terminal outcome
+        // keeps its attributed transcript line.
         assert_eq!(
             notices.len(),
-            2,
-            "only the delegation boundaries belong in the root transcript: {notices:?}"
+            1,
+            "the started notice is gone; only the terminal outcome remains: {notices:?}"
         );
-        assert!(notices[0].contains("started"));
-        assert!(notices[1].contains("Two call sites"));
+        assert!(notices[0].contains("Two call sites"));
         assert!(
             !notices.iter().any(|text| text.contains("is working")
-                || text.contains("search")),
+                || text.contains("search")
+                || text.contains("started")),
             "mid-flight progress must not narrate itself into the root transcript"
         );
 

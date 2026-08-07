@@ -2,27 +2,32 @@
 
     #[test]
     fn a_completed_tool_row_shows_its_bounded_result_preview() {
+        // `search`, not `registry.search`: the latter is in the reviewed
+        // suppression set once it succeeds (see the suppression tests in
+        // `transcript.rs`), so it cannot exercise "a completed row shows its
+        // preview" on its own — this needs a tool the suppression set never
+        // touches.
         let mut app = App::new("gpt-5.3", "~/work/api");
         app.apply(&event(RuntimeEvent::ToolCallRequested {
-            call: ToolCallId::new("call-registry"),
-            name: "registry.search".to_owned(),
-            argument_keys: vec!["query".to_owned()],
+            call: ToolCallId::new("call-search"),
+            name: "search".to_owned(),
+            argument_keys: vec!["pattern".to_owned()],
             argument_fingerprint: agent_runtime_registry::Fingerprint::of("arguments"),
             arguments: None,
         }));
         app.set_tool_display(
-            "call-registry",
+            "call-search",
             smith_tools::project_tool_call_display(
-                "registry.search",
-                &serde_json::json!({"query": "browser automation", "max_results": 3}),
+                "search",
+                &serde_json::json!({"pattern": "browser automation", "path": "src"}),
             )
-            .expect("reviewed registry projection"),
+            .expect("reviewed search projection"),
         );
-        app.set_tool_result_preview("call-registry", "card one\ncard two");
+        app.set_tool_result_preview("call-search", "card one\ncard two");
 
         let running = render(&app, 74, 14, Theme::new());
         assert!(
-            running.contains("Registry Search(\"browser automation\" · max 3)"),
+            running.contains("Search(\"browser automation\" · src)"),
             "{running}"
         );
         assert!(
@@ -31,8 +36,8 @@
         );
 
         app.apply(&event(RuntimeEvent::ToolCallCompleted {
-            call: ToolCallId::new("call-registry"),
-            name: "registry.search".to_owned(),
+            call: ToolCallId::new("call-search"),
+            name: "search".to_owned(),
             is_error: false,
         }));
         let completed = render(&app, 74, 14, Theme::new());

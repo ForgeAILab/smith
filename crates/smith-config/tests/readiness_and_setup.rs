@@ -118,6 +118,7 @@ fn catalog_snapshot() -> CatalogSnapshot {
         reasoning: true,
         reasoning_controls: None,
         structured_output: true,
+        cost: None,
         disabled_reason: None,
     };
     let mut openrouter_models = BTreeMap::from([
@@ -145,6 +146,7 @@ fn catalog_snapshot() -> CatalogSnapshot {
             reasoning: false,
             reasoning_controls: None,
             structured_output: false,
+            cost: None,
             disabled_reason: Some("catalog output limit exceeds its context window".to_owned()),
         },
     );
@@ -1253,6 +1255,7 @@ fn xai_catalog_snapshot() -> CatalogSnapshot {
                         reasoning: true,
                         reasoning_controls: None,
                         structured_output: true,
+                        cost: None,
                         disabled_reason: None,
                     },
                 )]),

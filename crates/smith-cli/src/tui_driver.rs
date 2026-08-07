@@ -8,7 +8,15 @@ use smith_tui::app::RunningTaskSummary;
 use super::*;
 
 pub(super) enum InteractiveExit {
-    Quit(smith_tui::status::SessionUsage),
+    /// The session's usage, plus the price reference it was resolved against
+    /// (if any) — carried out here because `Status` does not survive past
+    /// `run_tui`'s return, and the exit report needs the identical
+    /// reference `/status` read from during the session rather than a fresh
+    /// catalog lookup of its own.
+    Quit(
+        smith_tui::status::SessionUsage,
+        Option<smith_tui::status::PriceReference>,
+    ),
     Reconfigure(PaletteCommand),
 }
 
@@ -24,6 +32,10 @@ pub(super) struct InteractiveResources {
     pub(super) sessions: Vec<SessionListing>,
     /// Live credential-pool state, when the provider declares a pool.
     pub(super) credential_pool: Option<SharedPool>,
+    /// The catalog snapshot backing this session, so the active model's
+    /// price can be resolved with the exact binding the runtime factory
+    /// used. See `resolve_price`.
+    pub(super) catalog: Arc<smith_config::catalog::CatalogSnapshot>,
 }
 
 /// The runtime's out-of-band request streams, plus the accounts they rotate
@@ -54,6 +66,7 @@ pub(super) async fn run_interactive(
         agents,
         sessions,
         credential_pool,
+        catalog,
     } = resources;
     let policy = host.runtime().policy();
     let snapshot = host.session().snapshot();
@@ -66,6 +79,7 @@ pub(super) async fn run_interactive(
     let mut app = App::new(policy.model.as_str(), project_label);
     app.status
         .switch_model(Some(policy.provider_name.clone()), policy.model.as_str());
+    app.status.set_price(resolve_price(policy, &catalog));
     app.status.set_agent(policy.agent_profile.clone());
     match host.goal() {
         Ok(goal) => app.status.set_goal(goal),
@@ -152,6 +166,11 @@ pub(super) async fn run_interactive(
         // provider report and clear cache evidence.
         app.status
             .switch_model(Some(policy.provider_name.clone()), policy.model.as_str());
+        // `switch_model` just cleared the price along with the cache
+        // evidence, but this branch's target is the same active `policy`
+        // already resolved above — the prior *snapshot's* model, not this
+        // session's — so the price is re-resolved rather than left cleared.
+        app.status.set_price(resolve_price(policy, &catalog));
     }
 
     let mut terminal = match terminal::enter() {
@@ -194,6 +213,40 @@ pub(super) async fn run_interactive(
     restore_result?;
     shutdown_result?;
     run_result
+}
+
+/// Resolves the active model's catalog price, using **exactly** the binding
+/// the runtime factory itself resolves models against — this mirrors
+/// `crates/smith-runtime/src/factory.rs`'s `prepare_factory_inputs` catalog
+/// lookup line for line, rather than inventing a second resolution that
+/// could disagree with it and price the wrong model.
+///
+/// Returns `None` when the catalog carries no price entry for this binding.
+/// That is never treated as "assume some other price" anywhere downstream —
+/// `usage-accounting`'s "Labelled cost calculation" forbids substituting a
+/// price from another model, provider, or a hard-coded default, and a
+/// `None` here is exactly how that absence is represented.
+fn resolve_price(
+    policy: &RuntimePolicy,
+    catalog: &smith_config::catalog::CatalogSnapshot,
+) -> Option<smith_tui::status::PriceReference> {
+    let cost = smith_config::catalog::catalog_provider_for(
+        &policy.provider_kind,
+        policy.endpoint.as_deref(),
+    )
+    .and_then(|provider| catalog.provider(provider))
+    .and_then(|provider| provider.models.get(policy.model.as_str()))
+    .and_then(|model| model.cost.as_ref())?;
+    Some(smith_tui::status::PriceReference {
+        provider: policy.provider_name.clone(),
+        model: policy.model.as_str().to_owned(),
+        table: smith_tui::status::PriceTable {
+            input: cost.input,
+            output: cost.output,
+            cache_read: cost.cache_read,
+            cache_write: cost.cache_write,
+        },
+    })
 }
 
 /// Forwards one live child's own event stream into the client's single event
@@ -347,7 +400,7 @@ pub(super) async fn run_tui(
                                     );
                                 }
                             }
-                            Some(Action::Quit) => break InteractiveExit::Quit(app.status.session_usage()),
+                            Some(Action::Quit) => break InteractiveExit::Quit(app.session_usage(), app.status.price().cloned()),
                             // An account switch is live pool state, so it is
                             // applied here rather than by tearing the session
                             // down and rebuilding it around a new selection.
@@ -622,6 +675,18 @@ pub(super) async fn run_tui(
                             }
                             if let Some(call) = tool_call {
                                 if let Some(display) = host.tool_call_display(&call) {
+                                    // Only at request time: the same call id
+                                    // is resolved again at completion, and
+                                    // this queue must see a spawn exactly
+                                    // once or `ChildSpawned` would enrich the
+                                    // wrong row. This is the root's own
+                                    // event stream — the child-events branch
+                                    // below never reaches this call, which is
+                                    // how the pending-spawn queue stays
+                                    // root-only.
+                                    if !completed_tool {
+                                        app.note_pending_spawn(call.as_str(), &display);
+                                    }
                                     app.set_tool_display(call.as_str(), display);
                                 }
                                 if completed_tool
@@ -649,7 +714,7 @@ pub(super) async fn run_tui(
                         }
                         dirty = true;
                     }
-                    None => break InteractiveExit::Quit(app.status.session_usage()),
+                    None => break InteractiveExit::Quit(app.session_usage(), app.status.price().cloned()),
                 }
             }
 
@@ -744,24 +809,43 @@ pub(super) async fn run_tui(
                         })
                         .collect(),
                 );
-                // Same reason, for the open child inspector: turns, tokens,
-                // and lifecycle live in the coordinator, which the TUI cannot
-                // reach. A child selected by arrow key gets the same card as
-                // one opened by `/agent <id>`, and it stays current while the
-                // child works.
-                if let Some(inspected) = app.inspected_child.clone() {
-                    let card = host
-                        .runtime()
-                        .delegation()
-                        .and_then(|delegation| delegation.coordinator())
-                        .and_then(|coordinator| {
-                            coordinator
-                                .list()
-                                .iter()
-                                .find(|status| status.child.as_str() == inspected)
-                                .map(crate::local_command::child_status_card)
-                        });
-                    app.set_inspected_detail(&inspected, card);
+                // Same reason, for the open child inspector and the
+                // delegated-work panel: turns, tokens, and lifecycle live in
+                // the coordinator, which the TUI cannot reach. A child
+                // selected by arrow key gets the same card as one opened by
+                // `/agent <id>`, and it stays current while the child works
+                // — and every visible child's panel row gets the
+                // coordinator's own turn/token counts on the same cadence,
+                // per `usage-accounting`'s "Counts come from the
+                // coordinator": Smith computes none of this itself.
+                if let Some(coordinator) = host
+                    .runtime()
+                    .delegation()
+                    .and_then(|delegation| delegation.coordinator())
+                {
+                    let statuses = coordinator.list();
+                    if let Some(inspected) = app.inspected_child.clone() {
+                        let card = statuses
+                            .iter()
+                            .find(|status| status.child.as_str() == inspected)
+                            .map(crate::local_command::child_status_card);
+                        app.set_inspected_detail(&inspected, card);
+                    }
+                    app.set_child_counts(
+                        statuses
+                            .iter()
+                            .map(|status| {
+                                (
+                                    status.child.to_string(),
+                                    smith_tui::app::ChildCounts {
+                                        turns_used: status.turns_used,
+                                        max_turns: status.max_turns,
+                                        tokens_used: status.tokens_used,
+                                    },
+                                )
+                            })
+                            .collect(),
+                    );
                 }
                 terminal.draw(|frame| smith_tui::draw_synced(frame, &mut app, theme))?;
                 dirty = false;
@@ -771,7 +855,7 @@ pub(super) async fn run_tui(
         interactions.drain_answers(&mut app);
         host.set_goal_continuation_enabled(!app.should_defer_goal_continuation());
         if app.should_quit {
-            break InteractiveExit::Quit(app.status.session_usage());
+            break InteractiveExit::Quit(app.session_usage(), app.status.price().cloned());
         }
     };
     Ok(exit)

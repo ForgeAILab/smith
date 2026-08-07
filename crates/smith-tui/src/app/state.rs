@@ -14,6 +14,7 @@ use agent_runtime_core::content::{ContentPart, UserInput};
 use agent_runtime_core::event::{EventEnvelope, PlanItemProjection, PlanSensitivity, RuntimeEvent};
 use agent_runtime_core::ids::{AttemptId, RequestId, TurnId};
 use agent_runtime_core::steer::SteerReceipt;
+use agent_runtime_core::usage::{CounterKind, UsageDelta};
 use smith_host::approval::ApprovalPrompt;
 use smith_host::rotation::RotationPrompt;
 use smith_tools::ToolCallDisplay;
@@ -25,8 +26,8 @@ use crate::diff::EditReview;
 use crate::picker::{ResourceEntry, ResourcePicker};
 use crate::questionnaire::{QuestionnaireResolution, QuestionnaireState};
 use crate::selection::Selection;
-use crate::status::{Activity, Status, render_elapsed};
-use crate::transcript::{Block, ToolStatus, Transcript};
+use crate::status::{Activity, SessionUsage, Status, render_elapsed};
+use crate::transcript::{Block, ToolStatus, Transcript, safe_tool_name};
 
 /// How long a second `Ctrl+C` still counts as the exit press.
 pub(super) const FORCE_QUIT_WINDOW: Duration = Duration::from_secs(1);
@@ -481,6 +482,39 @@ pub(super) enum PendingPrompt {
     Questionnaire(QuestionnaireState),
 }
 
+/// A root spawn call awaiting the child identity `ChildSpawned` will report.
+///
+/// `RuntimeEvent::ChildSpawned` carries no originating tool-call id, so the
+/// correlation is host-side: the root's own event processing pushes one
+/// entry here per spawn call, in the order the calls were made, and the
+/// `ChildSpawned` handler pops the front entry to enrich that row. This is
+/// deliberately an explicit FIFO rather than a scan — see
+/// `App::note_pending_spawn` and `App::apply` in `reducer.rs`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PendingSpawn {
+    /// The spawn call's tool-call id.
+    pub(super) call_id: String,
+    /// The profile the spawn selected, when it selected one.
+    pub(super) profile: Option<String>,
+}
+
+/// Coordinator-owned turn and token counts for one visible child.
+///
+/// Kept as its own type so the client can say precisely what it does and
+/// does not know: these numbers are never derived from the event stream,
+/// only replaced wholesale from the delegation coordinator's own accounting
+/// on the host's poll-on-redraw — see `usage-accounting`'s "Counts come
+/// from the coordinator".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChildCounts {
+    /// Tasks (spawn plus follow-ups) the child has consumed.
+    pub turns_used: u32,
+    /// The task cap, or `u32::MAX` when the child is unbounded.
+    pub max_turns: u32,
+    /// Cumulative provider tokens attributed to the child.
+    pub tokens_used: u64,
+}
+
 /// The latest user-visible state of one child.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChildSummary {
@@ -488,6 +522,13 @@ pub struct ChildSummary {
     pub state: String,
     /// Latest bounded result or detail.
     pub detail: Option<String>,
+    /// The child's agent profile, once the spawn correlation resolves it.
+    ///
+    /// `None` for a child recovered or resumed into this process without
+    /// ever being freshly spawned here: the coordinator's own `ChildStatus`
+    /// carries no profile field, so a recovered child's profile is honestly
+    /// unknown rather than guessed at.
+    pub profile: Option<String>,
 }
 
 impl ChildSummary {
@@ -756,6 +797,22 @@ pub struct App {
     /// same poll-on-redraw cadence as background tasks. Absent until that poll
     /// answers, which is honest: the client never invents child accounting.
     pub(super) inspected_detail: Option<String>,
+    /// Coordinator-reported turn and token counts, keyed by child id, kept
+    /// current on the same poll-on-redraw as [`Self::inspected_detail`] —
+    /// but for every visible child, not only the inspected one.
+    pub(super) child_counts: BTreeMap<String, ChildCounts>,
+    /// Root spawn calls awaiting the child identity `ChildSpawned` reports.
+    pub(super) pending_spawns: VecDeque<PendingSpawn>,
+    /// Per-counter usage delegated children reported on their own live
+    /// streams this process observed, kept separate from
+    /// [`Status`](crate::status::Status)'s root counters so the two can
+    /// never be blended together; see `usage-accounting`'s "Delegated usage
+    /// is accounted separately".
+    pub(super) delegated_usage: BTreeMap<CounterKind, u64>,
+    /// Children that reported at least one delegated-usage record on their
+    /// own live stream, each counted once regardless of how many records it
+    /// sent.
+    pub(super) delegated_contributors: BTreeSet<String>,
     /// Running background shell tasks, as of the host's latest registry poll.
     pub running_tasks: Vec<RunningTaskSummary>,
     /// When each running task was first seen, keyed by task id.
@@ -843,6 +900,10 @@ impl App {
             retired_children: BTreeSet::new(),
             inspected_child: None,
             inspected_detail: None,
+            child_counts: BTreeMap::new(),
+            pending_spawns: VecDeque::new(),
+            delegated_usage: BTreeMap::new(),
+            delegated_contributors: BTreeSet::new(),
             running_tasks: Vec::new(),
             task_clocks: BTreeMap::new(),
             plan: None,
@@ -895,6 +956,10 @@ impl App {
             ChildSummary {
                 state: state.into(),
                 detail,
+                // The coordinator's own status has no profile field, and a
+                // restored child was never freshly spawned in this process,
+                // so there is no spawn correlation to draw one from either.
+                profile: None,
             },
         );
     }
@@ -1150,19 +1215,21 @@ impl App {
         conversation.transcript.retain_newest(MAX_CHILD_BLOCKS);
 
         // The panel row answers "what is that agent doing right now" in one
-        // line, and the child's own stream is what knows.
-        let detail = match &envelope.payload {
-            RuntimeEvent::ToolCallRequested { name, .. } => Some(format!("running {name}")),
-            RuntimeEvent::ToolCallCompleted { name, is_error, .. } => Some(format!(
-                "{} {name}",
-                if *is_error { "failed" } else { "ok" }
-            )),
-            _ => None,
-        };
-        if let Some(detail) = detail
-            && let Some(summary) = self.children.get_mut(child)
-        {
-            summary.detail = Some(detail);
+        // line, using the same reviewed tool display projection the
+        // transcript uses; see `refresh_child_tool_detail`.
+        match &envelope.payload {
+            RuntimeEvent::ToolCallRequested { .. } | RuntimeEvent::ToolCallCompleted { .. } => {
+                self.refresh_child_tool_detail(child);
+            }
+            // Delegated usage is accounted separately from the root's own
+            // counters — see `usage-accounting`'s "Delegated usage is
+            // accounted separately" — and only for what this live stream
+            // actually reported, so a dormant recovered child (no stream,
+            // no call here) contributes nothing.
+            RuntimeEvent::Usage { record } => {
+                self.record_delegated_usage(child, &record.delta);
+            }
+            _ => {}
         }
 
         if handled && self.inspected_child.as_deref() == Some(child) {
@@ -1170,6 +1237,150 @@ impl App {
             // is why they are looking.
             self.follow_newest();
         }
+    }
+
+    /// Recomputes a child's panel detail from its own most recent tool row.
+    ///
+    /// The reviewed display for that row resolves moments after the
+    /// triggering event is folded — the host answers separately, from
+    /// canonical history — so this is called both right after folding a
+    /// tool event (to show an honest fallback immediately) and again once
+    /// [`Self::set_child_tool_display`] resolves the projection, which
+    /// overwrites the fallback before the next redraw. Reading the block's
+    /// own `status` rather than trusting the triggering event's kind means a
+    /// late-resolving completion still reports the right outcome.
+    fn refresh_child_tool_detail(&mut self, child: &str) {
+        let Some(conversation) = self.child_conversations.get(child) else {
+            return;
+        };
+        let Some(Block::Tool {
+            name,
+            display,
+            protected_summary,
+            status,
+            ..
+        }) = conversation.transcript.blocks().last()
+        else {
+            return;
+        };
+        // Matches the transcript's own unknown-tool fallback exactly: the
+        // tool is named, and `protected_summary` — already computed from
+        // the call's real argument keys, never its values — follows it.
+        let label = display.as_ref().map_or_else(
+            || format!("{}({protected_summary})", safe_tool_name(name)),
+            ToolCallDisplay::invocation,
+        );
+        let detail = match status {
+            ToolStatus::Running | ToolStatus::Unreported => label,
+            ToolStatus::Ok => format!("ok {label}"),
+            ToolStatus::Failed | ToolStatus::Denied => format!("failed {label}"),
+        };
+        if let Some(summary) = self.children.get_mut(child) {
+            summary.detail = Some(detail);
+        }
+    }
+
+    /// Folds one child's own provider-usage record into the delegated
+    /// totals, counting the reporting child as a contributor exactly once.
+    ///
+    /// Mirrors [`Status::record_usage`](crate::status::Status::record_usage)'s
+    /// own rule that an input-free record is not usable evidence: an
+    /// output-only record says nothing about context consumption, so — like
+    /// the root path — it contributes no counters and does not mark the
+    /// child a contributor on its own.
+    fn record_delegated_usage(&mut self, child: &str, delta: &UsageDelta) {
+        if delta.input_tokens() == 0 {
+            return;
+        }
+        self.delegated_contributors.insert(child.to_owned());
+        for kind in [
+            CounterKind::InputUncached,
+            CounterKind::InputCached,
+            CounterKind::CacheWrite,
+            CounterKind::Output,
+            CounterKind::Reasoning,
+        ] {
+            let value = delta.get(kind);
+            if value > 0 {
+                *self.delegated_usage.entry(kind).or_insert(0) += value;
+            }
+        }
+    }
+
+    /// This session's whole usage: the root's own counters, plus whatever
+    /// delegated children reported on their own streams this process
+    /// observed, kept distinguishable per `usage-accounting`'s "Delegated
+    /// usage is accounted separately" rather than blended into the root
+    /// figures.
+    pub fn session_usage(&self) -> SessionUsage {
+        let mut usage = self.status.session_usage();
+        usage.delegated_totals = self.delegated_usage.clone();
+        usage.delegated_contributors =
+            u32::try_from(self.delegated_contributors.len()).unwrap_or(u32::MAX);
+        usage
+    }
+
+    /// Replaces the coordinator's authoritative turn/token counts for every
+    /// currently visible child.
+    ///
+    /// A wholesale replace on the same poll-on-redraw cadence as
+    /// [`Self::set_inspected_detail`]: the coordinator is the counting
+    /// authority, so this is the only path by which the panel's turn/token
+    /// figures move at all.
+    pub fn set_child_counts(&mut self, counts: BTreeMap<String, ChildCounts>) {
+        self.child_counts = counts;
+    }
+
+    /// The coordinator's latest turn/token counts for one child, when the
+    /// poll has answered for it.
+    pub fn child_counts(&self, child: &str) -> Option<ChildCounts> {
+        self.child_counts.get(child).copied()
+    }
+
+    /// The profile a lifecycle transition that replaces a child's whole
+    /// summary should carry forward, so only `ChildSpawned` — the one event
+    /// that resolves it — ever changes it.
+    pub(super) fn carried_child_profile(&self, child: &str) -> Option<String> {
+        self.children
+            .get(child)
+            .and_then(|summary| summary.profile.clone())
+    }
+
+    /// Notes a live root tool call as a pending delegation spawn awaiting
+    /// its child's identity, when the call's resolved display says it is
+    /// one.
+    ///
+    /// `RuntimeEvent::ChildSpawned` carries no originating tool-call id, and
+    /// Smith's runtime is never configured to emit raw tool arguments on the
+    /// event stream, so the one place a live spawn call's action is actually
+    /// known is the reviewed projection the host resolves from canonical,
+    /// credential-redacted history. Queuing keys strictly on that resolved
+    /// `label`/`target` — the same controlled vocabulary
+    /// `is_redundant_tool_row` reads — never on the tool name's shape or a
+    /// parsed free-text scan.
+    ///
+    /// This must only ever be called for the root's own event stream. It is
+    /// called from exactly one place: `tui_driver::run_tui`'s root-events
+    /// branch, right after the host resolves a live `ToolCallRequested`'s
+    /// display — a branch of the host loop's `tokio::select!` that is
+    /// structurally distinct from the child-events branch, which folds a
+    /// child's own `agent`-shaped calls through
+    /// [`Self::set_child_tool_display`] instead and never reaches this
+    /// method. A child could not reach its own queue even if it tried:
+    /// delegation forbids a child from spawning a grandchild in the first
+    /// place.
+    pub fn note_pending_spawn(&mut self, call_id: &str, display: &ToolCallDisplay) {
+        if display.label() != "Agent" || display.target() != "spawn" {
+            return;
+        }
+        let profile = display
+            .qualifiers()
+            .iter()
+            .find_map(|qualifier| qualifier.strip_prefix("profile ").map(str::to_owned));
+        self.pending_spawns.push_back(PendingSpawn {
+            call_id: call_id.to_owned(),
+            profile,
+        });
     }
 
     /// Starts the linger countdown for a child that just finished cleanly.
@@ -1473,6 +1684,9 @@ impl App {
         if let Some(conversation) = self.child_conversations.get_mut(child) {
             conversation.transcript.set_tool_display(call_id, display);
         }
+        // The panel detail mirrors whatever the reviewed projection now
+        // says about the child's most recent tool row.
+        self.refresh_child_tool_detail(child);
     }
 
     /// The child counterpart of [`Self::set_tool_result_preview`].

@@ -367,3 +367,82 @@
             }
         }
     }
+
+    #[test]
+    fn the_collapsed_completed_row_still_counts_against_the_todo_row_budget() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        let mut items: Vec<PlanItemProjection> = (0..4)
+            .map(|index| PlanItemProjection {
+                id: format!("open-{index}"),
+                text: format!("Open step {index}"),
+                status: PlanItemStatus::Pending,
+                reason: None,
+            })
+            .collect();
+        items.extend((0..3).map(|index| PlanItemProjection {
+            id: format!("done-{index}"),
+            text: format!("Done step {index}"),
+            status: PlanItemStatus::Completed,
+            reason: None,
+        }));
+        app.apply(&event(RuntimeEvent::PlanUpdated {
+            revision: 1,
+            sensitivity: PlanSensitivity::Public,
+            counts: std::collections::BTreeMap::new(),
+            items: Some(items),
+        }));
+
+        // 4 open items plus 1 collapsed row for the 3 completed items is 5,
+        // exactly `MAX_VISIBLE_TODOS`: the same anchored row count 7 (or
+        // more) uncollapsed items would have reserved before this change,
+        // plus the heading. The collapsed row costs a budget slot rather
+        // than adding on top of it.
+        assert_eq!(
+            desired_todo_rows(&app),
+            u16::try_from(MAX_VISIBLE_TODOS).expect("small constant") + 1
+        );
+
+        // A plan well under the cap reserves only what it uses: 2 open rows
+        // plus 1 collapsed row plus the heading, not one row per item.
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        app.apply(&event(RuntimeEvent::PlanUpdated {
+            revision: 1,
+            sensitivity: PlanSensitivity::Public,
+            counts: std::collections::BTreeMap::new(),
+            items: Some(vec![
+                PlanItemProjection {
+                    id: "open-0".to_owned(),
+                    text: "Open step 0".to_owned(),
+                    status: PlanItemStatus::InProgress,
+                    reason: None,
+                },
+                PlanItemProjection {
+                    id: "open-1".to_owned(),
+                    text: "Open step 1".to_owned(),
+                    status: PlanItemStatus::Pending,
+                    reason: None,
+                },
+                PlanItemProjection {
+                    id: "done-0".to_owned(),
+                    text: "Done step 0".to_owned(),
+                    status: PlanItemStatus::Completed,
+                    reason: None,
+                },
+                PlanItemProjection {
+                    id: "done-1".to_owned(),
+                    text: "Done step 1".to_owned(),
+                    status: PlanItemStatus::Completed,
+                    reason: None,
+                },
+                PlanItemProjection {
+                    id: "done-2".to_owned(),
+                    text: "Done step 2".to_owned(),
+                    status: PlanItemStatus::Completed,
+                    reason: None,
+                },
+            ]),
+        }));
+        assert_eq!(desired_todo_rows(&app), 4);
+    }

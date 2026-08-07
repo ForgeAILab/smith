@@ -1,5 +1,58 @@
 // local commands behavior tests.
 
+    use smith_tui::status::{PriceReference, PriceTable, SessionUsage};
+
+    #[test]
+    fn status_cost_reports_unknown_without_assuming_a_price() {
+        // usage-accounting: "Price is unavailable" — `/status` must show the
+        // counters and report cost as unknown rather than assuming a price,
+        // unlike the exit report's "no cost line at all".
+        let mut totals = std::collections::BTreeMap::new();
+        totals.insert(CounterKind::InputUncached, 1_000);
+        let usage = SessionUsage {
+            turns: 1,
+            reported: true,
+            totals,
+            ..SessionUsage::default()
+        };
+        let rendered = render_status_cost(&usage, None, ("openai", "gpt-5.3"));
+        assert_eq!(rendered, "unknown · no price reference for openai/gpt-5.3");
+    }
+
+    #[test]
+    fn status_cost_names_the_priced_binding_and_labels_it_exact() {
+        // usage-accounting: "A priced model with reported counters" — one
+        // USD figure labelled exact, naming the provider and model.
+        let mut totals = std::collections::BTreeMap::new();
+        totals.insert(CounterKind::InputUncached, 1_000_000);
+        let usage = SessionUsage {
+            turns: 1,
+            reported: true,
+            totals,
+            ..SessionUsage::default()
+        };
+        let price = PriceReference {
+            provider: "openai".to_owned(),
+            model: "gpt-5.3".to_owned(),
+            table: PriceTable {
+                input: Some(2_000_000),
+                output: None,
+                cache_read: None,
+                cache_write: None,
+            },
+        };
+        let rendered = render_status_cost(&usage, Some(&price), ("openai", "gpt-5.3"));
+        assert_eq!(rendered, "$2.000 exact · openai/gpt-5.3");
+    }
+
+    #[test]
+    fn status_cost_says_nothing_spent_yet_before_any_usage() {
+        // A fresh session has no usage to price at all — a different fact
+        // from "priced but unknown", and must not be conflated with it.
+        let rendered = render_status_cost(&SessionUsage::default(), None, ("openai", "gpt-5.3"));
+        assert_eq!(rendered, "nothing spent yet");
+    }
+
     #[test]
     fn context_categories_name_tool_results_separately_from_user_input() {
         let tool = context_display_category("tool_result", 4_200);
@@ -278,6 +331,14 @@
             "{status_content}"
         );
         assert!(status_content.contains("source"), "{status_content}");
+        // No usage has been recorded yet, so `/status` reports "nothing
+        // spent yet" rather than either a zero dollar figure or "unknown" —
+        // there is nothing to price, which is a different fact from a
+        // priced session's cost being unpriceable.
+        assert!(
+            status_content.contains("cost: nothing spent yet"),
+            "{status_content}"
+        );
         let context_content = app
             .transcript
             .blocks()

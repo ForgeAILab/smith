@@ -335,8 +335,12 @@
             &screen,
             &[
                 "● main",
-                "○ child-a  read-only",
-                "○ child-b  completed · No findings.",
+                // No spawn call preceded these events, so the panel falls
+                // back to the root's own profile — the same "inherited"
+                // resolution `ChildSpawned` applies when nothing was
+                // selected.
+                "○ child-a  build · read-only",
+                "○ child-b  build · completed · No findings.",
             ],
         );
         let clocks = screen
@@ -355,6 +359,167 @@
         assert!(
             main_row > composer_row,
             "the panel sits below the composer:\n{screen}"
+        );
+    }
+
+    #[test]
+    fn a_working_childs_row_shows_the_reviewed_projection_profile_and_coordinator_counts() {
+        use agent_runtime_core::delegation::WorkspacePolicy;
+        use agent_runtime_core::ids::ChildId;
+
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        let spawn_args = serde_json::json!({
+            "action": "spawn",
+            "task": "review the diff",
+            "tools": "read_only",
+            "workspace": "shared",
+            "profile": "review"
+        });
+        let display = smith_tools::project_tool_call_display("agent", &spawn_args)
+            .expect("reviewed spawn projection");
+        app.apply(&event(RuntimeEvent::ToolCallRequested {
+            call: ToolCallId::new("spawn-1"),
+            name: "agent".to_owned(),
+            argument_keys: vec![
+                "action".into(),
+                "task".into(),
+                "tools".into(),
+                "workspace".into(),
+                "profile".into(),
+            ],
+            argument_fingerprint: agent_runtime_registry::Fingerprint::of("arguments"),
+            arguments: None,
+        }));
+        app.note_pending_spawn("spawn-1", &display);
+        app.set_tool_display("spawn-1", display);
+        let child = ChildId::new("child-1");
+        app.apply(&event(RuntimeEvent::ChildSpawned {
+            child: child.clone(),
+            workspace: WorkspacePolicy::SharedProject,
+            max_turns: 5,
+            max_tokens: None,
+            deadline_ms: None,
+        }));
+
+        app.apply_child(
+            child.as_str(),
+            &event(RuntimeEvent::ToolCallRequested {
+                call: ToolCallId::new("child-call-1"),
+                name: "read".to_owned(),
+                argument_keys: vec!["path".to_owned()],
+                argument_fingerprint: agent_runtime_registry::Fingerprint::of("arguments"),
+                arguments: None,
+            }),
+        );
+        app.set_child_tool_display(
+            child.as_str(),
+            "child-call-1",
+            smith_tools::project_tool_call_display("read", &serde_json::json!({"path": "src/retry.rs"}))
+                .expect("reviewed read projection"),
+        );
+        app.set_child_counts(std::collections::BTreeMap::from([(
+            child.to_string(),
+            crate::app::ChildCounts {
+                turns_used: 2,
+                max_turns: 5,
+                tokens_used: 12_400,
+            },
+        )]));
+
+        let screen = render(&app, 100, 24, Theme::new().without_color());
+        assert!(
+            screen.contains("○ child-1  review · Read(src/retry.rs) · 2/5 turns · 12.4k tokens"),
+            "the row shows the reviewed projection, not the bare tool name, beside the \
+             child's profile and the coordinator's own counts:\n{screen}"
+        );
+    }
+
+    #[test]
+    fn a_child_tool_with_no_reviewed_projection_names_the_tool_with_an_honest_label() {
+        use agent_runtime_core::delegation::WorkspacePolicy;
+        use agent_runtime_core::ids::ChildId;
+
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        let child = ChildId::new("child-plain");
+        app.apply(&event(RuntimeEvent::ChildSpawned {
+            child: child.clone(),
+            workspace: WorkspacePolicy::ReadOnlyView,
+            max_turns: 1,
+            max_tokens: None,
+            deadline_ms: None,
+        }));
+        app.apply_child(
+            child.as_str(),
+            &event(RuntimeEvent::ToolCallRequested {
+                call: ToolCallId::new("call-1"),
+                name: "mcp.some_third_party_tool".to_owned(),
+                argument_keys: vec!["query".to_owned()],
+                argument_fingerprint: agent_runtime_registry::Fingerprint::of("arguments"),
+                arguments: None,
+            }),
+        );
+
+        let screen = render(&app, 100, 24, Theme::new().without_color());
+        let row = screen
+            .lines()
+            .find(|line| line.contains(child.as_str()))
+            .expect("a panel row");
+        assert!(
+            // `query` is the argument's *key* — safe metadata the fallback
+            // always names — never a value, since none was ever supplied
+            // here or anywhere on this honest-fallback path.
+            row.contains("mcp.some_third_party_tool(query") && row.contains("arguments hidden"),
+            "the tool is named with an honest unavailable label rather than a raw argument \
+             value: {row}"
+        );
+    }
+
+    #[test]
+    fn a_long_child_activity_clips_before_the_docked_clock() {
+        use agent_runtime_core::delegation::WorkspacePolicy;
+        use agent_runtime_core::ids::ChildId;
+
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        let child = ChildId::new("child-verbose");
+        app.apply(&event(RuntimeEvent::ChildSpawned {
+            child: child.clone(),
+            workspace: WorkspacePolicy::ReadOnlyView,
+            max_turns: 1,
+            max_tokens: None,
+            deadline_ms: None,
+        }));
+        let many_keys = (0..12)
+            .map(|index| format!("argument_key_number_{index}"))
+            .collect::<Vec<_>>();
+        app.apply_child(
+            child.as_str(),
+            &event(RuntimeEvent::ToolCallRequested {
+                call: ToolCallId::new("call-1"),
+                name: "mcp.some_third_party_tool".to_owned(),
+                argument_keys: many_keys,
+                argument_fingerprint: agent_runtime_registry::Fingerprint::of("arguments"),
+                arguments: None,
+            }),
+        );
+
+        let screen = render(&app, 80, 24, Theme::new().without_color());
+        let row = screen
+            .lines()
+            .find(|line| line.contains(child.as_str()))
+            .expect("a panel row");
+        assert!(
+            row.width() <= 80,
+            "the row must not overflow the panel width: {row}"
+        );
+        assert!(
+            row.trim_end().ends_with("0s"),
+            "the elapsed clock stays docked at the right edge even though the activity is \
+             long enough to clip: {row:?}"
+        );
+        assert!(
+            !row.contains("argument_key_number_11"),
+            "the key list is bounded, not an unbounded dump, and the whole thing still \
+             clips well short of the clock: {row}"
         );
     }
 
@@ -689,4 +854,250 @@
                  must draw through the same renderer, down to the styles"
             );
         }
+    }
+
+    #[test]
+    fn open_items_render_first_and_completed_items_collapse_to_one_struck_row() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.apply(&event(RuntimeEvent::PlanUpdated {
+            revision: 1,
+            sensitivity: PlanSensitivity::Public,
+            counts: std::collections::BTreeMap::new(),
+            items: Some(vec![
+                PlanItemProjection {
+                    id: "inspect".to_owned(),
+                    text: "Inspect the retry module".to_owned(),
+                    status: PlanItemStatus::Completed,
+                    reason: None,
+                },
+                PlanItemProjection {
+                    id: "change".to_owned(),
+                    text: "Implement the fix".to_owned(),
+                    status: PlanItemStatus::InProgress,
+                    reason: None,
+                },
+                PlanItemProjection {
+                    id: "verify".to_owned(),
+                    text: "Run the focused tests".to_owned(),
+                    status: PlanItemStatus::Pending,
+                    reason: None,
+                },
+                PlanItemProjection {
+                    id: "docs".to_owned(),
+                    text: "Update the docs".to_owned(),
+                    status: PlanItemStatus::Completed,
+                    reason: None,
+                },
+                PlanItemProjection {
+                    id: "changelog".to_owned(),
+                    text: "Note the change in the changelog".to_owned(),
+                    status: PlanItemStatus::Completed,
+                    reason: None,
+                },
+            ]),
+        }));
+
+        let screen = render(&app, 100, 20, Theme::new().without_color());
+        let lines: Vec<&str> = screen.lines().collect();
+        let heading = lines
+            .iter()
+            .position(|line| line.contains("Todo"))
+            .expect("todo heading");
+        let implement = lines
+            .iter()
+            .position(|line| line.contains("Implement the fix"))
+            .expect("open item in authored order");
+        let verify = lines
+            .iter()
+            .position(|line| line.contains("Run the focused tests"))
+            .expect("open item in authored order");
+        let collapsed = lines
+            .iter()
+            .position(|line| line.contains("Note the change in the changelog"))
+            .expect("the collapsed row names the most recently completed item");
+        assert!(
+            heading < implement && implement < verify && verify < collapsed,
+            "open items render first in authored order, the collapsed row last:\n{screen}"
+        );
+        assert!(
+            lines[collapsed].contains("(+2 done)"),
+            "two completed items sit behind the one the row names:\n{}",
+            lines[collapsed]
+        );
+        assert!(
+            !screen.contains("Inspect the retry module") && !screen.contains("Update the docs"),
+            "a completed item other than the most recent one gets no row of its own:\n{screen}"
+        );
+
+        // The collapsed row's text is struck through and dim, not the
+        // Success-toned `[x]` an uncollapsed completed item would have used.
+        let mut terminal = Terminal::new(TestBackend::new(100, 20)).expect("a test terminal");
+        terminal
+            .draw(|frame| draw(frame, &app, Theme::new()))
+            .expect("a frame");
+        let buffer = terminal.backend().buffer().clone();
+        let row = (0..buffer.area.height)
+            .find(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, *y)].symbol())
+                    .collect::<String>()
+                    .contains("Note the change")
+            })
+            .expect("the collapsed row");
+        let rendered = (0..buffer.area.width)
+            .map(|x| buffer[(x, row)].symbol())
+            .collect::<String>();
+        let text_x = u16::try_from(rendered.find("Note the change").expect("collapsed text"))
+            .expect("text position fits");
+        let cell = &buffer[(text_x, row)];
+        assert!(
+            cell.modifier.contains(Modifier::CROSSED_OUT),
+            "the collapsed row's text is struck through"
+        );
+        assert!(
+            cell.modifier.contains(Modifier::DIM),
+            "the collapsed row's text is dim"
+        );
+    }
+
+    #[test]
+    fn a_single_completed_item_reports_no_done_count() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.apply(&event(RuntimeEvent::PlanUpdated {
+            revision: 1,
+            sensitivity: PlanSensitivity::Public,
+            counts: std::collections::BTreeMap::new(),
+            items: Some(vec![
+                PlanItemProjection {
+                    id: "inspect".to_owned(),
+                    text: "Inspect the retry module".to_owned(),
+                    status: PlanItemStatus::Completed,
+                    reason: None,
+                },
+                PlanItemProjection {
+                    id: "verify".to_owned(),
+                    text: "Run the focused tests".to_owned(),
+                    status: PlanItemStatus::Pending,
+                    reason: None,
+                },
+            ]),
+        }));
+
+        let screen = render(&app, 100, 20, Theme::new().without_color());
+        assert!(
+            screen.contains("Inspect the retry module"),
+            "the single completed item still names itself:\n{screen}"
+        );
+        assert!(
+            !screen.contains("done)"),
+            "no item is hidden behind it, so no `(+N done)` suffix renders:\n{screen}"
+        );
+    }
+
+    #[test]
+    fn a_cancelled_item_keeps_its_own_row_and_is_excluded_from_the_collapse() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.apply(&event(RuntimeEvent::PlanUpdated {
+            revision: 1,
+            sensitivity: PlanSensitivity::Public,
+            counts: std::collections::BTreeMap::new(),
+            items: Some(vec![
+                PlanItemProjection {
+                    id: "skip".to_owned(),
+                    text: "Skip the deprecated path".to_owned(),
+                    status: PlanItemStatus::Cancelled,
+                    reason: None,
+                },
+                PlanItemProjection {
+                    id: "inspect".to_owned(),
+                    text: "Inspect the retry module".to_owned(),
+                    status: PlanItemStatus::Completed,
+                    reason: None,
+                },
+                PlanItemProjection {
+                    id: "verify".to_owned(),
+                    text: "Run the focused tests".to_owned(),
+                    status: PlanItemStatus::Completed,
+                    reason: None,
+                },
+            ]),
+        }));
+
+        let screen = render(&app, 100, 20, Theme::new().without_color());
+        assert!(
+            screen.contains("[-] Skip the deprecated path"),
+            "a cancelled item keeps its own row among the open items:\n{screen}"
+        );
+        assert!(
+            screen.contains("(+1 done)"),
+            "two items are completed, so the cancelled item must not inflate \
+             the hidden count to two:\n{screen}"
+        );
+    }
+
+    #[test]
+    fn a_fully_completed_plan_stays_visible_while_working_and_retires_once_the_turn_stops() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        app.apply(&event(RuntimeEvent::PlanUpdated {
+            revision: 1,
+            sensitivity: PlanSensitivity::Public,
+            counts: std::collections::BTreeMap::new(),
+            items: Some(vec![
+                PlanItemProjection {
+                    id: "inspect".to_owned(),
+                    text: "Inspect the retry module".to_owned(),
+                    status: PlanItemStatus::Completed,
+                    reason: None,
+                },
+                PlanItemProjection {
+                    id: "verify".to_owned(),
+                    text: "Run the focused tests".to_owned(),
+                    status: PlanItemStatus::Completed,
+                    reason: None,
+                },
+            ]),
+        }));
+
+        let while_working = render(&app, 100, 20, Theme::new().without_color());
+        assert!(
+            while_working.contains("Todo") && while_working.contains("Run the focused tests"),
+            "a fully-completed plan still renders while the turn is working:\n{while_working}"
+        );
+
+        app.apply(&event(RuntimeEvent::TurnCompleted {
+            finish: TurnFinish::Completed,
+            visible_output: true,
+        }));
+        let after_stop = render(&app, 100, 20, Theme::new().without_color());
+        assert!(
+            !after_stop.contains("Todo") && !after_stop.contains("Run the focused tests"),
+            "once the turn is no longer running, a fully-completed plan retires \
+             instead of pinning the finished list until the next turn:\n{after_stop}"
+        );
+    }
+
+    #[test]
+    fn a_sensitive_plan_shows_no_item_text_and_no_collapse_row() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        app.apply(&event(RuntimeEvent::PlanUpdated {
+            revision: 1,
+            sensitivity: PlanSensitivity::Sensitive,
+            counts: std::collections::BTreeMap::from([("completed".to_owned(), 3)]),
+            items: Some(vec![PlanItemProjection {
+                id: "hidden".to_owned(),
+                text: "Sensitive step".to_owned(),
+                status: PlanItemStatus::Completed,
+                reason: None,
+            }]),
+        }));
+
+        let screen = render(&app, 100, 20, Theme::new().without_color());
+        assert!(
+            !screen.contains("Todo"),
+            "a sensitive plan renders no anchored pane, collapsed or otherwise:\n{screen}"
+        );
+        assert!(!screen.contains("Sensitive step"), "{screen}");
+        assert!(!screen.contains("done)"), "{screen}");
     }

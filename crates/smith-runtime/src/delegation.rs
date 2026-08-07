@@ -200,7 +200,11 @@ pub struct SmithChildRoute {
     pub(crate) agent_profile_name: String,
     pub(crate) agent_profile_revision: String,
     pub(crate) agent_profile_posture: AgentPosture,
-    /// Children remain read-only in this release, even for build profiles.
+    /// Whether this route's agent-profile posture is read-only
+    /// (`agent_profile_posture.is_read_only()`). A child can reach
+    /// write-capable tools only when this is `false` *and* its spawn asked
+    /// for a full tool scope and a non-read-only workspace policy — see
+    /// [`SmithChildFactory::child_builder`].
     pub(crate) read_only: bool,
 }
 
@@ -315,10 +319,27 @@ impl ChildRuntimeFactory for SmithChildFactory {
         let tool_authority = Arc::new(SmithToolAuthority::new(workspace.root()));
         let tool_coverage = tool_authority.coverage().clone();
 
-        let mut tools = if route.read_only {
-            smith_tools::read_only()
-        } else {
+        // A child reaches write-capable tools only when three things hold at
+        // once: its resolved route's agent-profile posture is not read-only,
+        // its spawn declared a full tool scope, and its spawn's workspace
+        // policy is not the read-only view. The workspace key is not
+        // optional. Just above, `WorkspacePolicy::ReadOnlyView` is mapped to
+        // this same shared `self.workspace` handle as
+        // `WorkspacePolicy::SharedProject` — there is no separate read-only
+        // wrapper, so within this factory nothing about the workspace object
+        // itself refuses a write. The tool set chosen here is what actually
+        // enforces "read-only" for that policy. `WorkspacePolicy::ReadOnlyView`
+        // is also what `AgentTool` defaults an absent `workspace` argument to,
+        // so without this third key a build-posture spawn that asked for
+        // `tools: "all"` but named no workspace would silently receive
+        // write-capable tools against the shared project.
+        let write_capable = !route.read_only
+            && spec.tools == ToolViewScope::All
+            && !matches!(spec.workspace, WorkspacePolicy::ReadOnlyView);
+        let mut tools = if write_capable {
             smith_tools::all()
+        } else {
+            smith_tools::read_only()
         };
         tools.push(Arc::new(QuestionnaireTool::new()));
         tools.push(Arc::new(WriteTodosTool::new()));
@@ -521,6 +542,24 @@ fn child_task_delivery(outcome: &ChildTaskOutcome) -> (String, String) {
     }
 }
 
+/// One child-enabled agent profile a `spawn` call may name.
+///
+/// Built once at construction directly from the same preflighted routes that
+/// populate [`SmithChildFactory::profile_routes`] (see
+/// `factory::prepare_child_profile_routes`), so the tool's advertised schema
+/// and its resolution path can never name a profile the factory cannot route.
+#[derive(Debug, Clone)]
+pub struct AgentToolProfile {
+    /// Stable profile name, as the model names it.
+    pub name: String,
+    /// Deterministic agent-profile revision, part of the route key.
+    pub revision: String,
+    /// The profile's serving provider name, for display only.
+    pub provider: String,
+    /// The profile's preflighted model.
+    pub model: ModelId,
+}
+
 /// The model-facing delegation tool.
 ///
 /// Declares no invocation effects because the authority-bearing decision
@@ -532,12 +571,25 @@ fn child_task_delivery(outcome: &ChildTaskOutcome) -> (String, String) {
 #[derive(Debug)]
 pub struct AgentTool {
     slot: Arc<OnceLock<DelegationCoordinator>>,
+    profiles: Vec<AgentToolProfile>,
 }
 
 impl AgentTool {
     /// A tool over the coordinator `slot` the host fills after session start.
+    /// Offers no selectable child profile until [`Self::with_profiles`] adds
+    /// some.
     pub fn new(slot: Arc<OnceLock<DelegationCoordinator>>) -> Self {
-        Self { slot }
+        Self {
+            slot,
+            profiles: Vec::new(),
+        }
+    }
+
+    /// Offers `profiles` on `spawn`'s `profile` argument, exactly the
+    /// child-enabled profiles [`SmithChildFactory`] preflighted a route for.
+    pub fn with_profiles(mut self, profiles: Vec<AgentToolProfile>) -> Self {
+        self.profiles = profiles;
+        self
     }
 
     fn coordinator(&self) -> Result<&DelegationCoordinator, RuntimeError> {
@@ -547,6 +599,25 @@ impl AgentTool {
                 "delegation is not wired for this session",
             )
         })
+    }
+
+    /// Resolves a model-named profile against the registered directory.
+    fn find_profile(&self, name: &str) -> Option<&AgentToolProfile> {
+        self.profiles.iter().find(|profile| profile.name == name)
+    }
+
+    /// A stable, human-readable list of the available profile names, named in
+    /// the refusal a spawn gets when it asks for one that is not registered.
+    fn available_profiles_description(&self) -> String {
+        if self.profiles.is_empty() {
+            "none are registered".to_owned()
+        } else {
+            self.profiles
+                .iter()
+                .map(|profile| profile.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
     }
 }
 
@@ -561,6 +632,11 @@ enum AgentAction {
         tools: ToolScopeArg,
         #[serde(default)]
         workspace: Option<WorkspaceArg>,
+        /// A registered child-enabled agent profile to run the spawn on.
+        /// Absent inherits the parent's profile exactly as before profile
+        /// selection existed.
+        #[serde(default)]
+        profile: Option<String>,
     },
     /// List every child and its status.
     List,
@@ -649,42 +725,98 @@ fn task_outcome_json(outcome: &ChildTaskOutcome) -> Value {
 #[async_trait]
 impl Tool for AgentTool {
     fn spec(&self) -> ToolSpec {
-        ToolSpec::new(
-            AGENT_TOOL_NAME,
+        let description = if self.profiles.is_empty() {
             "Delegate a task to a sub-agent. Actions: spawn (start a child with a task; \
              read-only tools unless tools=\"all\"), list, wait (block until a child finishes), \
              result, follow_up (start a new task on an idle child), resume (continue an exact \
              interrupted checkpoint), stop. A completed child's \
              result is also delivered to you automatically at the next safe point. A child's \
              needs_input result is informational and does not open user interface; decide \
-             whether to call root ask_user, then send the answer with an explicit follow_up.",
+             whether to call root ask_user, then send the answer with an explicit follow_up."
+                .to_owned()
+        } else {
+            format!(
+                "Delegate a task to a sub-agent. Actions: spawn (start a child with a task; \
+                 read-only tools unless tools=\"all\"), list, wait (block until a child \
+                 finishes), result, follow_up (start a new task on an idle child), resume \
+                 (continue an exact interrupted checkpoint), stop. spawn may name a registered \
+                 child-enabled profile ({}) to run the child on that profile's own preflighted \
+                 provider, model, and posture instead of inheriting the parent's; omitting it \
+                 inherits the parent's profile. A profile whose posture can write still needs \
+                 tools=\"all\" to receive write-capable tools, and a read-only (the default) or \
+                 otherwise declared read-only workspace keeps the child read-only no matter what \
+                 posture or tool scope it asked for. A completed child's result is also \
+                 delivered to you automatically at the next safe point. A child's needs_input \
+                 result is informational and does not open user interface; decide whether to \
+                 call root ask_user, then send the answer with an explicit follow_up.",
+                self.available_profiles_description()
+            )
+        };
+        let mut properties = serde_json::Map::new();
+        properties.insert(
+            "action".to_owned(),
+            json!({
+                "type": "string",
+                "enum": ["spawn", "list", "wait", "result", "follow_up", "resume", "stop"],
+                "description": "The delegation operation."
+            }),
+        );
+        properties.insert(
+            "task".to_owned(),
+            json!({
+                "type": "string",
+                "description": "The task text (spawn and follow_up)."
+            }),
+        );
+        properties.insert(
+            "child_id".to_owned(),
+            json!({
+                "type": "string",
+                "description": "The child to address (wait, result, follow_up, resume, stop)."
+            }),
+        );
+        properties.insert(
+            "tools".to_owned(),
+            json!({
+                "type": "string",
+                "enum": ["read_only", "all"],
+                "description": "The child's tool scope (spawn). Defaults to read_only. A \
+                                 write-posture profile still needs \"all\" to receive \
+                                 write-capable tools."
+            }),
+        );
+        properties.insert(
+            "workspace".to_owned(),
+            json!({
+                "description": "The child's workspace policy (spawn): \"shared\", \
+                                \"read_only\", or {\"directory\": {\"path\": \"…\"}}. \
+                                Defaults to read_only, which keeps the child read-only \
+                                regardless of tool scope or profile posture."
+            }),
+        );
+        if !self.profiles.is_empty() {
+            let names: Vec<Value> = self
+                .profiles
+                .iter()
+                .map(|profile| Value::String(profile.name.clone()))
+                .collect();
+            properties.insert(
+                "profile".to_owned(),
+                json!({
+                    "type": "string",
+                    "enum": names,
+                    "description": "A registered child-enabled agent profile to run the spawn \
+                                     on, resolved through its own preflighted provider/model \
+                                     route (spawn). Absent inherits the parent's profile."
+                }),
+            );
+        }
+        ToolSpec::new(
+            AGENT_TOOL_NAME,
+            description,
             json!({
                 "type": "object",
-                "properties": {
-                    "action": {
-                        "type": "string",
-                        "enum": ["spawn", "list", "wait", "result", "follow_up", "resume", "stop"],
-                        "description": "The delegation operation."
-                    },
-                    "task": {
-                        "type": "string",
-                        "description": "The task text (spawn and follow_up)."
-                    },
-                    "child_id": {
-                        "type": "string",
-                        "description": "The child to address (wait, result, follow_up, resume, stop)."
-                    },
-                    "tools": {
-                        "type": "string",
-                        "enum": ["read_only", "all"],
-                        "description": "The child's tool scope (spawn). Defaults to read_only."
-                    },
-                    "workspace": {
-                        "description": "The child's workspace policy (spawn): \"shared\", \
-                                        \"read_only\", or {\"directory\": {\"path\": \"…\"}}. \
-                                        Defaults to read_only."
-                    },
-                },
+                "properties": Value::Object(properties),
                 "required": ["action"],
                 "additionalProperties": false
             }),
@@ -780,7 +912,28 @@ impl Tool for AgentTool {
                 task,
                 tools,
                 workspace,
+                profile,
             } => {
+                // Resolved before any lifecycle-creating call: an unknown,
+                // non-child-enabled, or unrouted profile must fail without
+                // creating a child or a lifecycle event, so this has to
+                // short-circuit ahead of `coordinator.spawn` below.
+                let model = match profile {
+                    Some(name) => match self.find_profile(&name) {
+                        Some(option) => ChildModelSelection::Explicit {
+                            provider: Some(profile_route_key(&option.name, &option.revision)),
+                            model: option.model.clone(),
+                        },
+                        None => {
+                            return Ok(ToolOutcome::error(format!(
+                                "child profile `{name}` is not registered for direct-child use; \
+                                 available profiles: {}",
+                                self.available_profiles_description()
+                            )));
+                        }
+                    },
+                    None => ChildModelSelection::Inherit,
+                };
                 let workspace = match workspace {
                     None | Some(WorkspaceArg::ReadOnly) => WorkspacePolicy::ReadOnlyView,
                     Some(WorkspaceArg::Shared) => WorkspacePolicy::SharedProject,
@@ -790,7 +943,7 @@ impl Tool for AgentTool {
                 };
                 let spec = ChildSpec {
                     task: UserInput::text(task),
-                    model: ChildModelSelection::Inherit,
+                    model,
                     limits: UNLIMITED_CHILD_LIMITS,
                     tools: match tools {
                         ToolScopeArg::ReadOnly => ToolViewScope::ReadOnly,

@@ -1,6 +1,7 @@
 //! Typed local commands and status/context rendering.
 
 use super::*;
+use smith_tui::status::{PriceReference, SessionCost, SessionUsage};
 
 pub(super) fn tool_call_for_display(
     event: &RuntimeEvent,
@@ -165,6 +166,25 @@ pub(super) async fn handle_local_command(
                     .collect::<Vec<_>>()
                     .join(", ")
             };
+            // The same merged/root/agents shape the exit report carries,
+            // named honestly when nothing has been spent yet — `/status` is
+            // the one place a user checks usage mid-session rather than at
+            // exit.
+            let session_usage = app.session_usage();
+            let usage = session_usage
+                .render()
+                .unwrap_or_else(|| "nothing spent yet".to_owned());
+            // Unlike the exit report, `/status` reports cost as unknown
+            // rather than omitting it when the catalog carries no price
+            // entry for the active model (`usage-accounting`'s "Price is
+            // unavailable"; `DESIGN.md` §7's `cost ?`) — a user checking
+            // mid-session should never have to wonder whether "no cost line"
+            // means "free" or "unpriced".
+            let cost = render_status_cost(
+                &session_usage,
+                app.status.price(),
+                (&policy.provider_name, policy.model.as_str()),
+            );
             app.show_local_result(
                 "status",
                 format!(
@@ -173,7 +193,9 @@ pub(super) async fn handle_local_command(
                      {reasoning}\n\
                      protected mid-turn recovery: {}\n\
                      {harness}\n{context}\nproject: {}\nGit: {}\n\
-                     goal: {goal}\nconnections: {connections}\nchildren: {}\nchange attribution: {}",
+                     goal: {goal}\nconnections: {connections}\nchildren: {}\nusage: {usage}\n\
+                     cost: {cost}\n\
+                     change attribution: {}",
                     host.session().id(),
                     policy.agent_profile,
                     policy.agent_posture.as_str(),
@@ -478,6 +500,38 @@ pub(super) async fn handle_local_command(
             unreachable!("the reducer handles this command before host dispatch")
         }
     }
+}
+
+/// The `/status` cost line.
+///
+/// Two honesty rules that only look alike from a distance: an empty session
+/// has nothing to price (there is no "unknown" about zero tokens), while a
+/// non-empty session against an unpriced model genuinely has an unknown
+/// cost — `usage-accounting`'s "Price is unavailable" requires Smith to show
+/// the counters and report cost as unknown rather than assuming a price, not
+/// to omit the field the way the exit report does for the same case.
+/// `binding` names the active provider/model even when unpriced, matching
+/// `/status`'s own `provider:`/`model:` lines rather than naming nothing.
+pub(super) fn render_status_cost(
+    usage: &SessionUsage,
+    price: Option<&PriceReference>,
+    binding: (&str, &str),
+) -> String {
+    if usage.is_empty() {
+        return "nothing spent yet".to_owned();
+    }
+    let Some(price) = price else {
+        let (provider, model) = binding;
+        return format!("unknown · no price reference for {provider}/{model}");
+    };
+    let cost = SessionCost::compute(usage, price);
+    format!(
+        "{} {} · {}/{}",
+        cost.render(),
+        cost.label.as_str(),
+        price.provider,
+        price.model,
+    )
 }
 
 pub(super) fn render_goal(goal: &GoalProjection) -> String {

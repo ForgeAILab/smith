@@ -2,10 +2,12 @@
 
 use std::time::Duration;
 
-use crate::app::{App, ChildSummary, MAX_PENDING_PREVIEW_ENTRIES, Overlay, RunningTaskSummary};
-use crate::status::render_elapsed;
+use crate::app::{
+    App, ChildCounts, ChildSummary, MAX_PENDING_PREVIEW_ENTRIES, Overlay, RunningTaskSummary,
+};
+use crate::status::{TokenCount, render_elapsed};
 use crate::theme::{Theme, Tone, glyph};
-use agent_runtime_core::event::PlanItemStatus;
+use agent_runtime_core::event::{PlanItemProjection, PlanItemStatus};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -143,34 +145,107 @@ pub(super) fn draw_todos(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Th
     let Some(items) = app.plan.as_ref().and_then(|plan| plan.items.as_ref()) else {
         return;
     };
+    // The pane retires once every item is completed and the turn is no
+    // longer running, rather than pinning a finished list until the next
+    // turn starts. `desired_todo_rows` in `layout.rs` reaches the same
+    // verdict from the same two facts, so the reserved area and what this
+    // function draws into it never disagree.
+    if !app.is_busy()
+        && items
+            .iter()
+            .all(|item| item.status == PlanItemStatus::Completed)
+    {
+        return;
+    }
     let capacity = usize::from(area.height).saturating_sub(1);
+    let open = items
+        .iter()
+        .filter(|item| item.status != PlanItemStatus::Completed);
+    // `PlanItemProjection` carries no completion timestamp, so "most
+    // recently completed" is read as the last completed item in authored
+    // order — the only ordering the projection actually carries. This walk
+    // also counts every completed item, so the collapsed row can report how
+    // many sit behind the one it names.
+    let mut completed_count = 0usize;
+    let mut most_recently_completed = None;
+    for item in items {
+        if item.status == PlanItemStatus::Completed {
+            completed_count += 1;
+            most_recently_completed = Some(item);
+        }
+    }
+
     let mut lines = vec![Line::from(Span::styled(
         "  Todo",
         theme.style(Tone::Heading),
     ))];
-    lines.extend(items.iter().take(capacity).map(|item| {
-        let (marker, tone) = match item.status {
-            PlanItemStatus::Pending => ("[ ]", Tone::Default),
-            PlanItemStatus::InProgress => ("[>]", Tone::Accent),
-            PlanItemStatus::Completed => ("[x]", Tone::Success),
-            PlanItemStatus::Cancelled => ("[-]", Tone::Dim),
-        };
-        let text = item.text.split_whitespace().collect::<Vec<_>>().join(" ");
-        Line::from(vec![
-            Span::styled(format!("  {marker} "), theme.style(tone)),
-            Span::styled(
-                if text.is_empty() {
-                    item.id.clone()
-                } else {
-                    text
-                },
-                theme.style(tone),
-            ),
-        ])
-    }));
+    lines.extend(open.take(capacity).map(|item| todo_item_line(item, theme)));
+    if let Some(item) = most_recently_completed {
+        // Charged against the same capacity an open item would have used, so
+        // the anchored row budget the collapsed row draws from is unchanged.
+        if lines.len().saturating_sub(1) < capacity {
+            lines.push(collapsed_todo_line(
+                item,
+                completed_count.saturating_sub(1),
+                theme,
+            ));
+        }
+    }
     // Todo rows are fixed-height composer chrome; long text clips instead of
     // wrapping and moving the input.
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// One open (pending, in-progress, or cancelled) todo row.
+///
+/// A completed item reaches [`collapsed_todo_line`] instead, so the completed
+/// arm here is unused today. It is kept total rather than `unreachable!`
+/// anyway: this runs inside the draw path, and a panic there takes the whole
+/// terminal session down mid-frame — a far worse outcome than one row drawn
+/// the way it was drawn before the collapse existed.
+fn todo_item_line(item: &PlanItemProjection, theme: Theme) -> Line<'static> {
+    let (marker, tone) = match item.status {
+        PlanItemStatus::Pending => ("[ ]", Tone::Default),
+        PlanItemStatus::InProgress => ("[>]", Tone::Accent),
+        PlanItemStatus::Cancelled => ("[-]", Tone::Dim),
+        PlanItemStatus::Completed => ("[x]", Tone::Success),
+    };
+    let text = item.text.split_whitespace().collect::<Vec<_>>().join(" ");
+    Line::from(vec![
+        Span::styled(format!("  {marker} "), theme.style(tone)),
+        Span::styled(
+            if text.is_empty() {
+                item.id.clone()
+            } else {
+                text
+            },
+            theme.style(tone),
+        ),
+    ])
+}
+
+/// The single collapsed row standing in for every completed item: the most
+/// recently completed item's text, struck through and dim, naming how many
+/// more are hidden behind it when more than one item is complete.
+fn collapsed_todo_line(item: &PlanItemProjection, hidden: usize, theme: Theme) -> Line<'static> {
+    let text = item.text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let text = if text.is_empty() {
+        item.id.clone()
+    } else {
+        text
+    };
+    let struck = theme.style(Tone::Dim).add_modifier(Modifier::CROSSED_OUT);
+    let mut spans = vec![
+        Span::styled("  [x] ", theme.style(Tone::Dim)),
+        Span::styled(text, struck),
+    ];
+    if hidden > 0 {
+        spans.push(Span::styled(
+            format!(" (+{hidden} done)"),
+            theme.style(Tone::Dim),
+        ));
+    }
+    Line::from(spans)
 }
 
 pub(super) fn overlay_hint(app: &App) -> Option<String> {
@@ -479,11 +554,26 @@ fn agent_row(
     };
     // While a child works its detail IS the activity; once it settles, the
     // lifecycle label carries the outcome and the detail explains it.
-    let activity = match (summary.state.as_str(), &summary.detail) {
+    let mut activity = match (summary.state.as_str(), &summary.detail) {
         ("running" | "working" | "resuming", Some(detail)) => detail.clone(),
         (state, Some(detail)) => format!("{state} {} {detail}", glyph::SEPARATOR),
         (state, None) => state.to_owned(),
     };
+    // Everything this row adds beyond the child's bare id lands in the
+    // activity text, which clips first — never in `identity` — so a long
+    // profile, projection, or count can never push the docked clock off
+    // screen; see `child-agents`'s "Delegated-work panel reports
+    // substantive child activity".
+    if let Some(profile) = &summary.profile {
+        activity = format!("{profile} {} {activity}", glyph::SEPARATOR);
+    }
+    if let Some(counts) = app.child_counts(child_id) {
+        activity = format!(
+            "{activity} {} {}",
+            glyph::SEPARATOR,
+            render_child_counts(counts)
+        );
+    }
     // The selected row is already bold and marked; letting it keep its state
     // colour means the eye does not lose a failure by landing on it.
     let tone = child_state_tone(summary.state.as_str());
@@ -499,6 +589,24 @@ fn agent_row(
         style,
         width,
         theme,
+    )
+}
+
+/// Coordinator-owned turn/token counts as a compact panel fragment.
+///
+/// Smith computes no count of its own here — `counts` already came from the
+/// delegation coordinator on the host's poll-on-redraw; this only formats
+/// what it was handed, the same unbounded-turn convention the transcript's
+/// spawn enrichment uses.
+fn render_child_counts(counts: ChildCounts) -> String {
+    let turns = if counts.max_turns == u32::MAX {
+        counts.turns_used.to_string()
+    } else {
+        format!("{}/{}", counts.turns_used, counts.max_turns)
+    };
+    format!(
+        "{turns} turns · {} tokens",
+        TokenCount::reported(counts.tokens_used).render()
     )
 }
 
