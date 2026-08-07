@@ -561,7 +561,10 @@ profile.
 Smith SHALL normalize only schema-valid catalog metadata into provider-scoped
 model records. Explicit Smith model configuration MUST retain field-level
 precedence over catalog metadata, and every winning catalog field MUST identify
-its catalog revision and retrieval provenance.
+its catalog revision and retrieval provenance. A catalog entry MAY carry an
+optional per-counter price in USD per million tokens; an entry whose price
+block is absent, incomplete, or ill-typed MUST remain a valid selectable model
+record with no price rather than a rejected or partially-priced one.
 
 #### Scenario: Complete catalog limits are normalized
 
@@ -590,6 +593,40 @@ its catalog revision and retrieval provenance.
 - **WHEN** Smith validates the snapshot
 - **THEN** that entry cannot become a selectable model record
 - **AND** Smith does not clamp or guess a replacement limit
+
+#### Scenario: A published price is normalized
+
+- **GIVEN** a catalog model publishes finite non-negative input, output, cache
+  read, and cache write costs
+- **WHEN** Smith normalizes the model record
+- **THEN** each cost is retained per counter in USD per million tokens
+- **AND** it carries the same catalog revision and retrieval provenance as the
+  entry's other fields
+
+#### Scenario: A partial or ill-typed price
+
+- **GIVEN** a catalog model publishes only an input cost, or publishes a
+  negative, infinite, or non-numeric cost
+- **WHEN** Smith normalizes the model record
+- **THEN** the model stays selectable
+- **AND** only the individually valid costs are retained, with no value
+  inferred for a counter the source did not price
+
+#### Scenario: A price cannot disable a model
+
+- **GIVEN** a catalog model publishes no price at all
+- **WHEN** Smith prepares runtime choices
+- **THEN** the model is selectable exactly as it is today
+- **AND** the absence of a price is not a validation diagnostic
+
+#### Scenario: A snapshot at the prior schema revision
+
+- **GIVEN** a cached catalog snapshot was written at the schema revision before
+  prices existed
+- **WHEN** Smith loads it
+- **THEN** it is rejected as stale by the existing revision check
+- **AND** Smith falls back to the embedded seed and schedules a refresh, as it
+  does for any stale revision
 
 #### Scenario: Effective reserves leave no input budget
 
