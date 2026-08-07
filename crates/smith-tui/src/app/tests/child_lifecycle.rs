@@ -191,12 +191,28 @@
             child: child.clone(),
             phase: ChildPhase::TurnStarted,
         }));
-        app.apply(&event(RuntimeEvent::ChildProgress {
-            child: child.clone(),
-            phase: ChildPhase::ToolCall {
-                name: "Grep".to_owned(),
-            },
-        }));
+        // What the child *did* comes from the child's own stream — the same
+        // events, folded by the same code, into its own transcript.
+        app.apply_child(child.as_str(), &event(tool_requested("call-1", "search")));
+        app.apply_child(
+            child.as_str(),
+            &event(tool_completed("call-1", "search", false)),
+        );
+        app.apply_child(
+            child.as_str(),
+            &event(RuntimeEvent::TextDelta {
+                request: RequestId::new("request-1"),
+                attempt: AttemptId::new("attempt-1"),
+                text: "Two call sites.".to_owned(),
+            }),
+        );
+        app.apply_child(
+            child.as_str(),
+            &event(RuntimeEvent::ProviderAttemptOutputCommitted {
+                request: RequestId::new("request-1"),
+                attempt: AttemptId::new("attempt-1"),
+            }),
+        );
         app.apply(&event(RuntimeEvent::ChildProgress {
             child: child.clone(),
             phase: ChildPhase::TurnFinished,
@@ -224,7 +240,7 @@
         assert!(notices[1].contains("Two call sites"));
         assert!(
             !notices.iter().any(|text| text.contains("is working")
-                || text.contains("ran Grep")),
+                || text.contains("search")),
             "mid-flight progress must not narrate itself into the root transcript"
         );
 
@@ -233,7 +249,7 @@
             [
                 "started · read-only · up to 3 turns",
                 "turn · working",
-                "ran Grep",
+                "ok search",
                 "completed: Two call sites.",
             ],
             "the inspector keeps the record the transcript no longer prints"
@@ -252,20 +268,167 @@
             deadline_ms: None,
         }));
         for index in 0..MAX_CHILD_BLOCKS + 50 {
-            app.apply(&event(RuntimeEvent::ChildProgress {
-                child: child.clone(),
-                phase: ChildPhase::ToolCall {
-                    name: format!("Read{index}"),
-                },
-            }));
+            let call = format!("call-{index}");
+            let name = format!("read{index}");
+            app.apply_child(child.as_str(), &event(tool_requested(&call, &name)));
+            app.apply_child(child.as_str(), &event(tool_completed(&call, &name, false)));
         }
 
         let log = child_log(&app, child.as_str());
-        assert_eq!(log.len(), MAX_CHILD_BLOCKS);
+        assert_eq!(
+            log.len(),
+            MAX_CHILD_BLOCKS,
+            "a call and its outcome are one row, not two"
+        );
         assert_eq!(
             log.last().map(String::as_str),
-            Some(format!("ran Read{}", MAX_CHILD_BLOCKS + 49).as_str()),
+            Some(format!("ok read{}", MAX_CHILD_BLOCKS + 49).as_str()),
             "the newest activity is what a bounded tail keeps"
+        );
+    }
+
+    #[test]
+    fn a_child_tool_row_carries_the_arguments_and_result_the_host_resolves() {
+        let mut app = app();
+        let child = ChildId::new("child-1");
+        app.apply(&event(RuntimeEvent::ChildSpawned {
+            child: child.clone(),
+            workspace: WorkspacePolicy::ReadOnlyView,
+            max_turns: 1,
+            max_tokens: None,
+            deadline_ms: None,
+        }));
+        app.apply_child(child.as_str(), &event(tool_requested("call-1", "read")));
+
+        // Before the host answers, the row says the shape of the call and
+        // never guesses at its values.
+        let Some(Block::Tool {
+            display,
+            protected_summary,
+            status,
+            ..
+        }) = app.child_blocks(child.as_str()).last()
+        else {
+            panic!("the child's tool call is a tool row");
+        };
+        assert!(display.is_none());
+        assert!(
+            protected_summary.contains("path"),
+            "the protected fallback names the argument keys: {protected_summary}"
+        );
+        assert_eq!(*status, ToolStatus::Running);
+
+        app.set_child_tool_display(
+            child.as_str(),
+            "call-1",
+            smith_tools::project_tool_call_display(
+                "read",
+                &serde_json::json!({"path": "src/retry.rs"}),
+            )
+            .expect("reviewed read projection"),
+        );
+        app.apply_child(
+            child.as_str(),
+            &event(tool_completed("call-1", "read", false)),
+        );
+        app.set_child_tool_result_preview(child.as_str(), "call-1", "fn retry() {}");
+
+        let Some(Block::Tool {
+            display,
+            status,
+            result_preview,
+            ..
+        }) = app.child_blocks(child.as_str()).last()
+        else {
+            panic!("the outcome resolves the same row");
+        };
+        assert_eq!(
+            display.as_ref().map(smith_tools::ToolCallDisplay::target),
+            Some("src/retry.rs")
+        );
+        assert_eq!(*status, ToolStatus::Ok);
+        assert_eq!(result_preview.as_deref(), Some("fn retry() {}"));
+    }
+
+    #[test]
+    fn a_failed_child_tool_call_reads_as_failed() {
+        let mut app = app();
+        let child = ChildId::new("child-1");
+        app.apply_child(child.as_str(), &event(tool_requested("call-1", "shell")));
+        app.apply_child(
+            child.as_str(),
+            &event(tool_completed("call-1", "shell", true)),
+        );
+        assert_eq!(child_log(&app, child.as_str()), ["failed shell"]);
+    }
+
+    /// A child's answer streams into its own transcript. The parent's copy of
+    /// it, delivered later at the safe boundary, must not print it a second
+    /// time under the first.
+    #[test]
+    fn a_live_child_answer_is_not_repeated_by_the_parent_completion() {
+        let mut app = app();
+        let child = ChildId::new("child-1");
+        let request = RequestId::new("request-1");
+        let attempt = AttemptId::new("attempt-1");
+        app.apply_child(
+            child.as_str(),
+            &event(RuntimeEvent::TextDelta {
+                request: request.clone(),
+                attempt: attempt.clone(),
+                text: "Two call sites.".to_owned(),
+            }),
+        );
+        app.apply_child(
+            child.as_str(),
+            &event(RuntimeEvent::ProviderAttemptOutputCommitted {
+                request: request.clone(),
+                attempt: attempt.clone(),
+            }),
+        );
+        app.apply(&event(RuntimeEvent::ChildCompleted {
+            child: child.clone(),
+            result: "Two call sites.".to_owned(),
+        }));
+
+        assert_eq!(
+            child_log(&app, child.as_str()),
+            ["completed: Two call sites."],
+            "the child said it once"
+        );
+    }
+
+    /// The same completion for a child the client never heard from — a durable
+    /// record recovered after a restart — is the only copy of its answer, so
+    /// it is still shown.
+    #[test]
+    fn a_recovered_child_answer_still_comes_from_the_parent_completion() {
+        let mut app = app();
+        let child = ChildId::new("child-1");
+        app.apply(&event(RuntimeEvent::ChildCompleted {
+            child: child.clone(),
+            result: "No findings.".to_owned(),
+        }));
+        assert_eq!(
+            child_log(&app, child.as_str()),
+            ["completed: No findings."],
+            "a child with no live stream is not left with an empty log"
+        );
+    }
+
+    #[test]
+    fn a_stopped_child_settles_the_call_it_was_in_the_middle_of() {
+        let mut app = app();
+        let child = ChildId::new("child-1");
+        app.apply_child(child.as_str(), &event(tool_requested("call-1", "shell")));
+        app.apply(&event(RuntimeEvent::ChildStopped {
+            child: child.clone(),
+            reason: CancelReason::UserRequested,
+        }));
+        assert_eq!(
+            child_log(&app, child.as_str())[0],
+            "ran shell",
+            "a call nobody will report an outcome for stops claiming it is running"
         );
     }
 

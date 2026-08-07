@@ -355,7 +355,8 @@ fn child_lines(app: &App, child: &str, theme: Theme, width: u16) -> Vec<Line<'st
     }
 
     let blocks = app.child_blocks(child);
-    if blocks.is_empty() {
+    let speculative = app.child_speculative_text(child);
+    if blocks.is_empty() && speculative.is_none() {
         // A child restored from a durable record has a state but no live
         // history in this process. Saying so beats an empty pane.
         lines.push(Line::from(Span::styled(
@@ -371,6 +372,16 @@ fn child_lines(app: &App, child: &str, theme: Theme, width: u16) -> Vec<Line<'st
         return lines;
     }
     lines.extend(block_lines(blocks, theme, width));
+    // A child answers by streaming, like any agent. Its uncommitted text draws
+    // exactly where the root timeline draws its own — held out of the
+    // transcript until the attempt commits, so a retry cannot leave prose
+    // behind.
+    if let Some(text) = speculative {
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
+        lines.extend(render_speculative_lines(text, theme));
+    }
     lines
 }
 

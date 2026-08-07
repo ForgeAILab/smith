@@ -35,7 +35,9 @@ use agent_runtime_core::content::{ContentPart, ToolResultBlock, UserInput};
 use agent_runtime_core::delegation::{
     ChildLimits, ChildModelSelection, ChildSpec, ToolViewScope, WorkspacePolicy,
 };
-use agent_runtime_core::event::{EstimationConfidence, EventEnvelope, RuntimeEvent, TurnFinish};
+use agent_runtime_core::event::{
+    ChildPhase, EstimationConfidence, EventEnvelope, RuntimeEvent, TurnFinish,
+};
 use agent_runtime_core::goal::{GoalCommand, GoalProjection};
 use agent_runtime_core::ids::{ChildId, SessionId};
 use agent_runtime_core::provider::{ModelId, ReasoningSupport};

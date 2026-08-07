@@ -196,6 +196,42 @@ pub(super) async fn run_interactive(
     run_result
 }
 
+/// Forwards one live child's own event stream into the client's single event
+/// loop, tagged with the child it belongs to.
+///
+/// A child is a full runtime session, and this is how the client watches one:
+/// the same events, the same fold, a different transcript. Presentation only —
+/// the child's lifecycle, budget, and result delivery stay with the runtime's
+/// coordinator, which is the authority for them.
+///
+/// A dormant child has no live stream, so this is a no-op for one recovered
+/// from a durable record; its canonical history is what the inspector shows
+/// instead. The forwarding task ends with the child's stream.
+fn subscribe_to_child(
+    host: &HostSession,
+    child: &ChildId,
+    events: tokio::sync::mpsc::UnboundedSender<(ChildId, EventEnvelope)>,
+) {
+    let Some(coordinator) = host
+        .runtime()
+        .delegation()
+        .and_then(|delegation| delegation.coordinator())
+    else {
+        return;
+    };
+    let Some(mut stream) = coordinator.child_events(child) else {
+        return;
+    };
+    let child = child.clone();
+    tokio::spawn(async move {
+        while let Some(envelope) = stream.next().await {
+            if events.send((child.clone(), envelope)).is_err() {
+                break;
+            }
+        }
+    });
+}
+
 pub(super) struct TuiRunInputs<'a> {
     host: &'a HostSession,
     project: &'a std::path::Path,
@@ -230,6 +266,11 @@ pub(super) async fn run_tui(
     let mut spinner = tokio::time::interval(SPINNER_TICK);
     let mut frame = tokio::time::interval(FRAME);
     let (local_tx, mut local_rx) = tokio::sync::mpsc::unbounded_channel();
+    // One forwarding task per live child funnels every child's own stream into
+    // this loop, so a child's events are folded by the same single-threaded
+    // reducer the root's are and can never interleave mid-fold.
+    let (child_tx, mut child_rx) =
+        tokio::sync::mpsc::unbounded_channel::<(ChildId, EventEnvelope)>();
     let mut last_change_turn = host.changes().latest().map(|set| set.turn);
     let mut interactions = interaction::InteractionSurface::new(
         interactions,
@@ -589,10 +630,51 @@ pub(super) async fn run_tui(
                                     app.set_tool_result_preview(call.as_str(), text);
                                 }
                             }
+                            // A child is a full runtime session. The parent
+                            // stream says one started; its own stream says
+                            // what it is doing, and that is what the
+                            // inspector draws.
+                            //
+                            // A resume is a second start: the durable record
+                            // is bound to a new execution with a new stream,
+                            // and the task watching the old one ended with it.
+                            match &envelope.payload {
+                                RuntimeEvent::ChildSpawned { child, .. }
+                                | RuntimeEvent::ChildProgress {
+                                    child,
+                                    phase: ChildPhase::ResumeStarted { .. },
+                                } => subscribe_to_child(host, child, child_tx.clone()),
+                                _ => {}
+                            }
                         }
                         dirty = true;
                     }
                     None => break InteractiveExit::Quit(app.status.session_usage()),
+                }
+            }
+
+            child_event = child_rx.recv() => {
+                if let Some((child, envelope)) = child_event {
+                    app.apply_child(child.as_str(), &envelope);
+                    // The child's events withhold argument values and result
+                    // text exactly as the root's do. Both are resolved the
+                    // same way: by call id, against that agent's canonical
+                    // history, redacted by the host.
+                    if let Some(call) = tool_call_for_display(&envelope.payload) {
+                        if let Some(display) = host.child_tool_call_display(&child, &call) {
+                            app.set_child_tool_display(child.as_str(), call.as_str(), display);
+                        }
+                        if matches!(envelope.payload, RuntimeEvent::ToolCallCompleted { .. })
+                            && let Some(text) = host.child_tool_result_text(&child, &call)
+                        {
+                            app.set_child_tool_result_preview(
+                                child.as_str(),
+                                call.as_str(),
+                                text,
+                            );
+                        }
+                    }
+                    dirty = true;
                 }
             }
 

@@ -45,11 +45,12 @@ pub enum ToolStatus {
     Failed,
     /// Denied by the approval gate.
     Denied,
-    /// The call finished and its outcome was never reported.
+    /// The call was still running when its conversation ended, and no
+    /// outcome ever arrived.
     ///
-    /// A delegated child's progress crosses the runtime boundary as
-    /// identifiers only, so the parent learns that a tool ran and nothing
-    /// about how it ended. Claiming `ok` there would invent a result.
+    /// A delegated child that is stopped or lost mid-call leaves rows in this
+    /// state. Resolving them to `ok` would invent a result; leaving them
+    /// `running` would claim work that stopped is still in flight.
     Unreported,
 }
 
@@ -337,24 +338,21 @@ impl Transcript {
         });
     }
 
-    /// Records a tool call that is already over and whose outcome nobody
-    /// reported.
+    /// Resolves every still-running call to `status`.
     ///
-    /// This is how a delegated child's tool activity enters a transcript: the
-    /// runtime carries the name across the boundary and nothing else, so
-    /// there is no call id to match a completion against and no arguments to
-    /// project. It is a finished row on arrival.
-    pub fn push_unreported_tool_call(&mut self, name: &str) {
-        self.close_open();
-        self.blocks.push(Block::Tool {
-            call_id: String::new(),
-            name: name.to_owned(),
-            display: None,
-            protected_summary: String::new(),
-            status: ToolStatus::Unreported,
-            result_preview: None,
-            started_at: None,
-        });
+    /// Called when a conversation reaches a terminal state with rows left
+    /// open. A row frozen at `running 4s` would keep claiming work is in
+    /// flight for a session that has ended.
+    pub fn settle_running_tool_calls(&mut self, status: ToolStatus) {
+        for block in self.blocks.iter_mut().rev() {
+            if let Block::Tool {
+                status: slot @ ToolStatus::Running,
+                ..
+            } = block
+            {
+                *slot = status;
+            }
+        }
     }
 
     /// Drops the oldest blocks until at most `max` remain.

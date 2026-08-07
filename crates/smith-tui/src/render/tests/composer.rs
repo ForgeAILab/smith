@@ -361,7 +361,6 @@
     #[test]
     fn inspecting_a_child_swaps_the_transcript_for_its_log_and_returns_it_on_escape() {
         use agent_runtime_core::delegation::WorkspacePolicy;
-        use agent_runtime_core::event::ChildPhase;
         use agent_runtime_core::ids::ChildId;
 
         let mut app = App::new("gpt-5.3", "~/work/api");
@@ -374,12 +373,47 @@
             max_tokens: None,
             deadline_ms: None,
         }));
-        app.apply(&event(RuntimeEvent::ChildProgress {
-            child: child.clone(),
-            phase: ChildPhase::ToolCall {
-                name: "Grep".to_owned(),
-            },
-        }));
+        // The child's own stream, folded by the same code as the root's.
+        app.apply_child(
+            child.as_str(),
+            &event(RuntimeEvent::ToolCallRequested {
+                call: agent_runtime_core::ids::ToolCallId::new("child-call-1"),
+                name: "search".to_owned(),
+                argument_keys: vec!["path".to_owned(), "pattern".to_owned()],
+                argument_fingerprint: agent_runtime_registry::Fingerprint::of("arguments"),
+                arguments: None,
+            }),
+        );
+        // The host resolves the call against the child's canonical history
+        // and hands back the same redacted projection the root timeline gets.
+        app.set_child_tool_display(
+            child.as_str(),
+            "child-call-1",
+            smith_tools::project_tool_call_display(
+                "search",
+                &serde_json::json!({"path": "src/retry.rs", "pattern": "backoff"}),
+            )
+            .expect("reviewed search projection"),
+        );
+        app.apply_child(
+            child.as_str(),
+            &event(RuntimeEvent::ToolCallCompleted {
+                call: agent_runtime_core::ids::ToolCallId::new("child-call-1"),
+                name: "search".to_owned(),
+                is_error: false,
+            }),
+        );
+        app.set_child_tool_result_preview(child.as_str(), "child-call-1", "src/retry.rs:42");
+        // Mid-sentence: uncommitted, and drawn like the root's own streaming
+        // answer rather than held back until the child finishes.
+        app.apply_child(
+            child.as_str(),
+            &event(RuntimeEvent::TextDelta {
+                request: RequestId::new("child-request-1"),
+                attempt: AttemptId::new("child-attempt-1"),
+                text: "The retry policy backs off".to_owned(),
+            }),
+        );
 
         let root = render(&app, 80, 24, Theme::new().without_color());
         assert!(
@@ -398,12 +432,18 @@
             &[
                 "child-a · running",
                 "started · read-only · up to 3 turns",
-                // The child's tool call draws as the root timeline's do —
-                // same row, same shape — and says only what the runtime
-                // reported: that it ran, not that it succeeded.
-                "Grep() · ran",
+                // The child's tool call draws as the root timeline's do:
+                // same row, same shape, the same reviewed arguments and
+                // result lines beneath it.
+                "Search(\"backoff\" · src/retry.rs) · ok",
+                "src/retry.rs:42",
+                "The retry policy backs off",
                 "esc back to main",
             ],
+        );
+        assert!(
+            !root.contains("The retry policy backs off"),
+            "a child streaming is not the root session streaming:\n{root}"
         );
         assert!(
             !inspected.contains("explain the retry policy"),

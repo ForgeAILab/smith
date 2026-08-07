@@ -117,6 +117,26 @@ mod tests {
         event_at(Timestamp::ZERO, payload)
     }
 
+    /// A tool request as any agent's stream reports one: the call's identity
+    /// and its argument shape, never the values.
+    fn tool_requested(call: &str, name: &str) -> RuntimeEvent {
+        RuntimeEvent::ToolCallRequested {
+            call: ToolCallId::new(call),
+            name: name.to_owned(),
+            argument_keys: vec!["path".to_owned()],
+            argument_fingerprint: agent_runtime_registry::Fingerprint::of("arguments"),
+            arguments: None,
+        }
+    }
+
+    fn tool_completed(call: &str, name: &str, is_error: bool) -> RuntimeEvent {
+        RuntimeEvent::ToolCallCompleted {
+            call: ToolCallId::new(call),
+            name: name.to_owned(),
+            is_error,
+        }
+    }
+
     fn event_at(timestamp: Timestamp, payload: RuntimeEvent) -> EventEnvelope {
         EventEnvelope::new(
             0,

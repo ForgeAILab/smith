@@ -7,11 +7,12 @@ use agent_runtime_core::clock::Timestamp;
 use agent_runtime_core::event::{
     ChildPhase, ChildRecoveryState, EventEnvelope, PlanSensitivity, RuntimeEvent, TurnFinish,
 };
-use agent_runtime_core::ids::{AttemptId, RequestId, TurnId};
+use agent_runtime_core::ids::TurnId;
 
 use crate::status::{Activity, ContextPlanUpdate, render_elapsed, render_terminal_elapsed};
 use crate::transcript::ToolStatus;
 
+use super::conversation::ConversationMut;
 use super::state::*;
 
 impl App {
@@ -48,99 +49,13 @@ impl App {
         }
     }
 
-    pub(super) fn begin_speculative_attempt(&mut self, request: &RequestId, attempt: &AttemptId) {
-        let key = AttemptOutputKey::new(request, attempt);
-        if self.finalized_attempts.contains(&key) {
-            self.transcript.push_error(format!(
-                "provider attempt {attempt} for request {request} restarted after its output terminal"
-            ));
-            return;
+    /// The root conversation: this session's transcript and the provider
+    /// output still deciding whether to join it.
+    pub(super) fn conversation(&mut self) -> ConversationMut<'_> {
+        ConversationMut {
+            transcript: &mut self.transcript,
+            speculative: &mut self.speculative,
         }
-        if !self.speculative_attempts.contains_key(&key) {
-            self.speculative_order.push(key.clone());
-            self.speculative_attempts
-                .insert(key, SpeculativeAttempt::default());
-        }
-    }
-
-    pub(super) fn buffer_speculative_text(
-        &mut self,
-        request: &RequestId,
-        attempt: &AttemptId,
-        text: &str,
-    ) {
-        self.begin_speculative_attempt(request, attempt);
-        let key = AttemptOutputKey::new(request, attempt);
-        if let Some(output) = self.speculative_attempts.get_mut(&key) {
-            output.push_text(text);
-        }
-    }
-
-    pub(super) fn buffer_speculative_reasoning(
-        &mut self,
-        request: &RequestId,
-        attempt: &AttemptId,
-        text: &str,
-        redacted: bool,
-    ) {
-        self.begin_speculative_attempt(request, attempt);
-        let key = AttemptOutputKey::new(request, attempt);
-        if let Some(output) = self.speculative_attempts.get_mut(&key) {
-            output.push_reasoning(text, redacted);
-        }
-    }
-
-    pub(super) fn finish_speculative_attempt(
-        &mut self,
-        request: &RequestId,
-        attempt: &AttemptId,
-        commit: bool,
-    ) {
-        let key = AttemptOutputKey::new(request, attempt);
-        let Some(output) = self.speculative_attempts.remove(&key) else {
-            if !self.finalized_attempts.contains(&key) {
-                self.transcript.push_error(format!(
-                    "provider attempt {attempt} for request {request} ended without a start"
-                ));
-                self.finalized_attempts.insert(key);
-            }
-            return;
-        };
-        self.speculative_order.retain(|candidate| candidate != &key);
-        if !self.finalized_attempts.insert(key) {
-            return;
-        }
-
-        if commit {
-            for chunk in output.chunks {
-                match chunk {
-                    SpeculativeChunk::Text(text) => self.transcript.push_text_delta(&text),
-                    SpeculativeChunk::Reasoning { text, redacted } => {
-                        self.transcript.push_reasoning_delta(&text, redacted);
-                    }
-                }
-            }
-        } else if !output.chunks.is_empty() {
-            self.transcript.push_notice(
-                "retry",
-                format!("discarded speculative output from provider attempt {attempt}"),
-            );
-        }
-    }
-
-    pub(super) fn discard_orphaned_speculative_output(&mut self, boundary: &str) {
-        let orphaned = self.speculative_attempts.len();
-        if orphaned == 0 {
-            return;
-        }
-        self.speculative_attempts.clear();
-        self.speculative_order.clear();
-        self.transcript.push_notice(
-            "integrity",
-            format!(
-                "discarded {orphaned} unterminated speculative provider attempt(s) at {boundary}"
-            ),
-        );
     }
 
     pub(super) fn reconcile_pending_terminal(
@@ -332,6 +247,13 @@ impl App {
         // there instead is not.
         self.selection = None;
 
+        // Everything that becomes a transcript block goes through the shared
+        // conversation fold — the same code a delegated child's stream goes
+        // through. What remains below is this session's own business: header
+        // status, the plan, the turn clock, steering, pending input, and the
+        // panel of children. A child cannot reach any of it.
+        self.conversation().apply(&envelope.payload);
+
         match &envelope.payload {
             RuntimeEvent::SessionStarted => {
                 // A new session's children are new children; leaving the
@@ -346,15 +268,12 @@ impl App {
                 self.work = None;
                 self.turn_started_at = None;
                 self.turn_started_timestamp = None;
-                self.speculative_attempts.clear();
-                self.speculative_order.clear();
-                self.finalized_attempts.clear();
+                self.speculative.clear();
                 self.active_turn = None;
                 self.pending_input = PendingInputState::default();
                 self.provider_phase = None;
             }
             RuntimeEvent::TurnStarted | RuntimeEvent::InternalTurnStarted { .. } => {
-                self.discard_orphaned_speculative_output("next turn start");
                 self.provider_phase = None;
                 self.status.activity = Activity::Working;
                 self.turn_summary = None;
@@ -363,7 +282,7 @@ impl App {
                 self.turn_started_at = Some(Instant::now());
                 self.turn_started_timestamp =
                     (envelope.timestamp != Timestamp::ZERO).then_some(envelope.timestamp);
-                self.finalized_attempts.clear();
+                self.speculative.finalized.clear();
                 self.active_turn.clone_from(&envelope.turn);
             }
             RuntimeEvent::TurnSteerCommitted { steer, .. } => {
@@ -453,57 +372,25 @@ impl App {
                     },
                 );
             }
-            RuntimeEvent::ProviderAttemptStarted {
-                request, attempt, ..
-            } => {
+            RuntimeEvent::ProviderAttemptStarted { .. } => {
                 self.set_provider_phase(Some(ProviderPhase::Sending));
-                self.begin_speculative_attempt(request, attempt);
             }
-            RuntimeEvent::TextDelta {
-                request,
-                attempt,
-                text,
-            } => {
+            RuntimeEvent::TextDelta { .. } => {
                 self.set_provider_phase(Some(ProviderPhase::Responding));
-                self.buffer_speculative_text(request, attempt, text);
             }
-            RuntimeEvent::ReasoningDelta {
-                request,
-                attempt,
-                text,
-                redacted,
-            } => {
+            RuntimeEvent::ReasoningDelta { .. } => {
                 self.set_provider_phase(Some(ProviderPhase::Thinking));
-                self.buffer_speculative_reasoning(request, attempt, text, *redacted);
             }
             RuntimeEvent::ProviderAttemptFinished { .. } => {
                 self.set_provider_phase(None);
             }
-            RuntimeEvent::ProviderAttemptOutputCommitted { request, attempt } => {
-                self.finish_speculative_attempt(request, attempt, true);
-            }
-            RuntimeEvent::ProviderAttemptOutputDiscarded { request, attempt } => {
-                self.finish_speculative_attempt(request, attempt, false);
-            }
-            RuntimeEvent::ToolCallRequested {
-                call,
-                name,
-                argument_keys,
-                arguments,
-                ..
-            } => {
+            RuntimeEvent::ToolCallRequested { call, name, .. } => {
                 if let Some(work) = &mut self.work {
                     work.tools.insert(
                         call.as_str().to_owned(),
                         (name.clone(), ToolStatus::Running, Some(Instant::now())),
                     );
                 }
-                self.transcript.push_tool_call(
-                    call.as_str(),
-                    name,
-                    arguments.as_ref(),
-                    argument_keys,
-                );
             }
             RuntimeEvent::ToolCallCompleted { call, is_error, .. } => {
                 let status = if *is_error {
@@ -516,7 +403,6 @@ impl App {
                 {
                     *work_status = status;
                 }
-                self.transcript.complete_tool_call(call.as_str(), status);
             }
             RuntimeEvent::ContextPlanned {
                 context,
@@ -584,26 +470,10 @@ impl App {
             RuntimeEvent::CacheObservation { read_tokens, .. } => {
                 self.status.record_cache(*read_tokens);
             }
-            RuntimeEvent::Downgrade { capability, detail } => {
-                self.transcript
-                    .push_notice("downgrade", format!("{capability}: {detail}"));
-            }
-            RuntimeEvent::LimitReached { limit } => {
-                self.transcript
-                    .push_notice("limit", format!("{limit:?} reached"));
-            }
-            RuntimeEvent::Error { error } => {
-                self.transcript.push_error(error.to_string());
-            }
             RuntimeEvent::TurnCompleted { finish, .. } => {
                 self.provider_phase = None;
                 self.reconcile_pending_terminal(envelope.turn.as_ref(), finish);
                 self.cancel_pending_prompts();
-                // A valid v5 stream has already committed or discarded every
-                // attempt. A gap, corrupt journal, or incompatible producer
-                // must fail closed: orphan text cannot become visible while
-                // idle or leak into the next turn.
-                self.discard_orphaned_speculative_output("turn completion");
                 let elapsed = self.turn_started_at.take().map(|started| started.elapsed());
                 let terminal_elapsed = self.turn_started_timestamp.take().and_then(|started| {
                     envelope
@@ -612,7 +482,6 @@ impl App {
                         .checked_sub(started.as_millis())
                         .map(Duration::from_millis)
                 });
-                self.transcript.close_open();
                 self.status.activity = Activity::Idle;
                 if self.active_turn.as_ref() == envelope.turn.as_ref() {
                     self.active_turn = None;
@@ -805,15 +674,10 @@ impl App {
                         },
                     );
                     self.settle_child_clock(child.as_str());
+                    self.settle_child_tool_calls(child.as_str());
                     self.push_child_notice(child.as_str(), "interrupted", detail.clone());
                     self.transcript
                         .push_notice("sub-agent", format!("{child} interrupted · {detail}"));
-                }
-                ChildPhase::ToolCall { name } => {
-                    if let Some(summary) = self.children.get_mut(&child.to_string()) {
-                        summary.detail = Some(format!("ran {name}"));
-                    }
-                    self.push_child_tool_call(child.as_str(), name);
                 }
                 // The completed/stopped notice that follows says everything a
                 // bare "finished a turn" would.
@@ -865,6 +729,7 @@ impl App {
                     },
                 );
                 self.settle_child_clock(child.as_str());
+                self.settle_child_tool_calls(child.as_str());
                 // The panel row and the root notice are one-liners and stay
                 // clipped. The inspector is where the delegated work is
                 // actually read, so it keeps the answer whole, as the prose
@@ -884,6 +749,7 @@ impl App {
                     },
                 );
                 self.settle_child_clock(child.as_str());
+                self.settle_child_tool_calls(child.as_str());
                 self.push_child_notice(child.as_str(), "stopped", detail.clone());
                 self.transcript
                     .push_notice("sub-agent", format!("{child} stopped · {detail}"));
@@ -897,6 +763,7 @@ impl App {
                     },
                 );
                 self.settle_child_clock(child.as_str());
+                self.settle_child_tool_calls(child.as_str());
                 self.push_child_error(child.as_str(), error.message.clone());
                 self.transcript
                     .push_error(format!("sub-agent {child} failed: {}", error.message));
@@ -908,8 +775,6 @@ impl App {
                     clock.settle();
                 }
                 self.cancel_pending_prompts();
-                self.discard_orphaned_speculative_output("session shutdown");
-                self.transcript.close_open();
                 self.status.activity = Activity::Ended;
                 self.turn_started_at = None;
                 self.turn_started_timestamp = None;

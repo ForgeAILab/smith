@@ -357,6 +357,39 @@ impl HostSession {
         })
     }
 
+    /// Reviewed display metadata for one tool call a delegated child made.
+    ///
+    /// A child's lifecycle events carry identifiers only, exactly as the
+    /// parent's own do, so the same resolution applies — only against the
+    /// child's canonical history instead of this session's. `None` once the
+    /// child is dormant: its history is no longer in this process, and the
+    /// row keeps the honest fallback it was built with.
+    pub fn child_tool_call_display(
+        &self,
+        child: &ChildId,
+        call: &ToolCallId,
+    ) -> Option<ToolCallDisplay> {
+        self.with_child_history(child, |history| {
+            tool_call_display_from_history(history, call, &self.display_redactor)
+        })
+        .flatten()
+    }
+
+    /// Credential-redacted text of one tool result a delegated child received.
+    pub fn child_tool_result_text(&self, child: &ChildId, call: &ToolCallId) -> Option<String> {
+        self.with_child_history(child, |history| {
+            tool_result_text_from_history(history, call, &self.display_redactor)
+        })
+        .flatten()
+    }
+
+    fn with_child_history<R>(&self, child: &ChildId, f: impl FnOnce(&[Message]) -> R) -> Option<R> {
+        self.runtime
+            .delegation()
+            .and_then(|delegation| delegation.coordinator())
+            .and_then(|coordinator| coordinator.with_child_history(child, f))
+    }
+
     /// Credential-redacted result text for every canonical tool call, used
     /// when rebuilding a local transcript from resumed history.
     pub fn tool_result_texts(&self) -> Vec<(ToolCallId, String)> {

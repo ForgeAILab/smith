@@ -3,6 +3,7 @@
 //! The implementation is split by state-transition ownership under `app/`;
 //! the public paths remain rooted at `smith_tui::app`.
 
+mod conversation;
 mod input;
 mod pending_input;
 mod prompts;

@@ -11,13 +11,14 @@ use std::time::{Duration, Instant};
 
 use agent_runtime_core::clock::Timestamp;
 use agent_runtime_core::content::{ContentPart, UserInput};
-use agent_runtime_core::event::{EventEnvelope, PlanItemProjection, PlanSensitivity};
+use agent_runtime_core::event::{EventEnvelope, PlanItemProjection, PlanSensitivity, RuntimeEvent};
 use agent_runtime_core::ids::{AttemptId, RequestId, TurnId};
 use agent_runtime_core::steer::SteerReceipt;
 use smith_host::approval::ApprovalPrompt;
 use smith_host::rotation::RotationPrompt;
 use smith_tools::ToolCallDisplay;
 
+use super::conversation::{Conversation, SpeculativeState};
 use crate::commands::CommandAction;
 use crate::composer::Composer;
 use crate::diff::EditReview;
@@ -723,15 +724,15 @@ pub struct App {
     pub children: BTreeMap<String, ChildSummary>,
     /// Live panel clocks for children, keyed by stable child id.
     pub(super) child_clocks: BTreeMap<String, ChildClock>,
-    /// Bounded per-child transcript, keyed by stable child id.
+    /// Bounded per-child conversation, keyed by stable child id.
     ///
-    /// Deliberately the same [`Transcript`] the root conversation uses. Child
-    /// progress no longer narrates itself into the root timeline, so this is
-    /// where "what has that agent been doing" lives — and it holds blocks, not
-    /// prose, so the one renderer draws both. What the runtime reports about a
-    /// child is thinner than what it reports about the root turn; that is a
-    /// difference in the events, not in the client.
-    pub(super) child_transcripts: BTreeMap<String, Transcript>,
+    /// Deliberately the same [`Conversation`] the root uses, folded by the
+    /// same code from the same events — a child is a full runtime session, and
+    /// the client subscribes to its stream directly. Child progress does not
+    /// narrate itself into the root timeline, so this is where "what has that
+    /// agent been doing" lives, in blocks rather than prose, drawn by the one
+    /// renderer.
+    pub(super) child_conversations: BTreeMap<String, Conversation>,
     /// When each cleanly finished child's panel row is due to retire.
     ///
     /// Armed when a child completes and nobody is inspecting it, disarmed the
@@ -815,9 +816,10 @@ pub struct App {
     pub(super) pending_lost_range: Option<(u64, u64)>,
     /// The live provider round-trip stage and when it started.
     pub(super) provider_phase: Option<(ProviderPhase, Instant)>,
-    pub(super) speculative_attempts: BTreeMap<AttemptOutputKey, SpeculativeAttempt>,
-    pub(super) speculative_order: Vec<AttemptOutputKey>,
-    pub(super) finalized_attempts: BTreeSet<AttemptOutputKey>,
+    /// The root conversation's held-back provider output. Its transcript is
+    /// [`Self::transcript`]; the two are borrowed together as a
+    /// [`ConversationMut`] whenever an event is folded into either.
+    pub(super) speculative: SpeculativeState,
     /// Serving turn identity from typed runtime envelopes.
     pub(super) active_turn: Option<TurnId>,
     /// Process-local, not-yet-canonical user input.
@@ -836,7 +838,7 @@ impl App {
             questionnaire_resolutions: VecDeque::new(),
             children: BTreeMap::new(),
             child_clocks: BTreeMap::new(),
-            child_transcripts: BTreeMap::new(),
+            child_conversations: BTreeMap::new(),
             child_dismiss_at: BTreeMap::new(),
             retired_children: BTreeSet::new(),
             inspected_child: None,
@@ -866,9 +868,7 @@ impl App {
             pending_recovered_events: 0,
             pending_lost_range: None,
             provider_phase: None,
-            speculative_attempts: BTreeMap::new(),
-            speculative_order: Vec::new(),
-            finalized_attempts: BTreeSet::new(),
+            speculative: SpeculativeState::default(),
             active_turn: None,
             pending_input: PendingInputState::default(),
         }
@@ -1071,38 +1071,51 @@ impl App {
         self.child_clocks.get(child).map(ChildClock::elapsed)
     }
 
-    /// Appends one bounded line to a child's retained progress log.
+    /// One child's conversation, ready to be written to.
     ///
-    /// Every child lifecycle event lands here, including the ones the root
-    /// transcript deliberately stays quiet about: the inspector is the only
-    /// place that record still exists in the client.
-    /// One child's transcript, ready to be written to.
-    ///
-    /// Every child lifecycle event goes through here, which makes it the one
-    /// honest place to say "this child is not finished being interesting": a
-    /// retired row comes back, and a pending retirement is called off.
-    pub(super) fn child_transcript_mut(&mut self, child: &str) -> &mut Transcript {
+    /// Everything the client records about a child goes through here, which
+    /// makes it the one honest place to say "this child is not finished being
+    /// interesting": a retired row comes back, and a pending retirement is
+    /// called off.
+    pub(super) fn child_conversation_mut(&mut self, child: &str) -> &mut Conversation {
         self.child_dismiss_at.remove(child);
         self.retired_children.remove(child);
-        self.child_transcripts.entry(child.to_owned()).or_default()
+        self.child_conversations
+            .entry(child.to_owned())
+            .or_default()
     }
 
     /// Records one child lifecycle milestone, sourced to the phase it names.
+    ///
+    /// Lifecycle is the parent's knowledge — a child never narrates its own
+    /// spawn — so these come from the parent stream even though everything
+    /// else in the log comes from the child's.
     pub(super) fn push_child_notice(&mut self, child: &str, source: &str, text: impl Into<String>) {
-        let transcript = self.child_transcript_mut(child);
-        transcript.push_notice(source, text);
-        transcript.retain_newest(MAX_CHILD_BLOCKS);
+        let conversation = self.child_conversation_mut(child);
+        conversation.transcript.push_notice(source, text);
+        conversation.transcript.retain_newest(MAX_CHILD_BLOCKS);
     }
 
-    /// Records one tool call the child made, outcome unknown.
-    pub(super) fn push_child_tool_call(&mut self, child: &str, name: &str) {
-        let transcript = self.child_transcript_mut(child);
-        transcript.push_unreported_tool_call(name);
-        transcript.retain_newest(MAX_CHILD_BLOCKS);
+    /// Settles the child's still-open tool rows when the child itself is done.
+    pub(super) fn settle_child_tool_calls(&mut self, child: &str) {
+        if let Some(conversation) = self.child_conversations.get_mut(child) {
+            conversation.as_mut().settle(ToolStatus::Unreported);
+        }
     }
 
     /// Records the child's answer as the assistant prose it is.
+    ///
+    /// Only for a child the client never heard from directly: a live child
+    /// streamed this answer into its own transcript already, and repeating the
+    /// parent's copy beneath it would show the same reply twice.
     pub(super) fn push_child_answer(&mut self, child: &str, text: &str) {
+        if self
+            .child_conversations
+            .get(child)
+            .is_some_and(|conversation| conversation.live)
+        {
+            return;
+        }
         let bounded: String = if text.chars().count() > MAX_CHILD_ANSWER_CHARS {
             text.chars()
                 .take(MAX_CHILD_ANSWER_CHARS)
@@ -1111,17 +1124,52 @@ impl App {
         } else {
             text.to_owned()
         };
-        let transcript = self.child_transcript_mut(child);
-        transcript.push_text_delta(&bounded);
-        transcript.close_open();
-        transcript.retain_newest(MAX_CHILD_BLOCKS);
+        let conversation = self.child_conversation_mut(child);
+        conversation.transcript.push_text_delta(&bounded);
+        conversation.transcript.close_open();
+        conversation.transcript.retain_newest(MAX_CHILD_BLOCKS);
     }
 
     /// Records a failure the child reported.
     pub(super) fn push_child_error(&mut self, child: &str, message: impl Into<String>) {
-        let transcript = self.child_transcript_mut(child);
-        transcript.push_error(message);
-        transcript.retain_newest(MAX_CHILD_BLOCKS);
+        let conversation = self.child_conversation_mut(child);
+        conversation.transcript.push_error(message);
+        conversation.transcript.retain_newest(MAX_CHILD_BLOCKS);
+    }
+
+    /// Folds one event from a child's own stream into that child's
+    /// conversation.
+    ///
+    /// This is the same fold the root session gets, against a different
+    /// transcript. Nothing here touches session status, the plan, or the turn
+    /// clock: a child working is not the user's session working.
+    pub fn apply_child(&mut self, child: &str, envelope: &EventEnvelope) {
+        let conversation = self.child_conversation_mut(child);
+        conversation.live = true;
+        let handled = conversation.as_mut().apply(&envelope.payload);
+        conversation.transcript.retain_newest(MAX_CHILD_BLOCKS);
+
+        // The panel row answers "what is that agent doing right now" in one
+        // line, and the child's own stream is what knows.
+        let detail = match &envelope.payload {
+            RuntimeEvent::ToolCallRequested { name, .. } => Some(format!("running {name}")),
+            RuntimeEvent::ToolCallCompleted { name, is_error, .. } => Some(format!(
+                "{} {name}",
+                if *is_error { "failed" } else { "ok" }
+            )),
+            _ => None,
+        };
+        if let Some(detail) = detail
+            && let Some(summary) = self.children.get_mut(child)
+        {
+            summary.detail = Some(detail);
+        }
+
+        if handled && self.inspected_child.as_deref() == Some(child) {
+            // The reader is looking at this child; a new block below the fold
+            // is why they are looking.
+            self.follow_newest();
+        }
     }
 
     /// Starts the linger countdown for a child that just finished cleanly.
@@ -1167,9 +1215,22 @@ impl App {
 
     /// One child's retained transcript blocks, oldest first.
     pub fn child_blocks(&self, child: &str) -> &[Block] {
-        self.child_transcripts
+        self.child_conversations
             .get(child)
-            .map_or(&[] as &[Block], Transcript::blocks)
+            .map_or(&[] as &[Block], |conversation| {
+                conversation.transcript.blocks()
+            })
+    }
+
+    /// Visible text from one child's newest live provider attempt.
+    ///
+    /// The same presentation-only speculative state [`Self::speculative_text`]
+    /// exposes for the root, so the inspector can show a child mid-sentence
+    /// exactly as the root timeline shows itself mid-sentence.
+    pub fn child_speculative_text(&self, child: &str) -> Option<&str> {
+        self.child_conversations
+            .get(child)
+            .and_then(|conversation| conversation.speculative.visible_text())
     }
 
     /// Children in the order the delegated-work panel lists them: live work
@@ -1329,17 +1390,12 @@ impl App {
     /// [`Transcript::blocks`] and therefore cannot become canonical history or
     /// journal-replayed output without an explicit runtime commit event.
     pub fn speculative_text(&self) -> Option<&str> {
-        self.speculative_order.iter().rev().find_map(|key| {
-            self.speculative_attempts
-                .get(key)
-                .map(|attempt| attempt.visible_text.as_str())
-                .filter(|text| !text.is_empty())
-        })
+        self.speculative.visible_text()
     }
 
     /// Number of provider attempts with output awaiting an explicit terminal.
     pub fn speculative_attempt_count(&self) -> usize {
-        self.speculative_attempts.len()
+        self.speculative.in_flight()
     }
 
     /// Projects metadata-only process-exit reconciliation into the transcript.
@@ -1404,6 +1460,33 @@ impl App {
     /// Attaches host-supplied, credential-redacted result lines to a tool row.
     pub fn set_tool_result_preview(&mut self, call_id: &str, preview: impl AsRef<str>) {
         self.transcript.set_tool_result_preview(call_id, preview);
+    }
+
+    /// The child counterpart of [`Self::set_tool_display`].
+    ///
+    /// A child's events withhold argument values exactly as the root's do, so
+    /// its rows need the same host-supplied projection. Enrichment arrives for
+    /// a child that already has a row, so this must not resurrect a retired
+    /// one: a projection landing just after a child settled is the host
+    /// answering an earlier question, not new work.
+    pub fn set_child_tool_display(&mut self, child: &str, call_id: &str, display: ToolCallDisplay) {
+        if let Some(conversation) = self.child_conversations.get_mut(child) {
+            conversation.transcript.set_tool_display(call_id, display);
+        }
+    }
+
+    /// The child counterpart of [`Self::set_tool_result_preview`].
+    pub fn set_child_tool_result_preview(
+        &mut self,
+        child: &str,
+        call_id: &str,
+        preview: impl AsRef<str>,
+    ) {
+        if let Some(conversation) = self.child_conversations.get_mut(child) {
+            conversation
+                .transcript
+                .set_tool_result_preview(call_id, preview);
+        }
     }
 
     /// Toggles bounded, redaction-safe tool detail beneath the working row.
