@@ -89,8 +89,13 @@ jobs:
 
           sudo dpkg --add-architecture arm64
           sudo apt-get update
+          # libc6-dev-arm64-cross is only *recommended* by the cross gcc, so
+          # --no-install-recommends drops it and leaves the compiler with no
+          # target libc headers -- at which point it reaches for the host's
+          # /usr/include and dies on bits/libc-header-start.h. Name it.
           sudo apt-get install --yes --no-install-recommends \
             gcc-aarch64-linux-gnu \
+            libc6-dev-arm64-cross \
             pkg-config \
             libdbus-1-dev:arm64
 
