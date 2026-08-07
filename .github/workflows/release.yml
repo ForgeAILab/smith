@@ -158,6 +158,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          # Same rule the npm dist-tag uses below: a hyphen in the version
+          # means prerelease. Without this the action marks every tag a full
+          # release, so an -rc lands on the repo page as "Latest".
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             artifacts/**/*.tar.gz
             SHA256SUMS
