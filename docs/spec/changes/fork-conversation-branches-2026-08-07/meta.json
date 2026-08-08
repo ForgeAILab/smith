@@ -1,0 +1,9 @@
+{
+  "change_id": "fork-conversation-branches",
+  "change_ref": "fork-conversation-branches-2026-08-07",
+  "created_at": "2026-08-07T00:00:00Z",
+  "updated_at": "2026-08-07T00:00:00Z",
+  "completed_at": null,
+  "status": "draft",
+  "depends_on": ["collapse-work-surfaces-and-price-sessions"]
+}
