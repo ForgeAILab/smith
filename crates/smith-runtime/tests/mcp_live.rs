@@ -1,5 +1,5 @@
-//! One real stdio MCP server, end to end. Opt-in, like every other test that
-//! reaches outside the process.
+//! One real MCP server, end to end, over either transport. Opt-in, like every
+//! other test that reaches outside the process.
 //!
 //! The hermetic suite proves the seams — admission, registration, namespacing,
 //! failure isolation — against a fake connector. What it cannot prove is that
@@ -10,6 +10,14 @@
 //!
 //! ```text
 //! SMITH_MCP_COMMAND=codegraph SMITH_MCP_ARGS='serve --mcp' \
+//!   cargo test -p smith-runtime --test mcp_live -- --ignored --nocapture
+//! ```
+//!
+//! A remote server is named by endpoint instead, and exercises the other
+//! transport:
+//!
+//! ```text
+//! SMITH_MCP_URL=http://127.0.0.1:3001/mcp \
 //!   cargo test -p smith-runtime --test mcp_live -- --ignored --nocapture
 //! ```
 //!
@@ -54,30 +62,35 @@ struct LiveServer {
     _project: tempfile::TempDir,
 }
 
-/// Declares the server named by the environment, trusts it, and waits for it.
-async fn connect_named_server() -> LiveServer {
+/// The `[mcp.servers.live]` table the environment asks for.
+///
+/// `SMITH_MCP_URL` selects the streamable-HTTP transport; otherwise
+/// `SMITH_MCP_COMMAND` spawns a local server. The two transports share every
+/// seam after the connection, so a run of either exercises the rest.
+fn declared_server() -> String {
+    if let Ok(url) = std::env::var("SMITH_MCP_URL") {
+        return format!("[mcp.servers.live]\nurl = \"{url}\"\n");
+    }
     let Ok(command) = std::env::var("SMITH_MCP_COMMAND") else {
-        panic!("set SMITH_MCP_COMMAND to the server's program, e.g. `codegraph`");
+        panic!("set SMITH_MCP_COMMAND to the server's program, or SMITH_MCP_URL to its endpoint");
     };
-    let args: Vec<String> = std::env::var("SMITH_MCP_ARGS")
-        .unwrap_or_default()
-        .split_whitespace()
-        .map(str::to_owned)
-        .collect();
-
-    let home = tempfile::tempdir().expect("a user root");
-    let project = tempfile::tempdir().expect("a project root");
-    std::fs::create_dir_all(project.path().join(".smith")).expect("a project `.smith`");
+    let args = std::env::var("SMITH_MCP_ARGS").unwrap_or_default();
     let rendered_args = args
-        .iter()
+        .split_whitespace()
         .map(|arg| format!("\"{arg}\""))
         .collect::<Vec<_>>()
         .join(", ");
+    format!("[mcp.servers.live]\ncommand = \"{command}\"\nargs = [{rendered_args}]\n")
+}
+
+/// Declares the server named by the environment, trusts it, and waits for it.
+async fn connect_named_server() -> LiveServer {
+    let home = tempfile::tempdir().expect("a user root");
+    let project = tempfile::tempdir().expect("a project root");
+    std::fs::create_dir_all(project.path().join(".smith")).expect("a project `.smith`");
     std::fs::write(
         project.path().join(".smith/config.toml"),
-        format!(
-            "{CONFIG}\n[mcp.servers.live]\ncommand = \"{command}\"\nargs = [{rendered_args}]\n"
-        ),
+        format!("{CONFIG}\n{}", declared_server()),
     )
     .expect("a project config");
 
@@ -112,8 +125,8 @@ async fn connect_named_server() -> LiveServer {
 }
 
 #[tokio::test]
-#[ignore = "requires a real MCP server named by SMITH_MCP_COMMAND"]
-async fn a_real_stdio_server_connects_and_contributes_namespaced_tools() {
+#[ignore = "requires a real MCP server named by SMITH_MCP_COMMAND or SMITH_MCP_URL"]
+async fn a_real_server_connects_and_contributes_namespaced_tools() {
     let live = connect_named_server().await;
     let supervisor = &live.supervisor;
 
@@ -152,8 +165,8 @@ async fn a_real_stdio_server_connects_and_contributes_namespaced_tools() {
 ///   cargo test -p smith-runtime --test mcp_live -- --ignored --nocapture
 /// ```
 #[tokio::test]
-#[ignore = "requires a real MCP server named by SMITH_MCP_COMMAND"]
-async fn a_real_stdio_server_answers_a_tool_call() {
+#[ignore = "requires a real MCP server named by SMITH_MCP_COMMAND or SMITH_MCP_URL"]
+async fn a_real_server_answers_a_tool_call() {
     let Ok(tool_name) = std::env::var("SMITH_MCP_TOOL") else {
         panic!("set SMITH_MCP_TOOL to a tool the server advertises, e.g. `codegraph_status`");
     };
