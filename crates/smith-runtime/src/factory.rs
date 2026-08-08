@@ -295,6 +295,13 @@ pub struct RuntimeRequest {
     pub credential_pool: Option<SharedPool>,
     /// Tools registered in addition to Smith's built-ins.
     pub tools: Vec<Arc<dyn Tool>>,
+    /// Connected MCP servers, whose tools are registered alongside the
+    /// built-ins.
+    ///
+    /// The supervisor is owned by the host and outlives one runtime, so a
+    /// server that connects after composition is picked up at the next
+    /// rebuild rather than being lost. Absent means no server is declared.
+    pub mcp: Option<Arc<crate::mcp::McpSupervisor>>,
     /// Optional host-owned recorder wrapped around built-in mutating tools.
     pub change_recorder: Option<Arc<smith_tools::ChangeRecorder>>,
     /// Smith-owned, descriptor-first skill sources.
@@ -369,6 +376,7 @@ impl RuntimeRequest {
             rotation: None,
             credential_pool: None,
             tools: Vec::new(),
+            mcp: None,
             change_recorder: None,
             skills: crate::built_in_skills::built_in_sources(),
             memory: None,
@@ -1195,6 +1203,31 @@ fn prepare_capability_stage(
             }
         })
         .collect::<Vec<_>>();
+
+    // Remote tools are appended after every local one, and a name already
+    // spoken for is left alone. The namespacing in `mcp__<server>__<tool>`
+    // makes a collision with a built-in impossible by construction; the check
+    // stays because "impossible by construction" is a property of a naming
+    // scheme, and a shadowed `shell` would be the worst possible way to
+    // discover that the scheme had changed.
+    if let Some(supervisor) = &request.mcp {
+        let mut taken = tools
+            .iter()
+            .map(|tool| tool.spec().name)
+            .collect::<BTreeSet<_>>();
+        for tool in supervisor.tools() {
+            let name = tool.spec().name;
+            if !taken.insert(name.clone()) {
+                tracing::warn!(
+                    tool = %name,
+                    "a remote tool was not registered because that name is already in use"
+                );
+                continue;
+            }
+            tools.push(tool);
+            ability_sources.push(agent_runtime::registry::RegistrySource::Provider);
+        }
+    }
 
     let delegation_slot = if matches!(request.surface, HostSurface::Child) {
         None
@@ -2638,6 +2671,7 @@ mod tests {
             persistence: persistence(),
             approval: approval_config(ApprovalMode::Ask),
             background: background(),
+            mcp: Default::default(),
         }
     }
 
@@ -2817,6 +2851,7 @@ mod tests {
             persistence: persistence(),
             approval: approval_config(ApprovalMode::Ask),
             background: background(),
+            mcp: Default::default(),
         };
 
         // Nothing configured: the model's own declared ceiling.
@@ -2859,6 +2894,7 @@ mod tests {
             persistence: persistence(),
             approval: approval_config(ApprovalMode::Ask),
             background: background(),
+            mcp: Default::default(),
         };
 
         let err = context_policy(&config, &profile).expect_err("no room to plan");
@@ -2895,6 +2931,7 @@ mod tests {
             persistence: persistence(),
             approval: approval_config(ApprovalMode::Ask),
             background: background(),
+            mcp: Default::default(),
         };
 
         let context_policy = context_policy(&config, &profile).expect("a context policy");
@@ -2932,6 +2969,7 @@ mod tests {
             persistence: persistence(),
             approval: approval_config(ApprovalMode::Ask),
             background: background(),
+            mcp: Default::default(),
         };
         config.approval.auto_approve = Some(sourced(vec!["edit".to_owned()]));
         let fallback = Arc::new(HeadlessApproval::new());

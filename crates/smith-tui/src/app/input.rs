@@ -184,6 +184,22 @@ impl App {
                     _ => None,
                 };
             }
+            Some(Overlay::McpTrustConfirm { server, .. }) => {
+                return match key.code {
+                    KeyCode::Char('y') => {
+                        let action = Action::TrustMcpServer {
+                            server: server.clone(),
+                        };
+                        self.overlay = None;
+                        Some(action)
+                    }
+                    KeyCode::Char('n') | KeyCode::Esc => {
+                        self.overlay = None;
+                        None
+                    }
+                    _ => None,
+                };
+            }
             Some(Overlay::ReviewConfirm { scope, .. }) => {
                 return match key.code {
                     KeyCode::Char('y') => {

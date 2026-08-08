@@ -419,24 +419,46 @@ fn locate_pool_entry(error: ConfigError, position: usize) -> ConfigError {
 }
 
 pub(super) fn validate_credential(credential: &Sourced<String>) -> Result<(), ConfigError> {
-    let refused = || ConfigError::PlaintextSecret {
+    if is_credential_reference(&credential.value) {
+        return Ok(());
+    }
+    Err(ConfigError::PlaintextSecret {
         source: credential.source.clone(),
         message: format!(
             "write a reference such as `keychain:smith/<provider>`; the schemes are {}",
-            CREDENTIAL_SCHEMES
-                .iter()
-                .map(|scheme| format!("`{scheme}:`"))
-                .collect::<Vec<_>>()
-                .join(", ")
+            credential_schemes()
         ),
-    };
-    let Some((scheme, rest)) = credential.value.split_once(':') else {
-        return Err(refused());
-    };
-    if !CREDENTIAL_SCHEMES.contains(&scheme) || rest.trim().is_empty() {
-        return Err(refused());
-    }
-    Ok(())
+    })
+}
+
+/// Whether a value names a place a secret can be fetched from rather than
+/// being the secret itself.
+pub(super) fn is_credential_reference(value: &str) -> bool {
+    value.split_once(':').is_some_and(|(scheme, rest)| {
+        CREDENTIAL_SCHEMES.contains(&scheme) && !rest.trim().is_empty()
+    })
+}
+
+/// Whether a header name carries authorization.
+pub(super) fn names_an_auth_header(name: &str) -> bool {
+    AUTH_HEADERS.contains(&name.to_ascii_lowercase().as_str())
+}
+
+/// Whether a variable name says it carries a credential.
+pub(super) fn names_a_credential(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    CREDENTIAL_ENV_MARKERS
+        .iter()
+        .any(|marker| upper.contains(marker))
+}
+
+/// The credential schemes, spelled for a diagnostic.
+pub(super) fn credential_schemes() -> String {
+    CREDENTIAL_SCHEMES
+        .iter()
+        .map(|scheme| format!("`{scheme}:`"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 pub(super) fn resolve_model_limits(

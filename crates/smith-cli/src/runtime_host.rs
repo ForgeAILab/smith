@@ -2,6 +2,14 @@
 
 use super::*;
 
+/// How long an interactive start waits for declared servers before opening the
+/// prompt without them.
+///
+/// Sized for a local command's startup, not for an `npx` download: long enough
+/// that a normal server is simply *there* on the first turn, short enough that a
+/// slow one is never felt.
+const INTERACTIVE_MCP_GRACE_MS: u64 = 1_500;
+
 pub(super) struct StartedHost {
     pub(super) host: HostSession,
     pub(super) approvals: Option<ApprovalRequests>,
@@ -21,6 +29,8 @@ pub(super) struct StartedHost {
     pub(super) agents: ResolvedAgent,
     pub(super) sessions: Vec<SessionListing>,
     pub(super) catalog: Arc<smith_config::catalog::CatalogSnapshot>,
+    /// Declared MCP servers and their connections, when any are declared.
+    pub(super) mcp: Option<Arc<crate::mcp::McpContext>>,
 }
 
 pub(super) async fn start_host(
@@ -28,6 +38,7 @@ pub(super) async fn start_host(
     resume: Option<&str>,
     surface: HostSurface,
     frozen_catalog: Option<Arc<smith_config::catalog::CatalogSnapshot>>,
+    mcp: Option<Arc<crate::mcp::McpContext>>,
 ) -> Result<StartedHost> {
     let prepared = prepare(selection)?;
     let project = prepared.project;
@@ -138,6 +149,23 @@ pub(super) async fn start_host(
         });
     }
 
+    // Connections start here, beside the rest of session start, and nothing
+    // below waits for them: a server that takes a minute to install itself
+    // must not be able to delay the prompt.
+    let mcp = match mcp {
+        Some(context) => Some(context),
+        None => crate::mcp::McpContext::start(
+            &resolution.config,
+            &resolution.layout.user_dir,
+            &project,
+            runtime.credentials.clone(),
+        )
+        .context("planning the declared MCP servers")?,
+    };
+    if let Some(context) = &mcp {
+        runtime.mcp = Some(context.supervisor());
+    }
+
     let mut approvals = None;
     let mut headless_approval = None;
     if resolution.config.approval.mode.value == ApprovalMode::Ask {
@@ -230,6 +258,31 @@ pub(super) async fn start_host(
     if let Some(session) = resume {
         request = request.resume(SessionId::new(session));
     }
+    // Two budgets, for two different costs of waiting.
+    //
+    // A one-shot run has no later boundary to pick a server's tools up at, so
+    // it waits for the full startup timeout: a `-p` run that silently dropped
+    // a configured server's tools would be worse than a slow one.
+    //
+    // An interactive run waits only long enough for a *local* server to come
+    // up. Nearly every MCP server is a local command that answers in
+    // milliseconds, and paying a short grace here means the common case gets
+    // its tools on turn one and never crosses the rebuild boundary at all. A
+    // server slower than the grace still cannot delay the prompt: the wait
+    // ends, the session starts without it, and its tools join at the next idle
+    // boundary.
+    if let Some(context) = &mcp {
+        let budget = match surface {
+            HostSurface::Terminal => INTERACTIVE_MCP_GRACE_MS,
+            HostSurface::Headless | HostSurface::Child => {
+                smith_runtime::mcp::DEFAULT_STARTUP_TIMEOUT_MS
+            }
+        };
+        context
+            .supervisor()
+            .settle(Duration::from_millis(budget))
+            .await;
+    }
     let host = smith_runtime::host::start(request)
         .await
         .map_err(anyhow::Error::new)
@@ -254,6 +307,7 @@ pub(super) async fn start_host(
         agents,
         sessions,
         catalog,
+        mcp,
     })
 }
 
@@ -341,12 +395,14 @@ pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
     let mut resume = args.resume.take();
     let mut frozen_catalog = None;
     let mut reasoning_notice = None;
+    let mut mcp: Option<Arc<crate::mcp::McpContext>> = None;
     loop {
         let started = match start_host(
             &args.selection,
             resume.as_deref(),
             HostSurface::Terminal,
             frozen_catalog.clone(),
+            mcp.clone(),
         )
         .await
         {
@@ -380,8 +436,10 @@ pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
             rotations,
             credential_pool,
             accounts,
+            mcp: started_mcp,
             ..
         } = started;
+        mcp = started_mcp;
         let current_session = host.session().id().as_str().to_owned();
         match run_interactive(
             &host,
@@ -398,6 +456,7 @@ pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
                 agents,
                 sessions,
                 catalog: catalog.clone(),
+                mcp: mcp.clone(),
             },
             PresentationOptions {
                 no_color: args.no_color,
@@ -410,6 +469,13 @@ pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
             InteractiveExit::Quit(usage, price) => {
                 report_session_usage(&host, &current_session, &usage, price.as_ref());
                 return Ok(0);
+            }
+            // The same identity, recomposed around the tools a server
+            // contributed after this session started.
+            InteractiveExit::CapabilitiesChanged => {
+                resume = Some(current_session);
+                frozen_catalog = Some(catalog);
+                continue;
             }
             InteractiveExit::Reconfigure(command) => {
                 match &command {

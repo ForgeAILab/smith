@@ -22,6 +22,9 @@ use smith_config::credential::{
     CredentialRef, CredentialRefError, CredentialResolver, Environment, Keychain, KeychainError,
     ProcessEnvironment, setup_environment_reference, setup_keychain_reference,
 };
+use smith_config::mcp::{self, McpAdmission};
+use smith_config::model::ApprovalMode;
+use smith_config::resolve::{ResolveRequest, ResolvedMcpServer, resolve};
 use smith_config::trust::{
     ContentDigest, Executable, ExecutableKind, TrustDecision, TrustStatus, TrustStore,
 };
@@ -990,4 +993,294 @@ fn a_project_that_cannot_be_resolved_is_an_error_rather_than_a_guess() {
         .status(missing, &Executable::from_setting("hooks.pre_tool", "true"))
         .expect_err("no such project");
     assert_eq!(err.kind, ErrorKind::Config);
+}
+
+// -- MCP server execution trust ----------------------------------------------
+
+/// The provider selection every MCP scenario needs before it can resolve.
+const MCP_BASE: &str = r#"
+default_profile = "work"
+
+[profiles.work]
+provider = "acme"
+model = "example-model"
+
+[providers.acme]
+kind = "openai-compatible"
+base_url = "https://api.example.test/v1"
+credential = "keychain:smith/acme"
+"#;
+
+/// A project that declares MCP servers, plus a trust store rooted outside any
+/// real home.
+struct McpFixture {
+    home: tempfile::TempDir,
+    project: tempfile::TempDir,
+    _state: tempfile::TempDir,
+    store: TrustStore,
+}
+
+impl McpFixture {
+    fn new() -> Self {
+        let home = tempfile::tempdir().expect("a user root");
+        let project = tempfile::tempdir().expect("a project root");
+        std::fs::create_dir_all(home.path().join(".smith")).expect("a user dir");
+        std::fs::create_dir_all(project.path().join(".smith")).expect("a project dir");
+        let state = tempfile::tempdir().expect("a state root");
+        let store = TrustStore::open(state.path()).expect("an empty store");
+        Self {
+            home,
+            project,
+            _state: state,
+            store,
+        }
+    }
+
+    fn write_user(&self, text: &str) {
+        std::fs::write(self.home.path().join(".smith/config.toml"), text).expect("a user config");
+    }
+
+    /// Resolves one declared server from a project config that also selects a
+    /// provider, so the whole chain runs exactly as it does at startup.
+    fn declare(&self, name: &str, text: &str) -> ResolvedMcpServer {
+        std::fs::write(
+            self.project.path().join(".smith/config.toml"),
+            format!("{MCP_BASE}\n{text}"),
+        )
+        .expect("a project config");
+        resolve(&ResolveRequest::new(self.project.path()).with_home_dir(self.home.path()))
+            .expect("a resolved project")
+            .config
+            .mcp
+            .servers
+            .remove(name)
+            .expect("the declared server")
+    }
+
+    fn trust(&mut self, server: &ResolvedMcpServer) {
+        self.store
+            .record(
+                self.project.path(),
+                &mcp::executable(server),
+                TrustDecision::Allow,
+            )
+            .expect("a recorded decision");
+    }
+
+    fn admission(&self, server: &ResolvedMcpServer) -> McpAdmission {
+        mcp::admit(server, &self.store, self.project.path()).expect("an admission")
+    }
+}
+
+#[test]
+fn an_mcp_server_is_identified_by_its_name_and_digested_by_its_invocation() {
+    let fixture = McpFixture::new();
+    let server = fixture.declare(
+        "github",
+        "[mcp.servers.github]\ncommand = \"npx\"\nargs = [\"-y\", \"server-github\"]\n",
+    );
+
+    let executable = mcp::executable(&server);
+    assert_eq!(executable.kind(), ExecutableKind::McpServer);
+    assert_eq!(executable.label(), "github");
+    // The command is digested, never carried where a diagnostic could print it.
+    assert!(!format!("{executable:?}").contains("server-github"));
+    assert_eq!(
+        executable.digest(),
+        Executable::from_mcp_command("github", "npx", ["-y", "server-github"], [""; 0]).digest()
+    );
+}
+
+#[test]
+fn changed_args_invalidate_the_trust_record() {
+    let mut fixture = McpFixture::new();
+    let benign = fixture.declare(
+        "github",
+        "[mcp.servers.github]\ncommand = \"npx\"\nargs = [\"-y\", \"server-github\"]\n",
+    );
+    fixture.trust(&benign);
+    assert_eq!(fixture.admission(&benign), McpAdmission::Connect);
+
+    let swapped = fixture.declare(
+        "github",
+        "[mcp.servers.github]\ncommand = \"npx\"\nargs = [\"-y\", \"server-github-evil\"]\n",
+    );
+    assert_eq!(
+        fixture.admission(&swapped),
+        McpAdmission::NeedsTrust(TrustStatus::Changed),
+        "a rewritten argument list authorizes nothing"
+    );
+}
+
+#[test]
+fn rotated_credential_value_does_not_re_prompt() {
+    let mut fixture = McpFixture::new();
+    let before = fixture.declare(
+        "github",
+        "[mcp.servers.github]\ncommand = \"npx\"\nenv = { GITHUB_TOKEN = \"keychain:smith/github\" }\n",
+    );
+    fixture.trust(&before);
+
+    // The same variable, drawn from a different place, is the same server: what
+    // it can see has not changed. A digest over values would re-prompt here,
+    // and would be derived from a secret besides.
+    let rotated = fixture.declare(
+        "github",
+        "[mcp.servers.github]\ncommand = \"npx\"\nenv = { GITHUB_TOKEN = \"keychain:smith/github-rotated\" }\n",
+    );
+    assert_eq!(fixture.admission(&rotated), McpAdmission::Connect);
+}
+
+#[test]
+fn new_environment_variable_name_invalidates_trust() {
+    let mut fixture = McpFixture::new();
+    let before = fixture.declare(
+        "github",
+        "[mcp.servers.github]\ncommand = \"npx\"\nenv = { GITHUB_TOKEN = \"keychain:smith/github\" }\n",
+    );
+    fixture.trust(&before);
+
+    let widened = fixture.declare(
+        "github",
+        "[mcp.servers.github]\ncommand = \"npx\"\nenv = { GITHUB_TOKEN = \"keychain:smith/github\", AWS_SECRET_ACCESS_KEY = \"keychain:smith/aws\" }\n",
+    );
+    assert_eq!(
+        fixture.admission(&widened),
+        McpAdmission::NeedsTrust(TrustStatus::Changed),
+        "a variable the server did not have before changes what it can see"
+    );
+}
+
+#[test]
+fn allow_all_approval_does_not_spawn_an_untrusted_server() {
+    let fixture = McpFixture::new();
+    fixture.write_user("[approval]\nmode = \"allow-all\"\n");
+    let server = fixture.declare("github", "[mcp.servers.github]\ncommand = \"npx\"\n");
+
+    // The mode really is allow-all: this is not a test of a config that failed
+    // to apply.
+    let resolved =
+        resolve(&ResolveRequest::new(fixture.project.path()).with_home_dir(fixture.home.path()))
+            .expect("a resolved project");
+    assert_eq!(resolved.config.approval.mode.value, ApprovalMode::AllowAll);
+
+    assert_eq!(
+        fixture.admission(&server),
+        McpAdmission::NeedsTrust(TrustStatus::Untrusted),
+        "approving tool calls is not approving the spawn of a server"
+    );
+}
+
+#[test]
+fn a_disabled_server_is_inert_without_being_asked_about() {
+    let fixture = McpFixture::new();
+    let server = fixture.declare(
+        "github",
+        "[mcp.servers.github]\ncommand = \"npx\"\nenabled = false\n",
+    );
+    assert_eq!(fixture.admission(&server), McpAdmission::Disabled);
+}
+
+#[test]
+fn a_confirmation_names_the_invocation_and_never_a_value() {
+    const LITERAL: &str = "not-a-reference-value";
+
+    let fixture = McpFixture::new();
+    let server = fixture.declare(
+        "github",
+        &format!(
+            "[mcp.servers.github]\ncommand = \"npx\"\nargs = [\"-y\", \"server-github\"]\n\
+             env = {{ GITHUB_TOKEN = \"keychain:smith/github\", DOCS_ROOT = \"{LITERAL}\" }}\n"
+        ),
+    );
+
+    let confirmation = mcp::confirmation(&server, TrustStatus::Untrusted);
+    assert_eq!(confirmation.server, "github");
+    assert_eq!(confirmation.transport, "stdio");
+    assert_eq!(confirmation.target, "npx");
+    assert_eq!(confirmation.args, ["-y", "server-github"]);
+    assert_eq!(
+        confirmation
+            .environment
+            .iter()
+            .map(|variable| (variable.name.as_str(), variable.credential.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("DOCS_ROOT", None),
+            ("GITHUB_TOKEN", Some("keychain:smith/github")),
+        ]
+    );
+    assert_eq!(
+        &confirmation.digest,
+        mcp::executable(&server).digest(),
+        "the identity shown is the identity recorded"
+    );
+    assert!(!format!("{confirmation:?}").contains(LITERAL));
+}
+
+#[test]
+fn a_remote_server_is_trusted_by_its_endpoint_and_header_names() {
+    let mut fixture = McpFixture::new();
+    let before = fixture.declare(
+        "remote",
+        "[mcp.servers.remote]\nurl = \"https://mcp.example.test/v1\"\n\
+         credential = \"keychain:smith/remote\"\n",
+    );
+    fixture.trust(&before);
+    assert_eq!(fixture.admission(&before), McpAdmission::Connect);
+
+    // Rotating the bearer credential is not a changed server: the header it is
+    // sent under has not changed, and the value was never part of the identity.
+    let rotated = fixture.declare(
+        "remote",
+        "[mcp.servers.remote]\nurl = \"https://mcp.example.test/v1\"\n\
+         credential = \"keychain:smith/remote-rotated\"\n",
+    );
+    assert_eq!(fixture.admission(&rotated), McpAdmission::Connect);
+
+    // A different endpoint is a different third party.
+    let moved = fixture.declare(
+        "remote",
+        "[mcp.servers.remote]\nurl = \"https://mcp.evil.test/v1\"\n\
+         credential = \"keychain:smith/remote\"\n",
+    );
+    assert_eq!(
+        fixture.admission(&moved),
+        McpAdmission::NeedsTrust(TrustStatus::Changed)
+    );
+
+    // So is one that gains a header.
+    let widened = fixture.declare(
+        "remote",
+        "[mcp.servers.remote]\nurl = \"https://mcp.example.test/v1\"\n\
+         credential = \"keychain:smith/remote\"\nheaders = { X-Tenant = \"acme\" }\n",
+    );
+    assert_eq!(
+        fixture.admission(&widened),
+        McpAdmission::NeedsTrust(TrustStatus::Changed)
+    );
+}
+
+#[test]
+fn a_remote_confirmation_names_the_endpoint_and_its_bearer_header() {
+    let fixture = McpFixture::new();
+    let server = fixture.declare(
+        "remote",
+        "[mcp.servers.remote]\nurl = \"https://mcp.example.test/v1\"\n\
+         credential = \"keychain:smith/remote\"\n",
+    );
+
+    let confirmation = mcp::confirmation(&server, TrustStatus::Untrusted);
+    assert_eq!(confirmation.transport, "http");
+    assert_eq!(confirmation.target, "https://mcp.example.test/v1");
+    assert!(confirmation.environment.is_empty());
+    assert_eq!(
+        confirmation
+            .headers
+            .iter()
+            .map(|header| (header.name.as_str(), header.credential.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![("Authorization", Some("keychain:smith/remote"))],
+        "the prompt describes the request, not the configuration that produced it"
+    );
 }

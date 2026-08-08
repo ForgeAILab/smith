@@ -90,7 +90,7 @@ impl Ability for SmithToolAbility {
             self.spec.description.clone(),
             revision,
         )
-        .with_keywords(keywords(&self.spec.name))
+        .with_keywords(retrieval_keywords(&self.spec.name))
         .with_affordances(affordances(&self.spec.name, &permissions))
         .with_permissions(permissions.clone())
         .with_risk(permission_risk(&permissions))
@@ -111,6 +111,28 @@ impl ActivationHandle for SmithToolAbility {
     fn activate(&self) -> Result<Activated, ActivationError> {
         Ok(Activated::ToolSchema(self.spec.to_schema()))
     }
+}
+
+/// The words retrieval may match one tool by.
+///
+/// A remote tool's name is `mcp__<server>__<tool>`, which nobody types and no
+/// model asks for. Without its parts as keywords a connected server's tools
+/// would be registered, advertised nowhere, and effectively invisible — the
+/// failure mode of "it registered fine" that nobody notices until a turn needs
+/// one.
+fn retrieval_keywords(name: &str) -> Vec<String> {
+    let mut words: Vec<String> = keywords(name).into_iter().map(str::to_owned).collect();
+    if let Some((server, tool)) = agent_runtime_mcp::naming::split_model_facing_name(name) {
+        words.push("mcp".to_owned());
+        words.push(server.to_owned());
+        words.push(tool.to_owned());
+        words.extend(
+            tool.split(['_', '-'])
+                .filter(|part| !part.is_empty())
+                .map(str::to_owned),
+        );
+    }
+    words
 }
 
 fn keywords(name: &str) -> Vec<&'static str> {
@@ -240,6 +262,9 @@ fn affordances(name: &str, permissions: &[Permission]) -> Vec<&'static str> {
         CREATE_GOAL_TOOL_NAME | UPDATE_GOAL_TOOL_NAME => vec!["goal-management"],
         _ => Vec::new(),
     };
+    if agent_runtime_mcp::naming::split_model_facing_name(name).is_some() {
+        values.push("remote-tool");
+    }
     values.extend(permissions.iter().map(permission_affordance));
     values
 }

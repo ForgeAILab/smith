@@ -24,6 +24,7 @@ pub mod delegation;
 pub mod factory;
 pub mod host;
 pub mod journal;
+pub mod mcp;
 pub mod memory;
 pub mod model_catalog;
 pub mod pool;

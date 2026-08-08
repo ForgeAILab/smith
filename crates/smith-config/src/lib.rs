@@ -26,6 +26,7 @@ pub mod auth_file;
 pub mod catalog;
 pub mod credential;
 pub mod inventory;
+pub mod mcp;
 pub mod model;
 pub mod resolve;
 pub mod setup;

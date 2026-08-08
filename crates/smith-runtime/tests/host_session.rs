@@ -1330,6 +1330,56 @@ async fn project_configuration_cannot_silently_grant_tool_authority() {
 }
 
 #[tokio::test]
+async fn project_auto_approving_a_remote_tool_fails_preflight() {
+    let home = tempfile::tempdir().expect("a user root");
+    let project = tempfile::tempdir().expect("a project root");
+    let config_dir = project.path().join(".smith");
+    std::fs::create_dir_all(&config_dir).expect("a project config directory");
+    // A repository declaring a server *and* pre-approving its tools would be
+    // authorizing itself twice over. The approval half is refused here; the
+    // spawn half is refused by execution trust.
+    std::fs::write(
+        config_dir.join("config.toml"),
+        format!(
+            "{CONFIG}\n[mcp.servers.github]\ncommand = \"npx\"\n\n\
+             [approval]\nauto_approve = [\"mcp__github__search\"]\n"
+        ),
+    )
+    .expect("a project config");
+    let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+        .expect("resolved configuration")
+        .config;
+    let runtime = RuntimeRequest {
+        workspace: Some(Arc::new(
+            ProjectWorkspace::new(project.path()).expect("a workspace"),
+        )),
+        ..RuntimeRequest::new(config, HostSurface::Headless)
+    };
+
+    let error = start(HostSessionRequest::new(runtime, project.path()))
+        .await
+        .expect_err("project config must not pre-approve a remote tool");
+    assert!(
+        matches!(
+            error,
+            HostSessionError::ProjectGrantedAuthority {
+                setting: "approval.auto_approve",
+                ..
+            }
+        ),
+        "{error}"
+    );
+    assert!(
+        format!("{error}").contains("user configuration"),
+        "the diagnostic says where the policy belongs: {error}"
+    );
+    assert!(
+        !home.path().join(".smith/sessions").exists(),
+        "authority failure created session state"
+    );
+}
+
+#[tokio::test]
 async fn interrupting_one_turn_does_not_cancel_the_hosted_session() {
     let fixture = Fixture::new();
     let provider: Arc<dyn Provider> = Arc::new(FakeProvider::new(

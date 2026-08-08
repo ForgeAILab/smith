@@ -228,6 +228,67 @@ pub struct ConfigFile {
     /// Background-work policy for monitors and child agents: `[background]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background: Option<BackgroundSection>,
+    /// Model Context Protocol servers: `[mcp.servers.<name>]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<McpSection>,
+}
+
+/// The Model Context Protocol servers one layer declares.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpSection {
+    /// Named servers: `[mcp.servers.<name>]`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub servers: BTreeMap<String, McpServerSection>,
+}
+
+/// One MCP server declaration.
+///
+/// A declaration names exactly one transport: a `command` Smith spawns, or a
+/// `url` it connects to. Naming both is a contradiction rather than a
+/// preference, because there is no defensible rule for which one a user meant.
+///
+/// Nothing here is executed by reading it. Spawning the command requires an
+/// executable-trust decision over the *resolved* invocation, which is a
+/// separate question asked once per content digest.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpServerSection {
+    /// The program to run for a local server spoken to over its stdio.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// The command's arguments, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    /// Environment variables set for a spawned server.
+    ///
+    /// A value is either a credential *reference* — `keychain:`, `authfile:`,
+    /// `env:`, or `file:` — resolved through the same secret path as a
+    /// provider's, or a literal. A literal under a credential-bearing variable
+    /// name is refused outside owner-only user configuration, because a
+    /// repository file is the wrong place to keep a token.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+    /// The endpoint of a remote server reached over streamable HTTP.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// A credential reference sent to a remote server as a bearer token.
+    ///
+    /// The same references a provider's `credential` takes, resolved through
+    /// the same path. Writing the token itself is refused: this is a
+    /// repository file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
+    /// Extra headers sent to a remote server.
+    ///
+    /// Values follow the same rule as `env`: a credential reference is
+    /// resolved, and a literal under an authorization-bearing header name is
+    /// refused rather than redacted.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub headers: BTreeMap<String, String>,
+    /// Whether this run uses the server at all. Omitted means enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
 }
 
 /// One profile: a coherent selection a user can switch to by name.

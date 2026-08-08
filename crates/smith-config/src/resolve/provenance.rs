@@ -37,6 +37,23 @@ pub(super) const AUTH_HEADERS: &[&str] = &[
     "api-key",
 ];
 
+/// Fragments that mark an environment variable as credential-bearing.
+///
+/// The same reasoning as [`AUTH_HEADERS`], applied to a surface Smith knows
+/// less about. An MCP server defines its own variables, so their *values* say
+/// nothing Smith can classify; the name is written by whoever declared the
+/// server and states the intent plainly. Matching a fragment rather than a
+/// whole name catches `GITHUB_TOKEN` and `AWS_SECRET_ACCESS_KEY` alike.
+pub(super) const CREDENTIAL_ENV_MARKERS: &[&str] = &[
+    "TOKEN",
+    "SECRET",
+    "KEY",
+    "PASSWORD",
+    "PASSWD",
+    "CREDENTIAL",
+    "AUTH",
+];
+
 /// What kind of value a setting holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ValueKind {

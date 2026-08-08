@@ -167,6 +167,131 @@ pub struct ResolvedConfig {
     pub approval: ResolvedApproval,
     /// Background-work policy.
     pub background: ResolvedBackground,
+    /// Declared Model Context Protocol servers.
+    pub mcp: ResolvedMcp,
+}
+
+/// Every declared MCP server, resolved but not contacted.
+///
+/// Resolution reads declarations and stops there. Whether a server may be
+/// *spawned* is an executable-trust decision over the resolved invocation, and
+/// whether it answers is a runtime question; neither belongs to configuration.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ResolvedMcp {
+    /// Declared servers, by name.
+    pub servers: BTreeMap<String, ResolvedMcpServer>,
+}
+
+impl ResolvedMcp {
+    /// The servers a run would use, in name order.
+    ///
+    /// A server switched off by `enabled = false` is kept in [`Self::servers`]
+    /// so a surface can say it exists and why it is inert, and is excluded
+    /// here so nothing else has to remember the check.
+    pub fn enabled(&self) -> impl Iterator<Item = &ResolvedMcpServer> {
+        self.servers.values().filter(|server| server.enabled.value)
+    }
+}
+
+/// One resolved MCP server declaration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedMcpServer {
+    /// The declared name, which namespaces the server's tools.
+    pub name: String,
+    /// Where the winning declaration of this server was written.
+    pub source: Source,
+    /// How Smith would reach it.
+    pub transport: ResolvedMcpTransport,
+    /// Environment for a spawned server, by variable name.
+    pub env: BTreeMap<String, Sourced<McpValue>>,
+    /// Whether this run uses it.
+    pub enabled: Sourced<bool>,
+}
+
+/// How a resolved server is reached.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolvedMcpTransport {
+    /// A local command Smith would spawn and speak to over its stdio.
+    Stdio {
+        /// The program.
+        command: Sourced<String>,
+        /// Its arguments, when a layer supplied any.
+        args: Option<Sourced<Vec<String>>>,
+    },
+    /// A remote endpoint reached over streamable HTTP.
+    StreamableHttp {
+        /// The endpoint.
+        url: Sourced<String>,
+        /// A credential sent as a bearer token, when one is declared.
+        credential: Option<Sourced<String>>,
+        /// Extra headers, by name.
+        headers: BTreeMap<String, Sourced<McpValue>>,
+    },
+}
+
+impl ResolvedMcpTransport {
+    /// The transport's stable name, as diagnostics and surfaces spell it.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Stdio { .. } => "stdio",
+            Self::StreamableHttp { .. } => "http",
+        }
+    }
+
+    /// The command's arguments, empty when none were declared.
+    pub fn args(&self) -> &[String] {
+        match self {
+            Self::Stdio { args, .. } => args.as_ref().map_or(&[], |args| args.value.as_slice()),
+            Self::StreamableHttp { .. } => &[],
+        }
+    }
+
+    /// Every header name this transport would send, in order.
+    ///
+    /// A declared `credential` contributes the `Authorization` name it will be
+    /// sent under, because gaining an authorization header changes what the
+    /// endpoint receives — and that has to be part of what the user approved.
+    pub fn header_names(&self) -> Vec<String> {
+        match self {
+            Self::Stdio { .. } => Vec::new(),
+            Self::StreamableHttp {
+                credential,
+                headers,
+                ..
+            } => credential
+                .iter()
+                .map(|_| AUTHORIZATION_HEADER.to_owned())
+                .chain(headers.keys().cloned())
+                .collect(),
+        }
+    }
+}
+
+/// The header a declared `credential` is sent under.
+pub const AUTHORIZATION_HEADER: &str = "Authorization";
+
+/// One configured value a declared server would be given — an environment
+/// variable for a local server, a header for a remote one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum McpValue {
+    /// A reference resolved through the existing secret path, never read here.
+    Credential(String),
+    /// A value written literally.
+    ///
+    /// Kept redaction-safe rather than as text: a server defines its own
+    /// variables, so Smith cannot tell which of them carry secrets and must
+    /// assume any of them might.
+    Literal(Secret),
+}
+
+impl McpValue {
+    /// The credential reference this value names, if it names one.
+    pub fn credential(&self) -> Option<&str> {
+        match self {
+            Self::Credential(reference) => Some(reference),
+            Self::Literal(_) => None,
+        }
+    }
 }
 
 /// The selected provider, validated against the options its kind supports.

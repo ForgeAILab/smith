@@ -456,6 +456,7 @@ impl App {
                 CommandAction::Effort(_) => "effort",
                 CommandAction::Account(_) => "account",
                 CommandAction::Agent(_) | CommandAction::AgentResume(_) => "agent",
+                CommandAction::Mcp(_) => "mcp",
                 CommandAction::Diff(_) => "diff",
                 CommandAction::Review(_) => "review",
                 CommandAction::Undo => "undo",
@@ -806,6 +807,16 @@ impl App {
         self.overlay = Some(Overlay::RevertConfirm {
             scope: scope.into(),
             fingerprint: fingerprint.into(),
+            content: content.into(),
+        });
+    }
+
+    /// Shows one MCP server's resolved invocation and content identity, with no
+    /// default action: a repository asking Smith to run a program is exactly
+    /// the decision that must never be made by pressing Enter.
+    pub fn confirm_mcp_trust(&mut self, server: impl Into<String>, content: impl Into<String>) {
+        self.overlay = Some(Overlay::McpTrustConfirm {
+            server: server.into(),
             content: content.into(),
         });
     }

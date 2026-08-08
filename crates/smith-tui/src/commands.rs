@@ -41,6 +41,8 @@ pub enum CommandAction {
     Agent(Option<String>),
     /// Explicitly continue one interrupted child's exact checkpoint.
     AgentResume(String),
+    /// List declared MCP servers, or grant one execution trust.
+    Mcp(McpAction),
     /// Inspect a Git change scope.
     Diff(Option<String>),
     /// Review a change scope.
@@ -55,6 +57,16 @@ pub enum CommandAction {
     Quit,
     /// Render command help locally.
     Help,
+}
+
+/// Typed local MCP server control.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum McpAction {
+    /// List every declared server with its state.
+    List,
+    /// Show the named server's resolved invocation and content identity, and
+    /// ask whether it may be run.
+    Trust(String),
 }
 
 /// Typed local persistent-goal control.
@@ -199,6 +211,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         advanced: false,
     },
     CommandSpec {
+        name: "mcp",
+        argument_hint: "[trust NAME]",
+        description: "show MCP servers, or trust one so it may run",
+        requires_idle: false,
+        advanced: false,
+    },
+    CommandSpec {
         name: "diff",
         argument_hint: "[SCOPE]",
         description: "inspect workspace changes",
@@ -299,6 +318,18 @@ pub fn parse(input: &str) -> Result<CommandAction, String> {
         return Err(format!("`/{name}` takes no value"));
     }
 
+    if name == "mcp" {
+        return match (argument.as_deref(), second) {
+            (None, _) => Ok(CommandAction::Mcp(McpAction::List)),
+            (Some("trust"), Some(server)) => Ok(CommandAction::Mcp(McpAction::Trust(server))),
+            (Some("trust"), None) => {
+                Err("`/mcp trust` requires a server name — run `/mcp` to list them".to_owned())
+            }
+            (Some(other), _) => Err(format!(
+                "`/mcp` takes no value, or `trust NAME`; `{other}` is neither"
+            )),
+        };
+    }
     if name == "agent" && argument.as_deref() == Some("resume") {
         let child = second.ok_or_else(|| "`/agent resume` requires a child ID".to_owned())?;
         return Ok(CommandAction::AgentResume(child));

@@ -41,7 +41,7 @@ pub use app::{
     Action, App, MouseOutcome, Overlay, PaletteCommand, PendingInputPreview, PreparedSubmission,
     ResourceTarget, RuntimeResources, SubmissionTarget,
 };
-pub use commands::{COMMANDS, CommandAction, CommandSpec, GoalAction};
+pub use commands::{COMMANDS, CommandAction, CommandSpec, GoalAction, McpAction};
 pub use composer::Composer;
 pub use diff::{Change, EditReview, diff_lines};
 pub use picker::{PickerOutcome, ResourceEntry, ResourcePicker, draw_resource_picker};
@@ -58,6 +58,8 @@ pub use setup::{
     SetupApp, SetupCredential, SetupEffect, SetupMode, SetupModelLimits, SetupSubmission,
     draw_setup,
 };
-pub use status::{Activity, Confidence, ContextPlanStatus, ContextPlanUpdate, Status, TokenCount};
+pub use status::{
+    Activity, Confidence, ContextPlanStatus, ContextPlanUpdate, McpStatus, Status, TokenCount,
+};
 pub use theme::{Theme, Tone};
 pub use transcript::{Block, LocalResultState, ToolStatus, Transcript};

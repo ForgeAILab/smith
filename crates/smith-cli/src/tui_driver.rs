@@ -8,6 +8,10 @@ use smith_tui::app::RunningTaskSummary;
 use super::*;
 
 pub(super) enum InteractiveExit {
+    /// A declared MCP server finished connecting, so the composed tool set is
+    /// stale. The session is rebuilt around the same identity at the next idle
+    /// boundary; the connections themselves survive it.
+    CapabilitiesChanged,
     /// The session's usage, plus the price reference it was resolved against
     /// (if any) — carried out here because `Status` does not survive past
     /// `run_tui`'s return, and the exit report needs the identical
@@ -36,6 +40,8 @@ pub(super) struct InteractiveResources {
     /// price can be resolved with the exact binding the runtime factory
     /// used. See `resolve_price`.
     pub(super) catalog: Arc<smith_config::catalog::CatalogSnapshot>,
+    /// Declared MCP servers and their connections, when any are declared.
+    pub(super) mcp: Option<Arc<crate::mcp::McpContext>>,
 }
 
 /// The runtime's out-of-band request streams, plus the accounts they rotate
@@ -67,6 +73,7 @@ pub(super) async fn run_interactive(
         sessions,
         credential_pool,
         catalog,
+        mcp,
     } = resources;
     let policy = host.runtime().policy();
     let snapshot = host.session().snapshot();
@@ -200,6 +207,7 @@ pub(super) async fn run_interactive(
             credential_pool,
             agents: &agents,
             theme,
+            mcp,
         },
     )
     .await;
@@ -295,6 +303,7 @@ pub(super) struct TuiRunInputs<'a> {
     credential_pool: Option<SharedPool>,
     agents: &'a ResolvedAgent,
     theme: Theme,
+    mcp: Option<Arc<crate::mcp::McpContext>>,
 }
 
 pub(super) async fn run_tui(
@@ -312,6 +321,7 @@ pub(super) async fn run_tui(
         credential_pool,
         agents,
         theme,
+        mcp,
     } = inputs;
     let session = host.session();
     let mut events = session.subscribe();
@@ -324,6 +334,13 @@ pub(super) async fn run_tui(
     // reducer the root's are and can never interleave mid-fold.
     let (child_tx, mut child_rx) =
         tokio::sync::mpsc::unbounded_channel::<(ChildId, EventEnvelope)>();
+    let mut mcp_changes = mcp.as_ref().map(|context| context.supervisor().subscribe());
+    // What the runtime was composed with. A rebuild is worth its cost only
+    // when a server has actually contributed something new since.
+    let composed_remote_tools = mcp
+        .as_ref()
+        .map_or(0, |context| context.supervisor().tools().len());
+    let mut remote_tools_pending = false;
     let mut last_change_turn = host.changes().latest().map(|set| set.turn);
     let mut interactions = interaction::InteractionSurface::new(
         interactions,
@@ -429,7 +446,26 @@ pub(super) async fn run_tui(
                                 break InteractiveExit::Reconfigure(command);
                             }
                             Some(Action::Command(command)) => {
-                                handle_local_command(&mut app, host, project, command).await;
+                                handle_local_command(
+                                    &mut app,
+                                    host,
+                                    project,
+                                    mcp.as_deref(),
+                                    command,
+                                )
+                                .await;
+                            }
+                            Some(Action::TrustMcpServer { server }) => {
+                                match mcp.as_ref().map(|context| context.trust(&server)) {
+                                    Some(Ok(notice)) => {
+                                        app.show_local_result("mcp", notice);
+                                    }
+                                    Some(Err(error)) => app.show_local_error("mcp", error),
+                                    None => app.show_local_error(
+                                        "mcp",
+                                        "no MCP servers are declared",
+                                    ),
+                                }
                             }
                             Some(Action::ApplyUndo) => match host.changes().undo_latest() {
                                 Ok(()) => app.transcript.push_notice(
@@ -762,6 +798,36 @@ pub(super) async fn run_tui(
                 }
             }
 
+            () = async {
+                match &mut mcp_changes {
+                    Some(receiver) => {
+                        let _ = receiver.changed().await;
+                    }
+                    // No declared server: this arm never completes, and the
+                    // loop behaves exactly as it did before MCP existed.
+                    None => std::future::pending().await,
+                }
+            } => {
+                if let Some(context) = &mcp {
+                    let supervisor = context.supervisor();
+                    let reports = supervisor.reports();
+                    app.status.mcp = smith_tui::McpStatus {
+                        connecting: reports
+                            .iter()
+                            .filter(|report| !report.state.is_settled())
+                            .count(),
+                        failed: reports
+                            .iter()
+                            .filter(|report| matches!(
+                                report.state,
+                                smith_runtime::mcp::McpState::Failed { .. }
+                            ))
+                            .count(),
+                    };
+                    remote_tools_pending = supervisor.tools().len() != composed_remote_tools;
+                    dirty = true;
+                }
+            }
             _ = spinner.tick() => {
                 let exit_hint_expired = app.expire_ctrl_c_exit_hint();
                 // Rows retire while the session is idle — that is the whole
@@ -780,7 +846,17 @@ pub(super) async fn run_tui(
                 }
             }
 
-            _ = frame.tick(), if dirty => {
+            _ = frame.tick(), if dirty || remote_tools_pending => {
+                // A newly connected server's tools join at the next idle
+                // boundary, never mid-turn: swapping the tool set underneath a
+                // running turn is what the epoch rules exist to prevent.
+                if remote_tools_pending
+                    && !app.is_busy()
+                    && !app.has_pending_input()
+                    && app.overlay.is_none()
+                {
+                    break InteractiveExit::CapabilitiesChanged;
+                }
                 // Re-read on the way to the screen rather than at each site
                 // that could change it: the pool also moves on its own — a
                 // rotation the runtime performed, a snapshot that arrived

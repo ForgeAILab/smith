@@ -14,6 +14,7 @@ workspace = true
 [dependencies]
 agent-runtime = { workspace = true }
 agent-runtime-core = { workspace = true }
+agent-runtime-mcp = { workspace = true, features = ["http"] }
 smith-config = { workspace = true }
 smith-host = { workspace = true }
 smith-tools = { workspace = true }
@@ -42,6 +43,10 @@ zeroize = { workspace = true }
 nix = { version = "0.31", default-features = false, features = ["signal"] }
 
 [dev-dependencies]
+# The integration suite drives the supervisor through a fake connector, so it
+# needs the same binding functions production uses — and the same transports,
+# so a test cannot pass against a feature set production does not build.
+agent-runtime-mcp = { workspace = true, features = ["http"] }
 agent-runtime-testkit = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }

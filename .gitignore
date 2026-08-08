@@ -11,3 +11,6 @@ Cargo.lock.bak
 # Local sibling-checkout dependency patches. Committed manifests stay pinned to
 # the reviewed Git revision above rather than a developer-specific filesystem.
 .cargo/config.toml
+
+# Python bytecode from the repo scripts.
+__pycache__/

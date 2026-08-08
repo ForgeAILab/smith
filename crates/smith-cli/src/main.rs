@@ -14,6 +14,7 @@ mod headless;
 mod interaction;
 mod local_command;
 mod logging;
+mod mcp;
 mod resources;
 mod runtime_host;
 mod setup;
@@ -212,6 +213,7 @@ async fn run_command(mut args: RunArgs) -> Result<u8> {
                 &args.selection,
                 args.resume.as_deref(),
                 HostSurface::Headless,
+                None,
                 None,
             )
             .await?;

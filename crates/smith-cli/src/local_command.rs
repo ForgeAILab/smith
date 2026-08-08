@@ -43,9 +43,28 @@ pub(super) async fn handle_local_command(
     app: &mut App,
     host: &HostSession,
     project: &std::path::Path,
+    mcp: Option<&crate::mcp::McpContext>,
     command: CommandAction,
 ) {
     match command {
+        CommandAction::Mcp(action) => match (mcp, action) {
+            (None, _) => app.show_local_result(
+                "mcp",
+                "no MCP servers are declared; add an `[mcp.servers.<name>]` table",
+            ),
+            (Some(context), smith_tui::McpAction::List) => {
+                app.show_local_result("mcp", context.render_list());
+            }
+            // Showing the resolved invocation and its content identity is the
+            // whole point of the confirmation: the decision is about exactly
+            // this content, so exactly this content is what gets displayed.
+            (Some(context), smith_tui::McpAction::Trust(server)) => {
+                match context.confirmation(&server) {
+                    Ok(content) => app.confirm_mcp_trust(server, content),
+                    Err(error) => app.show_local_error("mcp", error),
+                }
+            }
+        },
         CommandAction::Account(_) => {
             // Resolved entirely in the TUI against live pool state, which the
             // host does not need to be consulted about.

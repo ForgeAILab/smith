@@ -523,6 +523,7 @@ pub(super) fn extract(
     let persistence = resolve_persistence(provenance)?;
     let approval = resolve_approval(provenance)?;
     let background = resolve_background(provenance)?;
+    let mcp = super::mcp::resolve_mcp(provenance, declared)?;
 
     Ok(ResolvedConfig {
         profile,
@@ -538,6 +539,7 @@ pub(super) fn extract(
         persistence,
         approval,
         background,
+        mcp,
     })
 }
 

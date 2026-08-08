@@ -254,10 +254,10 @@
             "{context}"
         );
 
-        handle_local_command(&mut app, &host, project.path(), CommandAction::Status).await;
-        handle_local_command(&mut app, &host, project.path(), CommandAction::Context).await;
-        handle_local_command(&mut app, &host, project.path(), CommandAction::Agent(None)).await;
-        handle_local_command(&mut app, &host, project.path(), CommandAction::Diff(None)).await;
+        handle_local_command(&mut app, &host, project.path(), None, CommandAction::Status).await;
+        handle_local_command(&mut app, &host, project.path(), None, CommandAction::Context).await;
+        handle_local_command(&mut app, &host, project.path(), None, CommandAction::Agent(None)).await;
+        handle_local_command(&mut app, &host, project.path(), None, CommandAction::Diff(None)).await;
 
         git(project.path(), &["init"]);
         git(
@@ -273,6 +273,7 @@
             &mut app,
             &host,
             project.path(),
+            None,
             CommandAction::Diff(Some("unstaged".to_owned())),
         )
         .await;

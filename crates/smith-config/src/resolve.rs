@@ -5,6 +5,7 @@
 
 mod agent;
 mod load;
+mod mcp;
 mod provenance;
 mod provider;
 mod types;

@@ -240,6 +240,14 @@ pub enum Action {
         /// Preview fingerprint.
         fingerprint: String,
     },
+    /// Record the already-confirmed decision to run one MCP server.
+    ///
+    /// The decision is written to the trust store by the host, which is also
+    /// what makes the server connectable without restarting the session.
+    TrustMcpServer {
+        /// The declared server name.
+        server: String,
+    },
     /// Start the already-confirmed provider-backed read-only review.
     StartReview {
         /// Review scope.
@@ -419,6 +427,18 @@ pub enum Overlay {
         /// Stale-preview fingerprint.
         fingerprint: String,
         /// Exact reverse patch.
+        content: String,
+    },
+    /// A declared MCP server awaiting execution confirmation.
+    ///
+    /// The content shows the resolved command, its arguments, the names of the
+    /// environment it would be given, and the content identity the decision is
+    /// recorded against — everything the user is actually deciding about, and
+    /// no value they must not be shown.
+    McpTrustConfirm {
+        /// The declared server name.
+        server: String,
+        /// The rendered invocation and its content identity.
         content: String,
     },
     /// Provider-backed read-only review awaiting explicit confirmation.

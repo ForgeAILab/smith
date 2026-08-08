@@ -452,7 +452,7 @@
             child.as_str(),
             &event(RuntimeEvent::ToolCallRequested {
                 call: ToolCallId::new("call-1"),
-                name: "mcp.some_third_party_tool".to_owned(),
+                name: "mcp__docs__some_third_party_tool".to_owned(),
                 argument_keys: vec!["query".to_owned()],
                 argument_fingerprint: agent_runtime_registry::Fingerprint::of("arguments"),
                 arguments: None,
@@ -468,7 +468,8 @@
             // `query` is the argument's *key* — safe metadata the fallback
             // always names — never a value, since none was ever supplied
             // here or anywhere on this honest-fallback path.
-            row.contains("mcp.some_third_party_tool(query") && row.contains("arguments hidden"),
+            row.contains("mcp__docs__some_third_party_tool(query")
+                && row.contains("arguments hidden"),
             "the tool is named with an honest unavailable label rather than a raw argument \
              value: {row}"
         );
@@ -495,7 +496,7 @@
             child.as_str(),
             &event(RuntimeEvent::ToolCallRequested {
                 call: ToolCallId::new("call-1"),
-                name: "mcp.some_third_party_tool".to_owned(),
+                name: "mcp__docs__some_third_party_tool".to_owned(),
                 argument_keys: many_keys,
                 argument_fingerprint: agent_runtime_registry::Fingerprint::of("arguments"),
                 arguments: None,
@@ -1100,4 +1101,44 @@
         );
         assert!(!screen.contains("Sensitive step"), "{screen}");
         assert!(!screen.contains("done)"), "{screen}");
+    }
+
+    #[test]
+    fn connecting_and_failed_servers_show_in_status_and_go_quiet_once_settled() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.transcript.push_user("explain the retry policy");
+        let quiet_transcript = render(&app, 100, 24, Theme::new().without_color());
+
+        app.status.mcp = crate::status::McpStatus {
+            connecting: 2,
+            failed: 0,
+        };
+        let connecting = render(&app, 100, 24, Theme::new().without_color());
+        assert!(
+            connecting.contains("mcp 2 connecting"),
+            "a server that is still starting is visible while it lasts: {connecting}"
+        );
+
+        app.status.mcp = crate::status::McpStatus {
+            connecting: 1,
+            failed: 1,
+        };
+        let mixed = render(&app, 100, 24, Theme::new().without_color());
+        assert!(
+            mixed.contains("mcp 1 connecting") && mixed.contains("1 failed"),
+            "{mixed}"
+        );
+
+        // Both settle: status returns to quiet, and nothing about their
+        // transitions was written into the conversation.
+        app.status.mcp = crate::status::McpStatus::default();
+        let settled = render(&app, 100, 24, Theme::new().without_color());
+        assert!(
+            !settled.contains("mcp "),
+            "a settled server reports nothing: {settled}"
+        );
+        assert_eq!(
+            settled, quiet_transcript,
+            "the transcript is untouched by a server connecting or failing"
+        );
     }

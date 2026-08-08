@@ -882,3 +882,98 @@
         assert!(screen.contains("child-explore"), "{screen}");
         assert!(screen.contains("up to 6 turns"), "{screen}");
     }
+
+    #[test]
+    fn two_servers_same_tool_name_render_distinguishably() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        for (call, name) in [
+            ("docs-1", "mcp__docs__search"),
+            ("wiki-1", "mcp__wiki__search"),
+        ] {
+            app.apply(&event(RuntimeEvent::ToolCallRequested {
+                call: ToolCallId::new(call),
+                name: name.to_owned(),
+                argument_keys: vec!["query".to_owned()],
+                argument_fingerprint: agent_runtime_registry::Fingerprint::of("arguments"),
+                arguments: None,
+            }));
+            app.apply(&event(RuntimeEvent::ToolCallCompleted {
+                call: ToolCallId::new(call),
+                name: name.to_owned(),
+                is_error: false,
+            }));
+        }
+
+        let screen = render(&app, 100, 20, Theme::new().without_color());
+        assert!(
+            screen.contains("mcp__docs__search") && screen.contains("mcp__wiki__search"),
+            "each row names the server it belongs to, so the same tool name on two \
+             servers cannot be confused: {screen}"
+        );
+    }
+
+    #[test]
+    fn a_remote_tool_row_hides_its_arguments_and_says_so() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.apply(&event(RuntimeEvent::ToolCallRequested {
+            call: ToolCallId::new("remote-1"),
+            name: "mcp__docs__search".to_owned(),
+            argument_keys: vec!["query".to_owned(), "api_token".to_owned()],
+            argument_fingerprint: agent_runtime_registry::Fingerprint::of("arguments"),
+            arguments: None,
+        }));
+
+        let screen = render(&app, 100, 20, Theme::new().without_color());
+        assert!(screen.contains("mcp__docs__search"), "{screen}");
+        assert!(
+            screen.contains("arguments hidden"),
+            "the withholding is stated rather than left to be inferred: {screen}"
+        );
+    }
+
+    #[test]
+    fn resumed_remote_tool_row_matches_the_live_row() {
+        // A server names its own argument fields, so Smith cannot tell which
+        // of them carry secrets — and must not render one from persisted
+        // history either.
+        let history = vec![
+            Message::assistant(vec![ContentPart::ToolCall(ToolCall {
+                id: ToolCallId::new("remote-1"),
+                name: "mcp__docs__search".to_owned(),
+                arguments: serde_json::json!({
+                    "query": "boundaries",
+                    "api_token": "value-that-must-not-render"
+                }),
+            })]),
+            Message::tool_result(ToolResultBlock {
+                call_id: ToolCallId::new("remote-1"),
+                name: "mcp__docs__search".to_owned(),
+                content: vec![ContentPart::text("ok")],
+                is_error: false,
+            }),
+        ];
+        let mut resumed = App::new("gpt-5.3", "~/work/api");
+        resumed.transcript.replace_from_history(&history);
+
+        let mut live = App::new("gpt-5.3", "~/work/api");
+        live.apply(&event(RuntimeEvent::ToolCallRequested {
+            call: ToolCallId::new("remote-1"),
+            name: "mcp__docs__search".to_owned(),
+            argument_keys: vec!["api_token".to_owned(), "query".to_owned()],
+            argument_fingerprint: agent_runtime_registry::Fingerprint::of("arguments"),
+            arguments: None,
+        }));
+        live.apply(&event(RuntimeEvent::ToolCallCompleted {
+            call: ToolCallId::new("remote-1"),
+            name: "mcp__docs__search".to_owned(),
+            is_error: false,
+        }));
+
+        let live_screen = render(&live, 100, 20, Theme::new().without_color());
+        let resumed_screen = render(&resumed, 100, 20, Theme::new().without_color());
+        for screen in [&live_screen, &resumed_screen] {
+            assert!(screen.contains("mcp__docs__search"), "{screen}");
+            assert!(screen.contains("arguments hidden"), "{screen}");
+            assert!(!screen.contains("value-that-must-not-render"), "{screen}");
+        }
+    }

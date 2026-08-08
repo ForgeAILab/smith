@@ -658,6 +658,12 @@ pub struct Status {
     pub activity: Activity,
     /// Latest durability-aligned persistent-goal projection.
     pub goal: Option<GoalProjection>,
+    /// How many declared MCP servers are still connecting, and how many failed.
+    ///
+    /// A server that is starting or broken is operational state the user needs
+    /// while it lasts and never afterwards, so it lives here rather than in the
+    /// transcript: a connection settling must not interrupt a conversation.
+    pub mcp: McpStatus,
     /// Whether any provider usage has been reported this session.
     usage_reported: bool,
     /// Per-counter session totals, kept separately from the cumulative input
@@ -671,6 +677,40 @@ pub struct Status {
     /// Never filled in from another model, provider, or a hard-coded
     /// default. See [`Self::set_price`] and [`Self::switch_model`].
     price: Option<PriceReference>,
+}
+
+/// Declared MCP servers that have not settled yet.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct McpStatus {
+    /// Servers still becoming ready.
+    pub connecting: usize,
+    /// Servers that tried and failed.
+    pub failed: usize,
+}
+
+impl McpStatus {
+    /// Whether anything is worth reporting at all.
+    ///
+    /// Every settled, working server reports nothing: the quiet state is the
+    /// one a session spends nearly all its time in.
+    pub fn is_quiet(self) -> bool {
+        self.connecting == 0 && self.failed == 0
+    }
+
+    /// The footer segment, or `None` while everything is settled and working.
+    pub fn render_footer(self) -> Option<String> {
+        if self.is_quiet() {
+            return None;
+        }
+        let mut parts = Vec::new();
+        if self.connecting > 0 {
+            parts.push(format!("{} connecting", self.connecting));
+        }
+        if self.failed > 0 {
+            parts.push(format!("{} failed", self.failed));
+        }
+        Some(format!("mcp {}", parts.join(" · ")))
+    }
 }
 
 impl Status {
@@ -705,6 +745,7 @@ impl Status {
             cache_read: None,
             activity: Activity::Idle,
             goal: None,
+            mcp: McpStatus::default(),
             usage_reported: false,
             totals: BTreeMap::new(),
             turns: 0,

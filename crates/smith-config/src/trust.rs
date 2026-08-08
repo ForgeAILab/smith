@@ -53,6 +53,8 @@ pub enum ExecutableKind {
     CredentialHelper,
     /// A setting whose value Smith would run as a command.
     ShellSetting,
+    /// A declared Model Context Protocol server Smith would spawn or dial.
+    McpServer,
 }
 
 impl ExecutableKind {
@@ -63,6 +65,7 @@ impl ExecutableKind {
             Self::Hook => "hook",
             Self::CredentialHelper => "credential helper",
             Self::ShellSetting => "shell setting",
+            Self::McpServer => "MCP server",
         }
     }
 }
@@ -124,6 +127,16 @@ impl fmt::Display for ContentDigest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
+}
+
+/// One digest part, prefixed by what it is, so two parts of different kinds
+/// cannot be swapped without changing the digest.
+fn tagged(tag: &str, value: &str) -> Vec<u8> {
+    let mut part = Vec::with_capacity(tag.len() + value.len() + 1);
+    part.extend_from_slice(tag.as_bytes());
+    part.push(b':');
+    part.extend_from_slice(value.as_bytes());
+    part
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -204,6 +217,73 @@ impl Executable {
             ExecutableKind::ShellSetting,
             key,
             ContentDigest::of(command.as_bytes()),
+        )
+    }
+
+    /// Describes a declared MCP server by the local invocation Smith would
+    /// perform, labelled by the server's name.
+    ///
+    /// The digest covers the *fully resolved* command, its arguments, and the
+    /// **names** of the environment variables the server would be given. Three
+    /// consequences, each deliberate:
+    ///
+    /// - Changing the command or an argument is a different program, so the
+    ///   earlier decision authorizes nothing.
+    /// - Rotating a credential changes no name, so a trusted server keeps
+    ///   running. A value-derived digest would re-prompt on every rotation and
+    ///   would be a secret-derived identity besides.
+    /// - Adding a variable changes what the server can see, so it re-prompts
+    ///   even when the command is untouched.
+    ///
+    /// Each part is tagged before it is length-prefixed, so an argument and a
+    /// variable name spelled alike cannot be exchanged for one another.
+    pub fn from_mcp_command<A, E>(
+        name: impl Into<String>,
+        command: &str,
+        args: A,
+        environment: E,
+    ) -> Self
+    where
+        A: IntoIterator,
+        A::Item: AsRef<str>,
+        E: IntoIterator,
+        E::Item: AsRef<str>,
+    {
+        let mut parts: Vec<Vec<u8>> = vec![b"stdio".to_vec(), tagged("command", command)];
+        parts.extend(args.into_iter().map(|arg| tagged("arg", arg.as_ref())));
+        parts.extend(
+            environment
+                .into_iter()
+                .map(|variable| tagged("env", variable.as_ref())),
+        );
+        Self::new(
+            ExecutableKind::McpServer,
+            name,
+            ContentDigest::of_parts(parts.iter().map(Vec::as_slice)),
+        )
+    }
+
+    /// Describes a declared remote MCP server by the endpoint Smith would dial
+    /// and the header names it would send.
+    ///
+    /// Header *values* are excluded for the same reason environment values are:
+    /// a bearer token is a secret, and rotating one must not look like a
+    /// changed server.
+    pub fn from_mcp_endpoint<H>(name: impl Into<String>, url: &str, headers: H) -> Self
+    where
+        H: IntoIterator,
+        H::Item: AsRef<str>,
+    {
+        let mut parts: Vec<Vec<u8>> = vec![b"http".to_vec(), tagged("url", url)];
+        parts.extend(
+            headers
+                .into_iter()
+                .map(|header| tagged("header", header.as_ref())),
+        );
+        Self::new(
+            ExecutableKind::McpServer,
+            name,
+            ContentDigest::of_parts(parts.iter().map(Vec::as_slice)),
         )
     }
 

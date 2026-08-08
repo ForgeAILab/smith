@@ -153,6 +153,9 @@ fn draw_surface(
         Some(Overlay::ReviewConfirm { content, .. }) => {
             draw_review_confirm(frame, area, content, theme);
         }
+        Some(Overlay::McpTrustConfirm { content, .. }) => {
+            draw_recovery_confirm(frame, area, "run this MCP server", content, theme);
+        }
         Some(Overlay::RotationConfirm { content, .. }) => {
             draw_rotation_confirm(frame, area, content, theme);
         }

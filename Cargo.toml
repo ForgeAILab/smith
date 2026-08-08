@@ -34,10 +34,14 @@ smith-tui = { path = "crates/smith-tui", version = "0.0.1" }
 # that `agent-runtime` on crates.io is an unrelated crate that publishes its
 # own 0.1.0, so the `git`/`rev` keys -- not the version -- are what identify
 # the dependency. Never relax them to a bare version requirement.
-agent-runtime = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "3788c2017052d71d90b6d42ab35f5514bbcc6743", version = "=0.1.0" }
-agent-runtime-core = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "3788c2017052d71d90b6d42ab35f5514bbcc6743", version = "=0.1.0" }
-agent-runtime-registry = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "3788c2017052d71d90b6d42ab35f5514bbcc6743", version = "=0.1.0" }
-agent-runtime-testkit = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "3788c2017052d71d90b6d42ab35f5514bbcc6743", version = "=0.1.0" }
+agent-runtime = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "52bd3ecf49f7019358237503e9403344b9de238e", version = "=0.1.0" }
+agent-runtime-core = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "52bd3ecf49f7019358237503e9403344b9de238e", version = "=0.1.0" }
+# The MCP client. `smith-runtime` adds the `http` transport on top of the
+# default `stdio` one; both land on the same `reqwest` Smith's own transport
+# uses, which is why the `reqwest` requirement below tracks `rmcp`'s.
+agent-runtime-mcp = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "52bd3ecf49f7019358237503e9403344b9de238e", version = "=0.1.0" }
+agent-runtime-registry = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "52bd3ecf49f7019358237503e9403344b9de238e", version = "=0.1.0" }
+agent-runtime-testkit = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "52bd3ecf49f7019358237503e9403344b9de238e", version = "=0.1.0" }
 
 anyhow = "1"
 # Clipboard image capture for composer attachments. `arboard` reads the
@@ -61,7 +65,12 @@ keyring = { version = "3", default-features = false, features = ["apple-native",
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29", "layout-cache", "underline-color", "unstable-rendered-line-info"] }
 # The production HTTP transport. `rustls` keeps the TLS stack in Rust so the
 # workspace stays free of an OpenSSL build dependency.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "http2", "charset"] }
+#
+# Pinned to the same major as `rmcp`'s (agent-runtime-mcp's MCP client) so the
+# `http` MCP transport and Smith's provider transport share one client, one TLS
+# stack, and one connection-pool implementation. Diverging here links two
+# independent HTTP stacks into every binary; if `rmcp` moves, move with it.
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "http2", "charset", "form"] }
 rustix = { version = "1.1", features = ["fs", "process"] }
 fs2 = "0.4"
 serde = { version = "1", features = ["derive"] }

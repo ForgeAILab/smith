@@ -315,6 +315,7 @@ pub(super) struct Declarations {
     pub(super) child_agents: BTreeMap<String, Source>,
     pub(super) profiles: BTreeMap<String, Source>,
     pub(super) providers: BTreeMap<String, Source>,
+    pub(super) mcp_servers: BTreeMap<String, Source>,
 }
 
 impl Declarations {
@@ -337,6 +338,11 @@ impl Declarations {
         for name in file.providers.keys() {
             let key = join_key(&["providers", name]);
             self.providers
+                .insert(name.clone(), source_for(layer, path, key));
+        }
+        for name in file.mcp.iter().flat_map(|mcp| mcp.servers.keys()) {
+            let key = join_key(&["mcp", "servers", name]);
+            self.mcp_servers
                 .insert(name.clone(), source_for(layer, path, key));
         }
     }
@@ -383,17 +389,30 @@ pub(super) fn validate_inline_secret_file(
         });
     }
 
-    let has_inline = has_inline_provider_key || checkpoint_key;
+    // A credential-named MCP environment variable holding anything but a
+    // reference is a secret written in a file, and is refused on the same terms
+    // as an inline provider key. The key is named; the value never is.
+    let mcp_env_literal = file.mcp.as_ref().and_then(|mcp| {
+        mcp.servers.iter().find_map(|(server, section)| {
+            section
+                .env
+                .iter()
+                .find(|(name, value)| names_a_credential(name) && !is_credential_reference(value))
+                .map(|(name, _)| join_key(&["mcp", "servers", server, "env", name]))
+        })
+    });
+
+    let has_inline = has_inline_provider_key || checkpoint_key || mcp_env_literal.is_some();
     if !has_inline {
         return Ok(());
     }
     let source = Source::file(
         layer,
         path,
-        if checkpoint_key {
-            "persistence.checkpoint_key"
-        } else {
-            "providers.<name>.api_key"
+        match (&mcp_env_literal, checkpoint_key) {
+            (Some(key), _) => key.clone(),
+            (None, true) => "persistence.checkpoint_key".to_owned(),
+            (None, false) => "providers.<name>.api_key".to_owned(),
         },
     );
     if layer != Layer::UserFile {
@@ -590,6 +609,38 @@ pub(super) fn flatten(
                     })
                 }
             }
+            // A server's environment and headers are the one place a value's
+            // *meaning* is defined by a third party. A reference is a locator
+            // and stays readable; anything else is treated as secret-bearing,
+            // because Smith has no way to tell which of a server's variables
+            // carry a token. Which layers may write a literal at all is decided
+            // in `validate_inline_secret_file` and `resolve_headers`, on either
+            // side of this.
+            other if is_mcp_value(prefix) => {
+                let key = join_owned(prefix);
+                let source = source_for(layer, path, key.clone());
+                match other.as_str() {
+                    Some(value) if is_credential_reference(value) => {
+                        out.push(Contribution {
+                            key,
+                            value: SettingValue::Text(value.to_owned()),
+                            source,
+                        });
+                        Ok(())
+                    }
+                    Some(value) => {
+                        out.push(Contribution {
+                            key,
+                            value: SettingValue::Secret(Secret::new(value)),
+                            source,
+                        });
+                        Ok(())
+                    }
+                    None => Err(ConfigError::Unrepresentable {
+                        message: format!("`{key}` must be a string"),
+                    }),
+                }
+            }
             other => match setting_value(other) {
                 Some(setting) => {
                     let key = join_owned(prefix);
@@ -609,6 +660,19 @@ pub(super) fn flatten(
         result?;
     }
     Ok(())
+}
+
+/// Whether a flattened key addresses one environment variable or header of one
+/// declared server.
+///
+/// Both tables hold the same class of value — something a third party receives,
+/// which may or may not be a secret — so both are classified the same way.
+fn is_mcp_value(prefix: &[String]) -> bool {
+    matches!(
+        prefix,
+        [root, servers, _name, table, _key]
+            if root == "mcp" && servers == "servers" && (table == "env" || table == "headers")
+    )
 }
 
 pub(super) fn setting_value(value: &toml::Value) -> Option<SettingValue> {

@@ -51,4 +51,5 @@ max_output_tokens = 4096
     include!("submission.rs");
     include!("resources.rs");
     include!("rendering.rs");
+    include!("mcp.rs");
 }
