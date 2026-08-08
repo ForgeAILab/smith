@@ -237,9 +237,22 @@ impl fmt::Display for Source {
     }
 }
 
+/// Settings whose command-line flag is not the mechanical spelling of the key.
+///
+/// Smith's flag vocabulary names the *control*, not the key path, so a
+/// diagnostic that derived the flag from the key alone would name an option
+/// nobody can type. Only the flags that actually exist are listed.
+const FLAG_SPELLINGS: &[(&str, &str)] = &[("reasoning.effort", "effort")];
+
 /// The flag spelling of a setting key, for diagnostics.
 fn flag_spelling(key: &str) -> String {
-    key.replace(['.', '_'], "-")
+    FLAG_SPELLINGS
+        .iter()
+        .find(|(setting, _)| *setting == key)
+        .map_or_else(
+            || key.replace(['.', '_'], "-"),
+            |(_, flag)| (*flag).to_owned(),
+        )
 }
 
 /// A value together with the source that supplied it.

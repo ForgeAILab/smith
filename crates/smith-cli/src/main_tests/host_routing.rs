@@ -241,3 +241,88 @@
         let unrelated = anyhow::anyhow!("provider is unavailable");
         assert!(!is_reasoning_startup_error(&unrelated));
     }
+
+    #[test]
+    fn an_invocation_effort_is_never_what_the_startup_recovery_path_clears() {
+        // A saved override on resume, and an in-session choice: both were made
+        // against another binding, so both are recoverable.
+        assert!(reasoning_selection_is_recoverable(
+            &Selection::default(),
+            true
+        ));
+        assert!(reasoning_selection_is_recoverable(
+            &Selection {
+                reasoning_effort: Some("high".into()),
+                ..Selection::default()
+            },
+            false
+        ));
+
+        // An invocation effort on its own is not recoverable: there is nothing
+        // to clear but the flag, and the flag is the instruction. The run must
+        // fail with the reasoning diagnostic instead of starting at some other
+        // effort.
+        assert!(!reasoning_selection_is_recoverable(
+            &Selection {
+                effort: Some("high".into()),
+                ..Selection::default()
+            },
+            false
+        ));
+
+        // A fresh start with nothing selected has nothing to recover.
+        assert!(!reasoning_selection_is_recoverable(
+            &Selection::default(),
+            false
+        ));
+
+        // Whatever the arm clears, the flag survives it — which is why a retry
+        // that still cannot honor the flag fails rather than starting.
+        let mut cleared = Selection {
+            effort: Some("high".into()),
+            reasoning_effort: Some("low".into()),
+            reasoning_enabled: Some(true),
+            ..Selection::default()
+        };
+        assert!(reasoning_selection_is_recoverable(&cleared, true));
+        cleared.reasoning_enabled = None;
+        cleared.reasoning_effort = None;
+        cleared.reasoning_enabled_reset = true;
+        cleared.reasoning_effort_reset = true;
+        assert_eq!(cleared.effort.as_deref(), Some("high"));
+        assert!(
+            !reasoning_selection_is_recoverable(&cleared, true),
+            "a second retry would loop instead of reporting the failure"
+        );
+    }
+
+    #[test]
+    fn a_child_profile_never_inherits_the_invocation_effort() {
+        // Mirrors what `start_host` composes for each child-enabled profile:
+        // the flag was chosen against the main binding, and a child profile
+        // may sit on one with no ladder at all.
+        let selection = Selection {
+            profile: Some("work".into()),
+            provider: Some("acme".into()),
+            model: Some("example-model".into()),
+            effort: Some("high".into()),
+            reasoning_effort: Some("low".into()),
+            reasoning_enabled: Some(true),
+            ..Selection::default()
+        };
+        let mut child = selection.clone();
+        child.profile = Some("explore".into());
+        child.provider = None;
+        child.model = None;
+        child.reasoning_enabled = None;
+        child.reasoning_effort = None;
+        child.effort = None;
+
+        assert_eq!(child.overrides().reasoning_effort, None);
+        assert_eq!(child.session_overrides().reasoning_effort, None);
+        assert_eq!(
+            selection.overrides().reasoning_effort.as_deref(),
+            Some("high"),
+            "the parent selection must be left intact"
+        );
+    }

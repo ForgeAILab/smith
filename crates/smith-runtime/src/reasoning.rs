@@ -1266,6 +1266,111 @@ max_output_tokens = 4096
     }
 
     #[test]
+    fn an_invocation_effort_is_validated_by_the_one_refusal_path() {
+        // The flag reaches the resolver as an ordinary command-line-layer
+        // value, so it is refused by exactly the rule an unsupported profile
+        // effort meets — same wording, same place, before any credential
+        // lookup or provider request.
+        let mut config = resolved_config();
+        config.reasoning.effort = Some(Sourced::new(
+            "ludicrous".to_owned(),
+            Source::flag("reasoning.effort"),
+        ));
+
+        let error = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Fixed),
+            Some(OPENAI_ENDPOINT),
+            None,
+        )
+        .expect_err("an unadvertised effort is refused");
+        assert!(error.contains("`ludicrous`"), "{error}");
+        assert!(
+            error.contains("supported values: low, medium, high"),
+            "{error}"
+        );
+        assert!(error.contains("example-model"), "{error}");
+
+        // A supported one resolves, and says the command line chose it rather
+        // than a session or a profile.
+        config.reasoning.effort = Some(Sourced::new(
+            "medium".to_owned(),
+            Source::flag("reasoning.effort"),
+        ));
+        let policy = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Fixed),
+            Some(OPENAI_ENDPOINT),
+            None,
+        )
+        .expect("an advertised effort is selectable from the command line");
+        assert_eq!(policy.selected_effort.as_deref(), Some("medium"));
+        assert_eq!(policy.selection_source, "command-line flag `--effort`");
+        assert_eq!(
+            policy
+                .request_config()
+                .and_then(|reasoning| reasoning.effort),
+            Some("medium".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_invocation_effort_on_an_uncontrollable_binding_refuses_rather_than_degrades() {
+        // Nothing adjustable at all: presence in the catalog is not a dialect.
+        let mut config = resolved_config();
+        config.reasoning.effort = Some(Sourced::new(
+            "high".to_owned(),
+            Source::flag("reasoning.effort"),
+        ));
+        let error =
+            resolve_reasoning_policy(&config, &model_profile(ReasoningSupport::Fixed), None, None)
+                .expect_err("an unknown endpoint grants no reasoning controls");
+        assert!(error.contains("not adjustable"), "{error}");
+        assert!(error.contains("presence only"), "{error}");
+
+        // Controllable, but with an on/off switch and no ladder to pick from.
+        let toggle_only = CatalogReasoningControls {
+            toggle: true,
+            efforts: Vec::new(),
+        };
+        let error = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Fixed),
+            Some(OPENROUTER_ENDPOINT),
+            Some(&toggle_only),
+        )
+        .expect_err("a toggle-only binding advertises no efforts");
+        assert!(error.contains("no effort levels are advertised"), "{error}");
+    }
+
+    #[test]
+    fn a_shadowed_persisted_effort_leaves_the_invocation_effort_in_place() {
+        // What resume does when `--effort` was supplied: the saved override is
+        // not reinstated over the command-line layer, and the flag's own
+        // thinking state is untouched.
+        let saved = PersistedReasoningOverride {
+            enabled: Some(true),
+            effort: Some("low".to_owned()),
+        };
+
+        let mut config = resolved_config();
+        config.reasoning.effort = Some(Sourced::new(
+            "high".to_owned(),
+            Source::flag("reasoning.effort"),
+        ));
+        saved.apply(&mut config, false, true);
+
+        let effort = config.reasoning.effort.expect("the invocation effort");
+        assert_eq!(effort.value, "high");
+        assert_eq!(effort.source.layer, Layer::CommandLine);
+        assert_eq!(
+            config.reasoning.enabled.map(|value| value.value),
+            Some(true),
+            "shadowing an effort must not touch the saved thinking state"
+        );
+    }
+
+    #[test]
     fn persisted_override_is_versioned_redaction_safe_and_additive() {
         let override_value = PersistedReasoningOverride {
             enabled: Some(false),

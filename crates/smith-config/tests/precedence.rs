@@ -1558,6 +1558,118 @@ dialect = "openai-effort"
 }
 
 #[test]
+fn an_invocation_effort_outranks_the_profile_and_the_environment() {
+    let fixture = Fixture::new();
+    let scenario = Scenario {
+        profile: vec!["[profiles.work.reasoning]\neffort = \"low\"\n".to_owned()],
+        env: BTreeMap::from([("SMITH_REASONING_EFFORT".to_owned(), "medium".to_owned())]),
+        cli: Overrides {
+            reasoning_effort: Some("high".to_owned()),
+            ..Overrides::default()
+        },
+        ..Scenario::default()
+    };
+
+    let resolution = scenario.resolve(&fixture).expect("a resolved run");
+    let effort = resolution
+        .config
+        .reasoning
+        .effort
+        .clone()
+        .expect("a resolved effort");
+    assert_eq!(effort.value, "high");
+    assert_eq!(effort.source.layer, Layer::CommandLine);
+    // The flag is the control's name, not the key path, so the diagnostic
+    // names an option the user can actually type.
+    assert_eq!(effort.source.to_string(), "command-line flag `--effort`");
+
+    let explanation = resolution
+        .provenance
+        .explain("reasoning.effort")
+        .expect("reasoning provenance");
+    assert_eq!(explanation.source.layer, Layer::CommandLine);
+    assert_eq!(
+        explanation
+            .overridden
+            .iter()
+            .map(|entry| entry.source.layer)
+            .collect::<Vec<_>>(),
+        vec![Layer::Environment, Layer::Profile]
+    );
+    // The overridden profile entry stays visible and unchanged.
+    assert_eq!(
+        explanation
+            .overridden
+            .iter()
+            .find(|entry| entry.source.layer == Layer::Profile)
+            .map(|entry| entry.value.clone()),
+        Some(SettingValue::Text("low".to_owned()))
+    );
+}
+
+#[test]
+fn an_in_session_effort_still_outranks_an_invocation_effort() {
+    let fixture = Fixture::new();
+    let scenario = Scenario {
+        cli: Overrides {
+            reasoning_effort: Some("high".to_owned()),
+            ..Overrides::default()
+        },
+        session: Overrides {
+            reasoning_effort: Some("low".to_owned()),
+            ..Overrides::default()
+        },
+        ..Scenario::default()
+    };
+
+    let resolution = scenario.resolve(&fixture).expect("a resolved run");
+    let effort = resolution
+        .config
+        .reasoning
+        .effort
+        .clone()
+        .expect("a resolved effort");
+    assert_eq!(effort.value, "low");
+    assert_eq!(effort.source.layer, Layer::SessionOverride);
+}
+
+#[test]
+fn an_invocation_effort_leaves_the_rest_of_the_profile_alone() {
+    let fixture = Fixture::new();
+    let scenario = Scenario {
+        profile: vec!["[profiles.work.reasoning]\nenabled = true\neffort = \"low\"\n".to_owned()],
+        cli: Overrides {
+            profile: Some("work".to_owned()),
+            reasoning_effort: Some("high".to_owned()),
+            ..Overrides::default()
+        },
+        ..Scenario::default()
+    };
+
+    let resolution = scenario.resolve(&fixture).expect("a resolved run");
+    assert_eq!(resolution.config.profile.expect("a profile").value, "work");
+    assert_eq!(resolution.config.provider.name.value, "acme");
+    assert_eq!(resolution.config.model.value, "example-model");
+    assert_eq!(resolution.config.model.source.layer, Layer::Profile);
+    let enabled = resolution
+        .config
+        .reasoning
+        .enabled
+        .expect("the profile's thinking state");
+    assert!(enabled.value);
+    assert_eq!(enabled.source.layer, Layer::Profile);
+    assert_eq!(
+        resolution
+            .config
+            .reasoning
+            .effort
+            .expect("the flag's effort")
+            .value,
+        "high"
+    );
+}
+
+#[test]
 fn a_profile_selected_by_a_flag_replaces_the_default_profile() {
     let fixture = Fixture::new();
     fixture.write_project(&format!(

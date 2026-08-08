@@ -110,6 +110,10 @@ pub(super) async fn start_host(
         // the parent's valid override.
         child_selection.reasoning_enabled = None;
         child_selection.reasoning_effort = None;
+        // `--effort` is chosen against the main binding for the same reason,
+        // and a child profile may sit on a binding with no effort ladder at
+        // all.
+        child_selection.effort = None;
         let (_, child_request) = resolution_request(&child_selection)?;
         let child_resolution = resolve(&child_request.with_profile_use(ProfileUse::Child))
             .map_err(|error| anyhow::anyhow!("{error}"))
@@ -214,10 +218,15 @@ pub(super) async fn start_host(
         HostSurface::Child => (None, None),
     };
 
-    let mut request = HostSessionRequest::new(runtime, &project).reasoning_reset(
-        selection.reasoning_enabled_reset,
-        selection.reasoning_effort_reset,
-    );
+    let mut request = HostSessionRequest::new(runtime, &project)
+        .reasoning_reset(
+            selection.reasoning_enabled_reset,
+            selection.reasoning_effort_reset,
+        )
+        // `--effort` is this run's answer, so it shadows a resumed session's
+        // saved effort without rewriting it: drop the flag on a later resume
+        // and the session's own `/effort` choice is back.
+        .reasoning_effort_shadowed(selection.effort.is_some());
     if let Some(session) = resume {
         request = request.resume(SessionId::new(session));
     }
@@ -344,11 +353,7 @@ pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
             Ok(started) => started,
             Err(error)
                 if is_reasoning_startup_error(&error)
-                    && (args.selection.reasoning_enabled.is_some()
-                        || args.selection.reasoning_effort.is_some()
-                        || (resume.is_some()
-                            && (!args.selection.reasoning_enabled_reset
-                                || !args.selection.reasoning_effort_reset))) =>
+                    && reasoning_selection_is_recoverable(&args.selection, resume.is_some()) =>
             {
                 args.selection.reasoning_enabled = None;
                 args.selection.reasoning_effort = None;
@@ -447,6 +452,25 @@ pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
             }
         }
     }
+}
+
+/// Whether an unrepresentable reasoning selection may be cleared and retried.
+///
+/// The recovery path exists for a selection made against a *different*
+/// binding: a saved session override, or an in-session `/think`/`/effort` the
+/// rebuild has just landed on a binding that cannot express it. Clearing those
+/// and continuing with a notice is what the user would ask for.
+///
+/// An `--effort` typed on this invocation is deliberately not part of it and
+/// is never named here. The flag has its own `Selection` field, so the retry
+/// still carries it: a binding that cannot honor the flag fails again on the
+/// second attempt with the reasoning diagnostic, and no run can start at an
+/// effort nobody asked for. What a retry *can* fix is the saved thinking state
+/// beside it, which is worth fixing whether or not a flag was supplied.
+pub(super) fn reasoning_selection_is_recoverable(selection: &Selection, resuming: bool) -> bool {
+    selection.reasoning_enabled.is_some()
+        || selection.reasoning_effort.is_some()
+        || (resuming && (!selection.reasoning_enabled_reset || !selection.reasoning_effort_reset))
 }
 
 pub(super) fn is_reasoning_startup_error(error: &anyhow::Error) -> bool {

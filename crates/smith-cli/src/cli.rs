@@ -88,6 +88,14 @@ pub(crate) struct Selection {
     pub reasoning_effort: Option<String>,
     /// An explicit `/effort default` clears a persisted override.
     pub reasoning_effort_reset: bool,
+    /// `--effort <NAME>`: one provider-advertised effort for this invocation.
+    ///
+    /// Deliberately separate from `reasoning_effort` above. That field carries
+    /// an in-session `/effort` choice and becomes the session layer; this one
+    /// was typed on a command line and becomes the command-line layer, so the
+    /// two never have to pretend to be each other in diagnostics or in what a
+    /// resumed session saves.
+    pub effort: Option<String>,
     /// An approval policy override.
     pub approval: Option<ApprovalMode>,
     /// A background-exit policy override.
@@ -102,6 +110,7 @@ impl Selection {
             profile: self.profile.clone(),
             provider: self.provider.clone(),
             model: self.model.clone(),
+            reasoning_effort: self.effort.clone(),
             approval_mode: self.approval,
             background_exit: self.background_exit,
             ..Overrides::default()
@@ -427,6 +436,14 @@ fn parse_selection_flag(
             let parsed = text_value(flag, inline, args)?;
             set_once(&mut selection.model, parsed, flag)
         }
+        // No list is spelled here: the advertised effort ladder belongs to the
+        // resolved provider/model binding, so an unsupported value is refused
+        // by the reasoning resolver — which knows the alternatives — rather
+        // than guessed at by the parser.
+        "--effort" => {
+            let parsed = text_value(flag, inline, args)?;
+            set_once(&mut selection.effort, parsed, flag)
+        }
         "--approval" => {
             let raw = text_value(flag, inline, args)?;
             let parsed = ApprovalMode::parse(&raw).ok_or_else(|| {
@@ -582,6 +599,7 @@ RUN OPTIONS:
       --agent <MODE>            Deprecated legacy root-mode override
       --provider <NAME>         Select a configured provider
       --model <MODEL>           Select a configured model
+      --effort <NAME>           Select a provider-advertised reasoning effort
       --approval <POLICY>       ask | deny | allow-all
       --yolo                    Alias for --approval allow-all
       --background-exit <MODE>  error | wait | stop
@@ -716,6 +734,86 @@ mod tests {
         assert!(run.resume_requested);
         assert_eq!(run.selection.provider.as_deref(), Some("acme"));
         assert_eq!(run.selection.model.as_deref(), Some("gpt-x"));
+    }
+
+    #[test]
+    fn effort_is_an_invocation_selection_not_a_session_override() {
+        for args in [
+            vec!["--effort", "high"],
+            vec!["--effort=high"],
+            vec!["-p", "review", "--effort", "high"],
+        ] {
+            let Command::Run(run) = command(&args) else {
+                panic!("expected a run");
+            };
+            assert_eq!(run.selection.effort.as_deref(), Some("high"));
+            // The session field belongs to `/effort`; a flag must not be able
+            // to masquerade as an in-session choice.
+            assert_eq!(run.selection.reasoning_effort, None);
+            assert!(!run.selection.reasoning_effort_reset);
+            assert_eq!(
+                run.selection.overrides().reasoning_effort.as_deref(),
+                Some("high")
+            );
+            assert_eq!(run.selection.session_overrides().reasoning_effort, None);
+        }
+
+        let Command::Run(absent) = command(&[]) else {
+            panic!("expected a run");
+        };
+        assert_eq!(absent.selection.effort, None);
+        assert_eq!(absent.selection.overrides().reasoning_effort, None);
+
+        let duplicate = parse(["--effort", "low", "--effort", "high"].map(OsString::from))
+            .expect_err("effort is one selection");
+        assert!(
+            duplicate.to_string().contains("supplied twice"),
+            "{duplicate}"
+        );
+
+        let missing = parse(["--effort"].map(OsString::from)).expect_err("effort requires a value");
+        assert!(
+            missing.to_string().contains("requires a value"),
+            "{missing}"
+        );
+    }
+
+    #[test]
+    fn effort_reaches_the_selection_only_commands() {
+        assert_eq!(
+            command(&["config", "explain", "reasoning.effort", "--effort", "low"]),
+            Command::ConfigExplain {
+                key: "reasoning.effort".into(),
+                selection: Selection {
+                    effort: Some("low".into()),
+                    ..Selection::default()
+                },
+            }
+        );
+        assert_eq!(
+            command(&["sessions", "list", "--effort", "low"]),
+            Command::SessionsList {
+                selection: Selection {
+                    effort: Some("low".into()),
+                    ..Selection::default()
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn effort_composes_with_a_profile_without_replacing_it() {
+        let Command::Run(run) = command(&["--profile", "work", "--effort", "low"]) else {
+            panic!("expected a run");
+        };
+        assert_eq!(run.selection.profile.as_deref(), Some("work"));
+        let overrides = run.selection.overrides();
+        assert_eq!(overrides.profile.as_deref(), Some("work"));
+        assert_eq!(overrides.reasoning_effort.as_deref(), Some("low"));
+        // Everything else the profile pins stays the profile's to decide.
+        assert_eq!(overrides.provider, None);
+        assert_eq!(overrides.model, None);
+        assert_eq!(overrides.approval_mode, None);
     }
 
     #[test]

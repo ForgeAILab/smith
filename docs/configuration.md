@@ -429,6 +429,26 @@ arguments open local bounded selectors and make no provider request. Invalid
 or mandatory/fixed choices fail before credential lookup. Higher effort can
 increase latency, token use, and cost.
 
+`--effort NAME` selects one advertised effort for a single invocation, so an
+effort tier does not have to be deployed as a named profile. The names are the
+binding's own, not a fixed set: `smith --effort <NAME>` refuses an unadvertised
+value before any credential lookup or provider request and lists what the
+binding does advertise. A binding with no adjustable reasoning, and a
+toggle-only binding with no ladder, both refuse the flag rather than ignore it.
+The flag ranks at the command-line layer — above `[profiles.<name>.reasoning]`,
+above `[reasoning]`, above `SMITH_REASONING_EFFORT`, and below an in-session
+`/effort` — and `smith config explain reasoning.effort` names it as the source.
+It selects an effort only; it never turns reasoning on or off.
+
+On `--resume`, an explicitly supplied `--effort` answers for that run and
+*shadows* the session's saved `/effort` choice without replacing it: the saved
+value is neither applied nor overwritten, so resuming later without the flag
+restores the session's own effort. The saved thinking state (`/think`) is
+unaffected either way.
+
+`SMITH_REASONING_EFFORT` addresses the same setting from the environment, one
+layer lower; a flag on the same run wins.
+
 ## Policy keys and defaults
 
 Smith's defaults claim no provider, model, model limit, model-dependent output
@@ -473,6 +493,7 @@ The run surface accepts:
 --agent MODE                  # deprecated legacy mode compatibility
 --provider NAME
 --model ID
+--effort NAME                 # one provider-advertised reasoning effort
 --approval ask|deny|allow-all
 --yolo                       # explicit alias for --approval allow-all
 --background-exit error|wait|stop

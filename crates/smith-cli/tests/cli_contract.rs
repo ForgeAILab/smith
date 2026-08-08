@@ -318,6 +318,194 @@ fn config_explain_reports_the_selected_profile_source() {
     assert!(text.contains("selected profile"), "{text}");
 }
 
+/// A binding with an exact dialect and an advertised ladder, reached through
+/// a credential that does not exist: anything the run rejects about the effort
+/// is therefore proven to happen before the credential is looked up.
+const LADDER_CONFIG: &str = r#"
+default_profile = "dev"
+
+[profiles.dev]
+provider = "remote"
+model = "example-model"
+
+[providers.remote]
+kind = "openai-compatible"
+base_url = "http://127.0.0.1:1/v1"
+credential = "env:SMITH_TEST_KEY_THAT_DOES_NOT_EXIST"
+
+[models."remote/example-model"]
+context_tokens = 128000
+max_input_tokens = 124000
+max_output_tokens = 4096
+
+[models."remote/example-model".reasoning]
+toggle = true
+efforts = ["low", "medium", "high"]
+dialect = "openai-effort"
+"#;
+
+#[test]
+fn help_lists_the_effort_flag() {
+    let fixture = Fixture::new();
+    let output = fixture.run(&["--help"]);
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).expect("text help");
+    assert!(text.contains("--effort <NAME>"), "{text}");
+}
+
+#[test]
+fn an_unsupported_invocation_effort_fails_with_alternatives_and_no_provider_work() {
+    let fixture = Fixture::with_config(LADDER_CONFIG);
+
+    let refused = fixture.run(&[
+        "-p",
+        "hello",
+        "--effort",
+        "ludicrous",
+        "--output-format",
+        "json",
+    ]);
+    assert!(!refused.status.success());
+    assert!(refused.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&refused.stderr).into_owned();
+    assert!(stderr.contains("ludicrous"), "{stderr}");
+    assert!(stderr.contains("low, medium, high"), "{stderr}");
+    // The credential is unresolvable and the endpoint is closed, so naming the
+    // effort proves the refusal preceded both.
+    assert!(
+        !stderr.contains("SMITH_TEST_KEY_THAT_DOES_NOT_EXIST"),
+        "{stderr}"
+    );
+
+    // A model with no adjustable reasoning at all says so rather than
+    // ignoring the flag.
+    let fixed = Fixture::new();
+    let refused = fixed.run(&["-p", "hello", "--effort", "low", "--output-format", "json"]);
+    assert!(!refused.status.success());
+    let stderr = String::from_utf8_lossy(&refused.stderr).into_owned();
+    assert!(stderr.contains("reasoning"), "{stderr}");
+    assert!(stderr.contains("not adjustable"), "{stderr}");
+}
+
+/// A live local endpoint whose model advertises an exact effort ladder and
+/// whose profile already pins one of its rungs.
+fn effort_ladder_config(address: std::net::SocketAddr) -> String {
+    format!(
+        r#"
+default_profile = "prod"
+
+[profiles.prod]
+provider = "remote"
+model = "test-model"
+
+[profiles.prod.reasoning]
+effort = "low"
+
+[providers.remote]
+kind = "openai-compatible"
+base_url = "http://{address}/v1"
+credential = "env:ACME_API_KEY"
+
+[models."remote/test-model"]
+context_tokens = 128000
+max_input_tokens = 124000
+max_output_tokens = 4096
+
+[models."remote/test-model".reasoning]
+toggle = true
+efforts = ["low", "medium", "high"]
+dialect = "openai-effort"
+"#
+    )
+}
+
+#[test]
+fn an_invocation_effort_overrides_a_profiles_effort_all_the_way_to_the_wire() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a listener");
+    let address = listener.local_addr().expect("a listener address");
+    let server = thread::spawn(move || serve_one_openai_request(listener));
+    let fixture = Fixture::with_config(&effort_ladder_config(address));
+
+    let output = fixture
+        .command()
+        .args([
+            "-p",
+            "hello",
+            "--profile",
+            "prod",
+            "--effort",
+            "high",
+            "--output-format",
+            "json",
+        ])
+        .env("ACME_API_KEY", "sk-effort-contract")
+        .output()
+        .expect("smith ran");
+    let request = String::from_utf8_lossy(&server.join().expect("provider server")).into_owned();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result = json(&output);
+    assert_eq!(result["reasoning"]["effort"], "high");
+    assert_eq!(
+        result["reasoning"]["source"],
+        "command-line flag `--effort`"
+    );
+    assert!(
+        request.contains(r#""reasoning_effort":"high""#),
+        "{request}"
+    );
+    // Everything else the profile pins is still the profile's.
+    assert_eq!(result["provider"], "remote");
+    assert_eq!(result["model"], "test-model");
+}
+
+#[test]
+fn without_the_flag_the_profiles_effort_is_unchanged() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a listener");
+    let address = listener.local_addr().expect("a listener address");
+    let server = thread::spawn(move || serve_one_openai_request(listener));
+    let fixture = Fixture::with_config(&effort_ladder_config(address));
+
+    let output = fixture
+        .command()
+        .args(["-p", "hello", "--output-format", "json"])
+        .env("ACME_API_KEY", "sk-effort-contract")
+        .output()
+        .expect("smith ran");
+    let request = String::from_utf8_lossy(&server.join().expect("provider server")).into_owned();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result = json(&output);
+    assert_eq!(result["reasoning"]["effort"], "low");
+    assert_eq!(result["reasoning"]["source"], "profile");
+    assert!(request.contains(r#""reasoning_effort":"low""#), "{request}");
+}
+
+#[test]
+fn config_explain_names_the_flag_that_supplied_an_effort() {
+    let fixture = Fixture::with_config(LADDER_CONFIG);
+    let explained = fixture.run(&["config", "explain", "reasoning.effort", "--effort", "high"]);
+    assert!(
+        explained.status.success(),
+        "{}",
+        String::from_utf8_lossy(&explained.stderr)
+    );
+    let text = String::from_utf8(explained.stdout).expect("text output");
+    assert!(text.contains("reasoning.effort = high"), "{text}");
+    assert!(
+        text.contains("source: command-line flag `--effort`"),
+        "{text}"
+    );
+}
+
 #[test]
 fn interactive_startup_failure_happens_before_any_terminal_escape() {
     let fixture = Fixture::with_config(

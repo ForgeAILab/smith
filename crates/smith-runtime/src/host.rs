@@ -65,6 +65,7 @@ pub struct HostSessionRequest {
     pub checkpoint_keys: Option<Arc<dyn CheckpointKeyProvider>>,
     reasoning_reset_enabled: bool,
     reasoning_reset_effort: bool,
+    reasoning_effort_shadowed: bool,
 }
 
 impl HostSessionRequest {
@@ -81,6 +82,7 @@ impl HostSessionRequest {
             checkpoint_keys: None,
             reasoning_reset_enabled: false,
             reasoning_reset_effort: false,
+            reasoning_effort_shadowed: false,
         }
     }
 
@@ -103,6 +105,19 @@ impl HostSessionRequest {
     pub fn reasoning_reset(mut self, enabled: bool, effort: bool) -> Self {
         self.reasoning_reset_enabled = enabled;
         self.reasoning_reset_effort = effort;
+        self
+    }
+
+    /// Suppresses a persisted effort for this run without discarding it.
+    ///
+    /// The distinction from [`Self::reasoning_reset`] is what the session
+    /// keeps. A reset is the user saying "forget my saved effort", so it is
+    /// forgotten. A shadow is a higher layer — an invocation flag — answering
+    /// for this run only: the saved value is neither applied nor overwritten,
+    /// so the next run without the flag resumes onto the session's own choice.
+    #[must_use]
+    pub fn reasoning_effort_shadowed(mut self, shadowed: bool) -> Self {
+        self.reasoning_effort_shadowed = shadowed;
         self
     }
 }
@@ -619,6 +634,9 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
             request.runtime.artifact_store = Some(Arc::new(SmithArtifactStore::new(paths.clone())));
         }
         let inner = FileSessionStore::new(paths.clone());
+        // A saved effort a higher layer answered for this run, kept so the
+        // run's own selection cannot erase the session's choice on save.
+        let mut shadowed_effort = None;
         if request.session_id.is_some() {
             let snapshot = inner.load(&session_id).await?;
             resume_snapshot_exists = snapshot.is_some();
@@ -626,18 +644,26 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
                 .as_ref()
                 .and_then(|snapshot| snapshot.extension_state.get(SESSION_STATE_NAMESPACE))
             {
-                PersistedReasoningOverride::restore(state)?.apply(
+                let restored = PersistedReasoningOverride::restore(state)?;
+                restored.apply(
                     &mut config,
                     request.reasoning_reset_enabled,
-                    request.reasoning_reset_effort,
+                    request.reasoning_reset_effort || request.reasoning_effort_shadowed,
                 );
+                if request.reasoning_effort_shadowed && !request.reasoning_reset_effort {
+                    shadowed_effort = restored.effort.clone();
+                }
                 request.runtime.config = config.clone();
             }
+        }
+        let mut reasoning_override = PersistedReasoningOverride::from_config(&config);
+        if reasoning_override.effort.is_none() {
+            reasoning_override.effort = shadowed_effort;
         }
         let store = Arc::new(RedactingSessionStore::new(
             inner,
             persistence_redactor.clone(),
-            PersistedReasoningOverride::from_config(&config),
+            reasoning_override,
         ));
         request.runtime.session_store = Some(store);
         if request.runtime.checkpoint_store.is_none() && request.runtime.checkpoint_setup.is_none()
