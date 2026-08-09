@@ -6,9 +6,10 @@ Run Smith from npm without installing a platform binary first:
 npx @forgeailab/smith
 ```
 
-The package downloads the matching Smith GitHub release archive for macOS,
-glibc Linux, or musl Linux, verifies it against `SHA256SUMS` when available,
-caches it under `~/.smith/npx`, and starts the `smith` binary.
+The package downloads the matching Smith GitHub release archive for macOS or
+glibc Linux, verifies it against `SHA256SUMS` when available, caches it under
+`~/.smith/npx`, and starts the `smith` binary. Musl-based Linux distributions
+must currently build Smith from source.
 
 Useful commands:
 

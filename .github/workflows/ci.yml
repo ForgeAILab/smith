@@ -145,6 +145,18 @@ jobs:
       - name: Syntax check
         run: node --check npx-cli/bin/cli.js
 
+      - name: Platform selection tests
+        working-directory: npx-cli
+        run: npm test
+
+      - name: Installer rejects unavailable musl artifacts
+        run: |
+          if output="$(SMITH_LIBC=musl bash install.sh 2>&1)"; then
+            echo "installer unexpectedly accepted an unavailable musl target" >&2
+            exit 1
+          fi
+          grep -Fq "currently require glibc" <<<"${output}"
+
       - name: Pack dry run
         working-directory: npx-cli
         run: npm pack --dry-run

@@ -71,10 +71,14 @@ function parseArgs(argv) {
   return { passthrough, release };
 }
 
-function platformInfo(platform = process.platform, archInput = process.arch) {
+function platformInfo(
+  platform = process.platform,
+  archInput = process.arch,
+  libc = platform === "linux" ? linuxLibc() : null
+) {
   if (platform !== "darwin" && platform !== "linux") {
     throw new Error(
-      `Unsupported platform ${platform}. Smith release archives currently support macOS and Linux.`
+      `Unsupported platform ${platform}. Smith release archives currently support macOS and glibc Linux.`
     );
   }
 
@@ -87,8 +91,10 @@ function platformInfo(platform = process.platform, archInput = process.arch) {
     throw new Error(`Unsupported architecture ${archInput}`);
   }
 
-  if (platform === "linux" && linuxLibc() === "musl") {
-    osName = "linux-musl";
+  if (platform === "linux" && libc === "musl") {
+    throw new Error(
+      "Unsupported Linux libc musl. Smith release binaries currently require glibc; build from source on musl Linux."
+    );
   }
 
   const artifact = `smith-${arch}-${osName}`;
@@ -349,6 +355,8 @@ async function main() {
   const release = await ensureRelease(options.release);
   runBinary(release.binaryPath, options.passthrough, { ...process.env });
 }
+
+module.exports = { platformInfo };
 
 if (require.main === module) {
   main().catch((error) => {

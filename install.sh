@@ -33,7 +33,6 @@ case "$ARCH" in
     *)             echo "Error: unsupported architecture '$ARCH'" >&2; exit 1 ;;
 esac
 
-LIBC_SUFFIX=""
 if [ "$OS" = "linux" ]; then
     LIBC="${SMITH_LIBC:-}"
     if [ -z "$LIBC" ] && command -v ldd >/dev/null 2>&1; then
@@ -44,19 +43,23 @@ if [ "$OS" = "linux" ]; then
     fi
 
     case "$LIBC" in
-        musl) LIBC_SUFFIX="-musl" ;;
-        gnu|"") ;;
+        musl)
+            echo "Error: Smith release binaries currently require glibc Linux; musl is not supported yet." >&2
+            echo "Build from source instead: cargo install --path crates/smith-cli" >&2
+            exit 1
+            ;;
+        gnu|"") LIBC="gnu" ;;
         *) echo "Error: unsupported SMITH_LIBC '$LIBC' (expected 'gnu' or 'musl')" >&2; exit 1 ;;
     esac
 fi
 
-ARTIFACT="smith-${ARCH}-${OS}${LIBC_SUFFIX}"
+ARTIFACT="smith-${ARCH}-${OS}"
 URL="https://github.com/${REPO}/releases/latest/download/${ARTIFACT}.tar.gz"
 
 echo "    OS:   ${OS}"
 echo "    Arch: ${ARCH}"
 if [ "$OS" = "linux" ]; then
-    echo "    Libc: ${LIBC:-gnu}"
+    echo "    Libc: ${LIBC}"
 fi
 echo "    Fetching: ${URL}"
 

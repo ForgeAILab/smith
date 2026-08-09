@@ -7,20 +7,15 @@ suite on:
 - macOS with Rust 1.88; and
 - Linux with current stable Rust plus dependency policy checks.
 
-The workflow deliberately has no guessed Agent Runtime URL. Configure these
-GitHub repository variables before enabling required checks:
+The workflow reads the exact Agent Runtime Git repository and revision from
+`Cargo.lock`, checks out that immutable source, and rejects a missing,
+ambiguous, different, or dirty runtime checkout before running Smith. If the
+runtime repository becomes private, add `AGENT_RUNTIME_TOKEN` as a repository
+secret with read access to it.
 
-- `AGENT_RUNTIME_REPOSITORY`: `owner/repository`;
-- `AGENT_RUNTIME_REVISION`: an exact lowercase 40-character commit SHA.
-
-If the runtime repository is private, add `AGENT_RUNTIME_TOKEN` as a repository
-secret with read access to that repository. The workflow rejects a missing,
-abbreviated, different, or dirty runtime revision before running Smith.
-
-This exact CI checkout is a co-development compatibility gate. It does not make
-the current sibling `path` dependency releasable. Publication remains blocked
-until Smith's manifests use an immutable released semantic version or Git
-revision and the sibling checkout moves to an uncommitted local Cargo patch.
+Committed manifests use the same immutable Git revision. Local co-development
+may replace it through the git-ignored `.cargo/config.toml` patch table, so a
+sibling checkout never leaks into a release.
 
 Run the same gates locally from the Smith workspace:
 

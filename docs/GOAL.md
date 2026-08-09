@@ -66,46 +66,33 @@ Implemented:
   text/JSON/JSONL projections, and structured approval/interaction-required
   status.
 
-The remaining release gates are an immutable upstream runtime reference,
-execution of the configured macOS/Linux release workflow against that
-reference, platform visual/dependency evidence, and the still-open release
-checklist items in
-`docs/spec/changes/integrate-stable-session-harness-2026-07-31/`.
+The first public-release gates are complete. Smith pins one immutable upstream
+runtime revision, the hosted macOS/Linux matrix and dependency policy pass
+against it, and the four-platform release workflow has produced a successful
+release candidate. The remaining release action is publishing the stable
+`v0.0.1` tag from a green `main` revision.
 
 ## Latest compatibility evidence
 
-On 2026-07-25, the complete local gate passed on macOS and isolated
-Linux/aarch64 against clean Agent Runtime revision
-`4e052f2eeb488367c5932a8aa511d5c3880dbdbe`:
+On 2026-08-09, hosted CI passed from clean `main` commit `0aff697` against
+Agent Runtime revision `0a07231649d81ccb40f2395a9924f8bd6027baf9`:
 
-- 380 Smith workspace tests passed on macOS and 381 passed on Linux, where the
-  additional case covers non-UTF-8 project paths;
-- all 57 Agent Runtime testkit and consumer-conformance tests passed on both
-  hosts;
-- all-target warning-denied Clippy passed on Rust 1.88 on both hosts and on the
-  current macOS toolchain;
-- the four-target dependency policy passed its advisory, license, ban, and
-  source checks;
-- formatting and strict change-spec validation passed; and
-- a manifest-level architecture test proves that the full `agent-runtime`
-  facade is a production dependency only of `smith-runtime`.
+- the complete Smith workspace and Agent Runtime consumer-conformance gates
+  passed on macOS and Linux with Rust 1.88;
+- the Linux stable-toolchain leg passed, including advisory, license, ban, and
+  source policy checks;
+- the npm bootstrapper syntax and package dry-run gates passed; and
+- formatting and all-target warning-denied Clippy passed on the pinned
+  toolchain.
 
-That revision is compatibility evidence, not a release pin: the runtime
-checkout still has no declared remote or published immutable source. The
-fail-closed CI workflow is configured and linted, but cannot provide
-hosted evidence until that source exists and the required repository and
-revision variables are set.
-
-The packaging audit fails at that same boundary rather than silently bundling
-the sibling checkout: Cargo cannot prepare `smith-config` because
-`agent-runtime-core` is not published in the configured registry. A real
-runtime registry release or immutable Git source is therefore required before
-Smith can package or publish.
+The `v0.0.1-rc.3` release also proved the release workflow can build and publish
+x86_64 and ARM64 archives for macOS and glibc Linux, generate checksums, create
+a GitHub prerelease, and publish the matching npm prerelease.
 
 ## Deliberately deferred
 
-A concrete monitor executor, nested agents, extension/MCP hosting,
-prompt-cache keepalive, Forge integration, and a bidirectional headless
-interaction protocol stay out of this release goal. They should build on the
-released runtime capability/delegation/security contracts rather than create
-temporary Smith-local mechanisms.
+Static musl release binaries, deeper-than-one agent nesting, a concrete monitor
+executor, and a bidirectional headless interaction protocol stay out of this
+release goal. They should build on the released runtime
+capability/delegation/security contracts rather than create temporary
+Smith-local mechanisms.

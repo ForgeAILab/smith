@@ -122,7 +122,8 @@ jobs:
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/smith dist/
-          tar -czf ${{ matrix.artifact }}.tar.gz -C dist smith
+          cp LICENSE-MIT LICENSE-APACHE dist/
+          tar -czf ${{ matrix.artifact }}.tar.gz -C dist smith LICENSE-MIT LICENSE-APACHE
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -204,6 +205,18 @@ jobs:
       - name: Set package version from tag
         working-directory: npx-cli
         run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version --allow-same-version
+
+      - name: Include license texts in the npm package
+        run: |
+          {
+            echo "Smith is licensed under either the MIT License or Apache License 2.0, at your option."
+            echo
+            cat LICENSE-MIT
+            echo
+            echo "---"
+            echo
+            cat LICENSE-APACHE
+          } > npx-cli/LICENSE
 
       # No NODE_AUTH_TOKEN: the CLI detects the OIDC environment on its own.
       # Provenance is generated automatically under trusted publishing, so

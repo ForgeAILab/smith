@@ -86,7 +86,7 @@ questionnaires are never queued implicitly.
 ## Installation
 
 ```sh
-# Run instantly through npm (macOS / Linux)
+# Run instantly through npm (macOS / glibc Linux)
 npx @forgeailab/smith
 
 # Or install via the curl installer
@@ -94,6 +94,7 @@ curl -fsSL https://raw.githubusercontent.com/ForgeAILab/smith/main/install.sh | 
 ```
 
 Prefer to build from source? Smith requires Rust 1.88 or newer.
+Building from source is currently required on musl-based Linux distributions.
 
 ```sh
 cargo install --path crates/smith-cli   # or: cargo run -p smith-cli
@@ -457,12 +458,12 @@ model and trust boundaries.
 
 ## Specification
 
-The active harness integration change lives under
-[`docs/spec/changes/integrate-stable-session-harness-2026-07-31/`](docs/spec/changes/integrate-stable-session-harness-2026-07-31/).
-Its approved proposal and implementation checklist define the session-scoped
-turn pipeline, prepared authority, protected recovery, capability activation,
-and standard Smith harness components.
+The current behavioral contracts live under [`docs/spec/specs/`](docs/spec/specs/).
+Completed proposals and their implementation evidence live under
+[`docs/spec/changes/archive/`](docs/spec/changes/archive/).
 
-The installable package is expected to be `smith-cli`, exposing the `smith`
-binary. Registry names must be rechecked immediately before publication.
-Licensed `MIT OR Apache-2.0`.
+## License
+
+Smith is licensed under either the MIT License or Apache License 2.0, at your
+option. See [`LICENSE-MIT`](LICENSE-MIT) and
+[`LICENSE-APACHE`](LICENSE-APACHE).
