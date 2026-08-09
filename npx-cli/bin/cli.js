@@ -43,11 +43,11 @@ function isVersion(args) {
   return args.includes("--version") || args.includes("-V");
 }
 
-function parseArgs(argv) {
+function parseArgs(argv, packageVersion = PACKAGE.version, env = process.env) {
   const args = [...argv];
   let release =
-    process.env.SMITH_NPX_TAG ||
-    (PACKAGE.version === "0.0.0" ? "latest" : `v${PACKAGE.version}`);
+    env.SMITH_NPX_TAG ||
+    (packageVersion === "0.0.0" ? "latest" : `v${packageVersion}`);
   const passthrough = [];
 
   for (let i = 0; i < args.length; i += 1) {
@@ -71,14 +71,10 @@ function parseArgs(argv) {
   return { passthrough, release };
 }
 
-function platformInfo(
-  platform = process.platform,
-  archInput = process.arch,
-  libc = platform === "linux" ? linuxLibc() : null
-) {
+function platformInfo(platform = process.platform, archInput = process.arch) {
   if (platform !== "darwin" && platform !== "linux") {
     throw new Error(
-      `Unsupported platform ${platform}. Smith release archives currently support macOS and glibc Linux.`
+      `Unsupported platform ${platform}. Smith release archives currently support macOS and Linux.`
     );
   }
 
@@ -91,38 +87,8 @@ function platformInfo(
     throw new Error(`Unsupported architecture ${archInput}`);
   }
 
-  if (platform === "linux" && libc === "musl") {
-    throw new Error(
-      "Unsupported Linux libc musl. Smith release binaries currently require glibc; build from source on musl Linux."
-    );
-  }
-
   const artifact = `smith-${arch}-${osName}`;
   return { artifact, archiveName: `${artifact}.tar.gz` };
-}
-
-function linuxLibc() {
-  const override = process.env.SMITH_NPX_LIBC;
-  if (override === "gnu" || override === "musl") {
-    return override;
-  }
-
-  const report = process.report?.getReport?.();
-  if (report?.header?.glibcVersionRuntime) {
-    return "gnu";
-  }
-
-  let output = "";
-  try {
-    output = childProcess.execFileSync("ldd", ["--version"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  } catch (error) {
-    output = `${error.stdout || ""}\n${error.stderr || ""}`;
-  }
-
-  return /musl/i.test(output) ? "musl" : "gnu";
 }
 
 function request(url, redirects = 0) {
@@ -356,7 +322,7 @@ async function main() {
   runBinary(release.binaryPath, options.passthrough, { ...process.env });
 }
 
-module.exports = { platformInfo };
+module.exports = { parseArgs, platformInfo };
 
 if (require.main === module) {
   main().catch((error) => {

@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
@@ -18,11 +18,11 @@ repository = "https://github.com/ForgeAILab/smith"
 authors = ["Smith contributors"]
 
 [workspace.dependencies]
-smith-config = { path = "crates/smith-config", version = "0.0.1" }
-smith-host = { path = "crates/smith-host", version = "0.0.1" }
-smith-runtime = { path = "crates/smith-runtime", version = "0.0.1" }
-smith-tools = { path = "crates/smith-tools", version = "0.0.1" }
-smith-tui = { path = "crates/smith-tui", version = "0.0.1" }
+smith-config = { path = "crates/smith-config", version = "0.0.2" }
+smith-host = { path = "crates/smith-host", version = "0.0.2" }
+smith-runtime = { path = "crates/smith-runtime", version = "0.0.2" }
+smith-tools = { path = "crates/smith-tools", version = "0.0.2" }
+smith-tui = { path = "crates/smith-tui", version = "0.0.2" }
 
 # The shared runtime. Smith depends on one immutable, reviewed runtime source
 # revision. Local sibling-checkout development uses the git-ignored
@@ -58,7 +58,7 @@ futures-core = "0.3"
 futures-util = "0.3"
 ignore = "0.4"
 image = { version = "0.25", default-features = false, features = ["png"] }
-keyring = { version = "3", default-features = false, features = ["apple-native", "sync-secret-service"] }
+keyring = { version = "3", default-features = false, features = ["apple-native", "sync-secret-service", "vendored"] }
 # `unstable-rendered-line-info` provides `Paragraph::line_count`, the only way
 # to size scroll offsets and modal heights with the renderer's own word-wrap
 # arithmetic instead of a drifting character-wrap estimate.

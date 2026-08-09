@@ -86,7 +86,7 @@ questionnaires are never queued implicitly.
 ## Installation
 
 ```sh
-# Run instantly through npm (macOS / glibc Linux)
+# Run instantly through npm (macOS / Linux)
 npx @forgeailab/smith
 
 # Or install via the curl installer
@@ -94,11 +94,26 @@ curl -fsSL https://raw.githubusercontent.com/ForgeAILab/smith/main/install.sh | 
 ```
 
 Prefer to build from source? Smith requires Rust 1.88 or newer.
-Building from source is currently required on musl-based Linux distributions.
 
 ```sh
 cargo install --path crates/smith-cli   # or: cargo run -p smith-cli
 ```
+
+The canonical Linux archives are fully static musl binaries for x86_64 and
+ARM64, so the npm and curl installers use the same download on Debian, Ubuntu,
+Alpine, and other Linux distributions. Native GNU alternatives built on
+Ubuntu 22.04 are also attached as `smith-<arch>-linux-gnu.tar.gz`.
+
+Every release includes `SHA256SUMS`. For a manually downloaded archive:
+
+```sh
+sha256sum --check --ignore-missing SHA256SUMS
+```
+
+Portable Linux builds retain Secret Service/keyring support. On a headless
+server without a credential service, guided setup can instead record an
+environment reference or explicitly store the API key in owner-only
+`~/.smith/config.toml`.
 
 ## Running it
 

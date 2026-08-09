@@ -7,9 +7,11 @@ npx @forgeailab/smith
 ```
 
 The package downloads the matching Smith GitHub release archive for macOS or
-glibc Linux, verifies it against `SHA256SUMS` when available, caches it under
-`~/.smith/npx`, and starts the `smith` binary. Musl-based Linux distributions
-must currently build Smith from source.
+Linux, verifies it against `SHA256SUMS` when available, caches it under
+`~/.smith/npx`, and starts the `smith` binary. Linux always uses Smith's
+fully static musl archive, so the same package works on glibc and musl hosts.
+Explicitly named `smith-<arch>-linux-gnu.tar.gz` archives remain available
+for users who prefer an Ubuntu 22.04-baseline GNU build.
 
 Useful commands:
 

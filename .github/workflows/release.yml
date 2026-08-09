@@ -1,6 +1,7 @@
 name: Release
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - "v*"
@@ -10,17 +11,16 @@ permissions:
   id-token: write # for npm publish provenance
 
 jobs:
-  build:
-    name: Build ${{ matrix.target }}
+  build-native:
+    name: Build native ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        # macOS (Intel + Apple Silicon) and Linux glibc (x86_64 + ARM).
-        # musl targets are deferred: the keyring crate's sync-secret-service
-        # feature needs libdbus at build time, which is not trivially
-        # cross-compilable for static musl. Add them once that is resolved.
+        # macOS remains unchanged. GNU/Linux is an explicitly named
+        # alternative built natively on Ubuntu 22.04, whose glibc 2.35
+        # baseline also runs on Debian 12's glibc 2.36.
         include:
           # macos-13 was retired in December 2025; macos-15-intel is the
           # remaining x86_64 macOS image. GitHub drops Intel macOS entirely
@@ -28,19 +28,15 @@ jobs:
           - target: x86_64-apple-darwin
             os: macos-15-intel
             artifact: smith-x86_64-macos
-            builder: cargo
           - target: aarch64-apple-darwin
             os: macos-14
             artifact: smith-aarch64-macos
-            builder: cargo
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            artifact: smith-x86_64-linux
-            builder: cargo
+            os: ubuntu-22.04
+            artifact: smith-x86_64-linux-gnu
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            artifact: smith-aarch64-linux
-            builder: cargo
+            os: ubuntu-22.04-arm
+            artifact: smith-aarch64-linux-gnu
 
     steps:
       - name: Checkout
@@ -55,60 +51,10 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install Linux host dependencies
-        if: runner.os == 'Linux' && matrix.target == 'x86_64-unknown-linux-gnu'
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends libdbus-1-dev pkg-config
-
-      - name: Install cross-compilation toolchain (Linux ARM64)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          # Ubuntu's archive and security hosts carry amd64/i386 only; every
-          # other architecture lives on ports.ubuntu.com. Enabling arm64
-          # without repointing it there makes `apt-get update` 404 on the
-          # arm64 indexes, and apt treats a missing index as fatal. Pin the
-          # stock sources to the host architecture, then give arm64 a source
-          # that actually carries it.
-          . /etc/os-release
-          if compgen -G "/etc/apt/sources.list.d/*.sources" > /dev/null; then
-            sudo sed -i '/^Architectures:/d' /etc/apt/sources.list.d/*.sources
-            sudo sed -i '/^Types:/a Architectures: amd64' /etc/apt/sources.list.d/*.sources
-          fi
-          for legacy in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do
-            [[ -f "${legacy}" ]] || continue
-            sudo sed -i -E 's|^deb(-src)? +(\[[^]]*\] *)?|deb\1 [arch=amd64] |' "${legacy}"
-          done
-          sudo tee /etc/apt/sources.list.d/arm64-ports.sources > /dev/null <<EOF
-          Types: deb
-          URIs: http://ports.ubuntu.com/ubuntu-ports
-          Suites: ${VERSION_CODENAME} ${VERSION_CODENAME}-updates ${VERSION_CODENAME}-backports ${VERSION_CODENAME}-security
-          Components: main universe restricted multiverse
-          Architectures: arm64
-          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-          EOF
-
-          sudo dpkg --add-architecture arm64
-          sudo apt-get update
-          # libc6-dev-arm64-cross is only *recommended* by the cross gcc, so
-          # --no-install-recommends drops it and leaves the compiler with no
-          # target libc headers -- at which point it reaches for the host's
-          # /usr/include and dies on bits/libc-header-start.h. Name it.
-          sudo apt-get install --yes --no-install-recommends \
-            gcc-aarch64-linux-gnu \
-            libc6-dev-arm64-cross \
-            pkg-config \
-            libdbus-1-dev:arm64
-
-          # Only this leg cross-compiles. Exporting the cross environment here
-          # rather than on the shared build step is what keeps the native
-          # x86_64 build from being pointed at an arm64 pkg-config path that
-          # does not exist on its runner.
-          {
-            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc"
-            echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc"
-            echo "PKG_CONFIG_ALLOW_CROSS=1"
-            echo "PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig"
-          } >> "${GITHUB_ENV}"
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -116,7 +62,7 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build smith binary
-        run: ${{ matrix.builder }} build -p smith-cli --release --locked --target ${{ matrix.target }}
+        run: cargo build -p smith-cli --release --locked --target ${{ matrix.target }}
 
       - name: Package binary
         run: |
@@ -131,9 +77,146 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}.tar.gz
 
+  build-musl:
+    name: Build portable ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    container:
+      # Platform-specific digests from rust-cross/cargo-zigbuild's
+      # sha-f36f2f2 image. A tag cannot move this release toolchain.
+      image: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-24.04
+            artifact: smith-x86_64-linux
+            machine: "x86-64"
+            image: ghcr.io/rust-cross/cargo-zigbuild@sha256:dfdbadd9b3c32cc5c8a8cba03fd990094e8b2162a75f27755469639760e9cae7
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+            artifact: smith-aarch64-linux
+            machine: "ARM aarch64"
+            image: ghcr.io/rust-cross/cargo-zigbuild@sha256:8282f47dc8beff299275b02a8942cb7103918be89f644395ec9f6eafbeb1ea0c
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install build and inspection tools
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends \
+            binutils \
+            build-essential \
+            cmake \
+            file \
+            perl \
+            pkg-config
+
+      - name: Select the repository Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --target ${{ matrix.target }}
+          rustup default 1.88.0
+          rustc --version
+          cargo zigbuild --help >/dev/null
+          echo "cargo-zigbuild=available"
+
+      - name: Build static Smith binary
+        env:
+          CARGO_TARGET_DIR: target-musl
+        run: cargo zigbuild --locked --release -p smith-cli --target ${{ matrix.target }}
+
+      - name: Verify static artifact and keyring feature
+        env:
+          CARGO_TARGET_DIR: target-musl
+        run: |
+          binary="target-musl/${{ matrix.target }}/release/smith"
+          test -x "${binary}"
+          file "${binary}" | tee smith-file.txt
+          grep -F "${{ matrix.machine }}" smith-file.txt
+          grep -F "statically linked" smith-file.txt
+          if readelf --program-headers "${binary}" | grep -q 'Requesting program interpreter'; then
+            echo "portable binary unexpectedly declares a dynamic interpreter" >&2
+            exit 1
+          fi
+          cargo tree --locked -p smith-cli --target ${{ matrix.target }} --invert keyring |
+            grep -F 'keyring v'
+          expected_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)"
+          test "$("${binary}" --version)" = "smith ${expected_version}"
+
+      - name: Package portable binary
+        env:
+          CARGO_TARGET_DIR: target-musl
+        run: |
+          mkdir -p dist
+          cp "target-musl/${{ matrix.target }}/release/smith" dist/
+          cp LICENSE-MIT LICENSE-APACHE dist/
+          tar -czf ${{ matrix.artifact }}.tar.gz -C dist smith LICENSE-MIT LICENSE-APACHE
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.tar.gz
+
+  smoke-musl:
+    name: Smoke portable ${{ matrix.target }}
+    needs: build-musl
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-24.04
+            artifact: smith-x86_64-linux
+            machine: "x86-64"
+            container_smoke: true
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+            artifact: smith-aarch64-linux
+            machine: "ARM aarch64"
+            container_smoke: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download portable archive
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+
+      - name: Inspect and execute on the native architecture
+        run: |
+          mkdir smoke
+          tar -xzf ${{ matrix.artifact }}.tar.gz -C smoke
+          test -x smoke/smith
+          file smoke/smith | tee smith-file.txt
+          grep -F "${{ matrix.machine }}" smith-file.txt
+          grep -F "statically linked" smith-file.txt
+          expected_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)"
+          test "$(smoke/smith --version)" = "smith ${expected_version}"
+
+      - name: Execute in clean Debian 12 and Alpine containers
+        if: matrix.container_smoke
+        run: |
+          expected_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)"
+          expected="smith ${expected_version}"
+          test "$(docker run --rm -v "${PWD}/smoke:/smith:ro" debian:12-slim /smith/smith --version)" = "${expected}"
+          test "$(docker run --rm -v "${PWD}/smoke:/smith:ro" alpine:3.22 /smith/smith --version)" = "${expected}"
+
   release:
     name: Create Release
-    needs: build
+    needs: [build-native, smoke-musl]
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -153,11 +236,13 @@ jobs:
           # download from the release page.
           mkdir -p release-files
           find artifacts -name '*.tar.gz' -type f -exec cp {} release-files/ \;
+          test "$(find release-files -name '*.tar.gz' -type f | wc -l | tr -d ' ')" = 6
           cd release-files && sha256sum *.tar.gz > ../SHA256SUMS
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          body_path: docs/releases/${{ github.ref_name }}.md
           generate_release_notes: true
           # Same rule the npm dist-tag uses below: a hyphen in the version
           # means prerelease. Without this the action marks every tag a full
@@ -193,7 +278,6 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-          package-manager-cache: false
 
       - name: Require an npm that can mint OIDC credentials
         run: |
