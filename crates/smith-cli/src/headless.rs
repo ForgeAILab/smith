@@ -2815,8 +2815,12 @@ max_output_tokens = 4096
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
+        // Runtime construction and the scripted follow-up can be delayed when
+        // the full binary test suite contends for CI workers. The broker is
+        // still required to resolve without stdin; this bound only avoids
+        // treating scheduler contention as an interaction regression.
         let outcome = tokio::time::timeout(
-            Duration::from_secs(2),
+            Duration::from_secs(10),
             run_with_io(
                 &host,
                 "ask me for the codename".into(),
@@ -3395,7 +3399,10 @@ max_output_tokens = 4096
         let (task_id, _spool) = registry
             .spawn_background_task(
                 host.session().id(),
-                "sleep 1".into(),
+                // Keep the task alive well beyond a contended headless turn.
+                // A one-second sleep made this assertion depend on CI timing:
+                // the correct error policy sees no running work after it exits.
+                "sleep 30".into(),
                 std::env::temp_dir(),
                 None,
             )
