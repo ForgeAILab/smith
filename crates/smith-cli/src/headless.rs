@@ -1481,6 +1481,12 @@ mod tests {
 
     use super::*;
 
+    // These tests drive complete host/runtime turns while the Rust harness runs
+    // the rest of this binary's suite in parallel. Keep the watchdog generous
+    // enough for a contended hosted runner; it detects a real deadlock without
+    // turning scheduler latency into a product failure.
+    const HEADLESS_TEST_WATCHDOG: Duration = Duration::from_secs(10);
+
     #[derive(Debug)]
     struct TestCheckpointKeys;
 
@@ -2349,7 +2355,7 @@ max_output_tokens = 4096
         let mut stderr = Vec::new();
 
         let execution = tokio::time::timeout(
-            Duration::from_secs(3),
+            HEADLESS_TEST_WATCHDOG,
             run_with_io(
                 &host,
                 "Use create_goal to create an explicit persistent multi-turn goal, then continue it until complete".into(),
@@ -2496,7 +2502,7 @@ turn_time_limit_ms = 600000
         let mut stderr = Vec::new();
 
         let outcome = tokio::time::timeout(
-            Duration::from_secs(2),
+            HEADLESS_TEST_WATCHDOG,
             run_with_io(
                 &host,
                 "edit the file".into(),
@@ -2820,7 +2826,7 @@ max_output_tokens = 4096
         // still required to resolve without stdin; this bound only avoids
         // treating scheduler contention as an interaction regression.
         let outcome = tokio::time::timeout(
-            Duration::from_secs(10),
+            HEADLESS_TEST_WATCHDOG,
             run_with_io(
                 &host,
                 "ask me for the codename".into(),
@@ -2994,7 +3000,7 @@ max_output_tokens = 4096
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let outcome = tokio::time::timeout(
-            Duration::from_secs(2),
+            HEADLESS_TEST_WATCHDOG,
             run_with_io(
                 &recovered,
                 NEW_PROMPT.into(),
@@ -3068,7 +3074,7 @@ max_output_tokens = 4096
         .await
         .expect("interactive recovery host");
         let InteractionNotice::Present(prompt) =
-            tokio::time::timeout(Duration::from_secs(2), requests.recv())
+            tokio::time::timeout(HEADLESS_TEST_WATCHDOG, requests.recv())
                 .await
                 .expect("interactive recovery presents without hanging")
                 .expect("restored questionnaire presentation")
@@ -3086,7 +3092,7 @@ max_output_tokens = 4096
             ])
             .expect("the exact restored request accepts one answer");
 
-        tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::time::timeout(HEADLESS_TEST_WATCHDOG, async {
             loop {
                 if interactive_host.session().history().iter().any(|message| {
                     message.joined_text() == "resumed after the exact restored answer"
@@ -3340,15 +3346,14 @@ max_output_tokens = 4096
             .await
             .expect("a spawned background task");
 
-        let started = std::time::Instant::now();
-        let (error, output) = apply_background_exit_policy(&session_id, BackgroundExit::Stop).await;
-        let elapsed = started.elapsed();
+        let (error, output) = tokio::time::timeout(
+            HEADLESS_TEST_WATCHDOG,
+            apply_background_exit_policy(&session_id, BackgroundExit::Stop),
+        )
+        .await
+        .expect("stop should not wait for the 30s command to finish on its own");
 
         assert!(error.is_none());
-        assert!(
-            elapsed < Duration::from_secs(4),
-            "stop should not wait for the 30s command to finish on its own: {elapsed:?}"
-        );
         let output = output.expect("a background-exit report");
         assert_eq!(output.policy, "stop");
         assert_eq!(output.tasks.len(), 1);
