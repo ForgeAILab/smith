@@ -1,7 +1,7 @@
 ---
 created_at: 2026-08-09T05:52:22Z
-updated_at: 2026-08-09T06:23:07Z
-completed_at:
+updated_at: 2026-08-09T06:50:11Z
+completed_at: 2026-08-09T06:50:11Z
 ---
 
 ## 0. Approval
@@ -58,9 +58,9 @@ completed_at:
 
 - [x] 6.1 Commit the scoped implementation without including unrelated dirty
   worktree changes and push the release branch.
-- [ ] 6.2 Create and push immutable tag `v0.0.2` at the reviewed commit.
-- [ ] 6.3 Monitor the release workflow until all Linux/macOS builds, smokes,
+- [x] 6.2 Create and push immutable tag `v0.0.2` at the reviewed commit.
+- [x] 6.3 Monitor the release workflow until all Linux/macOS builds, smokes,
   checksums, GitHub Release creation, and npm trusted publication succeed.
-- [ ] 6.4 Verify the public archives and `@forgeailab/smith@0.0.2`, then install
+- [x] 6.4 Verify the public archives and `@forgeailab/smith@0.0.2`, then install
   the canonical x86_64 Linux archive on the Debian 12 server and run
   `smith --version`.
