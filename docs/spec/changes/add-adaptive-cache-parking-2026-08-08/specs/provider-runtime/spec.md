@@ -133,11 +133,12 @@ MUST NOT become canonical conversation content or portable warmth claims.
 
 ### Requirement: Synthetic provider responses cannot execute tools
 
-Keepalive and handoff-checkpoint requests SHALL advertise no tool definitions,
-tool choice, mutation, interaction, delegation, or host side-effect capability.
-If a provider nevertheless returns a tool call or side-effect-shaped output,
-Agent Runtime and Smith SHALL fail the synthetic attempt without executing or
-approving it.
+Keepalive and handoff-checkpoint requests SHALL preserve tool definitions only
+when they are already identity-bound stable-prefix material, force tool choice
+to none, and expose no tool execution, mutation, interaction, delegation, or
+host side-effect capability. If a provider nevertheless returns a tool call or
+side-effect-shaped output, Agent Runtime and Smith SHALL fail the synthetic
+attempt without executing or approving it.
 
 #### Scenario: Provider emits a tool call during handoff
 
@@ -151,6 +152,6 @@ approving it.
 - **GIVEN** a later real parent continuation advertises its ordinary scoped
   tool view
 - **WHEN** Agent Runtime constructs that request
-- **THEN** the prior synthetic no-tool shape does not mutate the parent's
+- **THEN** the prior synthetic no-execution shape does not mutate the parent's
   canonical ability epoch
 - **AND** normal tool validation remains governed by the parent runtime

@@ -36,10 +36,16 @@ pub(super) fn resolution_request(selection: &Selection) -> Result<(PathBuf, Reso
         anyhow::bail!("project path `{}` is not a directory", start.display());
     }
 
+    let authority = if selection.allow_synthetic_cache_spend {
+        SyntheticCacheSpendAuthority::Allow
+    } else {
+        SyntheticCacheSpendAuthority::Deny
+    };
     let request = ResolveRequest::new(&start)
         .with_env(std::env::vars())
         .with_cli(selection.overrides())
-        .with_session(selection.session_overrides());
+        .with_session(selection.session_overrides())
+        .with_synthetic_cache_spend(authority);
     Ok((start, request))
 }
 

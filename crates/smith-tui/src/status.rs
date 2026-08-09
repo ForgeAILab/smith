@@ -21,9 +21,10 @@ use std::time::Duration;
 use agent_runtime_core::event::{EstimationConfidence, EventEnvelope};
 use agent_runtime_core::goal::GoalProjection;
 use agent_runtime_core::manifest::SegmentKind;
-use agent_runtime_core::usage::{CounterKind, UsageDelta};
+use agent_runtime_core::provider::ProviderAttemptPurpose;
+use agent_runtime_core::usage::{CounterKind, UsageDelta, UsageRecord};
 
-use crate::cache::{CachePrice, CacheProjection, CacheTurnSummary};
+use crate::cache::{CacheLifecycleSummary, CachePrice, CacheProjection, CacheTurnSummary};
 
 /// How a displayed quantity was obtained.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,6 +238,8 @@ pub enum Activity {
     /// Waiting for input.
     #[default]
     Idle,
+    /// No parent provider turn is open while direct child work remains pending.
+    ParkedAwaitingChild,
     /// A turn is running.
     Working,
     /// A turn is being cancelled.
@@ -280,6 +283,7 @@ impl Activity {
     pub fn label(self) -> &'static str {
         match self {
             Self::Idle => "ready",
+            Self::ParkedAwaitingChild => "waiting for child",
             Self::Working => "working",
             Self::Interrupting => "interrupting",
             Self::Ended => "ended",
@@ -301,6 +305,13 @@ pub struct SessionUsage {
     pub reported: bool,
     /// Per-counter totals, omitting counters the provider never reported.
     pub totals: BTreeMap<CounterKind, u64>,
+    /// Provider usage from cache-maintenance and idle-compaction attempts.
+    /// These counters count toward the session's provider spend, but remain
+    /// disjoint from root and delegated turn usage.
+    pub synthetic_totals: BTreeMap<CounterKind, u64>,
+    /// Synthetic provider counters partitioned by their typed Runtime
+    /// purpose. Keys are never inferred from text labels.
+    pub synthetic_by_purpose: BTreeMap<ProviderAttemptPurpose, BTreeMap<CounterKind, u64>>,
     /// Context compactions observed.
     pub compactions: u32,
     /// Tokens those compactions reclaimed.
@@ -328,6 +339,7 @@ impl SessionUsage {
     pub fn is_empty(&self) -> bool {
         self.totals.is_empty()
             && self.turns == 0
+            && self.synthetic_totals.is_empty()
             && self.delegated_totals.is_empty()
             && self.cache_miss_count == 0
             && self.cache_rebilled_tokens == 0
@@ -344,9 +356,35 @@ impl SessionUsage {
         self.totals.values().copied().sum()
     }
 
-    /// Every counter's total across both root and delegated usage.
+    /// Every counter's total across root, delegated, and synthetic provider
+    /// usage. Synthetic counters remain separately inspectable even though
+    /// they participate in this provider/session total.
     pub fn merged_total_tokens(&self) -> u64 {
-        self.total_tokens() + self.delegated_totals.values().copied().sum::<u64>()
+        self.total_tokens()
+            + self.delegated_totals.values().copied().sum::<u64>()
+            + self.synthetic_totals.values().copied().sum::<u64>()
+    }
+
+    /// Replaces the synthetic bucket from Runtime's final canonical usage
+    /// ledger. Interactive exit uses this after shutdown so an attempt that
+    /// completed or cancelled during the drain is counted exactly once.
+    pub fn reconcile_synthetic_records(&mut self, records: &[UsageRecord]) {
+        self.synthetic_totals.clear();
+        self.synthetic_by_purpose.clear();
+        for record in records {
+            let Some(purpose) = record.provenance.attempt_purpose else {
+                continue;
+            };
+            if !purpose.is_synthetic_cache() || record.delta.is_empty() {
+                continue;
+            }
+            self.reported = true;
+            let purpose_totals = self.synthetic_by_purpose.entry(purpose).or_default();
+            for (kind, value) in record.delta.iter() {
+                *self.synthetic_totals.entry(kind).or_insert(0) += value;
+                *purpose_totals.entry(kind).or_insert(0) += value;
+            }
+        }
     }
 
     /// A human-facing summary, or `None` when nothing was observed.
@@ -383,11 +421,14 @@ impl SessionUsage {
         );
         let root_line =
             append_cache_diagnostics(root_line, self.cache_miss_count, self.cache_rebilled_tokens);
-        if self.delegated_totals.is_empty() {
+        if self.delegated_totals.is_empty() && self.synthetic_totals.is_empty() {
             return Some(root_line);
         }
 
-        let merged = merge_counter_totals(&self.totals, &self.delegated_totals);
+        let merged = merge_counter_totals(
+            &merge_counter_totals(&self.totals, &self.delegated_totals),
+            &self.synthetic_totals,
+        );
         let mut merged_line = format!(
             "total · {}",
             render_counter_parts(&merged, mark).join(" · ")
@@ -395,12 +436,30 @@ impl SessionUsage {
         if !self.reported {
             merged_line.push_str(" · estimated");
         }
-        let agent_parts = render_counter_parts(&self.delegated_totals, mark);
-        Some(format!(
-            "{merged_line}\n  root: {root_line}\n  agents: {} agent(s) · {}",
-            self.delegated_contributors,
-            agent_parts.join(" · "),
-        ))
+        let mut lines = vec![merged_line, format!("  root: {root_line}")];
+        if !self.delegated_totals.is_empty() {
+            let agent_parts = render_counter_parts(&self.delegated_totals, mark);
+            lines.push(format!(
+                "  agents: {} agent(s) · {}",
+                self.delegated_contributors,
+                agent_parts.join(" · "),
+            ));
+        }
+        if !self.synthetic_totals.is_empty() {
+            let purposes = self
+                .synthetic_by_purpose
+                .iter()
+                .map(|(purpose, totals)| {
+                    format!(
+                        "{} ({})",
+                        purpose.as_str(),
+                        render_counter_parts(totals, mark).join(" · ")
+                    )
+                })
+                .collect::<Vec<_>>();
+            lines.push(format!("  cache maintenance: {}", purposes.join("; ")));
+        }
+        Some(lines.join("\n"))
     }
 }
 
@@ -596,11 +655,38 @@ impl SessionCost {
             if *tokens == 0 {
                 continue;
             }
-            match price.table.price_for(*kind) {
-                Some(rate) => {
-                    micro_usd += u128::from(*tokens) * u128::from(rate) / 1_000_000;
+            accumulate_price(
+                *kind,
+                *tokens,
+                &price.table,
+                &mut micro_usd,
+                &mut all_priced,
+            );
+        }
+        // Keepalive, handoff, and explicit-resource work use the active
+        // provider/model identity and can use this exact price reference.
+        // Idle compaction may use an independently supplied summary model;
+        // UsageRecord does not carry that model's price table, so its cost
+        // remains unpriced rather than being silently billed at the parent
+        // model's rate.
+        if usage.synthetic_by_purpose.is_empty() && !usage.synthetic_totals.is_empty() {
+            all_priced = false;
+        }
+        for (purpose, totals) in &usage.synthetic_by_purpose {
+            if *purpose == ProviderAttemptPurpose::IdleCompaction {
+                if totals.values().any(|tokens| *tokens > 0) {
+                    all_priced = false;
                 }
-                None => all_priced = false,
+                continue;
+            }
+            for (kind, tokens) in totals {
+                accumulate_price(
+                    *kind,
+                    *tokens,
+                    &price.table,
+                    &mut micro_usd,
+                    &mut all_priced,
+                );
             }
         }
         // `usage.reported` is the provider-reported signal for the whole
@@ -624,6 +710,24 @@ impl SessionCost {
             CostLabel::Exact => amount,
             CostLabel::Estimated => format!("~{amount}"),
         }
+    }
+}
+
+fn accumulate_price(
+    kind: CounterKind,
+    tokens: u64,
+    table: &PriceTable,
+    micro_usd: &mut u128,
+    all_priced: &mut bool,
+) {
+    if tokens == 0 {
+        return;
+    }
+    match table.price_for(kind) {
+        Some(rate) => {
+            *micro_usd += u128::from(tokens) * u128::from(rate) / 1_000_000;
+        }
+        None => *all_priced = false,
     }
 }
 
@@ -696,6 +800,11 @@ pub struct Status {
     /// Per-counter session totals, kept separately from the cumulative input
     /// figure the header shows so an exit report can name each counter.
     totals: BTreeMap<CounterKind, u64>,
+    /// Provider-reported cache-maintenance counters, excluded from ordinary
+    /// root turns while retained in whole-session spend.
+    synthetic_totals: BTreeMap<CounterKind, u64>,
+    /// Synthetic counters keyed by Runtime's typed attempt purpose.
+    synthetic_by_purpose: BTreeMap<ProviderAttemptPurpose, BTreeMap<CounterKind, u64>>,
     /// Turns that produced provider usage this session.
     turns: u32,
     /// The active provider/model's catalog price, resolved once by
@@ -776,6 +885,8 @@ impl Status {
             mcp: McpStatus::default(),
             usage_reported: false,
             totals: BTreeMap::new(),
+            synthetic_totals: BTreeMap::new(),
+            synthetic_by_purpose: BTreeMap::new(),
             turns: 0,
             price: None,
         }
@@ -846,6 +957,42 @@ impl Status {
         }
     }
 
+    /// Routes one canonical Runtime usage record without allowing synthetic
+    /// cache work to masquerade as a root/user turn.
+    pub fn record_usage_record(&mut self, record: &UsageRecord) {
+        if let Some(purpose) = record.provenance.attempt_purpose
+            && purpose.is_synthetic_cache()
+        {
+            self.record_synthetic_usage(purpose, &record.delta);
+            return;
+        }
+        self.record_usage(&record.delta);
+    }
+
+    /// Accounts provider usage under a typed synthetic purpose. This updates
+    /// provider/session spend only: context and ordinary turn counts remain
+    /// untouched.
+    pub fn record_synthetic_usage(&mut self, purpose: ProviderAttemptPurpose, delta: &UsageDelta) {
+        if !purpose.is_synthetic_cache() || delta.is_empty() {
+            return;
+        }
+        self.usage_reported = true;
+        let purpose_totals = self.synthetic_by_purpose.entry(purpose).or_default();
+        for kind in [
+            CounterKind::InputUncached,
+            CounterKind::InputCached,
+            CounterKind::CacheWrite,
+            CounterKind::Output,
+            CounterKind::Reasoning,
+        ] {
+            let value = delta.get(kind);
+            if value > 0 {
+                *self.synthetic_totals.entry(kind).or_insert(0) += value;
+                *purpose_totals.entry(kind).or_insert(0) += value;
+            }
+        }
+    }
+
     /// A bounded, content-free summary of what this session spent.
     ///
     /// Root-only: `Status` has no visibility into delegated children, so a
@@ -857,6 +1004,8 @@ impl Status {
             turns: self.turns,
             reported: self.usage_reported,
             totals: self.totals.clone(),
+            synthetic_totals: self.synthetic_totals.clone(),
+            synthetic_by_purpose: self.synthetic_by_purpose.clone(),
             compactions: self.capabilities.compactions,
             reclaimed_tokens: self.capabilities.reclaimed_tokens,
             delegated_totals: BTreeMap::new(),
@@ -942,6 +1091,11 @@ impl Status {
             Some(price) => self.cache_projection.with_price(summary, price),
             None => summary.clone(),
         })
+    }
+
+    /// Latest canonical cache-operation and provider-evidence lifecycle.
+    pub fn cache_lifecycle(&self) -> &CacheLifecycleSummary {
+        self.cache_projection.lifecycle()
     }
 
     /// The latest completed turn's provider-reported cache-read percentage.
@@ -1107,6 +1261,93 @@ mod tests {
 
         status.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 1_500));
         assert_eq!(status.context.render(), "10k");
+    }
+
+    #[test]
+    fn synthetic_usage_counts_toward_session_spend_without_creating_turns() {
+        use agent_runtime_core::usage::{Provenance, UsageSource};
+
+        let mut status = Status::new("gpt-5.6", "~/work/api");
+        status.record_usage_record(&UsageRecord {
+            source: UsageSource::ProviderAttempt,
+            provenance: Provenance::default(),
+            delta: UsageDelta::new()
+                .with(CounterKind::InputUncached, 1_000)
+                .with(CounterKind::Output, 50),
+        });
+        status.record_usage_record(&UsageRecord {
+            source: UsageSource::ProviderAttempt,
+            provenance: Provenance {
+                attempt_purpose: Some(ProviderAttemptPurpose::CacheKeepalive),
+                ..Provenance::default()
+            },
+            delta: UsageDelta::new()
+                .with(CounterKind::InputCached, 800)
+                .with(CounterKind::Output, 2),
+        });
+        status.record_usage_record(&UsageRecord {
+            source: UsageSource::SemanticSummary,
+            provenance: Provenance {
+                purpose: Some("cache_idle_compaction".to_owned()),
+                attempt_purpose: Some(ProviderAttemptPurpose::IdleCompaction),
+                ..Provenance::default()
+            },
+            delta: UsageDelta::new()
+                .with(CounterKind::InputUncached, 100)
+                .with(CounterKind::Output, 10),
+        });
+
+        let usage = status.session_usage();
+        assert_eq!(usage.turns, 1);
+        assert_eq!(usage.totals[&CounterKind::InputUncached], 1_000);
+        assert_eq!(usage.totals[&CounterKind::Output], 50);
+        assert_eq!(usage.synthetic_totals[&CounterKind::InputUncached], 100);
+        assert_eq!(usage.synthetic_totals[&CounterKind::InputCached], 800);
+        assert_eq!(usage.synthetic_totals[&CounterKind::Output], 12);
+        assert_eq!(
+            usage.synthetic_by_purpose[&ProviderAttemptPurpose::CacheKeepalive]
+                [&CounterKind::InputCached],
+            800
+        );
+        assert_eq!(usage.total_tokens(), 1_050);
+        assert_eq!(usage.merged_total_tokens(), 1_962);
+        assert_eq!(status.context.render(), "1k");
+        let rendered = usage.render().expect("usage projection");
+        assert!(rendered.contains("cache_keepalive"), "{rendered}");
+        assert!(rendered.contains("cache_idle_compaction"), "{rendered}");
+    }
+
+    #[test]
+    fn same_model_synthetic_cost_is_priced_but_idle_summary_cost_stays_unknown() {
+        let price = priced(1_000_000, 1_000_000, 1_000_000, 1_000_000);
+        let mut keepalive = SessionUsage {
+            reported: true,
+            ..SessionUsage::default()
+        };
+        keepalive
+            .synthetic_totals
+            .insert(CounterKind::InputCached, 80);
+        keepalive.synthetic_by_purpose.insert(
+            ProviderAttemptPurpose::CacheKeepalive,
+            BTreeMap::from([(CounterKind::InputCached, 80)]),
+        );
+        let keepalive_cost = SessionCost::compute(&keepalive, &price);
+        assert_eq!(keepalive_cost.micro_usd, 80);
+        assert_eq!(keepalive_cost.label, CostLabel::Exact);
+
+        let mut idle = SessionUsage {
+            reported: true,
+            ..SessionUsage::default()
+        };
+        idle.synthetic_totals
+            .insert(CounterKind::InputUncached, 100);
+        idle.synthetic_by_purpose.insert(
+            ProviderAttemptPurpose::IdleCompaction,
+            BTreeMap::from([(CounterKind::InputUncached, 100)]),
+        );
+        let idle_cost = SessionCost::compute(&idle, &price);
+        assert_eq!(idle_cost.micro_usd, 0);
+        assert_eq!(idle_cost.label, CostLabel::Estimated);
     }
 
     #[test]

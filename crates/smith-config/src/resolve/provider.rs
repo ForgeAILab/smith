@@ -4,9 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use crate::model::{
-    ApprovalMode, BackgroundExit, KIND_ANTHROPIC_MESSAGES, KIND_CHATGPT_RESPONSES, KIND_FAKE,
-    KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES, KIND_XAI_RESPONSES,
-    ReasoningDialect, ReasoningOnlyBehavior,
+    ApprovalMode, BackgroundExit, CacheMaintenanceMode, KIND_ANTHROPIC_MESSAGES,
+    KIND_CHATGPT_RESPONSES, KIND_FAKE, KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE,
+    KIND_OPENAI_RESPONSES, KIND_XAI_RESPONSES, ReasoningDialect, ReasoningOnlyBehavior,
 };
 use agent_runtime_core::store::Secret;
 
@@ -544,7 +544,11 @@ pub(super) fn resolve_model_reasoning(
     })
 }
 
-pub(super) fn resolve_context(provenance: &Provenance) -> Result<ResolvedContext, ConfigError> {
+pub(super) fn resolve_context(
+    provenance: &Provenance,
+    model_limits: &ResolvedModelLimits,
+    synthetic_cache_spend: SyntheticCacheSpendAuthority,
+) -> Result<ResolvedContext, ConfigError> {
     let high = required_percent(provenance, "context.compaction_high_watermark_percent")?;
     let low = required_percent(provenance, "context.compaction_low_watermark_percent")?;
     if low.value >= high.value {
@@ -556,6 +560,11 @@ pub(super) fn resolve_context(provenance: &Provenance) -> Result<ResolvedContext
             ),
         });
     }
+    let cache = resolve_cache_policy(provenance, model_limits, synthetic_cache_spend)?;
+    // Keep the old resolved field as a compatibility projection.  It points
+    // at the exact same sourced winner as the replacement field, so no second
+    // inactivity timer can be constructed downstream.
+    let idle_compaction_ms = cache.inactivity_limit_ms.clone();
     Ok(ResolvedContext {
         output_reserve: optional_u32(provenance, "context.output_reserve")?,
         reasoning_reserve: required_u32(provenance, "context.reasoning_reserve")?,
@@ -563,7 +572,158 @@ pub(super) fn resolve_context(provenance: &Provenance) -> Result<ResolvedContext
         max_estimated_slack: optional_u32(provenance, "context.max_estimated_slack")?,
         compaction_high_watermark_percent: high,
         compaction_low_watermark_percent: low,
-        idle_compaction_ms: required_u64(provenance, "context.idle_compaction_ms")?,
+        idle_compaction_ms,
+        cache,
+    })
+}
+
+/// Resolves the typed cache lifecycle policy and applies host-only authority
+/// narrowing.  The repository/project layers can request adaptive behavior,
+/// but they cannot manufacture `SyntheticCacheSpendAuthority::Allow`.
+pub(super) fn resolve_cache_policy(
+    provenance: &Provenance,
+    model_limits: &ResolvedModelLimits,
+    synthetic_cache_spend: SyntheticCacheSpendAuthority,
+) -> Result<ResolvedCachePolicy, ConfigError> {
+    let requested_raw = text(provenance, "context.cache.maintenance")?.unwrap_or_else(|| {
+        Sourced::new(
+            "off".to_owned(),
+            Source::built_in("context.cache.maintenance"),
+        )
+    });
+    let requested = CacheMaintenanceMode::parse(&requested_raw.value).ok_or_else(|| {
+        ConfigError::InvalidValue {
+            source: requested_raw.source.clone(),
+            message: format!(
+                "`{}` is not a cache maintenance mode; the modes are {}",
+                requested_raw.value,
+                list_spellings(CacheMaintenanceMode::spellings())
+            ),
+        }
+    })?;
+    let requested_maintenance = Sourced::new(requested, requested_raw.source.clone());
+    let (effective, narrowing_reason) = match (requested, synthetic_cache_spend) {
+        (CacheMaintenanceMode::Adaptive, SyntheticCacheSpendAuthority::Deny) => (
+            CacheMaintenanceMode::Observe,
+            Some(
+                "requested adaptive maintenance narrowed to observe: host synthetic_cache_spend authority is deny"
+                    .to_owned(),
+            ),
+        ),
+        (mode, _) => (mode, None),
+    };
+    let effective_maintenance = Sourced::new(effective, requested_raw.source.clone());
+
+    let inactivity_limit_ms = bounded_u64(
+        provenance,
+        "context.cache.inactivity_limit_ms",
+        1_000,
+        86_400_000,
+    )?;
+    let max_hold_while_child_ms = bounded_u64(
+        provenance,
+        "context.cache.max_hold_while_child_ms",
+        0,
+        86_400_000,
+    )?;
+    let max_maintenance_calls =
+        bounded_u8(provenance, "context.cache.max_maintenance_calls", 0, 8)?;
+    let max_maintenance_input_tokens =
+        required_u32(provenance, "context.cache.max_maintenance_input_tokens")?;
+    if max_maintenance_input_tokens.value != 0 {
+        let Some(limit) = model_limits
+            .max_input_tokens
+            .as_ref()
+            .map(|limit| limit.value)
+        else {
+            return Err(ConfigError::InvalidValue {
+                source: max_maintenance_input_tokens.source,
+                message: "context.cache.max_maintenance_input_tokens requires a resolved model input limit when nonzero".to_owned(),
+            });
+        };
+        if max_maintenance_input_tokens.value > limit {
+            return Err(ConfigError::InvalidValue {
+                source: max_maintenance_input_tokens.source,
+                message: format!(
+                    "context.cache.max_maintenance_input_tokens must be 0 or no greater than the resolved model input limit ({limit})"
+                ),
+            });
+        }
+    }
+    let max_maintenance_output_tokens = bounded_u32(
+        provenance,
+        "context.cache.max_maintenance_output_tokens",
+        1,
+        4_096,
+    )?;
+    let maintenance_deadline_ms = bounded_u64(
+        provenance,
+        "context.cache.maintenance_deadline_ms",
+        1,
+        120_000,
+    )?;
+    let keepalive_margin_ms = bounded_u64(
+        provenance,
+        "context.cache.keepalive_margin_ms",
+        0,
+        inactivity_limit_ms.value,
+    )?;
+    let keepalive_jitter_percent =
+        bounded_u8(provenance, "context.cache.keepalive_jitter_percent", 0, 50)?;
+    let handoff_checkpoint = required_flag(provenance, "context.cache.handoff_checkpoint")?;
+    let idle_compaction = required_flag(provenance, "context.cache.idle_compaction")?;
+    let resume_capsule = required_flag(provenance, "context.cache.resume_capsule")?;
+
+    Ok(ResolvedCachePolicy {
+        requested_maintenance,
+        effective_maintenance,
+        narrowing_reason,
+        inactivity_limit_ms,
+        max_hold_while_child_ms,
+        max_maintenance_calls,
+        max_maintenance_input_tokens,
+        max_maintenance_output_tokens,
+        maintenance_deadline_ms,
+        keepalive_margin_ms,
+        keepalive_jitter_percent,
+        handoff_checkpoint,
+        idle_compaction,
+        resume_capsule,
+    })
+}
+
+/// Resolves the bounded parent wait policy. Missing values are deliberately
+/// filled with built-in sources so a profile that predates the new table stays
+/// usable during the migration window.
+pub(super) fn resolve_child_agents(
+    provenance: &Provenance,
+) -> Result<ResolvedChildAgents, ConfigError> {
+    let default_timeout = bounded_u64_or_default(
+        provenance,
+        "child_agents.wait_default_timeout_ms",
+        0,
+        30_000,
+        5_000,
+    )?;
+    let max_timeout = bounded_u64_or_default(
+        provenance,
+        "child_agents.wait_max_timeout_ms",
+        1,
+        30_000,
+        30_000,
+    )?;
+    if default_timeout.value > max_timeout.value {
+        return Err(ConfigError::InvalidValue {
+            source: default_timeout.source,
+            message: format!(
+                "child_agents.wait_default_timeout_ms ({}) must not exceed wait_max_timeout_ms ({})",
+                default_timeout.value, max_timeout.value
+            ),
+        });
+    }
+    Ok(ResolvedChildAgents {
+        wait_default_timeout_ms: default_timeout,
+        wait_max_timeout_ms: max_timeout,
     })
 }
 
@@ -765,6 +925,71 @@ pub(super) fn required_u64(
     match u64::try_from(value.value) {
         Ok(narrowed) => Ok(Sourced::new(narrowed, value.source)),
         Err(_) => Err(out_of_range(value, "0 and 9223372036854775807")),
+    }
+}
+
+fn bounded_u64(
+    provenance: &Provenance,
+    key: &str,
+    minimum: u64,
+    maximum: u64,
+) -> Result<Sourced<u64>, ConfigError> {
+    let value = required_u64(provenance, key)?;
+    if (minimum..=maximum).contains(&value.value) {
+        Ok(value)
+    } else {
+        Err(ConfigError::InvalidValue {
+            source: value.source,
+            message: format!("{key} must be between {minimum} and {maximum}"),
+        })
+    }
+}
+
+fn bounded_u64_or_default(
+    provenance: &Provenance,
+    key: &str,
+    minimum: u64,
+    maximum: u64,
+    default: u64,
+) -> Result<Sourced<u64>, ConfigError> {
+    match provenance.winner(key) {
+        Some(_) => bounded_u64(provenance, key, minimum, maximum),
+        None => Ok(Sourced::new(default, Source::built_in(key))),
+    }
+}
+
+fn bounded_u8(
+    provenance: &Provenance,
+    key: &str,
+    minimum: u8,
+    maximum: u8,
+) -> Result<Sourced<u8>, ConfigError> {
+    let value = integer(provenance, key)?.ok_or_else(|| missing(key))?;
+    match u8::try_from(value.value) {
+        Ok(narrowed) if (minimum..=maximum).contains(&narrowed) => {
+            Ok(Sourced::new(narrowed, value.source))
+        }
+        _ => Err(ConfigError::InvalidValue {
+            source: value.source,
+            message: format!("{key} must be between {minimum} and {maximum}"),
+        }),
+    }
+}
+
+fn bounded_u32(
+    provenance: &Provenance,
+    key: &str,
+    minimum: u32,
+    maximum: u32,
+) -> Result<Sourced<u32>, ConfigError> {
+    let value = required_u32(provenance, key)?;
+    if (minimum..=maximum).contains(&value.value) {
+        Ok(value)
+    } else {
+        Err(ConfigError::InvalidValue {
+            source: value.source,
+            message: format!("{key} must be between {minimum} and {maximum}"),
+        })
     }
 }
 

@@ -63,6 +63,107 @@ claim that a cache entry expired or became unavailable. In particular,
 pre-request cache-alive probe: it classifies cache state only after the
 provider returns usage/cache evidence for an attempt.
 
+## Adaptive cache lifecycle and idle compaction
+
+Cache mechanism policy is profile-scoped. The built-in mode is `off`; Smith
+still records provider cache plans and evidence, but sends no synthetic cache
+request. `observe` exposes the same lifecycle without dispatch. `adaptive`
+requests bounded keepalive or handoff work, but becomes effective only when the
+selected model/adapter has passed the matching conformance fixture and the
+trusted host was started with `--allow-synthetic-cache-spend`:
+
+```toml
+[profiles.work.context.cache]
+maintenance = "adaptive"             # off | observe | adaptive
+inactivity_limit_ms = 3600000
+max_hold_while_child_ms = 3600000
+max_maintenance_calls = 1
+max_maintenance_input_tokens = 0      # use the exact plan/model input budget
+max_maintenance_output_tokens = 256
+maintenance_deadline_ms = 30000
+keepalive_margin_ms = 120000
+keepalive_jitter_percent = 10
+handoff_checkpoint = true
+idle_compaction = true
+resume_capsule = true
+
+[profiles.work.child_agents]
+wait_default_timeout_ms = 5000
+wait_max_timeout_ms = 30000
+```
+
+The authority flag is a host decision, not a TOML or environment setting. A
+project can request or narrow adaptive behavior but cannot authorize provider
+spend. Without the flag, `adaptive` resolves to `observe` and explain/status
+output names the narrowing reason. Unsupported models, custom or unverified
+endpoints, rotating credential pools, missing exact identity, exhausted
+budgets, and contract violations also fail closed for maintenance while
+ordinary provider turns remain available. Cost or price estimates are
+presentation-only and never grant dispatch.
+
+The numeric bounds and zero meanings are:
+
+| Key | Default | Accepted values |
+| --- | ---: | --- |
+| `context.cache.inactivity_limit_ms` | `3600000` | `1000..=86400000`; zero is invalid |
+| `context.cache.max_hold_while_child_ms` | `3600000` | `0..=86400000`; zero disables child holding |
+| `context.cache.max_maintenance_calls` | `1` | `0..=8`; zero disables synthetic maintenance |
+| `context.cache.max_maintenance_input_tokens` | `0` | zero uses the exact resolved plan/model budget; otherwise no greater than the model input limit |
+| `context.cache.max_maintenance_output_tokens` | `256` | `1..=4096`, then narrowed to the model output limit |
+| `context.cache.maintenance_deadline_ms` | `30000` | `1..=120000` |
+| `context.cache.keepalive_margin_ms` | `120000` | `0..=inactivity_limit_ms`; zero removes the early margin |
+| `context.cache.keepalive_jitter_percent` | `10` | `0..=50`; zero is deterministic |
+| `child_agents.wait_default_timeout_ms` | `5000` | `0..=30000`; zero is an immediate status check |
+| `child_agents.wait_max_timeout_ms` | `30000` | `1..=30000`; must be at least the default |
+
+`agent.wait` accepts the optional `timeout_ms`, returns `running` when the
+bounded wait expires, and rejects a value above the resolved maximum before it
+waits. A parent is `parked-awaiting-child` only while a direct child is still
+nonterminal; no provider stream or tool call is kept open. Terminal child
+outcomes are preserved and automatically admitted through an ordinary,
+attributed continuation at the next safe boundary. Child progress and child
+provider/tool work do not reset the parent's inactivity or cache-touch clocks.
+
+`context.idle_compaction_ms` remains a deprecated one-release alias for
+`context.cache.inactivity_limit_ms`. Equal values in one layer are accepted;
+different values in the same layer are ambiguous and fail preflight. Across
+layers, normal precedence selects the winner and `config explain` retains the
+source. Use the canonical key for new configuration.
+
+At the inactivity limit Smith persists exact state and may attempt semantic
+compaction once for that real-turn interval. This is ordinary summary work,
+not a cache keepalive, and it has its own `cache_idle_compaction` usage
+purpose. Failure keeps the original canonical history and is not retried.
+Keepalive and same-model handoff use `cache_keepalive` and
+`cache_handoff_checkpoint`; all provider-reported usage counts toward provider
+and session limits while remaining separate from user, parent, and child turn
+usage.
+
+Status and machine output retain a bounded per-attempt projection for this
+work: typed purpose, provider and model, optional exact cache identity,
+disjoint usage counters with provider-reported provenance, cost with explicit
+provenance, latency, and bounded completion status. A missing provider bill is
+reported as unknown rather than derived from an unrelated price table; exact
+same-model presentation may calculate cost only when compatible catalog rates
+are available.
+
+Cache status separates structural eligibility from provider evidence:
+`eligible` does not mean warm, an explicit zero read can prove a miss, omitted
+evidence remains unknown, and elapsed time never proves expiry. A provider's
+typed expiry/resource evidence can suspend work; Smith does not infer it from
+an idle duration. Identity changes retire the old lease instead of transferring
+warmth.
+
+When enabled, the versioned resume capsule is stored inside the existing
+canonical snapshot and protected checkpoint rather than a sidecar database.
+The highest compatible committed watermark wins, with protected exact state
+ahead of a same-boundary projection. Generated summary text cannot override
+exact state or schedule work. After a process restart live child work is
+reconciled as interrupted, provider warmth is unknown, and Smith sends no
+prewarm request; the next real continuation creates cache naturally. Human and
+machine projections contain only bounded, redaction-safe capsule metadata, not
+summary text, prompts, credentials, private instructions, or cache contents.
+
 Interactive `/status` renders one canonical `cache:` block containing the
 latest completed root-turn state, `CH`, expected/observed/missed tokens,
 confidence, cumulative miss count, re-billed tokens, and known derived extra
@@ -184,7 +285,24 @@ capability_budget = 12000
 max_estimated_slack = 256
 compaction_high_watermark_percent = 85
 compaction_low_watermark_percent = 60
-idle_compaction_ms = 3600000
+
+[profiles.work.context.cache]
+maintenance = "observe"
+inactivity_limit_ms = 3600000
+max_hold_while_child_ms = 3600000
+max_maintenance_calls = 1
+max_maintenance_input_tokens = 0
+max_maintenance_output_tokens = 256
+maintenance_deadline_ms = 30000
+keepalive_margin_ms = 120000
+keepalive_jitter_percent = 10
+handoff_checkpoint = true
+idle_compaction = true
+resume_capsule = true
+
+[profiles.work.child_agents]
+wait_default_timeout_ms = 5000
+wait_max_timeout_ms = 30000
 
 [profiles.work.limits]
 max_retries = 2
@@ -491,7 +609,20 @@ reserve, capability budget, or estimated-count slack.
 | `context.reasoning_reserve` | `0` | Continuation/reasoning reserve |
 | `context.compaction_high_watermark_percent` | `85` | Pressure trigger |
 | `context.compaction_low_watermark_percent` | `60` | Post-compaction target |
-| `context.idle_compaction_ms` | `3600000` | Idle compaction interval |
+| `context.cache.maintenance` | `"off"` | Requested cache maintenance: `off`, `observe`, or `adaptive` |
+| `context.cache.inactivity_limit_ms` | `3600000` | Shared parent inactivity/idle-compaction boundary |
+| `context.cache.max_hold_while_child_ms` | `3600000` | Maximum parent cache hold while a child remains active |
+| `context.cache.max_maintenance_calls` | `1` | Synthetic calls per parked interval |
+| `context.cache.max_maintenance_input_tokens` | `0` | Synthetic input ceiling; `0` uses the exact plan/model budget |
+| `context.cache.max_maintenance_output_tokens` | `256` | Synthetic output ceiling |
+| `context.cache.maintenance_deadline_ms` | `30000` | Per-synthetic-call deadline |
+| `context.cache.keepalive_margin_ms` | `120000` | Early margin before a declared retention boundary |
+| `context.cache.keepalive_jitter_percent` | `10` | Bounded scheduling jitter |
+| `context.cache.handoff_checkpoint` | `true` | Permit a conformance-gated same-model handoff |
+| `context.cache.idle_compaction` | `true` | Attempt ordinary semantic compaction once at inactivity |
+| `context.cache.resume_capsule` | `true` | Persist the redaction-safe cold-continuation projection |
+| `child_agents.wait_default_timeout_ms` | `5000` | Default bounded `agent.wait` timeout |
+| `child_agents.wait_max_timeout_ms` | `30000` | Maximum accepted `agent.wait.timeout_ms` |
 | `limits.max_retries` | `2` | Retries after the first provider attempt |
 | `limits.max_tool_steps` | `0` | Tool-loop ceiling per turn; `0` removes it |
 | `limits.turn_time_limit_ms` | `0` | Whole-turn deadline; `0` removes it |
@@ -528,6 +659,7 @@ The run surface accepts:
 --effort NAME                 # one provider-advertised reasoning effort
 --approval ask|deny|allow-all
 --yolo                       # explicit alias for --approval allow-all
+--allow-synthetic-cache-spend # trusted-host authority for bounded maintenance
 --background-exit error|wait|stop
 --resume [SESSION_ID]
 --output-format text|json|stream-json
@@ -541,4 +673,6 @@ Project-controlled configuration cannot grant `allow-all`, populate
 Those settings require a higher-trust source. Opening a repository is never
 authority. `--yolo` is only a shorter explicit spelling of
 `--approval allow-all`; it does not add tools or override a profile's
-read-only posture.
+read-only posture. Likewise, only the explicit
+`--allow-synthetic-cache-spend` host flag grants adaptive cache-maintenance
+spend; no repository setting or environment variable can manufacture it.

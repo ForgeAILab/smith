@@ -13,8 +13,9 @@ use agent_runtime_core::event::{
 use agent_runtime_core::goal::{GoalProjection, GoalStatus};
 use agent_runtime_core::ids::SessionId;
 use agent_runtime_core::interaction::InteractionOutcomeKind;
+use agent_runtime_core::provider::ProviderAttemptPurpose;
 use agent_runtime_core::security::SecurityResource;
-use agent_runtime_core::usage::UsageDelta;
+use agent_runtime_core::usage::{UsageDelta, UsageRecord};
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use serde::Serialize;
@@ -23,11 +24,14 @@ use smith_host::{
     ApprovalRequired, HeadlessApproval, HeadlessInteraction, HeadlessRotation, InteractionRequired,
 };
 use smith_runtime::background_tasks::{BackgroundTaskInfo, BackgroundTaskRegistry, TaskStatus};
+use smith_runtime::cache_controller::CacheControllerSnapshot;
 use smith_runtime::host::HostSession;
 use smith_runtime::journal::{EphemeralInterruptionReason, EphemeralWorkInterruption};
 use smith_runtime::rotation::SharedPool;
 use smith_runtime::{ChildDurability, ChildState};
-use smith_tui::cache::{CachePrice, CacheProjection, CacheTurnSummary, CacheVisibilityState};
+use smith_tui::cache::{
+    CacheLifecycleSummary, CachePrice, CacheProjection, CacheTurnSummary, CacheVisibilityState,
+};
 
 use crate::cli::OutputFormat;
 
@@ -59,6 +63,14 @@ struct StreamEnvelope<'a> {
     #[serde(rename = "type")]
     kind: &'static str,
     event: &'a EventEnvelope,
+}
+
+#[derive(Debug, Serialize)]
+struct CacheControllerEnvelope<'a> {
+    schema_version: u32,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    controller: &'a CacheControllerSnapshot,
 }
 
 #[derive(Debug, Serialize)]
@@ -104,6 +116,10 @@ struct ResultEnvelope {
     /// The final turn's last cache plan, summarizing provider prefix reuse.
     #[serde(skip_serializing_if = "Option::is_none")]
     cache: Option<CacheOutput>,
+    /// Redaction-safe cold-continuation metadata; protected summary text and
+    /// canonical history are deliberately absent from this projection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resume_capsule: Option<smith_runtime::resume_capsule::RedactedResumeCapsule>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
@@ -141,6 +157,9 @@ struct CacheOutput {
     /// Aggregate canonical state for the final root turn.
     #[serde(skip_serializing_if = "Option::is_none")]
     state: Option<CacheVisibilityState>,
+    /// Exact redaction-safe Runtime cache-identity digest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_identity: Option<String>,
     /// Canonical expectation and provider observation.
     #[serde(skip_serializing_if = "Option::is_none")]
     expected_read_tokens: Option<u64>,
@@ -164,6 +183,12 @@ struct CacheOutput {
     idle_minutes: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     extra_cost_micro_usd: Option<u128>,
+    /// Canonical Runtime operation/evidence lifecycle for the session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lifecycle: Option<CacheLifecycleSummary>,
+    /// Smith's bounded scheduler/lease projection captured before shutdown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    controller: Option<CacheControllerSnapshot>,
     #[serde(skip)]
     notice: Option<String>,
 }
@@ -175,6 +200,7 @@ impl CacheOutput {
             preserved_prefix_tokens: 0,
             invalidated_prefix_tokens: 0,
             state: None,
+            cache_identity: None,
             expected_read_tokens: None,
             observed_read_tokens: None,
             observed_write_tokens: None,
@@ -185,10 +211,13 @@ impl CacheOutput {
             rebilled_tokens: None,
             idle_minutes: None,
             extra_cost_micro_usd: None,
+            lifecycle: None,
+            controller: None,
             notice: None,
         });
         Self {
             state: Some(summary.state),
+            cache_identity: summary.cache_identity.clone(),
             expected_read_tokens: summary.expected_read_tokens,
             observed_read_tokens: summary.observed_read_tokens,
             observed_write_tokens: summary.observed_write_tokens,
@@ -200,6 +229,67 @@ impl CacheOutput {
             idle_minutes: summary.idle_minutes,
             extra_cost_micro_usd: summary.extra_cost_micro_usd,
             notice: summary.significant().then(|| summary.render_notice()),
+            ..prior
+        }
+    }
+
+    fn from_lifecycle(lifecycle: CacheLifecycleSummary, prior: Option<Self>) -> Self {
+        let prior = prior.unwrap_or(Self {
+            provider_cache_supported: true,
+            preserved_prefix_tokens: 0,
+            invalidated_prefix_tokens: 0,
+            state: None,
+            cache_identity: lifecycle.cache_identity.clone(),
+            expected_read_tokens: None,
+            observed_read_tokens: None,
+            observed_write_tokens: None,
+            missed_tokens: None,
+            confidence: None,
+            cache_read_percent: None,
+            miss_count: None,
+            rebilled_tokens: None,
+            idle_minutes: None,
+            extra_cost_micro_usd: None,
+            lifecycle: None,
+            controller: None,
+            notice: None,
+        });
+        Self {
+            lifecycle: Some(lifecycle),
+            ..prior
+        }
+    }
+
+    fn from_controller(controller: CacheControllerSnapshot, prior: Option<Self>) -> Self {
+        let prior = prior.unwrap_or(Self {
+            provider_cache_supported: controller.provider_contract.behavior
+                != agent_runtime_core::provider::ProviderCacheBehavior::Unsupported,
+            preserved_prefix_tokens: controller
+                .lifecycle
+                .current()
+                .map_or(0, |lease| lease.structurally_preserved_prefix_tokens),
+            invalidated_prefix_tokens: 0,
+            state: None,
+            cache_identity: controller
+                .lifecycle
+                .current()
+                .map(|lease| lease.identity().digest().to_string()),
+            expected_read_tokens: None,
+            observed_read_tokens: None,
+            observed_write_tokens: None,
+            missed_tokens: None,
+            confidence: None,
+            cache_read_percent: None,
+            miss_count: None,
+            rebilled_tokens: None,
+            idle_minutes: None,
+            extra_cost_micro_usd: None,
+            lifecycle: None,
+            controller: None,
+            notice: None,
+        });
+        Self {
+            controller: Some(controller),
             ..prior
         }
     }
@@ -280,8 +370,50 @@ enum ResultStatus {
 struct UsageOutput {
     current_turn: UsageDelta,
     session: UsageDelta,
+    /// Provider/session usage from typed cache-maintenance and idle-compaction
+    /// attempts. It remains excluded from `current_turn`.
+    #[serde(default, skip_serializing_if = "SyntheticUsageOutput::is_empty")]
+    synthetic_cache: SyntheticUsageOutput,
     current_turn_provenance: UsageProvenance,
     session_provenance: UsageProvenance,
+}
+
+#[derive(Debug, Default, Serialize)]
+struct SyntheticUsageOutput {
+    total: UsageDelta,
+    by_purpose: BTreeMap<String, UsageDelta>,
+}
+
+impl SyntheticUsageOutput {
+    fn is_empty(&self) -> bool {
+        self.total.is_empty() && self.by_purpose.is_empty()
+    }
+
+    fn from_records(records: &[UsageRecord]) -> Self {
+        let mut output = Self::default();
+        for record in records {
+            let Some(purpose) = record.provenance.attempt_purpose else {
+                continue;
+            };
+            if !purpose.is_synthetic_cache() {
+                continue;
+            }
+            output.total.merge(&record.delta);
+            output
+                .by_purpose
+                .entry(purpose.as_str().to_owned())
+                .or_insert_with(UsageDelta::new)
+                .merge(&record.delta);
+        }
+        output
+    }
+}
+
+fn is_synthetic_usage(record: &UsageRecord) -> bool {
+    record
+        .provenance
+        .attempt_purpose
+        .is_some_and(ProviderAttemptPurpose::is_synthetic_cache)
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -326,6 +458,9 @@ struct LifecycleOutput {
     plan: Option<PlanOutput>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     children: Vec<ChildSessionOutput>,
+    /// Whether the parent is idle, serving, or parked without provider I/O.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_state: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -722,6 +857,8 @@ async fn run_with_io(
     };
     let mut goal_continuation_turns = 0_u32;
     let mut active_goal_turns = BTreeSet::new();
+    let mut active_child_completion_turns = BTreeSet::new();
+    let mut pending_child_completion_delivery = false;
 
     while let Some(event) = events.next().await {
         cache_projection.apply(&event);
@@ -735,6 +872,22 @@ async fn run_with_io(
                 active_goal_turns.insert(turn.as_str().to_owned());
             }
         }
+        if matches!(
+            &event.payload,
+            RuntimeEvent::InternalTurnStarted { source }
+                if source.kind == "delegation.child-completion"
+        ) {
+            pending_child_completion_delivery = false;
+            if let Some(turn) = &event.turn {
+                active_child_completion_turns.insert(turn.as_str().to_owned());
+            }
+        }
+        if matches!(
+            &event.payload,
+            RuntimeEvent::ChildCompleted { .. } | RuntimeEvent::ChildNeedsInput { .. }
+        ) {
+            pending_child_completion_delivery = true;
+        }
         let belongs_to_turn = event.turn.as_ref() == Some(&turn_id);
         let belongs_to_goal_turn = event
             .turn
@@ -742,7 +895,9 @@ async fn run_with_io(
             .is_some_and(|turn| active_goal_turns.contains(turn.as_str()));
         if belongs_to_turn {
             match &event.payload {
-                RuntimeEvent::Usage { record } => turn_usage.merge(&record.delta),
+                RuntimeEvent::Usage { record } if !is_synthetic_usage(record) => {
+                    turn_usage.merge(&record.delta)
+                }
                 RuntimeEvent::CachePlanChanged {
                     preserved_prefix_tokens,
                     invalidated_prefix_tokens,
@@ -754,6 +909,7 @@ async fn run_with_io(
                         preserved_prefix_tokens: *preserved_prefix_tokens,
                         invalidated_prefix_tokens: *invalidated_prefix_tokens,
                         state: None,
+                        cache_identity: None,
                         expected_read_tokens: None,
                         observed_read_tokens: None,
                         observed_write_tokens: None,
@@ -764,6 +920,8 @@ async fn run_with_io(
                         rebilled_tokens: None,
                         idle_minutes: None,
                         extra_cost_micro_usd: None,
+                        lifecycle: None,
+                        controller: None,
                         notice: None,
                     });
                 }
@@ -890,15 +1048,27 @@ async fn run_with_io(
             return Err(error);
         }
         if belongs_to_goal_turn
-            && matches!(event.payload, RuntimeEvent::TurnCompleted { .. })
+            && matches!(&event.payload, RuntimeEvent::TurnCompleted { .. })
             && let Some(turn) = &event.turn
         {
             active_goal_turns.remove(turn.as_str());
         }
+        if matches!(&event.payload, RuntimeEvent::TurnCompleted { .. })
+            && let Some(turn) = &event.turn
+        {
+            active_child_completion_turns.remove(turn.as_str());
+        }
         if finish.is_some() {
             match host.goal() {
                 Ok(Some(goal)) if goal.status == GoalStatus::Active => {}
-                Ok(_) if active_goal_turns.is_empty() => break,
+                Ok(_)
+                    if active_goal_turns.is_empty()
+                        && active_child_completion_turns.is_empty()
+                        && !pending_child_completion_delivery
+                        && !has_required_child_work(host) =>
+                {
+                    break;
+                }
                 Ok(_) => {}
                 Err(error) => {
                     sequence_error.get_or_insert_with(|| {
@@ -915,6 +1085,9 @@ async fn run_with_io(
         .then(|| "the runtime event stream ended before the turn completed".to_owned());
 
     lifecycle.children = child_session_outputs(host);
+    lifecycle.parent_state = host
+        .delegation_parking()
+        .map(|snapshot| snapshot.state.as_str());
 
     let final_goal = match host.goal() {
         Ok(goal) => goal,
@@ -954,6 +1127,24 @@ async fn run_with_io(
         }
     }
 
+    // Host shutdown freezes and drains the controller, then retains this
+    // final redaction-safe snapshot. Publish that exact terminal projection
+    // in both the stream envelope and final result.
+    let cache_controller = host.cache_lifecycle();
+    let resume_capsule = host.resume_capsule();
+    if format == OutputFormat::StreamJson
+        && let Some(controller) = cache_controller.as_ref()
+    {
+        write_json(
+            stdout,
+            &CacheControllerEnvelope {
+                schema_version: OUTPUT_SCHEMA_VERSION,
+                kind: "cache_controller",
+                controller,
+            },
+        )?;
+    }
+
     let snapshot = session.snapshot();
     let artifacts = session.artifacts_for_turn(&turn_id);
     let output = snapshot
@@ -965,11 +1156,19 @@ async fn run_with_io(
         .map(|message| message.joined_text())
         .unwrap_or_default();
     let session_usage = snapshot.usage.total();
+    let synthetic_cache = SyntheticUsageOutput::from_records(snapshot.usage.records());
     if let Some(summary) = cache_projection.completed_turn(turn_id.as_str()) {
         let summary = cache_price
             .map(|price| cache_projection.with_price(summary, price))
             .unwrap_or_else(|| summary.clone());
         cache = Some(CacheOutput::from_summary(&summary, cache));
+    }
+    let cache_lifecycle = cache_projection.lifecycle().clone();
+    if cache_lifecycle != CacheLifecycleSummary::default() {
+        cache = Some(CacheOutput::from_lifecycle(cache_lifecycle, cache));
+    }
+    if let Some(controller) = cache_controller {
+        cache = Some(CacheOutput::from_controller(controller, cache));
     }
     let approval_required = approval.and_then(HeadlessApproval::required);
     let interaction_required = interaction
@@ -1003,6 +1202,7 @@ async fn run_with_io(
             session_provenance: UsageProvenance::of(&session_usage),
             current_turn: turn_usage,
             session: session_usage,
+            synthetic_cache,
         },
         lifecycle,
         goal: final_goal,
@@ -1015,6 +1215,7 @@ async fn run_with_io(
         background_exit: background_exit_output,
         reasoning: Some(ReasoningOutput::of(&host.runtime().policy().reasoning)),
         cache,
+        resume_capsule,
         error: error.clone(),
     };
 
@@ -1065,6 +1266,28 @@ async fn run_with_io(
     Ok(Outcome { exit_code })
 }
 
+fn has_required_child_work(host: &HostSession) -> bool {
+    if host.delegation_parking().is_some_and(|parking| {
+        parking.admission_in_flight
+            || !parking.pending_children.is_empty()
+            || !parking.ready_outcomes.is_empty()
+    }) {
+        return true;
+    }
+    let Some(coordinator) = host
+        .runtime()
+        .delegation()
+        .and_then(|delegation| delegation.coordinator())
+    else {
+        return false;
+    };
+    coordinator
+        .list()
+        .into_iter()
+        .any(|status| matches!(status.state, ChildState::Running))
+        || !coordinator.take_ready_task_outcomes().is_empty()
+}
+
 async fn write_restored_interaction_required(
     host: &HostSession,
     format: OutputFormat,
@@ -1078,10 +1301,15 @@ async fn write_restored_interaction_required(
     let session = host.session();
     let session_id = session.id().as_str().to_owned();
     let turn_id = restored.turn_id().as_str().to_owned();
-    let session_usage = session.snapshot().usage.total();
     let final_goal = host.goal().ok().flatten();
     let goal_continuation_turns = final_goal.as_ref().map(|_| 0);
-    let shutdown_error = host.shutdown().await.err().map(|error| error.to_string());
+    let (shutdown_error, cache_controller) =
+        shutdown_and_write_stream_tail(host, format, stdout).await?;
+    let snapshot = session.snapshot();
+    let session_usage = snapshot.usage.total();
+    let synthetic_cache = SyntheticUsageOutput::from_records(snapshot.usage.records());
+    let resume_capsule = host.resume_capsule();
+    let cache = cache_controller.map(|controller| CacheOutput::from_controller(controller, None));
     let result = ResultEnvelope {
         schema_version: OUTPUT_SCHEMA_VERSION,
         kind: "result",
@@ -1096,6 +1324,7 @@ async fn write_restored_interaction_required(
             session_provenance: UsageProvenance::of(&session_usage),
             current_turn_provenance: UsageProvenance::Unknown,
             session: session_usage,
+            synthetic_cache,
         },
         lifecycle: LifecycleOutput {
             activation: activation_output(session),
@@ -1111,7 +1340,8 @@ async fn write_restored_interaction_required(
         account: None,
         background_exit: None,
         reasoning: Some(ReasoningOutput::of(&host.runtime().policy().reasoning)),
-        cache: None,
+        cache,
+        resume_capsule,
         error: shutdown_error,
     };
 
@@ -1147,14 +1377,19 @@ async fn write_submission_failure(
     submission_error: String,
 ) -> Result<Outcome> {
     let session = host.session();
-    let snapshot = session.snapshot();
-    let session_usage = snapshot.usage.total();
     let final_goal = host.goal().ok().flatten();
     let goal_continuation_turns = final_goal.as_ref().map(|_| 0);
-    let error = match host.shutdown().await {
-        Ok(_) => submission_error,
-        Err(shutdown) => format!("{submission_error}; shutdown also failed: {shutdown}"),
+    let (shutdown_error, cache_controller) =
+        shutdown_and_write_stream_tail(host, format, stdout).await?;
+    let error = match shutdown_error {
+        None => submission_error,
+        Some(shutdown) => format!("{submission_error}; shutdown also failed: {shutdown}"),
     };
+    let snapshot = session.snapshot();
+    let session_usage = snapshot.usage.total();
+    let synthetic_cache = SyntheticUsageOutput::from_records(snapshot.usage.records());
+    let resume_capsule = host.resume_capsule();
+    let cache = cache_controller.map(|controller| CacheOutput::from_controller(controller, None));
     let result = ResultEnvelope {
         schema_version: OUTPUT_SCHEMA_VERSION,
         kind: "result",
@@ -1172,6 +1407,7 @@ async fn write_submission_failure(
             session_provenance: UsageProvenance::of(&session_usage),
             current_turn_provenance: UsageProvenance::Unknown,
             session: session_usage,
+            synthetic_cache,
         },
         lifecycle: LifecycleOutput {
             activation: activation_output(session),
@@ -1187,7 +1423,8 @@ async fn write_submission_failure(
         account: None,
         background_exit: None,
         reasoning: Some(ReasoningOutput::of(&host.runtime().policy().reasoning)),
-        cache: None,
+        cache,
+        resume_capsule,
         error: Some(error.clone()),
     };
 
@@ -1200,6 +1437,54 @@ async fn write_submission_failure(
         OutputFormat::Json | OutputFormat::StreamJson => write_json(stdout, &result)?,
     }
     Ok(Outcome { exit_code: 1 })
+}
+
+/// Freezes a non-success host and emits the same terminal stream tail as a
+/// completed turn: canonical shutdown first, then Smith's exact retained
+/// controller projection. The returned controller is reused byte-for-byte in
+/// the terminal result so stream and final JSON cannot diverge.
+async fn shutdown_and_write_stream_tail(
+    host: &HostSession,
+    format: OutputFormat,
+    stdout: &mut impl Write,
+) -> Result<(Option<String>, Option<CacheControllerSnapshot>)> {
+    let mut events = (format == OutputFormat::StreamJson).then(|| host.session().subscribe());
+    let shutdown_error = host.shutdown().await.err().map(|error| error.to_string());
+
+    if let Some(events) = events.as_mut() {
+        while let Ok(Some(event)) =
+            tokio::time::timeout(Duration::from_millis(100), events.next()).await
+        {
+            let terminal = matches!(event.payload, RuntimeEvent::SessionShutdown);
+            write_json(
+                stdout,
+                &StreamEnvelope {
+                    schema_version: OUTPUT_SCHEMA_VERSION,
+                    kind: "runtime_event",
+                    event: &event,
+                },
+            )?;
+            if terminal {
+                break;
+            }
+        }
+    }
+
+    let cache_controller = host.cache_lifecycle();
+    if format == OutputFormat::StreamJson
+        && let Some(controller) = cache_controller.as_ref()
+    {
+        write_json(
+            stdout,
+            &CacheControllerEnvelope {
+                schema_version: OUTPUT_SCHEMA_VERSION,
+                kind: "cache_controller",
+                controller,
+            },
+        )?;
+    }
+
+    Ok((shutdown_error, cache_controller))
 }
 
 fn observe_sequence(last: &mut Option<u64>, current: u64, error: &mut Option<String>) {
@@ -1301,6 +1586,9 @@ fn write_text(writer: &mut impl Write, text: &str) -> Result<()> {
 
 fn write_text_projection(writer: &mut impl Write, result: &ResultEnvelope) -> Result<()> {
     let mut lines = Vec::new();
+    if let Some(parent_state) = result.lifecycle.parent_state {
+        lines.push(format!("parent: {parent_state}"));
+    }
     if let Some(goal) = &result.goal {
         let status = goal.status.as_str();
         let used = goal
@@ -1365,6 +1653,9 @@ fn write_text_projection(writer: &mut impl Write, result: &ResultEnvelope) -> Re
             },
         );
         let mut line = format!("cache: {state} · CH {ch} · confidence {confidence}");
+        if let Some(identity) = &cache.cache_identity {
+            line.push_str(&format!(" · identity {identity}"));
+        }
         if let Some(expected) = cache.expected_read_tokens {
             line.push_str(&format!(" · expected {expected}"));
         }
@@ -1377,7 +1668,57 @@ fn write_text_projection(writer: &mut impl Write, result: &ResultEnvelope) -> Re
         if let Some(rebilled) = cache.rebilled_tokens {
             line.push_str(&format!(" · re-billed {rebilled}"));
         }
+        if let Some(lifecycle) = &cache.lifecycle {
+            line.push_str(&format!(
+                " · maintenance calls {}",
+                lifecycle.maintenance_calls_used
+            ));
+            if let Some(guaranteed_until_ms) = lifecycle.guaranteed_until_ms {
+                line.push_str(&format!(" · guaranteed until {guaranteed_until_ms}ms"));
+            }
+        }
         lines.push(line);
+        if let Some(controller) = &cache.controller {
+            lines.push(crate::local_command::render_cache_controller_status(
+                controller,
+            ));
+        }
+    }
+    if !result.usage.synthetic_cache.is_empty() {
+        let purposes = result
+            .usage
+            .synthetic_cache
+            .by_purpose
+            .iter()
+            .map(|(purpose, usage)| format!("{purpose} ({})", render_usage_delta(usage)))
+            .collect::<Vec<_>>()
+            .join("; ");
+        lines.push(format!("cache synthetic usage: {purposes}"));
+    }
+    if let Some(capsule) = &result.resume_capsule {
+        let summary = capsule.semantic_summary.as_ref().map_or_else(
+            || "none".to_owned(),
+            |summary| {
+                format!(
+                    "{:?}/{}/{} · rev {} · coverage {} · {:?}",
+                    summary.provenance.purpose,
+                    summary.provenance.provider,
+                    summary.provenance.model,
+                    summary.provenance.revision,
+                    summary.provenance.source_coverage.len(),
+                    summary.provenance.outcome,
+                )
+                .to_ascii_lowercase()
+            },
+        );
+        lines.push(format!(
+            "resume capsule: schema {} · watermark {} · persisted {} · summary {summary}",
+            capsule.schema_version,
+            capsule.last_persisted_watermark,
+            capsule
+                .last_persisted_at
+                .map_or_else(|| "?".to_owned(), |at| format!("{}ms", at.0)),
+        ));
     }
     for artifact in &result.artifacts {
         lines.push(format!(
@@ -1398,6 +1739,17 @@ fn write_text_projection(writer: &mut impl Write, result: &ResultEnvelope) -> Re
         writeln!(writer, "smith: {line}").context("writing text projection to stderr")?;
     }
     writer.flush().context("flushing text projection stderr")
+}
+
+fn render_usage_delta(delta: &UsageDelta) -> String {
+    if delta.is_empty() {
+        return "none".to_owned();
+    }
+    delta
+        .iter()
+        .map(|(kind, value)| format!("{} {value}", smith_tui::status::counter_label(kind)))
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
 fn approval_diagnostic(required: &ApprovalOutput) -> String {
@@ -1498,6 +1850,31 @@ mod tests {
 
     fn host_request(runtime: RuntimeRequest, project: &std::path::Path) -> HostSessionRequest {
         HostSessionRequest::new(runtime, project).checkpoint_keys(Arc::new(TestCheckpointKeys))
+    }
+
+    fn terminal_stream_result(lines: &[serde_json::Value]) -> &serde_json::Value {
+        let result = lines.last().expect("terminal result");
+        assert_eq!(result["type"], "result", "{lines:?}");
+        let controller_positions = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(position, line)| (line["type"] == "cache_controller").then_some(position))
+            .collect::<Vec<_>>();
+        assert_eq!(controller_positions.len(), 1, "{lines:?}");
+        let shutdown_position = lines
+            .iter()
+            .position(|line| line["event"]["payload"]["event"] == "session_shutdown")
+            .expect("stream omitted canonical shutdown");
+        assert!(
+            shutdown_position < controller_positions[0]
+                && controller_positions[0] < lines.len() - 1,
+            "terminal stream tail is out of order: {lines:?}"
+        );
+        assert_eq!(
+            lines[controller_positions[0]]["controller"], result["cache"]["controller"],
+            "controller envelope and terminal result diverged"
+        );
+        result
     }
 
     #[test]
@@ -1628,6 +2005,48 @@ mod tests {
     }
 
     #[test]
+    fn synthetic_usage_has_a_typed_machine_bucket() {
+        let ordinary = UsageRecord {
+            source: UsageSource::ProviderAttempt,
+            provenance: Provenance::default(),
+            delta: UsageDelta::new().with(CounterKind::InputUncached, 100),
+        };
+        let keepalive = UsageRecord {
+            source: UsageSource::ProviderAttempt,
+            provenance: Provenance {
+                attempt_purpose: Some(ProviderAttemptPurpose::CacheKeepalive),
+                ..Provenance::default()
+            },
+            delta: UsageDelta::new()
+                .with(CounterKind::InputCached, 80)
+                .with(CounterKind::Output, 2),
+        };
+        let idle = UsageRecord {
+            source: UsageSource::SemanticSummary,
+            provenance: Provenance {
+                purpose: Some("cache_idle_compaction".to_owned()),
+                attempt_purpose: Some(ProviderAttemptPurpose::IdleCompaction),
+                ..Provenance::default()
+            },
+            delta: UsageDelta::new()
+                .with(CounterKind::InputUncached, 10)
+                .with(CounterKind::Output, 3),
+        };
+
+        assert!(!is_synthetic_usage(&ordinary));
+        assert!(is_synthetic_usage(&keepalive));
+        assert!(is_synthetic_usage(&idle));
+        let projected = SyntheticUsageOutput::from_records(&[ordinary, keepalive, idle]);
+        let value = serde_json::to_value(projected).expect("synthetic usage serializes");
+        assert_eq!(value["total"]["input_cached"], 80);
+        assert_eq!(value["total"]["input_uncached"], 10);
+        assert_eq!(value["total"]["output"], 5);
+        assert_eq!(value["by_purpose"]["cache_keepalive"]["input_cached"], 80);
+        assert_eq!(value["by_purpose"]["cache_idle_compaction"]["output"], 3);
+        assert!(!value.to_string().contains("100"));
+    }
+
+    #[test]
     fn machine_result_v2_compatibility_fixture_is_stable() {
         let usage = UsageDelta::new()
             .with(agent_runtime_core::usage::CounterKind::InputUncached, 12)
@@ -1644,6 +2063,7 @@ mod tests {
             usage: UsageOutput {
                 current_turn: usage.clone(),
                 session: usage,
+                synthetic_cache: SyntheticUsageOutput::default(),
                 current_turn_provenance: UsageProvenance::ProviderReported,
                 session_provenance: UsageProvenance::ProviderReported,
             },
@@ -1656,6 +2076,7 @@ mod tests {
                 }),
                 plan: None,
                 children: Vec::new(),
+                parent_state: None,
             },
             goal: None,
             goal_continuation_turns: None,
@@ -1667,6 +2088,7 @@ mod tests {
             background_exit: None,
             reasoning: None,
             cache: None,
+            resume_capsule: None,
             error: None,
         };
 
@@ -1691,6 +2113,7 @@ mod tests {
             usage: UsageOutput {
                 current_turn: UsageDelta::new(),
                 session: UsageDelta::new(),
+                synthetic_cache: SyntheticUsageOutput::default(),
                 current_turn_provenance: UsageProvenance::Unknown,
                 session_provenance: UsageProvenance::Unknown,
             },
@@ -1719,6 +2142,7 @@ mod tests {
             background_exit: None,
             reasoning: None,
             cache: None,
+            resume_capsule: None,
             error: None,
         };
 
@@ -1751,6 +2175,7 @@ mod tests {
             usage: UsageOutput {
                 current_turn: UsageDelta::new(),
                 session: UsageDelta::new(),
+                synthetic_cache: SyntheticUsageOutput::default(),
                 current_turn_provenance: UsageProvenance::Unknown,
                 session_provenance: UsageProvenance::Unknown,
             },
@@ -1768,6 +2193,7 @@ mod tests {
             background_exit: None,
             reasoning: None,
             cache: None,
+            resume_capsule: None,
             error: None,
         };
         let actual = serde_json::to_value(result).expect("serializable result");
@@ -1833,6 +2259,7 @@ mod tests {
             usage: UsageOutput {
                 current_turn: UsageDelta::new(),
                 session: UsageDelta::new(),
+                synthetic_cache: SyntheticUsageOutput::default(),
                 current_turn_provenance: UsageProvenance::Unknown,
                 session_provenance: UsageProvenance::Unknown,
             },
@@ -1858,6 +2285,7 @@ mod tests {
                     }]),
                 }),
                 children: Vec::new(),
+                parent_state: None,
             },
             goal: None,
             goal_continuation_turns: None,
@@ -1884,6 +2312,7 @@ mod tests {
             background_exit: None,
             reasoning: None,
             cache: None,
+            resume_capsule: None,
             error: None,
         };
         let mut stderr = Vec::new();
@@ -2003,6 +2432,7 @@ mod tests {
             usage: UsageOutput {
                 current_turn: usage.clone(),
                 session: usage,
+                synthetic_cache: SyntheticUsageOutput::default(),
                 current_turn_provenance: UsageProvenance::ProviderReported,
                 session_provenance: UsageProvenance::ProviderReported,
             },
@@ -2017,6 +2447,7 @@ mod tests {
             background_exit: None,
             reasoning: None,
             cache: Some(CacheOutput::from_summary(&headless_summary, None)),
+            resume_capsule: None,
             error: None,
         };
         let final_json = serde_json::to_value(&result).expect("final JSON");
@@ -2138,7 +2569,7 @@ max_output_tokens = 4096
         let outcome = run_with_io(
             &host,
             "must be rejected".into(),
-            OutputFormat::Json,
+            OutputFormat::StreamJson,
             HeadlessBrokers::default(),
             BackgroundExit::Error,
             &mut stdout,
@@ -2149,7 +2580,12 @@ max_output_tokens = 4096
 
         assert_eq!(outcome.exit_code, 1);
         assert!(stderr.is_empty());
-        let result: serde_json::Value = serde_json::from_slice(&stdout).expect("a result envelope");
+        let lines = String::from_utf8(stdout)
+            .expect("UTF-8 JSONL")
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("one JSON value"))
+            .collect::<Vec<_>>();
+        let result = terminal_stream_result(&lines);
         assert_eq!(result["status"], "failed");
         assert_eq!(result["turn_id"], "");
         assert_eq!(
@@ -3004,7 +3440,7 @@ max_output_tokens = 4096
             run_with_io(
                 &recovered,
                 NEW_PROMPT.into(),
-                OutputFormat::Json,
+                OutputFormat::StreamJson,
                 HeadlessBrokers {
                     interaction: Some(headless_interaction.as_ref()),
                     ..HeadlessBrokers::default()
@@ -3023,7 +3459,11 @@ max_output_tokens = 4096
         let rendered = String::from_utf8(stdout).expect("UTF-8 result");
         assert!(!rendered.contains(SENSITIVE_PROMPT), "{rendered}");
         assert!(!rendered.contains(NEW_PROMPT), "{rendered}");
-        let result: serde_json::Value = serde_json::from_str(rendered.trim()).expect("result JSON");
+        let lines = rendered
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("one JSON value"))
+            .collect::<Vec<_>>();
+        let result = terminal_stream_result(&lines);
         assert_eq!(result["schema_version"], OUTPUT_SCHEMA_VERSION);
         assert_eq!(result["status"], "interaction_required");
         assert_eq!(result["session_id"], session_id.as_str());
@@ -3472,7 +3912,7 @@ max_output_tokens = 4096
                 // Long enough to still be running when the policy check
                 // happens (after host startup and the turn itself), short
                 // enough that `wait` polling it to completion stays fast.
-                "sleep 1".into(),
+                "sleep 3".into(),
                 std::env::temp_dir(),
                 None,
             )

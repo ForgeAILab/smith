@@ -52,6 +52,13 @@ Schema 3 retains existing field meanings and adds optional goal fields:
   "usage": {
     "current_turn": {},
     "session": {},
+    "synthetic_cache": {
+      "total": {},
+      "by_purpose": {
+        "cache_keepalive": {},
+        "cache_idle_compaction": {}
+      }
+    },
     "current_turn_provenance": "provider_reported",
     "session_provenance": "provider_reported"
   },
@@ -98,6 +105,13 @@ exists. `output` is selected only from assistant history created after this
 turn was accepted; an older answer cannot be reused for a reasoning-only or
 failed turn.
 
+`usage.current_turn` excludes synthetic cache attempts, while `usage.session`
+includes every provider-reported attempt. When synthetic cache work occurred,
+the optional `usage.synthetic_cache` bucket reports the same counters once as
+`total` and again by typed purpose (`cache_keepalive`,
+`cache_handoff_checkpoint`, or `cache_idle_compaction`). It is omitted when
+empty, and synthetic attempts never create parent, child, or delegated turns.
+
 When the turn has canonical cache evidence, the result also contains a
 `cache` object with `state`, `expected_read_tokens`,
 `observed_read_tokens`, `observed_write_tokens`, `missed_tokens`,
@@ -109,6 +123,28 @@ Explicit zero is rendered as `0`/`0%`; omitted evidence remains absent or
 unknown. The cache-read percentage is based on provider-reported cached input
 over uncached plus cached plus cache-write input across billed attempts,
 including failed billed attempts.
+
+The same `cache` object may contain two bounded lifecycle projections. Its
+`lifecycle` member is reduced from Agent Runtime's canonical operation and
+availability-evidence events. Its `controller` member is Smith's final
+redaction-safe lease/scheduler snapshot: requested and effective mode,
+authority narrowing, provider contract, exact identity digest, structural
+preservation, provider reads/writes, retention guarantee, maintenance budget,
+last decision, scheduling/suspension reason, synthetic usage, and a bounded
+`synthetic_attempts` list. Each attempt retains its typed purpose, provider,
+model, optional exact cache identity, disjoint counters with per-counter
+provenance, cost and cost provenance, latency, and bounded status. Idle
+compaction also has a separately attributed outcome/latency/model/revision/
+usage projection. These fields do not turn elapsed time, structural
+eligibility, or estimated economics into a verified cache hit or expiry.
+
+When capsule persistence is enabled, the result also carries
+`resume_capsule`. It contains only schema/watermark, exact-state counts and
+identities, child recovery states, artifact references, summary provenance,
+and persistence diagnostics. Protected summary text, prompts, tool arguments,
+credentials, private instructions, and cache content are never serialized to
+this machine-output projection. On cold resume provider warmth is unknown and
+no prewarm is sent.
 
 `lifecycle.plan`, when present, contains:
 
@@ -189,6 +225,23 @@ alongside the terminal result, so consumers that need request/attempt/cache
 plan correlation can use the runtime event rather than inferring a miss from
 usage totals.
 
+At the terminal boundary, a run with an active cache controller emits one
+additive envelope after the canonical `session_shutdown` event has drained and
+before the terminal result:
+
+```json
+{
+  "schema_version": 3,
+  "type": "cache_controller",
+  "controller": {}
+}
+```
+
+The `controller` value is the same bounded snapshot nested under the terminal
+result's `cache.controller`. It is a Smith projection rather than a competing
+Runtime event. Consumers must tolerate this additive envelope type and still
+use the final `result` line as the terminal record.
+
 Text/reasoning events are attempt-scoped. Failed partial output may appear in
 stream events for observability, followed by
 `provider_attempt_output_discarded`; only committed output enters the terminal
@@ -244,4 +297,4 @@ a new prompt turn or advancing that checkpoint.
 Consumers must dispatch on `schema_version` and `type`, tolerate additive
 fields inside a supported schema, and treat unknown status/resource/event
 variants as unsupported rather than guessing. Schema-v1 fixtures remain only
-as migration evidence; new integrations should implement schema 2.
+as migration evidence; new integrations should implement schema 3.

@@ -19,6 +19,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agent_runtime_core::clock::{SystemClock, Timestamp};
+use agent_runtime_core::provider::{
+    Capabilities, ModelDescriptor, ModelId, Provider, ProviderCallContext, ProviderError,
+    ProviderErrorKind, ProviderRequest, ProviderStream,
+};
 use agent_runtime_core::provider_credential::ProviderCredentialTarget;
 use agent_runtime_core::store::Secret;
 use async_trait::async_trait;
@@ -45,6 +49,68 @@ pub const XAI_CLIENT_ID_ENV: &str = "XAI_OAUTH_CLIENT_ID";
 /// `offline_access` is the load-bearing one: without it the issuer returns no
 /// refresh token and the session dies at the first expiry.
 pub const XAI_SCOPES: &[&str] = &["openid", "profile", "email", "offline_access", "api:access"];
+
+/// Forwards the exact Runtime cache identity into the Responses adapter.
+///
+/// Agent Runtime normally puts the identity on both the request and call
+/// context.  Keeping this narrow XAI boundary presence-aware also covers
+/// synthetic/provider callers that carry it only in the context, without
+/// recomputing a key from the prompt or silently falling back to a session
+/// id.  The wrapped Responses adapter still owns all wire serialization and
+/// ordinary cache-contract normalization.
+pub struct XaiCacheIdentityProvider {
+    inner: Arc<dyn Provider>,
+}
+
+impl fmt::Debug for XaiCacheIdentityProvider {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("XaiCacheIdentityProvider")
+            .field("inner", &"[provider]")
+            .finish()
+    }
+}
+
+impl XaiCacheIdentityProvider {
+    /// Wraps the configured Responses provider at the XAI boundary.
+    pub fn new(inner: Arc<dyn Provider>) -> Self {
+        Self { inner }
+    }
+}
+
+#[async_trait]
+impl Provider for XaiCacheIdentityProvider {
+    fn describe(&self) -> Vec<ModelDescriptor> {
+        self.inner.describe()
+    }
+
+    fn capabilities(&self, model: &ModelId) -> Option<Capabilities> {
+        self.inner.capabilities(model)
+    }
+
+    async fn stream(
+        &self,
+        mut request: ProviderRequest,
+        ctx: ProviderCallContext,
+    ) -> Result<ProviderStream, ProviderError> {
+        if request.cache_identity.is_none() {
+            request.cache_identity = ctx.cache_identity.clone();
+        } else if ctx
+            .cache_identity
+            .as_ref()
+            .is_some_and(|identity| request.cache_identity.as_ref() != Some(identity))
+        {
+            return Err(ProviderError::new(
+                ProviderErrorKind::BadRequest,
+                "provider request and call context carry different cache identities",
+            ));
+        }
+        request
+            .validate_cache_identity()
+            .map_err(|message| ProviderError::new(ProviderErrorKind::BadRequest, message))?;
+        self.inner.stream(request, ctx).await
+    }
+}
 
 /// Longest a login ceremony may run before Smith gives up.
 const LOGIN_DEADLINE: Duration = Duration::from_secs(10 * 60);
@@ -564,8 +630,15 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use agent_runtime::registry::{Fingerprint, RegistryRevision};
+    use agent_runtime_core::cache::{CacheEndpointIdentity, CacheIdentity};
     use agent_runtime_core::cancel::Cancellation;
     use agent_runtime_core::clock::{Clock, Deadline};
+    use agent_runtime_core::ids::{AttemptId, RequestId, SessionId};
+    use agent_runtime_core::provider::{
+        Capabilities, ModelDescriptor, ModelId, PromptCacheControl, ProviderAttemptPurpose,
+        ProviderStreamEvent,
+    };
     use agent_runtime_core::provider_credential::{
         CredentialInvalidation, ProviderAuthRejection, ProviderCredentialError,
         ProviderCredentialRevision, ProviderCredentialSource,
@@ -581,6 +654,75 @@ mod tests {
             refresh_token: refresh.into(),
             expires_at_ms,
         }
+    }
+
+    #[derive(Debug)]
+    struct IdentityRecordingProvider {
+        seen: Arc<Mutex<Option<CacheIdentity>>>,
+    }
+
+    #[async_trait]
+    impl Provider for IdentityRecordingProvider {
+        fn describe(&self) -> Vec<ModelDescriptor> {
+            Vec::new()
+        }
+
+        fn capabilities(&self, _model: &ModelId) -> Option<Capabilities> {
+            Some(Capabilities::basic_streaming())
+        }
+
+        async fn stream(
+            &self,
+            request: ProviderRequest,
+            _ctx: ProviderCallContext,
+        ) -> Result<ProviderStream, ProviderError> {
+            *self.seen.lock().expect("identity recorder") = request.cache_identity;
+            Ok(Box::pin(futures_util::stream::iter(Vec::<
+                ProviderStreamEvent,
+            >::new())))
+        }
+    }
+
+    #[tokio::test]
+    async fn context_only_cache_identity_is_forwarded_to_the_xai_adapter() {
+        let identity = CacheIdentity::builder(
+            "xai",
+            ModelId::new("grok-4.3"),
+            CacheEndpointIdentity::from_opaque(
+                "xai-responses",
+                RegistryRevision::new("endpoint-r1"),
+            ),
+            RegistryRevision::new("adapter-r1"),
+            Fingerprint::of("profile-r1"),
+        )
+        .cache_control(PromptCacheControl::Implicit)
+        .provider_key(Fingerprint::of("routing-key-r1"))
+        .build();
+        let seen = Arc::new(Mutex::new(None));
+        let provider = XaiCacheIdentityProvider::new(Arc::new(IdentityRecordingProvider {
+            seen: seen.clone(),
+        }));
+        provider
+            .stream(
+                ProviderRequest::new(
+                    ModelId::new("grok-4.3"),
+                    vec![agent_runtime_core::content::Message::user("identity")],
+                ),
+                ProviderCallContext {
+                    session: SessionId::new("session-xai"),
+                    request_id: RequestId::new("request-xai"),
+                    attempt_id: AttemptId::new("attempt-xai"),
+                    cache_identity: Some(identity.clone()),
+                    purpose: ProviderAttemptPurpose::Ordinary,
+                    cancel: Cancellation::new(),
+                    deadline: Deadline::never(),
+                },
+            )
+            .await
+            .expect("forwarded stream")
+            .collect::<Vec<_>>()
+            .await;
+        assert_eq!(*seen.lock().expect("identity recorder"), Some(identity));
     }
 
     #[derive(Debug, Default)]

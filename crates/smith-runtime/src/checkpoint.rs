@@ -34,6 +34,7 @@ use crate::private_storage::acquire_private_lock_blocking;
 use crate::private_storage::{
     acquire_private_lock, read_private_bounded, write_private_atomically,
 };
+use crate::resume_capsule::{RESUME_CAPSULE_STATE_NAMESPACE, ResumeCapsuleSlot};
 use crate::session::SessionPaths;
 
 /// Version of Smith's encrypted outer envelope.
@@ -313,6 +314,7 @@ pub struct SmithCheckpointStore {
 pub struct SmithCheckpointSetup {
     paths: SessionPaths,
     provider: Arc<dyn CheckpointKeyProvider>,
+    resume_capsule: Option<Arc<ResumeCapsuleSlot>>,
 }
 
 impl SmithCheckpointSetup {
@@ -321,20 +323,40 @@ impl SmithCheckpointSetup {
         Self {
             paths,
             provider: Arc::new(OsCheckpointKeyProvider),
+            resume_capsule: None,
         }
     }
 
     /// Uses an injected key provider, primarily for deterministic hosts and
     /// tests that must never access the developer's credential service.
     pub fn with_provider(paths: SessionPaths, provider: Arc<dyn CheckpointKeyProvider>) -> Self {
-        Self { paths, provider }
+        Self {
+            paths,
+            provider,
+            resume_capsule: None,
+        }
+    }
+
+    /// Projects the root capsule into every root protected checkpoint. Child
+    /// checkpoints share the store but are deliberately left untouched.
+    pub(crate) fn with_resume_capsule(
+        mut self,
+        resume_capsule: Option<Arc<ResumeCapsuleSlot>>,
+    ) -> Self {
+        self.resume_capsule = resume_capsule;
+        self
     }
 
     /// Initializes the exact runtime store.
     pub async fn initialize(&self) -> Result<Arc<dyn CheckpointStore>, CheckpointProtectionError> {
         SmithCheckpointStore::initialize_with(self.paths.clone(), self.provider.clone())
             .await
-            .map(|store| Arc::new(store) as Arc<dyn CheckpointStore>)
+            .map(|store| {
+                with_resume_capsule(
+                    Arc::new(store) as Arc<dyn CheckpointStore>,
+                    self.resume_capsule.clone(),
+                )
+            })
     }
 }
 
@@ -344,7 +366,69 @@ impl fmt::Debug for SmithCheckpointSetup {
             .debug_struct("SmithCheckpointSetup")
             .field("paths", &self.paths)
             .field("provider", &self.provider)
+            .field("resume_capsule", &self.resume_capsule.is_some())
             .finish()
+    }
+}
+
+/// Injects the latest bounded root capsule into protected checkpoint clones.
+/// The wrapped store remains the sole checkpoint source of truth.
+pub(crate) fn with_resume_capsule(
+    store: Arc<dyn CheckpointStore>,
+    resume_capsule: Option<Arc<ResumeCapsuleSlot>>,
+) -> Arc<dyn CheckpointStore> {
+    match resume_capsule {
+        Some(resume_capsule) => Arc::new(ResumeCapsuleCheckpointStore {
+            inner: store,
+            resume_capsule,
+        }),
+        None => store,
+    }
+}
+
+struct ResumeCapsuleCheckpointStore {
+    inner: Arc<dyn CheckpointStore>,
+    resume_capsule: Arc<ResumeCapsuleSlot>,
+}
+
+impl fmt::Debug for ResumeCapsuleCheckpointStore {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ResumeCapsuleCheckpointStore")
+            .field("inner", &self.inner)
+            .field("session", &self.resume_capsule.snapshot().session_id)
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl CheckpointStore for ResumeCapsuleCheckpointStore {
+    async fn load_latest(
+        &self,
+        session: &SessionId,
+    ) -> Result<Option<TurnCheckpoint>, RuntimeError> {
+        self.inner.load_latest(session).await
+    }
+
+    async fn save(&self, checkpoint: &TurnCheckpoint) -> Result<(), RuntimeError> {
+        let capsule = self.resume_capsule.snapshot();
+        if checkpoint.session != capsule.session_id {
+            return self.inner.save(checkpoint).await;
+        }
+        let mut checkpoint = checkpoint.clone();
+        let (prepared, state) = self
+            .resume_capsule
+            .prepare_versioned_state(checkpoint.snapshot.updated)
+            .map_err(|error| RuntimeError::conflict(error.to_string()))?;
+        checkpoint
+            .snapshot
+            .extension_state
+            .insert(RESUME_CAPSULE_STATE_NAMESPACE.to_owned(), state);
+        let result = self.inner.save(&checkpoint).await;
+        if result.is_ok() {
+            let _ = self.resume_capsule.commit_persisted(&prepared);
+        }
+        result
     }
 }
 
@@ -719,7 +803,7 @@ fn protected_state_error() -> RuntimeError {
 mod tests {
     use std::os::unix::fs::PermissionsExt;
 
-    use agent_runtime::registry::RegistryRevision;
+    use agent_runtime::registry::{Fingerprint, RegistryRevision};
     use agent_runtime_core::checkpoint::CheckpointWatermark;
     use agent_runtime_core::clock::{Deadline, Timestamp};
     use agent_runtime_core::content::UserInput;
@@ -768,6 +852,35 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Default)]
+    struct RecordingCheckpointStore {
+        saved: std::sync::Mutex<Vec<TurnCheckpoint>>,
+    }
+
+    impl RecordingCheckpointStore {
+        fn snapshots(&self) -> Vec<TurnCheckpoint> {
+            self.saved.lock().expect("recording store poisoned").clone()
+        }
+    }
+
+    #[async_trait]
+    impl CheckpointStore for RecordingCheckpointStore {
+        async fn load_latest(
+            &self,
+            _session: &SessionId,
+        ) -> Result<Option<TurnCheckpoint>, RuntimeError> {
+            Ok(None)
+        }
+
+        async fn save(&self, checkpoint: &TurnCheckpoint) -> Result<(), RuntimeError> {
+            self.saved
+                .lock()
+                .expect("recording store poisoned")
+                .push(checkpoint.clone());
+            Ok(())
+        }
+    }
+
     fn paths(root: &std::path::Path, project: &str) -> SessionPaths {
         SessionPaths::new(root, &ProjectId::new(project).unwrap())
     }
@@ -810,6 +923,73 @@ mod tests {
             Timestamp::ZERO,
         )
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn resume_capsule_is_root_only_and_child_saves_remain_unwrapped() {
+        let inner = Arc::new(RecordingCheckpointStore::default());
+        let root_session = SessionId::new("root-session");
+        let capsule = Arc::new(ResumeCapsuleSlot::new(root_session, Timestamp::ZERO));
+        let store = with_resume_capsule(inner.clone(), Some(capsule));
+
+        store
+            .save(&accepted("root-session", "root-turn"))
+            .await
+            .unwrap();
+        store
+            .save(&accepted("child-session", "child-turn"))
+            .await
+            .unwrap();
+
+        let saved = inner.snapshots();
+        assert_eq!(saved.len(), 2);
+        assert!(
+            saved[0]
+                .snapshot
+                .extension_state
+                .contains_key(RESUME_CAPSULE_STATE_NAMESPACE)
+        );
+        assert!(
+            !saved[1]
+                .snapshot
+                .extension_state
+                .contains_key(RESUME_CAPSULE_STATE_NAMESPACE)
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_capsule_wrapper_reads_the_fresh_snapshot_at_each_save() {
+        let inner = Arc::new(RecordingCheckpointStore::default());
+        let capsule = Arc::new(ResumeCapsuleSlot::new(
+            SessionId::new("root-session"),
+            Timestamp::ZERO,
+        ));
+        let store = with_resume_capsule(inner.clone(), Some(capsule.clone()));
+        let checkpoint = accepted("root-session", "root-turn");
+        let first_profile = Fingerprint::of("capsule-profile-v1");
+        let second_profile = Fingerprint::of("capsule-profile-v2");
+
+        capsule.update(|current| current.model_profile_identity = Some(first_profile.clone()));
+        store.save(&checkpoint).await.unwrap();
+        capsule.update(|current| current.model_profile_identity = Some(second_profile.clone()));
+        store.save(&checkpoint).await.unwrap();
+
+        let saved = inner.snapshots();
+        assert_eq!(saved.len(), 2);
+        assert_eq!(
+            saved[0].snapshot.extension_state[RESUME_CAPSULE_STATE_NAMESPACE].value["model_profile_identity"],
+            serde_json::json!(first_profile)
+        );
+        assert_eq!(
+            saved[1].snapshot.extension_state[RESUME_CAPSULE_STATE_NAMESPACE].value["model_profile_identity"],
+            serde_json::json!(second_profile)
+        );
+
+        // A concurrent observer update after snapshot() is not part of the
+        // wrapper's atomicity contract: the slot mutex makes each save-boundary
+        // projection deterministic, while the inner store owns persistence.
+        // Updating immediately before each save proves freshness without making
+        // the test depend on executor scheduling.
     }
 
     #[tokio::test]

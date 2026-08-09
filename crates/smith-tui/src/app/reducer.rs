@@ -471,7 +471,7 @@ impl App {
                 self.status.set_goal(goal.clone());
             }
             RuntimeEvent::Usage { record } => {
-                self.status.record_usage(&record.delta);
+                self.status.record_usage_record(record);
             }
             RuntimeEvent::CacheObservation { .. } | RuntimeEvent::CacheStateChanged { .. } => {}
             RuntimeEvent::TurnCompleted { finish, .. } => {
@@ -850,5 +850,24 @@ impl App {
             // surface yet; they are recorded by the session log regardless.
             _ => {}
         }
+        self.refresh_parked_activity();
+    }
+
+    fn refresh_parked_activity(&mut self) {
+        if matches!(
+            self.status.activity,
+            Activity::Working | Activity::Interrupting | Activity::Ended
+        ) {
+            return;
+        }
+        let pending_child = self
+            .children
+            .values()
+            .any(|child| matches!(child.state.as_str(), "running" | "working" | "resuming"));
+        self.status.activity = if pending_child {
+            Activity::ParkedAwaitingChild
+        } else {
+            Activity::Idle
+        };
     }
 }

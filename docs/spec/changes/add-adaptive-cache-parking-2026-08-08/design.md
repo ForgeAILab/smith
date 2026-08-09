@@ -214,15 +214,24 @@ dispatch eligibility, host authority, or any maintenance budget.
 
 When enabled and conformance-approved, Smith may send one ephemeral handoff
 checkpoint before a declared guarantee or bounded hold ends. It uses the exact
-parent provider, endpoint, model, cache key, and stable prefix; advertises no
-tools; asks for one bounded continuation summary; and has a short deadline and
-no automatic retry.
+parent provider, endpoint, model, cache key, and stable prefix; preserves any
+tool schemas that are already identity-bound prefix material while forcing
+tool choice to none and disabling execution; asks for one bounded continuation
+summary; and has a short deadline and no automatic retry.
 
 The request and response are never canonical messages. The response is stored
 as semantic text in the resume capsule with model, purpose, source coverage,
 usage, cache evidence, and revision. A valid summary may still be retained when
 the checkpoint reports a miss, but that miss suspends further maintenance for
 the old identity.
+
+Agent Runtime returns handoff text only to the live Smith caller and does not
+serialize it in Runtime events, snapshots, journals, or idempotency records.
+Smith persists validated text into its existing resume-capsule projection. If
+a crash loses the live text before that consumer persistence commits, recovery
+accepts the Runtime operation's persisted completion without replaying the
+provider request; the optional summary is absent and cold-resume correctness
+comes from canonical state.
 
 If a useful checkpoint is disabled or inappropriate, a minimal ephemeral
 keepalive may be used only when the adapter separately declares it safe. Smith

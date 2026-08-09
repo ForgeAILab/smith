@@ -268,16 +268,37 @@ fn stream_json_is_json_lines_with_a_terminal_result_after_shutdown() {
     assert!(lines.len() > 3, "too few events: {lines:?}");
     assert_eq!(lines.last().expect("a result")["type"], "result");
     assert_eq!(lines.last().expect("a result")["status"], "ok");
+    let streamed = &lines[..lines.len() - 1];
     assert!(
-        lines[..lines.len() - 1]
-            .iter()
-            .all(|line| line["type"] == "runtime_event")
+        streamed.iter().all(|line| matches!(
+            line["type"].as_str(),
+            Some("runtime_event" | "cache_controller")
+        )),
+        "stream contained an undocumented envelope: {streamed:?}"
     );
+    let controller_positions = streamed
+        .iter()
+        .enumerate()
+        .filter_map(|(position, line)| (line["type"] == "cache_controller").then_some(position))
+        .collect::<Vec<_>>();
+    assert_eq!(controller_positions.len(), 1, "{streamed:?}");
+    let terminal_result = lines.last().expect("a result");
+    let controller_envelope = &streamed[controller_positions[0]];
     assert!(
-        lines[..lines.len() - 1]
-            .iter()
-            .any(|line| line["event"]["payload"]["event"] == "session_shutdown"),
-        "stream omitted ordered shutdown"
+        controller_envelope["controller"].is_object(),
+        "controller envelope omitted its bounded projection"
+    );
+    assert_eq!(
+        controller_envelope["controller"], terminal_result["cache"]["controller"],
+        "stream controller and terminal cache projection diverged"
+    );
+    let shutdown_position = streamed
+        .iter()
+        .position(|line| line["event"]["payload"]["event"] == "session_shutdown")
+        .expect("stream omitted ordered shutdown");
+    assert!(
+        shutdown_position < controller_positions[0],
+        "final controller must be captured after shutdown drains: {streamed:?}"
     );
 }
 

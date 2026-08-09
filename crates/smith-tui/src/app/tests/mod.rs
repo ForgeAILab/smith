@@ -21,7 +21,7 @@ mod tests {
     };
     use agent_runtime_core::interaction::InteractionSensitivity;
     use agent_runtime_core::manifest::{ActivatedCapability, SegmentKind};
-    use agent_runtime_core::provider::ModelId;
+    use agent_runtime_core::provider::{ModelId, ProviderAttemptPurpose};
     use agent_runtime_core::tool::{PreparedToolCall, ToolCallDisplay, ToolEffects};
     use agent_runtime_core::usage::{
         CounterKind, Provenance, UsageDelta, UsageRecord, UsageSource,

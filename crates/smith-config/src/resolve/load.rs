@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use crate::model::{
     AgentModeSection, AgentPosture, ApprovalMode, ApprovalSection, BackgroundExit,
-    BackgroundSection, CacheSection, ChildAgentSection, ConfigFile, ContextSection, LimitsSection,
-    PersistenceSection,
+    BackgroundSection, CacheSection, ChildAgentSection, ConfigFile, ContextCacheSection,
+    ContextSection, LimitsSection, PersistenceSection,
 };
 use agent_runtime_core::store::Secret;
 
@@ -33,8 +33,10 @@ pub fn resolve(request: &ResolveRequest) -> Result<Resolution, ConfigError> {
     }
 
     let env = env_contributions(&request.env)?;
-    let cli = request.cli.contributions(Layer::CommandLine);
-    let session = request.session.contributions(Layer::SessionOverride);
+    let mut cli = request.cli.contributions(Layer::CommandLine);
+    normalize_idle_compaction_aliases(&mut cli)?;
+    let mut session = request.session.contributions(Layer::SessionOverride);
+    normalize_idle_compaction_aliases(&mut session)?;
 
     let agent_profiles = resolve_agent_profiles(&file_layers, &declared)?;
     let selected = select_profile(&file_layers, &env, &cli, &session, &declared)?;
@@ -60,6 +62,7 @@ pub fn resolve(request: &ResolveRequest) -> Result<Resolution, ConfigError> {
         &declared,
         agent_profiles,
         request.profile_use,
+        request.synthetic_cache_spend,
     )?;
     let cache_miss_notices = required_flag(&provenance, "cache.miss_notices")?;
     Ok(Resolution {
@@ -271,9 +274,22 @@ pub(super) fn built_in_defaults(user_dir: &Path) -> ConfigFile {
             reasoning_reserve: Some(0),
             compaction_high_watermark_percent: Some(85),
             compaction_low_watermark_percent: Some(60),
-            // One hour of meaningful inactivity, per the context-lifetime
-            // policy.
-            idle_compaction_ms: Some(60 * 60 * 1000),
+            cache: Some(ContextCacheSection {
+                // One hour of meaningful inactivity, per the context-lifetime
+                // policy.
+                inactivity_limit_ms: Some(60 * 60 * 1000),
+                maintenance: Some(crate::model::CacheMaintenanceMode::Off),
+                max_hold_while_child_ms: Some(60 * 60 * 1000),
+                max_maintenance_calls: Some(1),
+                max_maintenance_input_tokens: Some(0),
+                max_maintenance_output_tokens: Some(256),
+                maintenance_deadline_ms: Some(30_000),
+                keepalive_margin_ms: Some(120_000),
+                keepalive_jitter_percent: Some(10),
+                handoff_checkpoint: Some(true),
+                idle_compaction: Some(true),
+                resume_capsule: Some(true),
+            }),
             ..ContextSection::default()
         }),
         limits: Some(LimitsSection {
@@ -551,6 +567,8 @@ pub(super) fn contributions_of(
     let mut out = Vec::new();
     flatten(&table, &mut Vec::new(), layer, path, &mut out)?;
 
+    normalize_idle_compaction_aliases(&mut out)?;
+
     // `default_profile` is how a file selects the active profile, so it is also
     // that file's contribution to the `profile` setting.
     if let Some(name) = &file.default_profile {
@@ -568,6 +586,54 @@ pub(super) fn contributions_of(
         });
     }
     Ok(out)
+}
+
+/// Maps the one-release `context.idle_compaction_ms` spelling onto the
+/// replacement cache-policy key while retaining the original source key for
+/// explain output.  A file may contain both spellings, but choosing one by
+/// serialization order would make a configuration change silently alter the
+/// inactivity clock, so differing same-file values fail closed.
+fn normalize_idle_compaction_aliases(out: &mut [Contribution]) -> Result<(), ConfigError> {
+    let mut seen: BTreeMap<(Layer, Option<PathBuf>, String), (&SettingValue, Source)> =
+        BTreeMap::new();
+    for contribution in out.iter() {
+        let Some(canonical) = idle_compaction_canonical_key(&contribution.key) else {
+            continue;
+        };
+        let identity = (
+            contribution.source.layer,
+            contribution.source.file.clone(),
+            canonical,
+        );
+        if let Some((previous, previous_source)) = seen.get(&identity) {
+            if *previous != &contribution.value {
+                return Err(ConfigError::Ambiguous {
+                    key: identity.2.clone(),
+                    sources: vec![previous_source.clone(), contribution.source.clone()],
+                });
+            }
+        } else {
+            seen.insert(identity, (&contribution.value, contribution.source.clone()));
+        }
+    }
+    for contribution in out {
+        if let Some(canonical) = idle_compaction_canonical_key(&contribution.key) {
+            contribution.key = canonical;
+        }
+    }
+    Ok(())
+}
+
+fn idle_compaction_canonical_key(key: &str) -> Option<String> {
+    if key == "context.idle_compaction_ms" {
+        return Some("context.cache.inactivity_limit_ms".to_owned());
+    }
+    if let Some(prefix) = key.strip_suffix(".context.idle_compaction_ms") {
+        return Some(format!("{prefix}.context.cache.inactivity_limit_ms"));
+    }
+    (key == "context.cache.inactivity_limit_ms"
+        || key.ends_with(".context.cache.inactivity_limit_ms"))
+    .then(|| key.to_owned())
 }
 
 pub(super) fn flatten(
@@ -748,7 +814,7 @@ pub(super) fn env_contributions(
         }
         match setting_for_env(&upper) {
             Some(key) => claimed
-                .entry(key)
+                .entry(canonical_setting_key(key))
                 .or_default()
                 .push((name.as_str(), value.as_str())),
             None => {
@@ -791,6 +857,19 @@ pub(super) fn setting_for_env(name: &str) -> Option<&'static str> {
         .iter()
         .find(|(key, _)| env_name(key) == name)
         .map(|(key, _)| *key)
+}
+
+fn canonical_setting_key(key: &str) -> &str {
+    match key {
+        // The legacy environment spelling is accepted only as an alias; both
+        // declarations therefore participate in one same-layer ambiguity
+        // check while the original variable remains in Source for explain.
+        "context.idle_compaction_ms" => "context.cache.inactivity_limit_ms",
+        other => SETTINGS
+            .iter()
+            .find(|(candidate, _)| *candidate == other)
+            .map_or(other, |(candidate, _)| *candidate),
+    }
 }
 
 /// The environment variable name for a setting key.

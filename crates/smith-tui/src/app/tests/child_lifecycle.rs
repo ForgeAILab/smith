@@ -177,6 +177,34 @@
     }
 
     #[test]
+    fn completed_parent_turn_projects_parked_without_an_open_provider_turn() {
+        let mut app = app();
+        let child = ChildId::new("child-parked");
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        app.apply(&event(RuntimeEvent::ChildSpawned {
+            child: child.clone(),
+            workspace: WorkspacePolicy::ReadOnlyView,
+            max_turns: 1,
+            max_tokens: None,
+            deadline_ms: None,
+        }));
+        app.apply(&event(RuntimeEvent::TurnCompleted {
+            finish: TurnFinish::Completed,
+            visible_output: true,
+        }));
+
+        assert_eq!(app.status.activity, Activity::ParkedAwaitingChild);
+        assert_eq!(app.status.activity.label(), "waiting for child");
+        assert!(app.active_turn.is_none());
+
+        app.apply(&event(RuntimeEvent::ChildCompleted {
+            child,
+            result: "done".to_owned(),
+        }));
+        assert_eq!(app.status.activity, Activity::Idle);
+    }
+
+    #[test]
     fn child_progress_stays_out_of_the_root_transcript_and_in_the_child_log() {
         let mut app = app();
         let child = ChildId::new("child-1");
@@ -660,6 +688,11 @@
         assert!(
             app.overlay.is_none(),
             "a child request must not seize the root questionnaire overlay"
+        );
+        assert_eq!(
+            app.status.activity,
+            Activity::Idle,
+            "a terminal needs-input outcome is inspectable metadata, not live child work"
         );
         assert!(app.transcript.blocks().iter().any(|block| {
             matches!(

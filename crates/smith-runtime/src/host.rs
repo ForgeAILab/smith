@@ -13,11 +13,21 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use agent_runtime::delegation::ChildDurability;
+use agent_runtime::harness::{
+    SEMANTIC_SUMMARY_COMPONENT_ID, SEMANTIC_SUMMARY_PURPOSE, protected_semantic_summary_from_state,
+};
+use agent_runtime::registry::Fingerprint;
 use agent_runtime::runtime::{
     CheckpointRecoveryPolicy, GoalAdmissionGate, GoalController, GoalControllerConfig,
     SessionHandle, StartSession,
 };
+use agent_runtime_core::artifact::{
+    ArtifactProvenance, ArtifactRef, ArtifactRetention, ArtifactSensitivity, ArtifactStore,
+    ArtifactWrite,
+};
+use agent_runtime_core::cancel::CancelReason;
 use agent_runtime_core::checkpoint::{TurnCheckpoint, TurnState};
+use agent_runtime_core::clock::{Clock, SystemClock};
 use agent_runtime_core::content::{ContentPart, Message};
 use agent_runtime_core::error::{ErrorKind, RuntimeError};
 use agent_runtime_core::event::EventEnvelope;
@@ -25,7 +35,8 @@ use agent_runtime_core::event::RuntimeEvent;
 use agent_runtime_core::goal::{GoalCommand, GoalCommandResult, GoalProjection};
 use agent_runtime_core::ids::{ChildId, InteractionRequestId, SessionId, ToolCallId, TurnId};
 use agent_runtime_core::observer::EventObserver;
-use agent_runtime_core::store::{SessionSnapshot, SessionStore};
+use agent_runtime_core::store::{SessionSnapshot, SessionStateSensitivity, SessionStore};
+use agent_runtime_core::usage::{CounterKind, UsageDelta, UsageSource};
 use async_trait::async_trait;
 use smith_config::model::ApprovalMode;
 use smith_config::resolve::{Layer, ResolvedConfig, Source};
@@ -33,10 +44,14 @@ use smith_tools::{ToolCallDisplay, project_tool_call_display};
 
 use crate::artifact::SmithArtifactStore;
 use crate::background_tasks::{BackgroundTaskRegistry, TaskStatus};
+use crate::cache_controller::{
+    CacheControllerConfig, CacheControllerResolvedInputs, CacheLifecycleController,
+};
 use crate::checkpoint::{
     CheckpointBarrier, CheckpointKeyProvider, ConfiguredCheckpointKeyProvider,
-    CredentialCheckpointKeyProvider, SmithCheckpointSetup,
+    CredentialCheckpointKeyProvider, SmithCheckpointSetup, with_resume_capsule,
 };
+use crate::delegation::{DelegationLifecycle, DelegationWaitPolicy};
 use crate::factory::{FactoryError, RuntimeRequest, SmithRuntime};
 use crate::journal::{
     DefaultRedactor, EphemeralWorkInterruption, EventJournal, JournalConfig, JournalRecord,
@@ -45,6 +60,14 @@ use crate::journal::{
 use crate::private_storage::{PrivateFileLock, try_acquire_private_lock};
 use crate::project_instructions::discover as discover_project_instructions;
 use crate::reasoning::{PersistedReasoningOverride, SESSION_STATE_NAMESPACE};
+use crate::resume_capsule::{
+    ArtifactProjection, MAX_ARTIFACTS, MAX_SERIALIZED_CAPSULE_BYTES, MAX_SUMMARY_BYTES,
+    RESUME_CAPSULE_STATE_NAMESPACE, RESUME_IDLE_SUMMARY_ARTIFACT_PURPOSE,
+    RESUME_RUNTIME_SUMMARY_STATE_ARTIFACT_PURPOSE, RESUME_RUNTIME_SUMMARY_STATE_MEDIA_TYPE,
+    RESUME_SUMMARY_MEDIA_TYPE, RecoverySource, ResumeCapsule, ResumeCapsuleError,
+    ResumeCapsuleSlot, SummaryCoverage, SummaryUsage, restore_runtime_summary_state,
+    restore_summary_artifact,
+};
 use crate::session::{FileSessionStore, ProjectId, SessionListing, SessionPaths};
 use crate::summary::SmithSemanticSummaryConfig;
 
@@ -137,6 +160,10 @@ pub struct HostSession {
     recovered_ephemeral_work: Option<EphemeralWorkInterruption>,
     goal_controller: Mutex<Option<GoalController>>,
     goal_admission_gate: Option<GoalAdmissionGate>,
+    delegation_lifecycle: Mutex<Option<DelegationLifecycle>>,
+    cache_controller: Mutex<Option<CacheLifecycleController>>,
+    final_cache_lifecycle: Mutex<Option<crate::cache_controller::CacheControllerSnapshot>>,
+    resume_capsule: Option<Arc<ResumeCapsuleSlot>>,
 }
 
 /// Redaction-safe identity of an exact pending interaction restored from a
@@ -196,6 +223,39 @@ impl HostSession {
     /// this resume.
     pub fn recovered_ephemeral_work(&self) -> Option<&EphemeralWorkInterruption> {
         self.recovered_ephemeral_work.as_ref()
+    }
+
+    /// Current identity-only parent parking projection, when delegation is
+    /// enabled for this root session.
+    pub fn delegation_parking(&self) -> Option<crate::delegation::ParkingSnapshot> {
+        self.delegation_lifecycle
+            .lock()
+            .expect("delegation lifecycle lock poisoned")
+            .as_ref()
+            .map(DelegationLifecycle::snapshot)
+    }
+
+    /// Current redaction-safe cold-continuation projection, when enabled.
+    pub fn resume_capsule(&self) -> Option<crate::resume_capsule::RedactedResumeCapsule> {
+        self.resume_capsule
+            .as_ref()
+            .map(|slot| slot.snapshot().redacted_projection())
+    }
+
+    /// Current redaction-safe adaptive cache controller projection.
+    pub fn cache_lifecycle(&self) -> Option<crate::cache_controller::CacheControllerSnapshot> {
+        let live = self
+            .cache_controller
+            .lock()
+            .expect("cache controller lock poisoned")
+            .as_ref()
+            .map(CacheLifecycleController::snapshot);
+        live.or_else(|| {
+            self.final_cache_lifecycle
+                .lock()
+                .expect("final cache lifecycle lock poisoned")
+                .clone()
+        })
     }
 
     /// Current bounded persistent-goal projection for this eligible root
@@ -423,12 +483,29 @@ impl HostSession {
         })
     }
 
-    /// Shuts down the runtime first, then drains and syncs its journal.
+    /// Stops host schedulers, performs Runtime's final save, then drains and
+    /// syncs the journal.
     ///
     /// The journal is attempted even when snapshot persistence fails so a
     /// storage error cannot strand the writer task or silently lose events
     /// already accepted by its bounded queue.
     pub async fn shutdown(&self) -> Result<Option<JournalStats>, RuntimeError> {
+        let cache_controller = self
+            .cache_controller
+            .lock()
+            .expect("cache controller lock poisoned")
+            .take();
+        if let Some(controller) = cache_controller.as_ref() {
+            controller.stop_scheduling();
+        }
+        let delegation_lifecycle = self
+            .delegation_lifecycle
+            .lock()
+            .expect("delegation lifecycle lock poisoned")
+            .take();
+        if let Some(lifecycle) = delegation_lifecycle {
+            lifecycle.shutdown().await;
+        }
         let goal_controller = self
             .goal_controller
             .lock()
@@ -443,9 +520,20 @@ impl HostSession {
             .delegation()
             .and_then(|delegation| delegation.coordinator())
         {
-            Some(coordinator) => coordinator.flush().await,
+            Some(coordinator) => coordinator.shutdown(CancelReason::Shutdown).await,
             None => Ok(()),
         };
+        if let Some(controller) = cache_controller {
+            controller.shutdown().await;
+            *self
+                .final_cache_lifecycle
+                .lock()
+                .expect("final cache lifecycle lock poisoned") = Some(controller.snapshot());
+        }
+        // Drain the controller before Runtime's terminal snapshot. An idle
+        // summary accepted before shutdown may still finish optional capsule
+        // projection while the worker drains; the final Runtime save must be
+        // the last session-store write.
         let session = self.session.shutdown().await;
 
         // Background tasks are session-owned, process-group work, not runtime
@@ -606,11 +694,29 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
             discover_project_instructions(&request.project_root)?;
     }
     let mut config = request.runtime.config.clone();
+    let summary_provider = request.runtime.semantic_summary.as_ref().map(|summary| {
+        summary
+            .provider
+            .clone()
+            .unwrap_or_else(|| config.provider.name.value.clone())
+    });
     let surface = request.runtime.surface;
     reject_project_granted_authority(&config, &request.project_root)?;
     reject_project_controlled_persistence(&config, &request.project_root)?;
     let persistence = config.persistence.enabled.value;
     let session_id = request.session_id.clone().unwrap_or_else(mint_session_id);
+    let host_clock: Arc<dyn Clock> = request
+        .runtime
+        .clock
+        .clone()
+        .unwrap_or_else(|| Arc::new(SystemClock));
+    request.runtime.clock = Some(host_clock.clone());
+    let resume_capsule = config
+        .context
+        .cache
+        .resume_capsule
+        .value
+        .then(|| Arc::new(ResumeCapsuleSlot::new(session_id.clone(), host_clock.now())));
 
     if request.session_id.is_some() && !persistence {
         return Err(HostSessionError::ResumeDisabled {
@@ -640,6 +746,20 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         if request.session_id.is_some() {
             let snapshot = inner.load(&session_id).await?;
             resume_snapshot_exists = snapshot.is_some();
+            // Prime the persistence projection before Runtime startup so a
+            // recovered non-terminal checkpoint cannot save an empty capsule
+            // while the final recovery selection is still pending.  This is
+            // only a write-safety baseline; the authoritative candidate
+            // selection is repeated after start_session below.
+            if let (Some(slot), Some(persisted)) = (
+                resume_capsule.as_ref(),
+                snapshot.as_ref().and_then(|snapshot| {
+                    snapshot.extension_state.get(RESUME_CAPSULE_STATE_NAMESPACE)
+                }),
+            ) {
+                slot.restore_versioned_state(persisted, RecoverySource::CanonicalSnapshot)
+                    .map_err(|error| RuntimeError::conflict(error.to_string()))?;
+            }
             if let Some(state) = snapshot
                 .as_ref()
                 .and_then(|snapshot| snapshot.extension_state.get(SESSION_STATE_NAMESPACE))
@@ -664,8 +784,19 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
             inner,
             persistence_redactor.clone(),
             reasoning_override,
+            resume_capsule.clone(),
+            request.runtime.artifact_store.clone(),
+            summary_provider.clone(),
         ));
         request.runtime.session_store = Some(store);
+        if let Some(store) = request.runtime.checkpoint_store.take() {
+            request.runtime.checkpoint_store =
+                Some(with_resume_capsule(store, resume_capsule.clone()));
+        }
+        if let Some(setup) = request.runtime.checkpoint_setup.take() {
+            request.runtime.checkpoint_setup =
+                Some(setup.with_resume_capsule(resume_capsule.clone()));
+        }
         if request.runtime.checkpoint_store.is_none() && request.runtime.checkpoint_setup.is_none()
         {
             let provider = match request.checkpoint_keys.clone() {
@@ -691,10 +822,13 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
                     }
                 }
             };
-            request.runtime.checkpoint_setup = Some(match provider {
-                Some(provider) => SmithCheckpointSetup::with_provider(paths.clone(), provider),
-                None => SmithCheckpointSetup::platform(paths.clone()),
-            });
+            request.runtime.checkpoint_setup = Some(
+                match provider {
+                    Some(provider) => SmithCheckpointSetup::with_provider(paths.clone(), provider),
+                    None => SmithCheckpointSetup::platform(paths.clone()),
+                }
+                .with_resume_capsule(resume_capsule.clone()),
+            );
         }
 
         let (slot, barrier, ring) = if config.persistence.journal_events.value {
@@ -774,6 +908,18 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
             return Err(HostSessionError::SessionNotFound {
                 session: session_id,
             });
+        }
+        if let (Some(slot), Some(persisted)) = (
+            resume_capsule.as_ref(),
+            checkpoint.as_ref().and_then(|checkpoint| {
+                checkpoint
+                    .snapshot
+                    .extension_state
+                    .get(RESUME_CAPSULE_STATE_NAMESPACE)
+            }),
+        ) {
+            slot.restore_versioned_state(persisted, RecoverySource::ProtectedCheckpoint)
+                .map_err(|error| RuntimeError::conflict(error.to_string()))?;
         }
         checkpoint
     } else {
@@ -866,7 +1012,7 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         }
     };
 
-    let mut start = StartSession::new().with_id(session_id);
+    let mut start = StartSession::new().with_id(session_id.clone());
     if let Some(floor) = resume_identity_floor {
         start = start.with_resume_identity_floor(floor);
     }
@@ -883,11 +1029,76 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         }
     };
 
+    // Agent Runtime has now loaded its canonical and protected startup
+    // candidates through the wrapped stores.  Select the capsule candidates
+    // only after that boundary, then restore the optional protected summary
+    // body and apply cold-process reconciliation last.  In particular, the
+    // RedactingSessionStore load above must never run after cold_resume and
+    // restore a pre-cold canonical projection back into the live slot.
+    if request.session_id.is_some() {
+        let canonical = match &paths {
+            Some(paths) => {
+                FileSessionStore::new(paths.clone())
+                    .load(&session_id)
+                    .await?
+            }
+            None => None,
+        };
+        let protected = match runtime.checkpoint_store() {
+            Some(store) => store.load_latest(&session_id).await?,
+            None => None,
+        };
+        if let Some(slot) = &resume_capsule {
+            if let Some(persisted) = canonical
+                .as_ref()
+                .and_then(|snapshot| snapshot.extension_state.get(RESUME_CAPSULE_STATE_NAMESPACE))
+            {
+                slot.restore_versioned_state(persisted, RecoverySource::CanonicalSnapshot)
+                    .map_err(|error| RuntimeError::conflict(error.to_string()))?;
+            }
+            if let Some(persisted) = protected.as_ref().and_then(|checkpoint| {
+                checkpoint
+                    .snapshot
+                    .extension_state
+                    .get(RESUME_CAPSULE_STATE_NAMESPACE)
+            }) {
+                slot.restore_versioned_state(persisted, RecoverySource::ProtectedCheckpoint)
+                    .map_err(|error| RuntimeError::conflict(error.to_string()))?;
+            }
+            if let Some(store) = runtime.artifact_store() {
+                if let Some(summary_state) = restore_runtime_summary_state(slot, store.as_ref())
+                    .await
+                    .map_err(|error| RuntimeError::conflict(error.to_string()))?
+                    && session
+                        .restore_semantic_summary_if_absent(summary_state)
+                        .is_err()
+                {
+                    // Summary state is optional recovery acceleration. A
+                    // changed route, incompatible revision, or stale source
+                    // prefix must never block canonical cold continuation.
+                    slot.update(|capsule| capsule.latest_summary_state_artifact = None);
+                }
+                restore_summary_artifact(slot, store.as_ref())
+                    .await
+                    .map_err(|error| RuntimeError::conflict(error.to_string()))?;
+            }
+            let _ = slot.cold_resume();
+        }
+    }
+
     // Root sessions get their delegation coordinator now that the session
     // exists: the `agent` tool starts answering, and completed child results
     // are routed into the session's safe-boundary inbox.
+    let mut delegation_lifecycle = None;
     if let Some(delegation) = runtime.delegation() {
-        crate::delegation::wire_delegation(&session, delegation).await?;
+        let wait_policy = DelegationWaitPolicy::new(
+            config.child_agents.wait_default_timeout_ms.value,
+            config.child_agents.wait_max_timeout_ms.value,
+        )?;
+        delegation_lifecycle = Some(
+            crate::delegation::wire_delegation_with_wait_policy(&session, delegation, wait_policy)
+                .await?,
+        );
         let durable_children = delegation
             .coordinator()
             .expect("a successfully wired delegation has a coordinator")
@@ -943,6 +1154,44 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         })
         .transpose()?;
 
+    let cache_config = CacheControllerConfig::from_resolved(
+        &config.context.cache,
+        CacheControllerResolvedInputs {
+            synthetic_spend: config.synthetic_cache_spend,
+            contract: runtime.policy().model_profile.capabilities.cache_contract(),
+            model_input_limit: runtime.policy().model_profile.limits.max_input_tokens,
+            model_output_limit: runtime.policy().model_profile.limits.max_output_tokens,
+            provider: runtime.policy().provider_name.clone(),
+            model: runtime.policy().model.as_str().to_owned(),
+            endpoint_identity: runtime.policy().cache_endpoint_identity.clone(),
+            profile_identity: runtime.policy().model_profile.fingerprint(),
+            semantic_summary_provider: runtime
+                .policy()
+                .semantic_summary
+                .as_ref()
+                .map(|summary| summary.provider.clone()),
+            semantic_summary_model: runtime
+                .policy()
+                .semantic_summary
+                .as_ref()
+                .map(|summary| summary.model.clone()),
+            attempt_marker_available: resume_capsule.is_some(),
+        },
+    )
+    .map_err(RuntimeError::config)?;
+    let parking_monitor = delegation_lifecycle
+        .as_ref()
+        .map(DelegationLifecycle::monitor);
+    let cache_controller = CacheLifecycleController::start(
+        session.clone(),
+        cache_config,
+        host_clock,
+        parking_monitor,
+        resume_capsule.clone(),
+        runtime.artifact_store().cloned(),
+        changes.clone(),
+    );
+
     Ok(HostSession {
         runtime,
         session,
@@ -956,6 +1205,10 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         recovered_ephemeral_work,
         goal_controller: Mutex::new(goal_controller),
         goal_admission_gate,
+        delegation_lifecycle: Mutex::new(delegation_lifecycle),
+        cache_controller: Mutex::new(Some(cache_controller)),
+        final_cache_lifecycle: Mutex::new(None),
+        resume_capsule,
     })
 }
 
@@ -1084,6 +1337,74 @@ struct RedactingSessionStore {
     inner: FileSessionStore,
     redactor: DefaultRedactor,
     reasoning: PersistedReasoningOverride,
+    resume_capsule: Option<Arc<ResumeCapsuleSlot>>,
+    artifact_store: Option<Arc<dyn ArtifactStore>>,
+    summary_provider: Option<String>,
+}
+
+struct OrdinarySummaryPersistence {
+    model: String,
+    revision: agent_runtime::registry::RegistryRevision,
+    body: String,
+    usage: SummaryUsage,
+    artifact: ArtifactRef,
+    coverage: Vec<SummaryCoverage>,
+}
+
+struct RuntimeSummaryPersistence {
+    state_artifact: ArtifactRef,
+    ordinary: Option<OrdinarySummaryPersistence>,
+}
+
+fn project_runtime_summary_persistence(
+    capsule: &mut ResumeCapsule,
+    persistence: RuntimeSummaryPersistence,
+    summary_provider: Option<&str>,
+    updated: agent_runtime_core::clock::Timestamp,
+) -> Result<(), ResumeCapsuleError> {
+    let runtime_state_unchanged = capsule
+        .latest_summary_state_artifact
+        .as_ref()
+        .is_some_and(|current| current == &persistence.state_artifact);
+    capsule.attach_runtime_summary_state_artifact(persistence.state_artifact)?;
+
+    // Runtime's canonical snapshot can still contain the successful ordinary
+    // summary that preceded a Smith handoff or a later failed idle attempt.
+    // An identical protected-state artifact is exact evidence that Runtime
+    // has not committed a newer summary, so retain the newer Smith projection
+    // regardless of its purpose/outcome. A different state artifact is a
+    // genuinely newer Runtime summary and replaces it below.
+    if let Some(ordinary) = persistence.ordinary
+        && !runtime_state_unchanged
+    {
+        let provider = summary_provider.ok_or(ResumeCapsuleError::InvalidSerializedForm)?;
+        capsule.record_ordinary_summary(
+            provider,
+            ordinary.model,
+            ordinary.revision,
+            updated,
+            ordinary.body,
+            ordinary.coverage,
+        )?;
+        if let Some(summary) = capsule.semantic_summary.as_mut() {
+            summary.provenance.usage = ordinary.usage;
+        }
+        let artifact_id = ordinary.artifact.id.to_string();
+        capsule.attach_summary_artifact(ordinary.artifact.clone())?;
+        if capsule.exact_state.artifacts.len() < MAX_ARTIFACTS
+            && !capsule
+                .exact_state
+                .artifacts
+                .iter()
+                .any(|artifact| artifact.artifact == artifact_id)
+        {
+            capsule.exact_state.artifacts.push(ArtifactProjection {
+                artifact: artifact_id,
+                digest: Some(Fingerprint::of(ordinary.artifact.digest.hex.as_bytes())),
+            });
+        }
+    }
+    Ok(())
 }
 
 impl RedactingSessionStore {
@@ -1091,18 +1412,151 @@ impl RedactingSessionStore {
         inner: FileSessionStore,
         redactor: DefaultRedactor,
         reasoning: PersistedReasoningOverride,
+        resume_capsule: Option<Arc<ResumeCapsuleSlot>>,
+        artifact_store: Option<Arc<dyn ArtifactStore>>,
+        summary_provider: Option<String>,
     ) -> Self {
         Self {
             inner,
             redactor,
             reasoning,
+            resume_capsule,
+            artifact_store,
+            summary_provider,
         }
+    }
+
+    /// Copies the latest Sensitive Runtime summary extension into an
+    /// owner-authorized artifact. Smith's ordinary JSON snapshot intentionally
+    /// drops this namespace; the capsule keeps only the protected reference so
+    /// a later host can hand the exact state back to Runtime.
+    async fn persist_runtime_summary_state(
+        &self,
+        snapshot: &SessionSnapshot,
+    ) -> Option<RuntimeSummaryPersistence> {
+        let capsule = self.resume_capsule.as_ref()?;
+        if snapshot.id != capsule.snapshot().session_id {
+            return None;
+        }
+        let state = snapshot
+            .extension_state
+            .get(SEMANTIC_SUMMARY_COMPONENT_ID)?;
+        if state.sensitivity != SessionStateSensitivity::Sensitive {
+            return None;
+        }
+        let mut summary = protected_semantic_summary_from_state(state, UsageDelta::new()).ok()?;
+        let summary_usage = snapshot
+            .usage
+            .records()
+            .iter()
+            .rev()
+            .find(|record| {
+                record.source == UsageSource::SemanticSummary
+                    && record.provenance.purpose.as_deref() == Some(summary.purpose.as_str())
+            })
+            .map(|record| record.delta.clone())
+            .unwrap_or_default();
+        summary.usage = summary_usage.clone();
+        if summary.source_artifact.provenance.session != snapshot.id {
+            return None;
+        }
+        let bytes = serde_json::to_vec(state).ok()?;
+        if bytes.is_empty() || bytes.len() > MAX_SERIALIZED_CAPSULE_BYTES {
+            return None;
+        }
+        let artifacts = self.artifact_store.as_ref()?;
+        let idempotency_key = Fingerprint::of(&bytes).as_str().to_owned();
+        let state_artifact = artifacts
+            .put(ArtifactWrite {
+                bytes,
+                media_type: RESUME_RUNTIME_SUMMARY_STATE_MEDIA_TYPE.to_owned(),
+                sensitivity: ArtifactSensitivity::Sensitive,
+                retention: ArtifactRetention::Session,
+                provenance: ArtifactProvenance::new(
+                    snapshot.id.clone(),
+                    RESUME_RUNTIME_SUMMARY_STATE_ARTIFACT_PURPOSE,
+                ),
+                idempotency_key,
+            })
+            .await
+            .ok()?;
+        if state_artifact.provenance.session != snapshot.id
+            || state_artifact.provenance.purpose != RESUME_RUNTIME_SUMMARY_STATE_ARTIFACT_PURPOSE
+            || state_artifact.media_type != RESUME_RUNTIME_SUMMARY_STATE_MEDIA_TYPE
+            || state_artifact.byte_length == 0
+            || state_artifact.byte_length > MAX_SERIALIZED_CAPSULE_BYTES as u64
+        {
+            return None;
+        }
+
+        let ordinary = if summary.purpose == SEMANTIC_SUMMARY_PURPOSE {
+            let body = summary.body.as_str();
+            if body.is_empty() || body.len() > MAX_SUMMARY_BYTES {
+                None
+            } else {
+                let artifact = artifacts
+                    .put(ArtifactWrite {
+                        bytes: body.as_bytes().to_vec(),
+                        media_type: RESUME_SUMMARY_MEDIA_TYPE.to_owned(),
+                        sensitivity: summary.source_artifact.sensitivity,
+                        retention: ArtifactRetention::Session,
+                        provenance: ArtifactProvenance::new(
+                            snapshot.id.clone(),
+                            RESUME_IDLE_SUMMARY_ARTIFACT_PURPOSE,
+                        ),
+                        idempotency_key: summary.summary_revision.as_str().to_owned(),
+                    })
+                    .await
+                    .ok();
+                artifact.and_then(|artifact| {
+                    (artifact.provenance.session == snapshot.id
+                        && artifact.provenance.purpose == RESUME_IDLE_SUMMARY_ARTIFACT_PURPOSE
+                        && artifact.media_type == RESUME_SUMMARY_MEDIA_TYPE
+                        && artifact.byte_length > 0
+                        && artifact.byte_length <= MAX_SUMMARY_BYTES as u64)
+                        .then(|| OrdinarySummaryPersistence {
+                            model: summary.model_id,
+                            revision: summary.summary_revision,
+                            body: body.to_owned(),
+                            usage: summary_usage_projection(&summary_usage),
+                            artifact,
+                            coverage: vec![SummaryCoverage::new(
+                                "canonical_history",
+                                0,
+                                summary.omit_prefix as u64,
+                            )],
+                        })
+                })
+            }
+        } else {
+            None
+        };
+        Some(RuntimeSummaryPersistence {
+            state_artifact,
+            ordinary,
+        })
+    }
+}
+
+fn summary_usage_projection(usage: &UsageDelta) -> SummaryUsage {
+    SummaryUsage {
+        input_uncached: usage.get(CounterKind::InputUncached),
+        input_cached: usage.get(CounterKind::InputCached),
+        cache_write: usage.get(CounterKind::CacheWrite),
+        output: usage.get(CounterKind::Output),
+        reasoning: usage.get(CounterKind::Reasoning),
+        cost_micro_usd: None,
+        cost_is_estimate: false,
     }
 }
 
 #[async_trait]
 impl SessionStore for RedactingSessionStore {
     async fn load(&self, id: &SessionId) -> Result<Option<SessionSnapshot>, RuntimeError> {
+        // Capsule recovery is deliberately host-ordered after Runtime startup
+        // has loaded canonical and protected state.  Loading must remain a
+        // pure store operation here: mutating the slot would allow this call
+        // to overwrite a cold-resumed projection during start_session.
         self.inner.load(id).await
     }
 
@@ -1116,26 +1570,78 @@ impl SessionStore for RedactingSessionStore {
                 self.reasoning.versioned()?,
             );
         }
-        let mut value = serde_json::to_value(&snapshot).map_err(|error| {
-            RuntimeError::new(
-                ErrorKind::Serialization,
-                format!(
-                    "session `{}` could not be prepared for redaction: {error}",
-                    snapshot.id
-                ),
-            )
-        })?;
+        let prepared_capsule = if let Some(slot) = &self.resume_capsule {
+            // Protected artifact I/O happens before the atomic live-slot
+            // projection, so a concurrent canonical event cannot be captured
+            // in the rollback baseline and then erased by a failed save.
+            let persistence = self.persist_runtime_summary_state(&snapshot).await;
+            let projection = persistence.and_then(|persistence| {
+                slot.try_update_atomic(|capsule| {
+                    project_runtime_summary_persistence(
+                        capsule,
+                        persistence,
+                        self.summary_provider.as_deref(),
+                        snapshot.updated,
+                    )
+                })
+                .ok()
+            });
+            let (prepared, state) = match slot.prepare_versioned_state(snapshot.updated) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    if let Some((previous, expected)) = projection {
+                        let _ = slot.restore_if_current(&expected, previous);
+                    }
+                    return Err(RuntimeError::conflict(error.to_string()));
+                }
+            };
+            snapshot
+                .extension_state
+                .insert(RESUME_CAPSULE_STATE_NAMESPACE.to_owned(), state);
+            Some((slot, prepared, projection))
+        } else {
+            None
+        };
+        let mut value = match serde_json::to_value(&snapshot) {
+            Ok(value) => value,
+            Err(error) => {
+                if let Some((slot, _, Some((previous, expected)))) = prepared_capsule.as_ref() {
+                    let _ = slot.restore_if_current(expected, previous.clone());
+                }
+                return Err(RuntimeError::new(
+                    ErrorKind::Serialization,
+                    format!(
+                        "session `{}` could not be prepared for redaction: {error}",
+                        snapshot.id
+                    ),
+                ));
+            }
+        };
         self.redactor.redact(&mut value);
-        let redacted = serde_json::from_value(value).map_err(|error| {
-            RuntimeError::new(
-                ErrorKind::Serialization,
-                format!(
-                    "session `{}` could not be restored after redaction: {error}",
-                    snapshot.id
-                ),
-            )
-        })?;
-        self.inner.save(&redacted).await
+        let redacted = match serde_json::from_value(value) {
+            Ok(redacted) => redacted,
+            Err(error) => {
+                if let Some((slot, _, Some((previous, expected)))) = prepared_capsule.as_ref() {
+                    let _ = slot.restore_if_current(expected, previous.clone());
+                }
+                return Err(RuntimeError::new(
+                    ErrorKind::Serialization,
+                    format!(
+                        "session `{}` could not be restored after redaction: {error}",
+                        snapshot.id
+                    ),
+                ));
+            }
+        };
+        let result = self.inner.save(&redacted).await;
+        if let Some((slot, prepared, projection)) = prepared_capsule {
+            if result.is_ok() {
+                let _ = slot.commit_persisted(&prepared);
+            } else if let Some((previous, expected)) = projection {
+                let _ = slot.restore_if_current(&expected, previous);
+            }
+        }
+        result
     }
 }
 
@@ -1431,11 +1937,16 @@ impl EventObserver for EventRing {
 mod tests {
     use super::*;
     use crate::journal::JournalLine;
+    use crate::resume_capsule::{ResumeSummaryOutcome, ResumeSummaryPurpose};
+    use agent_runtime_core::artifact::{ArtifactDigest, ArtifactId};
     use agent_runtime_core::cancel::CancelReason;
     use agent_runtime_core::content::ToolCall;
     use agent_runtime_core::delegation::WorkspacePolicy;
     use agent_runtime_core::ids::{EventId, QuestionId};
     use agent_runtime_core::interaction::InteractionSensitivity;
+    use agent_runtime_core::provider::{
+        CacheEndpointIdentity, CacheIdentity, CacheIdentityFragment, ModelId,
+    };
     use serde_json::json;
 
     fn journal_event(seq: u64, payload: RuntimeEvent) -> JournalLine {
@@ -1449,6 +1960,241 @@ mod tests {
                 payload,
             ),
         })
+    }
+
+    fn cache_identity() -> CacheIdentity {
+        CacheIdentity::builder(
+            "provider",
+            ModelId::new("model"),
+            CacheEndpointIdentity::from_opaque(
+                "endpoint",
+                agent_runtime::registry::RegistryRevision::new("endpoint-r1"),
+            ),
+            agent_runtime::registry::RegistryRevision::new("adapter-r1"),
+            Fingerprint::of("profile"),
+        )
+        .provider_key(Fingerprint::of("account"))
+        .stable_prefix(vec![CacheIdentityFragment::new(
+            "system",
+            Fingerprint::of("system"),
+        )])
+        .build()
+    }
+
+    fn artifact_reference(
+        session: &SessionId,
+        id: &str,
+        purpose: &str,
+        media_type: &str,
+    ) -> ArtifactRef {
+        ArtifactRef {
+            id: ArtifactId::new(id).expect("bounded artifact id"),
+            digest: ArtifactDigest::new("sha256", "aa").expect("valid digest"),
+            media_type: media_type.to_owned(),
+            byte_length: 8,
+            sensitivity: ArtifactSensitivity::Sensitive,
+            retention: ArtifactRetention::Session,
+            provenance: ArtifactProvenance::new(session.clone(), purpose),
+        }
+    }
+
+    #[test]
+    fn stale_runtime_ordinary_summary_cannot_replace_a_handoff_during_persist_prepare() {
+        let session = SessionId::new("session-handoff-persist");
+        let identity = cache_identity();
+        let slot = ResumeCapsuleSlot::new(session.clone(), agent_runtime_core::clock::Timestamp(1));
+        let handoff_artifact = artifact_reference(
+            &session,
+            "handoff-artifact",
+            crate::resume_capsule::RESUME_SUMMARY_ARTIFACT_PURPOSE,
+            RESUME_SUMMARY_MEDIA_TYPE,
+        );
+        let runtime_state = artifact_reference(
+            &session,
+            "runtime-state",
+            RESUME_RUNTIME_SUMMARY_STATE_ARTIFACT_PURPOSE,
+            RESUME_RUNTIME_SUMMARY_STATE_MEDIA_TYPE,
+        );
+        slot.update(|capsule| {
+            capsule
+                .attach_runtime_summary_state_artifact(runtime_state.clone())
+                .expect("prior ordinary Runtime state artifact");
+            capsule.cache.prior_identity = Some(identity.clone());
+            capsule
+                .record_handoff_summary(
+                    "provider",
+                    "model",
+                    agent_runtime::registry::RegistryRevision::new("handoff-r1"),
+                    identity,
+                    agent_runtime_core::clock::Timestamp(2),
+                    "handoff body",
+                    vec![SummaryCoverage::new("canonical_events", 0, 3)],
+                )
+                .expect("valid handoff summary");
+            capsule
+                .attach_summary_artifact(handoff_artifact)
+                .expect("valid handoff artifact");
+        });
+        let handoff = slot
+            .snapshot()
+            .semantic_summary
+            .expect("handoff projection");
+
+        let persistence = RuntimeSummaryPersistence {
+            state_artifact: runtime_state,
+            ordinary: Some(OrdinarySummaryPersistence {
+                model: "summary-model".to_owned(),
+                revision: agent_runtime::registry::RegistryRevision::new("ordinary-r2"),
+                body: "stale ordinary body".to_owned(),
+                usage: SummaryUsage::default(),
+                artifact: artifact_reference(
+                    &session,
+                    "ordinary-artifact",
+                    RESUME_IDLE_SUMMARY_ARTIFACT_PURPOSE,
+                    RESUME_SUMMARY_MEDIA_TYPE,
+                ),
+                coverage: vec![SummaryCoverage::new("canonical_history", 0, 2)],
+            }),
+        };
+        slot.try_update_atomic(|capsule| {
+            project_runtime_summary_persistence(
+                capsule,
+                persistence,
+                Some("summary-provider"),
+                agent_runtime_core::clock::Timestamp(3),
+            )
+        })
+        .expect("runtime summary state reference projects atomically");
+
+        let after = slot.snapshot();
+        assert_eq!(after.semantic_summary.as_ref(), Some(&handoff));
+        assert!(after.latest_summary_state_artifact.is_some());
+        let (_, state) = slot
+            .prepare_versioned_state(agent_runtime_core::clock::Timestamp(4))
+            .expect("handoff capsule remains persistable");
+        assert_eq!(
+            state.value["semantic_summary"]["provenance"]["purpose"],
+            "handoff_checkpoint"
+        );
+        assert_eq!(
+            state.value["semantic_summary"]["provenance"]["provider"],
+            "provider"
+        );
+        assert_eq!(
+            state.value["semantic_summary"]["provenance"]["model"],
+            "model"
+        );
+
+        let newer_runtime_state = artifact_reference(
+            &session,
+            "runtime-state-newer",
+            RESUME_RUNTIME_SUMMARY_STATE_ARTIFACT_PURPOSE,
+            RESUME_RUNTIME_SUMMARY_STATE_MEDIA_TYPE,
+        );
+        slot.try_update_atomic(|capsule| {
+            project_runtime_summary_persistence(
+                capsule,
+                RuntimeSummaryPersistence {
+                    state_artifact: newer_runtime_state.clone(),
+                    ordinary: Some(OrdinarySummaryPersistence {
+                        model: "summary-model-newer".to_owned(),
+                        revision: agent_runtime::registry::RegistryRevision::new("ordinary-r3"),
+                        body: "newer ordinary body".to_owned(),
+                        usage: SummaryUsage::default(),
+                        artifact: artifact_reference(
+                            &session,
+                            "ordinary-artifact-newer",
+                            RESUME_IDLE_SUMMARY_ARTIFACT_PURPOSE,
+                            RESUME_SUMMARY_MEDIA_TYPE,
+                        ),
+                        coverage: vec![SummaryCoverage::new("canonical_history", 0, 4)],
+                    }),
+                },
+                Some("summary-provider"),
+                agent_runtime_core::clock::Timestamp(5),
+            )
+        })
+        .expect("newer ordinary Runtime state replaces the older handoff");
+        let newer = slot.snapshot();
+        let newer_summary = newer.semantic_summary.expect("newer ordinary projection");
+        assert_eq!(
+            newer_summary.provenance.purpose,
+            ResumeSummaryPurpose::OrdinarySummary
+        );
+        assert_eq!(newer_summary.provenance.provider, "summary-provider");
+        assert_eq!(newer_summary.provenance.model, "summary-model-newer");
+        assert_eq!(newer_summary.provenance.cache_identity, None);
+        assert_eq!(
+            newer.latest_summary_state_artifact.as_ref(),
+            Some(&newer_runtime_state)
+        );
+    }
+
+    #[test]
+    fn stale_runtime_success_cannot_replace_a_newer_failed_idle_projection() {
+        let session = SessionId::new("session-idle-failure-persist");
+        let runtime_state = artifact_reference(
+            &session,
+            "runtime-state-before-failure",
+            RESUME_RUNTIME_SUMMARY_STATE_ARTIFACT_PURPOSE,
+            RESUME_RUNTIME_SUMMARY_STATE_MEDIA_TYPE,
+        );
+        let slot = ResumeCapsuleSlot::new(session.clone(), agent_runtime_core::clock::Timestamp(1));
+        slot.update(|capsule| {
+            capsule
+                .attach_runtime_summary_state_artifact(runtime_state.clone())
+                .expect("prior successful Runtime summary state");
+            capsule
+                .record_failed_ordinary_summary(
+                    "summary-provider",
+                    "summary-model",
+                    agent_runtime::registry::RegistryRevision::new("failed-r2"),
+                    agent_runtime_core::clock::Timestamp(3),
+                    vec![SummaryCoverage::new("canonical_events", 0, 4)],
+                )
+                .expect("failed idle projection");
+        });
+        let failed = slot
+            .snapshot()
+            .semantic_summary
+            .expect("failed summary metadata");
+
+        slot.try_update_atomic(|capsule| {
+            project_runtime_summary_persistence(
+                capsule,
+                RuntimeSummaryPersistence {
+                    state_artifact: runtime_state,
+                    ordinary: Some(OrdinarySummaryPersistence {
+                        model: "summary-model".to_owned(),
+                        revision: agent_runtime::registry::RegistryRevision::new("successful-r1"),
+                        body: "older successful body".to_owned(),
+                        usage: SummaryUsage::default(),
+                        artifact: artifact_reference(
+                            &session,
+                            "older-success-artifact",
+                            RESUME_IDLE_SUMMARY_ARTIFACT_PURPOSE,
+                            RESUME_SUMMARY_MEDIA_TYPE,
+                        ),
+                        coverage: vec![SummaryCoverage::new("canonical_history", 0, 2)],
+                    }),
+                },
+                Some("summary-provider"),
+                agent_runtime_core::clock::Timestamp(4),
+            )
+        })
+        .expect("unchanged Runtime state is recognized as stale");
+
+        let after = slot.snapshot();
+        assert_eq!(after.semantic_summary.as_ref(), Some(&failed));
+        assert_eq!(
+            after
+                .semantic_summary
+                .as_ref()
+                .map(|summary| summary.provenance.outcome),
+            Some(ResumeSummaryOutcome::Failed)
+        );
+        slot.prepare_versioned_state(agent_runtime_core::clock::Timestamp(5))
+            .expect("failed metadata remains persistable");
     }
 
     #[test]

@@ -338,6 +338,13 @@ pub struct ProfileSection {
     /// Profile-scoped `[context]` overrides.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<ContextSection>,
+    /// Profile-scoped `[child_agents]` wait policy overrides.
+    ///
+    /// This is deliberately separate from the top-level named child-agent
+    /// presets.  The latter describe who may run; this table bounds how a
+    /// parent waits for one of them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_agents: Option<ChildAgentPolicySection>,
     /// Profile-scoped `[limits]` overrides.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limits: Option<LimitsSection>,
@@ -359,6 +366,99 @@ pub struct CacheSection {
     /// Whether significant cache-miss notices are shown on local surfaces.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub miss_notices: Option<bool>,
+}
+
+/// How Smith handles optional synthetic provider-cache maintenance.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CacheMaintenanceMode {
+    /// Do not schedule synthetic cache work.
+    #[default]
+    Off,
+    /// Record plans and observations without synthetic provider I/O.
+    Observe,
+    /// Permit bounded synthetic work after all capability and host gates pass.
+    Adaptive,
+}
+
+impl CacheMaintenanceMode {
+    /// Parses a stable configuration spelling.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "off" => Some(Self::Off),
+            "observe" => Some(Self::Observe),
+            "adaptive" => Some(Self::Adaptive),
+            _ => None,
+        }
+    }
+
+    /// Stable configuration spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Observe => "observe",
+            Self::Adaptive => "adaptive",
+        }
+    }
+
+    /// All accepted spellings.
+    pub fn spellings() -> &'static [&'static str] {
+        &["off", "observe", "adaptive"]
+    }
+}
+
+/// Layered lifecycle policy under `[context.cache]`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextCacheSection {
+    /// Requested synthetic maintenance mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maintenance: Option<CacheMaintenanceMode>,
+    /// Meaningful inactivity before the idle boundary, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inactivity_limit_ms: Option<u64>,
+    /// Maximum bounded parent hold while a child remains active.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_hold_while_child_ms: Option<u64>,
+    /// Synthetic requests permitted per parked interval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_maintenance_calls: Option<u8>,
+    /// Exact input-token budget; zero selects the resolved plan/model budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_maintenance_input_tokens: Option<u32>,
+    /// Generated output-token budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_maintenance_output_tokens: Option<u32>,
+    /// Deadline for a synthetic request, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maintenance_deadline_ms: Option<u64>,
+    /// Early scheduling margin before a declared retention boundary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keepalive_margin_ms: Option<u64>,
+    /// Jitter applied to the early scheduling margin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keepalive_jitter_percent: Option<u8>,
+    /// Whether a same-model handoff summary may consume the allowance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff_checkpoint: Option<bool>,
+    /// Whether idle compaction is enabled at the meaningful-inactivity limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_compaction: Option<bool>,
+    /// Whether the redaction-safe resume capsule projection is enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_capsule: Option<bool>,
+}
+
+/// Parent wait bounds under `[profiles.<name>.child_agents]`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChildAgentPolicySection {
+    /// Default timeout for `agent.wait`, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_default_timeout_ms: Option<u64>,
+    /// Maximum accepted `agent.wait.timeout_ms`, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_max_timeout_ms: Option<u64>,
 }
 
 /// One provider declaration.
@@ -576,6 +676,11 @@ pub struct ContextSection {
     /// milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idle_compaction_ms: Option<u64>,
+    /// Adaptive cache lifecycle policy.  The legacy
+    /// `idle_compaction_ms` field above is retained as a bounded alias for
+    /// `cache.inactivity_limit_ms` during the transition release.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<ContextCacheSection>,
 }
 
 /// Loop limits for one turn.

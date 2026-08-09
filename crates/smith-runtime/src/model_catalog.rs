@@ -393,6 +393,12 @@ pub fn runtime_catalog_source(
                 // The catalog describes the model; the serving adapter
                 // declares how it drives a prompt cache.
                 prompt_cache: PromptCacheControl::None,
+                // Cache behavior is intentionally left to the resolved
+                // provider/model adapter.  A public model catalog may say
+                // nothing about endpoint-specific retention, evidence, or
+                // synthetic conformance and must not grant those capabilities
+                // by accident.
+                cache_contract: None,
                 auth: AuthKind::ApiKey,
                 continuation: false,
                 max_output_tokens: Some(limits.max_output_tokens),

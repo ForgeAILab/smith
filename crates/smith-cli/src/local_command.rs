@@ -169,6 +169,14 @@ pub(super) async fn handle_local_command(
                 },
             );
             let context = render_context_status(&app.status, policy);
+            let cache_controller = host.cache_lifecycle().map_or_else(
+                || "cache maintenance: unavailable".to_owned(),
+                |snapshot| render_cache_controller_status(&snapshot),
+            );
+            let resume_capsule = host.resume_capsule().map_or_else(
+                || "resume capsule: disabled".to_owned(),
+                |capsule| render_resume_capsule_status(&capsule),
+            );
             let harness = render_harness_status(&app.status);
             let reasoning = render_reasoning_status(policy);
             let goal = host.goal().map_or_else(
@@ -211,7 +219,7 @@ pub(super) async fn handle_local_command(
                      provider: {}\nmodel: {}\npermission: {:?}\n\
                      {reasoning}\n\
                      protected mid-turn recovery: {}\n\
-                     {harness}\n{context}\nproject: {}\nGit: {}\n\
+                     {harness}\n{context}\n{cache_controller}\n{resume_capsule}\nproject: {}\nGit: {}\n\
                      goal: {goal}\nconnections: {connections}\nchildren: {}\nusage: {usage}\n\
                      cost: {cost}\n\
                      change attribution: {}",
@@ -833,9 +841,12 @@ pub(super) fn render_context_status(status: &Status, policy: &RuntimePolicy) -> 
 pub(super) fn render_cache_status(status: &Status) -> String {
     let usage = status.session_usage();
     let Some(summary) = status.cache_summary() else {
-        return format!(
-            "cache: state unknown · CH ? · misses {} · re-billed {}",
-            usage.cache_miss_count, usage.cache_rebilled_tokens,
+        return append_cache_lifecycle(
+            format!(
+                "cache: state unknown · CH ? · misses {} · re-billed {}",
+                usage.cache_miss_count, usage.cache_rebilled_tokens,
+            ),
+            status,
         );
     };
     let expected = summary
@@ -856,18 +867,236 @@ pub(super) fn render_cache_status(status: &Status) -> String {
         Some(agent_runtime_core::event::EstimationConfidence::Estimated) => "estimated",
         None => "?",
     };
-    format!(
-        "cache: state {} · CH {} · expected {} · observed {} · missed {} · confidence {} · misses {} · re-billed {} · extra cost {}",
-        summary.state.as_str(),
-        summary.render_ch(),
-        expected,
-        observed,
-        missed,
-        confidence,
-        usage.cache_miss_count,
-        usage.cache_rebilled_tokens,
-        cost,
+    append_cache_lifecycle(
+        format!(
+            "cache: state {} · CH {} · expected {} · observed {} · missed {} · confidence {} · misses {} · re-billed {} · extra cost {}",
+            summary.state.as_str(),
+            summary.render_ch(),
+            expected,
+            observed,
+            missed,
+            confidence,
+            usage.cache_miss_count,
+            usage.cache_rebilled_tokens,
+            cost,
+        ),
+        status,
     )
+}
+
+fn append_cache_lifecycle(mut line: String, status: &Status) -> String {
+    let lifecycle = status.cache_lifecycle();
+    if let Some(identity) = &lifecycle.cache_identity {
+        line.push_str(&format!(" · identity {identity}"));
+    }
+    line.push_str(&format!(
+        " · guarantee {} · maintenance calls {}",
+        lifecycle
+            .guaranteed_until_ms
+            .map_or_else(|| "?".to_owned(), |timestamp| format!("{timestamp}ms")),
+        lifecycle.maintenance_calls_used,
+    ));
+    if let Some(reason) = lifecycle.suspension_reason {
+        line.push_str(&format!(" · suspended {}", cache_operation_reason(reason)));
+    }
+    line
+}
+
+/// Renders Smith's bounded adaptive scheduler without conflating structural
+/// preservation, provider evidence, or calculated economics.
+pub(super) fn render_cache_controller_status(
+    controller: &smith_runtime::cache_controller::CacheControllerSnapshot,
+) -> String {
+    let requested = format!("{:?}", controller.requested_maintenance).to_ascii_lowercase();
+    let effective = format!("{:?}", controller.effective_maintenance).to_ascii_lowercase();
+    let scheduled = controller
+        .scheduled_for
+        .map_or_else(|| "none".to_owned(), |at| format!("{}ms", at.0));
+    let decision = controller.decision.as_ref().map_or_else(
+        || "none".to_owned(),
+        |decision| {
+            let mut rendered = format!("{:?}", decision.disposition).to_ascii_lowercase();
+            if let Some(reason) = decision.reason {
+                rendered.push_str(&format!("/{reason:?}").to_ascii_lowercase());
+            }
+            rendered
+        },
+    );
+    let narrowing = controller
+        .narrowing_reason
+        .as_ref()
+        .map(|reason| format!(" · narrowed {reason}"))
+        .unwrap_or_default();
+    let idle = render_idle_compaction_status(controller);
+    let synthetic = render_synthetic_attempt_status(controller);
+    let Some(lease) = controller.lifecycle.current() else {
+        return format!(
+            "cache maintenance: requested {requested} · effective {effective} · authority {} · lease none · calls {}/{} · scheduled {scheduled} · decision {decision}{narrowing}{idle}{synthetic}",
+            if controller.synthetic_spend_authorized {
+                "allowed"
+            } else {
+                "denied"
+            },
+            controller.interval_attempts,
+            controller.policy.max_maintenance_calls,
+        );
+    };
+    let guarantee = lease
+        .guaranteed_until
+        .map_or_else(|| "?".to_owned(), |at| format!("{}ms", at.0));
+    let reads = lease
+        .observed_read_tokens
+        .map_or_else(|| "?".to_owned(), |tokens| tokens.to_string());
+    let writes = lease
+        .observed_write_tokens
+        .map_or_else(|| "?".to_owned(), |tokens| tokens.to_string());
+    let last = lease.last_operation_purpose.map_or_else(
+        || "none".to_owned(),
+        |purpose| format!("{purpose:?}").to_ascii_lowercase(),
+    );
+    let suspension = lease.suspension_reason.map_or_else(
+        || "none".to_owned(),
+        |reason| format!("{reason:?}").to_ascii_lowercase(),
+    );
+    format!(
+        "cache maintenance: requested {requested} · effective {effective} · authority {} · lease {:?} · preserved {} · reads {reads} · writes {writes} · guarantee {guarantee} · calls {}/{} · synthetic in/out {}/{} · last {last} · scheduled {scheduled} · decision {decision} · suspension {suspension}{narrowing}{idle}{synthetic}",
+        if controller.synthetic_spend_authorized {
+            "allowed"
+        } else {
+            "denied"
+        },
+        lease.status,
+        lease.structurally_preserved_prefix_tokens,
+        controller.interval_attempts,
+        controller.policy.max_maintenance_calls,
+        lease.maintenance_input_tokens,
+        lease.maintenance_output_tokens,
+    )
+}
+
+fn render_synthetic_attempt_status(
+    controller: &smith_runtime::cache_controller::CacheControllerSnapshot,
+) -> String {
+    let Some(attempt) = controller.synthetic_attempts.last() else {
+        return " · synthetic attempts 0".to_owned();
+    };
+    let identity = attempt.cache_identity.as_deref().unwrap_or("none");
+    let cost = attempt.cost_micro_usd.map_or_else(
+        || "?".to_owned(),
+        |micro| format!("${}.{:06}", micro / 1_000_000, micro % 1_000_000),
+    );
+    format!(
+        " · synthetic attempts {} · latest {:?} {}/{} · identity {identity} · usage in/cached/write/out/reasoning {}/{}/{}/{}/{} · cost {cost}/{:?} · latency {}ms · status {}",
+        controller.synthetic_attempts.len(),
+        attempt.purpose,
+        attempt.provider,
+        attempt.model,
+        attempt.usage.input_uncached,
+        attempt.usage.input_cached,
+        attempt.usage.cache_write,
+        attempt.usage.output,
+        attempt.usage.reasoning,
+        attempt.cost_provenance,
+        attempt.latency_ms,
+        attempt.status,
+    )
+    .to_ascii_lowercase()
+}
+
+fn render_idle_compaction_status(
+    controller: &smith_runtime::cache_controller::CacheControllerSnapshot,
+) -> String {
+    let decision = controller.idle_compaction_decision.as_ref().map_or_else(
+        || "none".to_owned(),
+        |decision| {
+            let mut value = format!("{:?}", decision.disposition).to_ascii_lowercase();
+            if let Some(reason) = decision.reason {
+                value.push_str(&format!("/{reason:?}").to_ascii_lowercase());
+            }
+            value
+        },
+    );
+    let outcome = controller.idle_compaction_outcome.map_or_else(
+        || "none".to_owned(),
+        |outcome| format!("{outcome:?}").to_ascii_lowercase(),
+    );
+    let reason = controller
+        .idle_compaction_reason
+        .as_deref()
+        .unwrap_or("none");
+    let latency = controller.idle_compaction_latency_ms.map_or_else(
+        || "?".to_owned(),
+        |milliseconds| format!("{milliseconds}ms"),
+    );
+    let provider = controller
+        .idle_compaction_provider
+        .as_deref()
+        .unwrap_or("?");
+    let model = controller.idle_compaction_model.as_deref().unwrap_or("?");
+    let revision = controller
+        .idle_compaction_revision
+        .as_ref()
+        .map_or_else(|| "?".to_owned(), ToString::to_string);
+    let usage = &controller.idle_compaction_usage;
+    format!(
+        " · idle attempted {} · idle decision {decision} · idle outcome {outcome} · idle reason {reason} · idle latency {latency} · idle route {provider}/{model}/{revision} · idle usage in/cached/write/out/reasoning {}/{}/{}/{}/{}",
+        controller.idle_compaction.attempted,
+        usage.input_uncached,
+        usage.input_cached,
+        usage.cache_write,
+        usage.output,
+        usage.reasoning,
+    )
+}
+
+pub(super) fn render_resume_capsule_status(
+    capsule: &smith_runtime::resume_capsule::RedactedResumeCapsule,
+) -> String {
+    let summary = capsule.semantic_summary.as_ref().map_or_else(
+        || "none".to_owned(),
+        |summary| {
+            format!(
+                "{:?}/{}/{} · rev {} · coverage {} · {:?}",
+                summary.provenance.purpose,
+                summary.provenance.provider,
+                summary.provenance.model,
+                summary.provenance.revision,
+                summary.provenance.source_coverage.len(),
+                summary.provenance.outcome,
+            )
+            .to_ascii_lowercase()
+        },
+    );
+    format!(
+        "resume capsule: schema {} · watermark {} · persisted {} · summary {summary}",
+        capsule.schema_version,
+        capsule.last_persisted_watermark,
+        capsule
+            .last_persisted_at
+            .map_or_else(|| "?".to_owned(), |at| format!("{}ms", at.0)),
+    )
+}
+
+const fn cache_operation_reason(
+    reason: agent_runtime_core::event::CacheOperationReason,
+) -> &'static str {
+    use agent_runtime_core::event::CacheOperationReason;
+    match reason {
+        CacheOperationReason::Unsupported => "unsupported",
+        CacheOperationReason::MissingConformance => "missing_conformance",
+        CacheOperationReason::MissingAuthority => "missing_authority",
+        CacheOperationReason::InvalidIdentity => "invalid_identity",
+        CacheOperationReason::BudgetExceeded => "budget_exceeded",
+        CacheOperationReason::Cancelled => "cancelled",
+        CacheOperationReason::DeadlineExceeded => "deadline_exceeded",
+        CacheOperationReason::CapabilityChanged => "capability_changed",
+        CacheOperationReason::IdentityChanged => "identity_changed",
+        CacheOperationReason::CacheMiss => "cache_miss",
+        CacheOperationReason::CacheExpired => "cache_expired",
+        CacheOperationReason::ProtocolViolation => "protocol_violation",
+        CacheOperationReason::Shutdown => "shutdown",
+        CacheOperationReason::Conflict => "conflict",
+    }
 }
 
 pub(super) fn render_reasoning_status(policy: &RuntimePolicy) -> String {

@@ -249,7 +249,8 @@ keepalive MAY use:
 - the same provider, endpoint, model, cache key, and exact identity;
 - the exact stable parent prefix;
 - a minimal noncanonical suffix;
-- no tools or structured side effects;
+- any tool schemas already contained in the exact stable prefix, with tool
+  choice forced to none and no execution or structured side effects;
 - a bounded output limit and deadline;
 - provider-selected retention controls; and
 - jittered scheduling before a known lease boundary.
@@ -484,7 +485,8 @@ or bounded hold ends and SHALL:
 - use the exact parent provider, endpoint, model, cache key, and cache identity;
 - reuse the exact stable parent prefix;
 - add a noncanonical instruction requesting a concise continuation summary;
-- disable tools and tool choice;
+- preserve any identity-bound stable tool schemas while forcing tool choice to
+  none and disabling execution;
 - use bounded output and deadline limits;
 - exclude request and response from canonical history;
 - persist summary text, route, source coverage, and provenance in the resume
@@ -513,12 +515,32 @@ an otherwise ineligible checkpoint eligible.
 - **BUT** suspends further maintenance for the old identity
 - **AND** sends no prewarm request
 
+#### Scenario: Parent identity changes at the projection boundary
+
+- **GIVEN** a handoff operation returned for cache identity A
+- **AND** a real parent turn is ready to commit cache identity B
+- **WHEN** Smith attempts to persist A's identity-bound handoff summary
+- **THEN** it holds Runtime's current-identity lease through capsule
+  persistence or discards the stale projection
+- **AND** any later real identity change retires A's handoff metadata before
+  the capsule is persisted again
+
 #### Scenario: Provider emits a tool call
 
-- **GIVEN** a checkpoint request advertised no tools
+- **GIVEN** a checkpoint request forced tool choice to none and exposed no
+  executable side-effect capability
 - **WHEN** the provider emits a tool call anyway
 - **THEN** Smith fails the checkpoint attempt and records a contract violation
 - **AND** executes no tool
+
+#### Scenario: Crash loses protected live summary
+
+- **GIVEN** Runtime durably completed a handoff operation but Smith crashed
+  before persisting its protected live-only text into the resume capsule
+- **WHEN** the same operation is recovered
+- **THEN** Smith accepts the persisted completion without a summary
+- **AND** Runtime does not replay the provider request
+- **AND** cold resume reconstructs from canonical state
 
 ### Requirement: Summary-model isolation
 
@@ -573,12 +595,14 @@ text, credentials, or cache contents.
 
 ### Requirement: Cache-maintenance security boundary
 
-Every synthetic cache request SHALL advertise no tools; request no mutation,
-process, network, delegation, interaction, or approval capability; use a
-separately attributed purpose; fit the exact resolved plan/model input budget;
-have bounded output, deadline, provider/session attempt, usage, and no-retry
-policy; require explicit host synthetic-spend authority; remain cancellable
-during shutdown; and stop after the session releases its lifecycle lease.
+Every synthetic cache request SHALL preserve only tool schemas already bound
+into the exact stable prefix, force tool choice to none, and expose no tool
+execution, mutation, process, network, delegation, interaction, or approval
+capability. It SHALL use a separately attributed purpose; fit the exact
+resolved plan/model input budget; have bounded output, deadline,
+provider/session attempt, usage, and no-retry policy; require explicit host
+synthetic-spend authority; remain cancellable during shutdown; and stop after
+the session releases its lifecycle lease.
 Calculated price or cost MUST remain presentation-only. Redaction-safe state
 MUST NOT persist raw credentials, provider cache contents, or private
 instruction bodies.

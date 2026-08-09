@@ -54,6 +54,42 @@
     }
 
     #[test]
+    fn cache_controller_status_projects_idle_compaction_metadata_and_usage() {
+        let mut controller =
+            smith_runtime::cache_controller::CacheControllerSnapshot::default();
+        controller.idle_compaction.attempted = true;
+        controller.idle_compaction_outcome = Some(
+            smith_runtime::cache_controller::IdleCompactionOutcome::Completed,
+        );
+        controller.idle_compaction_reason = Some("artifact_projection_unavailable".to_owned());
+        controller.idle_compaction_latency_ms = Some(17);
+        controller.idle_compaction_provider = Some("summary-provider".to_owned());
+        controller.idle_compaction_model = Some("summary-model".to_owned());
+        controller.idle_compaction_revision =
+            Some(agent_runtime::registry::RegistryRevision::new("summary-r1"));
+        controller.idle_compaction_usage.input_uncached = 120;
+        controller.idle_compaction_usage.input_cached = 800;
+        controller.idle_compaction_usage.output = 20;
+
+        let rendered = render_cache_controller_status(&controller);
+        assert!(rendered.contains("idle attempted true"), "{rendered}");
+        assert!(rendered.contains("idle outcome completed"), "{rendered}");
+        assert!(
+            rendered.contains("idle reason artifact_projection_unavailable"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("idle latency 17ms"), "{rendered}");
+        assert!(
+            rendered.contains("idle route summary-provider/summary-model/summary-r1"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("idle usage in/cached/write/out/reasoning 120/800/0/20/0"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
     fn context_categories_name_tool_results_separately_from_user_input() {
         let tool = context_display_category("tool_result", 4_200);
         let user = context_display_category("user_input", 58);

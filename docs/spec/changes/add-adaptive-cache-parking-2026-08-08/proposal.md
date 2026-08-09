@@ -1,6 +1,6 @@
 ---
 created_at: 2026-08-08T23:10:05Z
-updated_at: 2026-08-09T02:38:40Z
+updated_at: 2026-08-09T18:17:26Z
 ---
 
 ## Why
@@ -99,9 +99,11 @@ process restart, model change, or eviction.
   adapter conformance allow it. `off` and `observe` issue no synthetic
   requests. Calculated price and cost remain presentation-only and never
   authorize dispatch.
-- Security: synthetic requests advertise no tools, cannot perform side
-  effects, have bounded input/output/deadline/retry policy, and never persist
-  raw credentials, private prompt bodies, or provider cache contents.
+- Security: synthetic requests preserve only tool schemas that are already
+  identity-bound stable-prefix material, force tool choice to none, never
+  execute returned tool calls or expose host side-effect capability, have
+  bounded input/output/deadline/retry policy, and never persist raw
+  credentials, private prompt bodies, or provider cache contents.
 
 ## Out of Scope
 

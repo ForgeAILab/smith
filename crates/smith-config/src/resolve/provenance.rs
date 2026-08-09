@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use agent_runtime_core::store::Secret;
 
-use crate::model::{ApprovalMode, BackgroundExit};
+use crate::model::{ApprovalMode, BackgroundExit, CacheMaintenanceMode};
 
 use super::provider::nearest;
 use super::types::ConfigError;
@@ -80,6 +80,24 @@ pub(super) const SETTINGS: &[(&str, ValueKind)] = &[
     ("background.max_children", ValueKind::Integer),
     ("background.max_monitors", ValueKind::Integer),
     ("cache.miss_notices", ValueKind::Flag),
+    ("context.cache.maintenance", ValueKind::Text),
+    ("context.cache.inactivity_limit_ms", ValueKind::Integer),
+    ("context.cache.max_hold_while_child_ms", ValueKind::Integer),
+    ("context.cache.max_maintenance_calls", ValueKind::Integer),
+    (
+        "context.cache.max_maintenance_input_tokens",
+        ValueKind::Integer,
+    ),
+    (
+        "context.cache.max_maintenance_output_tokens",
+        ValueKind::Integer,
+    ),
+    ("context.cache.maintenance_deadline_ms", ValueKind::Integer),
+    ("context.cache.keepalive_margin_ms", ValueKind::Integer),
+    ("context.cache.keepalive_jitter_percent", ValueKind::Integer),
+    ("context.cache.handoff_checkpoint", ValueKind::Flag),
+    ("context.cache.idle_compaction", ValueKind::Flag),
+    ("context.cache.resume_capsule", ValueKind::Flag),
     ("context.capability_budget", ValueKind::Integer),
     (
         "context.compaction_high_watermark_percent",
@@ -90,6 +108,8 @@ pub(super) const SETTINGS: &[(&str, ValueKind)] = &[
         ValueKind::Integer,
     ),
     ("context.idle_compaction_ms", ValueKind::Integer),
+    ("child_agents.wait_default_timeout_ms", ValueKind::Integer),
+    ("child_agents.wait_max_timeout_ms", ValueKind::Integer),
     ("context.max_estimated_slack", ValueKind::Integer),
     ("context.output_reserve", ValueKind::Integer),
     ("context.reasoning_reserve", ValueKind::Integer),
@@ -465,6 +485,34 @@ pub struct Overrides {
     pub compaction_low_watermark_percent: Option<u8>,
     /// Idle time before one automatic compaction, in milliseconds.
     pub idle_compaction_ms: Option<u64>,
+    /// Replacement inactivity limit for the cache lifecycle policy.
+    pub inactivity_limit_ms: Option<u64>,
+    /// Requested cache lifecycle maintenance mode.
+    pub cache_maintenance: Option<CacheMaintenanceMode>,
+    /// Maximum bounded child hold, in milliseconds.
+    pub max_hold_while_child_ms: Option<u64>,
+    /// Synthetic requests permitted per parked interval.
+    pub max_maintenance_calls: Option<u8>,
+    /// Exact synthetic input-token budget; zero means the resolved plan.
+    pub max_maintenance_input_tokens: Option<u32>,
+    /// Synthetic generated output-token budget.
+    pub max_maintenance_output_tokens: Option<u32>,
+    /// Synthetic request deadline, in milliseconds.
+    pub maintenance_deadline_ms: Option<u64>,
+    /// Early cache-boundary scheduling margin, in milliseconds.
+    pub keepalive_margin_ms: Option<u64>,
+    /// Cache-boundary scheduling jitter percentage.
+    pub keepalive_jitter_percent: Option<u8>,
+    /// Whether the same-model handoff checkpoint is enabled.
+    pub handoff_checkpoint: Option<bool>,
+    /// Whether idle compaction is enabled.
+    pub idle_compaction: Option<bool>,
+    /// Whether resume-capsule projection is enabled.
+    pub resume_capsule: Option<bool>,
+    /// Default child wait timeout, in milliseconds.
+    pub wait_default_timeout_ms: Option<u64>,
+    /// Maximum child wait timeout, in milliseconds.
+    pub wait_max_timeout_ms: Option<u64>,
     /// Retries per provider attempt.
     pub max_retries: Option<u32>,
     /// Tool calls allowed in one turn.
@@ -569,6 +617,84 @@ impl Overrides {
         if let Some(value) = self.idle_compaction_ms {
             push(
                 "context.idle_compaction_ms",
+                SettingValue::Integer(clamp_to_i64(value)),
+            );
+        }
+        if let Some(value) = self.inactivity_limit_ms {
+            push(
+                "context.cache.inactivity_limit_ms",
+                SettingValue::Integer(clamp_to_i64(value)),
+            );
+        }
+        if let Some(value) = self.cache_maintenance {
+            push(
+                "context.cache.maintenance",
+                SettingValue::Text(value.as_str().to_owned()),
+            );
+        }
+        if let Some(value) = self.max_hold_while_child_ms {
+            push(
+                "context.cache.max_hold_while_child_ms",
+                SettingValue::Integer(clamp_to_i64(value)),
+            );
+        }
+        if let Some(value) = self.max_maintenance_calls {
+            push(
+                "context.cache.max_maintenance_calls",
+                SettingValue::Integer(value.into()),
+            );
+        }
+        if let Some(value) = self.max_maintenance_input_tokens {
+            push(
+                "context.cache.max_maintenance_input_tokens",
+                SettingValue::Integer(value.into()),
+            );
+        }
+        if let Some(value) = self.max_maintenance_output_tokens {
+            push(
+                "context.cache.max_maintenance_output_tokens",
+                SettingValue::Integer(value.into()),
+            );
+        }
+        if let Some(value) = self.maintenance_deadline_ms {
+            push(
+                "context.cache.maintenance_deadline_ms",
+                SettingValue::Integer(clamp_to_i64(value)),
+            );
+        }
+        if let Some(value) = self.keepalive_margin_ms {
+            push(
+                "context.cache.keepalive_margin_ms",
+                SettingValue::Integer(clamp_to_i64(value)),
+            );
+        }
+        if let Some(value) = self.keepalive_jitter_percent {
+            push(
+                "context.cache.keepalive_jitter_percent",
+                SettingValue::Integer(value.into()),
+            );
+        }
+        if let Some(value) = self.handoff_checkpoint {
+            push(
+                "context.cache.handoff_checkpoint",
+                SettingValue::Flag(value),
+            );
+        }
+        if let Some(value) = self.idle_compaction {
+            push("context.cache.idle_compaction", SettingValue::Flag(value));
+        }
+        if let Some(value) = self.resume_capsule {
+            push("context.cache.resume_capsule", SettingValue::Flag(value));
+        }
+        if let Some(value) = self.wait_default_timeout_ms {
+            push(
+                "child_agents.wait_default_timeout_ms",
+                SettingValue::Integer(clamp_to_i64(value)),
+            );
+        }
+        if let Some(value) = self.wait_max_timeout_ms {
+            push(
+                "child_agents.wait_max_timeout_ms",
                 SettingValue::Integer(clamp_to_i64(value)),
             );
         }

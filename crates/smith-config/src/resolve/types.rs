@@ -43,7 +43,8 @@ use std::path::PathBuf;
 use agent_runtime_core::store::Secret;
 
 use crate::model::{
-    AgentPosture, ApprovalMode, BackgroundExit, ProfileUse, ReasoningDialect, ReasoningOnlyBehavior,
+    AgentPosture, ApprovalMode, BackgroundExit, CacheMaintenanceMode, ProfileUse, ReasoningDialect,
+    ReasoningOnlyBehavior,
 };
 
 use super::provenance::*;
@@ -65,6 +66,11 @@ pub struct ResolveRequest {
     pub session: Overrides,
     /// Placement the selected agent profile must support.
     pub profile_use: ProfileUse,
+    /// Explicit host authority for synthetic cache spend.  This value is
+    /// intentionally injected by the host rather than read from any project
+    /// or repository file: untrusted configuration may narrow authority but
+    /// can never grant it.
+    pub synthetic_cache_spend: SyntheticCacheSpendAuthority,
 }
 
 impl ResolveRequest {
@@ -113,6 +119,37 @@ impl ResolveRequest {
         self.profile_use = placement;
         self
     }
+
+    /// Supplies the host's explicit synthetic-cache-spend authority.
+    #[must_use]
+    pub fn with_synthetic_cache_spend(mut self, authority: SyntheticCacheSpendAuthority) -> Self {
+        self.synthetic_cache_spend = authority;
+        self
+    }
+}
+
+/// Host-only authority for bounded synthetic cache requests.
+///
+/// There is deliberately no TOML/JSON deserializer for this type.  A project
+/// setting may request adaptive maintenance, but only the trusted host can
+/// inject `Allow` into a resolve request.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SyntheticCacheSpendAuthority {
+    /// Synthetic provider spend is denied (the fail-closed default).
+    #[default]
+    Deny,
+    /// The host explicitly permits bounded synthetic provider spend.
+    Allow,
+}
+
+impl SyntheticCacheSpendAuthority {
+    /// Stable diagnostic spelling without exposing any secret authority token.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Deny => "deny",
+            Self::Allow => "allow",
+        }
+    }
 }
 
 /// One configuration file that was found and read.
@@ -159,6 +196,15 @@ pub struct ResolvedConfig {
     pub model_reasoning: ResolvedModelReasoning,
     /// Context reserves, budgets, and watermarks.
     pub context: ResolvedContext,
+    /// Trusted host authority for bounded synthetic provider spend.
+    ///
+    /// This is carried separately from the requested cache policy so a
+    /// repository cannot smuggle an `allow` value through ordinary layered
+    /// configuration.  Resolution defaults to [`SyntheticCacheSpendAuthority::Deny`]
+    /// and only a host-created [`ResolveRequest`] can supply `Allow`.
+    pub synthetic_cache_spend: SyntheticCacheSpendAuthority,
+    /// Bounded parent wait policy for child completion.
+    pub child_agents: ResolvedChildAgents,
     /// Loop limits.
     pub limits: ResolvedLimits,
     /// Session persistence policy.
@@ -403,7 +449,54 @@ pub struct ResolvedContext {
     pub compaction_low_watermark_percent: Sourced<u8>,
     /// Idle time before one automatic compaction, in milliseconds.
     pub idle_compaction_ms: Sourced<u64>,
+    /// Layered adaptive provider-cache policy.
+    pub cache: ResolvedCachePolicy,
 }
+
+/// Resolved adaptive cache lifecycle policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedCachePolicy {
+    /// Requested mode before host authority/capability narrowing.
+    pub requested_maintenance: Sourced<CacheMaintenanceMode>,
+    /// Effective mode after fail-closed host narrowing.
+    pub effective_maintenance: Sourced<CacheMaintenanceMode>,
+    /// Why effective policy was narrowed, if it was.
+    pub narrowing_reason: Option<String>,
+    /// One meaningful-inactivity clock shared by maintenance and compaction.
+    pub inactivity_limit_ms: Sourced<u64>,
+    /// Bounded child hold; zero disables child holding.
+    pub max_hold_while_child_ms: Sourced<u64>,
+    /// Synthetic requests allowed per parked interval.
+    pub max_maintenance_calls: Sourced<u8>,
+    /// Exact input budget; zero means the resolved plan/model budget.
+    pub max_maintenance_input_tokens: Sourced<u32>,
+    /// Bounded generated output budget.
+    pub max_maintenance_output_tokens: Sourced<u32>,
+    /// Bounded synthetic request deadline.
+    pub maintenance_deadline_ms: Sourced<u64>,
+    /// Early scheduling margin.
+    pub keepalive_margin_ms: Sourced<u64>,
+    /// Scheduling jitter percentage.
+    pub keepalive_jitter_percent: Sourced<u8>,
+    /// Whether same-model handoff checkpointing is enabled.
+    pub handoff_checkpoint: Sourced<bool>,
+    /// Whether idle compaction is enabled.
+    pub idle_compaction: Sourced<bool>,
+    /// Whether resume-capsule projections are enabled.
+    pub resume_capsule: Sourced<bool>,
+}
+
+/// Resolved bounded parent wait policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedChildAgents {
+    /// Default `agent.wait` timeout; zero means immediate status check.
+    pub wait_default_timeout_ms: Sourced<u64>,
+    /// Maximum accepted `agent.wait.timeout_ms`.
+    pub wait_max_timeout_ms: Sourced<u64>,
+}
+
+/// Compatibility name for hosts that call the section a policy.
+pub type ResolvedChildAgentPolicy = ResolvedChildAgents;
 
 /// Resolved loop limits.
 #[derive(Debug, Clone, PartialEq, Eq)]

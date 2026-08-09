@@ -1277,7 +1277,13 @@ impl App {
             // actually reported, so a dormant recovered child (no stream,
             // no call here) contributes nothing.
             RuntimeEvent::Usage { record } => {
-                self.record_delegated_usage(child, &record.delta);
+                if let Some(purpose) = record.provenance.attempt_purpose
+                    && purpose.is_synthetic_cache()
+                {
+                    self.status.record_synthetic_usage(purpose, &record.delta);
+                } else {
+                    self.record_delegated_usage(child, &record.delta);
+                }
             }
             _ => {}
         }

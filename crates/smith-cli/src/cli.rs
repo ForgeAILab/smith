@@ -100,6 +100,8 @@ pub(crate) struct Selection {
     pub approval: Option<ApprovalMode>,
     /// A background-exit policy override.
     pub background_exit: Option<BackgroundExit>,
+    /// Explicit trusted-host authority for bounded synthetic cache spend.
+    pub allow_synthetic_cache_spend: bool,
 }
 
 impl Selection {
@@ -468,6 +470,20 @@ fn parse_selection_flag(
             })?;
             set_once(&mut selection.background_exit, parsed, flag)
         }
+        "--allow-synthetic-cache-spend" => {
+            if inline.is_some() {
+                return Err(ParseError::new(
+                    "`--allow-synthetic-cache-spend` does not take a value",
+                ));
+            }
+            if selection.allow_synthetic_cache_spend {
+                return Err(ParseError::new(
+                    "`--allow-synthetic-cache-spend` was supplied twice",
+                ));
+            }
+            selection.allow_synthetic_cache_spend = true;
+            Ok(())
+        }
         _ if flag.starts_with('-') => Err(ParseError::new(format!(
             "unknown option `{flag}`; run `smith --help`"
         ))),
@@ -603,6 +619,8 @@ RUN OPTIONS:
       --approval <POLICY>       ask | deny | allow-all
       --yolo                    Alias for --approval allow-all
       --background-exit <MODE>  error | wait | stop
+      --allow-synthetic-cache-spend
+                                Permit bounded, conformance-gated cache maintenance
       --output-format <FORMAT>  text | json | stream-json
       --no-color                Disable terminal colors
       --no-motion               Disable terminal animation
@@ -686,6 +704,28 @@ mod tests {
         let duplicate =
             parse(["--background-exit", "wait", "--background-exit", "stop"].map(OsString::from))
                 .expect_err("background-exit was supplied twice");
+        assert!(duplicate.to_string().contains("supplied twice"));
+    }
+
+    #[test]
+    fn synthetic_cache_spend_requires_one_explicit_valueless_host_flag() {
+        let Command::Run(run) = command(&["--allow-synthetic-cache-spend"]) else {
+            panic!("expected a run");
+        };
+        assert!(run.selection.allow_synthetic_cache_spend);
+
+        let valued = parse(["--allow-synthetic-cache-spend=true"].map(OsString::from))
+            .expect_err("host authority does not accept a value");
+        assert!(valued.to_string().contains("does not take a value"));
+
+        let duplicate = parse(
+            [
+                "--allow-synthetic-cache-spend",
+                "--allow-synthetic-cache-spend",
+            ]
+            .map(OsString::from),
+        )
+        .expect_err("host authority is granted once");
         assert!(duplicate.to_string().contains("supplied twice"));
     }
 

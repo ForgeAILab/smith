@@ -13,7 +13,7 @@ use agent_runtime::provider::fake::{
 use agent_runtime::registry::RegistryRevision;
 use agent_runtime_core::approval::{AllowAll, DenyAll};
 use agent_runtime_core::artifact::{
-    ArtifactId, ArtifactRead, ArtifactRef, MAX_ARTIFACT_READ_BYTES,
+    ArtifactId, ArtifactRead, ArtifactRef, ArtifactStore, MAX_ARTIFACT_READ_BYTES,
 };
 use agent_runtime_core::cancel::CancelReason;
 use agent_runtime_core::checkpoint::{CheckpointStore, TurnCheckpoint, TurnState};
@@ -39,6 +39,7 @@ use agent_runtime_testkit::RecordingObserver;
 use futures_util::StreamExt;
 use smith_config::resolve::{Overrides, ResolveRequest, ResolvedConfig, resolve};
 use smith_host::{InteractionNotice, InteractiveInteraction, ProjectWorkspace};
+use smith_runtime::artifact::SmithArtifactStore;
 use smith_runtime::background_tasks::BackgroundTaskRegistry;
 use smith_runtime::checkpoint::{
     CheckpointKey, CheckpointKeyProvider, CheckpointProtectionError, SmithCheckpointStore,
@@ -46,6 +47,10 @@ use smith_runtime::checkpoint::{
 use smith_runtime::factory::{HostSurface, MidTurnDurability, RuntimeRequest};
 use smith_runtime::host::{HostSessionError, HostSessionRequest, list, start};
 use smith_runtime::journal::{DefaultRedactor, JournalLine, JournalRecord, read_journal};
+use smith_runtime::resume_capsule::{
+    ChildLifecycleState, ChildResumeProjection, ChildTerminalOutcome, ExactResumeState,
+    RESUME_CAPSULE_STATE_NAMESPACE, ResumeCacheWarmth, ResumeCapsuleSlot,
+};
 use smith_runtime::session::FileSessionStore;
 use smith_runtime::{ChildDurability, ChildState, SpawnOutcome};
 
@@ -581,7 +586,7 @@ async fn oversized_shell_output_is_recoverable_from_the_session_artifact_store()
 }
 
 #[tokio::test]
-async fn persistent_sessions_use_recoverable_semantic_summaries_with_disjoint_usage() {
+async fn persistent_sessions_use_incremental_recoverable_semantic_summaries_with_disjoint_usage() {
     let fixture = Fixture::new();
     let main = |index: usize| {
         ScriptedStream::new(vec![
@@ -618,6 +623,7 @@ async fn persistent_sessions_use_recoverable_semantic_summaries_with_disjoint_us
         ],
     ));
     let mut request = fixture.request(HostSurface::Headless);
+    request.checkpoint_keys = Some(Arc::new(UnavailableCheckpointKeys));
     request.runtime.provider = Some(provider.clone());
     // Pinned for the same reason as the fallback test: the scripted sequence
     // encodes a cadence, and the scripted streams report no usage, so the
@@ -679,11 +685,25 @@ async fn persistent_sessions_use_recoverable_semantic_summaries_with_disjoint_us
 
     let second_summary_wire =
         serde_json::to_string(&requests[8].messages).expect("second summary request");
-    assert!(second_summary_wire.contains("request 0"));
+    assert_eq!(
+        requests[8].messages.len(),
+        4,
+        "the repeated summary request must contain only its adapter system message, prior protected summary, and one new canonical exchange"
+    );
+    assert!(second_summary_wire.contains("Previously committed semantic summary"));
+    assert!(second_summary_wire.contains("SUMMARY_ONE"));
+    assert!(
+        !second_summary_wire.contains("request 0"),
+        "a repeated summary must not reread the original canonical prefix"
+    );
+    assert!(
+        !second_summary_wire.contains("answer 3"),
+        "a repeated summary must not resend already covered canonical turns"
+    );
     assert!(second_summary_wire.contains("answer 4"));
     assert!(
-        !second_summary_wire.contains("SUMMARY_ONE"),
-        "semantic work must summarize canonical originals, not a prior projection"
+        second_summary_wire.contains("request 4"),
+        "a repeated summary must include the newly committed canonical delta"
     );
 
     let snapshot = host.session().snapshot();
@@ -769,6 +789,158 @@ async fn persistent_sessions_use_recoverable_semantic_summaries_with_disjoint_us
     assert_eq!(original.len(), 10);
     assert_eq!(original[0].joined_text(), "request 0");
     assert_eq!(original[9].joined_text(), "answer 4");
+
+    let capsule = host.resume_capsule().expect("live resume capsule");
+    let capsule_summary = capsule
+        .semantic_summary
+        .expect("ordinary summary capsule projection");
+    assert_eq!(capsule_summary.provenance.provider, "local");
+    assert_eq!(
+        capsule_summary.provenance.model,
+        "local/example-model:semantic-summary"
+    );
+    assert_eq!(
+        capsule_summary.provenance.revision,
+        state.value["summary_revision"]
+            .as_str()
+            .map(RegistryRevision::new)
+            .expect("summary revision")
+    );
+    assert_eq!(capsule_summary.provenance.usage.input_uncached, 50);
+    assert_eq!(capsule_summary.provenance.usage.output, 6);
+    assert!(capsule_summary.provenance.summary_artifact.is_some());
+    assert!(capsule.latest_summary_state_artifact.is_some());
+
+    let session_id = host.session().id().clone();
+    let paths = host.paths().expect("persistent paths").clone();
+    assert!(
+        !paths.checkpoint(&session_id).unwrap().exists(),
+        "fixture must exercise summary restoration without a protected checkpoint"
+    );
+
+    host.shutdown().await.expect("clean shutdown");
+
+    let mut resume = fixture
+        .request(HostSurface::Headless)
+        .resume(session_id.clone());
+    resume.checkpoint_keys = Some(Arc::new(UnavailableCheckpointKeys));
+    let resumed = start(resume)
+        .await
+        .expect("protected summary state restores from the capsule artifact");
+    let restored = resumed.session().snapshot();
+    assert_eq!(
+        restored.extension_state["harness.semantic_summary"].value["summary"],
+        "SUMMARY_TWO"
+    );
+    assert_eq!(restored.id, session_id);
+    resumed.shutdown().await.expect("clean resumed shutdown");
+}
+
+#[tokio::test]
+async fn custom_summary_route_is_attributed_without_replacing_parent_cache_identity() {
+    let fixture = Fixture::new();
+    let main = |index: usize| {
+        ScriptedStream::new(vec![
+            ProviderStreamEvent::TextDelta {
+                text: format!("answer {index}"),
+            },
+            ProviderStreamEvent::Finish {
+                reason: FinishReason::Stop,
+            },
+        ])
+    };
+    let summary = |text: &str, input: u64, output: u64| {
+        ScriptedStream::new(vec![
+            ProviderStreamEvent::TextDelta { text: text.into() },
+            usage_event(input, output),
+            ProviderStreamEvent::Finish {
+                reason: FinishReason::Stop,
+            },
+        ])
+    };
+    let mut main_capabilities = Capabilities::basic_streaming();
+    main_capabilities.cache_contract = Some(
+        agent_runtime_core::provider::ProviderCacheContract::from_control(
+            agent_runtime_core::provider::PromptCacheControl::Implicit,
+        ),
+    );
+    let main_provider = Arc::new(FakeProvider::new(
+        "example-model",
+        main_capabilities,
+        (0..7).map(main).collect(),
+    ));
+    let summary_provider = Arc::new(FakeProvider::new(
+        "summary-model",
+        Capabilities::basic_streaming(),
+        vec![summary("SUMMARY_ONE", 40, 5), summary("SUMMARY_TWO", 50, 6)],
+    ));
+    let summary_model = smith_runtime::summary::SmithProviderSummaryModel::new(
+        summary_provider.clone(),
+        "summary-provider",
+        agent_runtime_core::provider::ModelId::new("summary-model"),
+        Arc::new(agent_runtime_core::clock::SystemClock),
+        2_048,
+        30_000,
+    )
+    .expect("custom summary adapter");
+
+    let mut request = fixture.request(HostSurface::Headless);
+    request.runtime.provider = Some(main_provider.clone());
+    let mut summary_config = smith_runtime::summary::SmithSemanticSummaryConfig::standard();
+    summary_config.policy.min_turns = 6;
+    summary_config.provider = Some("summary-provider".to_owned());
+    summary_config.model = Some(Arc::new(summary_model));
+    request.runtime.semantic_summary = Some(summary_config);
+    let host = start(request).await.expect("a hosted session");
+
+    for index in 0..7 {
+        host.session()
+            .run(UserInput::text(format!("request {index}")))
+            .await
+            .unwrap_or_else(|error| panic!("turn {index} failed: {error}"));
+    }
+
+    assert_eq!(main_provider.requests().len(), 7);
+    assert_eq!(summary_provider.requests().len(), 2);
+    assert!(summary_provider.calls().iter().all(|call| {
+        call.purpose == agent_runtime_core::cache::ProviderAttemptPurpose::Ordinary
+            && call.cache_identity.is_none()
+    }));
+
+    let summary_policy = host
+        .runtime()
+        .policy()
+        .semantic_summary
+        .as_ref()
+        .expect("custom summary policy");
+    assert_eq!(summary_policy.provider, "summary-provider");
+    assert_eq!(
+        summary_policy.model,
+        "summary-provider/summary-model:semantic-summary"
+    );
+
+    let capsule = host.resume_capsule().expect("live resume capsule");
+    let capsule_summary = capsule
+        .semantic_summary
+        .expect("ordinary summary capsule projection");
+    assert_eq!(capsule_summary.provenance.provider, "summary-provider");
+    assert_eq!(
+        capsule_summary.provenance.model,
+        "summary-provider/summary-model:semantic-summary"
+    );
+
+    let controller = host.cache_lifecycle().expect("cache controller");
+    assert_eq!(
+        controller.idle_compaction_provider.as_deref(),
+        Some("summary-provider")
+    );
+    assert_eq!(
+        controller.idle_compaction_model.as_deref(),
+        Some("summary-provider/summary-model:semantic-summary")
+    );
+    assert!(controller.synthetic_attempts.is_empty());
+    assert_eq!(host.runtime().policy().provider_name, "local");
+    assert_eq!(host.runtime().policy().model.as_str(), "example-model");
 
     host.shutdown().await.expect("clean shutdown");
 }
@@ -1885,6 +2057,14 @@ async fn durable_child_follow_up_survives_a_full_smith_host_restart() {
             ]),
             ScriptedStream::new(vec![
                 ProviderStreamEvent::TextDelta {
+                    text: "parent received the completed review".to_owned(),
+                },
+                ProviderStreamEvent::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ]),
+            ScriptedStream::new(vec![
+                ProviderStreamEvent::TextDelta {
                     text: "follow-up regression risk".to_owned(),
                 },
                 ProviderStreamEvent::Finish {
@@ -1968,9 +2148,13 @@ async fn durable_child_follow_up_survives_a_full_smith_host_restart() {
     assert_eq!(after.turns_used, 2);
 
     let requests = provider.requests();
-    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests.len(),
+        3,
+        "the completed first child task is delivered through one automatic parent continuation before the child follow-up"
+    );
     let follow_up_wire =
-        serde_json::to_string(&requests[1].messages).expect("follow-up provider request");
+        serde_json::to_string(&requests[2].messages).expect("follow-up provider request");
     assert!(
         follow_up_wire.contains("Inspect the parser"),
         "{follow_up_wire}"
@@ -2686,6 +2870,263 @@ async fn resume_refuses_an_unknown_identity_instead_of_creating_it() {
         "a missing resume identity created `{}`",
         paths.directory().display()
     );
+}
+
+#[tokio::test]
+async fn cold_resume_selects_the_newer_canonical_capsule_after_runtime_startup() {
+    let fixture = Fixture::new();
+    let session = SessionId::new("session-cold-capsule-ordering");
+    let turn = TurnId::new("turn-cold-capsule-ordering");
+    let child = ChildId::new("running-before-restart");
+    let input = UserInput::text("resume exact state after a cold restart");
+    let paths = smith_runtime::host::paths(&fixture.config(), fixture.project.path()).unwrap();
+
+    let canonical_capsule = ResumeCapsuleSlot::new(session.clone(), Timestamp(20));
+    canonical_capsule.update(|capsule| {
+        let mut children = std::collections::BTreeMap::new();
+        children.insert(
+            child.clone(),
+            ChildResumeProjection {
+                child: child.clone(),
+                task_digest: None,
+                state: ChildLifecycleState::Running,
+                terminal_outcome: None,
+                watermark: 20,
+            },
+        );
+        assert!(capsule.commit_exact_state(
+            ExactResumeState {
+                watermark: 20,
+                children,
+                ..ExactResumeState::default()
+            },
+            Timestamp(20),
+        ));
+        capsule.cache.provider_warmth = ResumeCacheWarmth::WarmObserved;
+        capsule.cache.guaranteed_until = Some(Timestamp(99));
+    });
+
+    let protected_capsule = ResumeCapsuleSlot::new(session.clone(), Timestamp(10));
+    protected_capsule.update(|capsule| {
+        let mut children = std::collections::BTreeMap::new();
+        children.insert(
+            child.clone(),
+            ChildResumeProjection {
+                child: child.clone(),
+                task_digest: None,
+                state: ChildLifecycleState::Completed,
+                terminal_outcome: Some(ChildTerminalOutcome {
+                    state: ChildLifecycleState::Completed,
+                    result_digest: None,
+                    watermark: 10,
+                }),
+                watermark: 10,
+            },
+        );
+        assert!(capsule.commit_exact_state(
+            ExactResumeState {
+                watermark: 10,
+                children,
+                ..ExactResumeState::default()
+            },
+            Timestamp(10),
+        ));
+        capsule.cache.provider_warmth = ResumeCacheWarmth::MissObserved;
+    });
+
+    let mut canonical = SessionSnapshot {
+        id: session.clone(),
+        history: vec![input.clone().into_message()],
+        usage: UsageLedger::new(),
+        identity: SessionIdentityState {
+            turn: 1,
+            event: 20,
+            event_seq: 20,
+            ..SessionIdentityState::default()
+        },
+        manifests: Vec::new(),
+        extension_state: Default::default(),
+        updated: Timestamp(20),
+    };
+    canonical.extension_state.insert(
+        RESUME_CAPSULE_STATE_NAMESPACE.to_owned(),
+        canonical_capsule.versioned_state().unwrap(),
+    );
+    FileSessionStore::new(paths.clone())
+        .save(&canonical)
+        .await
+        .expect("the newer canonical capsule saves");
+
+    let mut protected = SessionSnapshot {
+        id: session.clone(),
+        history: vec![input.clone().into_message()],
+        usage: UsageLedger::new(),
+        identity: SessionIdentityState {
+            turn: 1,
+            event: 10,
+            event_seq: 10,
+            ..SessionIdentityState::default()
+        },
+        manifests: Vec::new(),
+        extension_state: Default::default(),
+        updated: Timestamp(10),
+    };
+    protected.extension_state.insert(
+        RESUME_CAPSULE_STATE_NAMESPACE.to_owned(),
+        protected_capsule.versioned_state().unwrap(),
+    );
+    let checkpoint_store = SmithCheckpointStore::initialize_with(paths, test_checkpoint_keys())
+        .await
+        .expect("a protected checkpoint store");
+    let accepted = TurnCheckpoint::accepted(
+        turn,
+        input,
+        protected.clone(),
+        0,
+        Deadline::never(),
+        1,
+        10,
+        Timestamp(10),
+    )
+    .expect("accepted checkpoint");
+    checkpoint_store
+        .save(&accepted)
+        .await
+        .expect("accepted checkpoint saves");
+    let completing = accepted
+        .transition(
+            TurnState::Completing {
+                finish: TurnFinish::Completed,
+                visible_output: false,
+                provider_error_kind: None,
+            },
+            protected.clone(),
+            11,
+            Timestamp(11),
+        )
+        .expect("completing checkpoint");
+    checkpoint_store
+        .save(&completing)
+        .await
+        .expect("completing checkpoint saves");
+    let publishing = completing
+        .transition(
+            TurnState::PublishingTerminal {
+                finish: TurnFinish::Completed,
+                visible_output: false,
+            },
+            protected.clone(),
+            12,
+            Timestamp(12),
+        )
+        .expect("publishing checkpoint");
+    checkpoint_store
+        .save(&publishing)
+        .await
+        .expect("publishing checkpoint saves");
+    let terminal = publishing
+        .transition(
+            TurnState::Terminal {
+                finish: TurnFinish::Completed,
+                visible_output: false,
+            },
+            protected,
+            13,
+            Timestamp(13),
+        )
+        .expect("terminal checkpoint");
+    checkpoint_store
+        .save(&terminal)
+        .await
+        .expect("terminal checkpoint saves");
+
+    let resumed = start(
+        fixture
+            .request(HostSurface::Headless)
+            .resume(session.clone()),
+    )
+    .await
+    .expect("the cold session resumes");
+    let capsule = resumed.resume_capsule().expect("resume capsule");
+    assert_eq!(capsule.last_persisted_watermark, 20);
+    assert_eq!(capsule.cache.provider_warmth, ResumeCacheWarmth::Unknown);
+    assert_eq!(capsule.cache.guaranteed_until, None);
+    assert_eq!(
+        capsule.exact_state.children[&child].state,
+        ChildLifecycleState::InterruptedByProcessExit
+    );
+    resumed.shutdown().await.expect("clean cold shutdown");
+}
+
+#[tokio::test]
+async fn missing_resume_summary_artifact_does_not_abort_exact_cold_resume() {
+    let fixture = Fixture::new();
+    let session = SessionId::new("session-missing-summary-artifact");
+    let paths = smith_runtime::host::paths(&fixture.config(), fixture.project.path()).unwrap();
+    let artifacts = SmithArtifactStore::new(paths.clone());
+    let reference = artifacts
+        .put(agent_runtime_core::artifact::ArtifactWrite {
+            bytes: b"summary body".to_vec(),
+            media_type: smith_runtime::resume_capsule::RESUME_SUMMARY_MEDIA_TYPE.to_owned(),
+            sensitivity: agent_runtime_core::artifact::ArtifactSensitivity::Sensitive,
+            retention: agent_runtime_core::artifact::ArtifactRetention::Session,
+            provenance: agent_runtime_core::artifact::ArtifactProvenance::new(
+                session.clone(),
+                smith_runtime::resume_capsule::RESUME_IDLE_SUMMARY_ARTIFACT_PURPOSE,
+            ),
+            idempotency_key: "missing-summary-host-r1".to_owned(),
+        })
+        .await
+        .expect("summary artifact writes");
+    let capsule = ResumeCapsuleSlot::new(session.clone(), Timestamp(1));
+    capsule
+        .update(|capsule| {
+            capsule.record_ordinary_summary(
+                "provider",
+                "summary-model",
+                RegistryRevision::new("summary-r1"),
+                Timestamp(2),
+                "summary body",
+                vec![],
+            )?;
+            capsule.attach_summary_artifact(reference)
+        })
+        .expect("summary metadata attaches");
+
+    let mut snapshot = SessionSnapshot {
+        id: session.clone(),
+        history: Vec::new(),
+        usage: UsageLedger::new(),
+        identity: SessionIdentityState::default(),
+        manifests: Vec::new(),
+        extension_state: Default::default(),
+        updated: Timestamp(1),
+    };
+    snapshot.extension_state.insert(
+        RESUME_CAPSULE_STATE_NAMESPACE.to_owned(),
+        capsule.versioned_state().expect("versioned capsule"),
+    );
+    FileSessionStore::new(paths)
+        .save(&snapshot)
+        .await
+        .expect("canonical snapshot saves");
+    std::fs::remove_dir_all(artifacts.directory()).expect("remove optional summary artifact");
+
+    let resumed = start(
+        fixture
+            .request(HostSurface::Headless)
+            .resume(session.clone()),
+    )
+    .await
+    .expect("missing optional artifact must not abort resume");
+    let capsule = resumed.resume_capsule().expect("resume capsule");
+    let summary = capsule.semantic_summary.expect("summary metadata");
+    assert_eq!(
+        summary.provenance.outcome,
+        smith_runtime::resume_capsule::ResumeSummaryOutcome::Missing
+    );
+    assert!(summary.provenance.summary_artifact.is_none());
+    resumed.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test]

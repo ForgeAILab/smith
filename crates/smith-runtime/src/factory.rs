@@ -67,7 +67,7 @@ use agent_runtime::harness::{
 };
 use agent_runtime::hub::{ScopeIdentity, ScopeInputs};
 use agent_runtime::provider::anthropic::{AnthropicConfig, AnthropicProvider};
-use agent_runtime::provider::fake::FakeProvider;
+use agent_runtime::provider::fake::{FakeProvider, ScriptedStream, usage_event};
 use agent_runtime::provider::gemini::{GeminiInteractionsConfig, GeminiInteractionsProvider};
 use agent_runtime::provider::openai::{OpenAiConfig, OpenAiProvider};
 use agent_runtime::provider::responses::{ResponsesConfig, ResponsesProvider};
@@ -85,7 +85,11 @@ use agent_runtime_core::clock::{Clock, Deadline, SystemClock};
 use agent_runtime_core::error::RuntimeError;
 use agent_runtime_core::interaction::{InteractionBroker, InteractionReadiness};
 use agent_runtime_core::observer::EventObserver;
-use agent_runtime_core::provider::{ModelId, PromptCacheControl, Provider, ProviderError};
+use agent_runtime_core::provider::{
+    CacheEndpointIdentity, Capabilities, FinishReason, ModelId, PromptCacheControl, Provider,
+    ProviderAttemptPurpose, ProviderCacheBehavior, ProviderCacheContract, ProviderError,
+    ProviderStreamEvent, SyntheticConformance,
+};
 use agent_runtime_core::provider_credential::{
     ProviderCredentialSource, ProviderCredentialTarget, StaticProviderCredentialSource,
 };
@@ -94,6 +98,7 @@ use agent_runtime_core::tool::Tool;
 use agent_runtime_core::workspace::Workspace;
 use async_trait::async_trait;
 use reqwest::Url;
+use smith_config::catalog::OPENAI_ENDPOINT;
 use smith_config::credential::{
     CredentialEnroller, CredentialError, CredentialRef, CredentialRefError, CredentialResolver,
 };
@@ -121,8 +126,8 @@ use crate::chatgpt::{
 };
 use crate::checkpoint::{BarrierCheckpointStore, CheckpointBarrier, SmithCheckpointSetup};
 use crate::delegation::{
-    AgentTool, AgentToolProfile, DelegationAuthority, SmithChildFactory, SmithChildRoute,
-    SmithDelegation,
+    AgentTool, AgentToolProfile, DelegationAuthority, DelegationWaitPolicy, SmithChildFactory,
+    SmithChildRoute, SmithDelegation,
 };
 use crate::journal::DefaultRedactor;
 use crate::memory::SmithMemorySource;
@@ -144,7 +149,7 @@ use crate::summary::{
     SemanticSummaryRuntimePolicy, SmithProviderSummaryModel, SmithSemanticSummaryConfig,
 };
 use crate::transport::{ReqwestTransport, TransportConfig};
-use crate::xai::{XaiCredentialSource, XaiOAuthClient, XaiTokenBundle};
+use crate::xai::{XaiCacheIdentityProvider, XaiCredentialSource, XaiOAuthClient, XaiTokenBundle};
 
 /// The reply the deterministic development provider gives.
 ///
@@ -169,6 +174,10 @@ pub const COMPACTION_POLICY_REVISION: &str = "smith-compaction-policy-1";
 /// The revision recorded for the cache capability Smith derives from the
 /// selected adapter's declared [`PromptCacheControl`].
 pub const CACHE_CAPABILITY_REVISION: &str = "smith-provider-cache-2";
+/// Host-owned endpoint/credential partition revision folded into Runtime's
+/// opaque cache identity. Bump whenever the label inputs or normalization
+/// change so persisted comparison baselines retire rather than transfer.
+pub const CACHE_ENDPOINT_IDENTITY_REVISION: &str = "smith-cache-endpoint-1";
 
 /// The default bound on the runtime's event broadcast buffer.
 pub const DEFAULT_EVENT_BUFFER: usize = 1_024;
@@ -440,6 +449,8 @@ pub struct RuntimePolicy {
     pub provider_kind: String,
     /// The endpoint, normalized to scheme, host, port, and path.
     pub endpoint: Option<String>,
+    /// Opaque endpoint/tenant partition supplied to Runtime cache planning.
+    pub cache_endpoint_identity: Option<CacheEndpointIdentity>,
     /// The credential *reference*, never its value.
     pub credential: Option<String>,
     /// Resolved approval mode enforced for authority-bearing actions.
@@ -500,6 +511,7 @@ impl fmt::Debug for RuntimePolicy {
             .field("provider_name", &self.provider_name)
             .field("provider_kind", &self.provider_kind)
             .field("endpoint", &self.endpoint)
+            .field("cache_endpoint_identity", &self.cache_endpoint_identity)
             .field("credential", &self.credential)
             .field("approval_mode", &self.approval_mode)
             .field("model", &self.model)
@@ -802,6 +814,13 @@ type SummaryStage = Option<(
     Arc<SemanticSummaryCoordinator>,
     SemanticSummaryRuntimePolicy,
 )>;
+
+fn summary_route_provider(config: &SmithSemanticSummaryConfig, active_provider: &str) -> String {
+    config
+        .provider
+        .clone()
+        .unwrap_or_else(|| active_provider.to_owned())
+}
 
 /// Display-safe evidence assembled before the runtime builder consumes policy.
 struct PolicyStage {
@@ -1147,8 +1166,13 @@ fn prepare_summary_stage(
             .map_err(FactoryError::Runtime)?,
         ),
     };
+    // The standard adapter is bound to the active run provider. A custom
+    // summary adapter is an independent route and must carry the explicit
+    // provider identity validated above; never infer it from the parent.
+    let summary_provider = summary_route_provider(&config, provider_name);
     let policy = SemanticSummaryRuntimePolicy {
         purpose: agent_runtime::harness::SEMANTIC_SUMMARY_PURPOSE.into(),
+        provider: summary_provider,
         model: summary_model.id().to_owned(),
         revision: config.policy.revision.clone(),
         min_turns: config.policy.min_turns,
@@ -1233,10 +1257,16 @@ fn prepare_capability_stage(
         None
     } else {
         let slot = Arc::new(std::sync::OnceLock::new());
-        tools.push(
-            Arc::new(AgentTool::new(slot.clone()).with_profiles(agent_tool_profiles))
-                as Arc<dyn Tool>,
-        );
+        let wait_policy = DelegationWaitPolicy::new(
+            request.config.child_agents.wait_default_timeout_ms.value,
+            request.config.child_agents.wait_max_timeout_ms.value,
+        )
+        .map_err(FactoryError::Runtime)?;
+        tools.push(Arc::new(
+            AgentTool::new(slot.clone())
+                .with_profiles(agent_tool_profiles)
+                .with_wait_policy(wait_policy),
+        ) as Arc<dyn Tool>);
         ability_sources.push(agent_runtime::registry::RegistrySource::BuiltIn);
         Some(slot)
     };
@@ -1329,6 +1359,12 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
     let agent_profile_name = agent_profile.name.clone();
     let prompt = prepare_prompt_stage(&request, &mut loop_config)?;
     let config = &request.config;
+    let cache_endpoint_identity = cache_endpoint_identity(
+        &provider_name,
+        &provider_kind,
+        endpoint.as_deref(),
+        active_credential_reference(&request).as_deref(),
+    );
 
     // The only boundary the secret crosses.
     let provider = prepare_provider_stage(
@@ -1389,7 +1425,8 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         agent_posture,
         provider_name: provider_name.clone(),
         provider_kind: provider_kind.clone(),
-        endpoint,
+        endpoint: endpoint.clone(),
+        cache_endpoint_identity: cache_endpoint_identity.clone(),
         credential: config
             .provider
             .credential()
@@ -1499,6 +1536,9 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         .clock(clock.clone())
         .event_buffer(request.event_buffer)
         .shutdown_timeout_ms(request.shutdown_timeout_ms);
+    if let Some(identity) = cache_endpoint_identity.as_ref() {
+        builder = builder.cache_endpoint_identity(identity.clone());
+    }
     if let Some(component) = &capabilities.todo {
         builder = builder
             .context_contributor(component.clone())
@@ -1571,6 +1611,7 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
                     provider,
                     provider_name,
                     provider_kind,
+                    cache_endpoint_identity,
                     model,
                     model_profile: profile.profile.clone(),
                     context_policy,
@@ -1641,6 +1682,12 @@ async fn prepare_child_profile_routes(
             compaction_policy: _,
             mut loop_config,
         } = prepare_factory_inputs(&route_request).await?;
+        let cache_endpoint_identity = cache_endpoint_identity(
+            &provider_name,
+            &provider_kind,
+            endpoint.as_deref(),
+            active_credential_reference(&route_request).as_deref(),
+        );
         if let (Some(secret), Some(redactor)) = (&secret, &route_request.persistence_redactor) {
             redactor.register_secret(secret);
         }
@@ -1701,6 +1748,7 @@ async fn prepare_child_profile_routes(
                 provider,
                 provider_name,
                 provider_kind,
+                cache_endpoint_identity,
                 model,
                 model_profile: profile.profile,
                 context_policy,
@@ -1719,6 +1767,26 @@ async fn prepare_child_profile_routes(
         }
     }
     Ok(routes)
+}
+
+/// Redaction-safe endpoint/tenant partition consumed into Runtime's cache
+/// identity. The normalized endpoint and credential reference are inputs to
+/// the digest only; neither is retained by `CacheEndpointIdentity`.
+fn cache_endpoint_identity(
+    provider_name: &str,
+    provider_kind: &str,
+    endpoint: Option<&str>,
+    credential_reference: Option<&str>,
+) -> Option<CacheEndpointIdentity> {
+    let endpoint = endpoint?;
+    let label = format!(
+        "provider={provider_name}\0kind={provider_kind}\0endpoint={endpoint}\0credential={}",
+        credential_reference.unwrap_or("none")
+    );
+    Some(CacheEndpointIdentity::from_opaque(
+        label,
+        RegistryRevision::new(CACHE_ENDPOINT_IDENTITY_REVISION),
+    ))
 }
 
 fn require_workspace(request: &RuntimeRequest) -> Result<Arc<dyn Workspace>, FactoryError> {
@@ -1782,6 +1850,12 @@ async fn prepare_factory_inputs(
             model: model.clone(),
             source,
         })?;
+    apply_adapter_cache_capability(
+        adapter,
+        endpoint.as_deref(),
+        request.config.provider.has_pool(),
+        &mut profile.profile.capabilities,
+    );
     let catalog_controls = request.model_catalog.as_deref().and_then(|snapshot| {
         let catalog_provider =
             smith_config::catalog::catalog_provider_for(&provider_kind, endpoint.as_deref())?;
@@ -1886,6 +1960,81 @@ fn adapter(provider: &ResolvedProvider) -> Result<Adapter, FactoryError> {
             provider: provider.name.value.clone(),
             kind: kind.to_owned(),
         }),
+    }
+}
+
+/// Applies the selected adapter's ordinary model-cache declaration without
+/// manufacturing synthetic-maintenance safety.  Catalog sources describe the
+/// model and limits, while the serving adapter owns the wire cache behavior;
+/// an explicit normalized unsupported contract remains authoritative so an
+/// adapter can preserve a genuinely unsupported model.
+fn apply_adapter_cache_capability(
+    adapter: Adapter,
+    endpoint: Option<&str>,
+    credential_partition_can_rotate: bool,
+    capabilities: &mut Capabilities,
+) {
+    // Runtime cache identities are immutable for a session. A credential pool
+    // may switch the account/tenant partition immediately before provider
+    // I/O, so the initial member cannot be an exact identity for later calls.
+    // Keep ordinary provider behavior available but disable Runtime cache
+    // planning and every synthetic action until rotation can publish a new
+    // immutable partition and force replanning.
+    if credential_partition_can_rotate {
+        capabilities.cache = false;
+        capabilities.prompt_cache = PromptCacheControl::None;
+        capabilities.cache_contract = Some(ProviderCacheContract::default());
+        return;
+    }
+    if matches!(adapter, Adapter::Fake) {
+        capabilities.cache = false;
+        capabilities.prompt_cache = PromptCacheControl::None;
+        capabilities.cache_contract = Some(ProviderCacheContract::default());
+        return;
+    }
+    if capabilities
+        .cache_contract
+        .as_ref()
+        .is_some_and(|contract| contract.behavior == ProviderCacheBehavior::Unsupported)
+    {
+        capabilities.cache = false;
+        capabilities.prompt_cache = PromptCacheControl::None;
+        return;
+    }
+    if capabilities.cache_contract.is_none() {
+        capabilities.cache = true;
+        // Anthropic's Messages adapter has an explicit four-breakpoint wire
+        // contract; the other built-in request adapters expose an implicit
+        // stable prefix.
+        let control = if matches!(adapter, Adapter::AnthropicMessages) {
+            PromptCacheControl::Explicit { max_breakpoints: 4 }
+        } else {
+            PromptCacheControl::Implicit
+        };
+        capabilities.prompt_cache = control;
+        let mut contract = ProviderCacheContract::from_control(control);
+        contract.evidence.stream = true;
+        capabilities.cache_contract = Some(contract);
+    }
+
+    // The native Responses wire shape has offline fixtures for every
+    // SyntheticConformance gate only at OpenAI's official endpoint. Generic
+    // compatible and user-supplied endpoints remain observation-only even
+    // when they publish prompt-cache usage fields.
+    if adapter == Adapter::OpenAiResponses && endpoint == Some(OPENAI_ENDPOINT) {
+        capabilities.cache = true;
+        capabilities.prompt_cache = PromptCacheControl::Implicit;
+        let contract = capabilities.cache_contract.get_or_insert_with(|| {
+            ProviderCacheContract::from_control(PromptCacheControl::Implicit)
+        });
+        contract.behavior = ProviderCacheBehavior::ImplicitPrefix;
+        contract.evidence.stream = true;
+        contract.key_revision = Some(RegistryRevision::new("openai-responses-prompt-cache-1"));
+        contract.maintenance.extend([
+            ProviderAttemptPurpose::CacheKeepalive,
+            ProviderAttemptPurpose::CacheHandoffCheckpoint,
+        ]);
+        contract.conformance = Some(SyntheticConformance::complete());
     }
 }
 
@@ -2081,7 +2230,19 @@ fn construct(
     pool: Option<&SharedPool>,
 ) -> Result<Arc<dyn Provider>, FactoryError> {
     match adapter {
-        Adapter::Fake => Ok(Arc::new(FakeProvider::text_reply(DEVELOPMENT_REPLY))),
+        Adapter::Fake => Ok(Arc::new(FakeProvider::new(
+            request.config.model.value.clone(),
+            profile.capabilities.clone(),
+            vec![ScriptedStream::new(vec![
+                ProviderStreamEvent::TextDelta {
+                    text: DEVELOPMENT_REPLY.to_owned(),
+                },
+                usage_event(6, 3),
+                ProviderStreamEvent::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ])],
+        ))),
         Adapter::OpenAiCompatible => {
             let transport = ReqwestTransport::new(request.transport.clone())
                 .map_err(FactoryError::Transport)?;
@@ -2294,7 +2455,12 @@ fn construct(
             let provider =
                 ResponsesProvider::with_credential_source(transport, config, target, source)
                     .map_err(FactoryError::Transport)?;
-            Ok(Arc::new(provider))
+            // The generic Responses adapter serializes the request identity,
+            // while XAI's host boundary may receive a context-only identity
+            // from a maintenance/admission caller.  Preserve the exact
+            // Runtime identity before delegating; never derive a replacement
+            // key from the prompt or session id.
+            Ok(Arc::new(XaiCacheIdentityProvider::new(Arc::new(provider))))
         }
         Adapter::GeminiInteractions => {
             let transport = ReqwestTransport::new(request.transport.clone())
@@ -2614,10 +2780,12 @@ mod tests {
     use agent_runtime_core::catalog::ModelLimits;
     use agent_runtime_core::clock::Deadline;
     use agent_runtime_core::ids::ToolCallId;
+    use agent_runtime_core::provider::ProviderAttemptPurpose;
     use agent_runtime_core::tool::{PreparedToolCall, ToolCallDisplay, ToolEffects};
-    use smith_config::model::ProfileUse;
+    use smith_config::model::{CacheMaintenanceMode, ProfileUse};
     use smith_config::resolve::{
-        ResolvedAgent, ResolvedAgentMode, ResolvedAgentProfile, ResolvedContext, Source, Sourced,
+        ResolvedAgent, ResolvedAgentMode, ResolvedAgentProfile, ResolvedCachePolicy,
+        ResolvedChildAgents, ResolvedContext, Source, Sourced, SyntheticCacheSpendAuthority,
     };
     use smith_host::HeadlessApproval;
 
@@ -2625,6 +2793,48 @@ mod tests {
 
     fn sourced<T>(value: T) -> Sourced<T> {
         Sourced::new(value, Source::built_in("test"))
+    }
+
+    #[test]
+    fn standard_summary_route_uses_active_provider_and_custom_route_uses_declared_provider() {
+        let standard = SmithSemanticSummaryConfig::standard();
+        assert_eq!(
+            summary_route_provider(&standard, "active-provider"),
+            "active-provider"
+        );
+
+        let mut custom = standard;
+        custom.provider = Some("summary-provider".to_owned());
+        assert_eq!(
+            summary_route_provider(&custom, "active-provider"),
+            "summary-provider"
+        );
+    }
+
+    fn cache() -> ResolvedCachePolicy {
+        ResolvedCachePolicy {
+            requested_maintenance: sourced(CacheMaintenanceMode::Off),
+            effective_maintenance: sourced(CacheMaintenanceMode::Off),
+            narrowing_reason: None,
+            inactivity_limit_ms: sourced(3_600_000),
+            max_hold_while_child_ms: sourced(3_600_000),
+            max_maintenance_calls: sourced(1),
+            max_maintenance_input_tokens: sourced(0),
+            max_maintenance_output_tokens: sourced(256),
+            maintenance_deadline_ms: sourced(30_000),
+            keepalive_margin_ms: sourced(120_000),
+            keepalive_jitter_percent: sourced(10),
+            handoff_checkpoint: sourced(true),
+            idle_compaction: sourced(true),
+            resume_capsule: sourced(true),
+        }
+    }
+
+    fn child_agents() -> ResolvedChildAgents {
+        ResolvedChildAgents {
+            wait_default_timeout_ms: sourced(5_000),
+            wait_max_timeout_ms: sourced(30_000),
+        }
     }
 
     fn provider(kind: &str, base_url: Option<&str>) -> ResolvedProvider {
@@ -2649,6 +2859,7 @@ mod tests {
             compaction_high_watermark_percent: sourced(85),
             compaction_low_watermark_percent: sourced(60),
             idle_compaction_ms: sourced(3_600_000),
+            cache: cache(),
         }
     }
 
@@ -2668,6 +2879,8 @@ mod tests {
             model_reasoning: Default::default(),
             context: context(None, 0),
             limits: limits(),
+            synthetic_cache_spend: SyntheticCacheSpendAuthority::Deny,
+            child_agents: child_agents(),
             persistence: persistence(),
             approval: approval_config(ApprovalMode::Ask),
             background: background(),
@@ -2768,6 +2981,72 @@ mod tests {
     }
 
     #[test]
+    fn only_official_openai_responses_grants_synthetic_safety() {
+        let mut ordinary = Capabilities::basic_streaming();
+        apply_adapter_cache_capability(
+            Adapter::OpenAiResponses,
+            Some("https://responses.example.test/v1"),
+            false,
+            &mut ordinary,
+        );
+        assert!(ordinary.cache);
+        assert_eq!(ordinary.prompt_cache, PromptCacheControl::Implicit);
+        let contract = ordinary.cache_contract.expect("ordinary contract");
+        assert_eq!(contract.behavior, ProviderCacheBehavior::ImplicitPrefix);
+        assert!(!contract.supports_synthetic(ProviderAttemptPurpose::CacheKeepalive));
+
+        let mut official = Capabilities::basic_streaming();
+        apply_adapter_cache_capability(
+            Adapter::OpenAiResponses,
+            Some(OPENAI_ENDPOINT),
+            false,
+            &mut official,
+        );
+        let contract = official.cache_contract.expect("official contract");
+        assert!(contract.supports_synthetic(ProviderAttemptPurpose::CacheKeepalive));
+        assert!(contract.supports_synthetic(ProviderAttemptPurpose::CacheHandoffCheckpoint));
+        assert!(!contract.supports_synthetic(ProviderAttemptPurpose::IdleCompaction));
+
+        let mut unsupported = Capabilities::basic_streaming();
+        unsupported.cache = true;
+        unsupported.prompt_cache = PromptCacheControl::Implicit;
+        unsupported.cache_contract = Some(ProviderCacheContract::default());
+        apply_adapter_cache_capability(
+            Adapter::OpenAiResponses,
+            Some(OPENAI_ENDPOINT),
+            false,
+            &mut unsupported,
+        );
+        assert!(!unsupported.cache);
+        assert_eq!(unsupported.prompt_cache, PromptCacheControl::None);
+        assert_eq!(
+            unsupported
+                .cache_contract
+                .expect("unsupported contract")
+                .behavior,
+            ProviderCacheBehavior::Unsupported
+        );
+    }
+
+    #[test]
+    fn credential_rotation_disables_cache_identity_and_synthetic_work() {
+        let mut capabilities = Capabilities::basic_streaming();
+        apply_adapter_cache_capability(
+            Adapter::OpenAiResponses,
+            Some(OPENAI_ENDPOINT),
+            true,
+            &mut capabilities,
+        );
+
+        assert!(!capabilities.cache);
+        assert_eq!(capabilities.prompt_cache, PromptCacheControl::None);
+        let contract = capabilities.cache_contract.expect("fail-closed contract");
+        assert_eq!(contract.behavior, ProviderCacheBehavior::Unsupported);
+        assert!(contract.maintenance.is_empty());
+        assert_eq!(contract.conformance, None);
+    }
+
+    #[test]
     fn an_anthropic_provider_defaults_to_the_official_endpoint() {
         let defaulted = endpoint(
             &provider(KIND_ANTHROPIC_MESSAGES, None),
@@ -2812,6 +3091,37 @@ mod tests {
     }
 
     #[test]
+    fn cache_endpoint_partition_is_opaque_and_credential_scoped() {
+        let first = cache_endpoint_identity(
+            "openai",
+            KIND_OPENAI_RESPONSES,
+            Some(OPENAI_ENDPOINT),
+            Some("keychain:primary"),
+        )
+        .expect("endpoint identity");
+        let same = cache_endpoint_identity(
+            "openai",
+            KIND_OPENAI_RESPONSES,
+            Some(OPENAI_ENDPOINT),
+            Some("keychain:primary"),
+        )
+        .expect("endpoint identity");
+        let other_credential = cache_endpoint_identity(
+            "openai",
+            KIND_OPENAI_RESPONSES,
+            Some(OPENAI_ENDPOINT),
+            Some("keychain:secondary"),
+        )
+        .expect("endpoint identity");
+        assert_eq!(first, same);
+        assert_ne!(first, other_credential);
+        let rendered = format!("{first:?}");
+        assert!(!rendered.contains(OPENAI_ENDPOINT));
+        assert!(!rendered.contains("keychain:primary"));
+        assert!(cache_endpoint_identity("fake", KIND_FAKE, None, None).is_none());
+    }
+
+    #[test]
     fn an_endpoint_carrying_a_credential_is_refused_without_being_quoted() {
         for url in [
             &format!("https://smith:{TOKEN}@api.example.test/v1"),
@@ -2848,6 +3158,8 @@ mod tests {
             model_reasoning: Default::default(),
             context: context(None, 0),
             limits: limits(),
+            synthetic_cache_spend: SyntheticCacheSpendAuthority::Deny,
+            child_agents: child_agents(),
             persistence: persistence(),
             approval: approval_config(ApprovalMode::Ask),
             background: background(),
@@ -2891,6 +3203,8 @@ mod tests {
             model_reasoning: Default::default(),
             context: context(Some(6_000), 2_000),
             limits: limits(),
+            synthetic_cache_spend: SyntheticCacheSpendAuthority::Deny,
+            child_agents: child_agents(),
             persistence: persistence(),
             approval: approval_config(ApprovalMode::Ask),
             background: background(),
@@ -2928,6 +3242,8 @@ mod tests {
             model_reasoning: Default::default(),
             context: context(Some(100), 0),
             limits: limits(),
+            synthetic_cache_spend: SyntheticCacheSpendAuthority::Deny,
+            child_agents: child_agents(),
             persistence: persistence(),
             approval: approval_config(ApprovalMode::Ask),
             background: background(),
@@ -2966,6 +3282,8 @@ mod tests {
             model_reasoning: Default::default(),
             context: context(None, 0),
             limits: limits(),
+            synthetic_cache_spend: SyntheticCacheSpendAuthority::Deny,
+            child_agents: child_agents(),
             persistence: persistence(),
             approval: approval_config(ApprovalMode::Ask),
             background: background(),

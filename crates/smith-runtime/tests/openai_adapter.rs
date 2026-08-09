@@ -31,8 +31,8 @@ use agent_runtime_core::clock::Deadline;
 use agent_runtime_core::content::{Message, ToolCall};
 use agent_runtime_core::ids::{AttemptId, RequestId};
 use agent_runtime_core::provider::{
-    FinishReason, ModelId, Provider, ProviderCallContext, ProviderError, ProviderErrorKind,
-    ProviderRequest, ProviderStream, ProviderStreamEvent,
+    FinishReason, ModelId, Provider, ProviderAttemptPurpose, ProviderCallContext, ProviderError,
+    ProviderErrorKind, ProviderRequest, ProviderStream, ProviderStreamEvent,
 };
 use agent_runtime_core::store::Secret;
 use agent_runtime_core::usage::{CounterKind, UsageDelta};
@@ -79,6 +79,8 @@ fn call_context(cancel: Cancellation) -> ProviderCallContext {
         session: agent_runtime_core::ids::SessionId::new("session-test"),
         request_id: RequestId::new("req-1"),
         attempt_id: AttemptId::new("att-1"),
+        cache_identity: None,
+        purpose: ProviderAttemptPurpose::Ordinary,
         cancel,
         deadline: Deadline::never(),
     }

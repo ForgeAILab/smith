@@ -18,8 +18,9 @@ use agent_runtime_core::clock::{Clock, Deadline, SystemClock, Timestamp};
 use agent_runtime_core::content::{ContentPart, Message, Role};
 use agent_runtime_core::provider::{
     AuthKind, Capabilities, FinishReason, ModelDescriptor, ModelId, PromptCacheControl, Provider,
-    ProviderCallContext, ProviderError, ProviderErrorKind, ProviderRequest, ProviderStream,
-    ProviderStreamEvent, RateLimitSnapshot, RateLimitWindow, ReasoningSupport, ToolChoice,
+    ProviderCacheBehavior, ProviderCacheContract, ProviderCallContext, ProviderError,
+    ProviderErrorKind, ProviderRequest, ProviderStream, ProviderStreamEvent, RateLimitSnapshot,
+    RateLimitWindow, ReasoningSupport, ToolChoice,
 };
 use agent_runtime_core::provider_credential::{
     CredentialInvalidation, ProviderAuthRejection, ProviderCredentialError,
@@ -802,12 +803,31 @@ impl ChatGptProviderConfig {
         capabilities.tools = true;
         capabilities.reasoning = ReasoningSupport::Controllable;
         capabilities.usage = true;
-        capabilities.cache = true;
+        // A model-scoped explicit unsupported declaration remains
+        // authoritative.  This adapter can drive an implicit prefix cache for
+        // supported models, but an adapter-wide default must not erase a
+        // model-specific unsupported capability.
+        let unsupported_cache = capabilities
+            .cache_contract
+            .as_ref()
+            .is_some_and(|contract| contract.behavior == ProviderCacheBehavior::Unsupported);
+        capabilities.cache = !unsupported_cache;
         // This adapter sends `prompt_cache_key`, so it drives an implicit
         // prefix cache and must say so. It does not chain `previous_response_id`
         // — that field exists only on the websocket request shape — so every
         // turn still uploads the whole history.
-        capabilities.prompt_cache = PromptCacheControl::Implicit;
+        capabilities.prompt_cache = if unsupported_cache {
+            PromptCacheControl::None
+        } else {
+            PromptCacheControl::Implicit
+        };
+        if unsupported_cache {
+            capabilities.cache_contract = Some(ProviderCacheContract::default());
+        } else {
+            let mut contract = ProviderCacheContract::from_control(PromptCacheControl::Implicit);
+            contract.evidence.stream = true;
+            capabilities.cache_contract = Some(contract);
+        }
         Ok(Self {
             model: ModelId::new(model),
             capabilities,
@@ -938,6 +958,11 @@ impl<T: HttpTransport> ChatGptProvider<T> {
                 })
             })
             .collect::<Vec<_>>();
+        let cache_key = request
+            .cache_identity
+            .as_ref()
+            .map(|identity| identity.wire_cache_key().as_str())
+            .unwrap_or_else(|| session.as_str());
         let mut payload = json!({
             "model": self.config.model.as_str(),
             "instructions": instructions,
@@ -948,7 +973,7 @@ impl<T: HttpTransport> ChatGptProvider<T> {
             "store": false,
             "stream": true,
             "include": ["reasoning.encrypted_content"],
-            "prompt_cache_key": session.as_str(),
+            "prompt_cache_key": cache_key,
         });
         let object = payload
             .as_object_mut()
@@ -1451,9 +1476,27 @@ impl<T: HttpTransport> Provider for ChatGptProvider<T> {
 
     async fn stream(
         &self,
-        request: ProviderRequest,
+        mut request: ProviderRequest,
         ctx: ProviderCallContext,
     ) -> Result<ProviderStream, ProviderError> {
+        // Runtime carries the exact opaque identity in both request and call
+        // context.  Older callers may provide it only in the context; copy it
+        // through rather than falling back to a request/session-derived key.
+        if request.cache_identity.is_none() {
+            request.cache_identity = ctx.cache_identity.clone();
+        } else if ctx
+            .cache_identity
+            .as_ref()
+            .is_some_and(|identity| request.cache_identity.as_ref() != Some(identity))
+        {
+            return Err(ProviderError::new(
+                ProviderErrorKind::BadRequest,
+                "provider request and call context carry different cache identities",
+            ));
+        }
+        request
+            .validate_cache_identity()
+            .map_err(|message| ProviderError::new(ProviderErrorKind::BadRequest, message))?;
         let (payload, tool_names) = self.build_payload(&request, &ctx.session)?;
         let body = serde_json::to_vec(&payload).map_err(|_| {
             ProviderError::new(
@@ -1626,9 +1669,11 @@ impl<T: HttpTransport> Provider for ChatGptProvider<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_runtime::registry::{Fingerprint, RegistryRevision};
+    use agent_runtime_core::cache::{CacheEndpointIdentity, CacheIdentity};
     use agent_runtime_core::content::ToolCall;
     use agent_runtime_core::ids::{AttemptId, RequestId, ToolCallId};
-    use agent_runtime_core::provider::ToolSchema;
+    use agent_runtime_core::provider::{ProviderAttemptPurpose, ToolSchema};
     use agent_runtime_core::provider_credential::StaticProviderCredentialSource;
     use agent_runtime_testkit::{
         CredentialLeaseFixture, RenewableProviderCredentialSource, ReplayTransport,
@@ -2053,6 +2098,67 @@ mod tests {
         assert!(valid_response_tool_name(&wire));
     }
 
+    #[tokio::test]
+    async fn context_only_cache_identity_reaches_the_chatgpt_routing_key() {
+        let identity = CacheIdentity::builder(
+            "chatgpt",
+            ModelId::new("gpt-5.6-terra"),
+            CacheEndpointIdentity::from_opaque(
+                "chatgpt-codex",
+                RegistryRevision::new("endpoint-r1"),
+            ),
+            RegistryRevision::new("adapter-r1"),
+            Fingerprint::of("profile-r1"),
+        )
+        .cache_control(PromptCacheControl::Implicit)
+        .provider_key(Fingerprint::of("routing-key-r1"))
+        .build();
+        let target = ProviderCredentialTarget::new("chatgpt").expect("target");
+        let provider = ChatGptProvider::new(
+            ReplayTransport::single(
+                "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n",
+            ),
+            ChatGptProviderConfig::new(
+                "gpt-5.6-terra",
+                Capabilities::basic_streaming(),
+                "acct_test",
+            )
+            .expect("config"),
+            target,
+            Arc::new(StaticProviderCredentialSource::new(Secret::new(
+                "access-token-canary",
+            ))) as Arc<dyn ProviderCredentialSource>,
+        );
+        let ctx = ProviderCallContext {
+            session: agent_runtime_core::ids::SessionId::new("session-must-not-be-used"),
+            request_id: RequestId::new("request-cache-identity"),
+            attempt_id: AttemptId::new("attempt-cache-identity"),
+            cache_identity: Some(identity.clone()),
+            purpose: ProviderAttemptPurpose::Ordinary,
+            cancel: Cancellation::new(),
+            deadline: Deadline::never(),
+        };
+        provider
+            .stream(
+                ProviderRequest::new(
+                    ModelId::new("gpt-5.6-terra"),
+                    vec![Message::user("identity propagation")],
+                ),
+                ctx,
+            )
+            .await
+            .expect("stream")
+            .collect::<Vec<_>>()
+            .await;
+
+        let requests = provider.transport().requests();
+        let payload: Value = serde_json::from_slice(&requests[0].body).expect("payload");
+        assert_eq!(
+            payload["prompt_cache_key"],
+            identity.wire_cache_key().as_str()
+        );
+    }
+
     /// The wire pairs a bearer with the account that issued it. When the
     /// source can name that account, its lease overrides the identity frozen
     /// into the provider config at construction — otherwise a source that
@@ -2094,6 +2200,8 @@ mod tests {
             session: agent_runtime_core::ids::SessionId::new("session-test"),
             request_id: RequestId::new("request-1"),
             attempt_id: AttemptId::new("attempt-1"),
+            cache_identity: None,
+            purpose: ProviderAttemptPurpose::Ordinary,
             cancel: Cancellation::new(),
             deadline: Deadline::never(),
         };
@@ -2188,6 +2296,8 @@ mod tests {
                     session: agent_runtime_core::ids::SessionId::new("session-test"),
                     request_id: RequestId::new("request-1"),
                     attempt_id: AttemptId::new("attempt-1"),
+                    cache_identity: None,
+                    purpose: ProviderAttemptPurpose::Ordinary,
                     cancel: Cancellation::new(),
                     deadline: Deadline::never(),
                 },
@@ -2244,6 +2354,8 @@ mod tests {
             session: agent_runtime_core::ids::SessionId::new("session-test"),
             request_id: RequestId::new("request-1"),
             attempt_id: AttemptId::new("attempt-1"),
+            cache_identity: None,
+            purpose: ProviderAttemptPurpose::Ordinary,
             cancel: Cancellation::new(),
             deadline: Deadline::never(),
         };
@@ -2324,6 +2436,8 @@ mod tests {
             session: agent_runtime_core::ids::SessionId::new("session-test"),
             request_id: RequestId::new("request-1"),
             attempt_id: AttemptId::new("attempt-1"),
+            cache_identity: None,
+            purpose: ProviderAttemptPurpose::Ordinary,
             cancel: Cancellation::new(),
             deadline: Deadline::never(),
         };
@@ -2375,6 +2489,8 @@ mod tests {
             session: agent_runtime_core::ids::SessionId::new("session-test"),
             request_id: RequestId::new("smith-live-chatgpt"),
             attempt_id: AttemptId::new("smith-live-chatgpt-1"),
+            cache_identity: None,
+            purpose: ProviderAttemptPurpose::Ordinary,
             cancel: Cancellation::new(),
             deadline: Deadline::after(&clock, 180_000),
         };

@@ -369,6 +369,7 @@ fn report_session_usage(
         }
     }
     if let Some(cache) = cache {
+        let identity = cache.cache_identity.as_deref().unwrap_or("?");
         let expected = cache
             .expected_read_tokens
             .map_or_else(|| "?".to_owned(), |tokens| tokens.to_string());
@@ -388,8 +389,9 @@ fn report_session_usage(
             None => "?",
         };
         println!(
-            "cache: state {} · CH {} · expected {} · observed {} · missed {} · confidence {} · misses {} · re-billed {} · extra cost {}",
+            "cache: state {} · identity {} · CH {} · expected {} · observed {} · missed {} · confidence {} · misses {} · re-billed {} · extra cost {}",
             cache.state.as_str(),
+            identity,
             cache.render_ch(),
             expected,
             observed,
@@ -398,6 +400,18 @@ fn report_session_usage(
             usage.cache_miss_count,
             usage.cache_rebilled_tokens,
             cost,
+        );
+    }
+    if let Some(controller) = host.cache_lifecycle() {
+        println!(
+            "{}",
+            crate::local_command::render_cache_controller_status(&controller)
+        );
+    }
+    if let Some(capsule) = host.resume_capsule() {
+        println!(
+            "{}",
+            crate::local_command::render_resume_capsule_status(&capsule)
         );
     }
     // Printed even for a session that spent nothing: an empty session is

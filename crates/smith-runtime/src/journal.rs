@@ -150,6 +150,9 @@ impl JournalLine {
 /// recovery reconciliation or an observability gap for a shared runtime event.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "record", rename_all = "snake_case")]
+// Runtime's canonical event envelope intentionally remains inline so the
+// existing JSONL wire shape and recovery path stay unchanged as it grows.
+#[allow(clippy::large_enum_variant)]
 pub enum JournalRecord {
     /// A canonical runtime event envelope, exactly as the runtime emitted it.
     Event {

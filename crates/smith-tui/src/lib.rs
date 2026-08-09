@@ -43,8 +43,9 @@ pub use app::{
     ResourceTarget, RuntimeResources, SubmissionTarget,
 };
 pub use cache::{
-    CachePrice, CacheProjection, CacheTurnSummary, CacheVisibilityState,
-    MISS_NOTICE_COST_MICRO_USD, MISS_NOTICE_TOKENS,
+    CacheLifecycleSummary, CacheOperationDisposition, CacheOperationSummary, CachePrice,
+    CacheProjection, CacheTurnSummary, CacheVisibilityState, MISS_NOTICE_COST_MICRO_USD,
+    MISS_NOTICE_TOKENS,
 };
 pub use commands::{COMMANDS, CommandAction, CommandSpec, GoalAction, McpAction};
 pub use composer::Composer;

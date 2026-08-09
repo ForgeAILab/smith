@@ -57,7 +57,8 @@ use smith_config::inventory::{
 };
 use smith_config::model::{ApprovalMode, ProfileUse};
 use smith_config::resolve::{
-    ConfigReadiness, Layer, Resolution, ResolveRequest, ResolvedAgent, inspect, resolve,
+    ConfigReadiness, Layer, Resolution, ResolveRequest, ResolvedAgent,
+    SyntheticCacheSpendAuthority, inspect, resolve,
 };
 use smith_host::{
     ApprovalPrompt, ApprovalRequests, GitChanges, HeadlessApproval, HeadlessInteraction,

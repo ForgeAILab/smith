@@ -204,6 +204,7 @@
             request: None,
             attempt: None,
             cache_plan: None,
+            cache_identity: None,
             read_tokens: Some(128),
             write_tokens: Some(0),
         });
@@ -240,6 +241,7 @@
             request: None,
             attempt: None,
             cache_plan: None,
+            cache_identity: None,
             read_tokens: Some(1),
             write_tokens: Some(0),
         });
@@ -253,6 +255,7 @@
             request: None,
             attempt: None,
             cache_plan: None,
+            cache_identity: None,
             read_tokens: Some(2),
             write_tokens: Some(0),
         });
@@ -304,6 +307,7 @@
             request: None,
             attempt: None,
             cache_plan: None,
+            cache_identity: None,
             read_tokens: Some(1),
             write_tokens: Some(0),
         });
@@ -351,6 +355,7 @@
                 request: None,
                 attempt: None,
                 cache_plan: None,
+                cache_identity: None,
                 read_tokens: Some(1),
                 write_tokens: Some(0),
             });
@@ -412,6 +417,7 @@
             request: None,
             attempt: None,
             cache_plan: None,
+            cache_identity: None,
             read_tokens: Some(1),
             write_tokens: Some(0),
         });
@@ -913,6 +919,7 @@
                     request: RequestId::new("cache-request"),
                     attempt: AttemptId::new("cache-attempt"),
                     cache_plan: fingerprint("cache-plan"),
+                    cache_identity: None,
                     state: CacheState::MissObserved,
                     expected_read_tokens: Some(20_000),
                     observed_read_tokens: Some(0),
@@ -1188,6 +1195,38 @@
             usage.merged_total_tokens(),
             1_540,
             "the merged figure is the explicit combined total"
+        );
+    }
+
+    #[test]
+    fn synthetic_child_usage_is_session_spend_not_delegated_turn_usage() {
+        let mut app = app();
+        app.apply_child(
+            "child-1",
+            &event(RuntimeEvent::Usage {
+                record: UsageRecord {
+                    source: UsageSource::ProviderAttempt,
+                    provenance: Provenance {
+                        attempt_purpose: Some(ProviderAttemptPurpose::CacheHandoffCheckpoint),
+                        ..Provenance::default()
+                    },
+                    delta: UsageDelta::new()
+                        .with(CounterKind::InputCached, 700)
+                        .with(CounterKind::Output, 20),
+                },
+            }),
+        );
+
+        let usage = app.session_usage();
+        assert_eq!(usage.turns, 0);
+        assert!(usage.totals.is_empty());
+        assert!(usage.delegated_totals.is_empty());
+        assert_eq!(usage.delegated_contributors, 0);
+        assert_eq!(usage.synthetic_totals[&CounterKind::InputCached], 700);
+        assert_eq!(
+            usage.synthetic_by_purpose
+                [&ProviderAttemptPurpose::CacheHandoffCheckpoint][&CounterKind::Output],
+            20
         );
     }
 

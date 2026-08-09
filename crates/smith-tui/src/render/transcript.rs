@@ -95,7 +95,9 @@ pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<
         let label = match app.status.activity {
             Activity::Working => "Working",
             Activity::Interrupting => "Interrupting",
-            Activity::Idle | Activity::Ended => unreachable!("activity was filtered above"),
+            Activity::Idle | Activity::ParkedAwaitingChild | Activity::Ended => {
+                unreachable!("activity was filtered above")
+            }
         };
         let details = app.work_detail_lines();
         // The provider round-trip stage answers "is anything happening?"

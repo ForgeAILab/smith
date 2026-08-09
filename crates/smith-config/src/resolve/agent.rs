@@ -482,6 +482,7 @@ pub(super) fn extract(
     declared: &Declarations,
     agent_profiles: BTreeMap<String, ResolvedAgentProfile>,
     profile_use: ProfileUse,
+    synthetic_cache_spend: SyntheticCacheSpendAuthority,
 ) -> Result<ResolvedConfig, ConfigError> {
     let provider_name =
         text(provenance, "provider")?.ok_or_else(|| ConfigError::MissingSetting {
@@ -518,7 +519,8 @@ pub(super) fn extract(
         effort: text(provenance, "reasoning.effort")?,
     };
     let model_reasoning = resolve_model_reasoning(provenance, &provider.name.value, &model.value)?;
-    let context = resolve_context(provenance)?;
+    let context = resolve_context(provenance, &model_limits, synthetic_cache_spend)?;
+    let child_agents = resolve_child_agents(provenance)?;
     let limits = resolve_limits(provenance)?;
     let persistence = resolve_persistence(provenance)?;
     let approval = resolve_approval(provenance)?;
@@ -535,6 +537,8 @@ pub(super) fn extract(
         reasoning,
         model_reasoning,
         context,
+        synthetic_cache_spend,
+        child_agents,
         limits,
         persistence,
         approval,

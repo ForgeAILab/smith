@@ -29,8 +29,9 @@ use std::sync::{Arc, Mutex};
 use agent_runtime_core::cancel::Cancellation;
 use agent_runtime_core::clock::{Clock, Deadline};
 use agent_runtime_core::provider::{
-    Capabilities, ModelDescriptor, ModelId, Provider, ProviderCallContext, ProviderError,
-    ProviderErrorKind, ProviderRequest, ProviderStream, ProviderStreamEvent,
+    Capabilities, ModelDescriptor, ModelId, PromptCacheControl, Provider, ProviderCacheContract,
+    ProviderCallContext, ProviderError, ProviderErrorKind, ProviderRequest, ProviderStream,
+    ProviderStreamEvent,
 };
 use agent_runtime_core::provider_credential::{
     CredentialInvalidation, ProviderAuthRejection, ProviderCredentialError,
@@ -394,11 +395,21 @@ impl PooledProvider {
 #[async_trait]
 impl Provider for PooledProvider {
     fn describe(&self) -> Vec<ModelDescriptor> {
-        self.inner.describe()
+        self.inner
+            .describe()
+            .into_iter()
+            .map(|mut descriptor| {
+                disable_rotating_partition_cache(&mut descriptor.capabilities);
+                descriptor
+            })
+            .collect()
     }
 
     fn capabilities(&self, model: &ModelId) -> Option<Capabilities> {
-        self.inner.capabilities(model)
+        self.inner.capabilities(model).map(|mut capabilities| {
+            disable_rotating_partition_cache(&mut capabilities);
+            capabilities
+        })
     }
 
     async fn stream(
@@ -436,6 +447,17 @@ impl Provider for PooledProvider {
             }
         }
     }
+}
+
+fn disable_rotating_partition_cache(capabilities: &mut Capabilities) {
+    // A pool can change the account/tenant immediately before provider I/O,
+    // while Runtime cache identities are immutable plan inputs. Advertising
+    // cache support here would attribute observations or synthetic work to
+    // the previous member's partition. Ordinary requests remain available;
+    // cache planning fails closed until rotation can force an identity replan.
+    capabilities.cache = false;
+    capabilities.prompt_cache = PromptCacheControl::None;
+    capabilities.cache_contract = Some(ProviderCacheContract::default());
 }
 
 impl PooledProvider {
@@ -660,6 +682,8 @@ mod tests {
             session: SessionId::new("s1"),
             request_id: RequestId::new("r1"),
             attempt_id: AttemptId::new("a1"),
+            cache_identity: None,
+            purpose: agent_runtime_core::provider::ProviderAttemptPurpose::Ordinary,
             cancel: Cancellation::new(),
             deadline: Deadline::never(),
         }
@@ -680,6 +704,42 @@ mod tests {
 
     async fn collect(stream: ProviderStream) -> Vec<ProviderStreamEvent> {
         stream.collect::<Vec<_>>().await
+    }
+
+    #[test]
+    fn rotating_provider_fails_cache_capabilities_closed() {
+        let mut cache_capable = Capabilities::basic_streaming();
+        cache_capable.cache = true;
+        cache_capable.prompt_cache = PromptCacheControl::Implicit;
+        cache_capable.cache_contract = Some(
+            agent_runtime_core::provider::ProviderCacheContract::from_control(
+                PromptCacheControl::Implicit,
+            ),
+        );
+        let inner = Arc::new(agent_runtime::provider::fake::FakeProvider::new(
+            "m",
+            cache_capable,
+            Vec::new(),
+        ));
+        let provider =
+            PooledProvider::new(inner, pool(2), Arc::new(AlwaysSwitch), Arc::new(FixedClock));
+
+        let capabilities = provider
+            .capabilities(&ModelId::new("m"))
+            .expect("model capabilities");
+        assert!(!capabilities.cache);
+        assert_eq!(capabilities.prompt_cache, PromptCacheControl::None);
+        assert_eq!(
+            capabilities.cache_contract().behavior,
+            agent_runtime_core::provider::ProviderCacheBehavior::Unsupported
+        );
+        assert_eq!(
+            provider.describe()[0]
+                .capabilities
+                .cache_contract()
+                .behavior,
+            agent_runtime_core::provider::ProviderCacheBehavior::Unsupported
+        );
     }
 
     #[tokio::test]

@@ -20,14 +20,15 @@ use crate::status::{SessionUsage, counter_label};
 
 /// Record wire version.
 ///
-/// Bumped to 3 for cache miss diagnostics: `cache_miss_count` and
+/// Bumped to 4 for separately attributed synthetic cache usage. Version 3
+/// added cache miss diagnostics: `cache_miss_count` and
 /// `cache_rebilled_tokens` are optional so an older record means "no cache
 /// evidence", never a verified zero. Version 2 added delegated usage:
 /// `delegated_totals` and
 /// `delegated_contributors` are new fields. Both carry `#[serde(default)]`
 /// so [`read_all`] stays tolerant of version-1 lines, which simply have no
 /// delegated usage to report.
-pub const USAGE_RECORD_SCHEMA_VERSION: u32 = 3;
+pub const USAGE_RECORD_SCHEMA_VERSION: u32 = 4;
 
 /// One session's bounded usage record.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,6 +49,14 @@ pub struct SessionUsageRecord {
     pub reported: bool,
     /// Per-counter totals, keyed by stable counter label.
     pub totals: std::collections::BTreeMap<String, u64>,
+    /// Provider counters from synthetic cache operations, excluded from root
+    /// and delegated turn usage while retained in session spend.
+    #[serde(default)]
+    pub synthetic_totals: std::collections::BTreeMap<String, u64>,
+    /// Synthetic counters partitioned by Runtime's stable typed purpose.
+    #[serde(default)]
+    pub synthetic_by_purpose:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, u64>>,
     /// Context compactions observed.
     pub compactions: u32,
     /// Tokens those compactions reclaimed.
@@ -91,6 +100,24 @@ impl SessionUsageRecord {
                 .totals
                 .iter()
                 .map(|(kind, value)| (counter_label(*kind).to_owned(), *value))
+                .collect(),
+            synthetic_totals: usage
+                .synthetic_totals
+                .iter()
+                .map(|(kind, value)| (counter_label(*kind).to_owned(), *value))
+                .collect(),
+            synthetic_by_purpose: usage
+                .synthetic_by_purpose
+                .iter()
+                .map(|(purpose, totals)| {
+                    (
+                        purpose.as_str().to_owned(),
+                        totals
+                            .iter()
+                            .map(|(kind, value)| (counter_label(*kind).to_owned(), *value))
+                            .collect(),
+                    )
+                })
                 .collect(),
             compactions: usage.compactions,
             reclaimed_tokens: usage.reclaimed_tokens,
@@ -185,6 +212,33 @@ mod tests {
     }
 
     #[test]
+    fn synthetic_cache_usage_round_trips_without_entering_root_totals() {
+        let mut usage = usage();
+        usage
+            .synthetic_totals
+            .insert(CounterKind::InputCached, 80_000);
+        usage.synthetic_by_purpose.insert(
+            agent_runtime_core::provider::ProviderAttemptPurpose::CacheKeepalive,
+            std::collections::BTreeMap::from([(CounterKind::InputCached, 80_000)]),
+        );
+        let record = SessionUsageRecord::new(
+            "session-1",
+            Some("openai".to_owned()),
+            "gpt-5.6",
+            "build",
+            &usage,
+        );
+
+        assert_eq!(record.schema_version, 4);
+        assert_eq!(record.totals["cached"], 90_000);
+        assert_eq!(record.synthetic_totals["cached"], 80_000);
+        assert_eq!(
+            record.synthetic_by_purpose["cache_keepalive"]["cached"],
+            80_000
+        );
+    }
+
+    #[test]
     fn a_record_carries_no_conversation_content() {
         let record = SessionUsageRecord::new(
             "session-1",
@@ -224,6 +278,8 @@ mod tests {
             turns: 1,
             reported: true,
             totals,
+            synthetic_totals: std::collections::BTreeMap::new(),
+            synthetic_by_purpose: std::collections::BTreeMap::new(),
             compactions: 0,
             reclaimed_tokens: 0,
             ..SessionUsage::default()
@@ -291,6 +347,8 @@ mod tests {
             turns: 1,
             reported: true,
             totals,
+            synthetic_totals: std::collections::BTreeMap::new(),
+            synthetic_by_purpose: std::collections::BTreeMap::new(),
             compactions: 0,
             reclaimed_tokens: 0,
             delegated_totals,
@@ -323,6 +381,8 @@ mod tests {
             turns: 2,
             reported: true,
             totals,
+            synthetic_totals: std::collections::BTreeMap::new(),
+            synthetic_by_purpose: std::collections::BTreeMap::new(),
             compactions: 1,
             reclaimed_tokens: 40_000,
             delegated_totals,

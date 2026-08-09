@@ -9,7 +9,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use agent_runtime_core::event::{CacheState, EstimationConfidence, EventEnvelope, RuntimeEvent};
+use agent_runtime_core::event::{
+    CacheOperationOutcome, CacheOperationReason, CacheState, EstimationConfidence, EventEnvelope,
+    RuntimeEvent,
+};
+use agent_runtime_core::provider::{CacheEvidenceKind, ProviderAttemptPurpose};
 use agent_runtime_core::usage::CounterKind;
 use serde::Serialize;
 
@@ -18,9 +22,9 @@ pub const MISS_NOTICE_TOKENS: u64 = 20_000;
 /// The fixed cache-miss notice threshold, in micro-USD.
 pub const MISS_NOTICE_COST_MICRO_USD: u128 = 100_000;
 
-/// Smith's presentation state.  The first five variants are the canonical
-/// runtime states; `Suspended` is local state used while an identity switch
-/// has invalidated the previous cache projection.
+/// Smith's presentation state. These are direct projections of canonical
+/// runtime states. Smith also uses `Suspended` when an identity switch makes
+/// the previous identity's evidence inapplicable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum CacheVisibilityState {
@@ -35,7 +39,10 @@ pub enum CacheVisibilityState {
     WarmObserved,
     /// The provider read was below the runtime expectation.
     MissObserved,
-    /// A provider/model identity switch suspended the previous identity.
+    /// The provider explicitly reported expiry for the exact identity.
+    Expired,
+    /// Runtime suspended maintenance, or an identity switch invalidated the
+    /// previous identity's projection.
     Suspended,
 }
 
@@ -47,6 +54,8 @@ impl From<CacheState> for CacheVisibilityState {
             CacheState::Eligible => Self::Eligible,
             CacheState::WarmObserved => Self::WarmObserved,
             CacheState::MissObserved => Self::MissObserved,
+            CacheState::Expired => Self::Expired,
+            CacheState::Suspended => Self::Suspended,
         }
     }
 }
@@ -60,6 +69,7 @@ impl CacheVisibilityState {
             Self::Eligible => "eligible",
             Self::WarmObserved => "warm_observed",
             Self::MissObserved => "miss_observed",
+            Self::Expired => "expired",
             Self::Suspended => "suspended",
         }
     }
@@ -87,6 +97,10 @@ pub struct CacheTurnSummary {
     pub turn: String,
     /// Aggregate canonical state for the turn.
     pub state: CacheVisibilityState,
+    /// Exact redaction-safe Runtime cache-identity digest, when all evidence
+    /// for the turn was correlated to the same identity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_identity: Option<String>,
     /// Expected reusable read tokens, when every cache-evidence-bearing
     /// attempt supplied it.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -120,6 +134,75 @@ pub struct CacheTurnSummary {
     /// Derived extra cost when a compatible price was supplied.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extra_cost_micro_usd: Option<u128>,
+}
+
+/// The latest canonical phase observed for one Runtime cache operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheOperationDisposition {
+    /// Runtime preflight accepted the operation.
+    Prepared,
+    /// Runtime rejected the operation before provider I/O.
+    Rejected,
+    /// The operation crossed provider admission.
+    Started,
+    /// The operation reached a terminal result.
+    Completed,
+    /// Runtime suspended maintenance for the exact identity.
+    Suspended,
+}
+
+/// Bounded projection of one canonical Runtime cache-operation lifecycle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CacheOperationSummary {
+    /// Stable upstream operation identity.
+    pub operation: String,
+    /// Exact redaction-safe Runtime cache-identity digest.
+    pub cache_identity: String,
+    /// Typed provider-attempt purpose.
+    pub purpose: ProviderAttemptPurpose,
+    /// Latest canonical lifecycle phase.
+    pub disposition: CacheOperationDisposition,
+    /// Logical request, when Runtime allocated one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request: Option<String>,
+    /// Provider attempt, when the operation crossed provider admission.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<String>,
+    /// Terminal result, when completed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<CacheOperationOutcome>,
+    /// Structured rejection, failure, or suspension reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<CacheOperationReason>,
+    /// Bounded Runtime metrics; never provider bodies.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub metrics: BTreeMap<String, u64>,
+}
+
+/// Canonical provider evidence and operation facts accumulated for a session.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct CacheLifecycleSummary {
+    /// Latest exact redaction-safe Runtime cache-identity digest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_identity: Option<String>,
+    /// Latest typed provider evidence kind.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<CacheEvidenceKind>,
+    /// Provider-declared guarantee boundary, in Runtime clock milliseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guaranteed_until_ms: Option<u64>,
+    /// Explicit resource existence, preserving omitted versus false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource_exists: Option<bool>,
+    /// Number of canonical operations that crossed provider admission.
+    pub maintenance_calls_used: u32,
+    /// Latest canonical operation lifecycle.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_operation: Option<CacheOperationSummary>,
+    /// Latest canonical maintenance-suspension reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suspension_reason: Option<CacheOperationReason>,
 }
 
 impl CacheTurnSummary {
@@ -180,6 +263,7 @@ struct AttemptProjection {
     request: String,
     attempt: String,
     cache_plan: String,
+    cache_identity: Option<String>,
     input_uncached: u64,
     input_cached: u64,
     cache_write: u64,
@@ -221,6 +305,8 @@ pub struct CacheProjection {
     session_rebilled: u64,
     session_observed_read: Option<u64>,
     legacy_read: Option<u64>,
+    operations: BTreeMap<String, CacheOperationSummary>,
+    lifecycle: CacheLifecycleSummary,
 }
 
 impl CacheProjection {
@@ -335,6 +421,7 @@ impl CacheProjection {
                 request,
                 attempt,
                 cache_plan,
+                cache_identity,
                 read_tokens,
                 write_tokens,
             } => {
@@ -353,6 +440,11 @@ impl CacheProjection {
                 let plan = cache_plan.as_ref().map(ToString::to_string);
                 let key = self.find_or_create(&turn, &request, &attempt_id, plan.as_deref());
                 let entry = self.attempts.get_mut(&key).expect("inserted attempt");
+                if let Some(identity) = cache_identity {
+                    let digest = identity.digest().to_string();
+                    entry.cache_identity = Some(digest.clone());
+                    self.lifecycle.cache_identity = Some(digest);
+                }
                 if let Some(read) = read_tokens {
                     entry.observed_read = Some(*read);
                     entry.read_present = true;
@@ -366,6 +458,7 @@ impl CacheProjection {
                 request,
                 attempt,
                 cache_plan,
+                cache_identity,
                 state,
                 expected_read_tokens,
                 observed_read_tokens,
@@ -379,6 +472,11 @@ impl CacheProjection {
                 let key = self.find_or_create(&turn, &request, &attempt_id, Some(&plan));
                 let entry = self.attempts.get_mut(&key).expect("inserted attempt");
                 entry.cache_plan = plan;
+                if let Some(identity) = cache_identity {
+                    let digest = identity.digest().to_string();
+                    entry.cache_identity = Some(digest.clone());
+                    self.lifecycle.cache_identity = Some(digest);
+                }
                 entry.state = Some((*state).into());
                 entry.expected = *expected_read_tokens;
                 entry.observed_read = *observed_read_tokens;
@@ -387,6 +485,118 @@ impl CacheProjection {
                 entry.confidence = Some(*confidence);
                 entry.read_present = observed_read_tokens.is_some();
                 entry.write_present = observed_write_tokens.is_some();
+            }
+            RuntimeEvent::CacheOperationPrepared {
+                operation,
+                request,
+                identity,
+                purpose,
+            } => {
+                self.publish_operation(CacheOperationSummary {
+                    operation: operation.to_string(),
+                    cache_identity: identity.digest().to_string(),
+                    purpose: *purpose,
+                    disposition: CacheOperationDisposition::Prepared,
+                    request: request.as_ref().map(ToString::to_string),
+                    attempt: None,
+                    outcome: None,
+                    reason: None,
+                    metrics: BTreeMap::new(),
+                });
+            }
+            RuntimeEvent::CacheOperationRejected {
+                operation,
+                request,
+                attempt,
+                identity,
+                purpose,
+                reason,
+            } => {
+                self.publish_operation(CacheOperationSummary {
+                    operation: operation.to_string(),
+                    cache_identity: identity.digest().to_string(),
+                    purpose: *purpose,
+                    disposition: CacheOperationDisposition::Rejected,
+                    request: request.as_ref().map(ToString::to_string),
+                    attempt: attempt.as_ref().map(ToString::to_string),
+                    outcome: Some(CacheOperationOutcome::Rejected),
+                    reason: Some(*reason),
+                    metrics: BTreeMap::new(),
+                });
+            }
+            RuntimeEvent::CacheOperationStarted {
+                operation,
+                request,
+                attempt,
+                identity,
+                purpose,
+            } => {
+                self.lifecycle.maintenance_calls_used =
+                    self.lifecycle.maintenance_calls_used.saturating_add(1);
+                self.publish_operation(CacheOperationSummary {
+                    operation: operation.to_string(),
+                    cache_identity: identity.digest().to_string(),
+                    purpose: *purpose,
+                    disposition: CacheOperationDisposition::Started,
+                    request: request.as_ref().map(ToString::to_string),
+                    attempt: attempt.as_ref().map(ToString::to_string),
+                    outcome: None,
+                    reason: None,
+                    metrics: BTreeMap::new(),
+                });
+            }
+            RuntimeEvent::CacheOperationCompleted {
+                operation,
+                request,
+                attempt,
+                identity,
+                purpose,
+                outcome,
+                reason,
+                metrics,
+            } => {
+                self.publish_operation(CacheOperationSummary {
+                    operation: operation.to_string(),
+                    cache_identity: identity.digest().to_string(),
+                    purpose: *purpose,
+                    disposition: CacheOperationDisposition::Completed,
+                    request: request.as_ref().map(ToString::to_string),
+                    attempt: attempt.as_ref().map(ToString::to_string),
+                    outcome: Some(*outcome),
+                    reason: *reason,
+                    metrics: metrics.clone(),
+                });
+            }
+            RuntimeEvent::CacheAvailabilityEvidenceRecorded { evidence } => {
+                self.lifecycle.cache_identity = Some(evidence.identity.digest().to_string());
+                self.lifecycle.evidence = Some(evidence.kind);
+                if evidence.suspends_maintenance() {
+                    self.lifecycle.guaranteed_until_ms = None;
+                } else if let Some(guaranteed_until) = evidence.guaranteed_until {
+                    self.lifecycle.guaranteed_until_ms = Some(guaranteed_until.as_millis());
+                }
+                if evidence.exists.is_some() {
+                    self.lifecycle.resource_exists = evidence.exists;
+                }
+            }
+            RuntimeEvent::CacheOperationSuspended {
+                identity,
+                operation,
+                reason,
+                ..
+            } => {
+                let digest = identity.digest().to_string();
+                self.lifecycle.cache_identity = Some(digest.clone());
+                self.lifecycle.suspension_reason = Some(*reason);
+                if let Some(operation) = operation {
+                    let key = operation.to_string();
+                    if let Some(mut summary) = self.operations.remove(&key) {
+                        summary.cache_identity = digest;
+                        summary.disposition = CacheOperationDisposition::Suspended;
+                        summary.reason = Some(*reason);
+                        self.publish_operation(summary);
+                    }
+                }
             }
             RuntimeEvent::ProviderAttemptFinished { attempt, .. } => {
                 let attempt_id = attempt.to_string();
@@ -456,6 +666,11 @@ impl CacheProjection {
         self.session_observed_read.or(self.legacy_read)
     }
 
+    /// Latest canonical provider evidence and cache-operation lifecycle.
+    pub fn lifecycle(&self) -> &CacheLifecycleSummary {
+        &self.lifecycle
+    }
+
     /// Suspends the latest identity after a provider/model switch. Historical
     /// miss totals remain session diagnostics, but the old CH value cannot be
     /// presented as belonging to the new cache identity.
@@ -464,6 +679,7 @@ impl CacheProjection {
             && let Some(summary) = self.completed.get_mut(turn)
         {
             summary.state = CacheVisibilityState::Suspended;
+            summary.cache_identity = None;
             summary.expected_read_tokens = None;
             summary.observed_read_tokens = None;
             summary.observed_write_tokens = None;
@@ -515,6 +731,20 @@ impl CacheProjection {
             total = total.checked_add(extra_cost(entry, price)?)?;
         }
         saw_miss.then_some(total)
+    }
+
+    fn publish_operation(&mut self, summary: CacheOperationSummary) {
+        self.lifecycle.cache_identity = Some(summary.cache_identity.clone());
+        if matches!(
+            summary.disposition,
+            CacheOperationDisposition::Prepared | CacheOperationDisposition::Started
+        ) {
+            self.operations
+                .insert(summary.operation.clone(), summary.clone());
+        } else {
+            self.operations.remove(&summary.operation);
+        }
+        self.lifecycle.last_operation = Some(summary);
     }
 
     fn find_or_create(
@@ -681,6 +911,13 @@ impl CacheProjection {
             .unwrap_or(100)
         });
         let state = aggregate_state(&evidence);
+        let cache_identity = evidence.first().and_then(|first| {
+            let identity = first.cache_identity.as_ref()?;
+            evidence
+                .iter()
+                .all(|entry| entry.cache_identity.as_ref() == Some(identity))
+                .then(|| identity.clone())
+        });
         let confidence = evidence
             .iter()
             .map(|entry| entry.confidence)
@@ -731,6 +968,7 @@ impl CacheProjection {
             CacheTurnSummary {
                 turn: turn.to_owned(),
                 state,
+                cache_identity,
                 expected_read_tokens: expected,
                 observed_read_tokens: observed_read,
                 observed_write_tokens: observed_write,
@@ -751,6 +989,16 @@ impl CacheProjection {
 
 fn aggregate_state(entries: &[&AttemptProjection]) -> CacheVisibilityState {
     if entries
+        .iter()
+        .any(|entry| entry.state == Some(CacheVisibilityState::Suspended))
+    {
+        CacheVisibilityState::Suspended
+    } else if entries
+        .iter()
+        .any(|entry| entry.state == Some(CacheVisibilityState::Expired))
+    {
+        CacheVisibilityState::Expired
+    } else if entries
         .iter()
         .any(|entry| entry.state == Some(CacheVisibilityState::MissObserved))
     {
@@ -841,8 +1089,12 @@ fn format_usd(micro_usd: u128) -> String {
 mod tests {
     use agent_runtime_core::clock::Timestamp;
     use agent_runtime_core::event::{EventEnvelope, TurnFinish};
-    use agent_runtime_core::ids::{AttemptId, EventId, RequestId, SessionId, TurnId};
-    use agent_runtime_core::provider::ModelId;
+    use agent_runtime_core::ids::{
+        AttemptId, CacheOperationId, EventId, RequestId, SessionId, TurnId,
+    };
+    use agent_runtime_core::provider::{
+        CacheAvailabilityEvidence, CacheIdentity, ModelId, PromptCacheControl,
+    };
     use agent_runtime_core::usage::{Provenance, UsageDelta, UsageRecord, UsageSource};
     use agent_runtime_registry::Fingerprint;
 
@@ -883,6 +1135,128 @@ mod tests {
         )
     }
 
+    fn cache_identity() -> CacheIdentity {
+        CacheIdentity::legacy(
+            Fingerprint::of("profile"),
+            "provider",
+            ModelId::new("model"),
+            Vec::new(),
+            PromptCacheControl::Implicit,
+        )
+    }
+
+    #[test]
+    fn exact_identity_and_expiry_remain_distinct_in_the_turn_projection() {
+        let identity = cache_identity();
+        let expected_digest = identity.digest().to_string();
+        let mut projection = CacheProjection::default();
+        projection.apply(&envelope(
+            1,
+            "turn",
+            RuntimeEvent::CacheStateChanged {
+                request: RequestId::new("request"),
+                attempt: AttemptId::new("attempt"),
+                cache_plan: Fingerprint::of("plan"),
+                cache_identity: Some(identity),
+                state: CacheState::Expired,
+                expected_read_tokens: Some(100),
+                observed_read_tokens: Some(0),
+                observed_write_tokens: None,
+                missed_tokens: Some(100),
+                confidence: EstimationConfidence::Exact,
+            },
+        ));
+        projection.apply(&envelope(
+            2,
+            "turn",
+            RuntimeEvent::TurnCompleted {
+                finish: TurnFinish::Completed,
+                visible_output: true,
+            },
+        ));
+
+        let summary = projection.latest_completed().expect("summary");
+        assert_eq!(summary.state, CacheVisibilityState::Expired);
+        assert_eq!(
+            summary.cache_identity.as_deref(),
+            Some(expected_digest.as_str())
+        );
+    }
+
+    #[test]
+    fn canonical_operation_lifecycle_and_guarantee_project_once() {
+        let identity = cache_identity();
+        let operation = CacheOperationId::new("cache-operation");
+        let request = RequestId::new("request");
+        let attempt = AttemptId::new("attempt");
+        let mut projection = CacheProjection::default();
+
+        projection.apply(&envelope(
+            1,
+            "turn",
+            RuntimeEvent::CacheOperationPrepared {
+                operation: operation.clone(),
+                request: Some(request.clone()),
+                identity: identity.clone(),
+                purpose: ProviderAttemptPurpose::CacheKeepalive,
+            },
+        ));
+        let started = envelope(
+            2,
+            "turn",
+            RuntimeEvent::CacheOperationStarted {
+                operation: operation.clone(),
+                request: Some(request.clone()),
+                attempt: Some(attempt.clone()),
+                identity: identity.clone(),
+                purpose: ProviderAttemptPurpose::CacheKeepalive,
+            },
+        );
+        projection.apply(&started);
+        projection.apply(&started);
+        projection.apply(&envelope(
+            3,
+            "turn",
+            RuntimeEvent::CacheAvailabilityEvidenceRecorded {
+                evidence: CacheAvailabilityEvidence::stream(
+                    identity.clone(),
+                    request.clone(),
+                    attempt.clone(),
+                    0,
+                    Some(10),
+                    Some(0),
+                )
+                .with_guaranteed_until(Timestamp(9_000)),
+            },
+        ));
+        projection.apply(&envelope(
+            4,
+            "turn",
+            RuntimeEvent::CacheOperationCompleted {
+                operation,
+                request: Some(request),
+                attempt: Some(attempt),
+                identity: identity.clone(),
+                purpose: ProviderAttemptPurpose::CacheKeepalive,
+                outcome: CacheOperationOutcome::Completed,
+                reason: None,
+                metrics: BTreeMap::from([("latency_ms".to_owned(), 12)]),
+            },
+        ));
+
+        let lifecycle = projection.lifecycle();
+        assert_eq!(lifecycle.maintenance_calls_used, 1);
+        assert_eq!(lifecycle.guaranteed_until_ms, Some(9_000));
+        assert_eq!(
+            lifecycle.cache_identity.as_deref(),
+            Some(identity.digest().as_str())
+        );
+        let operation = lifecycle.last_operation.as_ref().expect("operation");
+        assert_eq!(operation.disposition, CacheOperationDisposition::Completed);
+        assert_eq!(operation.outcome, Some(CacheOperationOutcome::Completed));
+        assert_eq!(operation.metrics.get("latency_ms"), Some(&12));
+    }
+
     #[test]
     fn explicit_zero_is_zero_not_unknown() {
         let mut projection = CacheProjection::default();
@@ -904,6 +1278,7 @@ mod tests {
                 request: RequestId::new("request"),
                 attempt: AttemptId::new("attempt"),
                 cache_plan: Fingerprint::of("plan"),
+                cache_identity: None,
                 state: CacheState::MissObserved,
                 expected_read_tokens: Some(100),
                 observed_read_tokens: Some(0),
@@ -937,6 +1312,7 @@ mod tests {
                 request: RequestId::new("request"),
                 attempt: AttemptId::new("attempt"),
                 cache_plan: Fingerprint::of("plan"),
+                cache_identity: None,
                 state: CacheState::Eligible,
                 expected_read_tokens: None,
                 observed_read_tokens: Some(0),
@@ -972,6 +1348,7 @@ mod tests {
                 request: RequestId::new("request"),
                 attempt: AttemptId::new("attempt"),
                 cache_plan: Fingerprint::of("plan"),
+                cache_identity: None,
                 state: CacheState::WarmObserved,
                 expected_read_tokens: Some(100),
                 observed_read_tokens: Some(100),
@@ -1022,6 +1399,7 @@ mod tests {
                 request: RequestId::new("request"),
                 attempt: AttemptId::new("attempt"),
                 cache_plan: Fingerprint::of("plan"),
+                cache_identity: None,
                 state: CacheState::WarmObserved,
                 expected_read_tokens: None,
                 observed_read_tokens: Some(0),
@@ -1063,6 +1441,7 @@ mod tests {
                 request: RequestId::new("request"),
                 attempt: AttemptId::new("attempt"),
                 cache_plan: Fingerprint::of("plan-a"),
+                cache_identity: None,
                 state: CacheState::MissObserved,
                 expected_read_tokens: Some(100),
                 observed_read_tokens: Some(0),
@@ -1148,6 +1527,7 @@ mod tests {
                 request: RequestId::new("request"),
                 attempt: AttemptId::new("attempt"),
                 cache_plan: Fingerprint::of("plan"),
+                cache_identity: None,
                 state: CacheState::MissObserved,
                 expected_read_tokens: Some(105_000),
                 observed_read_tokens: Some(0),
@@ -1182,6 +1562,7 @@ mod tests {
                 request: RequestId::new("request"),
                 attempt: AttemptId::new("attempt"),
                 cache_plan: Fingerprint::of("plan"),
+                cache_identity: None,
                 state: CacheState::WarmObserved,
                 expected_read_tokens: Some(20),
                 observed_read_tokens: Some(200),
@@ -1220,6 +1601,7 @@ mod tests {
                     request: RequestId::new("request"),
                     attempt: AttemptId::new(attempt),
                     cache_plan: Fingerprint::of("plan"),
+                    cache_identity: None,
                     state: CacheState::MissObserved,
                     expected_read_tokens: Some(100),
                     observed_read_tokens: Some(0),
@@ -1282,6 +1664,7 @@ mod tests {
                 request: RequestId::new("request"),
                 attempt: AttemptId::new("served"),
                 cache_plan: Fingerprint::of("plan"),
+                cache_identity: None,
                 state: CacheState::WarmObserved,
                 expected_read_tokens: Some(80),
                 observed_read_tokens: Some(80),
@@ -1340,6 +1723,7 @@ mod tests {
                 request: RequestId::new("retry-request"),
                 attempt: AttemptId::new("retry-attempt"),
                 cache_plan: Fingerprint::of("plan"),
+                cache_identity: None,
                 state: CacheState::MissObserved,
                 expected_read_tokens: Some(20_000),
                 observed_read_tokens: Some(0),
@@ -1375,6 +1759,7 @@ mod tests {
                     request: RequestId::new("request"),
                     attempt: AttemptId::new("attempt"),
                     cache_plan: Fingerprint::of("plan"),
+                    cache_identity: None,
                     state: CacheState::MissObserved,
                     expected_read_tokens: Some(100),
                     observed_read_tokens: Some(0),
@@ -1410,6 +1795,7 @@ mod tests {
                 request: RequestId::new("request"),
                 attempt: AttemptId::new("attempt"),
                 cache_plan: Fingerprint::of("plan"),
+                cache_identity: None,
                 state: CacheState::MissObserved,
                 expected_read_tokens: Some(100),
                 observed_read_tokens: Some(0),
@@ -1437,6 +1823,7 @@ mod tests {
                 request: RequestId::new("request"),
                 attempt: AttemptId::new("attempt"),
                 cache_plan: Fingerprint::of("plan"),
+                cache_identity: None,
                 state: CacheState::WarmObserved,
                 expected_read_tokens: Some(100),
                 observed_read_tokens: Some(100),
@@ -1497,6 +1884,7 @@ mod tests {
                 request: RequestId::new("one-request"),
                 attempt: AttemptId::new("attempt-one"),
                 cache_plan: Fingerprint::of("plan"),
+                cache_identity: None,
                 state: CacheState::MissObserved,
                 expected_read_tokens: Some(20_000),
                 observed_read_tokens: Some(0),
@@ -1543,6 +1931,7 @@ mod tests {
                     request: RequestId::new(request),
                     attempt: AttemptId::new(attempt),
                     cache_plan: Fingerprint::of("plan"),
+                    cache_identity: None,
                     state: CacheState::MissObserved,
                     expected_read_tokens: Some(20_000),
                     observed_read_tokens: Some(0),
@@ -1581,6 +1970,7 @@ mod tests {
                     request: RequestId::new("request"),
                     attempt: AttemptId::new(attempt),
                     cache_plan: Fingerprint::of("plan"),
+                    cache_identity: None,
                     state: CacheState::MissObserved,
                     expected_read_tokens: Some(missed),
                     observed_read_tokens: Some(0),
@@ -1616,6 +2006,7 @@ mod tests {
                 request: None,
                 attempt: None,
                 cache_plan: None,
+                cache_identity: None,
                 read_tokens: Some(0),
                 write_tokens: None,
             },
@@ -1648,6 +2039,7 @@ mod tests {
                 request: RequestId::new("request"),
                 attempt: AttemptId::new("attempt"),
                 cache_plan: Fingerprint::of("plan"),
+                cache_identity: None,
                 state: CacheState::MissObserved,
                 expected_read_tokens: Some(100),
                 observed_read_tokens: Some(0),
@@ -1698,6 +2090,7 @@ mod tests {
                 request: RequestId::new("request"),
                 attempt: AttemptId::new("attempt"),
                 cache_plan: Fingerprint::of("plan"),
+                cache_identity: None,
                 state: CacheState::MissObserved,
                 expected_read_tokens: Some(100),
                 observed_read_tokens: Some(0),

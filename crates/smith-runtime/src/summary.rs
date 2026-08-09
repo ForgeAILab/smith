@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use agent_runtime::context::Sensitivity;
 use agent_runtime::harness::{
-    SEMANTIC_SUMMARY_PURPOSE, SemanticSummaryPolicy, SummaryModel, SummaryModelRequest,
-    SummaryModelResponse,
+    SEMANTIC_SUMMARY_IDLE_COMPACTION_PURPOSE, SEMANTIC_SUMMARY_PURPOSE, SemanticSummaryPolicy,
+    SummaryModel, SummaryModelRequest, SummaryModelResponse,
 };
 use agent_runtime::registry::RegistryRevision;
 use agent_runtime_core::artifact::ArtifactRetention;
@@ -22,8 +22,8 @@ use agent_runtime_core::content::Message;
 use agent_runtime_core::error::{ErrorKind, RuntimeError};
 use agent_runtime_core::ids::{AttemptId, RequestId, SessionId};
 use agent_runtime_core::provider::{
-    FinishReason, ModelId, Provider, ProviderCallContext, ProviderRequest, ProviderStreamEvent,
-    ToolChoice,
+    FinishReason, ModelId, Provider, ProviderAttemptPurpose, ProviderCallContext, ProviderRequest,
+    ProviderStreamEvent, ToolChoice,
 };
 use agent_runtime_core::usage::UsageDelta;
 use async_trait::async_trait;
@@ -44,11 +44,42 @@ Preserve decisions, constraints, file/symbol names, tool evidence, unresolved wo
 and user preferences. Do not invent results, permissions, or facts. Do not issue \
 tool calls. Return only the concise semantic summary.";
 
+struct SummaryCallCancellation {
+    cancel: Cancellation,
+    armed: bool,
+}
+
+impl SummaryCallCancellation {
+    fn new(cancel: Cancellation) -> Self {
+        Self {
+            cancel,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for SummaryCallCancellation {
+    fn drop(&mut self) {
+        if self.armed {
+            self.cancel.cancel(CancelReason::Shutdown);
+        }
+    }
+}
+
 /// Smith-selected semantic summary composition.
 #[derive(Clone)]
 pub struct SmithSemanticSummaryConfig {
     /// Generic coordinator policy, including spend/sensitivity/retention.
     pub policy: SemanticSummaryPolicy,
+    /// Provider identity for a custom summary model. The standard adapter
+    /// derives this from the active run provider in the factory; a custom
+    /// adapter must declare its provider explicitly so summary accounting and
+    /// capsule provenance cannot silently inherit the parent route.
+    pub provider: Option<String>,
     /// Dedicated host model override. `None` adapts the selected run provider
     /// and model with a separately versioned summary prompt.
     pub model: Option<Arc<dyn SummaryModel>>,
@@ -63,6 +94,7 @@ impl fmt::Debug for SmithSemanticSummaryConfig {
         formatter
             .debug_struct("SmithSemanticSummaryConfig")
             .field("policy", &self.policy)
+            .field("provider", &self.provider)
             .field(
                 "model",
                 &self
@@ -98,6 +130,7 @@ impl SmithSemanticSummaryConfig {
                     SMITH_SEMANTIC_SUMMARY_POLICY_REVISION,
                 ))
             },
+            provider: None,
             model: None,
             max_output_tokens: DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
             timeout_ms: DEFAULT_SUMMARY_TIMEOUT_MS,
@@ -112,6 +145,25 @@ impl SmithSemanticSummaryConfig {
                 "Smith semantic summary output and timeout limits must be positive",
             ));
         }
+        match (&self.provider, &self.model) {
+            (None, None) => {}
+            (Some(provider), Some(_)) if !provider.trim().is_empty() => {}
+            (Some(_), Some(_)) => {
+                return Err(RuntimeError::config(
+                    "custom semantic summary provider identity must not be empty",
+                ));
+            }
+            (Some(_), None) => {
+                return Err(RuntimeError::config(
+                    "semantic summary provider identity requires a custom summary model",
+                ));
+            }
+            (None, Some(_)) => {
+                return Err(RuntimeError::config(
+                    "custom semantic summary models require an explicit provider identity",
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -121,6 +173,8 @@ impl SmithSemanticSummaryConfig {
 pub struct SemanticSummaryRuntimePolicy {
     /// Separately attributed purpose.
     pub purpose: String,
+    /// Provider identity for the dedicated summary route.
+    pub provider: String,
     /// Dedicated model/profile identity.
     pub model: String,
     /// Smith policy revision.
@@ -217,11 +271,15 @@ impl SummaryModel for SmithProviderSummaryModel {
         &self,
         request: &SummaryModelRequest,
     ) -> Result<SummaryModelResponse, RuntimeError> {
-        if request.purpose != SEMANTIC_SUMMARY_PURPOSE {
-            return Err(RuntimeError::config(
-                "Smith summary adapter received an unexpected purpose",
-            ));
-        }
+        let attempt_purpose = match request.purpose.as_str() {
+            SEMANTIC_SUMMARY_PURPOSE => ProviderAttemptPurpose::Ordinary,
+            SEMANTIC_SUMMARY_IDLE_COMPACTION_PURPOSE => ProviderAttemptPurpose::IdleCompaction,
+            _ => {
+                return Err(RuntimeError::config(
+                    "Smith summary adapter received an unexpected purpose",
+                ));
+            }
+        };
         let mut messages = Vec::with_capacity(request.messages.len() + 1);
         messages.push(Message::system(format!(
             "<summary-purpose id=\"{}\" max_chars=\"{}\">\n{}\n</summary-purpose>",
@@ -233,6 +291,10 @@ impl SummaryModel for SmithProviderSummaryModel {
         provider_request.max_output_tokens = Some(self.max_output_tokens);
 
         let cancel = Cancellation::new();
+        // Runtime cancels idle-compaction by dropping this summary future.
+        // Propagate that drop into the provider context instead of relying on
+        // transport-drop behavior alone.
+        let mut cancel_on_drop = SummaryCallCancellation::new(cancel.clone());
         let context = ProviderCallContext {
             // Summary work is separately attributed and must not share the
             // main conversation's cache partition: its prefix is a different
@@ -240,6 +302,8 @@ impl SummaryModel for SmithProviderSummaryModel {
             session: SessionId::new(format!("summary-{}", request.idempotency_key)),
             request_id: RequestId::new(format!("summary-{}", request.idempotency_key)),
             attempt_id: AttemptId::new(format!("summary-{}", request.idempotency_key)),
+            cache_identity: None,
+            purpose: attempt_purpose,
             cancel: cancel.clone(),
             deadline: Deadline::after(self.clock.as_ref(), self.timeout_ms),
         };
@@ -286,9 +350,13 @@ impl SummaryModel for SmithProviderSummaryModel {
             Ok(SummaryModelResponse { text, usage })
         };
         match tokio::time::timeout(Duration::from_millis(self.timeout_ms), call).await {
-            Ok(result) => result,
+            Ok(result) => {
+                cancel_on_drop.disarm();
+                result
+            }
             Err(_) => {
                 cancel.cancel(CancelReason::Timeout);
+                cancel_on_drop.disarm();
                 Err(RuntimeError::new(
                     ErrorKind::Timeout,
                     "semantic summary model timed out",
@@ -352,5 +420,90 @@ mod tests {
                 .joined_text()
                 .contains(SEMANTIC_SUMMARY_PURPOSE)
         );
+        assert_eq!(
+            provider.calls()[0].purpose,
+            ProviderAttemptPurpose::Ordinary
+        );
+    }
+
+    #[tokio::test]
+    async fn idle_adapter_call_is_attributed_to_idle_compaction() {
+        let provider = Arc::new(FakeProvider::new(
+            "model",
+            Capabilities::basic_streaming(),
+            vec![ScriptedStream::new(vec![
+                ProviderStreamEvent::TextDelta {
+                    text: "bounded idle summary".into(),
+                },
+                ProviderStreamEvent::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ])],
+        ));
+        let model = SmithProviderSummaryModel::new(
+            provider.clone(),
+            "fake",
+            ModelId::new("model"),
+            Arc::new(SystemClock),
+            128,
+            1_000,
+        )
+        .unwrap();
+
+        model
+            .summarize(&SummaryModelRequest {
+                messages: Arc::from(vec![Message::user("old request")]),
+                purpose: SEMANTIC_SUMMARY_IDLE_COMPACTION_PURPOSE.into(),
+                idempotency_key: "idle-stable".into(),
+                max_output_chars: 256,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            provider.calls()[0].purpose,
+            ProviderAttemptPurpose::IdleCompaction
+        );
+        assert!(
+            provider.requests()[0].messages[0]
+                .joined_text()
+                .contains(SEMANTIC_SUMMARY_IDLE_COMPACTION_PURPOSE)
+        );
+    }
+
+    #[test]
+    fn custom_summary_routes_require_a_paired_provider_identity() {
+        let provider = Arc::new(FakeProvider::new(
+            "model",
+            Capabilities::basic_streaming(),
+            Vec::new(),
+        ));
+        let model = Arc::new(
+            SmithProviderSummaryModel::new(
+                provider,
+                "summary-provider",
+                ModelId::new("model"),
+                Arc::new(SystemClock),
+                128,
+                1_000,
+            )
+            .unwrap(),
+        );
+
+        let mut provider_without_model = SmithSemanticSummaryConfig::standard();
+        provider_without_model.policy.input_budget_tokens = 1;
+        provider_without_model.provider = Some("summary-provider".to_owned());
+        assert!(provider_without_model.validate().is_err());
+
+        let mut model_without_provider = SmithSemanticSummaryConfig::standard();
+        model_without_provider.policy.input_budget_tokens = 1;
+        model_without_provider.model = Some(model.clone());
+        assert!(model_without_provider.validate().is_err());
+
+        let mut paired = SmithSemanticSummaryConfig::standard();
+        paired.policy.input_budget_tokens = 1;
+        paired.provider = Some("summary-provider".to_owned());
+        paired.model = Some(model);
+        paired.validate().expect("paired custom summary route");
     }
 }

@@ -2,8 +2,8 @@
 //!
 //! Children are composed by [`SmithChildFactory`] through the same policy as
 //! the parent, managed root-only through the shared runtime's coordinator,
-//! and their results are routed into the parent's safe-boundary inbox so the
-//! model receives them only at a provider/tool boundary.
+//! and their protected results are admitted through Runtime's attributed
+//! child-completion turn when the parent is idle.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -111,6 +111,21 @@ fn scripted(n: usize, text: &str) -> Arc<FakeProvider> {
         Capabilities::basic_streaming(),
         scripts,
     ))
+}
+
+async fn wait_for_provider_requests(provider: &FakeProvider, expected: usize) {
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while provider.requests().len() < expected {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "provider recorded {} requests while waiting for {expected}",
+            provider.requests().len()
+        )
+    });
 }
 
 #[derive(Debug)]
@@ -411,9 +426,12 @@ async fn a_durable_child_accepts_a_follow_up_after_parent_restart_with_prior_his
         .await
         .expect("the first parent session");
     let first_delegation = first.delegation().expect("a root delegation surface");
-    wire_delegation(&first_session, first_delegation)
+    let first_lifecycle = wire_delegation(&first_session, first_delegation)
         .await
         .expect("first delegation wiring");
+    // Model a process boundary after wiring but before automatic admission;
+    // the protected coordinator remains usable and persists the outcome.
+    first_lifecycle.shutdown().await;
     let first_coordinator = first_delegation.coordinator().expect("first coordinator");
     let child = match first_coordinator
         .spawn(ChildSpec {
@@ -525,6 +543,7 @@ async fn a_returned_child_question_survives_smith_restart_without_provider_work(
             ),
             text_script("parent surfaced the recovered question"),
             text_script("child continued with the answer"),
+            text_script("parent received the continued child result"),
         ],
     ));
     let sessions = Arc::new(InMemorySessionStore::new());
@@ -584,7 +603,7 @@ async fn a_returned_child_question_survives_smith_restart_without_provider_work(
         .await
         .expect("the parent resumes");
     let second_delegation = second.delegation().expect("a resumed delegation surface");
-    wire_delegation(&second_session, second_delegation)
+    let _second_lifecycle = wire_delegation(&second_session, second_delegation)
         .await
         .expect("protected child question recovers");
     let second_coordinator = second_delegation
@@ -602,19 +621,19 @@ async fn a_returned_child_question_survives_smith_restart_without_provider_work(
         Some(ChildTaskOutcome::NeedsInput { .. })
     ));
 
-    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    second_session
-        .run(UserInput::text("surface the recovered child question"))
-        .await
-        .expect("the root consumes the recovered outcome");
+    wait_for_provider_requests(&provider, 2).await;
     let root_wire = serde_json::to_string(&provider.requests()[1].messages).expect("messages");
     assert!(
-        root_wire.contains(r#"\"kind\":\"needs_input\""#),
+        root_wire.contains("delegation.child-completion"),
         "{root_wire}"
     );
     assert!(
-        root_wire.contains("Choose the implementation direction"),
+        root_wire.contains("needs protected input") && root_wire.contains("direction"),
         "{root_wire}"
+    );
+    assert!(
+        !root_wire.contains("Choose the implementation direction"),
+        "automatic admission carries bounded identities, not questionnaire text: {root_wire}"
     );
 
     second_coordinator
@@ -632,7 +651,22 @@ async fn a_returned_child_question_survives_smith_restart_without_provider_work(
         status.last_result.as_deref(),
         Some("child continued with the answer")
     );
-    assert_eq!(provider.requests().len(), 3);
+    wait_for_provider_requests(&provider, 4).await;
+    let completion_wire = serde_json::to_string(&provider.requests()[3].messages)
+        .expect("parent completion messages");
+    assert!(
+        completion_wire.contains("delegation.child-completion"),
+        "{completion_wire}"
+    );
+    assert!(
+        completion_wire.contains(child.as_str()),
+        "{completion_wire}"
+    );
+    assert!(
+        completion_wire.contains("child continued with the answer"),
+        "{completion_wire}"
+    );
+    assert_eq!(provider.requests().len(), 4);
     second_session.shutdown().await.expect("clean shutdown");
 }
 
@@ -856,7 +890,7 @@ async fn an_interrupted_smith_child_resumes_exactly_once_and_never_on_startup() 
 }
 
 /// The full root path: spawn through the coordinator and receive the protected
-/// final outcome in the parent's next provider request even when a one-slot
+/// final outcome in an attributed internal parent turn even when a one-slot
 /// presentation stream cannot retain the lifecycle burst.
 #[tokio::test]
 async fn a_spawned_child_completes_and_its_result_reaches_the_parent_model() {
@@ -882,7 +916,7 @@ async fn a_spawned_child_completes_and_its_result_reaches_the_parent_model() {
         .await
         .expect("a session");
     let delegation = smith.delegation().expect("a root delegation surface");
-    wire_delegation(&session, delegation)
+    let _lifecycle = wire_delegation(&session, delegation)
         .await
         .expect("delegation wires once");
     let coordinator = delegation.coordinator().expect("a coordinator");
@@ -945,60 +979,33 @@ async fn a_spawned_child_completes_and_its_result_reaches_the_parent_model() {
         "a narrowed child exposed a broader or orphaned descriptor: {names:?}"
     );
 
-    // The injection task runs concurrently; give it a moment to enqueue, then
-    // run a parent turn and assert the result arrived at the safe boundary.
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    session
-        .run(UserInput::text("what did the child find?"))
-        .await
-        .expect("the parent turn runs");
+    wait_for_provider_requests(&provider, 2).await;
     let parent_request = provider.requests()[1].clone();
     let parent_wire = serde_json::to_string(&parent_request.messages).expect("parent messages");
     assert!(
         parent_wire.contains("SHARED_PARENT_CHILD_INSTRUCTIONS"),
         "{parent_wire}"
     );
-    let deliveries = parent_request
-        .messages
-        .iter()
-        .filter_map(|message| {
-            let text = message.joined_text();
-            text.contains(r#""type":"child_task_outcome""#)
-                .then(|| serde_json::from_str::<serde_json::Value>(&text).expect("typed delivery"))
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        deliveries.len(),
-        1,
-        "the completed outcome is injected exactly once"
+    assert!(
+        parent_wire.contains("delegation.child-completion"),
+        "{parent_wire}"
     );
-    assert_eq!(deliveries[0]["child_id"], child.as_str());
-    assert_eq!(deliveries[0]["outcome"]["kind"], "completed");
-    assert_eq!(
-        deliveries[0]["outcome"]["result"]["text"],
-        "the child's findings"
-    );
-    assert_eq!(
-        deliveries[0]["outcome"]["result"]["artifacts"],
-        serde_json::json!([])
+    assert!(parent_wire.contains(child.as_str()), "{parent_wire}");
+    assert!(
+        parent_wire.contains("the child's findings"),
+        "{parent_wire}"
     );
 
     session
         .run(UserInput::text("continue after consuming the child result"))
         .await
         .expect("the later parent turn runs");
-    assert_eq!(
-        provider.requests()[2]
-            .messages
-            .iter()
-            .filter(|message| {
-                message
-                    .joined_text()
-                    .contains(r#""type":"child_task_outcome""#)
-            })
-            .count(),
-        1,
-        "the later request may retain canonical history but must not inject the result twice"
+    let later_wire =
+        serde_json::to_string(&provider.requests()[2].messages).expect("later parent messages");
+    assert!(
+        !later_wire.contains("delegation.child-completion")
+            && !later_wire.contains("Protected delegated child outcomes"),
+        "the ephemeral child-completion input must not enter canonical history: {later_wire}"
     );
     assert_eq!(
         coordinator
@@ -1070,7 +1077,7 @@ async fn a_child_artifact_is_explicitly_transferred_without_widening_source_owne
         .await
         .expect("a parent session");
     let delegation = smith.delegation().expect("a delegation surface");
-    wire_delegation(&session, delegation)
+    let _lifecycle = wire_delegation(&session, delegation)
         .await
         .expect("delegation wires");
     let coordinator = delegation.coordinator().expect("a coordinator");
@@ -1138,31 +1145,22 @@ async fn a_child_artifact_is_explicitly_transferred_without_widening_source_owne
         "the transferred parent copy preserves exact child output"
     );
 
-    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    session
-        .run(UserInput::text("inspect the completed child result"))
-        .await
-        .expect("the parent consumes the typed outcome");
+    wait_for_provider_requests(&provider, 3).await;
     let parent_request = &provider.requests()[2];
-    let delivery = parent_request
-        .messages
-        .iter()
-        .map(|message| message.joined_text())
-        .find(|text| text.contains(r#""type":"child_task_outcome""#))
-        .expect("the child outcome is delivered at the parent boundary");
-    let delivery: serde_json::Value =
-        serde_json::from_str(&delivery).expect("a typed child result");
-    assert_eq!(
-        delivery["outcome"]["result"]["text"],
-        "child artifact ready"
+    let delivery = serde_json::to_string(&parent_request.messages).expect("parent messages");
+    assert!(
+        delivery.contains("delegation.child-completion"),
+        "{delivery}"
     );
+    assert!(delivery.contains(child.as_str()), "{delivery}");
+    assert!(delivery.contains("child artifact ready"), "{delivery}");
     assert_eq!(
-        delivery["outcome"]["result"]["artifacts"][0]["id"],
-        transferred.id.as_str()
-    );
-    assert_eq!(
-        delivery["outcome"]["result"]["artifacts"][0]["provenance"]["session"],
-        session.id().as_str()
+        coordinator
+            .task_outcome(&child)
+            .expect("known child")
+            .expect("retained protected outcome"),
+        outcome,
+        "automatic admission does not consume the exact protected status result"
     );
 
     session.shutdown().await.expect("a clean shutdown");
@@ -1383,7 +1381,7 @@ async fn concurrent_child_needs_input_is_lossless_ordered_and_never_opens_root_u
         .await
         .expect("a session");
     let delegation = smith.delegation().expect("a delegation surface");
-    wire_delegation(&session, delegation)
+    let _lifecycle = wire_delegation(&session, delegation)
         .await
         .expect("delegation wires");
     let coordinator = delegation.coordinator().expect("a coordinator");
@@ -1427,48 +1425,28 @@ async fn concurrent_child_needs_input_is_lossless_ordered_and_never_opens_root_u
             ChildTaskOutcome::NeedsInput { .. }
         ));
     }
-    assert_eq!(
-        provider.requests().len(),
-        2,
-        "a returned questionnaire must finish each child after the paired metadata result"
+    assert!(
+        provider.requests().len() >= 2,
+        "each questionnaire child must finish its own provider turn"
     );
 
-    // Give the lossless coordinator waiter a scheduling boundary. This does
-    // not depend on the one-slot parent event broadcast, which has already
-    // seen a burst of child lifecycle events.
-    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    session
-        .run(UserInput::text("handle the returned child questions"))
-        .await
-        .expect("the parent turn runs");
+    wait_for_provider_requests(&provider, 3).await;
     let parent_request = provider.requests().last().cloned().expect("parent request");
-    let deliveries = parent_request
-        .messages
-        .iter()
-        .filter_map(|message| {
-            let text = message.joined_text();
-            (text.contains(r#""type":"child_task_outcome""#)
-                && text.contains(r#""kind":"needs_input""#))
-            .then(|| serde_json::from_str::<serde_json::Value>(&text).expect("typed delivery"))
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(deliveries.len(), 2, "each child outcome is injected once");
-    let delivered_children = deliveries
-        .iter()
-        .map(|delivery| {
-            delivery["outcome"]["needs_input"]["child"]
-                .as_str()
-                .expect("child attribution")
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        delivered_children,
-        ["child-1", "child-2"],
-        "keyed peers are canonicalized independently of completion order"
-    );
     let parent_wire =
         serde_json::to_string(&parent_request.messages).expect("serializable parent messages");
-    assert!(parent_wire.contains("Choose the public direction"));
+    assert!(parent_wire.contains("delegation.child-completion"));
+    assert!(parent_wire.contains("public-direction"));
+    assert!(parent_wire.contains("private-direction"));
+    let child_1 = parent_wire.find("child-1").expect("first child identity");
+    let child_2 = parent_wire.find("child-2").expect("second child identity");
+    assert!(
+        child_1 < child_2,
+        "keyed peers are canonicalized independently of completion order: {parent_wire}"
+    );
+    assert!(
+        !parent_wire.contains("Choose the public direction"),
+        "automatic admission carries bounded identities, not questionnaire text"
+    );
     assert!(
         !parent_wire.contains(PRIVATE_PROMPT),
         "a sensitive child prompt entered ordinary parent context"

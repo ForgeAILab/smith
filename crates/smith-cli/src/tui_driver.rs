@@ -2,6 +2,7 @@
 
 use std::collections::VecDeque;
 
+use agent_runtime_core::usage::UsageRecord;
 use smith_runtime::background_tasks::BackgroundTaskRegistry;
 use smith_tui::app::RunningTaskSummary;
 
@@ -18,7 +19,7 @@ pub(super) enum InteractiveExit {
     /// reference `/status` read from during the session rather than a fresh
     /// catalog lookup of its own.
     Quit(
-        smith_tui::status::SessionUsage,
+        Box<smith_tui::status::SessionUsage>,
         Option<smith_tui::status::PriceReference>,
         Option<Box<smith_tui::cache::CacheTurnSummary>>,
     ),
@@ -153,16 +154,17 @@ pub(super) async fn run_interactive(
             interruption.tasks.len(),
         );
     }
-    let usage = snapshot.usage.total();
-    let snapshot_cache_read = if usage.is_empty() {
+    let snapshot_cache_read = if snapshot.usage.records().is_empty() {
         None
     } else {
-        let cache_read = usage.get(CounterKind::InputCached);
+        let cache_read = snapshot.usage.total().get(CounterKind::InputCached);
         (cache_read > 0).then_some(cache_read)
     };
-    if !usage.is_empty() {
-        app.status.record_usage(&usage);
-    }
+    // Restore canonical records individually. The aggregate ledger total is
+    // intentionally not suitable for seeding the TUI: synthetic cache work
+    // (keepalives, handoffs, idle summaries, …) is part of that total but
+    // must stay out of ordinary turn/context accounting.
+    restore_usage_records(&mut app.status, snapshot.usage.records());
     if let Some(previous) = snapshot.manifests.last().map(|entry| &entry.manifest.model)
         && (previous.provider != policy.provider_name || previous.model != policy.model)
     {
@@ -214,7 +216,7 @@ pub(super) async fn run_interactive(
     if presentation.no_motion {
         theme = theme.without_motion();
     }
-    let run_result = run_tui(
+    let mut run_result = run_tui(
         &mut terminal,
         app,
         TuiRunInputs {
@@ -238,9 +240,23 @@ pub(super) async fn run_interactive(
         .map_err(|error| anyhow::anyhow!("{error}"))
         .context("shutting the session down");
 
+    if let Ok(InteractiveExit::Quit(usage, ..)) = &mut run_result {
+        let snapshot = host.session().snapshot();
+        usage.reconcile_synthetic_records(snapshot.usage.records());
+    }
+
     restore_result?;
     shutdown_result?;
     run_result
+}
+
+/// Seeds the status projection from durable Runtime records without losing
+/// their typed provenance. In particular, synthetic cache attempts count
+/// toward session spend but never become an ordinary user turn.
+fn restore_usage_records(status: &mut smith_tui::status::Status, records: &[UsageRecord]) {
+    for record in records {
+        status.record_usage_record(record);
+    }
 }
 
 /// Resolves the active model's catalog price, using **exactly** the binding
@@ -438,7 +454,7 @@ pub(super) async fn run_tui(
                                 }
                             }
                             Some(Action::Quit) => break InteractiveExit::Quit(
-                                app.session_usage(),
+                                Box::new(app.session_usage()),
                                 app.status.price().cloned(),
                                 app.status.cache_summary().map(Box::new),
                             ),
@@ -775,7 +791,7 @@ pub(super) async fn run_tui(
                         dirty = true;
                     }
                         None => break InteractiveExit::Quit(
-                            app.session_usage(),
+                            Box::new(app.session_usage()),
                             app.status.price().cloned(),
                             app.status.cache_summary().map(Box::new),
                         ),
@@ -960,7 +976,7 @@ pub(super) async fn run_tui(
         host.set_goal_continuation_enabled(!app.should_defer_goal_continuation());
         if app.should_quit {
             break InteractiveExit::Quit(
-                app.session_usage(),
+                Box::new(app.session_usage()),
                 app.status.price().cloned(),
                 app.status.cache_summary().map(Box::new),
             );
@@ -1058,4 +1074,54 @@ pub(super) async fn switch_account(
     Some(smith_tui::accounts::switch_notice(
         &outgoing, &incoming, true,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use agent_runtime_core::provider::ProviderAttemptPurpose;
+    use agent_runtime_core::usage::{
+        CounterKind, Provenance, UsageDelta, UsageRecord, UsageSource,
+    };
+
+    use super::restore_usage_records;
+
+    #[test]
+    fn restored_synthetic_usage_stays_out_of_ordinary_turn_totals() {
+        let mut status = smith_tui::status::Status::new("model", "project");
+        let ordinary = UsageRecord {
+            source: UsageSource::ProviderAttempt,
+            provenance: Provenance {
+                attempt_purpose: Some(ProviderAttemptPurpose::Ordinary),
+                ..Provenance::default()
+            },
+            delta: UsageDelta::new()
+                .with(CounterKind::InputUncached, 400)
+                .with(CounterKind::Output, 20),
+        };
+        let idle_summary = UsageRecord {
+            source: UsageSource::SemanticSummary,
+            provenance: Provenance {
+                attempt_purpose: Some(ProviderAttemptPurpose::IdleCompaction),
+                ..Provenance::default()
+            },
+            delta: UsageDelta::new()
+                .with(CounterKind::InputCached, 900)
+                .with(CounterKind::Output, 40),
+        };
+
+        restore_usage_records(&mut status, &[ordinary, idle_summary]);
+
+        let usage = status.session_usage();
+        assert_eq!(usage.turns, 1);
+        assert_eq!(usage.totals[&CounterKind::InputUncached], 400);
+        assert_eq!(usage.totals[&CounterKind::Output], 20);
+        assert_eq!(usage.synthetic_totals[&CounterKind::InputCached], 900);
+        assert_eq!(usage.synthetic_totals[&CounterKind::Output], 40);
+        assert_eq!(status.context.value, 400);
+        assert_eq!(
+            usage.synthetic_by_purpose[&ProviderAttemptPurpose::IdleCompaction]
+                [&CounterKind::InputCached],
+            900
+        );
+    }
 }

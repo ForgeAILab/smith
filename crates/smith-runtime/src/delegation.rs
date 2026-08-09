@@ -17,9 +17,8 @@
 //!   runtime never registers it, and the coordinator strips it from every
 //!   child view so a child can never manage children.
 //! - [`wire_delegation`]: installs the coordinator once the parent session
-//!   exists and routes child results into the parent's safe-boundary inbox
-//!   ([`SessionHandle::inject`]) so they reach the model only at a
-//!   provider/tool boundary.
+//!   exists and lets Agent Runtime admit protected child completion batches as
+//!   attributed internal turns only at an idle boundary.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
@@ -30,9 +29,9 @@ use agent_runtime::agent::config::LoopConfig;
 use agent_runtime::capability::{ActivationBudget, CapabilityResolver};
 use agent_runtime::context::{ContextBudget, ContextPolicy};
 use agent_runtime::delegation::{
-    ChildDurability, ChildRuntimeFactory, ChildState, ChildStatus, ChildTaskOutcome,
-    DELEGATION_PERMISSION, DelegationConfig, DelegationCoordinator, DelegationLimits,
-    DurableChildSpec, SpawnOutcome,
+    ChildCompletionAdmission, ChildCompletionAdmissionRequest, ChildDurability,
+    ChildRuntimeFactory, ChildState, ChildStatus, ChildTaskOutcome, DELEGATION_PERMISSION,
+    DelegationConfig, DelegationCoordinator, DelegationLimits, DurableChildSpec, SpawnOutcome,
 };
 use agent_runtime::harness::{
     ArtifactOffloader, ArtifactReadTool, MemoryContributor, QuestionnaireTool,
@@ -40,10 +39,10 @@ use agent_runtime::harness::{
 };
 use agent_runtime::hub::{ScopeIdentity, ScopeInputs};
 use agent_runtime::registry::{Fingerprint, Permission, RegistryRevision, RegistrySource};
-use agent_runtime::runtime::{InjectedContent, RuntimeBuilder, SessionHandle};
+use agent_runtime::runtime::{RuntimeBuilder, SessionHandle};
 use agent_runtime_core::approval::ApprovalPolicy;
 use agent_runtime_core::artifact::ArtifactStore;
-use agent_runtime_core::cancel::Cancellation;
+use agent_runtime_core::cancel::{CancelReason, Cancellation};
 use agent_runtime_core::catalog::ResolvedModelProfile;
 use agent_runtime_core::check_set::ActionClass;
 use agent_runtime_core::checkpoint::CheckpointStore;
@@ -53,11 +52,12 @@ use agent_runtime_core::delegation::{
     ChildLimits, ChildModelSelection, ChildSpec, ToolViewScope, WorkspacePolicy,
 };
 use agent_runtime_core::error::{ErrorKind, RuntimeError};
+use agent_runtime_core::event::RuntimeEvent;
 use agent_runtime_core::grant::{
     GrantConstraints, SecurityCheck, SecurityCheckId, SecurityCheckMode, SecurityCheckOutcome,
     SecurityCheckRevision,
 };
-use agent_runtime_core::provider::{ModelId, Provider};
+use agent_runtime_core::provider::{CacheEndpointIdentity, ModelId, Provider};
 use agent_runtime_core::security::{AuthorizationRequest, PermissionSet, SecurityResource};
 use agent_runtime_core::store::SessionStore;
 use agent_runtime_core::tool::{
@@ -66,6 +66,7 @@ use agent_runtime_core::tool::{
 };
 use agent_runtime_core::workspace::Workspace;
 use async_trait::async_trait;
+use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use smith_config::model::AgentPosture;
@@ -76,11 +77,16 @@ use crate::authority::SmithToolAuthority;
 use crate::factory::CACHE_CAPABILITY_REVISION;
 use crate::prompt::SmithPromptContributor;
 
+#[path = "delegation_parking.rs"]
+pub mod delegation_parking;
+
+pub use self::delegation_parking::{
+    DelegationParking, DelegationWaitPolicy, ParentParkingState, ParkingSnapshot, TerminalBatch,
+    TerminalOutcomeKey,
+};
+
 /// The model-facing delegation tool's name — Smith product policy.
 pub const AGENT_TOOL_NAME: &str = "agent";
-
-/// Schema of Smith's model-facing delegated task outcome envelope.
-const CHILD_TASK_OUTCOME_SCHEMA_VERSION: u32 = 1;
 
 /// The limits a spawned child runs under: none. Smith deliberately spawns
 /// children unbounded — the coordinator's concurrency cap is the only brake.
@@ -192,6 +198,7 @@ pub struct SmithChildRoute {
     pub(crate) provider: Arc<dyn Provider>,
     pub(crate) provider_name: String,
     pub(crate) provider_kind: String,
+    pub(crate) cache_endpoint_identity: Option<CacheEndpointIdentity>,
     pub(crate) model: ModelId,
     pub(crate) model_profile: ResolvedModelProfile,
     pub(crate) context_policy: ContextPolicy,
@@ -408,6 +415,9 @@ impl ChildRuntimeFactory for SmithChildFactory {
             .tool_output_processor(todo_component.clone())
             .turn_commit_hook(todo_component)
             .clock(self.clock.clone());
+        if let Some(identity) = route.cache_endpoint_identity.as_ref() {
+            builder = builder.cache_endpoint_identity(identity.clone());
+        }
         if let Some(contributor) = self.memory.clone() {
             builder = builder.context_contributor(Arc::new(contributor));
         }
@@ -451,17 +461,24 @@ impl SmithDelegation {
 }
 
 /// Installs the delegation coordinator for a freshly started root session and
-/// routes child results into its safe-boundary inbox.
-///
-/// Presentation is untouched: hosts render the attributed child lifecycle
-/// events from the parent stream themselves. Model-facing task outcomes use
-/// the coordinator's separate lossless queue and are injected must-deliver, so
-/// the parent receives them at the next provider/tool boundary and never
-/// depends on a bounded observability subscriber.
+/// starts bounded child-completion admission with the standard wait policy.
 pub async fn wire_delegation(
     session: &SessionHandle,
     delegation: &SmithDelegation,
-) -> Result<(), RuntimeError> {
+) -> Result<DelegationLifecycle, RuntimeError> {
+    wire_delegation_with_wait_policy(session, delegation, DelegationWaitPolicy::default()).await
+}
+
+/// Installs delegation with a resolved host wait policy.
+///
+/// The policy is passed directly to Agent Runtime's coordinator; Smith does
+/// not implement a second waiting loop or silently widen the runtime maximum.
+pub async fn wire_delegation_with_wait_policy(
+    session: &SessionHandle,
+    delegation: &SmithDelegation,
+    wait_policy: DelegationWaitPolicy,
+) -> Result<DelegationLifecycle, RuntimeError> {
+    wait_policy.resolve_timeout(None)?;
     let coordinator = DelegationCoordinator::new(
         session,
         delegation.factory.clone(),
@@ -471,73 +488,322 @@ pub async fn wire_delegation(
                 ..DelegationLimits::default()
             },
             delegation_tool_names: vec![AGENT_TOOL_NAME.to_owned()],
+            wait_default: wait_policy.default_timeout(),
+            wait_max: wait_policy.max_timeout(),
             ..DelegationConfig::default()
         },
     )?;
     coordinator.recover().await?;
-    let outcome_coordinator = coordinator.clone();
     delegation
         .slot
-        .set(coordinator)
+        .set(coordinator.clone())
         .map_err(|_| RuntimeError::new(ErrorKind::Conflict, "delegation is already wired"))?;
 
-    // Exact returned interactions use the coordinator's protected lossless
-    // channel. The parent event broadcast is presentation metadata and can
-    // legitimately lag when its bounded buffer is under pressure.
-    let outcome_session = session.clone();
-    tokio::spawn(async move {
-        while let Ok(outcomes) = outcome_coordinator.wait_ready_task_outcomes().await {
-            for outcome in outcomes {
-                let (key, text) = child_task_delivery(&outcome);
-                let _ = outcome_session
-                    .inject(InjectedContent::text(text).must_deliver().ordered_by(key));
-            }
-        }
-    });
-    Ok(())
+    Ok(start_delegation_lifecycle_tasks(session, coordinator))
 }
 
-/// Builds one typed safe-boundary delivery from the protected coordinator
-/// outcome. Events remain presentation metadata and are never parsed here.
-fn child_task_delivery(outcome: &ChildTaskOutcome) -> (String, String) {
+/// Process-owned workers that project parking and request conditional child
+/// completion admission. Exact payloads and cursor authority remain Runtime-
+/// owned; this handle exists so Smith can freeze admission before shutdown.
+#[derive(Debug)]
+pub struct DelegationLifecycle {
+    parking: Arc<std::sync::Mutex<DelegationParking>>,
+    cancel: Cancellation,
+    signal: Arc<tokio::sync::Notify>,
+    tasks: std::sync::Mutex<Option<Vec<tokio::task::JoinHandle<()>>>>,
+}
+
+/// Cloneable notification seam used by the host cache controller. It exposes
+/// only the identity-only parking projection, never child result content.
+#[derive(Debug, Clone)]
+pub(crate) struct DelegationParkingMonitor {
+    parking: Arc<std::sync::Mutex<DelegationParking>>,
+    signal: Arc<tokio::sync::Notify>,
+}
+
+impl DelegationParkingMonitor {
+    pub(crate) fn snapshot(&self) -> ParkingSnapshot {
+        self.parking
+            .lock()
+            .expect("delegation parking state poisoned")
+            .snapshot()
+    }
+
+    pub(crate) async fn changed(&self) {
+        self.signal.notified().await;
+    }
+}
+
+impl DelegationLifecycle {
+    /// Current identity-only parking projection for status and tests.
+    pub fn snapshot(&self) -> ParkingSnapshot {
+        self.parking
+            .lock()
+            .expect("delegation parking state poisoned")
+            .snapshot()
+    }
+
+    pub(crate) fn monitor(&self) -> DelegationParkingMonitor {
+        DelegationParkingMonitor {
+            parking: self.parking.clone(),
+            signal: self.signal.clone(),
+        }
+    }
+
+    /// Freezes new admission first, then cancels and boundedly drains both
+    /// process-owned workers.
+    pub async fn shutdown(&self) {
+        self.parking
+            .lock()
+            .expect("delegation parking state poisoned")
+            .shutdown();
+        self.cancel.cancel(CancelReason::Shutdown);
+        self.signal.notify_waiters();
+        let tasks = self
+            .tasks
+            .lock()
+            .expect("delegation lifecycle tasks poisoned")
+            .take()
+            .unwrap_or_default();
+        for mut task in tasks {
+            if tokio::time::timeout(std::time::Duration::from_millis(250), &mut task)
+                .await
+                .is_err()
+            {
+                task.abort();
+                let _ = task.await;
+            }
+        }
+    }
+}
+
+impl Drop for DelegationLifecycle {
+    fn drop(&mut self) {
+        self.cancel.cancel(CancelReason::Shutdown);
+        self.signal.notify_waiters();
+        for task in self
+            .tasks
+            .lock()
+            .expect("delegation lifecycle tasks poisoned")
+            .take()
+            .unwrap_or_default()
+        {
+            task.abort();
+        }
+    }
+}
+
+/// Starts the local parking projection and Runtime-backed admission worker.
+///
+/// Runtime's coordinator owns exact outcome payloads, protected cursor
+/// advancement, and conditional idle admission. Smith only projects
+/// lifecycle state and never fabricates a user-role message or local
+/// canonical event for a child result.
+fn start_delegation_lifecycle_tasks(
+    session: &SessionHandle,
+    coordinator: DelegationCoordinator,
+) -> DelegationLifecycle {
+    let parking = Arc::new(std::sync::Mutex::new(DelegationParking::new()));
+    let signal = Arc::new(tokio::sync::Notify::new());
+    let cancel = Cancellation::new();
+    let handle_parking = parking.clone();
+    let handle_signal = signal.clone();
+
+    let event_parking = parking.clone();
+    let event_signal = signal.clone();
+    let event_coordinator = coordinator.clone();
+    let event_session = session.clone();
+    let event_cancel = cancel.clone();
+    let event_task = tokio::spawn(async move {
+        let mut events = event_session.subscribe();
+        loop {
+            let envelope = tokio::select! {
+                _ = event_cancel.cancelled() => break,
+                envelope = events.next() => match envelope {
+                    Some(envelope) => envelope,
+                    None => break,
+                },
+            };
+            let mut state = event_parking
+                .lock()
+                .expect("delegation parking state poisoned");
+            match envelope.payload {
+                RuntimeEvent::TurnStarted | RuntimeEvent::InternalTurnStarted { .. } => {
+                    state.parent_turn_started();
+                }
+                RuntimeEvent::TurnCompleted { .. } => {
+                    let pending = event_coordinator
+                        .list()
+                        .into_iter()
+                        .filter(|status| matches!(status.state, ChildState::Running))
+                        .map(|status| status.child.as_str().to_owned())
+                        .collect::<Vec<_>>();
+                    state.parent_turn_completed(pending);
+                }
+                RuntimeEvent::ChildSpawned { child, .. } => {
+                    state.child_spawned(child.as_str());
+                }
+                RuntimeEvent::ChildNeedsInput { child, .. }
+                | RuntimeEvent::ChildCompleted { child, .. }
+                | RuntimeEvent::ChildStopped { child, .. }
+                | RuntimeEvent::ChildFailed { child, .. } => {
+                    state.child_terminal(child.as_str());
+                }
+                RuntimeEvent::SessionShutdown => state.shutdown(),
+                _ => {}
+            }
+            drop(state);
+            event_signal.notify_waiters();
+        }
+        event_parking
+            .lock()
+            .expect("delegation parking state poisoned")
+            .shutdown();
+        event_signal.notify_waiters();
+    });
+
+    let admission_parking = parking;
+    let admission_signal = signal;
+    let admission_cancel = cancel.clone();
+    let admission_task = tokio::spawn(async move {
+        let mut initial_snapshot = true;
+        loop {
+            if admission_cancel.is_cancelled() {
+                break;
+            }
+            let notified = admission_signal.notified();
+            tokio::pin!(notified);
+            // Register before reading the protected snapshot. `notify_waiters`
+            // does not retain a permit for a future that has not been polled,
+            // so omitting this creates a lost-wakeup window between the
+            // snapshot and the select below.
+            notified.as_mut().enable();
+            let mut progressed = false;
+
+            // This is an idempotent protected snapshot, not an acknowledgement.
+            // Runtime's child-completion admission remains the only operation
+            // that advances the canonical cursor.
+            progressed |= reconcile_ready_outcome_snapshot(
+                &admission_parking,
+                coordinator.take_ready_task_outcomes(),
+                initial_snapshot,
+            );
+            initial_snapshot = false;
+
+            let should_admit = admission_parking
+                .lock()
+                .expect("delegation parking state poisoned")
+                .begin_child_completion_admission();
+            if should_admit {
+                let cursor = coordinator.child_outcome_cursor();
+                let request = ChildCompletionAdmissionRequest::new(cursor.parent().clone(), cursor);
+                match coordinator
+                    .try_admit_child_completion_if_idle(request)
+                    .await
+                {
+                    Ok(ChildCompletionAdmission::Accepted { turn, cursor }) => {
+                        progressed = true;
+                        admission_parking
+                            .lock()
+                            .expect("delegation parking state poisoned")
+                            .admission_accepted(cursor.revision());
+                        // Waiting for the ordinary turn boundary ensures a
+                        // second attributed continuation cannot be started
+                        // concurrently by this Smith worker.
+                        turn.completed().await;
+                        progressed |= reconcile_ready_outcome_snapshot(
+                            &admission_parking,
+                            coordinator.take_ready_task_outcomes(),
+                            false,
+                        );
+                    }
+                    Ok(ChildCompletionAdmission::Busy) => admission_parking
+                        .lock()
+                        .expect("delegation parking state poisoned")
+                        .admission_busy(),
+                    Ok(ChildCompletionAdmission::Stale) => {
+                        progressed = true;
+                        let revision = coordinator.child_outcome_cursor().revision();
+                        admission_parking
+                            .lock()
+                            .expect("delegation parking state poisoned")
+                            .admission_stale(revision);
+                        progressed |= reconcile_ready_outcome_snapshot(
+                            &admission_parking,
+                            coordinator.take_ready_task_outcomes(),
+                            false,
+                        );
+                    }
+                    Ok(ChildCompletionAdmission::Shutdown) => {
+                        admission_parking
+                            .lock()
+                            .expect("delegation parking state poisoned")
+                            .shutdown();
+                        break;
+                    }
+                    Ok(ChildCompletionAdmission::Conflict { .. }) | Err(_) => admission_parking
+                        .lock()
+                        .expect("delegation parking state poisoned")
+                        .admission_conflict(),
+                }
+            }
+
+            if admission_parking
+                .lock()
+                .expect("delegation parking state poisoned")
+                .is_shutdown_frozen()
+            {
+                break;
+            }
+            if !progressed {
+                tokio::select! {
+                    _ = &mut notified => {}
+                    _ = admission_cancel.cancelled() => break,
+                }
+            }
+        }
+        admission_parking
+            .lock()
+            .expect("delegation parking state poisoned")
+            .shutdown();
+    });
+    DelegationLifecycle {
+        parking: handle_parking,
+        cancel,
+        signal: handle_signal,
+        tasks: std::sync::Mutex::new(Some(vec![event_task, admission_task])),
+    }
+}
+
+fn reconcile_ready_outcome_snapshot(
+    parking: &Arc<std::sync::Mutex<DelegationParking>>,
+    outcomes: Vec<ChildTaskOutcome>,
+    recovered: bool,
+) -> bool {
+    let keys = outcomes
+        .iter()
+        .map(terminal_outcome_key)
+        .collect::<Vec<_>>();
+    let mut state = parking.lock().expect("delegation parking state poisoned");
+    for key in &keys {
+        // The lossless Runtime snapshot closes the local live-child
+        // projection even if a bounded presentation subscriber lagged.
+        state.child_terminal(&key.child_id);
+    }
+    let changed = state.reconcile_ready_outcomes(keys);
+    if recovered {
+        state.enable_idle_wakeup_for_recovered_outcomes();
+    }
+    changed
+}
+
+fn terminal_outcome_key(outcome: &ChildTaskOutcome) -> TerminalOutcomeKey {
     match outcome {
-        ChildTaskOutcome::Completed { child, result } => (
-            format!("{child}/completed"),
-            json!({
-                "schema_version": CHILD_TASK_OUTCOME_SCHEMA_VERSION,
-                "type": "child_task_outcome",
-                "child_id": child,
-                "outcome": {
-                    "kind": "completed",
-                    "result": {
-                        "text": result.text,
-                        "artifacts": result.artifacts,
-                    },
-                },
-            })
-            .to_string(),
-        ),
-        ChildTaskOutcome::NeedsInput { .. } => {
-            let projection = outcome
-                .model_projection()
-                .expect("needs-input outcomes always have a bounded model projection");
-            let key = format!("{}/{}", projection.child, projection.request);
-            let text = json!({
-                "schema_version": CHILD_TASK_OUTCOME_SCHEMA_VERSION,
-                "type": "child_task_outcome",
-                "child_id": projection.child,
-                "outcome": {
-                    "kind": "needs_input",
-                    "informational": true,
-                    "next_action": {
-                        "ask": "decide whether to invoke root ask_user",
-                        "return": "send the answer to this child with agent follow_up"
-                    },
-                    "needs_input": projection,
-                },
-            })
-            .to_string();
-            (key, text)
+        ChildTaskOutcome::Completed { child, result } => {
+            TerminalOutcomeKey::new(child.as_str(), result.turn.as_str())
+        }
+        ChildTaskOutcome::NeedsInput { child, request } => {
+            TerminalOutcomeKey::new(child.as_str(), request.id().as_str())
         }
     }
 }
@@ -572,6 +838,7 @@ pub struct AgentToolProfile {
 pub struct AgentTool {
     slot: Arc<OnceLock<DelegationCoordinator>>,
     profiles: Vec<AgentToolProfile>,
+    wait_policy: DelegationWaitPolicy,
 }
 
 impl AgentTool {
@@ -582,6 +849,7 @@ impl AgentTool {
         Self {
             slot,
             profiles: Vec::new(),
+            wait_policy: DelegationWaitPolicy::default(),
         }
     }
 
@@ -589,6 +857,13 @@ impl AgentTool {
     /// child-enabled profiles [`SmithChildFactory`] preflighted a route for.
     pub fn with_profiles(mut self, profiles: Vec<AgentToolProfile>) -> Self {
         self.profiles = profiles;
+        self
+    }
+
+    /// Applies the same resolved wait bounds installed on the coordinator.
+    #[must_use]
+    pub fn with_wait_policy(mut self, wait_policy: DelegationWaitPolicy) -> Self {
+        self.wait_policy = wait_policy;
         self
     }
 
@@ -640,8 +915,12 @@ enum AgentAction {
     },
     /// List every child and its status.
     List,
-    /// Block until a child is idle or stopped, then report it.
-    Wait { child_id: String },
+    /// Wait for a bounded interval, then report the child status.
+    Wait {
+        child_id: String,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+    },
     /// Report a child's latest completed result.
     Result { child_id: String },
     /// Send a follow-up task to an idle child.
@@ -727,7 +1006,8 @@ impl Tool for AgentTool {
     fn spec(&self) -> ToolSpec {
         let description = if self.profiles.is_empty() {
             "Delegate a task to a sub-agent. Actions: spawn (start a child with a task; \
-             read-only tools unless tools=\"all\"), list, wait (block until a child finishes), \
+             read-only tools unless tools=\"all\"), list, wait (bounded by timeout_ms; zero \
+             is an immediate status check and terminal results are delivered automatically), \
              result, follow_up (start a new task on an idle child), resume (continue an exact \
              interrupted checkpoint), stop. A completed child's \
              result is also delivered to you automatically at the next safe point. A child's \
@@ -737,8 +1017,9 @@ impl Tool for AgentTool {
         } else {
             format!(
                 "Delegate a task to a sub-agent. Actions: spawn (start a child with a task; \
-                 read-only tools unless tools=\"all\"), list, wait (block until a child \
-                 finishes), result, follow_up (start a new task on an idle child), resume \
+                 read-only tools unless tools=\"all\"), list, wait (bounded by timeout_ms; zero \
+                 is an immediate status check and terminal results are delivered automatically), \
+                 result, follow_up (start a new task on an idle child), resume \
                  (continue an exact interrupted checkpoint), stop. spawn may name a registered \
                  child-enabled profile ({}) to run the child on that profile's own preflighted \
                  provider, model, and posture instead of inheriting the parent's; omitting it \
@@ -773,6 +1054,14 @@ impl Tool for AgentTool {
             json!({
                 "type": "string",
                 "description": "The child to address (wait, result, follow_up, resume, stop)."
+            }),
+        );
+        properties.insert(
+            "timeout_ms".to_owned(),
+            json!({
+                "type": "integer",
+                "minimum": 0,
+                "description": "Optional bounded wait in milliseconds (0 checks immediately; values above the configured host maximum are rejected)."
             }),
         );
         properties.insert(
@@ -857,10 +1146,16 @@ impl Tool for AgentTool {
                 ("spawn".to_owned(), "Spawn sub-agent", Some(task.clone()))
             }
             AgentAction::List => ("list".to_owned(), "List sub-agents", None),
-            AgentAction::Wait { child_id } => (
+            AgentAction::Wait {
+                child_id,
+                timeout_ms,
+            } => (
                 child_id.clone(),
                 "Wait for sub-agent",
-                Some(child_id.clone()),
+                Some(match timeout_ms {
+                    Some(timeout_ms) => format!("{child_id} for {timeout_ms} ms"),
+                    None => child_id.clone(),
+                }),
             ),
             AgentAction::Result { child_id } => (
                 child_id.clone(),
@@ -972,12 +1267,26 @@ impl Tool for AgentTool {
                 let children: Vec<Value> = coordinator.list().iter().map(status_json).collect();
                 Ok(ToolOutcome::json(json!({ "children": children })))
             }
-            AgentAction::Wait { child_id } => {
-                let outcome = coordinator
-                    .wait_task_outcome(&agent_runtime_core::ids::ChildId::new(child_id))
+            AgentAction::Wait {
+                child_id,
+                timeout_ms,
+            } => {
+                let child = agent_runtime_core::ids::ChildId::new(child_id);
+                let timeout = match timeout_ms {
+                    Some(timeout_ms) => match self.wait_policy.resolve_timeout(Some(timeout_ms)) {
+                        Ok(timeout) => Some(timeout),
+                        Err(err) => return Ok(ToolOutcome::error(err.message)),
+                    },
+                    None => None,
+                };
+                let status = coordinator
+                    .wait_with_options(
+                        &child,
+                        agent_runtime::delegation::DelegationWaitOptions { timeout },
+                    )
                     .await;
-                match outcome {
-                    Ok(outcome) => Ok(ToolOutcome::json(task_outcome_json(&outcome))),
+                match status {
+                    Ok(status) => Ok(ToolOutcome::json(status_json(&status))),
                     Err(err) => Ok(ToolOutcome::error(err.message)),
                 }
             }
