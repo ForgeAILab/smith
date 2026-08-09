@@ -1,0 +1,14 @@
+{
+  "change_id": "add-adaptive-cache-parking",
+  "change_ref": "add-adaptive-cache-parking-2026-08-08",
+  "created_at": "2026-08-08T23:10:05Z",
+  "updated_at": "2026-08-09T02:38:40Z",
+  "completed_at": null,
+  "status": "implementing",
+  "approved_at": "2026-08-09T02:38:40Z",
+  "implementation_started_at": "2026-08-09T02:38:40Z",
+  "depends_on": [
+    "add-prompt-cache-miss-visibility-2026-08-08",
+    "agent-runtime:add-adaptive-cache-parking-2026-08-08"
+  ]
+}
