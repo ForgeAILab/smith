@@ -462,6 +462,20 @@ pub(super) fn draw_identity_footer(frame: &mut Frame<'_>, area: Rect, app: &App,
             ),
         ),
     );
+    // CH is a completed-root-turn metric. Keep the pre-turn footer unchanged,
+    // then show explicit `0%` or honest `?` once a canonical turn rollup
+    // exists.
+    if app.status.cache_projection.latest_completed().is_some() {
+        let ch = app.status.render_cache_hit_rate();
+        push_segment(
+            &mut identity,
+            theme,
+            Span::styled(
+                format!("CH {ch}"),
+                theme.style(if ch == "?" { Tone::Warning } else { Tone::Dim }),
+            ),
+        );
+    }
     if app.is_busy() {
         let mut controls = if app.composer.is_blank() {
             "Enter steer · Tab queue when typed · Esc interrupt".to_owned()

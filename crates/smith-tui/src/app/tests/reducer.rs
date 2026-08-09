@@ -201,8 +201,11 @@
         let gap = app.take_stream_gap().expect("a parked stream gap");
 
         let mut missing = event(RuntimeEvent::CacheObservation {
-            read_tokens: 128,
-            write_tokens: 0,
+            request: None,
+            attempt: None,
+            cache_plan: None,
+            read_tokens: Some(128),
+            write_tokens: Some(0),
         });
         missing.seq = 5;
         app.apply_recovered(&missing);
@@ -234,8 +237,11 @@
         assert_eq!(app.pending_input_previews()[0].entries, ["queued for later"]);
 
         let mut after_gap = event(RuntimeEvent::CacheObservation {
-            read_tokens: 1,
-            write_tokens: 0,
+            request: None,
+            attempt: None,
+            cache_plan: None,
+            read_tokens: Some(1),
+            write_tokens: Some(0),
         });
         after_gap.seq = 4;
         app.apply(&after_gap);
@@ -244,8 +250,11 @@
         assert_eq!((gap.first_missing, gap.last_missing), (2, 3));
 
         let mut usage = event(RuntimeEvent::CacheObservation {
-            read_tokens: 2,
-            write_tokens: 0,
+            request: None,
+            attempt: None,
+            cache_plan: None,
+            read_tokens: Some(2),
+            write_tokens: Some(0),
         });
         usage.seq = 2;
         app.apply_recovered(&usage);
@@ -292,8 +301,11 @@
         );
 
         let mut caught_up = event(RuntimeEvent::CacheObservation {
-            read_tokens: 1,
-            write_tokens: 0,
+            request: None,
+            attempt: None,
+            cache_plan: None,
+            read_tokens: Some(1),
+            write_tokens: Some(0),
         });
         caught_up.seq = 8;
         app.apply(&caught_up);
@@ -336,8 +348,11 @@
 
         for (deferred_seq, gap) in [(4u64, (2u64, 3u64)), (7, (5, 6)), (10, (8, 9))] {
             let mut envelope = event(RuntimeEvent::CacheObservation {
-                read_tokens: 1,
-                write_tokens: 0,
+                request: None,
+                attempt: None,
+                cache_plan: None,
+                read_tokens: Some(1),
+                write_tokens: Some(0),
             });
             envelope.seq = deferred_seq;
             app.apply(&envelope);
@@ -394,8 +409,11 @@
         app.note_recovered_events(3);
 
         let mut caught_up = event(RuntimeEvent::CacheObservation {
-            read_tokens: 1,
-            write_tokens: 0,
+            request: None,
+            attempt: None,
+            cache_plan: None,
+            read_tokens: Some(1),
+            write_tokens: Some(0),
         });
         caught_up.seq = 2;
         app.apply_recovered(&caught_up);
@@ -850,6 +868,88 @@
             !rendered.contains("discarded speculative prefix"),
             "failed attempt output entered the committed transcript"
         );
+    }
+
+    #[test]
+    fn replayed_significant_cache_notice_is_local_and_not_duplicated() {
+        let turn = TurnId::new("cache-turn");
+        let event = |seq: u64, payload| {
+            EventEnvelope::new(
+                seq,
+                EventId::new(format!("cache-event-{seq}")),
+                SessionId::new("cache-session"),
+                Some(turn.clone()),
+                Timestamp(seq.saturating_mul(60_000)),
+                payload,
+            )
+        };
+        let events = vec![
+            event(
+                1,
+                RuntimeEvent::ProviderAttemptStarted {
+                    request: RequestId::new("cache-request"),
+                    attempt: AttemptId::new("cache-attempt"),
+                    index: 0,
+                    model: "fixture-model".to_owned(),
+                },
+            ),
+            event(
+                2,
+                RuntimeEvent::Usage {
+                    record: UsageRecord {
+                        source: UsageSource::ProviderAttempt,
+                        provenance: Provenance {
+                            request: Some(RequestId::new("cache-request")),
+                            attempt: Some(AttemptId::new("cache-attempt")),
+                            ..Provenance::default()
+                        },
+                        delta: UsageDelta::new().with(CounterKind::InputUncached, 20_000),
+                    },
+                },
+            ),
+            event(
+                3,
+                RuntimeEvent::CacheStateChanged {
+                    request: RequestId::new("cache-request"),
+                    attempt: AttemptId::new("cache-attempt"),
+                    cache_plan: fingerprint("cache-plan"),
+                    state: CacheState::MissObserved,
+                    expected_read_tokens: Some(20_000),
+                    observed_read_tokens: Some(0),
+                    observed_write_tokens: None,
+                    missed_tokens: Some(20_000),
+                    confidence: EstimationConfidence::Exact,
+                },
+            ),
+            event(
+                4,
+                RuntimeEvent::TurnCompleted {
+                    finish: TurnFinish::Completed,
+                    visible_output: true,
+                },
+            ),
+        ];
+
+        let mut app = app();
+        app.set_cache_miss_notices(true);
+        app.restore_cache_events(events.clone());
+        app.restore_cache_events(events);
+
+        let notices: Vec<_> = app
+            .transcript
+            .blocks()
+            .iter()
+            .filter_map(|block| match block {
+                Block::Notice { source, text } if source == "cache" => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            notices,
+            vec!["Cache miss · re-billed 20k · expected 20k · observed 0"]
+        );
+        assert_eq!(app.status.session_usage().cache_miss_count, 1);
+        assert_eq!(app.status.session_usage().cache_rebilled_tokens, 20_000);
     }
 
     #[test]

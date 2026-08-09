@@ -9,8 +9,8 @@ mod tests {
     use agent_runtime_core::delegation::WorkspacePolicy;
     use agent_runtime_core::error::RuntimeError;
     use agent_runtime_core::event::{
-        ChildPhase, ChildRecoveryState, EstimationConfidence, EventEnvelope, GoalUpdateCause,
-        PlanItemStatus, RuntimeEvent, TurnFinish,
+        CacheState, ChildPhase, ChildRecoveryState, EstimationConfidence, EventEnvelope,
+        GoalUpdateCause, PlanItemStatus, RuntimeEvent, TurnFinish,
     };
     use agent_runtime_core::goal::{
         GoalProjection, GoalStatus, GoalTokenUsage, GoalUsageProvenance,

@@ -7,7 +7,8 @@ use std::time::Duration;
 use agent_runtime_core::artifact::ArtifactRef;
 use agent_runtime_core::content::{Role, UserInput};
 use agent_runtime_core::event::{
-    EventEnvelope, PlanItemProjection, PlanSensitivity, RuntimeEvent, TurnFinish,
+    EstimationConfidence, EventEnvelope, PlanItemProjection, PlanSensitivity, RuntimeEvent,
+    TurnFinish,
 };
 use agent_runtime_core::goal::{GoalProjection, GoalStatus};
 use agent_runtime_core::ids::SessionId;
@@ -26,6 +27,7 @@ use smith_runtime::host::HostSession;
 use smith_runtime::journal::{EphemeralInterruptionReason, EphemeralWorkInterruption};
 use smith_runtime::rotation::SharedPool;
 use smith_runtime::{ChildDurability, ChildState};
+use smith_tui::cache::{CachePrice, CacheProjection, CacheTurnSummary, CacheVisibilityState};
 
 use crate::cli::OutputFormat;
 
@@ -136,6 +138,71 @@ struct CacheOutput {
     preserved_prefix_tokens: u32,
     /// Tokens at or after the first changed segment.
     invalidated_prefix_tokens: u32,
+    /// Aggregate canonical state for the final root turn.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    state: Option<CacheVisibilityState>,
+    /// Canonical expectation and provider observation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expected_read_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    observed_read_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    observed_write_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    missed_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    confidence: Option<EstimationConfidence>,
+    /// Latest completed root-turn provider cache-read share.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_read_percent: Option<u8>,
+    /// Derived retry diagnostics, separate from `usage`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    miss_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rebilled_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    idle_minutes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    extra_cost_micro_usd: Option<u128>,
+    #[serde(skip)]
+    notice: Option<String>,
+}
+
+impl CacheOutput {
+    fn from_summary(summary: &CacheTurnSummary, prior: Option<Self>) -> Self {
+        let prior = prior.unwrap_or(Self {
+            provider_cache_supported: summary.state != CacheVisibilityState::Unsupported,
+            preserved_prefix_tokens: 0,
+            invalidated_prefix_tokens: 0,
+            state: None,
+            expected_read_tokens: None,
+            observed_read_tokens: None,
+            observed_write_tokens: None,
+            missed_tokens: None,
+            confidence: None,
+            cache_read_percent: None,
+            miss_count: None,
+            rebilled_tokens: None,
+            idle_minutes: None,
+            extra_cost_micro_usd: None,
+            notice: None,
+        });
+        Self {
+            state: Some(summary.state),
+            expected_read_tokens: summary.expected_read_tokens,
+            observed_read_tokens: summary.observed_read_tokens,
+            observed_write_tokens: summary.observed_write_tokens,
+            missed_tokens: summary.missed_tokens,
+            confidence: summary.confidence,
+            cache_read_percent: summary.cache_read_percent,
+            miss_count: Some(summary.miss_count),
+            rebilled_tokens: Some(summary.rebilled_tokens),
+            idle_minutes: summary.idle_minutes,
+            extra_cost_micro_usd: summary.extra_cost_micro_usd,
+            notice: summary.significant().then(|| summary.render_notice()),
+            ..prior
+        }
+    }
 }
 
 /// One background shell task's state as the background-exit policy last
@@ -570,6 +637,10 @@ pub(crate) struct HeadlessBrokers<'a> {
     pub(crate) interaction: Option<&'a HeadlessInteraction>,
     pub(crate) rotation: Option<&'a HeadlessRotation>,
     pub(crate) credential_pool: Option<&'a SharedPool>,
+    /// The exact active-model price reference, when the catalog supplies one.
+    pub(crate) cache_price: Option<CachePrice>,
+    /// Layered local notice policy.
+    pub(crate) cache_miss_notices: bool,
 }
 
 /// Runs one turn, preserving canonical event order for stream JSON.
@@ -608,6 +679,8 @@ async fn run_with_io(
         interaction,
         rotation,
         credential_pool,
+        cache_price,
+        cache_miss_notices,
     } = brokers;
     if let Some(restored) = host.restored_interaction() {
         let required = interaction
@@ -622,6 +695,10 @@ async fn run_with_io(
 
     let session = host.session();
     let mut events = session.subscribe();
+    let mut cache_projection = CacheProjection::default();
+    if let Ok(history) = host.timeline_events().await {
+        cache_projection.replay(history);
+    }
     let initial_activation = activation_output(session);
     let history_start = session.history().len();
     let turn = match session.send(UserInput::text(prompt)) {
@@ -647,6 +724,7 @@ async fn run_with_io(
     let mut active_goal_turns = BTreeSet::new();
 
     while let Some(event) = events.next().await {
+        cache_projection.apply(&event);
         observe_sequence(&mut last_sequence, event.seq, &mut sequence_error);
         if matches!(
             &event.payload,
@@ -675,6 +753,18 @@ async fn run_with_io(
                         provider_cache_supported: *provider_cache_supported,
                         preserved_prefix_tokens: *preserved_prefix_tokens,
                         invalidated_prefix_tokens: *invalidated_prefix_tokens,
+                        state: None,
+                        expected_read_tokens: None,
+                        observed_read_tokens: None,
+                        observed_write_tokens: None,
+                        missed_tokens: None,
+                        confidence: None,
+                        cache_read_percent: None,
+                        miss_count: None,
+                        rebilled_tokens: None,
+                        idle_minutes: None,
+                        extra_cost_micro_usd: None,
+                        notice: None,
                     });
                 }
                 RuntimeEvent::Error { error } => last_error = Some(error.to_string()),
@@ -875,6 +965,12 @@ async fn run_with_io(
         .map(|message| message.joined_text())
         .unwrap_or_default();
     let session_usage = snapshot.usage.total();
+    if let Some(summary) = cache_projection.completed_turn(turn_id.as_str()) {
+        let summary = cache_price
+            .map(|price| cache_projection.with_price(summary, price))
+            .unwrap_or_else(|| summary.clone());
+        cache = Some(CacheOutput::from_summary(&summary, cache));
+    }
     let approval_required = approval.and_then(HeadlessApproval::required);
     let interaction_required = interaction
         .and_then(HeadlessInteraction::required)
@@ -926,6 +1022,15 @@ async fn run_with_io(
         OutputFormat::Text if exit_code == 0 => {
             write_text(stdout, &output)?;
             write_text_projection(stderr, &result)?;
+            if cache_miss_notices
+                && let Some(notice) = result
+                    .cache
+                    .as_ref()
+                    .and_then(|cache| cache.notice.as_ref())
+            {
+                writeln!(stderr, "smith: {notice}").context("writing cache notice")?;
+                stderr.flush().context("flushing cache notice")?;
+            }
         }
         OutputFormat::Text => {
             let diagnostic = match (
@@ -943,6 +1048,14 @@ async fn run_with_io(
                 _ => format!("turn ended with status {:?}", result.status),
             };
             write_text_projection(stderr, &result)?;
+            if cache_miss_notices
+                && let Some(notice) = result
+                    .cache
+                    .as_ref()
+                    .and_then(|cache| cache.notice.as_ref())
+            {
+                writeln!(stderr, "smith: {notice}").context("writing cache notice")?;
+            }
             writeln!(stderr, "smith: {diagnostic}").context("writing diagnostic to stderr")?;
             stderr.flush().context("flushing diagnostic stderr")?;
         }
@@ -1237,6 +1350,35 @@ fn write_text_projection(writer: &mut impl Write, result: &ResultEnvelope) -> Re
             .join(" · ");
         lines.push(format!("todo plan revision {} · {counts}", plan.revision));
     }
+    if let Some(cache) = &result.cache {
+        let state = cache
+            .state
+            .map_or_else(|| "unknown".to_owned(), |state| state.as_str().to_owned());
+        let ch = cache
+            .cache_read_percent
+            .map_or_else(|| "?".to_owned(), |percent| format!("{percent}%"));
+        let confidence = cache.confidence.map_or_else(
+            || "?".to_owned(),
+            |confidence| match confidence {
+                EstimationConfidence::Exact => "exact".to_owned(),
+                EstimationConfidence::Estimated => "estimated".to_owned(),
+            },
+        );
+        let mut line = format!("cache: {state} · CH {ch} · confidence {confidence}");
+        if let Some(expected) = cache.expected_read_tokens {
+            line.push_str(&format!(" · expected {expected}"));
+        }
+        if let Some(observed) = cache.observed_read_tokens {
+            line.push_str(&format!(" · observed {observed}"));
+        }
+        if let Some(missed) = cache.missed_tokens {
+            line.push_str(&format!(" · missed {missed}"));
+        }
+        if let Some(rebilled) = cache.rebilled_tokens {
+            line.push_str(&format!(" · re-billed {rebilled}"));
+        }
+        lines.push(line);
+    }
     for artifact in &result.artifacts {
         lines.push(format!(
             "artifact {} · {} bytes · {}",
@@ -1322,11 +1464,13 @@ mod tests {
     };
     use agent_runtime_core::cancel::CancelReason;
     use agent_runtime_core::clock::Timestamp;
+    use agent_runtime_core::event::CacheState;
     use agent_runtime_core::goal::{GoalTokenUsage, GoalUsageProvenance};
-    use agent_runtime_core::ids::GoalId;
+    use agent_runtime_core::ids::{AttemptId, EventId, GoalId, RequestId, TurnId};
     use agent_runtime_core::provider::{
         Capabilities, FinishReason, Provider, ProviderError, ProviderErrorKind, ProviderStreamEvent,
     };
+    use agent_runtime_core::usage::{CounterKind, Provenance, UsageRecord, UsageSource};
     use smith_config::resolve::{ResolveRequest, resolve};
     use smith_host::{InteractionNotice, InteractiveInteraction, ProjectWorkspace};
     use smith_runtime::checkpoint::{
@@ -1747,6 +1891,161 @@ mod tests {
         assert!(rendered.contains("artifact artifact-fixture · 262144 bytes · text/plain"));
         assert!(rendered.contains("1 child(ren) interrupted · 1 monitor(s) interrupted"));
         assert!(!rendered.contains(protected_item));
+    }
+
+    #[test]
+    fn canonical_cache_fixture_matches_tui_final_stream_and_text_surfaces() {
+        let turn = TurnId::new("turn-cache");
+        let event = |seq: u64, payload: RuntimeEvent| {
+            EventEnvelope::new(
+                seq,
+                EventId::new(format!("cache-event-{seq}")),
+                SessionId::new("session-cache"),
+                Some(turn.clone()),
+                Timestamp(seq.saturating_mul(60_000)),
+                payload,
+            )
+        };
+        let observation: RuntimeEvent = serde_json::from_value(serde_json::json!({
+            "event": "cache_observation",
+            "request": "request-cache",
+            "attempt": "attempt-cache",
+            "cache_plan": "plan-cache",
+            "read_tokens": 0
+        }))
+        .expect("cache observation fixture");
+        let state: RuntimeEvent = serde_json::from_value(serde_json::json!({
+            "event": "cache_state_changed",
+            "request": "request-cache",
+            "attempt": "attempt-cache",
+            "cache_plan": "plan-cache",
+            "state": "miss_observed",
+            "expected_read_tokens": 20_000,
+            "observed_read_tokens": 0,
+            "missed_tokens": 20_000,
+            "confidence": "exact"
+        }))
+        .expect("cache state fixture");
+        assert!(matches!(
+            &state,
+            RuntimeEvent::CacheStateChanged {
+                state: CacheState::MissObserved,
+                ..
+            }
+        ));
+        let usage = UsageDelta::new().with(CounterKind::InputUncached, 20_000);
+        let events = vec![
+            event(
+                1,
+                RuntimeEvent::ProviderAttemptStarted {
+                    request: RequestId::new("request-cache"),
+                    attempt: AttemptId::new("attempt-cache"),
+                    index: 0,
+                    model: "fixture-model".to_owned(),
+                },
+            ),
+            event(
+                2,
+                RuntimeEvent::Usage {
+                    record: UsageRecord {
+                        source: UsageSource::ProviderAttempt,
+                        provenance: Provenance {
+                            request: Some(RequestId::new("request-cache")),
+                            attempt: Some(AttemptId::new("attempt-cache")),
+                            ..Provenance::default()
+                        },
+                        delta: usage.clone(),
+                    },
+                },
+            ),
+            event(3, observation),
+            event(4, state),
+            event(
+                5,
+                RuntimeEvent::TurnCompleted {
+                    finish: TurnFinish::Completed,
+                    visible_output: true,
+                },
+            ),
+        ];
+
+        let mut tui_status = smith_tui::status::Status::new("fixture-model", "/fixture");
+        for envelope in &events {
+            tui_status.record_cache_event(envelope);
+        }
+        let tui_summary = tui_status.cache_summary().expect("TUI cache summary");
+
+        let mut projection = CacheProjection::default();
+        projection.replay(events.clone());
+        let headless_summary = projection
+            .latest_completed()
+            .expect("headless cache summary")
+            .clone();
+        assert_eq!(tui_summary, headless_summary);
+        assert_eq!(headless_summary.missed_tokens, Some(20_000));
+        assert_eq!(headless_summary.rebilled_tokens, 20_000);
+
+        let result = ResultEnvelope {
+            schema_version: OUTPUT_SCHEMA_VERSION,
+            kind: "result",
+            status: ResultStatus::Ok,
+            session_id: "session-cache".to_owned(),
+            turn_id: "turn-cache".to_owned(),
+            provider: "fixture-provider".to_owned(),
+            model: "fixture-model".to_owned(),
+            output: "fixture answer".to_owned(),
+            usage: UsageOutput {
+                current_turn: usage.clone(),
+                session: usage,
+                current_turn_provenance: UsageProvenance::ProviderReported,
+                session_provenance: UsageProvenance::ProviderReported,
+            },
+            lifecycle: LifecycleOutput::default(),
+            goal: None,
+            goal_continuation_turns: None,
+            artifacts: Vec::new(),
+            approval_required: None,
+            interaction_required: None,
+            recovery: None,
+            account: None,
+            background_exit: None,
+            reasoning: None,
+            cache: Some(CacheOutput::from_summary(&headless_summary, None)),
+            error: None,
+        };
+        let final_json = serde_json::to_value(&result).expect("final JSON");
+        assert_eq!(final_json["cache"]["state"], "miss_observed");
+        assert_eq!(final_json["cache"]["cache_read_percent"], 0);
+        assert_eq!(final_json["cache"]["missed_tokens"], 20_000);
+        assert_eq!(final_json["cache"]["rebilled_tokens"], 20_000);
+
+        let stream_lines: Vec<String> = events
+            .iter()
+            .map(|envelope| {
+                serde_json::to_string(&StreamEnvelope {
+                    schema_version: OUTPUT_SCHEMA_VERSION,
+                    kind: "event",
+                    event: envelope,
+                })
+                .expect("stream JSON")
+            })
+            .collect();
+        let observation_at = stream_lines
+            .iter()
+            .position(|line| line.contains("cache_observation"))
+            .expect("observation line");
+        let state_at = stream_lines
+            .iter()
+            .position(|line| line.contains("cache_state_changed"))
+            .expect("state line");
+        assert!(observation_at < state_at);
+        assert!(stream_lines[state_at].contains("\"missed_tokens\":20000"));
+
+        let mut stderr = Vec::new();
+        write_text_projection(&mut stderr, &result).expect("text cache projection");
+        let text = String::from_utf8(stderr).expect("UTF-8 projection");
+        assert!(text.contains("cache: miss_observed · CH 0% · confidence exact"));
+        assert!(text.contains("missed 20000 · re-billed 20000"));
     }
 
     #[test]

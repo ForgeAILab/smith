@@ -37,6 +37,38 @@ example `SMITH_CONTEXT_REASONING_RESERVE`,
 case-insensitively; defining two case variants for one key is an ambiguity and
 fails.
 
+## Prompt-cache miss notices
+
+Local cache-miss notices are controlled by the explainable layered Boolean
+`cache.miss_notices`. It defaults to `false`, so cache state and machine output
+remain available without adding transcript or stderr notices. Enable it in a
+file or for one run with the matching environment variable:
+
+```toml
+[cache]
+miss_notices = true
+```
+
+```sh
+SMITH_CACHE_MISS_NOTICES=true smith -p "inspect this repository"
+```
+
+The setting changes only local human-facing presentation. It does not change
+provider requests, canonical cache events, usage accounting, or retention.
+Smith emits at most one notice for a completed root turn when canonical
+re-billed tokens reach 20,000 or known derived extra cost reaches $0.10. Any
+idle duration in that notice is factual start-to-start context; it does not
+claim that a cache entry expired or became unavailable. In particular,
+`after Nm idle` is correlation, not an expiry diagnosis. Smith has no generic
+pre-request cache-alive probe: it classifies cache state only after the
+provider returns usage/cache evidence for an attempt.
+
+Interactive `/status` renders one canonical `cache:` block containing the
+latest completed root-turn state, `CH`, expected/observed/missed tokens,
+confidence, cumulative miss count, re-billed tokens, and known derived extra
+cost. Its separate `cache read (session)` line is retained as the cumulative
+raw provider-read total for compatibility; it is not the latest-turn `CH`.
+
 Agent-profile selection follows the same provenance rules. One named profile
 can configure the main agent, an explicit direct child, or both:
 

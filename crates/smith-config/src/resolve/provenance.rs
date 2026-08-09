@@ -79,6 +79,7 @@ pub(super) const SETTINGS: &[(&str, ValueKind)] = &[
     ("background.exit_policy", ValueKind::Text),
     ("background.max_children", ValueKind::Integer),
     ("background.max_monitors", ValueKind::Integer),
+    ("cache.miss_notices", ValueKind::Flag),
     ("context.capability_budget", ValueKind::Integer),
     (
         "context.compaction_high_watermark_percent",
@@ -488,6 +489,8 @@ pub struct Overrides {
     pub max_children: Option<u32>,
     /// Monitors allowed at once.
     pub max_monitors: Option<u32>,
+    /// Whether significant local cache-miss notices are shown.
+    pub cache_miss_notices: Option<bool>,
 }
 
 impl Overrides {
@@ -625,6 +628,9 @@ impl Overrides {
                 "background.max_monitors",
                 SettingValue::Integer(value.into()),
             );
+        }
+        if let Some(value) = self.cache_miss_notices {
+            push("cache.miss_notices", SettingValue::Flag(value));
         }
         out
     }

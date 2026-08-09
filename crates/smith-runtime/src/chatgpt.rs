@@ -1378,31 +1378,56 @@ fn append_usage(usage: &Value, events: &mut Vec<ProviderStreamEvent>) {
     let input = usage
         .get("input_tokens")
         .and_then(Value::as_u64)
-        .unwrap_or(0);
+        .unwrap_or_default();
+    let details = usage.get("input_tokens_details");
     let cached = usage
-        .pointer("/input_tokens_details/cached_tokens")
-        .and_then(Value::as_u64)
-        .unwrap_or(0)
-        .min(input);
+        .get("input_tokens_details")
+        .and_then(|details| details.get("cached_tokens"))
+        .and_then(Value::as_u64);
+    let written = details
+        .and_then(|details| details.get("cache_write_tokens"))
+        .and_then(Value::as_u64);
+    // Keep the billing counters disjoint while preserving the provider's
+    // independent field presence in CacheObservation. An explicit zero is
+    // evidence; an omitted field is not a zero.
+    let cached_count = cached.unwrap_or_default().min(input);
+    let write_count = written
+        .unwrap_or_default()
+        .min(input.saturating_sub(cached_count));
     let output = usage
         .get("output_tokens")
         .and_then(Value::as_u64)
-        .unwrap_or(0);
+        .unwrap_or_default();
     let reasoning = usage
-        .pointer("/output_tokens_details/reasoning_tokens")
+        .get("output_tokens_details")
+        .and_then(|details| details.get("reasoning_tokens"))
         .and_then(Value::as_u64)
-        .unwrap_or(0)
+        .unwrap_or_default()
         .min(output);
-    let delta = UsageDelta::new()
-        .with(CounterKind::InputUncached, input.saturating_sub(cached))
-        .with(CounterKind::InputCached, cached)
-        .with(CounterKind::Output, output.saturating_sub(reasoning))
-        .with(CounterKind::Reasoning, reasoning);
-    if cached > 0 {
+    let mut delta = UsageDelta::new();
+    let uncached = input
+        .saturating_sub(cached_count)
+        .saturating_sub(write_count);
+    if uncached > 0 {
+        delta.add(CounterKind::InputUncached, uncached);
+    }
+    if cached_count > 0 {
+        delta.add(CounterKind::InputCached, cached_count);
+    }
+    if write_count > 0 {
+        delta.add(CounterKind::CacheWrite, write_count);
+    }
+    if cached.is_some() || written.is_some() {
         events.push(ProviderStreamEvent::CacheObservation {
             read_tokens: cached,
-            write_tokens: 0,
+            write_tokens: written,
         });
+    }
+    if output.saturating_sub(reasoning) > 0 {
+        delta.add(CounterKind::Output, output.saturating_sub(reasoning));
+    }
+    if reasoning > 0 {
+        delta.add(CounterKind::Reasoning, reasoning);
     }
     if !delta.is_empty() {
         events.push(ProviderStreamEvent::Usage { delta });
@@ -1844,6 +1869,79 @@ mod tests {
         assert_eq!(usage.get(CounterKind::Output), 30);
         assert_eq!(usage.get(CounterKind::Reasoning), 10);
         assert!(state.terminal);
+    }
+
+    #[test]
+    fn responses_cache_observation_preserves_presence_and_write_tokens() {
+        let cases = [
+            (
+                "zero-read",
+                json!({
+                    "input_tokens": 10,
+                    "input_tokens_details": {"cached_tokens": 0},
+                    "output_tokens": 2
+                }),
+                Some(0),
+                None,
+                10,
+                0,
+            ),
+            (
+                "omitted",
+                json!({"input_tokens": 10, "output_tokens": 2}),
+                None,
+                None,
+                10,
+                0,
+            ),
+            (
+                "write-only",
+                json!({
+                    "input_tokens": 10,
+                    "input_tokens_details": {"cache_write_tokens": 3},
+                    "output_tokens": 2
+                }),
+                None,
+                Some(3),
+                7,
+                3,
+            ),
+        ];
+
+        for (name, usage, expected_read, expected_write, uncached, written) in cases {
+            let mut state = StreamState::default();
+            let events = decode_event(
+                &json!({"type": "response.completed", "response": {"usage": usage}}).to_string(),
+                &mut state,
+            )
+            .expect("event");
+            let observations: Vec<_> = events
+                .iter()
+                .filter_map(|event| match event {
+                    ProviderStreamEvent::CacheObservation {
+                        read_tokens,
+                        write_tokens,
+                    } => Some((*read_tokens, *write_tokens)),
+                    _ => None,
+                })
+                .collect();
+            if expected_read.is_none() && expected_write.is_none() {
+                assert!(observations.is_empty(), "{name} must stay absent");
+            } else {
+                assert_eq!(
+                    observations,
+                    vec![(expected_read, expected_write)],
+                    "{name}"
+                );
+            }
+            let delta = events.iter().find_map(|event| match event {
+                ProviderStreamEvent::Usage { delta } => Some(delta),
+                _ => None,
+            });
+            let delta = delta.expect("usage");
+            assert_eq!(delta.get(CounterKind::InputUncached), uncached, "{name}");
+            assert_eq!(delta.get(CounterKind::CacheWrite), written, "{name}");
+        }
     }
 
     #[test]

@@ -823,8 +823,51 @@ pub(super) fn render_context_status(status: &Status, policy: &RuntimePolicy) -> 
         status.context.render()
     ));
     lines.push(format!("cache read (session): {}", status.render_cache()));
+    lines.push(render_cache_status(status));
     lines.push(render_reasoning_status(policy));
     lines.join("\n")
+}
+
+/// Renders the canonical cache state and derived miss diagnostics shared by
+/// `/status` and the detailed context view. Unknown values remain `?`.
+pub(super) fn render_cache_status(status: &Status) -> String {
+    let usage = status.session_usage();
+    let Some(summary) = status.cache_summary() else {
+        return format!(
+            "cache: state unknown · CH ? · misses {} · re-billed {}",
+            usage.cache_miss_count, usage.cache_rebilled_tokens,
+        );
+    };
+    let expected = summary
+        .expected_read_tokens
+        .map_or_else(|| "?".to_owned(), |tokens| tokens.to_string());
+    let observed = summary
+        .observed_read_tokens
+        .map_or_else(|| "?".to_owned(), |tokens| tokens.to_string());
+    let missed = summary
+        .missed_tokens
+        .map_or_else(|| "?".to_owned(), |tokens| tokens.to_string());
+    let cost = summary.extra_cost_micro_usd.map_or_else(
+        || "?".to_owned(),
+        |micro| format!("${}.{:06} derived", micro / 1_000_000, micro % 1_000_000),
+    );
+    let confidence = match summary.confidence {
+        Some(agent_runtime_core::event::EstimationConfidence::Exact) => "exact",
+        Some(agent_runtime_core::event::EstimationConfidence::Estimated) => "estimated",
+        None => "?",
+    };
+    format!(
+        "cache: state {} · CH {} · expected {} · observed {} · missed {} · confidence {} · misses {} · re-billed {} · extra cost {}",
+        summary.state.as_str(),
+        summary.render_ch(),
+        expected,
+        observed,
+        missed,
+        confidence,
+        usage.cache_miss_count,
+        usage.cache_rebilled_tokens,
+        cost,
+    )
 }
 
 pub(super) fn render_reasoning_status(policy: &RuntimePolicy) -> String {
@@ -1003,6 +1046,7 @@ pub(super) fn render_context_view(status: &Status, policy: &RuntimePolicy) -> St
         status.context.render()
     ));
     lines.push(format!("cache read (session): {}", status.render_cache()));
+    lines.push(render_cache_status(status));
     lines.push(render_reasoning_status(policy));
     lines.join("\n")
 }

@@ -560,6 +560,9 @@ pub struct Resolution {
     pub config: ResolvedConfig,
     /// Why each key has the value it has.
     pub provenance: Provenance,
+    /// Whether significant local cache-miss notices are enabled, with the
+    /// winning layer retained for `config explain` consumers.
+    pub cache_miss_notices: Sourced<bool>,
 }
 
 /// The result of inspecting configuration before deciding whether setup is

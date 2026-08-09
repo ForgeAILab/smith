@@ -18,10 +18,12 @@ use std::collections::BTreeMap;
 
 use std::time::Duration;
 
-use agent_runtime_core::event::EstimationConfidence;
+use agent_runtime_core::event::{EstimationConfidence, EventEnvelope};
 use agent_runtime_core::goal::GoalProjection;
 use agent_runtime_core::manifest::SegmentKind;
 use agent_runtime_core::usage::{CounterKind, UsageDelta};
+
+use crate::cache::{CachePrice, CacheProjection, CacheTurnSummary};
 
 /// How a displayed quantity was obtained.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -312,13 +314,23 @@ pub struct SessionUsage {
     pub delegated_totals: BTreeMap<CounterKind, u64>,
     /// Distinct children that reported any delegated usage.
     pub delegated_contributors: u32,
+    /// Canonical cache-miss attempts observed in the root session. This is a
+    /// derived diagnostic, not a usage counter.
+    pub cache_miss_count: u32,
+    /// Canonical missed tokens observed in the root session. These tokens are
+    /// already present in ordinary input counters and are never added again.
+    pub cache_rebilled_tokens: u64,
 }
 
 impl SessionUsage {
     /// Whether anything at all was observed, including a delegated-only
     /// session that never accumulated any root usage of its own.
     pub fn is_empty(&self) -> bool {
-        self.totals.is_empty() && self.turns == 0 && self.delegated_totals.is_empty()
+        self.totals.is_empty()
+            && self.turns == 0
+            && self.delegated_totals.is_empty()
+            && self.cache_miss_count == 0
+            && self.cache_rebilled_tokens == 0
     }
 
     /// The root session's own counter total.
@@ -369,6 +381,8 @@ impl SessionUsage {
             self.compactions,
             self.reclaimed_tokens,
         );
+        let root_line =
+            append_cache_diagnostics(root_line, self.cache_miss_count, self.cache_rebilled_tokens);
         if self.delegated_totals.is_empty() {
             return Some(root_line);
         }
@@ -388,6 +402,17 @@ impl SessionUsage {
             agent_parts.join(" · "),
         ))
     }
+}
+
+fn append_cache_diagnostics(line: String, miss_count: u32, rebilled_tokens: u64) -> String {
+    if miss_count == 0 && rebilled_tokens == 0 {
+        return line;
+    }
+    format!(
+        "{line} · cache re-billed {} · {miss_count} miss{}",
+        compact_tokens(rebilled_tokens),
+        if miss_count == 1 { "" } else { "es" },
+    )
 }
 
 /// Renders one counter/value pair per entry, e.g. `input ~12.4k`.
@@ -654,6 +679,8 @@ pub struct Status {
     pub capabilities: CapabilityStatus,
     /// Cache tokens read, when the provider reports cache evidence.
     pub cache_read: Option<u64>,
+    /// Canonical retry-safe cache evidence and latest completed-turn rollup.
+    pub cache_projection: CacheProjection,
     /// What the agent is doing.
     pub activity: Activity,
     /// Latest durability-aligned persistent-goal projection.
@@ -743,6 +770,7 @@ impl Status {
             context_plan: None,
             capabilities: CapabilityStatus::default(),
             cache_read: None,
+            cache_projection: CacheProjection::default(),
             activity: Activity::Idle,
             goal: None,
             mcp: McpStatus::default(),
@@ -833,6 +861,8 @@ impl Status {
             reclaimed_tokens: self.capabilities.reclaimed_tokens,
             delegated_totals: BTreeMap::new(),
             delegated_contributors: 0,
+            cache_miss_count: self.cache_projection.session_miss_count(),
+            cache_rebilled_tokens: self.cache_projection.session_rebilled_tokens(),
         }
     }
 
@@ -858,6 +888,73 @@ impl Status {
     /// Records a cache observation.
     pub fn record_cache(&mut self, read_tokens: u64) {
         self.cache_read = Some(self.cache_read.unwrap_or(0).saturating_add(read_tokens));
+    }
+
+    /// Folds a canonical event into the cache projection. Live events and
+    /// journal replay both use this method, so a retry or duplicate replay
+    /// cannot inflate derived diagnostics.
+    pub fn record_cache_event(&mut self, envelope: &EventEnvelope) {
+        let identity_event = matches!(
+            &envelope.payload,
+            agent_runtime_core::event::RuntimeEvent::ModelProfileResolved { .. }
+        );
+        self.cache_projection.apply(envelope);
+        if identity_event
+            && self
+                .cache_projection
+                .latest_completed()
+                .is_some_and(|summary| {
+                    summary.state == crate::cache::CacheVisibilityState::Suspended
+                })
+        {
+            self.cache_read = None;
+            return;
+        }
+        if let Some(read) = self
+            .cache_projection
+            .session_observed_read()
+            .or_else(|| self.cache_projection.legacy_read())
+        {
+            self.cache_read = Some(read);
+        }
+    }
+
+    /// Replays canonical cache events without touching conversation state.
+    pub fn replay_cache_events<I>(&mut self, events: I)
+    where
+        I: IntoIterator<Item = EventEnvelope>,
+    {
+        for event in events {
+            self.record_cache_event(&event);
+        }
+    }
+
+    /// Latest completed root-turn cache summary, with derived cost when the
+    /// active binding has a compatible catalog price.
+    pub fn cache_summary(&self) -> Option<CacheTurnSummary> {
+        let summary = self.cache_projection.latest_completed()?;
+        let price = self.price.as_ref().map(|price| CachePrice {
+            input: price.table.input,
+            cache_read: price.table.cache_read,
+            cache_write: price.table.cache_write,
+        });
+        Some(match price {
+            Some(price) => self.cache_projection.with_price(summary, price),
+            None => summary.clone(),
+        })
+    }
+
+    /// The latest completed turn's provider-reported cache-read percentage.
+    /// Explicit zero is `0%`; absent evidence is `?`.
+    pub fn render_cache_hit_rate(&self) -> String {
+        self.cache_summary()
+            .map_or_else(|| "?".to_owned(), |summary| summary.render_ch())
+    }
+
+    /// A significant latest-turn cache notice, if one is available.
+    pub fn cache_notice(&self) -> Option<String> {
+        let summary = self.cache_summary()?;
+        summary.significant().then(|| summary.render_notice())
     }
 
     /// Records the latest canonical context plan without retaining any
@@ -915,6 +1012,7 @@ impl Status {
         self.provider = provider;
         self.model = model.into();
         self.cache_read = None;
+        self.cache_projection.suspend();
         self.context_plan = None;
         self.usage_reported = false;
         self.price = None;

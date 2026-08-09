@@ -445,7 +445,7 @@ async fn reported_usage_lands_in_disjoint_counters_without_counting_cached_input
     assert!(events.iter().any(|event| matches!(
         event,
         ProviderStreamEvent::CacheObservation {
-            read_tokens: 8_000,
+            read_tokens: Some(8_000),
             ..
         }
     )));
@@ -556,7 +556,7 @@ async fn upstream_cache_writes_are_reported_as_zero_although_this_adapter_cannot
             _ => None,
         })
         .expect("a cache observation");
-    assert_eq!(observation, (800, 0));
+    assert_eq!(observation, (Some(800), None));
 
     let delta = usage(&events).pop().expect("a usage event");
     assert!(

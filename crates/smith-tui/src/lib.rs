@@ -23,6 +23,7 @@
 
 pub mod accounts;
 pub mod app;
+pub mod cache;
 pub mod commands;
 pub mod composer;
 pub mod diff;
@@ -40,6 +41,10 @@ pub mod usage_log;
 pub use app::{
     Action, App, MouseOutcome, Overlay, PaletteCommand, PendingInputPreview, PreparedSubmission,
     ResourceTarget, RuntimeResources, SubmissionTarget,
+};
+pub use cache::{
+    CachePrice, CacheProjection, CacheTurnSummary, CacheVisibilityState,
+    MISS_NOTICE_COST_MICRO_USD, MISS_NOTICE_TOKENS,
 };
 pub use commands::{COMMANDS, CommandAction, CommandSpec, GoalAction, McpAction};
 pub use composer::Composer;

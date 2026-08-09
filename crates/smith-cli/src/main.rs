@@ -218,6 +218,14 @@ async fn run_command(mut args: RunArgs) -> Result<u8> {
             )
             .await?;
             logging::init(started.host.session().id()).await;
+            let cache_price =
+                tui_driver::resolve_price(started.host.runtime().policy(), &started.catalog).map(
+                    |price| smith_tui::cache::CachePrice {
+                        input: price.table.input,
+                        cache_read: price.table.cache_read,
+                        cache_write: price.table.cache_write,
+                    },
+                );
             headless::run(
                 &started.host,
                 prompt,
@@ -227,6 +235,8 @@ async fn run_command(mut args: RunArgs) -> Result<u8> {
                     interaction: started.headless_interaction.as_deref(),
                     rotation: started.headless_rotation.as_deref(),
                     credential_pool: started.credential_pool.as_ref(),
+                    cache_price,
+                    cache_miss_notices: started.cache_miss_notices,
                 },
                 args.selection.background_exit.unwrap_or_default(),
             )

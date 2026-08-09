@@ -228,6 +228,9 @@ pub struct ConfigFile {
     /// Background-work policy for monitors and child agents: `[background]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background: Option<BackgroundSection>,
+    /// Local cache-miss notice policy: `[cache]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<CacheSection>,
     /// Model Context Protocol servers: `[mcp.servers.<name>]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp: Option<McpSection>,
@@ -344,6 +347,18 @@ pub struct ProfileSection {
     /// Profile-scoped `[background]` overrides.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background: Option<BackgroundSection>,
+    /// Profile-scoped `[cache]` overrides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<CacheSection>,
+}
+
+/// Local cache presentation policy.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CacheSection {
+    /// Whether significant cache-miss notices are shown on local surfaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub miss_notices: Option<bool>,
 }
 
 /// One provider declaration.

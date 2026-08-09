@@ -20,6 +20,7 @@ pub(super) enum InteractiveExit {
     Quit(
         smith_tui::status::SessionUsage,
         Option<smith_tui::status::PriceReference>,
+        Option<Box<smith_tui::cache::CacheTurnSummary>>,
     ),
     Reconfigure(PaletteCommand),
 }
@@ -28,6 +29,7 @@ pub(super) struct PresentationOptions {
     pub(super) no_color: bool,
     pub(super) no_motion: bool,
     pub(super) reasoning_notice: Option<String>,
+    pub(super) cache_miss_notices: bool,
 }
 
 pub(super) struct InteractiveResources {
@@ -84,6 +86,7 @@ pub(super) async fn run_interactive(
             |branch| format!("{}:{branch}", abbreviate_home(&project.to_string_lossy())),
         );
     let mut app = App::new(policy.model.as_str(), project_label);
+    app.set_cache_miss_notices(presentation.cache_miss_notices);
     app.status
         .switch_model(Some(policy.provider_name.clone()), policy.model.as_str());
     app.status.set_price(resolve_price(policy, &catalog));
@@ -151,12 +154,14 @@ pub(super) async fn run_interactive(
         );
     }
     let usage = snapshot.usage.total();
+    let snapshot_cache_read = if usage.is_empty() {
+        None
+    } else {
+        let cache_read = usage.get(CounterKind::InputCached);
+        (cache_read > 0).then_some(cache_read)
+    };
     if !usage.is_empty() {
         app.status.record_usage(&usage);
-        let cache_read = usage.get(CounterKind::InputCached);
-        if cache_read > 0 {
-            app.status.record_cache(cache_read);
-        }
     }
     if let Some(previous) = snapshot.manifests.last().map(|entry| &entry.manifest.model)
         && (previous.provider != policy.provider_name || previous.model != policy.model)
@@ -178,6 +183,21 @@ pub(super) async fn run_interactive(
         // already resolved above — the prior *snapshot's* model, not this
         // session's — so the price is re-resolved rather than left cleared.
         app.status.set_price(resolve_price(policy, &catalog));
+    }
+    if let Ok(events) = host.timeline_events().await {
+        app.restore_cache_events(events);
+    }
+    // Old snapshots only carry an aggregate positive cached-input counter.
+    // Keep it as a legacy fallback after replay, and never let it override or
+    // double-count any attributed canonical projection recovered above.
+    if let Some(cache_read) = snapshot_cache_read
+        && app
+            .status
+            .cache_projection
+            .session_observed_read()
+            .is_none()
+    {
+        app.status.record_cache(cache_read);
     }
 
     let mut terminal = match terminal::enter() {
@@ -234,7 +254,7 @@ pub(super) async fn run_interactive(
 /// `usage-accounting`'s "Labelled cost calculation" forbids substituting a
 /// price from another model, provider, or a hard-coded default, and a
 /// `None` here is exactly how that absence is represented.
-fn resolve_price(
+pub(super) fn resolve_price(
     policy: &RuntimePolicy,
     catalog: &smith_config::catalog::CatalogSnapshot,
 ) -> Option<smith_tui::status::PriceReference> {
@@ -417,7 +437,11 @@ pub(super) async fn run_tui(
                                     );
                                 }
                             }
-                            Some(Action::Quit) => break InteractiveExit::Quit(app.session_usage(), app.status.price().cloned()),
+                            Some(Action::Quit) => break InteractiveExit::Quit(
+                                app.session_usage(),
+                                app.status.price().cloned(),
+                                app.status.cache_summary().map(Box::new),
+                            ),
                             // An account switch is live pool state, so it is
                             // applied here rather than by tearing the session
                             // down and rebuilding it around a new selection.
@@ -750,7 +774,11 @@ pub(super) async fn run_tui(
                         }
                         dirty = true;
                     }
-                    None => break InteractiveExit::Quit(app.session_usage(), app.status.price().cloned()),
+                        None => break InteractiveExit::Quit(
+                            app.session_usage(),
+                            app.status.price().cloned(),
+                            app.status.cache_summary().map(Box::new),
+                        ),
                 }
             }
 
@@ -931,7 +959,11 @@ pub(super) async fn run_tui(
         interactions.drain_answers(&mut app);
         host.set_goal_continuation_enabled(!app.should_defer_goal_continuation());
         if app.should_quit {
-            break InteractiveExit::Quit(app.session_usage(), app.status.price().cloned());
+            break InteractiveExit::Quit(
+                app.session_usage(),
+                app.status.price().cloned(),
+                app.status.cache_summary().map(Box::new),
+            );
         }
     };
     Ok(exit)

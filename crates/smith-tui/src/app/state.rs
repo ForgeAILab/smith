@@ -772,6 +772,8 @@ pub struct App {
     pub transcript: Transcript,
     /// Header status.
     pub status: Status,
+    /// Whether significant local cache-miss notices are enabled.
+    pub cache_miss_notices: bool,
     /// The input buffer.
     pub composer: Composer,
     /// The current overlay, if any.
@@ -901,6 +903,8 @@ pub struct App {
     pub(super) active_turn: Option<TurnId>,
     /// Process-local, not-yet-canonical user input.
     pub(super) pending_input: PendingInputState,
+    /// Last completed turn for which a local cache notice was appended.
+    pub(super) last_cache_notice_turn: Option<String>,
 }
 
 impl App {
@@ -909,6 +913,7 @@ impl App {
         Self {
             transcript: Transcript::new(),
             status: Status::new(model, project),
+            cache_miss_notices: false,
             composer: Composer::new(),
             overlay: None,
             pending_prompts: VecDeque::new(),
@@ -952,6 +957,31 @@ impl App {
             speculative: SpeculativeState::default(),
             active_turn: None,
             pending_input: PendingInputState::default(),
+            last_cache_notice_turn: None,
+        }
+    }
+
+    /// Enables or disables the layered `cache.miss_notices` presentation
+    /// policy. Canonical cache state is collected regardless of this flag.
+    pub fn set_cache_miss_notices(&mut self, enabled: bool) {
+        self.cache_miss_notices = enabled;
+    }
+
+    /// Replays canonical cache events into status without rebuilding
+    /// conversation blocks. Used when a persistent host restores its journal.
+    pub fn restore_cache_events<I>(&mut self, events: I)
+    where
+        I: IntoIterator<Item = EventEnvelope>,
+    {
+        self.status.replay_cache_events(events);
+        if self.cache_miss_notices
+            && let Some(summary) = self.status.cache_summary()
+            && summary.significant()
+            && self.last_cache_notice_turn.as_deref() != Some(summary.turn.as_str())
+        {
+            self.transcript
+                .push_notice("cache", summary.render_notice());
+            self.last_cache_notice_turn = Some(summary.turn);
         }
     }
 

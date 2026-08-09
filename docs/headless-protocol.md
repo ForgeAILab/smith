@@ -29,6 +29,12 @@ Machine stdout has no ANSI sequences, setup UI, prompt text, progress prose, or
 unversioned diagnostics. CLI parsing errors exit 2; startup/protocol failures
 that cannot produce a result exit 1.
 
+Text mode keeps the committed answer on stdout. When `cache.miss_notices` is
+enabled and a completed turn crosses the significant-miss threshold, the
+bounded factual cache notice is written to stderr; it never becomes provider
+context. JSON and stream-JSON always carry canonical cache evidence regardless
+of that setting.
+
 ## Result schema v3
 
 Schema 3 retains existing field meanings and adds optional goal fields:
@@ -91,6 +97,18 @@ Schema 3 retains existing field meanings and adds optional goal fields:
 exists. `output` is selected only from assistant history created after this
 turn was accepted; an older answer cannot be reused for a reasoning-only or
 failed turn.
+
+When the turn has canonical cache evidence, the result also contains a
+`cache` object with `state`, `expected_read_tokens`,
+`observed_read_tokens`, `observed_write_tokens`, `missed_tokens`,
+`confidence`, and the latest completed root-turn `cache_read_percent`.
+`miss_count` and `rebilled_tokens` are derived diagnostics kept separate from
+`usage`; `extra_cost_micro_usd` is present only when the serving model's
+compatible rates and attempt attribution make the derived value known.
+Explicit zero is rendered as `0`/`0%`; omitted evidence remains absent or
+unknown. The cache-read percentage is based on provider-reported cached input
+over uncached plus cached plus cache-write input across billed attempts,
+including failed billed attempts.
 
 `lifecycle.plan`, when present, contains:
 
@@ -165,6 +183,11 @@ Runtime events keep their independent event schema. Smith preserves canonical
 sequence order, includes `session_shutdown`, and writes the result last. A
 sequence gap turns the result into a failure rather than presenting incomplete
 stream output as complete.
+
+`stream-json` retains the attempt-level canonical `cache_state_changed` event
+alongside the terminal result, so consumers that need request/attempt/cache
+plan correlation can use the runtime event rather than inferring a miss from
+usage totals.
 
 Text/reasoning events are attempt-scoped. Failed partial output may appear in
 stream events for observability, followed by

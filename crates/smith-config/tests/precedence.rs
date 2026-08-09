@@ -249,6 +249,71 @@ fn explain_lists_every_layer_that_was_overridden_highest_first() {
 }
 
 #[test]
+fn cache_miss_notices_default_to_disabled_and_keep_provenance() {
+    let resolution = resolve_project(BASE_PROJECT_CONFIG).expect("a resolved run");
+
+    assert!(!resolution.cache_miss_notices.value);
+    assert_eq!(resolution.cache_miss_notices.source.layer, Layer::BuiltIn);
+    let explanation = resolution
+        .provenance
+        .explain("cache.miss_notices")
+        .expect("the built-in cache notice policy");
+    assert_eq!(explanation.value, SettingValue::Flag(false));
+    assert_eq!(explanation.source.layer, Layer::BuiltIn);
+}
+
+#[test]
+fn cache_miss_notices_follow_the_normal_file_profile_environment_and_flag_order() {
+    let fixture = Fixture::new();
+    fixture.write_user("[cache]\nmiss_notices = false\n");
+    fixture.write_project(&format!(
+        "{BASE_PROJECT_CONFIG}\n[cache]\nmiss_notices = true\n[profiles.work.cache]\nmiss_notices = false\n"
+    ));
+
+    let environment = BTreeMap::from([(
+        String::from("SMITH_CACHE_MISS_NOTICES"),
+        String::from("true"),
+    )]);
+    let resolution = resolve(
+        &fixture.request().with_env(environment).with_cli(Overrides {
+            cache_miss_notices: Some(false),
+            ..Overrides::default()
+        }),
+    )
+    .expect("a resolved run");
+
+    assert!(!resolution.cache_miss_notices.value);
+    assert_eq!(
+        resolution.cache_miss_notices.source.layer,
+        Layer::CommandLine
+    );
+    let explanation = resolution
+        .provenance
+        .explain("cache.miss_notices")
+        .expect("the cache notice policy");
+    assert_eq!(explanation.value, SettingValue::Flag(false));
+    assert_eq!(explanation.source.layer, Layer::CommandLine);
+    assert_eq!(explanation.overridden[0].value, SettingValue::Flag(true));
+    assert_eq!(explanation.overridden[0].source.layer, Layer::Environment);
+}
+
+#[test]
+fn cache_miss_notices_can_be_enabled_by_a_profile() {
+    let fixture = Fixture::new();
+    fixture.write_project(&format!(
+        "{BASE_PROJECT_CONFIG}\n[profiles.work.cache]\nmiss_notices = true\n"
+    ));
+
+    let resolution = resolve(&fixture.request()).expect("a resolved run");
+    assert!(resolution.cache_miss_notices.value);
+    assert_eq!(resolution.cache_miss_notices.source.layer, Layer::Profile);
+    assert_eq!(
+        resolution.cache_miss_notices.source.key,
+        "profiles.work.cache.miss_notices"
+    );
+}
+
+#[test]
 fn explain_refuses_an_unknown_key_and_suggests_the_near_miss() {
     let fixture = Fixture::new();
     let resolution = Scenario::default()

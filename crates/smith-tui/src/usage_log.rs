@@ -20,11 +20,14 @@ use crate::status::{SessionUsage, counter_label};
 
 /// Record wire version.
 ///
-/// Bumped to 2 for delegated usage: `delegated_totals` and
+/// Bumped to 3 for cache miss diagnostics: `cache_miss_count` and
+/// `cache_rebilled_tokens` are optional so an older record means "no cache
+/// evidence", never a verified zero. Version 2 added delegated usage:
+/// `delegated_totals` and
 /// `delegated_contributors` are new fields. Both carry `#[serde(default)]`
 /// so [`read_all`] stays tolerant of version-1 lines, which simply have no
 /// delegated usage to report.
-pub const USAGE_RECORD_SCHEMA_VERSION: u32 = 2;
+pub const USAGE_RECORD_SCHEMA_VERSION: u32 = 3;
 
 /// One session's bounded usage record.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,6 +60,14 @@ pub struct SessionUsageRecord {
     /// Distinct children that reported delegated usage.
     #[serde(default)]
     pub delegated_contributors: u32,
+    /// Positive canonical miss count, absent when the session supplied no
+    /// cache-miss evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_miss_count: Option<u32>,
+    /// Positive canonical re-billed tokens, absent when no miss evidence was
+    /// available. These never enter `totals`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_rebilled_tokens: Option<u64>,
 }
 
 impl SessionUsageRecord {
@@ -89,6 +100,9 @@ impl SessionUsageRecord {
                 .map(|(kind, value)| (counter_label(*kind).to_owned(), *value))
                 .collect(),
             delegated_contributors: usage.delegated_contributors,
+            cache_miss_count: (usage.cache_miss_count > 0).then_some(usage.cache_miss_count),
+            cache_rebilled_tokens: (usage.cache_rebilled_tokens > 0)
+                .then_some(usage.cache_rebilled_tokens),
         }
     }
 }
@@ -244,6 +258,23 @@ mod tests {
     }
 
     #[test]
+    fn cache_miss_diagnostics_are_persisted_outside_usage_totals() {
+        let usage = SessionUsage {
+            cache_miss_count: 2,
+            cache_rebilled_tokens: 105_000,
+            ..usage()
+        };
+        let record = SessionUsageRecord::new("session-1", None, "model", "build", &usage);
+        let encoded = serde_json::to_string(&record).expect("encode");
+        assert!(encoded.contains("cache_miss_count"));
+        assert!(encoded.contains("cache_rebilled_tokens"));
+        assert_eq!(record.totals.get("cache_miss_count"), None);
+        assert_eq!(record.totals.get("cache_rebilled_tokens"), None);
+        assert_eq!(record.cache_miss_count, Some(2));
+        assert_eq!(record.cache_rebilled_tokens, Some(105_000));
+    }
+
+    #[test]
     fn an_empty_session_renders_nothing() {
         assert!(SessionUsage::default().render().is_none());
     }
@@ -264,6 +295,8 @@ mod tests {
             reclaimed_tokens: 0,
             delegated_totals,
             delegated_contributors: 4,
+            cache_miss_count: 0,
+            cache_rebilled_tokens: 0,
         };
         // The merged line names no turn count. A child's turns live with the
         // delegation coordinator, so the only one available here is the
@@ -294,6 +327,8 @@ mod tests {
             reclaimed_tokens: 40_000,
             delegated_totals,
             delegated_contributors: 1,
+            cache_miss_count: 0,
+            cache_rebilled_tokens: 0,
         };
         let rendered = usage.render().expect("a summary");
         assert_eq!(
@@ -369,5 +404,35 @@ mod tests {
         assert_eq!(all.len(), 1);
         assert!(all[0].delegated_totals.is_empty());
         assert_eq!(all[0].delegated_contributors, 0);
+        assert_eq!(all[0].cache_miss_count, None);
+        assert_eq!(all[0].cache_rebilled_tokens, None);
+    }
+
+    #[test]
+    fn a_version_two_record_keeps_delegated_usage_without_fabricating_cache_evidence() {
+        let legacy = serde_json::json!({
+            "schema_version": 2,
+            "session": "session-v2",
+            "provider": "local",
+            "model": "example-model",
+            "agent": "build",
+            "turns": 3,
+            "reported": true,
+            "totals": {"input": 500},
+            "compactions": 1,
+            "reclaimed_tokens": 200,
+            "delegated_totals": {"cached": 90},
+            "delegated_contributors": 1
+        });
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let path = default_path(dir.path());
+        std::fs::write(&path, format!("{legacy}\n")).expect("seed a version-two line");
+
+        let all = read_all(&path);
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].delegated_totals.get("cached"), Some(&90));
+        assert_eq!(all[0].delegated_contributors, 1);
+        assert_eq!(all[0].cache_miss_count, None);
+        assert_eq!(all[0].cache_rebilled_tokens, None);
     }
 }

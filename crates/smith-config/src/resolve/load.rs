@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::model::{
     AgentModeSection, AgentPosture, ApprovalMode, ApprovalSection, BackgroundExit,
-    BackgroundSection, ChildAgentSection, ConfigFile, ContextSection, LimitsSection,
+    BackgroundSection, CacheSection, ChildAgentSection, ConfigFile, ContextSection, LimitsSection,
     PersistenceSection,
 };
 use agent_runtime_core::store::Secret;
@@ -61,10 +61,12 @@ pub fn resolve(request: &ResolveRequest) -> Result<Resolution, ConfigError> {
         agent_profiles,
         request.profile_use,
     )?;
+    let cache_miss_notices = required_flag(&provenance, "cache.miss_notices")?;
     Ok(Resolution {
         layout,
         config,
         provenance,
+        cache_miss_notices,
     })
 }
 
@@ -297,6 +299,9 @@ pub(super) fn built_in_defaults(user_dir: &Path) -> ConfigFile {
             exit_policy: Some(BackgroundExit::Error),
             max_children: Some(4),
             max_monitors: Some(8),
+        }),
+        cache: Some(CacheSection {
+            miss_notices: Some(false),
         }),
         ..ConfigFile::default()
     }

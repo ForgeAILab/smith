@@ -247,6 +247,12 @@ impl App {
         // there instead is not.
         self.selection = None;
 
+        // Cache evidence is a presentation projection of canonical runtime
+        // events. Fold it before the semantic match so newly added runtime
+        // cache variants remain replayable without entering conversation
+        // history or provider context.
+        self.status.record_cache_event(envelope);
+
         // Everything that becomes a transcript block goes through the shared
         // conversation fold — the same code a delegated child's stream goes
         // through. What remains below is this session's own business: header
@@ -467,9 +473,7 @@ impl App {
             RuntimeEvent::Usage { record } => {
                 self.status.record_usage(&record.delta);
             }
-            RuntimeEvent::CacheObservation { read_tokens, .. } => {
-                self.status.record_cache(*read_tokens);
-            }
+            RuntimeEvent::CacheObservation { .. } | RuntimeEvent::CacheStateChanged { .. } => {}
             RuntimeEvent::TurnCompleted { finish, .. } => {
                 self.provider_phase = None;
                 self.reconcile_pending_terminal(envelope.turn.as_ref(), finish);
@@ -487,6 +491,14 @@ impl App {
                     self.active_turn = None;
                 }
                 self.finish_work();
+                if self.cache_miss_notices
+                    && let Some(turn) = envelope.turn.as_ref().map(ToString::to_string)
+                    && self.last_cache_notice_turn.as_deref() != Some(turn.as_str())
+                    && let Some(notice) = self.status.cache_notice()
+                {
+                    self.transcript.push_notice("cache", notice);
+                    self.last_cache_notice_turn = Some(turn);
+                }
                 match finish {
                     TurnFinish::Cancelled { reason } => {
                         self.transcript.push_notice(

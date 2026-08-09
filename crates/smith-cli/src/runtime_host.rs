@@ -31,6 +31,8 @@ pub(super) struct StartedHost {
     pub(super) catalog: Arc<smith_config::catalog::CatalogSnapshot>,
     /// Declared MCP servers and their connections, when any are declared.
     pub(super) mcp: Option<Arc<crate::mcp::McpContext>>,
+    /// Layered local cache-miss notice policy.
+    pub(super) cache_miss_notices: bool,
 }
 
 pub(super) async fn start_host(
@@ -43,6 +45,7 @@ pub(super) async fn start_host(
     let prepared = prepare(selection)?;
     let project = prepared.project;
     let resolution = prepared.resolution;
+    let cache_miss_notices = resolution.cache_miss_notices.value;
     let catalog = match frozen_catalog {
         Some(catalog) => catalog,
         None => {
@@ -308,6 +311,7 @@ pub(super) async fn start_host(
         sessions,
         catalog,
         mcp,
+        cache_miss_notices,
     })
 }
 
@@ -356,12 +360,45 @@ fn report_session_usage(
     session: &str,
     usage: &smith_tui::status::SessionUsage,
     price: Option<&smith_tui::status::PriceReference>,
+    cache: Option<&smith_tui::cache::CacheTurnSummary>,
 ) {
     if let Some(line) = usage.render() {
         println!("{line}");
         if let Some(cost_line) = render_exit_cost_line(usage, price) {
             println!("{cost_line}");
         }
+    }
+    if let Some(cache) = cache {
+        let expected = cache
+            .expected_read_tokens
+            .map_or_else(|| "?".to_owned(), |tokens| tokens.to_string());
+        let observed = cache
+            .observed_read_tokens
+            .map_or_else(|| "?".to_owned(), |tokens| tokens.to_string());
+        let missed = cache
+            .missed_tokens
+            .map_or_else(|| "?".to_owned(), |tokens| tokens.to_string());
+        let cost = cache.extra_cost_micro_usd.map_or_else(
+            || "?".to_owned(),
+            |micro| format!("${}.{:06} derived", micro / 1_000_000, micro % 1_000_000),
+        );
+        let confidence = match cache.confidence {
+            Some(agent_runtime_core::event::EstimationConfidence::Exact) => "exact",
+            Some(agent_runtime_core::event::EstimationConfidence::Estimated) => "estimated",
+            None => "?",
+        };
+        println!(
+            "cache: state {} · CH {} · expected {} · observed {} · missed {} · confidence {} · misses {} · re-billed {} · extra cost {}",
+            cache.state.as_str(),
+            cache.render_ch(),
+            expected,
+            observed,
+            missed,
+            confidence,
+            usage.cache_miss_count,
+            usage.cache_rebilled_tokens,
+            cost,
+        );
     }
     // Printed even for a session that spent nothing: an empty session is
     // exactly the one a user is most likely to want to pick back up, and the
@@ -437,6 +474,7 @@ pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
             credential_pool,
             accounts,
             mcp: started_mcp,
+            cache_miss_notices,
             ..
         } = started;
         mcp = started_mcp;
@@ -462,12 +500,19 @@ pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
                 no_color: args.no_color,
                 no_motion: args.no_motion,
                 reasoning_notice: reasoning_notice.take(),
+                cache_miss_notices,
             },
         )
         .await?
         {
-            InteractiveExit::Quit(usage, price) => {
-                report_session_usage(&host, &current_session, &usage, price.as_ref());
+            InteractiveExit::Quit(usage, price, cache) => {
+                report_session_usage(
+                    &host,
+                    &current_session,
+                    &usage,
+                    price.as_ref(),
+                    cache.as_deref(),
+                );
                 return Ok(0);
             }
             // The same identity, recomposed around the tools a server
