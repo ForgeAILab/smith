@@ -2,8 +2,8 @@
   "change_id": "quiet-delegated-agent-transcript",
   "change_ref": "quiet-delegated-agent-transcript-2026-08-05",
   "created_at": "2026-08-05T00:00:00Z",
-  "updated_at": "2026-08-05T00:00:00Z",
-  "completed_at": null,
+  "updated_at": "2026-08-08T22:39:11Z",
+  "completed_at": "2026-08-08T22:39:11Z",
   "status": "approved",
   "depends_on": []
 }

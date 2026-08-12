@@ -21,9 +21,9 @@ resolved Smith runtime factory and shared events as every other host.
 ### Requirement: Operational status in the TUI
 
 The TUI SHALL display current provider/model, token and provenance status,
-cache state, active monitors, direct children, and queued notifications. An
-estimated or unknown value MUST be visually distinguishable from a
-provider-reported value.
+cache state, active monitors, direct children, running background shell tasks,
+and queued notifications. An estimated or unknown value MUST be visually
+distinguishable from a provider-reported value.
 
 #### Scenario: Provider switch leaves estimated context
 
@@ -31,6 +31,13 @@ provider-reported value.
 - **WHEN** the status line updates
 - **THEN** it labels context tokens estimated
 - **AND** does not reuse the prior provider's verified cache indicator
+
+#### Scenario: Running background task is visible
+
+- **GIVEN** a background shell task is running
+- **WHEN** the user views operational status
+- **THEN** the task is listed as active work with its task ID
+- **AND** it disappears from active work after its terminal notification
 
 ### Requirement: Non-interactive prompt mode
 
@@ -75,9 +82,10 @@ the caller supplied an explicit policy authorizing it.
 
 ### Requirement: Explicit active-work exit policy
 
-The TUI MUST request confirmation before exiting with active monitors or
-children. Non-interactive mode SHALL support `error`, `wait`, and `stop`
-background-exit policies and MUST default to `error`.
+The TUI MUST request confirmation before exiting with active monitors,
+children, or background shell tasks. Non-interactive mode SHALL support
+`error`, `wait`, and `stop` background-exit policies and MUST default to
+`error`.
 
 #### Scenario: Headless turn finishes with a persistent monitor
 
@@ -85,6 +93,13 @@ background-exit policies and MUST default to `error`.
 - **WHEN** the caller did not choose an exit policy
 - **THEN** Smith emits an active-work error describing the monitor
 - **AND** does not silently orphan it
+
+#### Scenario: Headless turn finishes with a running background task
+
+- **GIVEN** the final answer is ready while a background shell task remains
+- **WHEN** the caller chose the `wait` background-exit policy
+- **THEN** Smith waits for the task's terminal state before exiting
+- **AND** reports its terminal state in machine output
 
 ### Requirement: Host-appropriate UI contributions
 
@@ -224,7 +239,8 @@ context content, and MUST NOT issue a provider request.
 The interactive TUI SHALL keep the composer as its only persistent focus
 target. Transcript navigation SHALL work through global shortcuts, background
 activity SHALL render inline, and absent or hidden regions MUST NOT participate
-in focus order.
+in focus order. A temporary read-only view MAY borrow the transcript region,
+but MUST be dismissible with one key and MUST NOT take focus.
 
 #### Scenario: Tab does not leave the composer
 
@@ -245,8 +261,19 @@ in focus order.
 
 - **GIVEN** a child or monitor emits progress while the user is composing
 - **WHEN** Smith renders the event
-- **THEN** a concise attributed notice appears inline without stealing focus
-- **AND** detailed child state remains available through `/agent`
+- **THEN** the event reaches its surface without stealing focus — a monitor as
+  a concise attributed transcript notice, a child as panel activity and an
+  inspectable log entry
+- **AND** detailed child state remains available through `/agent` and panel
+  selection
+
+#### Scenario: A read-only child view borrows the transcript region
+
+- **GIVEN** a delegated child is selected from the panel
+- **WHEN** Smith renders its read-only view over the transcript region
+- **THEN** the composer keeps focus and its draft
+- **AND** one dismissal key restores the root timeline unchanged
+- **AND** the view participates in no focus order
 
 ### Requirement: Unified command discovery
 
@@ -1394,3 +1421,175 @@ attributed usage, but those blocks MUST remain noncanonical.
 - **WHEN** the TUI replays them
 - **THEN** it can reconstruct status and usage diagnostics
 - **AND** it cannot fabricate ping, pong, or summary text into conversation
+### Requirement: Account usage visibility and manual switching
+
+When the active provider has a credential pool, the TUI SHALL show which pool
+member is active, offer an accessible picker listing every member with its
+usage meter, cooldown state, and provenance-safe display name, and accept an
+explicit manual switch to any member not currently in cooldown. A rotation
+offered after limit exhaustion SHALL be presented as a modal the user answers,
+stating the cache cost of switching, and its outcome SHALL be recorded in the
+transcript. Headless runs SHALL select their member once at session start and
+keep it for the whole run, projecting the active member and the typed
+exhaustion outcome through the versioned machine output without ever prompting
+or rotating.
+
+#### Scenario: Inspect pool usage
+
+- **GIVEN** the active provider declares a two-member pool
+- **WHEN** the user opens the account picker
+- **THEN** both members appear in pool order with usage percentage or unknown,
+  cooldown state, and which one is active
+- **AND** no credential value or secret fragment is displayed
+
+#### Scenario: Manually switch the active account
+
+- **GIVEN** the picker is open and the second member is eligible
+- **WHEN** the user selects it
+- **THEN** subsequent attempts use the second member
+- **AND** the sticky selection persists for future sessions
+- **AND** the transcript records the manual switch
+
+#### Scenario: Rotation is offered as a modal and announced
+
+- **GIVEN** an attempt hits limit exhaustion mid-task with an eligible member
+  available
+- **WHEN** the runtime offers rotation
+- **THEN** a modal names the outgoing and incoming members, the outgoing
+  member's reset time, and warns that switching resends the turn without the
+  provider-side prompt cache
+- **AND** confirming it replays the attempt and writes a rotation notice to the
+  transcript
+- **AND** declining it writes the exhaustion outcome to the transcript instead
+
+#### Scenario: A headless run never rotates
+
+- **GIVEN** `smith -p` starts with a two-member pool and exhausts its member
+  mid-run
+- **WHEN** the attempt fails with the typed limit-exhaustion error
+- **THEN** the run fails with that error and the earliest reset time
+- **AND** no prompt is rendered and no member switch occurs
+- **AND** machine output names the member the run started on
+
+### Requirement: Command-line reasoning effort selection
+
+Smith SHALL accept `--effort <NAME>` anywhere the shared selection parser
+accepts selection flags, including `smith`, `smith -p`, `smith config explain`,
+and `smith sessions list`. The flag MUST support both spaced and inline forms,
+and the client MUST reject a missing value or more than one supplied value.
+
+#### Scenario: Selection surfaces accept both flag forms
+
+- **GIVEN** the invocation uses one provider-advertised effort name
+- **WHEN** the user supplies `--effort high` or `--effort=high` to `smith`,
+  `smith -p`, `smith config explain`, or `smith sessions list`
+- **THEN** the shared selection parser accepts the invocation flag
+- **AND** the selected effort remains available to the corresponding client
+  surface
+
+#### Scenario: Missing effort value is rejected
+
+- **GIVEN** the invocation contains `--effort` without a value
+- **WHEN** Smith parses the command line
+- **THEN** Smith rejects the invocation with a non-success usage outcome
+- **AND** it does not start the requested client surface
+
+#### Scenario: Repeated effort value is rejected
+
+- **GIVEN** the invocation supplies `--effort` twice, in either supported form
+- **WHEN** Smith parses the command line
+- **THEN** Smith rejects the invocation with a non-success usage outcome
+- **AND** it does not silently choose one value by argument order
+
+### Requirement: Discoverable invocation effort option
+
+Smith SHALL list `--effort <NAME>` in the `RUN OPTIONS` section of `--help` as
+selecting a provider-advertised reasoning effort.
+
+#### Scenario: Run help describes effort selection
+
+- **GIVEN** the user requests Smith command-line help
+- **WHEN** Smith renders `--help`
+- **THEN** `RUN OPTIONS` includes `--effort <NAME>`
+- **AND** its description identifies the value as a provider-advertised
+  reasoning effort
+
+### Requirement: Local failure for an unadvertised invocation effort
+
+Smith SHALL fail locally, with a non-success exit status, when the requested
+invocation effort is not advertised by the resolved provider/model binding.
+The diagnostic MUST name the requested value and list the supported
+alternatives, without performing credential lookup or issuing a provider
+request.
+
+#### Scenario: Unsupported effort names the available alternatives
+
+- **GIVEN** the user supplies an effort absent from the selected binding's
+  advertised ladder
+- **WHEN** Smith processes the invocation
+- **THEN** Smith exits with a non-success status and names the requested effort
+- **AND** the diagnostic lists the supported alternatives before any credential
+  lookup or provider request
+
+### Requirement: Explicit effort survives interactive startup boundaries
+
+Interactive startup recovery MUST preserve the meaning of an explicitly typed
+`--effort`. If the current binding cannot honor that flag, the recovery path
+MUST fail with the reasoning diagnostic instead of clearing the typed value and
+starting with a notice. When Smith composes a child-profile runtime, it MUST
+omit the invocation flag so an uncontrollable child binding does not abort the
+parent startup.
+
+#### Scenario: Recovery refuses an unhonorable explicit effort
+
+- **GIVEN** an interactive invocation explicitly supplies `--effort`
+- **AND** startup recovery reaches a binding that cannot honor the requested
+  reasoning selection
+- **WHEN** the recovery path evaluates the binding
+- **THEN** startup fails with the reasoning diagnostic
+- **AND** Smith does not silently clear the typed flag or start with a notice
+
+#### Scenario: Child profile does not inherit invocation effort
+
+- **GIVEN** the parent invocation explicitly supplies `--effort`
+- **AND** Smith composes a runtime for a child profile whose binding cannot
+  control reasoning
+- **WHEN** the child runtime is started
+- **THEN** the child does not receive the parent invocation flag
+- **AND** the uncontrollable child binding does not abort parent startup
+
+### Requirement: Invocation effort provenance is user-facing
+
+Smith MUST identify an invocation-supplied effort in `smith config explain
+reasoning.effort` output with the source "command-line flag `--effort`". It
+MUST NOT render the mechanical `--reasoning-effort` spelling for that source.
+
+#### Scenario: Config explanation uses the typed flag spelling
+
+- **GIVEN** the user supplies an invocation effort with `--effort`
+- **WHEN** the user runs `smith config explain reasoning.effort`
+- **THEN** the effective entry identifies its source as "command-line flag
+  `--effort`"
+- **AND** the output does not identify the source as `--reasoning-effort`
+
+### Requirement: Invocation effort remains distinct from reasoning state
+
+The `--effort` flag SHALL select an advertised effort only. It MUST NOT turn
+reasoning on or off, and an explicit in-session `/effort` selection MUST remain
+the higher-precedence control for the active session's subsequent turn.
+
+#### Scenario: Invocation effort does not toggle thinking
+
+- **GIVEN** the user starts Smith with an advertised `--effort` value
+- **WHEN** Smith applies the invocation selection
+- **THEN** it selects the requested effort without changing reasoning enabled
+  state
+- **AND** it does not interpret the flag as a thinking on/off switch
+
+#### Scenario: In-session effort outranks invocation effort
+
+- **GIVEN** the invocation supplies one advertised effort
+- **AND** the user selects a different effort through `/effort` in the session
+- **WHEN** Smith prepares the next complete turn
+- **THEN** the in-session effort is effective for that turn
+- **AND** the invocation flag does not override the explicit `/effort`

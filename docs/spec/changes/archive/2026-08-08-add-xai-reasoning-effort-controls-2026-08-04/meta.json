@@ -2,8 +2,8 @@
   "change_id": "add-xai-reasoning-effort-controls",
   "change_ref": "add-xai-reasoning-effort-controls-2026-08-04",
   "created_at": "2026-08-04T18:00:00Z",
-  "updated_at": "2026-08-04T18:00:00Z",
-  "completed_at": null,
+  "updated_at": "2026-08-08T22:39:11Z",
+  "completed_at": "2026-08-08T22:39:11Z",
   "status": "approved",
   "depends_on": [
     "add-context-and-reasoning-controls-2026-08-01",

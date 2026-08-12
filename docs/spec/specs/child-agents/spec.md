@@ -264,16 +264,32 @@ the preset cannot widen parent authority.
 
 ### Requirement: Child timeline navigation
 
-Smith SHALL expose current and completed direct children through `/agent` and
-`/timeline` with stable previous, next, and parent navigation. Child inspection
-MUST be a temporary read-only view and MUST NOT move persistent input focus
-away from the root composer.
+Smith SHALL expose current and completed direct children through `/agent`,
+`/timeline`, and keyboard selection of the delegated-work panel, with stable
+previous, next, and parent navigation. Child inspection MUST be a temporary
+read-only view and MUST NOT move persistent input focus away from the root
+composer. Turn, token, session, and workspace figures shown for a child MUST
+come from the delegation coordinator, never from client-side estimation.
 
 #### Scenario: Inspect consecutive child results
 - **GIVEN** two attributed children completed
 - **WHEN** the user opens one and requests next
 - **THEN** Smith displays the next child's bounded lifecycle and result
 - **AND** returning to parent restores the same composer draft and scroll state
+
+#### Scenario: Walk the delegated-work panel from the keyboard
+- **GIVEN** at least one direct child exists and composer history has nowhere
+  left to go
+- **WHEN** the user presses the panel's next-agent key
+- **THEN** Smith selects the next child in the panel's own order
+- **AND** replaces the transcript region with that child's read-only view
+- **AND** leaves the composer focused and its draft unchanged
+
+#### Scenario: Continue the inspected child from the composer
+- **GIVEN** a child that accepts a follow-up is being inspected
+- **WHEN** the user submits an ordinary prompt
+- **THEN** Smith confirms a follow-up turn addressed to that child
+- **AND** a local command submitted in the same view still addresses the root
 
 #### Scenario: No child is selected
 - **GIVEN** no direct child exists

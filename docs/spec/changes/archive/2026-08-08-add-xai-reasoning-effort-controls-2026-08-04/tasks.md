@@ -1,7 +1,7 @@
 ---
 created_at: 2026-08-04T18:00:00Z
-updated_at: 2026-08-04T18:00:00Z
-completed_at:
+updated_at: 2026-08-08T22:39:11Z
+completed_at: 2026-08-08T22:39:11Z
 ---
 
 ## 1. Reasoning policy

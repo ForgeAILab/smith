@@ -2,8 +2,8 @@
   "change_id": "add-usage-aware-credential-pools",
   "change_ref": "add-usage-aware-credential-pools-2026-08-04",
   "created_at": "2026-08-04T16:15:58Z",
-  "updated_at": "2026-08-04T18:30:00Z",
-  "completed_at": null,
+  "updated_at": "2026-08-08T22:39:11Z",
+  "completed_at": "2026-08-08T22:39:11Z",
   "status": "implemented",
   "depends_on": [
     "agent-runtime:add-provider-rate-limit-snapshots-2026-08-04"

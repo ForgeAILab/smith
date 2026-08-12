@@ -748,9 +748,13 @@ a boolean reasoning capability alone MUST NOT imply controllability.
 ### Requirement: Layered reasoning defaults
 
 Smith SHALL allow profiles to declare typed reasoning enabled-state and effort
-defaults. Smith MUST validate requested defaults against the selected provider/model controls
-before constructing a runtime and MUST preserve provider defaults when no
-Smith value is configured.
+defaults, and SHALL additionally accept one invocation-scoped reasoning effort
+supplied on the command line. The invocation value MUST resolve at the
+command-line layer, so it outranks the selected profile's declared effort and an
+environment-supplied effort, and is outranked by an explicit in-session
+selection. Smith MUST validate a requested effort against the selected
+provider/model controls before constructing a runtime, whichever layer supplied
+it, and MUST preserve provider defaults when no Smith value is configured.
 
 #### Scenario: Supported profile default resolves
 
@@ -759,12 +763,31 @@ Smith value is configured.
 - **WHEN** Smith resolves the configuration
 - **THEN** the runtime policy carries the configured values and source
 
+#### Scenario: Invocation effort outranks the selected profile
+
+- **GIVEN** the selected profile declares a reasoning effort
+- **AND** the invocation supplies a different advertised effort
+- **WHEN** Smith resolves the configuration
+- **THEN** the invocation value is effective
+- **AND** explaining `reasoning.effort` identifies the command line as its
+  source and keeps the profile value visible as an overridden entry
+
 #### Scenario: Unsupported effort fails before runtime construction
 
 - **GIVEN** a profile requests an effort absent from the capability snapshot
 - **WHEN** Smith resolves the configuration
 - **THEN** startup fails with the requested value and supported alternatives
 - **AND** no credential lookup or provider request is performed
+
+#### Scenario: Unsupported invocation effort fails the same way
+
+- **GIVEN** the invocation supplies an effort absent from the capability
+  snapshot
+- **WHEN** Smith resolves the configuration
+- **THEN** startup fails with the requested value and supported alternatives
+- **AND** no credential lookup or provider request is performed
+- **AND** the run does not fall back to a profile, environment, or provider
+  value it was told to override
 
 #### Scenario: Omitted reasoning configuration preserves provider behavior
 
@@ -777,13 +800,34 @@ Smith value is configured.
 
 Smith SHALL persist a session reasoning override additively and revalidate it
 against the frozen capability snapshot during resume. Older sessions without
-the field MUST preserve provider/model defaults.
+the field MUST preserve provider/model defaults. An invocation-scoped effort
+supplied when a session resumes MUST take effect for that run in place of the
+persisted effort, and MUST NOT overwrite or discard the persisted value; a
+later resume without the invocation value MUST see the persisted override
+unchanged. The persisted thinking state MUST be unaffected by an
+invocation-scoped effort.
 
 #### Scenario: Compatible override resumes
 
 - **GIVEN** a saved session contains a supported thinking and effort override
 - **WHEN** the session resumes against a compatible capability snapshot
 - **THEN** the override remains effective and source-labelled
+
+#### Scenario: Invocation effort shadows the persisted override
+
+- **GIVEN** a saved session carries an effort override
+- **AND** the session is resumed with a different advertised invocation effort
+- **WHEN** Smith resolves the resumed configuration
+- **THEN** the run uses the invocation effort
+- **AND** the saved session's persisted thinking state remains effective
+
+#### Scenario: Shadowed override survives the run
+
+- **GIVEN** a session was resumed with an invocation effort shadowing its
+  persisted effort
+- **WHEN** the session is saved and later resumed without an invocation effort
+- **THEN** the persisted effort is effective again with its original value
+- **AND** it was never rewritten to the invocation value
 
 #### Scenario: Legacy session has no override
 
@@ -1135,3 +1179,99 @@ MUST NOT grant, schedule, suppress, or modify cache maintenance.
 - **THEN** their maintenance authority and provider request eligibility are
   equivalent
 - **AND** only local notice presentation may differ
+### Requirement: Ordered provider credential pools
+
+A provider declaration SHALL accept an ordered pool of credential references
+in place of a single reference. Each pool entry MUST be a reviewed
+`CredentialRef` form with unchanged parsing, layering, provenance, and
+redaction semantics, entries MUST be distinct, and the first entry is the
+default active member. A legacy single `credential` declaration SHALL resolve
+as a pool of one with identical behavior.
+
+#### Scenario: Declare a pool of two accounts
+
+- **GIVEN** a provider declares `credentials = ["keychain:xai/personal", "keychain:xai/work"]`
+- **WHEN** configuration resolves
+- **THEN** the provider resolves with an ordered two-member pool
+- **AND** each member reports its own source provenance
+
+#### Scenario: Legacy single credential remains valid
+
+- **GIVEN** a provider declares only `credential = "env:XAI_API_KEY"`
+- **WHEN** configuration resolves
+- **THEN** the provider resolves as a pool of one
+- **AND** no configuration migration or warning is required
+
+#### Scenario: Invalid pool entry fails preflight
+
+- **GIVEN** a pool entry is not a parseable credential reference
+- **WHEN** setup or factory preflight validates the provider
+- **THEN** resolution fails before any terminal or provider I/O
+- **AND** the error names the offending entry and its declaration source
+- **AND** no credential value appears in the error
+
+#### Scenario: Duplicate pool entries are rejected
+
+- **GIVEN** a pool lists the same credential reference twice
+- **WHEN** configuration resolves
+- **THEN** resolution fails with a configuration error naming the duplicate
+
+### Requirement: Default-unlimited per-turn wall-clock deadline
+
+Smith SHALL apply no wall-clock deadline to a turn by default. The built-in
+default for `limits.turn_time_limit_ms` MUST be `0`, and a value of `0` MUST
+leave a turn without a wall-clock ceiling. A positive value MUST remain the
+enforced deadline. The setting MUST keep typed layered resolution and source
+provenance like every other limit.
+
+#### Scenario: Default run is unlimited
+
+- **GIVEN** no layer configures `limits.turn_time_limit_ms`
+- **WHEN** Smith resolves the run configuration
+- **THEN** the runtime policy carries no wall-clock deadline for the turn
+- **AND** the turn ends only when the model stops, a tool-loop ceiling trips, or
+  the run is interrupted
+
+#### Scenario: Positive configured value remains enforced
+
+- **GIVEN** user configuration sets `limits.turn_time_limit_ms = 120000`
+- **WHEN** Smith resolves the run configuration
+- **THEN** the turn is bounded by a 120000-millisecond wall-clock deadline
+- **AND** the deadline's source is retained for `smith config explain`
+
+#### Scenario: Explicit zero removes the ceiling
+
+- **GIVEN** user configuration sets `limits.turn_time_limit_ms = 0`
+- **WHEN** Smith resolves the run configuration
+- **THEN** the runtime policy carries no wall-clock deadline for the turn
+- **AND** `smith config explain` reports the value and its source
+
+### Requirement: Default-unlimited per-turn tool-loop ceiling
+
+Smith SHALL apply no tool-step ceiling to a turn by default. The built-in
+default for `limits.max_tool_steps` MUST be `0`, and a value of `0` MUST leave
+the tool loop without a step ceiling. A positive value MUST remain the enforced
+ceiling. The setting MUST keep typed layered resolution and source provenance
+like every other limit.
+
+#### Scenario: Default run is unlimited
+
+- **GIVEN** no layer configures `limits.max_tool_steps`
+- **WHEN** Smith resolves the run configuration
+- **THEN** the runtime policy carries no tool-step ceiling for the turn
+- **AND** the turn ends only when the model stops, a configured wall-clock
+  deadline trips, or the run is interrupted
+
+#### Scenario: Positive configured value remains enforced
+
+- **GIVEN** user configuration sets `limits.max_tool_steps = 32`
+- **WHEN** Smith resolves the run configuration
+- **THEN** the turn is bounded by a thirty-two-step tool loop
+- **AND** the ceiling's source is retained for `smith config explain`
+
+#### Scenario: Explicit zero removes the ceiling
+
+- **GIVEN** user configuration sets `limits.max_tool_steps = 0`
+- **WHEN** Smith resolves the run configuration
+- **THEN** the runtime policy carries no tool-step ceiling for the turn
+- **AND** `smith config explain` reports the value and its source
