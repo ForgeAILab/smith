@@ -854,6 +854,7 @@ profile_order = ["work", "plan"]
 provider = "acme"
 model = "example-model"
 posture = "build"
+delegation = false
 use = ["main", "child"]
 description = "Implementation profile"
 instructions = "Implement and verify the requested change."
@@ -878,12 +879,25 @@ credential = "keychain:smith/acme"
     assert_eq!(agent.profile.model.as_ref().unwrap().value, "example-model");
     assert!(agent.profile.supports(ProfileUse::Main));
     assert!(agent.profile.supports(ProfileUse::Child));
+    assert!(!agent.profile.delegation.value);
+    assert_eq!(agent.profile.delegation.source.layer, Layer::Profile);
+    assert_eq!(
+        agent.profile.delegation.source.key,
+        "profiles.work.delegation"
+    );
     assert_eq!(agent.profile_order.value, ["work", "plan"]);
     assert_eq!(
         agent.profile.instructions.as_ref().unwrap().value,
         "Inspect and produce an implementation-ready plan."
     );
     assert_eq!(agent.profile.revision.len(), 64);
+}
+
+#[test]
+fn agent_profile_delegation_defaults_to_enabled() {
+    let resolution = resolve_project(BASE_PROJECT_CONFIG).expect("a default delegation policy");
+
+    assert!(resolution.config.agent.profile.delegation.value);
 }
 
 #[test]

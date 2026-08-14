@@ -1419,4 +1419,60 @@ max_output_tokens = 4096
         assert!(reset.reasoning.enabled.is_none());
         assert!(reset.reasoning.effort.is_none());
     }
+
+    #[test]
+    fn an_invocation_off_effort_is_refused_by_an_openai_ladder_without_none() {
+        // `--effort off` is not a shorthand for disabling reasoning: the
+        // OpenAI-effort ladder must advertise `none` before off is valid.
+        let mut config = resolved_config();
+        config.reasoning.effort = Some(Sourced::new(
+            "off".to_owned(),
+            Source::flag("reasoning.effort"),
+        ));
+        let controls = CatalogReasoningControls {
+            toggle: false,
+            efforts: ["low", "medium", "high"].map(str::to_owned).to_vec(),
+        };
+
+        let result = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Fixed),
+            Some(OPENAI_ENDPOINT),
+            Some(&controls),
+        );
+        let error = result.expect_err("an unadvertised off effort must be refused");
+        assert!(error.contains("`off`"), "{error}");
+        assert!(
+            error.contains("supported values: low, medium, high"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_invocation_off_effort_is_refused_by_openrouter_as_a_non_effort_value() {
+        // OpenRouter sends off through its separate boolean control, so an
+        // effort flag must not turn into a silently disabled reasoning policy.
+        let mut config = resolved_config();
+        config.reasoning.effort = Some(Sourced::new(
+            "off".to_owned(),
+            Source::flag("reasoning.effort"),
+        ));
+        let controls = CatalogReasoningControls {
+            toggle: true,
+            efforts: ["low", "medium", "high"].map(str::to_owned).to_vec(),
+        };
+
+        let result = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Fixed),
+            Some(OPENROUTER_ENDPOINT),
+            Some(&controls),
+        );
+        let error = result.expect_err("an unadvertised off effort must be refused");
+        assert!(error.contains("`off`"), "{error}");
+        assert!(
+            error.contains("supported values: low, medium, high"),
+            "{error}"
+        );
+    }
 }

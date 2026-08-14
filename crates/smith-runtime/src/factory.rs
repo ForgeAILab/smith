@@ -439,6 +439,10 @@ pub struct RuntimePolicy {
     pub agent_profile_uses: Vec<ProfileUse>,
     /// Source of the effective authority posture, without instruction text.
     pub agent_profile_source: String,
+    /// Whether direct-child delegation is enabled for this composition.
+    pub agent_delegation: bool,
+    /// Source of the effective delegation setting.
+    pub agent_delegation_source: String,
     /// Whether the profile came from the transition-release legacy adapter.
     pub agent_profile_legacy: bool,
     /// Authority-narrowing behavior behind the selected mode name.
@@ -506,6 +510,8 @@ impl fmt::Debug for RuntimePolicy {
             .field("agent_profile_revision", &self.agent_profile_revision)
             .field("agent_profile_uses", &self.agent_profile_uses)
             .field("agent_profile_source", &self.agent_profile_source)
+            .field("agent_delegation", &self.agent_delegation)
+            .field("agent_delegation_source", &self.agent_delegation_source)
             .field("agent_profile_legacy", &self.agent_profile_legacy)
             .field("agent_posture", &self.agent_posture)
             .field("provider_name", &self.provider_name)
@@ -1253,7 +1259,7 @@ fn prepare_capability_stage(
         }
     }
 
-    let delegation_slot = if matches!(request.surface, HostSurface::Child) {
+    let delegation_slot = if !delegation_eligible(request) {
         None
     } else {
         let slot = Arc::new(std::sync::OnceLock::new());
@@ -1421,6 +1427,8 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         agent_profile_revision: agent_profile.revision.clone(),
         agent_profile_uses: agent_profile.uses.value.clone(),
         agent_profile_source: agent_profile.posture.source.to_string(),
+        agent_delegation: agent_profile.delegation.value,
+        agent_delegation_source: agent_profile.delegation.source.to_string(),
         agent_profile_legacy: agent_profile.legacy,
         agent_posture,
         provider_name: provider_name.clone(),
@@ -2753,7 +2761,7 @@ fn questionnaire_eligible(request: &RuntimeRequest) -> bool {
 
 /// Whether this run registers the child-delegation `agent` tool.
 fn delegation_eligible(request: &RuntimeRequest) -> bool {
-    !matches!(request.surface, HostSurface::Child)
+    !matches!(request.surface, HostSurface::Child) && request.config.agent.profile.delegation.value
 }
 
 /// Whether this run registers the todo-planning tool.
@@ -3367,6 +3375,7 @@ mod tests {
             posture: sourced(posture),
             description: None,
             instructions: None,
+            delegation: sourced(true),
             uses: sourced(vec![ProfileUse::Main]),
             provider: None,
             model: None,

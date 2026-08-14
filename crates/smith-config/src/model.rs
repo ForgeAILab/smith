@@ -317,6 +317,12 @@ pub struct ProfileSection {
     /// Bounded additive developer instructions for this agent preset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
+    /// Whether a main-agent runtime exposes direct-child delegation.
+    ///
+    /// Omitted preserves the existing enabled behavior. Child runtimes never
+    /// delegate regardless of this value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation: Option<bool>,
     /// The name of a provider declared in `[providers.<name>]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,

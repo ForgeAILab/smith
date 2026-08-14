@@ -192,12 +192,14 @@ pub(super) fn resolve_agent_profiles(
         let scope = join_key(&["agent_modes", name]);
         let posture = resolve_agent_posture(&global, &format!("{scope}.posture"), declaration)?;
         let description = bounded_description(&global, &format!("{scope}.description"))?;
+        let delegation = Sourced::new(true, declaration.clone());
         let uses = Sourced::new(vec![ProfileUse::Main], declaration.clone());
         let revision = agent_profile_revision(
             name,
             &posture,
             description.as_ref(),
             None,
+            &delegation,
             &uses,
             None,
             None,
@@ -210,6 +212,7 @@ pub(super) fn resolve_agent_profiles(
                 posture,
                 description,
                 instructions: None,
+                delegation,
                 uses,
                 provider: None,
                 model: None,
@@ -233,12 +236,14 @@ pub(super) fn resolve_agent_profiles(
             });
         }
         let description = bounded_description(&global, &format!("{scope}.description"))?;
+        let delegation = Sourced::new(true, declaration.clone());
         let uses = Sourced::new(vec![ProfileUse::Child], declaration.clone());
         let revision = agent_profile_revision(
             name,
             &posture,
             description.as_ref(),
             None,
+            &delegation,
             &uses,
             None,
             None,
@@ -251,6 +256,7 @@ pub(super) fn resolve_agent_profiles(
                 posture,
                 description,
                 instructions: None,
+                delegation,
                 uses,
                 provider: None,
                 model: None,
@@ -315,6 +321,8 @@ pub(super) fn resolved_profile(
     };
     let description = bounded_description(effective, "description")?;
     let instructions = bounded_instructions(effective, "instructions")?;
+    let delegation =
+        flag(effective, "delegation")?.unwrap_or_else(|| Sourced::new(true, declaration.clone()));
     let uses = profile_uses(effective, declaration)?;
     let provider = text(effective, "provider")?;
     let model = text(effective, "model")?;
@@ -323,6 +331,7 @@ pub(super) fn resolved_profile(
         &posture,
         description.as_ref(),
         instructions.as_ref(),
+        &delegation,
         &uses,
         provider.as_ref(),
         model.as_ref(),
@@ -333,6 +342,7 @@ pub(super) fn resolved_profile(
         posture,
         description,
         instructions,
+        delegation,
         uses,
         provider,
         model,
@@ -376,6 +386,7 @@ pub(super) fn merge_legacy_profile(
         &existing.posture,
         existing.description.as_ref(),
         existing.instructions.as_ref(),
+        &existing.delegation,
         &existing.uses,
         existing.provider.as_ref(),
         existing.model.as_ref(),
@@ -444,13 +455,14 @@ pub(super) fn agent_profile_revision(
     posture: &Sourced<AgentPosture>,
     description: Option<&Sourced<String>>,
     instructions: Option<&Sourced<String>>,
+    delegation: &Sourced<bool>,
     uses: &Sourced<Vec<ProfileUse>>,
     provider: Option<&Sourced<String>>,
     model: Option<&Sourced<String>>,
     legacy: bool,
 ) -> String {
     let mut digest = Sha256::new();
-    digest.update(b"smith-agent-profile-1\0");
+    digest.update(b"smith-agent-profile-2\0");
     digest.update(name.as_bytes());
     digest.update([0]);
     digest.update(posture.value.as_str().as_bytes());
@@ -462,6 +474,8 @@ pub(super) fn agent_profile_revision(
     }
     digest.update([0]);
     digest.update(uses.source.to_string().as_bytes());
+    digest.update([0, u8::from(delegation.value)]);
+    digest.update(delegation.source.to_string().as_bytes());
     for value in [description, instructions, provider, model]
         .into_iter()
         .flatten()
@@ -658,6 +672,7 @@ pub(super) fn resolve_agent(
                     .get(&active.value)
                     .and_then(|mode| mode.description.clone()),
                 instructions: None,
+                delegation: Sourced::new(true, active.source.clone()),
                 uses: Sourced::new(vec![ProfileUse::Main], active.source.clone()),
                 provider: None,
                 model: None,
@@ -671,6 +686,7 @@ pub(super) fn resolve_agent(
                         .get(&active.value)
                         .and_then(|mode| mode.description.as_ref()),
                     None,
+                    &Sourced::new(true, active.source.clone()),
                     &Sourced::new(vec![ProfileUse::Main], active.source.clone()),
                     None,
                     None,

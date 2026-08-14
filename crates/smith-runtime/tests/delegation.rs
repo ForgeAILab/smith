@@ -1563,6 +1563,81 @@ async fn the_agent_tool_spawns_waits_and_lists() {
     session.shutdown().await.expect("a clean shutdown");
 }
 
+#[tokio::test]
+async fn the_agent_tool_wait_is_bounded_without_stopping_the_child() {
+    let fixture = Fixture::new();
+    let provider = Arc::new(CrashThenReplyProvider::new());
+    let smith = factory::build(request(&fixture, provider.clone()))
+        .await
+        .expect("a runtime");
+    let session = smith
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .expect("a session");
+    let delegation = smith.delegation().expect("a root delegation surface");
+    wire_delegation(&session, delegation)
+        .await
+        .expect("delegation wires once");
+
+    let slot = Arc::new(OnceLock::new());
+    slot.set(delegation.coordinator().expect("a coordinator").clone())
+        .expect("an empty slot");
+    let tool = AgentTool::new(slot);
+    let ctx = InvocationContext {
+        session: session.id().clone(),
+        turn: None,
+        call_id: ToolCallId::new("call-1"),
+        request: RequestId::new("req-1"),
+        workspace: Arc::new(MemoryWorkspace::new("/repo")),
+        clock: Arc::new(SystemClock),
+        cancel: Cancellation::new(),
+        deadline: Deadline::never(),
+        output_limit: 100_000,
+    };
+
+    invoke_agent(
+        &tool,
+        serde_json::json!({ "action": "spawn", "task": "keep running" }),
+        &ctx,
+    )
+    .await
+    .expect("a spawn outcome");
+    provider.wait_for_calls(1).await;
+
+    let waited = invoke_agent(
+        &tool,
+        serde_json::json!({
+            "action": "wait",
+            "child_id": "child-1",
+            "timeout_ms": 10
+        }),
+        &ctx,
+    )
+    .await
+    .expect("a bounded wait outcome");
+    let waited = serde_json::to_string(&waited.into_result_block(
+        ToolCallId::new("call-2"),
+        AGENT_TOOL_NAME.to_owned(),
+        100_000,
+    ))
+    .expect("json");
+    assert!(waited.contains(r#"\"state\":\"running\""#), "{waited}");
+    assert!(waited.contains(r#"\"timed_out\":true"#), "{waited}");
+
+    let children = delegation.coordinator().expect("a coordinator").list();
+    assert!(matches!(children[0].state, ChildState::Running));
+
+    invoke_agent(
+        &tool,
+        serde_json::json!({ "action": "stop", "child_id": "child-1" }),
+        &ctx,
+    )
+    .await
+    .expect("a stop outcome");
+    session.shutdown().await.expect("a clean shutdown");
+}
+
 /// A root profile (`dev`, build posture) plus one child-enabled, read-only
 /// (`review`) profile — the fixture the model-facing profile-selection tests
 /// share.

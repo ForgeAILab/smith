@@ -570,6 +570,8 @@ pub struct ResolvedAgentProfile {
     pub description: Option<Sourced<String>>,
     /// Bounded additive developer instructions.
     pub instructions: Option<Sourced<String>>,
+    /// Whether a main-agent runtime may expose direct-child delegation.
+    pub delegation: Sourced<bool>,
     /// Placements where the profile is selectable.
     pub uses: Sourced<Vec<ProfileUse>>,
     /// Effective provider preference, when declared or inherited.
@@ -590,6 +592,7 @@ impl fmt::Debug for ResolvedAgentProfile {
             .field("posture", &self.posture)
             .field("description", &self.description)
             .field("has_instructions", &self.instructions.is_some())
+            .field("delegation", &self.delegation)
             .field("uses", &self.uses)
             .field("provider", &self.provider)
             .field("model", &self.model)

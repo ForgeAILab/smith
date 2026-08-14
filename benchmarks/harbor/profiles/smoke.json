@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "name": "smoke",
+  "description": "Three-family infrastructure and credential integration gate",
+  "dataset": "harbor-index/harbor-index-1.0",
+  "dataset_ref": "sha256:9d4514cb93f6fafd9cf8ff352c784495ab675176c7f09671db523bd19b663584",
+  "tasks": [
+    "harbor-index/arcagi2-grid-transform-88e3",
+    "harbor-index/omnimath-find-perfect-square-functions",
+    "harbor-index/tb-dna-insert"
+  ],
+  "rollouts": 1,
+  "concurrency": 1,
+  "timeout_multiplier": 1.0
+}

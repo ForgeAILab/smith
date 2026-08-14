@@ -183,6 +183,7 @@ model = "vendor/model-id"
 description = "implementation with bounded mutation"
 posture = "build"
 use = ["main"]
+delegation = false
 instructions = "Implement, verify, and report concrete evidence."
 
 [profiles.plan]
@@ -208,6 +209,11 @@ provider construction. Instructions are nonempty UTF-8 text bounded to 32 KiB
 and become an additive developer-instruction fragment after Smith's stable
 host policy. Profile text and settings cannot grant a tool, credential, trust,
 approval, permission, or larger workspace.
+
+`delegation` defaults to `true` and is inherited like the other profile fields.
+Setting it to `false` on a main profile removes both the model-facing `agent`
+tool and its delegation instructions. Child surfaces never delegate, even when
+their effective profile has `delegation = true`.
 
 When `profile_order` is omitted, Smith derives a deterministic cycle from all
 real main-enabled profiles and excludes legacy adapters and child-only

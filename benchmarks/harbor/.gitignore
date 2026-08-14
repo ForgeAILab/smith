@@ -1,0 +1,11 @@
+.venv/
+.build/
+artifacts/*
+!artifacts/.gitkeep
+jobs/
+reports/*.json
+reports/*.md
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

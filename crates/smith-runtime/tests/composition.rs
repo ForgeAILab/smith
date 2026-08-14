@@ -635,6 +635,34 @@ async fn instruction_sections_match_the_registered_tool_surface() {
         prompt.contains("Never say a command, test, build"),
         "{prompt}"
     );
+
+    let no_delegation = FAKE_CONFIG.replace(
+        "model = \"example-model\"",
+        "model = \"example-model\"\ndelegation = false",
+    );
+    let fixture = Fixture::new(&no_delegation);
+    let smith = factory::build(request(&fixture, HostSurface::Terminal))
+        .await
+        .expect("a root runtime with delegation disabled");
+
+    assert!(!smith.policy().agent_delegation);
+    assert!(
+        smith
+            .policy()
+            .agent_delegation_source
+            .contains("profiles.dev.delegation")
+    );
+    assert!(!smith.policy().tools.contains(&"agent".to_owned()));
+    assert!(smith.policy().tools.contains(&"shell".to_owned()));
+    assert!(smith.policy().tools.contains(&"ask_user".to_owned()));
+    assert!(
+        !smith
+            .policy()
+            .system_prompt
+            .contains("Delegate only a bounded")
+    );
+    assert_eq!(smith.policy().agent_posture, AgentPosture::Build);
+    assert_eq!(smith.policy().provider_name, "local");
 }
 
 #[tokio::test]
