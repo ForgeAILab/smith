@@ -1047,8 +1047,8 @@ idle_compaction = true
 resume_capsule = true
 
 [profiles.<name>.child_agents]
-wait_default_timeout_ms = 5000
-wait_max_timeout_ms = 30000
+wait_default_timeout_ms = 300000
+wait_max_timeout_ms = 300000
 ```
 
 `off` SHALL disable synthetic cache maintenance while preserving ordinary
@@ -1067,10 +1067,13 @@ exact resolved plan/model budget), `max_maintenance_output_tokens: 1..=4096`,
 `maintenance_deadline_ms: 1..=120_000`, `keepalive_margin_ms:
 0..=inactivity_limit_ms` (zero means no early margin), and
 `keepalive_jitter_percent: 0..=50` (zero is deterministic). The wait default
-is `0..=30_000` milliseconds and the wait maximum is `1..=30_000`; their
-defaults are 5,000 and 30,000 respectively, and the default MUST NOT exceed
-the maximum. `agent.wait.timeout_ms = 0` is an immediate status check; a
-requested timeout above the resolved maximum is rejected before waiting.
+is `0..=300_000` milliseconds and the wait maximum is `1..=300_000`; their
+built-in defaults are 300,000 milliseconds, and the default MUST NOT exceed the
+maximum. `agent.wait.timeout_ms = 0` is an immediate status check; a requested
+timeout above the resolved maximum is rejected before waiting. When a wait
+reaches its foreground boundary, Smith returns a successful running result with
+`timed_out = true` and leaves the child running in the background for automatic
+terminal delivery.
 An unsupported provider SHALL remain usable for ordinary turns with cache
 status `unsupported`; it MUST NOT be made invalid solely because the requested
 maintenance mode was `adaptive`.

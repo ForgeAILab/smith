@@ -77,11 +77,11 @@ fn built_in_cache_and_child_wait_defaults_are_typed_and_source_explainable() {
 
     assert_eq!(
         resolution.config.child_agents.wait_default_timeout_ms.value,
-        5_000
+        300_000
     );
     assert_eq!(
         resolution.config.child_agents.wait_max_timeout_ms.value,
-        30_000
+        300_000
     );
     assert_eq!(
         resolution

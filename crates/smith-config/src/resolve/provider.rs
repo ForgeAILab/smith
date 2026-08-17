@@ -702,15 +702,15 @@ pub(super) fn resolve_child_agents(
         provenance,
         "child_agents.wait_default_timeout_ms",
         0,
-        30_000,
-        5_000,
+        300_000,
+        300_000,
     )?;
     let max_timeout = bounded_u64_or_default(
         provenance,
         "child_agents.wait_max_timeout_ms",
         1,
-        30_000,
-        30_000,
+        300_000,
+        300_000,
     )?;
     if default_timeout.value > max_timeout.value {
         return Err(ConfigError::InvalidValue {

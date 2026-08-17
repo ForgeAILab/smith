@@ -12,16 +12,26 @@ use std::time::Duration;
 
 use agent_runtime_core::error::{ErrorKind, RuntimeError};
 
-/// The runtime hard bound for one model-facing child wait.
-pub const HARD_MAX_WAIT_TIMEOUT_MS: u64 = 30_000;
-/// The default bounded child wait.
-pub const DEFAULT_WAIT_TIMEOUT_MS: u64 = 5_000;
+/// The maximum foreground wait before Smith releases the parent tool call.
+///
+/// This is a soft boundary for the parent wait only. It never limits the
+/// child's lifetime: an active child continues in the background after this
+/// duration and its terminal result remains must-deliver.
+pub const HARD_MAX_WAIT_TIMEOUT_MS: u64 = 5 * 60 * 1_000;
+/// The default foreground child wait (five minutes).
+pub const DEFAULT_WAIT_TIMEOUT_MS: u64 = 5 * 60 * 1_000;
+/// The maximum duration accepted by one pinned Agent Runtime wait call.
+///
+/// Smith slices longer foreground waits at this boundary rather than asking
+/// the shared runtime to widen its own hard limit.
+pub const RUNTIME_WAIT_SLICE_MS: u64 = 30_000;
 
 /// Smith's host-narrowed child wait policy.
 ///
-/// The actual wait is validated again by Agent Runtime's coordinator.  Keeping
-/// this value at the Smith boundary lets configuration callers pass a
-/// resolved policy without creating a second waiting implementation.
+/// The actual per-slice wait is validated again by Agent Runtime's
+/// coordinator. Keeping the Smith foreground boundary at this host layer lets
+/// configuration callers use a five-minute soft handoff without widening the
+/// pinned runtime's own per-call maximum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DelegationWaitPolicy {
     default_timeout_ms: u64,
@@ -29,19 +39,20 @@ pub struct DelegationWaitPolicy {
 }
 
 impl DelegationWaitPolicy {
-    /// Creates a bounded policy.  A zero default is an immediate status check;
-    /// the maximum is always positive and never above Runtime's hard cap.
+    /// Creates a bounded foreground policy. A zero default is an immediate
+    /// status check; the maximum is always positive and never above Smith's
+    /// five-minute soft boundary.
     pub fn new(default_timeout_ms: u64, max_timeout_ms: u64) -> Result<Self, RuntimeError> {
         if max_timeout_ms == 0 || max_timeout_ms > HARD_MAX_WAIT_TIMEOUT_MS {
             return Err(RuntimeError::new(
                 ErrorKind::Config,
-                "delegation wait maximum must be between 1 and 30,000 milliseconds",
+                "delegation foreground wait maximum must be between 1 and 300,000 milliseconds",
             ));
         }
         if default_timeout_ms > HARD_MAX_WAIT_TIMEOUT_MS || default_timeout_ms > max_timeout_ms {
             return Err(RuntimeError::new(
                 ErrorKind::Config,
-                "delegation wait default must not exceed its maximum or 30,000 milliseconds",
+                "delegation foreground wait default must not exceed its maximum or 300,000 milliseconds",
             ));
         }
         Ok(Self {
@@ -50,7 +61,7 @@ impl DelegationWaitPolicy {
         })
     }
 
-    /// The standard Smith policy (5 seconds default, 30 seconds maximum).
+    /// The standard Smith policy (five-minute default and maximum).
     pub const fn default_policy() -> Self {
         Self {
             default_timeout_ms: DEFAULT_WAIT_TIMEOUT_MS,
@@ -68,14 +79,34 @@ impl DelegationWaitPolicy {
         self.max_timeout_ms
     }
 
-    /// Runtime-compatible default duration.
+    /// Resolved foreground default duration.
     pub const fn default_timeout(self) -> Duration {
         Duration::from_millis(self.default_timeout_ms)
     }
 
-    /// Runtime-compatible maximum duration.
+    /// Resolved foreground maximum duration.
     pub const fn max_timeout(self) -> Duration {
         Duration::from_millis(self.max_timeout_ms)
+    }
+
+    /// Runtime-compatible maximum duration for one wait slice.
+    ///
+    /// The parent-facing policy may be five minutes, but the pinned Agent
+    /// Runtime accepts at most thirty seconds per call. Long waits are
+    /// assembled from these bounded slices by [`crate::delegation::AgentTool`].
+    pub fn runtime_slice(self) -> Duration {
+        Duration::from_millis(self.max_timeout_ms.min(RUNTIME_WAIT_SLICE_MS))
+    }
+
+    /// Runtime-compatible default for callers that use the coordinator
+    /// directly rather than the model-facing Smith tool.
+    pub fn runtime_default_timeout(self) -> Duration {
+        Duration::from_millis(self.default_timeout_ms.min(RUNTIME_WAIT_SLICE_MS))
+    }
+
+    /// Runtime-compatible maximum for the coordinator configuration.
+    pub fn runtime_max_timeout(self) -> Duration {
+        Duration::from_millis(self.max_timeout_ms.min(RUNTIME_WAIT_SLICE_MS))
     }
 
     /// Validates one model-facing `timeout_ms` before a coordinator wait.
@@ -490,13 +521,13 @@ mod tests {
 
     #[test]
     fn wait_policy_accepts_immediate_default_and_rejects_over_max() {
-        let policy = DelegationWaitPolicy::new(0, 30_000).expect("valid policy");
+        let policy = DelegationWaitPolicy::new(0, 300_000).expect("valid policy");
         assert_eq!(policy.resolve_timeout(None).unwrap(), Duration::ZERO);
         assert_eq!(
-            policy.resolve_timeout(Some(30_000)).unwrap(),
-            Duration::from_secs(30)
+            policy.resolve_timeout(Some(300_000)).unwrap(),
+            Duration::from_secs(300)
         );
-        assert!(policy.resolve_timeout(Some(30_001)).is_err());
+        assert!(policy.resolve_timeout(Some(300_001)).is_err());
         assert!(DelegationWaitPolicy::new(4, 3).is_err());
         assert!(DelegationWaitPolicy::new(0, 0).is_err());
     }

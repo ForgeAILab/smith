@@ -22,6 +22,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use agent_runtime::ability::Ability;
 use agent_runtime::ability::activation::{ActivationContext, FailClosedPolicy};
@@ -488,8 +489,8 @@ pub async fn wire_delegation_with_wait_policy(
                 ..DelegationLimits::default()
             },
             delegation_tool_names: vec![AGENT_TOOL_NAME.to_owned()],
-            wait_default: wait_policy.default_timeout(),
-            wait_max: wait_policy.max_timeout(),
+            wait_default: wait_policy.runtime_default_timeout(),
+            wait_max: wait_policy.runtime_max_timeout(),
             ..DelegationConfig::default()
         },
     )?;
@@ -949,6 +950,69 @@ enum WorkspaceArg {
     Directory { path: String },
 }
 
+/// Waits in the foreground for at most `timeout`, keeping each shared-runtime
+/// wait call within its own hard maximum. A running result at the overall
+/// boundary is a soft handoff: the child is deliberately left untouched so
+/// the parent can finish its turn and park while the child continues.
+async fn wait_for_child_foreground(
+    coordinator: &DelegationCoordinator,
+    child: &agent_runtime_core::ids::ChildId,
+    timeout: Duration,
+    runtime_slice: Duration,
+) -> Result<(ChildStatus, bool), RuntimeError> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let slice = remaining.min(runtime_slice);
+        let status = if slice.is_zero() {
+            coordinator
+                .wait_with_options(
+                    child,
+                    agent_runtime::delegation::DelegationWaitOptions {
+                        timeout: Some(slice),
+                    },
+                )
+                .await?
+        } else {
+            // Runtime normally enforces the same bound through its injected
+            // clock. The host timer is a final safety net so a custom/frozen
+            // clock cannot keep the parent call open beyond its soft boundary.
+            match tokio::time::timeout(
+                slice,
+                coordinator.wait_with_options(
+                    child,
+                    agent_runtime::delegation::DelegationWaitOptions {
+                        timeout: Some(slice),
+                    },
+                ),
+            )
+            .await
+            {
+                Ok(result) => result?,
+                Err(_) => {
+                    coordinator
+                        .wait_with_options(
+                            child,
+                            agent_runtime::delegation::DelegationWaitOptions {
+                                timeout: Some(Duration::ZERO),
+                            },
+                        )
+                        .await?
+                }
+            }
+        };
+        if status.state != ChildState::Running {
+            return Ok((status, false));
+        }
+        // `slice == remaining` means the shared wait consumed the last
+        // foreground interval. Returning here does not stop the child; it
+        // merely releases the parent tool call.
+        if slice.is_zero() || slice >= remaining {
+            return Ok((status, true));
+        }
+    }
+}
+
 fn status_json(status: &ChildStatus) -> Value {
     let state = match &status.state {
         ChildState::Running => "running".to_owned(),
@@ -974,6 +1038,23 @@ fn status_json(status: &ChildStatus) -> Value {
         "incompatibility": status.incompatibility,
         "result": status.last_result,
     })
+}
+
+fn wait_status_json(status: &ChildStatus, timed_out: bool) -> Value {
+    let mut value = status_json(status);
+    if let Value::Object(object) = &mut value {
+        object.insert("timed_out".to_owned(), Value::Bool(timed_out));
+        if timed_out {
+            object.insert(
+                "note".to_owned(),
+                Value::String(
+                    "foreground wait expired; the child continues running in the background and its terminal result will be delivered automatically"
+                        .to_owned(),
+                ),
+            );
+        }
+    }
+    value
 }
 
 fn task_outcome_json(outcome: &ChildTaskOutcome) -> Value {
@@ -1006,8 +1087,8 @@ impl Tool for AgentTool {
     fn spec(&self) -> ToolSpec {
         let description = if self.profiles.is_empty() {
             "Delegate a task to a sub-agent. Actions: spawn (start a child with a task; \
-             read-only tools unless tools=\"all\"), list, wait (bounded by timeout_ms; zero \
-             is an immediate status check and terminal results are delivered automatically), \
+             read-only tools unless tools=\"all\"), list, wait (foreground for up to five minutes by default; timeout_ms may request a shorter bound; zero \
+             is an immediate status check; an expired wait leaves the child running in the background and terminal results are delivered automatically), \
              result, follow_up (start a new task on an idle child), resume (continue an exact \
              interrupted checkpoint), stop. A completed child's \
              result is also delivered to you automatically at the next safe point. A child's \
@@ -1017,8 +1098,8 @@ impl Tool for AgentTool {
         } else {
             format!(
                 "Delegate a task to a sub-agent. Actions: spawn (start a child with a task; \
-                 read-only tools unless tools=\"all\"), list, wait (bounded by timeout_ms; zero \
-                 is an immediate status check and terminal results are delivered automatically), \
+                 read-only tools unless tools=\"all\"), list, wait (foreground for up to five minutes by default; timeout_ms may request a shorter bound; zero \
+                 is an immediate status check; an expired wait leaves the child running in the background and terminal results are delivered automatically), \
                  result, follow_up (start a new task on an idle child), resume \
                  (continue an exact interrupted checkpoint), stop. spawn may name a registered \
                  child-enabled profile ({}) to run the child on that profile's own preflighted \
@@ -1272,23 +1353,22 @@ impl Tool for AgentTool {
                 timeout_ms,
             } => {
                 let child = agent_runtime_core::ids::ChildId::new(child_id);
-                let timeout = match timeout_ms {
-                    Some(timeout_ms) => match self.wait_policy.resolve_timeout(Some(timeout_ms)) {
-                        Ok(timeout) => Some(timeout),
-                        Err(err) => return Ok(ToolOutcome::error(err.message)),
-                    },
-                    None => None,
+                let timeout = match self.wait_policy.resolve_timeout(timeout_ms) {
+                    Ok(timeout) => timeout,
+                    Err(err) => return Ok(ToolOutcome::error(err.message)),
                 };
-                let status = coordinator
-                    .wait_with_options(
-                        &child,
-                        agent_runtime::delegation::DelegationWaitOptions { timeout },
-                    )
-                    .await;
-                match status {
-                    Ok(status) => Ok(ToolOutcome::json(status_json(&status))),
-                    Err(err) => Ok(ToolOutcome::error(err.message)),
-                }
+                let (status, timed_out) = match wait_for_child_foreground(
+                    coordinator,
+                    &child,
+                    timeout,
+                    self.wait_policy.runtime_slice(),
+                )
+                .await
+                {
+                    Ok(result) => result,
+                    Err(err) => return Ok(ToolOutcome::error(err.message)),
+                };
+                Ok(ToolOutcome::json(wait_status_json(&status, timed_out)))
             }
             AgentAction::Result { child_id } => {
                 let outcome = coordinator

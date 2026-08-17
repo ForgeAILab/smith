@@ -84,14 +84,16 @@ The `agent.wait` operation SHALL accept an optional `timeout_ms`. Its resolved
 configuration paths SHALL be
 `profiles.<name>.child_agents.wait_default_timeout_ms` and
 `profiles.<name>.child_agents.wait_max_timeout_ms`. The default range is
-`0..=30_000` milliseconds, the maximum range is `1..=30_000`, and their
-defaults are 5,000 and 30,000 milliseconds respectively. The resolved default
+`0..=300_000` milliseconds, the maximum range is `1..=300_000`, and their
+built-in defaults are 300,000 milliseconds respectively. The resolved default
 MUST NOT exceed the resolved maximum. A requested timeout of zero SHALL be an
 immediate status check; a requested timeout above the resolved maximum SHALL
 be rejected before waiting. A timeout before terminal child delivery SHALL
-return a successful structured `running` result and MUST NOT leave the parent
-tool call blocked indefinitely. The model-facing description SHALL state that
-terminal outcomes are delivered automatically.
+return a successful structured `running` result with `timed_out = true`, MUST
+release the parent tool call, and MUST leave the child running so it can finish
+in the background. The model-facing description SHALL state that terminal
+outcomes are delivered automatically and that a timed-out wait does not stop
+the child.
 
 #### Scenario: Follow up with an idle child
 
@@ -107,15 +109,15 @@ terminal outcomes are delivered automatically.
 - **THEN** cancellation reaches the tool and provider stream
 - **AND** the parent receives one terminal stopped result
 
-#### Scenario: Child exceeds wait timeout
+#### Scenario: Child exceeds the foreground wait timeout
 
-- **GIVEN** the parent calls `agent.wait` with a 5-second timeout
+- **GIVEN** the parent calls `agent.wait` with the five-minute default timeout
 - **AND** the child remains active
-- **WHEN** the timeout expires
-- **THEN** the tool returns `status = "running"`
+- **WHEN** the foreground timeout expires
+- **THEN** the tool returns `status = "running"` with `timed_out = true`
 - **AND** the parent may complete or continue normally
-- **AND** the child remains active and its terminal outcome remains
-  must-deliver
+- **AND** the child remains active in the background and its terminal outcome
+  remains must-deliver
 
 #### Scenario: Requested timeout exceeds the host maximum
 

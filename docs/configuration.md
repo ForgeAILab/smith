@@ -88,8 +88,8 @@ idle_compaction = true
 resume_capsule = true
 
 [profiles.work.child_agents]
-wait_default_timeout_ms = 5000
-wait_max_timeout_ms = 30000
+wait_default_timeout_ms = 300000
+wait_max_timeout_ms = 300000
 ```
 
 The authority flag is a host decision, not a TOML or environment setting. A
@@ -113,16 +113,21 @@ The numeric bounds and zero meanings are:
 | `context.cache.maintenance_deadline_ms` | `30000` | `1..=120000` |
 | `context.cache.keepalive_margin_ms` | `120000` | `0..=inactivity_limit_ms`; zero removes the early margin |
 | `context.cache.keepalive_jitter_percent` | `10` | `0..=50`; zero is deterministic |
-| `child_agents.wait_default_timeout_ms` | `5000` | `0..=30000`; zero is an immediate status check |
-| `child_agents.wait_max_timeout_ms` | `30000` | `1..=30000`; must be at least the default |
+| `child_agents.wait_default_timeout_ms` | `300000` | `0..=300000`; zero is an immediate status check |
+| `child_agents.wait_max_timeout_ms` | `300000` | `1..=300000`; must be at least the default |
 
-`agent.wait` accepts the optional `timeout_ms`, returns `running` when the
-bounded wait expires, and rejects a value above the resolved maximum before it
-waits. A parent is `parked-awaiting-child` only while a direct child is still
-nonterminal; no provider stream or tool call is kept open. Terminal child
-outcomes are preserved and automatically admitted through an ordinary,
-attributed continuation at the next safe boundary. Child progress and child
-provider/tool work do not reset the parent's inactivity or cache-touch clocks.
+`agent.wait` accepts the optional `timeout_ms`. With no override it waits in the
+foreground for up to five minutes, then returns a successful `running` result
+with `timed_out = true`; the child is left running in the background and its
+terminal result is delivered automatically. A shorter valid timeout can be
+requested, zero performs an immediate status check, and a value above the
+resolved maximum is rejected before waiting. A parent is
+`parked-awaiting-child` only while a direct child is still nonterminal; no
+provider stream or tool call is kept open after the foreground wait boundary.
+Terminal child outcomes are preserved and automatically admitted through an
+ordinary, attributed continuation at the next safe boundary. Child progress
+and child provider/tool work do not reset the parent's inactivity or cache-touch
+clocks.
 
 `context.idle_compaction_ms` remains a deprecated one-release alias for
 `context.cache.inactivity_limit_ms`. Equal values in one layer are accepted;
@@ -307,8 +312,8 @@ idle_compaction = true
 resume_capsule = true
 
 [profiles.work.child_agents]
-wait_default_timeout_ms = 5000
-wait_max_timeout_ms = 30000
+wait_default_timeout_ms = 300000
+wait_max_timeout_ms = 300000
 
 [profiles.work.limits]
 max_retries = 2
@@ -627,8 +632,8 @@ reserve, capability budget, or estimated-count slack.
 | `context.cache.handoff_checkpoint` | `true` | Permit a conformance-gated same-model handoff |
 | `context.cache.idle_compaction` | `true` | Attempt ordinary semantic compaction once at inactivity |
 | `context.cache.resume_capsule` | `true` | Persist the redaction-safe cold-continuation projection |
-| `child_agents.wait_default_timeout_ms` | `5000` | Default bounded `agent.wait` timeout |
-| `child_agents.wait_max_timeout_ms` | `30000` | Maximum accepted `agent.wait.timeout_ms` |
+| `child_agents.wait_default_timeout_ms` | `300000` | Default five-minute foreground `agent.wait` boundary; zero is an immediate status check |
+| `child_agents.wait_max_timeout_ms` | `300000` | Maximum accepted foreground `agent.wait.timeout_ms`; timeout leaves the child running |
 | `limits.max_retries` | `2` | Retries after the first provider attempt |
 | `limits.max_tool_steps` | `0` | Tool-loop ceiling per turn; `0` removes it |
 | `limits.turn_time_limit_ms` | `0` | Whole-turn deadline; `0` removes it |

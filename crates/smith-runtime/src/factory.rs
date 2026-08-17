@@ -2840,8 +2840,8 @@ mod tests {
 
     fn child_agents() -> ResolvedChildAgents {
         ResolvedChildAgents {
-            wait_default_timeout_ms: sourced(5_000),
-            wait_max_timeout_ms: sourced(30_000),
+            wait_default_timeout_ms: sourced(300_000),
+            wait_max_timeout_ms: sourced(300_000),
         }
     }
 
