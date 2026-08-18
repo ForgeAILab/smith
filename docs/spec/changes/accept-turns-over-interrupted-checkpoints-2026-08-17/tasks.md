@@ -23,5 +23,8 @@ updated_at: 2026-08-17T00:00:00Z
 - [x] 2.1 Full Smith workspace builds and passes against the patched runtime
   (1407 tests, via the `smith-interrupted-turn-fix` worktree of the pinned
   runtime lineage).
-- [ ] 2.2 Pin the new runtime revision in the root manifest once it is
-  upstreamed, and remove the local patch dependency.
+- [x] 2.2 Pin the new runtime revision in the root manifest once it is
+  upstreamed, and remove the local patch dependency
+  (`3222dda8feede92f8ac6c92a6d83f9d9667fc6bc`, the pinned lineage + fix,
+  pushed as `smith-interrupted-turn-fix`; verified `--locked` against the
+  remote Git source).

@@ -34,14 +34,14 @@ smith-tui = { path = "crates/smith-tui", version = "0.0.2" }
 # that `agent-runtime` on crates.io is an unrelated crate that publishes its
 # own 0.1.0, so the `git`/`rev` keys -- not the version -- are what identify
 # the dependency. Never relax them to a bare version requirement.
-agent-runtime = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "c5dffb6ca1c05a18721bdbfda33755421f1f35f4", version = "=0.1.0" }
-agent-runtime-core = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "c5dffb6ca1c05a18721bdbfda33755421f1f35f4", version = "=0.1.0" }
+agent-runtime = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "3222dda8feede92f8ac6c92a6d83f9d9667fc6bc", version = "=0.1.0" }
+agent-runtime-core = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "3222dda8feede92f8ac6c92a6d83f9d9667fc6bc", version = "=0.1.0" }
 # The MCP client. `smith-runtime` adds the `http` transport on top of the
 # default `stdio` one; both land on the same `reqwest` Smith's own transport
 # uses, which is why the `reqwest` requirement below tracks `rmcp`'s.
-agent-runtime-mcp = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "c5dffb6ca1c05a18721bdbfda33755421f1f35f4", version = "=0.1.0" }
-agent-runtime-registry = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "c5dffb6ca1c05a18721bdbfda33755421f1f35f4", version = "=0.1.0" }
-agent-runtime-testkit = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "c5dffb6ca1c05a18721bdbfda33755421f1f35f4", version = "=0.1.0" }
+agent-runtime-mcp = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "3222dda8feede92f8ac6c92a6d83f9d9667fc6bc", version = "=0.1.0" }
+agent-runtime-registry = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "3222dda8feede92f8ac6c92a6d83f9d9667fc6bc", version = "=0.1.0" }
+agent-runtime-testkit = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "3222dda8feede92f8ac6c92a6d83f9d9667fc6bc", version = "=0.1.0" }
 
 anyhow = "1"
 # Clipboard image capture for composer attachments. `arboard` reads the
