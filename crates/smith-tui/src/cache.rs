@@ -610,11 +610,9 @@ impl CacheProjection {
                     entry.usage_attributed |= entry.input_tokens() > 0;
                 }
             }
-            RuntimeEvent::TurnCompleted { .. } => {
-                if !turn.is_empty() {
-                    let is_internal = self.internal_turns.contains(&turn);
-                    self.finish_turn(&turn, !is_internal);
-                }
+            RuntimeEvent::TurnCompleted { .. } if !turn.is_empty() => {
+                let is_internal = self.internal_turns.contains(&turn);
+                self.finish_turn(&turn, !is_internal);
             }
             _ => {}
         }
