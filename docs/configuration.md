@@ -30,6 +30,20 @@ smith config explain model
 smith config explain context.output_reserve --profile work
 ```
 
+### Directories beside the configuration
+
+Two locations are read by their fixed paths rather than through the layered
+settings, because a setting that relocates them would be a setting that
+relocates what Smith trusts:
+
+| Path | Holds |
+| --- | --- |
+| `~/.smith/skills/<name>/SKILL.md` | User skills, available in every project |
+| `<project>/.smith/skills/<name>/SKILL.md` | Project skills, gated by project trust |
+
+Smith creates neither directory. See [Skills](skills.md) for the file format,
+the bounds, and how a project skill comes to be trusted.
+
 Environment names are the uppercased dotted key with `SMITH_` prepended, for
 example `SMITH_CONTEXT_REASONING_RESERVE`,
 `SMITH_PERSISTENCE_ENABLED`, and `SMITH_APPROVAL_MODE`. List values such as

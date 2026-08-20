@@ -47,7 +47,7 @@ pub use cache::{
     CacheProjection, CacheTurnSummary, CacheVisibilityState, MISS_NOTICE_COST_MICRO_USD,
     MISS_NOTICE_TOKENS,
 };
-pub use commands::{COMMANDS, CommandAction, CommandSpec, GoalAction, McpAction};
+pub use commands::{COMMANDS, CommandAction, CommandSpec, GoalAction, McpAction, SkillsAction};
 pub use composer::Composer;
 pub use diff::{Change, EditReview, diff_lines};
 pub use picker::{PickerOutcome, ResourceEntry, ResourcePicker, draw_resource_picker};

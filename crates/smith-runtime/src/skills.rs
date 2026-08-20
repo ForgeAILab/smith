@@ -7,6 +7,8 @@
 //! metadata for untrusted workspace declarations without registering their
 //! bodies for activation.
 
+mod discovery;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
@@ -17,6 +19,8 @@ use agent_runtime::ability::{Ability, AbilityKind, Named, Skill, SkillSource};
 use agent_runtime::registry::{RegistrySource, TrustClass};
 use agent_runtime_core::error::RuntimeError;
 use smith_config::trust::TrustStatus;
+
+pub use discovery::{DiscoveredSkill, DiscoveredSkills, SkillProblem, discover, discover_into};
 
 /// Smith's deterministic skill source layers, lowest precedence first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -65,6 +69,18 @@ pub struct SkillIndexEntry {
     pub activatable: bool,
     /// Content trust class used by diagnostics.
     pub trust: TrustClass,
+}
+
+impl SkillIndexEntry {
+    /// The skill's name, as precedence and shadowing spell it.
+    pub fn name(&self) -> &str {
+        &self.descriptor.card().id.name
+    }
+
+    /// The routing description retrieval scores against.
+    pub fn description(&self) -> &str {
+        &self.descriptor.card().summary
+    }
 }
 
 #[derive(Clone)]

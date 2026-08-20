@@ -290,10 +290,22 @@
             "{context}"
         );
 
-        handle_local_command(&mut app, &host, project.path(), None, CommandAction::Status).await;
-        handle_local_command(&mut app, &host, project.path(), None, CommandAction::Context).await;
-        handle_local_command(&mut app, &host, project.path(), None, CommandAction::Agent(None)).await;
-        handle_local_command(&mut app, &host, project.path(), None, CommandAction::Diff(None)).await;
+        let (_, skills) = crate::skills::SkillContext::compose(
+            smith_runtime::skills::SmithSkillSources::new(),
+            home.path(),
+            project.path(),
+        )
+        .expect("a skill context");
+        let commands = [
+            CommandAction::Status,
+            CommandAction::Context,
+            CommandAction::Agent(None),
+            CommandAction::Diff(None),
+            CommandAction::Skills(smith_tui::SkillsAction::List),
+        ];
+        for command in commands {
+            handle_local_command(&mut app, &host, project.path(), None, &skills, command).await;
+        }
 
         git(project.path(), &["init"]);
         git(
@@ -310,6 +322,7 @@
             &host,
             project.path(),
             None,
+            &skills,
             CommandAction::Diff(Some("unstaged".to_owned())),
         )
         .await;
@@ -338,6 +351,7 @@
                 ("context", LocalResultState::Info),
                 ("agents", LocalResultState::Empty),
                 ("diff", LocalResultState::Error),
+                ("skills", LocalResultState::Info),
                 ("diff · unstaged", LocalResultState::Info),
                 ("help", LocalResultState::Info),
             ]

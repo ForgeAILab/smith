@@ -39,9 +39,16 @@ const FILE_NAME: &str = "trust.json";
 
 /// The kinds of project-supplied authority Smith will not exercise unasked.
 ///
+/// Most variants name something Smith would *run*. [`ExecutableKind::Skill`]
+/// names something Smith would *say*: a body the project supplies becomes part
+/// of the instructions the model is steered by, which is authority exercised on
+/// the project's behalf whether or not a process is spawned.
+///
 /// Plain declarative settings have no variant here on purpose: they carry no
 /// execution, are readable before any decision, and gating them would make
-/// Smith prompt for a model name.
+/// Smith prompt for a model name. That reasoning stops at text Smith would
+/// adopt as its own instructions, which is why skills are gated and a model
+/// name is not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutableKind {
@@ -55,6 +62,9 @@ pub enum ExecutableKind {
     ShellSetting,
     /// A declared Model Context Protocol server Smith would spawn or dial.
     McpServer,
+    /// A project-supplied skill body Smith would activate as privileged
+    /// instructions.
+    Skill,
 }
 
 impl ExecutableKind {
@@ -66,6 +76,7 @@ impl ExecutableKind {
             Self::CredentialHelper => "credential helper",
             Self::ShellSetting => "shell setting",
             Self::McpServer => "MCP server",
+            Self::Skill => "skill",
         }
     }
 }

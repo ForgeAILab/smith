@@ -200,6 +200,22 @@ impl App {
                     _ => None,
                 };
             }
+            Some(Overlay::SkillTrustConfirm { skill, .. }) => {
+                return match key.code {
+                    KeyCode::Char('y') => {
+                        let action = Action::TrustSkill {
+                            skill: skill.clone(),
+                        };
+                        self.overlay = None;
+                        Some(action)
+                    }
+                    KeyCode::Char('n') | KeyCode::Esc => {
+                        self.overlay = None;
+                        None
+                    }
+                    _ => None,
+                };
+            }
             Some(Overlay::ReviewConfirm { scope, .. }) => {
                 return match key.code {
                     KeyCode::Char('y') => {

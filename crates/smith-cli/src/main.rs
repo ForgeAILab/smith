@@ -18,6 +18,7 @@ mod mcp;
 mod resources;
 mod runtime_host;
 mod setup;
+mod skills;
 mod submission;
 mod terminal;
 mod tui_driver;

@@ -1284,3 +1284,74 @@ fn a_remote_confirmation_names_the_endpoint_and_its_bearer_header() {
         "the prompt describes the request, not the configuration that produced it"
     );
 }
+
+#[test]
+fn a_skill_decision_binds_its_path_and_its_content_together() {
+    let (project, _state, mut store) = project();
+    std::fs::create_dir_all(project.path().join(".smith/skills/rust-review"))
+        .expect("the directory");
+    let path = project.path().join(".smith/skills/rust-review/SKILL.md");
+    std::fs::write(&path, "---\ndescription: Review\n---\n\nOriginal.\n").expect("the body");
+
+    let reviewed = Executable::from_file(project.path(), ExecutableKind::Skill, &path)
+        .expect("project content");
+    assert_eq!(reviewed.kind(), ExecutableKind::Skill);
+    assert_eq!(reviewed.label(), ".smith/skills/rust-review/SKILL.md");
+    store
+        .record(project.path(), &reviewed, TrustDecision::Allow)
+        .expect("recorded");
+    assert_eq!(
+        store.status(project.path(), &reviewed).expect("a status"),
+        TrustStatus::Trusted
+    );
+
+    // Same path, later content: the decision covers instructions that no
+    // longer exist, which is exactly when a skill must stop activating.
+    std::fs::write(&path, "---\ndescription: Review\n---\n\nRewritten.\n").expect("a later commit");
+    let rewritten = Executable::from_file(project.path(), ExecutableKind::Skill, &path)
+        .expect("project content");
+    assert_eq!(
+        store.status(project.path(), &rewritten).expect("a status"),
+        TrustStatus::Changed
+    );
+
+    // Same content, another path: approving one project skill must not approve
+    // a copy of it installed somewhere else in the repository.
+    std::fs::create_dir_all(project.path().join(".smith/skills/copy")).expect("the directory");
+    let copy = project.path().join(".smith/skills/copy/SKILL.md");
+    std::fs::write(&copy, "---\ndescription: Review\n---\n\nOriginal.\n").expect("the copy");
+    let copied = Executable::from_file(project.path(), ExecutableKind::Skill, &copy)
+        .expect("project content");
+    assert_eq!(
+        store.status(project.path(), &copied).expect("a status"),
+        TrustStatus::Untrusted
+    );
+}
+
+#[test]
+fn a_trust_file_written_before_skills_still_loads() {
+    let (project, state, mut store) = project();
+    let extension = extension(project.path());
+    store
+        .record(project.path(), &extension, TrustDecision::Allow)
+        .expect("recorded");
+
+    // Reopened from the bytes on disk, as a Smith that predates skills wrote
+    // them: existing decisions survive, and no skill arrives pre-approved.
+    let reopened = TrustStore::open(state.path()).expect("the persisted store");
+    assert_eq!(
+        reopened
+            .status(project.path(), &extension)
+            .expect("a status"),
+        TrustStatus::Trusted
+    );
+    let skill = Executable::new(
+        ExecutableKind::Skill,
+        ".smith/skills/rust-review/SKILL.md",
+        ContentDigest::of(b"---\ndescription: Review\n---\n\nBody.\n"),
+    );
+    assert_eq!(
+        reopened.status(project.path(), &skill).expect("a status"),
+        TrustStatus::Untrusted
+    );
+}

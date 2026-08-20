@@ -248,6 +248,15 @@ pub enum Action {
         /// The declared server name.
         server: String,
     },
+    /// Record the already-confirmed decision to activate one project skill.
+    ///
+    /// The host writes the decision to the trust store and recomposes the
+    /// catalog at the next idle boundary, which is what makes the skill usable
+    /// without restarting the session.
+    TrustSkill {
+        /// The project skill's name.
+        skill: String,
+    },
     /// Start the already-confirmed provider-backed read-only review.
     StartReview {
         /// Review scope.
@@ -439,6 +448,17 @@ pub enum Overlay {
         /// The declared server name.
         server: String,
         /// The rendered invocation and its content identity.
+        content: String,
+    },
+    /// A project skill awaiting activation confirmation.
+    ///
+    /// The content shows where the body lives and the content identity the
+    /// decision is recorded against — never the body itself. Text the project
+    /// wrote cannot be the argument for trusting text the project wrote.
+    SkillTrustConfirm {
+        /// The project skill's name.
+        skill: String,
+        /// The rendered path and content identity.
         content: String,
     },
     /// Provider-backed read-only review awaiting explicit confirmation.

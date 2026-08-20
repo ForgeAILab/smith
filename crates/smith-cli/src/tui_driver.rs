@@ -45,6 +45,8 @@ pub(super) struct InteractiveResources {
     pub(super) catalog: Arc<smith_config::catalog::CatalogSnapshot>,
     /// Declared MCP servers and their connections, when any are declared.
     pub(super) mcp: Option<Arc<crate::mcp::McpContext>>,
+    /// The skills this composition indexed, and the files it refused.
+    pub(super) skills: Arc<crate::skills::SkillContext>,
 }
 
 /// The runtime's out-of-band request streams, plus the accounts they rotate
@@ -77,6 +79,7 @@ pub(super) async fn run_interactive(
         credential_pool,
         catalog,
         mcp,
+        skills,
     } = resources;
     let policy = host.runtime().policy();
     let snapshot = host.session().snapshot();
@@ -230,6 +233,7 @@ pub(super) async fn run_interactive(
             agents: &agents,
             theme,
             mcp,
+            skills,
         },
     )
     .await;
@@ -340,6 +344,7 @@ pub(super) struct TuiRunInputs<'a> {
     agents: &'a ResolvedAgent,
     theme: Theme,
     mcp: Option<Arc<crate::mcp::McpContext>>,
+    skills: Arc<crate::skills::SkillContext>,
 }
 
 pub(super) async fn run_tui(
@@ -358,6 +363,7 @@ pub(super) async fn run_tui(
         agents,
         theme,
         mcp,
+        skills,
     } = inputs;
     let session = host.session();
     let mut events = session.subscribe();
@@ -377,6 +383,9 @@ pub(super) async fn run_tui(
         .as_ref()
         .map_or(0, |context| context.supervisor().tools().len());
     let mut remote_tools_pending = false;
+    // A newly trusted project skill is only in the trust file until the
+    // catalog is resolved again, and the catalog is resolved at composition.
+    let mut trusted_skill_pending = false;
     let mut last_change_turn = host.changes().latest().map(|set| set.turn);
     let mut interactions = interaction::InteractionSurface::new(
         interactions,
@@ -491,6 +500,7 @@ pub(super) async fn run_tui(
                                     host,
                                     project,
                                     mcp.as_deref(),
+                                    &skills,
                                     command,
                                 )
                                 .await;
@@ -505,6 +515,15 @@ pub(super) async fn run_tui(
                                         "mcp",
                                         "no MCP servers are declared",
                                     ),
+                                }
+                            }
+                            Some(Action::TrustSkill { skill: name }) => {
+                                match skills.trust(&name) {
+                                    Ok(notice) => {
+                                        trusted_skill_pending = true;
+                                        app.show_local_result("skills", notice);
+                                    }
+                                    Err(error) => app.show_local_error("skills", error),
                                 }
                             }
                             Some(Action::ApplyUndo) => match host.changes().undo_latest() {
@@ -890,11 +909,12 @@ pub(super) async fn run_tui(
                 }
             }
 
-            _ = frame.tick(), if dirty || remote_tools_pending => {
-                // A newly connected server's tools join at the next idle
-                // boundary, never mid-turn: swapping the tool set underneath a
-                // running turn is what the epoch rules exist to prevent.
-                if remote_tools_pending
+            _ = frame.tick(), if dirty || remote_tools_pending || trusted_skill_pending => {
+                // A newly connected server's tools and a newly trusted skill
+                // both join at the next idle boundary, never mid-turn:
+                // swapping the ability set underneath a running turn is what
+                // the epoch rules exist to prevent.
+                if (remote_tools_pending || trusted_skill_pending)
                     && !app.is_busy()
                     && !app.has_pending_input()
                     && app.overlay.is_none()

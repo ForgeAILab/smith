@@ -2192,3 +2192,146 @@ async fn a_remote_server_this_build_can_reach_fails_loudly_rather_than_silently(
         "the `http` transport must be compiled in, not reported as unavailable: {reason}"
     );
 }
+
+/// Writes `<root>/skills/<name>/SKILL.md`.
+fn write_discovered_skill(root: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+    let directory = root.join("skills").join(name);
+    std::fs::create_dir_all(&directory).expect("a skill directory");
+    let path = directory.join("SKILL.md");
+    std::fs::write(&path, body).expect("a skill body");
+    path
+}
+
+const DISCOVERED_SKILL: &str =
+    "---\ndescription: Review Rust implementation boundaries\n---\n\nDISCOVERED_BODY_MARKER\n";
+
+#[tokio::test]
+async fn tui_and_headless_discover_the_same_catalog() {
+    let fixture = Fixture::new(FAKE_CONFIG);
+    let user_root = fixture.home.path().join(".smith");
+    write_discovered_skill(&user_root, "rust-review", DISCOVERED_SKILL);
+    write_discovered_skill(
+        &fixture.project.path().join(".smith"),
+        "deploy",
+        DISCOVERED_SKILL,
+    );
+    let trust = smith_config::trust::TrustStore::open(fixture.home.path()).expect("a trust store");
+
+    let mut indexes = Vec::new();
+    for surface in [HostSurface::Terminal, HostSurface::Headless] {
+        let mut runtime = request(&fixture, surface);
+        runtime.provider = Some(Arc::new(FakeProvider::text_reply("unused")));
+        let (skills, problems) = smith_runtime::skills::discover_into(
+            std::mem::take(&mut runtime.skills),
+            &user_root,
+            fixture.project.path(),
+            &trust,
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        runtime.skills = skills;
+        let smith = factory::build(runtime).await.expect("a runtime");
+        indexes.push(
+            smith
+                .skill_index()
+                .iter()
+                .map(|entry| (entry.name().to_owned(), entry.layer, entry.activatable))
+                .collect::<Vec<_>>(),
+        );
+    }
+    assert_eq!(indexes[0], indexes[1]);
+    assert!(
+        indexes[0].iter().any(|(name, layer, activatable)| {
+            name == "rust-review"
+                && *layer == smith_runtime::skills::SmithSkillLayer::User
+                && *activatable
+        }),
+        "{:?}",
+        indexes[0]
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_skill_does_not_stop_a_session_starting() {
+    let fixture = Fixture::new(FAKE_CONFIG);
+    let user_root = fixture.home.path().join(".smith");
+    write_discovered_skill(&user_root, "rust-review", DISCOVERED_SKILL);
+    write_discovered_skill(&user_root, "half-written", "---\nname: half-written\n");
+    let trust = smith_config::trust::TrustStore::open(fixture.home.path()).expect("a trust store");
+
+    let mut runtime = request(&fixture, HostSurface::Terminal);
+    runtime.provider = Some(Arc::new(FakeProvider::text_reply("unused")));
+    let (skills, problems) = smith_runtime::skills::discover_into(
+        std::mem::take(&mut runtime.skills),
+        &user_root,
+        fixture.project.path(),
+        &trust,
+    );
+    runtime.skills = skills;
+    assert_eq!(problems.len(), 1);
+    assert_eq!(problems[0].name, "half-written");
+
+    let smith = factory::build(runtime)
+        .await
+        .expect("a broken skill file is not a reason to refuse to start");
+    assert!(
+        smith
+            .policy()
+            .skills
+            .iter()
+            .any(|name| name == "rust-review")
+    );
+    assert!(
+        !smith
+            .policy()
+            .skills
+            .iter()
+            .any(|name| name == "half-written")
+    );
+}
+
+#[tokio::test]
+async fn headless_indexes_an_untrusted_project_skill_without_asking_anything() {
+    let fixture = Fixture::new(FAKE_CONFIG);
+    let user_root = fixture.home.path().join(".smith");
+    write_discovered_skill(
+        &fixture.project.path().join(".smith"),
+        "deploy",
+        DISCOVERED_SKILL,
+    );
+    let trust = smith_config::trust::TrustStore::open(fixture.home.path()).expect("a trust store");
+
+    let provider = Arc::new(FakeProvider::text_reply("done"));
+    let mut runtime = request(&fixture, HostSurface::Headless);
+    runtime.provider = Some(provider.clone());
+    // No approval broker: an unattended run has no surface that could answer,
+    // so a discovery path that asked would deadlock or fail the run.
+    let (skills, problems) = smith_runtime::skills::discover_into(
+        std::mem::take(&mut runtime.skills),
+        &user_root,
+        fixture.project.path(),
+        &trust,
+    );
+    assert!(problems.is_empty(), "{problems:?}");
+    runtime.skills = skills;
+
+    let smith = factory::build(runtime).await.expect("a runtime");
+    assert!(!smith.policy().skills.iter().any(|name| name == "deploy"));
+    assert!(smith.skill_index().iter().any(|entry| {
+        entry.name() == "deploy"
+            && entry.layer == smith_runtime::skills::SmithSkillLayer::Workspace
+            && !entry.activatable
+    }));
+
+    let session = smith
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .expect("a session");
+    session
+        .run(UserInput::text("Use the deploy skill."))
+        .await
+        .expect("the turn runs");
+    session.shutdown().await.expect("clean shutdown");
+    let wire = serde_json::to_string(&provider.requests()[0].messages).unwrap();
+    assert!(!wire.contains("DISCOVERED_BODY_MARKER"), "{wire}");
+}

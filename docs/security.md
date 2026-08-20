@@ -72,6 +72,24 @@ workspace trust. Untrusted skills cannot shadow a user skill. Skill metadata
 and bodies are bounded and revision-pinned; front matter cannot promote its own
 trust class.
 
+A `<project>/.smith/skills/<name>/SKILL.md` is the one path by which repository
+content can ask to become part of the model's instructions, so it is decided
+like any other project-supplied authority: hash-bound project trust, recorded
+against the file's content and its project-relative path together. Editing an
+approved skill invalidates the decision rather than inheriting it, and a
+`SKILL.md` resolving outside the project root — a symlink aimed at a user skill
+or at anything else on the machine — is refused rather than covered by the
+project's trust. The skill's own text is never shown as the argument for
+trusting it; the confirmation shows the path and the digest. A skill is named
+by its directory, so a project cannot use frontmatter to point its shadowing at
+a name the reader does not see in the path.
+
+Every discovered body, user skills included, is pinned to the bytes discovery
+read. A body rewritten between indexing and activation fails closed instead of
+entering context unreviewed. Discovery reads only: a malformed skill file is
+excluded and reported, never a reason a session cannot start, and never a
+prompt in an unattended run.
+
 The standard host deliberately activates root `AGENTS.md` as declarative
 project guidance. It accepts only an exact regular UTF-8 file up to 32 KiB that
 resolves inside the project root — an in-project symlink such as `AGENTS.md ->

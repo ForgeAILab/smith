@@ -287,6 +287,9 @@ pub(super) fn overlay_hint(app: &App) -> Option<String> {
         Some(Overlay::McpTrustConfirm { .. }) => {
             Some("y trust and connect · n/esc leave untrusted".to_owned())
         }
+        Some(Overlay::SkillTrustConfirm { .. }) => {
+            Some("y trust and activate · n/esc leave withheld".to_owned())
+        }
         Some(Overlay::RotationConfirm { prompt, .. }) => {
             Some(if prompt.request().eligible.len() > 1 {
                 "y switch and resend · 1-9 choose account · n/esc stay".to_owned()

@@ -457,6 +457,7 @@ impl App {
                 CommandAction::Account(_) => "account",
                 CommandAction::Agent(_) | CommandAction::AgentResume(_) => "agent",
                 CommandAction::Mcp(_) => "mcp",
+                CommandAction::Skills(_) => "skills",
                 CommandAction::Diff(_) => "diff",
                 CommandAction::Review(_) => "review",
                 CommandAction::Undo => "undo",
@@ -817,6 +818,16 @@ impl App {
     pub fn confirm_mcp_trust(&mut self, server: impl Into<String>, content: impl Into<String>) {
         self.overlay = Some(Overlay::McpTrustConfirm {
             server: server.into(),
+            content: content.into(),
+        });
+    }
+
+    /// Shows one project skill's location and content identity, with no default
+    /// action: a repository asking Smith to adopt its instructions is decided
+    /// deliberately or not at all.
+    pub fn confirm_skill_trust(&mut self, skill: impl Into<String>, content: impl Into<String>) {
+        self.overlay = Some(Overlay::SkillTrustConfirm {
+            skill: skill.into(),
             content: content.into(),
         });
     }

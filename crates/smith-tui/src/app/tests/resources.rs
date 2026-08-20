@@ -69,10 +69,27 @@
             "/review",
             "/undo",
             "/revert",
+            "/skills",
             "/quit",
         ] {
             assert!(help.contains(command), "help must list {command}");
         }
+    }
+
+    #[test]
+    fn slash_skills_parses_its_list_and_trust_forms() {
+        assert_eq!(
+            commands::parse("/skills"),
+            Ok(CommandAction::Skills(SkillsAction::List))
+        );
+        assert_eq!(
+            commands::parse("/skills trust deploy"),
+            Ok(CommandAction::Skills(SkillsAction::Trust("deploy".into())))
+        );
+        let error = commands::parse("/skills trust").expect_err("a name is required");
+        assert!(error.contains("requires a skill name"), "{error}");
+        let error = commands::parse("/skills deploy").expect_err("trust is the only verb");
+        assert!(error.contains("is neither"), "{error}");
     }
 
     #[test]

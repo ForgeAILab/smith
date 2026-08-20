@@ -156,6 +156,9 @@ fn draw_surface(
         Some(Overlay::McpTrustConfirm { content, .. }) => {
             draw_recovery_confirm(frame, area, "run this MCP server", content, theme);
         }
+        Some(Overlay::SkillTrustConfirm { content, .. }) => {
+            draw_recovery_confirm(frame, area, "activate this project skill", content, theme);
+        }
         Some(Overlay::RotationConfirm { content, .. }) => {
             draw_rotation_confirm(frame, area, content, theme);
         }

@@ -52,4 +52,5 @@ max_output_tokens = 4096
     include!("resources.rs");
     include!("rendering.rs");
     include!("mcp.rs");
+    include!("skills.rs");
 }

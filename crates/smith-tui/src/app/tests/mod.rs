@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SkillsAction;
     use agent_runtime_core::approval::{
         ApprovalDecision, ApprovalOrigin, ApprovalPolicy, ApprovalRequest,
     };

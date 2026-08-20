@@ -1,0 +1,6 @@
+[patch."https://github.com/ForgeAILab/agent-runtime.git"]
+agent-runtime = { path = "../agent-runtime/crates/agent-runtime" }
+agent-runtime-core = { path = "../agent-runtime/crates/agent-runtime-core" }
+agent-runtime-mcp = { path = "../agent-runtime/crates/agent-runtime-mcp" }
+agent-runtime-registry = { path = "../agent-runtime/crates/agent-runtime-registry" }
+agent-runtime-testkit = { path = "../agent-runtime/crates/agent-runtime-testkit" }

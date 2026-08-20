@@ -44,9 +44,21 @@ pub(super) async fn handle_local_command(
     host: &HostSession,
     project: &std::path::Path,
     mcp: Option<&crate::mcp::McpContext>,
+    skills: &crate::skills::SkillContext,
     command: CommandAction,
 ) {
     match command {
+        CommandAction::Skills(action) => match action {
+            smith_tui::SkillsAction::List => {
+                app.show_local_result("skills", skills.render_list(host.runtime().skill_index()));
+            }
+            // The path and the digest are what the decision binds, so the path
+            // and the digest are what the confirmation shows.
+            smith_tui::SkillsAction::Trust(skill) => match skills.confirmation(&skill) {
+                Ok(content) => app.confirm_skill_trust(skill, content),
+                Err(error) => app.show_local_error("skills", error),
+            },
+        },
         CommandAction::Mcp(action) => match (mcp, action) {
             (None, _) => app.show_local_result(
                 "mcp",

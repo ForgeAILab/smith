@@ -31,6 +31,8 @@ pub(super) struct StartedHost {
     pub(super) catalog: Arc<smith_config::catalog::CatalogSnapshot>,
     /// Declared MCP servers and their connections, when any are declared.
     pub(super) mcp: Option<Arc<crate::mcp::McpContext>>,
+    /// The skills this composition indexed, and the files it refused.
+    pub(super) skills: Arc<crate::skills::SkillContext>,
     /// Layered local cache-miss notice policy.
     pub(super) cache_miss_notices: bool,
 }
@@ -94,6 +96,18 @@ pub(super) async fn start_host(
         model_catalog: Some(catalog.clone()),
         ..RuntimeRequest::new(resolution.config.clone(), surface)
     };
+    // Folded on here rather than inside the factory so that a direct embedder
+    // still gets exactly the sources it supplied: discovery is a property of
+    // the Smith *host*, which is the only layer that knows a user state root, a
+    // project root, and the decisions recorded about them.
+    let (skills, skill_context) = crate::skills::SkillContext::compose(
+        std::mem::take(&mut runtime.skills),
+        &resolution.layout.user_dir,
+        &project,
+    )
+    .context("discovering skills")?;
+    runtime.skills = skills;
+    let skill_context = Arc::new(skill_context);
     let persistence_redactor = DefaultRedactor::new();
     runtime.persistence_redactor = Some(persistence_redactor.clone());
     if let Some(source) = runtime_catalog_source(
@@ -311,6 +325,7 @@ pub(super) async fn start_host(
         sessions,
         catalog,
         mcp,
+        skills: skill_context,
         cache_miss_notices,
     })
 }
@@ -488,6 +503,7 @@ pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
             credential_pool,
             accounts,
             mcp: started_mcp,
+            skills,
             cache_miss_notices,
             ..
         } = started;
@@ -509,6 +525,7 @@ pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
                 sessions,
                 catalog: catalog.clone(),
                 mcp: mcp.clone(),
+                skills,
             },
             PresentationOptions {
                 no_color: args.no_color,

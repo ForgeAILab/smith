@@ -43,6 +43,8 @@ pub enum CommandAction {
     AgentResume(String),
     /// List declared MCP servers, or grant one execution trust.
     Mcp(McpAction),
+    /// List indexed skills, or grant one project skill trust.
+    Skills(SkillsAction),
     /// Inspect a Git change scope.
     Diff(Option<String>),
     /// Review a change scope.
@@ -66,6 +68,16 @@ pub enum McpAction {
     List,
     /// Show the named server's resolved invocation and content identity, and
     /// ask whether it may be run.
+    Trust(String),
+}
+
+/// Typed local skill-catalog control.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkillsAction {
+    /// List every indexed skill and every file discovery refused.
+    List,
+    /// Show the named project skill's path and content identity, and ask
+    /// whether its instructions may be activated.
     Trust(String),
 }
 
@@ -218,6 +230,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         advanced: false,
     },
     CommandSpec {
+        name: "skills",
+        argument_hint: "[trust NAME]",
+        description: "show indexed skills, or trust one this project ships",
+        requires_idle: false,
+        advanced: false,
+    },
+    CommandSpec {
         name: "diff",
         argument_hint: "[SCOPE]",
         description: "inspect workspace changes",
@@ -327,6 +346,18 @@ pub fn parse(input: &str) -> Result<CommandAction, String> {
             }
             (Some(other), _) => Err(format!(
                 "`/mcp` takes no value, or `trust NAME`; `{other}` is neither"
+            )),
+        };
+    }
+    if name == "skills" {
+        return match (argument.as_deref(), second) {
+            (None, _) => Ok(CommandAction::Skills(SkillsAction::List)),
+            (Some("trust"), Some(skill)) => Ok(CommandAction::Skills(SkillsAction::Trust(skill))),
+            (Some("trust"), None) => {
+                Err("`/skills trust` requires a skill name — run `/skills` to list them".to_owned())
+            }
+            (Some(other), _) => Err(format!(
+                "`/skills` takes no value, or `trust NAME`; `{other}` is neither"
             )),
         };
     }
