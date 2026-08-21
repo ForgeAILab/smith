@@ -13,8 +13,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use agent_runtime_core::event::RuntimeEvent;
 use agent_runtime_core::ids::{AttemptId, RequestId};
+use smith_runtime::client::SmithEventKind as RuntimeEvent;
 
 use crate::transcript::{ToolStatus, Transcript};
 

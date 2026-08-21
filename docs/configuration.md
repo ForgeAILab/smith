@@ -47,9 +47,10 @@ the bounds, and how a project skill comes to be trusted.
 Environment names are the uppercased dotted key with `SMITH_` prepended, for
 example `SMITH_CONTEXT_REASONING_RESERVE`,
 `SMITH_PERSISTENCE_ENABLED`, and `SMITH_APPROVAL_MODE`. List values such as
-`approval.auto_approve` are comma-separated. Environment names are matched
-case-insensitively; defining two case variants for one key is an ambiguity and
-fails.
+`agent_order` are comma-separated. Structured `[[approval.auto]]` rules are
+documented in TOML rather than encoded as a comma-separated tool-name list.
+Environment names are matched case-insensitively; defining two case variants
+for one key is an ambiguity and fails.
 
 ## Prompt-cache miss notices
 
@@ -656,6 +657,7 @@ reserve, capability budget, or estimated-count slack.
 | `persistence.sessions_dir` | `~/.smith/sessions` | User-owned state root |
 | `persistence.journal_events` | `true` | Write redacted JSONL events |
 | `approval.mode` | `"ask"` | Fail closed until a decision exists |
+| `approval.auto` | `[]` | Versioned prepared-call grants; user-controlled configuration only |
 | `background.exit_policy` | `"error"` | Refuse to orphan active work |
 | `background.max_children` | `4` | Concurrent child capacity |
 | `reasoning.enabled` | provider/model default | Explicit thinking state when supported |
@@ -667,9 +669,29 @@ leave a positive input budget. Numeric limits are validated before any provider
 request.
 
 Approval modes are `"ask"`, `"deny"`, and `"allow-all"`. Background exit modes
-are `"error"`, `"wait"`, and `"stop"`. `approval.auto_approve` is a list of
-tool names; it is still bounded by preparation, central authorization, and the
-workspace.
+are `"error"`, `"wait"`, and `"stop"`. Non-empty legacy
+`approval.auto_approve` lists are rejected because a tool name is not an
+authority boundary. A user-owned configuration may instead grant exact,
+revisioned prepared `edit` operations:
+
+```toml
+[[approval.auto]]
+revision = 1
+tool = "smith/edit"
+operations = ["replace", "create"]
+permissions = ["fs.read", "fs.write", "fs.create"]
+max_risk = "medium"
+mount = "workspace"
+paths = ["src/**", "tests/**"]
+expires_at = "2026-12-31T23:59:59Z" # optional
+max_uses = 50                        # optional
+```
+
+Every field is matched against the immutable prepared call. Operation, mount,
+path, permissions, and derived risk must all fit. Host filesystem, arbitrary
+process, network, credential, external-service, data-egress, and unclassified
+authority are never eligible. There is deliberately no scoped host-shell rule;
+already-isolated automation must opt into explicit `allow-all`.
 
 ## Command-line selection
 
@@ -693,8 +715,8 @@ The run surface accepts:
 An omitted `--resume` ID opens a local picker only in an interactive terminal.
 Headless or piped use must pass the exact ID. `--output-format` requires `-p`.
 
-Project-controlled configuration cannot grant `allow-all`, populate
-`auto_approve`, disable/redirect persistence, or choose the user session root.
+Project-controlled configuration cannot grant `allow-all`, add automatic
+approval rules, disable/redirect persistence, or choose the user session root.
 Those settings require a higher-trust source. Opening a repository is never
 authority. `--yolo` is only a shorter explicit spelling of
 `--approval allow-all`; it does not add tools or override a profile's

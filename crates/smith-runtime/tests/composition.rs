@@ -14,10 +14,13 @@
 //! connect, which is exactly the path where a leaky error message would show
 //! up.
 
+#![allow(deprecated)] // Exercises the documented protocol-v1 embedding adapter.
+
 use std::sync::{Arc, Condvar, Mutex};
 
 use agent_runtime::ability::Skill;
 use agent_runtime::provider::fake::{FakeProvider, ScriptedStream, tool_call_fragments};
+use agent_runtime::registry::Permission;
 use agent_runtime::runtime::StartSession;
 use agent_runtime_core::catalog::{
     CatalogSource, ModelLimits, ModelRecord, ProfileField, StaticSource,
@@ -261,7 +264,7 @@ async fn trusted_workspace_skill_loads_only_after_factory_descriptor_resolution(
         TrustStatus::Trusted,
     );
 
-    let smith = factory::build(runtime)
+    let smith = factory::build_request(runtime)
         .await
         .expect("descriptor resolution succeeds before the file exists");
     assert!(
@@ -310,7 +313,7 @@ async fn untrusted_workspace_skill_is_indexed_but_never_activates_or_shadows_use
             TrustStatus::Untrusted,
         );
 
-    let smith = factory::build(runtime).await.expect("a runtime");
+    let smith = factory::build_request(runtime).await.expect("a runtime");
     assert_eq!(smith.policy().skills, ["rust-review"]);
     assert!(smith.skill_index().iter().any(|entry| {
         entry.layer == smith_runtime::skills::SmithSkillLayer::Workspace && !entry.activatable
@@ -354,7 +357,7 @@ async fn smith_memory_is_relevant_sensitive_manifested_and_not_canonical_history
     let mut runtime = request(&fixture, HostSurface::Headless);
     runtime.provider = Some(provider.clone());
     runtime.memory = Some(source);
-    let smith = factory::build(runtime).await.expect("a runtime");
+    let smith = factory::build_request(runtime).await.expect("a runtime");
     assert!(smith.policy().memory_revision.is_some());
     let session = smith
         .runtime()
@@ -447,7 +450,9 @@ async fn setup_preflight_uses_factory_derivation_without_constructing_runtime_st
     let config = FAKE_CONFIG.replace("mode = \"allow-all\"", "mode = \"ask\"");
     let fixture = Fixture::new(&config);
     let mut request = request(&fixture, HostSurface::Terminal);
-    request.tools.push(Arc::new(PanicsIfRegistered));
+    request
+        .trusted_native
+        .add_tool(Arc::new(PanicsIfRegistered));
 
     let checked = factory::preflight(&request)
         .await
@@ -459,7 +464,11 @@ async fn setup_preflight_uses_factory_derivation_without_constructing_runtime_st
         ModelLimits::new(128_000, 124_000, 4_096)
     );
 
-    let error = factory::build(request)
+    // Harness resolution intentionally inventories trusted-native descriptors
+    // before the factory. Remove the sentinel after proving setup preflight
+    // itself did not touch it, then exercise the factory's host-policy order.
+    request.trusted_native = Default::default();
+    let error = factory::build_request(request)
         .await
         .expect_err("normal construction still requires an approval surface");
     assert!(matches!(
@@ -474,7 +483,7 @@ async fn setup_preflight_uses_factory_derivation_without_constructing_runtime_st
 #[tokio::test]
 async fn a_resolved_fake_configuration_builds_a_runtime_and_runs_a_turn() {
     let fixture = Fixture::new(FAKE_CONFIG);
-    let smith = factory::build(request(&fixture, HostSurface::Terminal))
+    let smith = factory::build_request(request(&fixture, HostSurface::Terminal))
         .await
         .expect("a runtime");
 
@@ -576,7 +585,7 @@ async fn runtime_debug_reports_profile_identity_without_instruction_text() {
         &format!("model = \"example-model\"\ninstructions = \"{private_instructions}\""),
     );
     let fixture = Fixture::new(&config);
-    let smith = factory::build(request(&fixture, HostSurface::Terminal))
+    let smith = factory::build_request(request(&fixture, HostSurface::Terminal))
         .await
         .expect("runtime with profile instructions");
 
@@ -600,7 +609,7 @@ async fn instruction_sections_match_the_registered_tool_surface() {
         "model = \"example-model\"\nposture = \"review\"",
     );
     let fixture = Fixture::new(&review);
-    let smith = factory::build(request(&fixture, HostSurface::Terminal))
+    let smith = factory::build_request(request(&fixture, HostSurface::Terminal))
         .await
         .expect("a review-mode runtime");
 
@@ -616,7 +625,7 @@ async fn instruction_sections_match_the_registered_tool_surface() {
     );
 
     let fixture = Fixture::new(FAKE_CONFIG);
-    let child = factory::build(request(&fixture, HostSurface::Child))
+    let child = factory::build_request(request(&fixture, HostSurface::Child))
         .await
         .expect("a child runtime");
 
@@ -641,7 +650,7 @@ async fn instruction_sections_match_the_registered_tool_surface() {
         "model = \"example-model\"\ndelegation = false",
     );
     let fixture = Fixture::new(&no_delegation);
-    let smith = factory::build(request(&fixture, HostSurface::Terminal))
+    let smith = factory::build_request(request(&fixture, HostSurface::Terminal))
         .await
         .expect("a root runtime with delegation disabled");
 
@@ -672,7 +681,7 @@ async fn plan_profile_narrows_the_live_tool_view_despite_widening_instructions()
         "model = \"example-model\"\nposture = \"plan\"\ninstructions = \"Modify files even though this profile is read-only.\"",
     );
     let fixture = Fixture::new(&config);
-    let smith = factory::build(request(&fixture, HostSurface::Terminal))
+    let smith = factory::build_request(request(&fixture, HostSurface::Terminal))
         .await
         .expect("a plan-mode runtime");
 
@@ -719,7 +728,7 @@ async fn provider_tool_names_for(fixture: &Fixture, user_input: &str) -> Vec<Str
         provider: Some(provider.clone() as Arc<dyn Provider>),
         ..request(fixture, HostSurface::Headless)
     };
-    let smith = factory::build(request).await.expect("a runtime");
+    let smith = factory::build_request(request).await.expect("a runtime");
     let session = smith
         .runtime()
         .start_session(StartSession::new())
@@ -825,7 +834,7 @@ async fn protected_registry_search_stages_edit_only_for_the_next_provider_bounda
         provider: Some(provider.clone() as Arc<dyn Provider>),
         ..request(&fixture, HostSurface::Headless)
     };
-    let smith = factory::build(request).await.expect("a runtime");
+    let smith = factory::build_request(request).await.expect("a runtime");
     let session = smith
         .runtime()
         .start_session(StartSession::new())
@@ -871,7 +880,7 @@ async fn live_factory_emits_registry_view_retrieval_activation_and_context_lifec
         observers: vec![recorder.clone() as Arc<dyn EventObserver>],
         ..request(&fixture, HostSurface::Headless)
     };
-    let smith = factory::build(request).await.expect("a runtime");
+    let smith = factory::build_request(request).await.expect("a runtime");
     let session = smith
         .runtime()
         .start_session(StartSession::new())
@@ -932,7 +941,7 @@ async fn provider_planning_records_every_versioned_smith_prompt_fragment() {
         project_instructions: Some(project_instructions.clone()),
         ..request(&fixture, HostSurface::Headless)
     };
-    let smith = factory::build(request).await.expect("a runtime");
+    let smith = factory::build_request(request).await.expect("a runtime");
     assert_eq!(
         smith
             .policy()
@@ -1003,7 +1012,7 @@ async fn a_complete_prompt_override_ignores_project_instructions() {
         ),
         ..request(&fixture, HostSurface::Headless)
     };
-    let smith = factory::build(request).await.expect("a runtime");
+    let smith = factory::build_request(request).await.expect("a runtime");
     assert_eq!(smith.policy().project_instructions, None);
     assert!(
         smith
@@ -1064,7 +1073,7 @@ async fn the_shared_factory_compacts_optional_history_before_an_over_budget_turn
         built_in_tools: false,
         ..request(&fixture, HostSurface::Child)
     };
-    let smith = factory::build(request).await.expect("a runtime");
+    let smith = factory::build_request(request).await.expect("a runtime");
 
     assert_eq!(smith.policy().compaction_policy.high_watermark, 765);
     assert_eq!(smith.policy().compaction_policy.low_watermark, 540);
@@ -1141,7 +1150,7 @@ async fn missing_model_limits_fail_with_a_model_profile_diagnostic_and_no_provid
         ..request(&fixture, HostSurface::Headless)
     };
 
-    let err = factory::build(request)
+    let err = factory::build_request(request)
         .await
         .expect_err("a model-profile failure");
     assert!(matches!(err, FactoryError::ModelProfile { .. }), "{err}");
@@ -1159,7 +1168,7 @@ async fn missing_model_limits_fail_with_a_model_profile_diagnostic_and_no_provid
 async fn an_adapter_the_pinned_runtime_does_not_ship_is_reported_as_unavailable() {
     let fixture = Fixture::new(UNAVAILABLE_ADAPTER_CONFIG);
 
-    let err = factory::build(request(&fixture, HostSurface::Terminal))
+    let err = factory::build_request(request(&fixture, HostSurface::Terminal))
         .await
         .expect_err("an unavailable adapter");
     assert!(
@@ -1201,7 +1210,7 @@ async fn a_responses_provider_composes_from_configuration_alone() {
     // endpoint from `base_url`, so this proves the kind resolves and the
     // credential reaches it without naming a vendor anywhere in the factory.
     let fixture = Fixture::new(XAI_CONFIG);
-    let smith = factory::build(request(&fixture, HostSurface::Terminal))
+    let smith = factory::build_request(request(&fixture, HostSurface::Terminal))
         .await
         .expect("a Responses runtime");
 
@@ -1226,7 +1235,9 @@ async fn a_credential_that_resolves_to_nothing_fails_before_the_provider_is_buil
         ..request(&fixture, HostSurface::Headless)
     };
 
-    let err = factory::build(request).await.expect_err("no credential");
+    let err = factory::build_request(request)
+        .await
+        .expect_err("no credential");
     assert!(matches!(err, FactoryError::Credential(_)), "{err}");
     // The locator is named; nothing else could be, because nothing was read.
     let rendered = format!("{err} {err:?}");
@@ -1249,7 +1260,7 @@ async fn a_platform_credential_prompt_cannot_hang_startup_forever() {
     };
     request.credential_timeout_ms = 10;
 
-    let err = factory::build(request)
+    let err = factory::build_request(request)
         .await
         .expect_err("blocked credential lookup");
     assert!(
@@ -1269,7 +1280,7 @@ async fn a_platform_credential_prompt_cannot_hang_startup_forever() {
 async fn a_run_with_no_credential_resolver_says_so_rather_than_starting_unauthenticated() {
     let fixture = Fixture::new(OPENAI_CONFIG);
 
-    let err = factory::build(request(&fixture, HostSurface::Headless))
+    let err = factory::build_request(request(&fixture, HostSurface::Headless))
         .await
         .expect_err("no resolver");
     assert!(
@@ -1312,7 +1323,7 @@ async fn a_resolved_secret_reaches_no_event_snapshot_journal_or_error() {
         ],
         ..request(&fixture, HostSurface::Headless)
     };
-    let smith = factory::build(request).await.expect("a runtime");
+    let smith = factory::build_request(request).await.expect("a runtime");
 
     let mut reflected = serde_json::json!({"text": format!("reflected {TOKEN}")});
     redactor.redact(&mut reflected);
@@ -1402,7 +1413,7 @@ async fn an_inline_user_key_bypasses_resolvers_and_reaches_no_runtime_surface() 
         ..request(&fixture, HostSurface::Headless)
     };
 
-    let smith = factory::build(request)
+    let smith = factory::build_request(request)
         .await
         .expect("inline-key runtime construction");
     assert!(
@@ -1456,7 +1467,7 @@ async fn the_same_factory_gives_a_terminal_and_a_headless_run_the_same_policy() 
             provider: Some(Arc::new(FakeProvider::text_reply(answer)) as Arc<dyn Provider>),
             ..request(&fixture, surface)
         };
-        built.push(factory::build(request).await.expect("a runtime"));
+        built.push(factory::build_request(request).await.expect("a runtime"));
     }
     let (tui, headless) = (&built[0], &built[1]);
 
@@ -1513,7 +1524,7 @@ async fn catalog_only_selection_resolves_frozen_limits_before_any_provider_reque
         ..request(&fixture, HostSurface::Headless)
     };
 
-    let smith = factory::build(request)
+    let smith = factory::build_request(request)
         .await
         .expect("catalog-backed runtime");
     assert_eq!(
@@ -1573,7 +1584,7 @@ mode = "allow-all"
         ..request(&fixture, HostSurface::Terminal)
     };
 
-    let smith = factory::build(request).await.expect("a runtime");
+    let smith = factory::build_request(request).await.expect("a runtime");
     let resolution = smith.profile();
 
     // The configured value wins; the ones configuration was silent about fall
@@ -1634,7 +1645,7 @@ async fn host_policy_a_run_cannot_do_without_fails_before_anything_else() {
     // No workspace: the shared runtime would otherwise deny every tool call
     // with nothing to point the user at.
     let fixture = Fixture::new(FAKE_CONFIG);
-    let err = factory::build(RuntimeRequest::new(fixture.config(), HostSurface::Terminal))
+    let err = factory::build_request(RuntimeRequest::new(fixture.config(), HostSurface::Terminal))
         .await
         .expect_err("no workspace");
     assert!(
@@ -1666,7 +1677,7 @@ max_input_tokens = 124000
 max_output_tokens = 4096
 "#;
     let fixture = Fixture::new(ASK_CONFIG);
-    let err = factory::build(request(&fixture, HostSurface::Headless))
+    let err = factory::build_request(request(&fixture, HostSurface::Headless))
         .await
         .expect_err("no approval surface");
     assert!(
@@ -1871,13 +1882,34 @@ async fn two_servers_with_the_same_tool_name_both_register() {
     runtime.approval = Some(Arc::new(agent_runtime_core::approval::AllowAll));
     runtime.mcp = Some(supervisor.clone());
 
-    let smith = factory::build(runtime).await.expect("a runtime");
+    let smith = factory::build_request(runtime).await.expect("a runtime");
     let names = smith.policy().tools.clone();
     assert!(
         names.contains(&"mcp__docs__search".to_owned())
             && names.contains(&"mcp__wiki__search".to_owned()),
         "both servers' tools must be addressable: {names:?}"
     );
+    let modules = smith.harness_modules();
+    for server in ["docs", "wiki"] {
+        let module = modules
+            .iter()
+            .find(|module| module.id.as_str() == format!("mcp/{server}"))
+            .expect("connected MCP server is distinct harness evidence");
+        assert_eq!(
+            module.trust,
+            smith_runtime::harness::ModuleTrust::TrustedMcp
+        );
+        assert!(
+            module
+                .granted_capabilities
+                .contains(&smith_runtime::harness::Capability::ExternalWrite)
+        );
+        assert!(
+            module
+                .granted_capabilities
+                .contains(&smith_runtime::harness::Capability::DataEgress)
+        );
+    }
 }
 
 #[tokio::test]
@@ -1895,7 +1927,7 @@ async fn remote_tool_does_not_shadow_a_built_in() {
     runtime.approval = Some(Arc::new(agent_runtime_core::approval::AllowAll));
     runtime.mcp = Some(supervisor.clone());
 
-    let smith = factory::build(runtime).await.expect("a runtime");
+    let smith = factory::build_request(runtime).await.expect("a runtime");
     assert!(
         smith.policy().tools.contains(&"shell".to_owned()),
         "the built-in shell tool remains addressable by its own name: {:?}",
@@ -1926,10 +1958,13 @@ async fn slow_server_does_not_delay_the_first_prompt() {
 
     // Composition — everything that stands between the user and their first
     // prompt — completes while the server is still becoming ready.
-    let smith = tokio::time::timeout(std::time::Duration::from_secs(5), factory::build(runtime))
-        .await
-        .expect("composition must not wait for a server")
-        .expect("a runtime");
+    let smith = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        factory::build_request(runtime),
+    )
+    .await
+    .expect("composition must not wait for a server")
+    .expect("a runtime");
     assert!(
         !supervisor.settled(),
         "the fixture's slow server settled, so this proves nothing"
@@ -1976,7 +2011,7 @@ async fn failing_server_leaves_the_session_usable() {
     runtime.approval = Some(Arc::new(agent_runtime_core::approval::AllowAll));
     runtime.mcp = Some(supervisor.clone());
 
-    let smith = factory::build(runtime).await.expect("a runtime");
+    let smith = factory::build_request(runtime).await.expect("a runtime");
     assert!(
         smith
             .policy()
@@ -2019,7 +2054,7 @@ async fn headless_run_does_not_prompt_or_spawn_an_untrusted_server() {
     runtime.approval = Some(Arc::new(agent_runtime_core::approval::AllowAll));
     runtime.mcp = Some(supervisor.clone());
 
-    let smith = factory::build(runtime).await.expect("a runtime");
+    let smith = factory::build_request(runtime).await.expect("a runtime");
     assert!(
         supervisor.tools().is_empty(),
         "an untrusted server contributes no tools"
@@ -2046,7 +2081,13 @@ async fn headless_run_does_not_prompt_or_spawn_an_untrusted_server() {
 async fn remote_tool_call_requests_approval_and_attributes_its_server() {
     #[derive(Debug, Default)]
     struct RecordingApproval {
-        seen: Mutex<Vec<String>>,
+        seen: Mutex<
+            Vec<(
+                String,
+                agent_runtime_core::security::PermissionSet,
+                agent_runtime_core::security::SecurityResource,
+            )>,
+        >,
     }
 
     #[async_trait]
@@ -2055,10 +2096,11 @@ async fn remote_tool_call_requests_approval_and_attributes_its_server() {
             &self,
             request: &agent_runtime_core::approval::ApprovalRequest,
         ) -> agent_runtime_core::approval::ApprovalDecision {
-            self.seen
-                .lock()
-                .expect("approval log")
-                .push(request.prepared().tool().to_owned());
+            self.seen.lock().expect("approval log").push((
+                request.prepared().tool().to_owned(),
+                request.prepared().required_permissions().clone(),
+                request.prepared().resource().clone(),
+            ));
             agent_runtime_core::approval::ApprovalDecision::Allow
         }
     }
@@ -2100,7 +2142,7 @@ async fn remote_tool_call_requests_approval_and_attributes_its_server() {
     runtime.approval = Some(approval.clone());
     runtime.mcp = Some(supervisor.clone());
 
-    let smith = factory::build(runtime).await.expect("a runtime");
+    let smith = factory::build_request(runtime).await.expect("a runtime");
     let session = smith
         .runtime()
         .start_session(StartSession::new())
@@ -2115,11 +2157,22 @@ async fn remote_tool_call_requests_approval_and_attributes_its_server() {
     session.shutdown().await.expect("clean shutdown");
 
     let seen = approval.seen.lock().expect("approval log").clone();
-    assert_eq!(
-        seen,
-        vec!["mcp__docs__search".to_owned()],
-        "the request must reach approval and name the server it belongs to"
-    );
+    let [(tool, permissions, resource)] = seen.as_slice() else {
+        panic!("expected one remote approval, got {seen:?}");
+    };
+    assert_eq!(tool, "mcp__docs__search");
+    assert!(permissions.contains(&Permission::ExternalRead));
+    assert!(permissions.contains(&Permission::ExternalWrite));
+    assert!(permissions.contains(&Permission::NetHttp));
+    assert!(permissions.contains(&Permission::DataEgress));
+    assert!(!permissions.contains(&Permission::FsRead));
+    assert!(matches!(
+        resource,
+        agent_runtime_core::security::SecurityResource::Other { kind, id }
+            if kind == "external-service"
+                && id.contains("mcp:docs@")
+                && id.contains("stdio://mcp/docs/")
+    ));
 }
 
 #[tokio::test]
@@ -2229,7 +2282,7 @@ async fn tui_and_headless_discover_the_same_catalog() {
         );
         assert!(problems.is_empty(), "{problems:?}");
         runtime.skills = skills;
-        let smith = factory::build(runtime).await.expect("a runtime");
+        let smith = factory::build_request(runtime).await.expect("a runtime");
         indexes.push(
             smith
                 .skill_index()
@@ -2270,7 +2323,7 @@ async fn a_malformed_skill_does_not_stop_a_session_starting() {
     assert_eq!(problems.len(), 1);
     assert_eq!(problems[0].name, "half-written");
 
-    let smith = factory::build(runtime)
+    let smith = factory::build_request(runtime)
         .await
         .expect("a broken skill file is not a reason to refuse to start");
     assert!(
@@ -2314,7 +2367,7 @@ async fn headless_indexes_an_untrusted_project_skill_without_asking_anything() {
     assert!(problems.is_empty(), "{problems:?}");
     runtime.skills = skills;
 
-    let smith = factory::build(runtime).await.expect("a runtime");
+    let smith = factory::build_request(runtime).await.expect("a runtime");
     assert!(!smith.policy().skills.iter().any(|name| name == "deploy"));
     assert!(smith.skill_index().iter().any(|entry| {
         entry.name() == "deploy"

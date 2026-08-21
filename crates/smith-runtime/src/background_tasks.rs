@@ -1,8 +1,9 @@
 //! Session-owned background task registry and lifecycle management.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use agent_runtime::runtime::{InjectedContent, SessionHandle};
@@ -12,12 +13,16 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::journal::EventJournal;
 
 /// Default grace period before SIGKILLing a process group.
 const GRACE: Duration = Duration::from_millis(500);
+
+/// Bound for an acknowledged stop, including process cleanup and terminal
+/// lifecycle publication.
+const STOP_ACK_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Hard cap on task output spool file size (8 MiB).
 pub const MAX_SPOOL_BYTES: usize = 8 * 1024 * 1024;
@@ -116,7 +121,15 @@ struct TaskEntry {
     spool_path: PathBuf,
     status: TaskStatus,
     timeout_ms: Option<u64>,
-    stop_tx: Option<tokio::sync::oneshot::Sender<TaskStatus>>,
+    stop_tx: Option<oneshot::Sender<StopRequest>>,
+    completion: watch::Receiver<TaskStatus>,
+}
+
+/// One terminal request and the acknowledgement returned after all terminal
+/// lifecycle side effects have been published.
+struct StopRequest {
+    reason: TaskStatus,
+    completed: oneshot::Sender<TaskStatus>,
 }
 
 /// Session-scoped state in the task registry.
@@ -147,19 +160,25 @@ impl SessionTaskState {
     }
 }
 
-/// Global registry managing background shell tasks.
+/// One host-owned registry managing background shell tasks.
 #[derive(Default)]
 pub struct BackgroundTaskRegistry {
     sessions: RwLock<HashMap<SessionId, Arc<Mutex<SessionTaskState>>>>,
 }
 
-static REGISTRY: OnceLock<BackgroundTaskRegistry> = OnceLock::new();
+impl fmt::Debug for BackgroundTaskRegistry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let sessions = self.sessions.read().map(|sessions| sessions.len()).ok();
+        f.debug_struct("BackgroundTaskRegistry")
+            .field("session_count", &sessions)
+            .finish()
+    }
+}
 
 impl BackgroundTaskRegistry {
-    /// The process-wide registry, keyed by session so concurrent sessions
-    /// never see each other's tasks.
-    pub fn global() -> &'static BackgroundTaskRegistry {
-        REGISTRY.get_or_init(BackgroundTaskRegistry::default)
+    /// Creates an isolated registry for one composed Smith host.
+    pub fn new() -> Self {
+        Self::default()
     }
 
     fn get_or_create_session(&self, session_id: &SessionId) -> Arc<Mutex<SessionTaskState>> {
@@ -228,7 +247,8 @@ impl BackgroundTaskRegistry {
             let _ = j.record_task_started(&task_id).await;
         }
 
-        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<TaskStatus>();
+        let (stop_tx, stop_rx) = oneshot::channel::<StopRequest>();
+        let (completion_tx, completion) = watch::channel(TaskStatus::Running);
 
         {
             let mut state = session.lock().unwrap();
@@ -242,6 +262,7 @@ impl BackgroundTaskRegistry {
                     status: TaskStatus::Running,
                     timeout_ms,
                     stop_tx: Some(stop_tx),
+                    completion,
                 },
             );
         }
@@ -260,6 +281,7 @@ impl BackgroundTaskRegistry {
                 0,
                 timeout_ms,
                 stop_rx,
+                completion_tx,
                 journal,
                 session_handle,
             )
@@ -326,7 +348,8 @@ impl BackgroundTaskRegistry {
             let _ = j.record_task_started(&task_id).await;
         }
 
-        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<TaskStatus>();
+        let (stop_tx, stop_rx) = oneshot::channel::<StopRequest>();
+        let (completion_tx, completion) = watch::channel(TaskStatus::Running);
 
         {
             let mut state = session.lock().unwrap();
@@ -340,6 +363,7 @@ impl BackgroundTaskRegistry {
                     status: TaskStatus::Running,
                     timeout_ms,
                     stop_tx: Some(stop_tx),
+                    completion,
                 },
             );
         }
@@ -360,6 +384,7 @@ impl BackgroundTaskRegistry {
                 initial_bytes,
                 timeout_ms,
                 stop_rx,
+                completion_tx,
                 journal,
                 session_handle,
             )
@@ -423,7 +448,7 @@ impl BackgroundTaskRegistry {
         task_id: &str,
     ) -> Result<TaskStatus, RuntimeError> {
         let session = self.get_or_create_session(session_id);
-        let stop_tx = {
+        let (stop_tx, completion) = {
             let mut state = session.lock().unwrap();
             let entry = state.tasks.get_mut(task_id).ok_or_else(|| {
                 RuntimeError::new(
@@ -436,19 +461,27 @@ impl BackgroundTaskRegistry {
                 return Ok(entry.status.clone());
             }
 
-            entry.stop_tx.take()
+            (entry.stop_tx.take(), entry.completion.clone())
         };
 
         if let Some(tx) = stop_tx {
-            let _ = tx.send(TaskStatus::Stopped);
+            let (completed, acknowledgement) = oneshot::channel();
+            let request = StopRequest {
+                reason: TaskStatus::Stopped,
+                completed,
+            };
+            let _ = tx.send(request);
+
+            return await_terminal_acknowledgement(
+                session_id,
+                task_id,
+                completion,
+                Some(acknowledgement),
+            )
+            .await;
         }
 
-        let state = session.lock().unwrap();
-        if let Some(entry) = state.tasks.get(task_id) {
-            Ok(entry.status.clone())
-        } else {
-            Ok(TaskStatus::Stopped)
-        }
+        await_terminal_acknowledgement(session_id, task_id, completion, None).await
     }
 
     /// Registers a channel to signal manual backgrounding on a foreground shell call.
@@ -498,7 +531,7 @@ impl BackgroundTaskRegistry {
     /// Stops all running background tasks for a session.
     pub fn stop_all_session_tasks(&self, session_id: &SessionId, reason: TaskStatus) {
         let session = self.get_or_create_session(session_id);
-        let txs: Vec<tokio::sync::oneshot::Sender<TaskStatus>> = {
+        let txs: Vec<oneshot::Sender<StopRequest>> = {
             let mut state = session.lock().unwrap();
             state
                 .tasks
@@ -514,9 +547,55 @@ impl BackgroundTaskRegistry {
         };
 
         for tx in txs {
-            let _ = tx.send(reason.clone());
+            let (completed, _acknowledgement) = oneshot::channel();
+            let _ = tx.send(StopRequest {
+                reason: reason.clone(),
+                completed,
+            });
         }
     }
+}
+
+async fn await_terminal_acknowledgement(
+    session_id: &SessionId,
+    task_id: &str,
+    mut completion: watch::Receiver<TaskStatus>,
+    acknowledgement: Option<oneshot::Receiver<TaskStatus>>,
+) -> Result<TaskStatus, RuntimeError> {
+    let wait = async {
+        if let Some(acknowledgement) = acknowledgement
+            && let Ok(status) = acknowledgement.await
+        {
+            return Ok(status);
+        }
+
+        loop {
+            let status = completion.borrow().clone();
+            if status.is_terminal() {
+                return Ok(status);
+            }
+            completion.changed().await.map_err(|_| {
+                RuntimeError::new(
+                    ErrorKind::Internal,
+                    format!(
+                        "background task {task_id} in session {session_id} lost its completion signal"
+                    ),
+                )
+            })?;
+        }
+    };
+
+    tokio::time::timeout(STOP_ACK_TIMEOUT, wait)
+        .await
+        .map_err(|_| {
+            RuntimeError::new(
+                ErrorKind::Tool,
+                format!(
+                    "background task {task_id} did not confirm process cleanup within {}ms",
+                    STOP_ACK_TIMEOUT.as_millis()
+                ),
+            )
+        })?
 }
 
 impl From<TaskStatus> for smith_tools::background::BackgroundTaskStatus {
@@ -532,18 +611,52 @@ impl From<TaskStatus> for smith_tools::background::BackgroundTaskStatus {
     }
 }
 
-/// Adapts the process-global [`BackgroundTaskRegistry`] to the
-/// [`smith_tools::background::BackgroundTaskHost`] seam, so `smith-tools`'
-/// `shell`, `task_output`, and `task_stop` can reach session-owned background
-/// tasks without depending on this crate.
-///
-/// Installed once, during runtime composition (`factory::prepare_capability_stage`),
-/// via [`smith_tools::background::install`]. Stateless: every method reaches
-/// through to [`BackgroundTaskRegistry::global`], the same singleton the
-/// runtime's own session wiring (`register_session_context`,
-/// `running_tasks`, and friends) already uses.
-#[derive(Debug, Default)]
-pub struct RegistryBackgroundTaskHost;
+/// Factory-owned background services shared by a runtime's tools and host
+/// lifecycle, but isolated from every other composed runtime in the process.
+#[derive(Debug, Clone)]
+pub struct BackgroundServices {
+    registry: Arc<BackgroundTaskRegistry>,
+    host: Arc<dyn smith_tools::background::BackgroundTaskHost>,
+}
+
+impl BackgroundServices {
+    /// Creates one isolated registry and its tool-facing adapter.
+    pub fn new() -> Self {
+        let registry = Arc::new(BackgroundTaskRegistry::new());
+        let host = Arc::new(RegistryBackgroundTaskHost::new(registry.clone()));
+        Self { registry, host }
+    }
+
+    /// Concrete lifecycle service used for registration, exit policy, and
+    /// shutdown.
+    pub fn registry(&self) -> &Arc<BackgroundTaskRegistry> {
+        &self.registry
+    }
+
+    /// Narrow adapter injected into background-capable built-in tools.
+    pub fn host(&self) -> Arc<dyn smith_tools::background::BackgroundTaskHost> {
+        self.host.clone()
+    }
+}
+
+impl Default for BackgroundServices {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Adapts one explicitly owned [`BackgroundTaskRegistry`] to the tool seam.
+#[derive(Debug)]
+pub struct RegistryBackgroundTaskHost {
+    registry: Arc<BackgroundTaskRegistry>,
+}
+
+impl RegistryBackgroundTaskHost {
+    /// Binds the adapter to an exact host-owned registry instance.
+    pub fn new(registry: Arc<BackgroundTaskRegistry>) -> Self {
+        Self { registry }
+    }
+}
 
 #[async_trait]
 impl smith_tools::background::BackgroundTaskHost for RegistryBackgroundTaskHost {
@@ -554,7 +667,8 @@ impl smith_tools::background::BackgroundTaskHost for RegistryBackgroundTaskHost 
         cwd: PathBuf,
         timeout_ms: Option<u64>,
     ) -> Result<smith_tools::background::SpawnedTask, RuntimeError> {
-        let (task_id, spool_ref) = BackgroundTaskRegistry::global()
+        let (task_id, spool_ref) = self
+            .registry
             .spawn_background_task(&session, command, cwd, timeout_ms)
             .await?;
         Ok(smith_tools::background::SpawnedTask { task_id, spool_ref })
@@ -570,7 +684,8 @@ impl smith_tools::background::BackgroundTaskHost for RegistryBackgroundTaskHost 
         captured_so_far: String,
         lines: mpsc::Receiver<String>,
     ) -> Result<smith_tools::background::SpawnedTask, RuntimeError> {
-        let (task_id, spool_ref) = BackgroundTaskRegistry::global()
+        let (task_id, spool_ref) = self
+            .registry
             .adopt_foreground_task(
                 &session,
                 command,
@@ -595,7 +710,8 @@ impl smith_tools::background::BackgroundTaskHost for RegistryBackgroundTaskHost 
         offset: usize,
         limit: usize,
     ) -> Result<smith_tools::background::BackgroundTaskOutput, RuntimeError> {
-        let result = BackgroundTaskRegistry::global()
+        let result = self
+            .registry
             .get_task_output(&session, &task_id, offset, limit)
             .await?;
         Ok(smith_tools::background::BackgroundTaskOutput {
@@ -613,16 +729,14 @@ impl smith_tools::background::BackgroundTaskHost for RegistryBackgroundTaskHost 
         session: SessionId,
         task_id: String,
     ) -> Result<smith_tools::background::BackgroundTaskStatus, RuntimeError> {
-        let status = BackgroundTaskRegistry::global()
-            .stop_task(&session, &task_id)
-            .await?;
+        let status = self.registry.stop_task(&session, &task_id).await?;
         Ok(status.into())
     }
 
-    fn register_foreground_signal(&self, session: SessionId) -> oneshot::Receiver<()> {
+    fn register_foreground_signal(&self, session: SessionId) -> Option<oneshot::Receiver<()>> {
         let (tx, rx) = oneshot::channel();
-        BackgroundTaskRegistry::global().register_foreground_signal(&session, tx);
-        rx
+        self.registry.register_foreground_signal(&session, tx);
+        Some(rx)
     }
 }
 
@@ -698,7 +812,8 @@ async fn run_task_worker_append(
     spool_path: PathBuf,
     initial_bytes: usize,
     timeout_ms: Option<u64>,
-    mut stop_rx: tokio::sync::oneshot::Receiver<TaskStatus>,
+    mut stop_rx: oneshot::Receiver<StopRequest>,
+    completion_tx: watch::Sender<TaskStatus>,
     journal: Option<Arc<EventJournal>>,
     session_handle: Option<SessionHandle>,
 ) {
@@ -772,18 +887,21 @@ async fn run_task_worker_append(
         }
     };
 
-    let terminal_status = tokio::select! {
+    let (terminal_status, stop_acknowledgement) = tokio::select! {
         status = child.wait() => {
             let code = status.ok().and_then(|s| s.code());
-            TaskStatus::Exited { code }
+            (TaskStatus::Exited { code }, None)
         }
-        requested_status = &mut stop_rx => {
+        request = &mut stop_rx => {
             stop_process_group(&mut child, group_pid).await;
-            requested_status.unwrap_or(TaskStatus::Stopped)
+            match request {
+                Ok(request) => (request.reason, Some(request.completed)),
+                Err(_) => (TaskStatus::Stopped, None),
+            }
         }
         _ = timeout_fut => {
             stop_process_group(&mut child, group_pid).await;
-            TaskStatus::DeadlineKill
+            (TaskStatus::DeadlineKill, None)
         }
     };
 
@@ -821,6 +939,11 @@ async fn run_task_worker_append(
 
         let _ = handle.inject(content);
     }
+
+    completion_tx.send_replace(terminal_status.clone());
+    if let Some(completed) = stop_acknowledgement {
+        let _ = completed.send(terminal_status);
+    }
 }
 
 async fn read_spool_tail(path: &Path) -> String {
@@ -845,9 +968,7 @@ async fn read_spool_tail(path: &Path) -> String {
 mod tests {
     use super::*;
 
-    /// A fresh session ID per test: the registry is a process-global
-    /// singleton, so tests that shared one session ID would see each other's
-    /// tasks.
+    /// A fresh session ID per test keeps spool paths unambiguous in diagnostics.
     fn unique_session() -> SessionId {
         SessionId::new(format!("bg-registry-test-{}", uuid::Uuid::new_v4()))
     }
@@ -857,9 +978,13 @@ mod tests {
     /// Every worker transition (exit, deadline kill, stop) is asynchronous
     /// relative to the call that triggers it, so tests assert on the settled
     /// state rather than racing the registry's own bookkeeping.
-    async fn wait_for_terminal(session: &SessionId, task_id: &str) -> TaskStatus {
+    async fn wait_for_terminal(
+        registry: &BackgroundTaskRegistry,
+        session: &SessionId,
+        task_id: &str,
+    ) -> TaskStatus {
         for _ in 0..500 {
-            let result = BackgroundTaskRegistry::global()
+            let result = registry
                 .get_task_output(session, task_id, 0, 1)
                 .await
                 .unwrap();
@@ -873,9 +998,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_background_spawn_returns_promptly_and_the_process_keeps_running() {
+        let registry = BackgroundTaskRegistry::new();
         let session = unique_session();
         let started = std::time::Instant::now();
-        let (task_id, spool_ref) = BackgroundTaskRegistry::global()
+        let (task_id, spool_ref) = registry
             .spawn_background_task(&session, "sleep 0.5".into(), std::env::temp_dir(), None)
             .await
             .unwrap();
@@ -891,7 +1017,7 @@ mod tests {
             "{spool_ref}"
         );
 
-        let running = BackgroundTaskRegistry::global().running_tasks(&session);
+        let running = registry.running_tasks(&session);
         assert!(
             running
                 .iter()
@@ -899,19 +1025,20 @@ mod tests {
             "the process must still be running right after the call resolves: {running:?}"
         );
 
-        let status = wait_for_terminal(&session, &task_id).await;
+        let status = wait_for_terminal(&registry, &session, &task_id).await;
         assert_eq!(status, TaskStatus::Exited { code: Some(0) });
     }
 
     #[tokio::test]
     async fn an_explicit_deadline_kills_a_background_task() {
+        let registry = BackgroundTaskRegistry::new();
         let session = unique_session();
-        let (task_id, _) = BackgroundTaskRegistry::global()
+        let (task_id, _) = registry
             .spawn_background_task(&session, "sleep 30".into(), std::env::temp_dir(), Some(150))
             .await
             .unwrap();
 
-        let status = wait_for_terminal(&session, &task_id).await;
+        let status = wait_for_terminal(&registry, &session, &task_id).await;
         assert_eq!(status, TaskStatus::DeadlineKill);
         // This is exactly the word `run_task_worker_append` puts in the
         // terminal notification's `status` field, so proving it here proves
@@ -921,29 +1048,23 @@ mod tests {
 
     #[tokio::test]
     async fn stop_task_is_idempotent_and_unknown_ids_report_a_stable_error() {
+        let registry = BackgroundTaskRegistry::new();
         let session = unique_session();
-        let (task_id, _) = BackgroundTaskRegistry::global()
+        let (task_id, _) = registry
             .spawn_background_task(&session, "sleep 30".into(), std::env::temp_dir(), None)
             .await
             .unwrap();
 
-        let _ = BackgroundTaskRegistry::global()
-            .stop_task(&session, &task_id)
-            .await
-            .unwrap();
-        let status = wait_for_terminal(&session, &task_id).await;
+        let status = registry.stop_task(&session, &task_id).await.unwrap();
         assert_eq!(status, TaskStatus::Stopped);
 
         // Now that the task is terminal, stopping it again must report the
         // existing state rather than erroring or re-signaling a process that
         // is already gone.
-        let again = BackgroundTaskRegistry::global()
-            .stop_task(&session, &task_id)
-            .await
-            .unwrap();
+        let again = registry.stop_task(&session, &task_id).await.unwrap();
         assert_eq!(again, TaskStatus::Stopped);
 
-        let unknown_stop = BackgroundTaskRegistry::global()
+        let unknown_stop = registry
             .stop_task(&session, "task:does-not-exist")
             .await
             .unwrap_err();
@@ -954,7 +1075,7 @@ mod tests {
             "{unknown_stop:?}"
         );
 
-        let unknown_output = BackgroundTaskRegistry::global()
+        let unknown_output = registry
             .get_task_output(&session, "task:does-not-exist", 0, 100)
             .await
             .unwrap_err();
@@ -967,7 +1088,190 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn concurrent_stops_converge_on_one_acknowledged_terminal_state() {
+        let registry = Arc::new(BackgroundTaskRegistry::new());
+        let session = unique_session();
+        let (task_id, _) = registry
+            .spawn_background_task(&session, "sleep 30".into(), std::env::temp_dir(), None)
+            .await
+            .unwrap();
+
+        let first_registry = registry.clone();
+        let first_session = session.clone();
+        let first_task = task_id.clone();
+        let first =
+            tokio::spawn(
+                async move { first_registry.stop_task(&first_session, &first_task).await },
+            );
+        let second_registry = registry.clone();
+        let second_session = session.clone();
+        let second_task = task_id.clone();
+        let second = tokio::spawn(async move {
+            second_registry
+                .stop_task(&second_session, &second_task)
+                .await
+        });
+
+        let first = first.await.unwrap().unwrap();
+        let second = second.await.unwrap().unwrap();
+        assert_eq!(first, TaskStatus::Stopped);
+        assert_eq!(second, first);
+    }
+
+    #[tokio::test]
+    async fn natural_exit_and_deadline_races_return_the_single_winning_terminal_state() {
+        let registry = BackgroundTaskRegistry::new();
+        let session = unique_session();
+
+        let (natural, _) = registry
+            .spawn_background_task(&session, "true".into(), std::env::temp_dir(), None)
+            .await
+            .unwrap();
+        let natural_status = registry.stop_task(&session, &natural).await.unwrap();
+        assert!(natural_status.is_terminal());
+
+        let (deadline, _) = registry
+            .spawn_background_task(&session, "sleep 30".into(), std::env::temp_dir(), Some(1))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        let deadline_status = registry.stop_task(&session, &deadline).await.unwrap();
+        assert!(deadline_status.is_terminal());
+        assert!(matches!(
+            deadline_status,
+            TaskStatus::Stopped | TaskStatus::DeadlineKill
+        ));
+    }
+
+    #[tokio::test]
+    async fn shutdown_and_tool_stop_share_the_worker_terminal_transition() {
+        let registry = BackgroundTaskRegistry::new();
+        let session = unique_session();
+        let (task_id, _) = registry
+            .spawn_background_task(&session, "sleep 30".into(), std::env::temp_dir(), None)
+            .await
+            .unwrap();
+
+        registry.stop_all_session_tasks(&session, TaskStatus::Shutdown);
+        let status = registry.stop_task(&session, &task_id).await.unwrap();
+        assert_eq!(status, TaskStatus::Shutdown);
+    }
+
+    #[tokio::test]
+    async fn an_unconfirmed_cleanup_times_out_instead_of_reporting_running() {
+        let registry = BackgroundTaskRegistry::new();
+        let session = unique_session();
+        let state = registry.get_or_create_session(&session);
+        let (_completion_tx, completion) = watch::channel(TaskStatus::Running);
+        {
+            let mut state = state.lock().unwrap();
+            state.tasks.insert(
+                "task:stuck".into(),
+                TaskEntry {
+                    task_id: "task:stuck".into(),
+                    command: "stuck".into(),
+                    cwd: std::env::temp_dir(),
+                    spool_path: std::env::temp_dir().join("stuck.log"),
+                    status: TaskStatus::Running,
+                    timeout_ms: None,
+                    stop_tx: None,
+                    completion,
+                },
+            );
+        }
+
+        let error = registry
+            .stop_task(&session, "task:stuck")
+            .await
+            .expect_err("an unconfirmed cleanup must fail");
+        assert_eq!(error.kind, ErrorKind::Tool);
+        assert!(error.message.contains("did not confirm process cleanup"));
+    }
+
+    #[tokio::test]
+    async fn two_service_bundles_isolate_task_ids_spools_signals_and_shutdown() {
+        let first = BackgroundServices::new();
+        let second = BackgroundServices::new();
+        let session = SessionId::new("same-session-id");
+        let first_spool = tempfile::tempdir().unwrap();
+        let second_spool = tempfile::tempdir().unwrap();
+        first.registry().register_session_context(
+            &session,
+            None,
+            None,
+            first_spool.path().to_path_buf(),
+        );
+        second.registry().register_session_context(
+            &session,
+            None,
+            None,
+            second_spool.path().to_path_buf(),
+        );
+
+        let first_signal = first
+            .host()
+            .register_foreground_signal(session.clone())
+            .unwrap();
+        let mut second_signal = second
+            .host()
+            .register_foreground_signal(session.clone())
+            .unwrap();
+        assert!(first.registry().trigger_manual_backgrounding(&session));
+        first_signal.await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), &mut second_signal)
+                .await
+                .is_err()
+        );
+        assert!(second.registry().trigger_manual_backgrounding(&session));
+        second_signal.await.unwrap();
+
+        let (first_task, _) = first
+            .registry()
+            .spawn_background_task(&session, "sleep 30".into(), std::env::temp_dir(), None)
+            .await
+            .unwrap();
+        let (second_task, _) = second
+            .registry()
+            .spawn_background_task(&session, "sleep 30".into(), std::env::temp_dir(), None)
+            .await
+            .unwrap();
+        assert_eq!(first_task, "task:1");
+        assert_eq!(second_task, "task:1");
+        assert!(
+            first.registry().running_tasks(&session)[0]
+                .spool_path
+                .starts_with(first_spool.path())
+        );
+        assert!(
+            second.registry().running_tasks(&session)[0]
+                .spool_path
+                .starts_with(second_spool.path())
+        );
+
+        first
+            .registry()
+            .stop_all_session_tasks(&session, TaskStatus::Shutdown);
+        let first_status = first
+            .registry()
+            .stop_task(&session, &first_task)
+            .await
+            .unwrap();
+        assert_eq!(first_status, TaskStatus::Shutdown);
+        assert_eq!(second.registry().running_tasks(&session).len(), 1);
+        assert_eq!(
+            second
+                .registry()
+                .stop_task(&session, &second_task)
+                .await
+                .unwrap(),
+            TaskStatus::Stopped
+        );
+    }
+
+    #[tokio::test]
     async fn spool_output_is_capped_with_an_explicit_truncation_marker() {
+        let registry = BackgroundTaskRegistry::new();
         let session = unique_session();
         let bytes = MAX_SPOOL_BYTES + 1024 * 1024;
         // The spool writer does one file write per *line* (unlike `shell`'s
@@ -977,15 +1281,15 @@ mod tests {
         // nothing but I/O overhead.
         let long_line = "a".repeat(8_000);
         let command = format!("yes '{long_line}' | head -c {bytes}");
-        let (task_id, _) = BackgroundTaskRegistry::global()
+        let (task_id, _) = registry
             .spawn_background_task(&session, command, std::env::temp_dir(), None)
             .await
             .unwrap();
 
-        let status = wait_for_terminal(&session, &task_id).await;
+        let status = wait_for_terminal(&registry, &session, &task_id).await;
         assert!(matches!(status, TaskStatus::Exited { .. }), "{status:?}");
 
-        let result = BackgroundTaskRegistry::global()
+        let result = registry
             .get_task_output(&session, &task_id, 0, MAX_SPOOL_BYTES + 65536)
             .await
             .unwrap();
@@ -999,6 +1303,7 @@ mod tests {
 
     #[tokio::test]
     async fn adoption_carries_the_captured_prefix_and_keeps_draining_the_live_receiver() {
+        let registry = BackgroundTaskRegistry::new();
         let session = unique_session();
 
         // Stands in for `shell.rs`'s own reader tasks: by the time a real
@@ -1025,7 +1330,7 @@ mod tests {
         });
         let group_pid = child.id();
 
-        let (task_id, _) = BackgroundTaskRegistry::global()
+        let (task_id, _) = registry
             .adopt_foreground_task(
                 &session,
                 "sleep 0.2; echo after-adopt".into(),
@@ -1039,13 +1344,13 @@ mod tests {
             .await
             .unwrap();
 
-        let status = wait_for_terminal(&session, &task_id).await;
+        let status = wait_for_terminal(&registry, &session, &task_id).await;
         assert!(
             matches!(status, TaskStatus::Exited { code: Some(0) }),
             "{status:?}"
         );
 
-        let result = BackgroundTaskRegistry::global()
+        let result = registry
             .get_task_output(&session, &task_id, 0, 65536)
             .await
             .unwrap();

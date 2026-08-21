@@ -7,17 +7,14 @@
 //! but the dependency graph only runs one way (`smith-runtime` depends on
 //! `smith-tools`, never the reverse), so this module cannot import the real
 //! registry. Instead it declares the operations `shell`, `task_output`, and
-//! `task_stop` need, and a process-global slot a host installs an
-//! implementation into — mirroring the `OnceLock` singleton pattern the
-//! registry itself uses for its per-session state.
+//! `task_stop` need. The composing host injects one explicit implementation
+//! into those tool instances; there is no process-global fallback.
 //!
-//! A test that exercises these tools without installing a host (every unit
-//! test in this crate) must see [`installed`] return `None` and assert the
-//! resulting graceful error, not a panic — background-task support is a
-//! runtime capability, not a crate invariant.
+//! Tests that do not need process lifetime use [`unavailable`], a deliberate
+//! fail-closed adapter rather than ambient state.
 
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use agent_runtime_core::error::{ErrorKind, RuntimeError};
 use agent_runtime_core::ids::SessionId;
@@ -119,7 +116,7 @@ pub struct BackgroundTaskOutput {
 /// owning session explicitly rather than assuming a single ambient one,
 /// because one process may compose more than one session's runtime.
 #[async_trait]
-pub trait BackgroundTaskHost: Send + Sync {
+pub trait BackgroundTaskHost: Send + Sync + std::fmt::Debug {
     /// Spawns `command` as a new session-owned background task.
     ///
     /// `timeout_ms` is `None` for "no deadline" — the ordinary case for an
@@ -179,36 +176,73 @@ pub trait BackgroundTaskHost: Send + Sync {
     ///
     /// Registering again for the same session replaces any prior signal —
     /// only the most recent foreground call is backgroundable at a time.
-    fn register_foreground_signal(&self, session: SessionId) -> oneshot::Receiver<()>;
+    fn register_foreground_signal(&self, session: SessionId) -> Option<oneshot::Receiver<()>>;
 }
 
-static HOST: OnceLock<Arc<dyn BackgroundTaskHost>> = OnceLock::new();
+/// Deliberate fail-closed adapter for tool-only tests and embeddings that do
+/// not provide background process ownership.
+#[derive(Debug, Default)]
+pub struct UnavailableBackgroundTaskHost;
 
-/// Installs the process-wide background task host.
-///
-/// Idempotent by design, mirroring the registry's own `OnceLock`: composing
-/// more than one runtime in a process (tests, a host embedding multiple
-/// sessions) must not panic on a second install, and every session reaches
-/// the same underlying registry regardless, so the first installation wins.
-pub fn install(host: Arc<dyn BackgroundTaskHost>) {
-    let _ = HOST.set(host);
-}
-
-/// The installed host, if any.
-///
-/// `None` in every unit test in this crate, which compose tools directly
-/// without a runtime — that is the graceful path under test, not a gap to
-/// work around.
-pub fn installed() -> Option<Arc<dyn BackgroundTaskHost>> {
-    HOST.get().cloned()
+/// Returns an explicit unavailable background host.
+pub fn unavailable() -> Arc<dyn BackgroundTaskHost> {
+    Arc::new(UnavailableBackgroundTaskHost)
 }
 
 /// The error every tool in this seam returns when no host is installed.
 pub fn host_unavailable() -> RuntimeError {
     RuntimeError::new(
         ErrorKind::Tool,
-        "background tasks are not available in this environment: no background task host is installed",
+        "background tasks are not available in this environment: the composed host does not provide them",
     )
+}
+
+#[async_trait]
+impl BackgroundTaskHost for UnavailableBackgroundTaskHost {
+    async fn spawn(
+        &self,
+        _session: SessionId,
+        _command: String,
+        _cwd: PathBuf,
+        _timeout_ms: Option<u64>,
+    ) -> Result<SpawnedTask, RuntimeError> {
+        Err(host_unavailable())
+    }
+
+    async fn adopt(
+        &self,
+        _session: SessionId,
+        _command: String,
+        _cwd: PathBuf,
+        _child: Child,
+        _group_pid: Option<u32>,
+        _captured_so_far: String,
+        _lines: mpsc::Receiver<String>,
+    ) -> Result<SpawnedTask, RuntimeError> {
+        Err(host_unavailable())
+    }
+
+    async fn output(
+        &self,
+        _session: SessionId,
+        _task_id: String,
+        _offset: usize,
+        _limit: usize,
+    ) -> Result<BackgroundTaskOutput, RuntimeError> {
+        Err(host_unavailable())
+    }
+
+    async fn stop(
+        &self,
+        _session: SessionId,
+        _task_id: String,
+    ) -> Result<BackgroundTaskStatus, RuntimeError> {
+        Err(host_unavailable())
+    }
+
+    fn register_foreground_signal(&self, _session: SessionId) -> Option<oneshot::Receiver<()>> {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -239,16 +273,14 @@ mod tests {
         assert_eq!(BackgroundTaskStatus::Stopped.exit_code(), None);
     }
 
-    #[test]
-    fn no_host_is_installed_by_default_in_this_crates_unit_tests() {
-        // Not a hard guarantee across the whole test binary (another test may
-        // install one first), but documents the assumption every graceful-path
-        // test in this crate relies on: never install a host from a `src/`
-        // unit test.
-        if installed().is_none() {
-            let err = host_unavailable();
-            assert_eq!(err.kind, ErrorKind::Tool);
-            assert!(err.message.contains("no background task host"));
-        }
+    #[tokio::test]
+    async fn unavailable_is_an_explicit_fail_closed_adapter() {
+        let host = unavailable();
+        let err = host
+            .stop(SessionId::new("s"), "task:1".into())
+            .await
+            .expect_err("unavailable host");
+        assert_eq!(err.kind, ErrorKind::Tool);
+        assert!(err.message.contains("does not provide"));
     }
 }

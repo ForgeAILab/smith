@@ -15,11 +15,12 @@
 //! `run_in_background` and manual backgrounding (ctrl+b in the TUI) are the
 //! two ways ownership of that process group moves from this invocation to the
 //! session's background task registry, through the [`crate::background`]
-//! seam. Neither path exists without a host installing one: without it, an
+//! seam. Neither path exists without an injected host service: without it, an
 //! explicit `run_in_background` request fails clearly, and a foreground call
 //! simply has nothing to hand off to, so it runs exactly as it always has.
 
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use agent_runtime_core::error::{ErrorKind, RuntimeError};
@@ -31,6 +32,7 @@ use agent_runtime_core::tool::{
 use agent_runtime_registry::Permission;
 use async_trait::async_trait;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::oneshot;
@@ -57,17 +59,44 @@ const MAX_CAPTURE_BYTES: usize = 8 * 1024 * 1024;
 /// How long a signalled process group gets to exit before it is killed.
 const GRACE: Duration = Duration::from_millis(500);
 
-/// Runs a shell command inside the project.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct ShellTool;
+/// Resource kind used for the deliberately unsandboxed same-user host shell.
+///
+/// A working directory below the project is only process setup; it does not
+/// constrain the filesystem, inherited environment, child processes, network,
+/// or data egress available to `sh -c`.
+pub const HOST_SHELL_RESOURCE_KIND: &str = "host-shell";
+
+const HOST_SHELL_ENVIRONMENT_POLICY: &str = "inherit-host-environment-v1";
+
+/// Runs a shell command through an explicitly composed background-task host.
+#[derive(Debug, Clone)]
+pub struct ShellTool {
+    background: Arc<dyn background::BackgroundTaskHost>,
+}
+
+impl ShellTool {
+    /// Builds the tool with the background-task owner for this runtime.
+    pub fn new(background: Arc<dyn background::BackgroundTaskHost>) -> Self {
+        Self { background }
+    }
+}
+
+impl Default for ShellTool {
+    fn default() -> Self {
+        Self::new(background::unavailable())
+    }
+}
 
 #[async_trait]
 impl Tool for ShellTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec::new(
             "shell",
-            "Run a shell command in the project root. Returns combined stdout/stderr \
-             and the exit status; killed at the timeout along with anything it \
+            "Run an unsandboxed same-user host shell command with the project as its \
+             initial working directory. The command can access host files, inherited \
+             environment and credentials, child processes, the network, and data \
+             egress outside the project. Returns combined stdout/stderr and the exit \
+             status; killed at the timeout along with anything it \
              spawned. Set `run_in_background` for a long command and poll it with \
              `task_output` instead of blocking the turn.",
             json!({
@@ -94,10 +123,12 @@ impl Tool for ShellTool {
                 "required": ["command"],
                 "additionalProperties": false
             }),
-            ToolEffects::read_only()
-                .with_write("project:files")
+            ToolEffects::new(vec![])
+                .with_host_read(HOST_SHELL_RESOURCE_KIND)
+                .with_host_write(HOST_SHELL_RESOURCE_KIND, "host:filesystem")
                 .with_spawn()
-                .with_network(),
+                .with_network()
+                .with_data_egress_to("host-network:any"),
         )
         .with_permission_upper_bound(shell_permissions())
     }
@@ -134,19 +165,29 @@ impl Tool for ShellTool {
                 .ok_or_else(|| invalid("tool arguments must be a JSON object"))?
                 .insert("timeout_ms".to_owned(), Value::from(timeout_ms));
         }
-        let effects = ToolEffects::read_only()
-            .with_write(ctx.workspace.root())
+        let effects = ToolEffects::new(vec![])
+            .with_host_read(HOST_SHELL_RESOURCE_KIND)
+            .with_host_write(HOST_SHELL_RESOURCE_KIND, "host:filesystem")
             .with_spawn()
-            .with_network();
+            .with_network()
+            .with_data_egress_to("host-network:any");
+        let action_revision = host_shell_action_revision(
+            &command,
+            &cwd.display,
+            run_in_background,
+            optional_usize(&arguments, "timeout_ms").map(|value| value as u64),
+        );
         Ok(PreparedToolCall::new(
             ctx.call_id.clone(),
             "shell",
             arguments,
             shell_permissions(),
-            SecurityResource::filesystem(ctx.workspace.root(), Vec::new()),
+            SecurityResource::other(HOST_SHELL_RESOURCE_KIND, action_revision),
             effects,
-            ToolCallDisplay::new(format!("Run shell command in {}", cwd.display))
-                .with_detail(command),
+            ToolCallDisplay::new(format!("Run unsandboxed host shell in {}", cwd.display))
+                .with_detail(format!(
+                    "{command}\nHost access: same-user files, inherited environment and credentials, child processes, network, and data egress"
+                )),
         ))
     }
 
@@ -168,8 +209,8 @@ impl Tool for ShellTool {
             // `timeout_ms` through if the caller supplied one.
             let timeout_ms = optional_usize(&arguments, "timeout_ms")
                 .map(|ms| (ms as u64).clamp(1, MAX_TIMEOUT_MS));
-            let host = background::installed().ok_or_else(background::host_unavailable)?;
-            let spawned = host
+            let spawned = self
+                .background
                 .spawn(ctx.session.clone(), command.to_owned(), cwd, timeout_ms)
                 .await?;
             return Ok(ToolOutcome {
@@ -221,10 +262,9 @@ impl Tool for ShellTool {
         // A host lets the user rescue this call mid-flight (ctrl+b in the
         // TUI); without one there is nowhere to hand the process off to, so
         // this stays `None` and the extra `select!` arm never fires.
-        let host = background::installed();
-        let mut background_rx = host
-            .as_ref()
-            .map(|host| host.register_foreground_signal(ctx.session.clone()));
+        let mut background_rx = self
+            .background
+            .register_foreground_signal(ctx.session.clone());
 
         let group = child.id();
         let mut output = String::new();
@@ -327,9 +367,8 @@ impl Tool for ShellTool {
                 })
             }
             Outcome::Backgrounded => {
-                // `background_rx` only ever resolves when `host` is `Some`.
-                let host = host.expect("a backgrounding signal implies an installed host");
-                let spawned = host
+                let spawned = self
+                    .background
                     .adopt(
                         ctx.session.clone(),
                         command.to_owned(),
@@ -363,6 +402,37 @@ impl Tool for ShellTool {
     }
 }
 
+fn host_shell_action_revision(
+    command: &str,
+    cwd: &str,
+    run_in_background: bool,
+    timeout_ms: Option<u64>,
+) -> String {
+    let mut digest = Sha256::new();
+    for field in [
+        "smith-host-shell-action-v1",
+        command,
+        cwd,
+        if run_in_background {
+            "background"
+        } else {
+            "foreground"
+        },
+        HOST_SHELL_ENVIRONMENT_POLICY,
+    ] {
+        digest.update(field.len().to_be_bytes());
+        digest.update(field.as_bytes());
+    }
+    match timeout_ms {
+        Some(timeout_ms) => {
+            digest.update([1]);
+            digest.update(timeout_ms.to_be_bytes());
+        }
+        None => digest.update([0]),
+    }
+    format!("sha256:{:x}", digest.finalize())
+}
+
 /// Waits for a manual-backgrounding signal, or never resolves without one.
 ///
 /// A plain `async fn` rather than an inline block so the `select!` branch
@@ -390,10 +460,8 @@ fn accumulate(output: &mut String, truncated: &mut bool, line: String) {
 
 fn shell_permissions() -> PermissionSet {
     [
-        Permission::FsRead,
-        Permission::FsWrite,
-        Permission::FsCreate,
-        Permission::FsDelete,
+        Permission::HostFsRead,
+        Permission::HostFsWrite,
         Permission::ProcessSpawn,
         Permission::NetHttp,
         Permission::DataEgress,
@@ -504,7 +572,7 @@ mod tests {
     #[tokio::test]
     async fn a_command_returns_its_output() {
         let (_dir, ctx) = project();
-        let outcome = ShellTool
+        let outcome = ShellTool::default()
             .invoke(json!({"command": "echo hello"}), &ctx)
             .await
             .unwrap();
@@ -517,7 +585,7 @@ mod tests {
     #[tokio::test]
     async fn stdout_and_stderr_are_both_captured() {
         let (_dir, ctx) = project();
-        let outcome = ShellTool
+        let outcome = ShellTool::default()
             .invoke(json!({"command": "echo out; echo err 1>&2"}), &ctx)
             .await
             .unwrap();
@@ -530,7 +598,7 @@ mod tests {
     #[tokio::test]
     async fn a_failing_command_states_its_exit_status() {
         let (_dir, ctx) = project();
-        let outcome = ShellTool
+        let outcome = ShellTool::default()
             .invoke(json!({"command": "exit 3"}), &ctx)
             .await
             .unwrap();
@@ -544,7 +612,7 @@ mod tests {
     #[tokio::test]
     async fn a_silent_command_says_no_output_rather_than_nothing() {
         let (_dir, ctx) = project();
-        let outcome = ShellTool
+        let outcome = ShellTool::default()
             .invoke(json!({"command": "true"}), &ctx)
             .await
             .unwrap();
@@ -556,7 +624,7 @@ mod tests {
         let (dir, ctx) = project();
         std::fs::write(dir.path().join("marker.txt"), "x").unwrap();
 
-        let outcome = ShellTool
+        let outcome = ShellTool::default()
             .invoke(json!({"command": "ls"}), &ctx)
             .await
             .unwrap();
@@ -564,25 +632,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_cwd_outside_the_project_runs_once_prepared() {
+    async fn a_cwd_outside_the_project_is_refused() {
         let (_dir, ctx) = project();
         let outside = tempfile::tempdir().unwrap();
         std::fs::write(outside.path().join("beyond-marker.txt"), "x").unwrap();
 
-        let outcome = ShellTool
+        let err = ShellTool::default()
             .invoke(
                 json!({"command": "ls", "cwd": outside.path().to_str().unwrap()}),
                 &ctx,
             )
             .await
-            .unwrap();
-        assert!(text_of(&outcome).contains("beyond-marker.txt"));
+            .expect_err("shell cwd remains a project-relative setup field");
+        assert_eq!(err.kind, ErrorKind::Workspace);
     }
 
     #[tokio::test]
     async fn a_slow_command_is_killed_at_its_timeout() {
         let (_dir, ctx) = project();
-        let outcome = ShellTool
+        let outcome = ShellTool::default()
             .invoke(json!({"command": "sleep 30", "timeout_ms": 300}), &ctx)
             .await
             .unwrap();
@@ -595,7 +663,7 @@ mod tests {
     #[tokio::test]
     async fn a_timeout_names_all_three_ways_out() {
         let (_dir, ctx) = project();
-        let outcome = ShellTool
+        let outcome = ShellTool::default()
             .invoke(json!({"command": "sleep 30", "timeout_ms": 300}), &ctx)
             .await
             .unwrap();
@@ -612,14 +680,14 @@ mod tests {
     #[tokio::test]
     async fn run_in_background_without_an_installed_host_fails_clearly() {
         let (_dir, ctx) = project();
-        let err = ShellTool
+        let err = ShellTool::default()
             .invoke(
                 json!({"command": "echo hi", "run_in_background": true}),
                 &ctx,
             )
             .await
             .unwrap_err();
-        assert!(err.message.contains("no background task host"), "{err:?}");
+        assert!(err.message.contains("does not provide"), "{err:?}");
     }
 
     #[tokio::test]
@@ -628,7 +696,7 @@ mod tests {
         // background call — the whole point is "no deadline unless asked".
         let (_dir, ctx) = project();
         let preparation = crate::testing::preparation_context(&ctx);
-        let prepared = ShellTool
+        let prepared = ShellTool::default()
             .prepare(
                 json!({"command": "sleep 1", "run_in_background": true}),
                 &preparation,
@@ -646,7 +714,7 @@ mod tests {
     async fn an_explicit_timeout_survives_a_background_request() {
         let (_dir, ctx) = project();
         let preparation = crate::testing::preparation_context(&ctx);
-        let prepared = ShellTool
+        let prepared = ShellTool::default()
             .prepare(
                 json!({"command": "sleep 1", "run_in_background": true, "timeout_ms": 5_000}),
                 &preparation,
@@ -668,7 +736,7 @@ mod tests {
             "( sleep 1; echo orphaned > {} ) & sleep 30",
             marker.display()
         );
-        let outcome = ShellTool
+        let outcome = ShellTool::default()
             .invoke(json!({"command": command, "timeout_ms": 200}), &ctx)
             .await
             .unwrap();
@@ -691,7 +759,7 @@ mod tests {
             cancel.cancel(agent_runtime_core::cancel::CancelReason::UserRequested);
         });
 
-        let err = ShellTool
+        let err = ShellTool::default()
             .invoke(json!({"command": "sleep 30"}), &ctx)
             .await
             .unwrap_err();
@@ -702,7 +770,7 @@ mod tests {
     async fn flooding_output_is_truncated_rather_than_unbounded() {
         let (_dir, ctx) = project();
         let bytes = MAX_CAPTURE_BYTES + 1024 * 1024;
-        let outcome = ShellTool
+        let outcome = ShellTool::default()
             .invoke(
                 json!({"command": format!("yes 'a line of output' | head -c {bytes}")}),
                 &ctx,
@@ -717,7 +785,7 @@ mod tests {
     #[tokio::test]
     async fn output_above_the_old_128k_cutoff_remains_exact_for_the_offloader() {
         let (_dir, ctx) = project();
-        let outcome = ShellTool
+        let outcome = ShellTool::default()
             .invoke(
                 json!({"command": "yes 'recoverable output' | head -c 262144"}),
                 &ctx,
@@ -732,7 +800,7 @@ mod tests {
     #[tokio::test]
     async fn an_oversized_timeout_is_clamped_not_honored() {
         let (_dir, ctx) = project();
-        let outcome = ShellTool
+        let outcome = ShellTool::default()
             .invoke(json!({"command": "true", "timeout_ms": 99_000_000}), &ctx)
             .await
             .unwrap();
@@ -743,7 +811,7 @@ mod tests {
     async fn an_empty_command_is_rejected() {
         let (_dir, ctx) = project();
         assert!(
-            ShellTool
+            ShellTool::default()
                 .invoke(json!({"command": "   "}), &ctx)
                 .await
                 .is_err()
@@ -752,7 +820,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_tool_declares_spawn_and_write_effects() {
-        let effects = ShellTool.spec().effects;
+        let effects = ShellTool::default().spec().effects;
         assert!(effects.spawns_process());
         assert!(effects.mutates());
     }

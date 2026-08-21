@@ -23,7 +23,7 @@ as an asynchronous approval or questionnaire channel.
 | --- | --- | --- |
 | `text` | Final committed assistant text only | Bounded lifecycle/authority diagnostics |
 | `json` | Exactly one schema-v3 result plus newline | Empty after successful protocol startup |
-| `stream-json` | Schema-v3 runtime-event lines, then one terminal result line | Empty after successful protocol startup |
+| `stream-json` | Schema-v3 Smith-client event lines, then one terminal result line | Empty after successful protocol startup |
 
 Machine stdout has no ANSI sequences, setup UI, prompt text, progress prose, or
 unversioned diagnostics. CLI parsing errors exit 2; startup/protocol failures
@@ -193,7 +193,15 @@ post-response limit, so reported usage may overshoot it by one request.
 
 It reports prior process-owned work and never claims that it restarted.
 
-## Stream envelopes
+## Smith client protocol and stream envelopes
+
+Presentation surfaces consume Smith client protocol v1; the minimum supported
+revision is also v1. Agent Runtime remains the canonical execution and journal
+format behind the adapter. The TUI, headless stream, journal replay, future
+GPUI clients, and embedded clients all receive the same Smith projection.
+Unknown future payloads retain their envelope identity and sequence as
+`unknown` instead of being dropped. The outer `type = "runtime_event"` spelling
+is retained for schema-v3 command-line compatibility.
 
 Every nonterminal line is:
 
@@ -215,8 +223,9 @@ Every nonterminal line is:
 }
 ```
 
-Runtime events keep their independent event schema. Smith preserves canonical
-sequence order, includes `session_shutdown`, and writes the result last. A
+Smith event envelopes retain the independent canonical event-schema value for
+wire compatibility. Smith preserves sequence order, includes
+`session_shutdown`, and writes the result last. A
 sequence gap turns the result into a failure rather than presenting incomplete
 stream output as complete.
 

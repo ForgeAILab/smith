@@ -1,12 +1,13 @@
 //! Provider, model, reasoning, context, and policy validation.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 use crate::model::{
-    ApprovalMode, BackgroundExit, CacheMaintenanceMode, KIND_ANTHROPIC_MESSAGES,
-    KIND_CHATGPT_RESPONSES, KIND_FAKE, KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE,
-    KIND_OPENAI_RESPONSES, KIND_XAI_RESPONSES, ReasoningDialect, ReasoningOnlyBehavior,
+    ApprovalMode, AutoApprovalRuleSection, BackgroundExit, CacheMaintenanceMode,
+    KIND_ANTHROPIC_MESSAGES, KIND_CHATGPT_RESPONSES, KIND_FAKE, KIND_GEMINI_INTERACTIONS,
+    KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES, KIND_XAI_RESPONSES, ReasoningDialect,
+    ReasoningOnlyBehavior,
 };
 use agent_runtime_core::store::Secret;
 
@@ -782,10 +783,150 @@ pub(super) fn resolve_approval(provenance: &Provenance) -> Result<ResolvedApprov
             list_spellings(ApprovalMode::spellings())
         ),
     })?;
+    let legacy_auto_approve = list(provenance, "approval.auto_approve")?;
+    if let Some(legacy) = &legacy_auto_approve
+        && !legacy.value.is_empty()
+    {
+        return Err(ConfigError::InvalidValue {
+            source: legacy.source.clone(),
+            message: "non-empty `approval.auto_approve` tool-name lists are no longer supported; migrate to versioned `[[approval.auto]]` prepared-call rules, or use user-owned `approval.mode = \"allow-all\"` only for deliberately unrestricted automation"
+                .to_owned(),
+        });
+    }
+    let auto = text(provenance, "approval.auto")?
+        .map(resolve_auto_approval_rules)
+        .transpose()?
+        .unwrap_or_default();
     Ok(ResolvedApproval {
         mode: Sourced::new(mode, raw.source),
-        auto_approve: list(provenance, "approval.auto_approve")?,
+        auto_approve: legacy_auto_approve,
+        auto,
     })
+}
+
+fn resolve_auto_approval_rules(
+    encoded: Sourced<String>,
+) -> Result<Vec<Sourced<AutoApprovalRule>>, ConfigError> {
+    let rules: Vec<AutoApprovalRuleSection> =
+        serde_json::from_str(&encoded.value).map_err(|error| ConfigError::InvalidValue {
+            source: encoded.source.clone(),
+            message: format!("`approval.auto` is not a valid rule list: {error}"),
+        })?;
+    rules
+        .into_iter()
+        .enumerate()
+        .map(|(index, rule)| {
+            let mut source = encoded.source.clone();
+            source.key = format!("{}[{index}]", source.key);
+            validate_auto_approval_rule(rule, source)
+        })
+        .collect()
+}
+
+fn validate_auto_approval_rule(
+    rule: AutoApprovalRuleSection,
+    source: Source,
+) -> Result<Sourced<AutoApprovalRule>, ConfigError> {
+    let invalid = |message: String| ConfigError::InvalidValue {
+        source: source.clone(),
+        message,
+    };
+    if rule.revision != 1 {
+        return Err(invalid(format!(
+            "unsupported automatic approval rule revision {}; only revision 1 is defined",
+            rule.revision
+        )));
+    }
+    let Some((module, tool)) = rule.tool.split_once('/') else {
+        return Err(invalid(
+            "automatic approval rule `tool` must be module-qualified, for example `smith/edit`"
+                .to_owned(),
+        ));
+    };
+    if module.is_empty() || tool.is_empty() || tool.contains('/') {
+        return Err(invalid(
+            "automatic approval rule `tool` must contain exactly one non-empty `/` separator"
+                .to_owned(),
+        ));
+    }
+    if rule.tool != "smith/edit" {
+        return Err(invalid(format!(
+            "automatic approval for `{}` is not supported; revision 1 permits only `smith/edit`",
+            rule.tool
+        )));
+    }
+    if rule.operations.is_empty() {
+        return Err(invalid(
+            "automatic approval rule `operations` cannot be empty".to_owned(),
+        ));
+    }
+    if rule.permissions.is_empty() {
+        return Err(invalid(
+            "automatic approval rule `permissions` cannot be empty".to_owned(),
+        ));
+    }
+    if rule.paths.is_empty() {
+        return Err(invalid(
+            "automatic approval rule `paths` cannot be empty".to_owned(),
+        ));
+    }
+    for pattern in &rule.paths {
+        let path = Path::new(pattern);
+        if pattern.is_empty()
+            || path.is_absolute()
+            || path.components().any(|component| {
+                matches!(
+                    component,
+                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                )
+            })
+        {
+            return Err(invalid(format!(
+                "automatic approval path pattern `{pattern}` must be project-relative and cannot contain `..`"
+            )));
+        }
+        globset::GlobBuilder::new(pattern)
+            .literal_separator(true)
+            .build()
+            .map_err(|error| {
+                invalid(format!(
+                    "automatic approval path pattern `{pattern}` is invalid: {error}"
+                ))
+            })?;
+    }
+    if rule.max_uses == Some(0) {
+        return Err(invalid(
+            "automatic approval rule `max_uses` must be greater than zero".to_owned(),
+        ));
+    }
+    let expires_at_unix_ms = rule
+        .expires_at
+        .as_deref()
+        .map(|value| {
+            time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+                .map(|timestamp| timestamp.unix_timestamp_nanos() / 1_000_000)
+                .map_err(|error| {
+                    invalid(format!(
+                        "automatic approval rule `expires_at` must be RFC 3339: {error}"
+                    ))
+                })
+        })
+        .transpose()?;
+
+    Ok(Sourced::new(
+        AutoApprovalRule {
+            revision: rule.revision,
+            tool: rule.tool,
+            operations: rule.operations,
+            permissions: rule.permissions,
+            max_risk: rule.max_risk,
+            mount: rule.mount,
+            paths: rule.paths,
+            expires_at_unix_ms,
+            max_uses: rule.max_uses,
+        },
+        source,
+    ))
 }
 
 pub(super) fn resolve_background(

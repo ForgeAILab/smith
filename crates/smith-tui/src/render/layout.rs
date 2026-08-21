@@ -4,11 +4,11 @@
 //! mutates state or caches across frames, which is what makes resize correct by
 //! construction: every wrap is recomputed at the new width.
 
-use agent_runtime_core::event::{PlanItemStatus, PlanSensitivity};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
+use smith_runtime::client::{PlanItemStatus, PlanSensitivity};
 
 use crate::app::{App, Overlay};
 use crate::picker::{compact_resource_picker_rows, draw_compact_resource_picker};

@@ -43,7 +43,8 @@ use std::path::PathBuf;
 use agent_runtime_core::store::Secret;
 
 use crate::model::{
-    AgentPosture, ApprovalMode, BackgroundExit, CacheMaintenanceMode, ProfileUse, ReasoningDialect,
+    AgentPosture, ApprovalMode, AutoApprovalMount, AutoApprovalOperation, AutoApprovalPermission,
+    AutoApprovalRisk, BackgroundExit, CacheMaintenanceMode, ProfileUse, ReasoningDialect,
     ReasoningOnlyBehavior,
 };
 
@@ -634,6 +635,31 @@ pub struct ResolvedApproval {
     pub mode: Sourced<ApprovalMode>,
     /// Tools that never prompt.
     pub auto_approve: Option<Sourced<Vec<String>>>,
+    /// Prepared-call-scoped automatic approval grants.
+    pub auto: Vec<Sourced<AutoApprovalRule>>,
+}
+
+/// One validated revision-1 prepared-call automatic approval rule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutoApprovalRule {
+    /// Schema revision, currently exactly one.
+    pub revision: u32,
+    /// Module-qualified tool identity.
+    pub tool: String,
+    /// Exact operations covered by this rule.
+    pub operations: Vec<AutoApprovalOperation>,
+    /// Maximum permission set the prepared call may request.
+    pub permissions: Vec<AutoApprovalPermission>,
+    /// Maximum derived risk.
+    pub max_risk: AutoApprovalRisk,
+    /// Resource mount class.
+    pub mount: AutoApprovalMount,
+    /// Validated project-relative glob patterns.
+    pub paths: Vec<String>,
+    /// Optional inclusive expiry as a Unix timestamp in milliseconds.
+    pub expires_at_unix_ms: Option<i128>,
+    /// Optional number of matching calls this policy instance may approve.
+    pub max_uses: Option<u32>,
 }
 
 /// Resolved background-work policy.

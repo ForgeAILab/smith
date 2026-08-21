@@ -14,11 +14,13 @@
 //! | [`TaskOutputTool`] | read-only |
 //! | [`TaskStopTool`] | spawns processes (process control) |
 //!
-//! Every tool resolves paths through the session's
-//! [`Workspace`](agent_runtime_core::workspace::Workspace), so containment is
-//! enforced in one place rather than re-implemented five times. The
-//! mutating tools declare their effects, which is what makes the runtime route
-//! them through approval before they run.
+//! Built-in filesystem tools resolve paths through the session's
+//! [`Workspace`](agent_runtime_core::workspace::Workspace), so their project
+//! boundary is enforced in one place. [`ShellTool`] is the explicit exception:
+//! until Smith supplies an OS sandbox, it declares same-user host authority
+//! rather than pretending its working directory contains the process. Mutating
+//! tools declare their effects, which is what makes the runtime route them
+//! through approval before they run.
 //!
 //! Reads, searches, listings, and command output are all bounded. A tool that
 //! can return an unbounded amount of text is a tool that can exhaust a context
@@ -47,14 +49,17 @@ pub mod task_stop;
 #[cfg(test)]
 mod testing;
 
-pub use change::{ChangeRecorder, EditMutation, ToolMutation, TurnChangeSet, observed_tools};
+pub use change::{
+    ChangeRecorder, EditMutation, ToolMutation, TurnChangeSet, observed_tools,
+    observed_tools_with_background,
+};
 pub use display::{ToolCallDisplay, has_tool_call_display_schema, project_tool_call_display};
 pub use edit::EditTool;
 pub use list::ListTool;
 pub use read::ReadTool;
 pub use read_state::{ReadDefect, ReadObservation, ReadRecorder};
 pub use search::SearchTool;
-pub use shell::ShellTool;
+pub use shell::{HOST_SHELL_RESOURCE_KIND, ShellTool};
 pub use task_output::TaskOutputTool;
 pub use task_stop::TaskStopTool;
 
@@ -66,15 +71,15 @@ use agent_runtime_core::tool::Tool;
 ///
 /// Ordering is stable so the model sees the same tool list across runs — a
 /// changing order needlessly invalidates a provider's prompt cache.
-pub(crate) fn built_in() -> Vec<Arc<dyn Tool>> {
+pub(crate) fn built_in(background: Arc<dyn background::BackgroundTaskHost>) -> Vec<Arc<dyn Tool>> {
     vec![
         Arc::new(ReadTool),
         Arc::new(ListTool),
         Arc::new(SearchTool),
         Arc::new(EditTool),
-        Arc::new(ShellTool),
-        Arc::new(TaskOutputTool),
-        Arc::new(TaskStopTool),
+        Arc::new(ShellTool::new(background.clone())),
+        Arc::new(TaskOutputTool::new(background.clone())),
+        Arc::new(TaskStopTool::new(background)),
     ]
 }
 
@@ -85,7 +90,14 @@ pub(crate) fn built_in() -> Vec<Arc<dyn Tool>> {
 /// that state has to live somewhere. Tools themselves stay pure functions of
 /// their arguments and the workspace.
 pub fn all() -> Vec<Arc<dyn Tool>> {
-    change::observe(None, ReadRecorder::new())
+    all_with_background(background::unavailable())
+}
+
+/// Every built-in tool, wired to the background-task owner for this runtime.
+pub fn all_with_background(
+    background: Arc<dyn background::BackgroundTaskHost>,
+) -> Vec<Arc<dyn Tool>> {
+    change::observe_with_background(None, ReadRecorder::new(), background)
 }
 
 /// Only the tools that cannot change anything.

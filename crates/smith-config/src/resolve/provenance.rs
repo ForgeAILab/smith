@@ -75,6 +75,7 @@ pub(super) const SETTINGS: &[(&str, ValueKind)] = &[
     ("agent_order", ValueKind::List),
     ("profile_order", ValueKind::List),
     ("approval.auto_approve", ValueKind::List),
+    ("approval.auto", ValueKind::Text),
     ("approval.mode", ValueKind::Text),
     ("background.exit_policy", ValueKind::Text),
     ("background.max_children", ValueKind::Integer),

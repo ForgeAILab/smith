@@ -77,3 +77,66 @@ fn dependency_package<'a>(alias: &'a str, dependency: &'a Value) -> &'a str {
         .and_then(Value::as_str)
         .unwrap_or(alias)
 }
+
+#[test]
+fn presentation_crates_use_the_smith_client_event_protocol() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("the workspace root");
+    for relative in ["crates/smith-cli/src", "crates/smith-tui/src"] {
+        visit_rust(&root.join(relative), &mut |path, source| {
+            assert!(
+                !source.contains("agent_runtime_core::event"),
+                "presentation source {} imports the canonical event vocabulary",
+                path.display()
+            );
+            assert!(
+                !source.contains("agent_runtime::runtime::SessionHandle"),
+                "presentation source {} imports the canonical session handle",
+                path.display()
+            );
+        });
+    }
+}
+
+#[test]
+fn the_factory_has_one_typed_root_and_private_physical_stages() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("the workspace root");
+    let factory = fs::read_to_string(root.join("crates/smith-runtime/src/factory.rs"))
+        .expect("factory source");
+    assert!(factory.contains("pub async fn build(harness: ResolvedHarness)"));
+    for stage in [
+        "resolve.rs",
+        "provider.rs",
+        "authority.rs",
+        "capabilities.rs",
+        "persistence.rs",
+        "delegation.rs",
+        "compose.rs",
+    ] {
+        assert!(
+            root.join("crates/smith-runtime/src/factory")
+                .join(stage)
+                .is_file(),
+            "missing private factory stage {stage}"
+        );
+    }
+}
+
+fn visit_rust(directory: &Path, visitor: &mut impl FnMut(&Path, &str)) {
+    for entry in fs::read_dir(directory).expect("source directory") {
+        let entry = entry.expect("source entry");
+        let path = entry.path();
+        if path.is_dir() {
+            visit_rust(&path, visitor);
+        } else if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
+            let source = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
+            visitor(&path, &source);
+        }
+    }
+}

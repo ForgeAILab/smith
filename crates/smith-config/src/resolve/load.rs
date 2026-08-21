@@ -310,6 +310,7 @@ pub(super) fn built_in_defaults(user_dir: &Path) -> ConfigFile {
         approval: Some(ApprovalSection {
             mode: Some(ApprovalMode::Ask),
             auto_approve: None,
+            auto: Vec::new(),
         }),
         background: Some(BackgroundSection {
             exit_policy: Some(BackgroundExit::Error),
@@ -646,6 +647,27 @@ pub(super) fn flatten(
     for (name, value) in table {
         prefix.push(name.clone());
         let result = match value {
+            // An automatic-approval rule is one security-policy object. Keep
+            // the complete ordered rule list as one layered value so a higher
+            // layer replaces it rather than accidentally merging individual
+            // fields from independently sourced grants.
+            toml::Value::Array(items) if is_auto_approval_rules(prefix) => {
+                let key = join_owned(prefix);
+                let source = source_for(layer, path, key.clone());
+                serde_json::to_string(items)
+                    .map(|value| {
+                        out.push(Contribution {
+                            key,
+                            value: SettingValue::Text(value),
+                            source,
+                        });
+                    })
+                    .map_err(|error| ConfigError::Unrepresentable {
+                        message: format!(
+                            "automatic approval rules could not be represented: {error}"
+                        ),
+                    })
+            }
             toml::Value::Table(inner) => flatten(inner, prefix, layer, path, out),
             other
                 if prefix.last().is_some_and(|segment| {
@@ -731,6 +753,15 @@ pub(super) fn flatten(
         result?;
     }
     Ok(())
+}
+
+fn is_auto_approval_rules(prefix: &[String]) -> bool {
+    matches!(prefix, [approval, auto] if approval == "approval" && auto == "auto")
+        || matches!(
+            prefix,
+            [profiles, _name, approval, auto]
+                if profiles == "profiles" && approval == "approval" && auto == "auto"
+        )
 }
 
 /// Whether a flattened key addresses one environment variable or header of one

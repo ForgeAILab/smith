@@ -399,8 +399,8 @@ fn report_session_usage(
             |micro| format!("${}.{:06} derived", micro / 1_000_000, micro % 1_000_000),
         );
         let confidence = match cache.confidence {
-            Some(agent_runtime_core::event::EstimationConfidence::Exact) => "exact",
-            Some(agent_runtime_core::event::EstimationConfidence::Estimated) => "estimated",
+            Some(smith_runtime::client::EstimationConfidence::Exact) => "exact",
+            Some(smith_runtime::client::EstimationConfidence::Estimated) => "estimated",
             None => "?",
         };
         println!(

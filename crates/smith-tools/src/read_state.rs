@@ -13,27 +13,22 @@
 //!    the contents of.
 //! 2. **Read in full.** An `offset`/`limit` read shows a window; replacing the
 //!    whole file from a window silently drops everything outside it.
-//! 3. **Unmodified since.** This is the one that catches the user editing the
-//!    file in their own editor between the agent's read and its write. Without
-//!    it, "the agent clobbered my changes" is a supported workflow.
-//!
-//! Staleness is checked by comparing the modification time captured at read
-//! against the one on disk now, rather than against a wall clock. A file
-//! rewritten within the same clock tick as the read still compares unequal.
+//! 3. **Same version at commit.** The read's handle-bound identity, length,
+//!    timestamp, and content hash are carried in the prepared call and checked
+//!    at the atomic replace/delete commit point.
 
+use smith_host::workspace::FileVersion;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
 
 /// One completed read of one canonical path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadObservation {
     /// Whether the read returned the entire file rather than a line window.
     pub full: bool,
-    /// The target's modification time when the read completed. `None` when the
-    /// platform did not report one, which fails the staleness check closed.
-    pub modified: Option<SystemTime>,
+    /// Exact identity and content returned by the completed handle read.
+    pub version: FileVersion,
 }
 
 /// Why a destructive whole-file operation is not authorized.
@@ -43,8 +38,6 @@ pub enum ReadDefect {
     Unread,
     /// The session read only part of it.
     Partial,
-    /// The file changed after the session read it.
-    Stale,
 }
 
 impl ReadDefect {
@@ -60,10 +53,6 @@ impl ReadDefect {
             ),
             ReadDefect::Partial => format!(
                 "`{display}` was only read in part; read the whole file before replacing or \
-                 deleting it"
-            ),
-            ReadDefect::Stale => format!(
-                "`{display}` changed since it was read; read it again before replacing or \
                  deleting it"
             ),
         }
@@ -91,37 +80,26 @@ impl ReadRecorder {
     ///
     /// A later partial read of an already-fully-read file correctly demotes it:
     /// the most recent read is the one whose staleness we can reason about.
-    pub fn record(&self, path: PathBuf, full: bool) {
-        let modified = std::fs::metadata(&path)
-            .and_then(|metadata| metadata.modified())
-            .ok();
+    pub fn record(&self, path: PathBuf, full: bool, version: FileVersion) {
         if let Ok(mut reads) = self.reads.lock() {
-            reads.insert(path, ReadObservation { full, modified });
+            reads.insert(path, ReadObservation { full, version });
         }
     }
 
     /// The most recent observation of one canonical path.
     pub fn observation(&self, path: &Path) -> Option<ReadObservation> {
-        self.reads.lock().ok()?.get(path).copied()
+        self.reads.lock().ok()?.get(path).cloned()
     }
 
     /// Checks whether a destructive whole-file operation is authorized.
-    pub fn authorize_destructive(&self, path: &Path) -> Result<(), ReadDefect> {
+    pub fn expected_version(&self, path: &Path) -> Result<FileVersion, ReadDefect> {
         let Some(observation) = self.observation(path) else {
             return Err(ReadDefect::Unread);
         };
         if !observation.full {
             return Err(ReadDefect::Partial);
         }
-        let current = std::fs::metadata(path)
-            .and_then(|metadata| metadata.modified())
-            .ok();
-        // Both sides absent means the platform reports no modification time at
-        // all; that is a missing check rather than a passed one.
-        match (observation.modified, current) {
-            (Some(read), Some(now)) if read == now => Ok(()),
-            _ => Err(ReadDefect::Stale),
-        }
+        Ok(observation.version)
     }
 }
 
@@ -133,6 +111,15 @@ mod tests {
         std::fs::write(path, body).expect("write");
     }
 
+    fn version(path: &Path) -> FileVersion {
+        let workspace = smith_host::workspace::ProjectWorkspace::new(path.parent().unwrap())
+            .expect("workspace");
+        workspace
+            .read_bounded(path.file_name().unwrap(), 1024)
+            .expect("read")
+            .version
+    }
+
     #[test]
     fn an_unread_path_is_refused() {
         let dir = tempfile::tempdir().expect("a temp dir");
@@ -140,10 +127,7 @@ mod tests {
         touch(&path, "fn a() {}\n");
 
         let recorder = ReadRecorder::new();
-        assert_eq!(
-            recorder.authorize_destructive(&path),
-            Err(ReadDefect::Unread)
-        );
+        assert_eq!(recorder.expected_version(&path), Err(ReadDefect::Unread));
     }
 
     #[test]
@@ -153,35 +137,20 @@ mod tests {
         touch(&path, "fn a() {}\n");
 
         let recorder = ReadRecorder::new();
-        recorder.record(path.clone(), false);
-        assert_eq!(
-            recorder.authorize_destructive(&path),
-            Err(ReadDefect::Partial)
-        );
+        recorder.record(path.clone(), false, version(&path));
+        assert_eq!(recorder.expected_version(&path), Err(ReadDefect::Partial));
     }
 
     #[test]
-    fn a_full_read_authorizes_until_the_file_changes() {
+    fn a_full_read_returns_the_version_to_check_at_commit() {
         let dir = tempfile::tempdir().expect("a temp dir");
         let path = dir.path().join("a.rs");
         touch(&path, "fn a() {}\n");
 
         let recorder = ReadRecorder::new();
-        recorder.record(path.clone(), true);
-        assert_eq!(recorder.authorize_destructive(&path), Ok(()));
-
-        // An external write, as if the user edited the file themselves.
-        std::fs::File::options()
-            .write(true)
-            .open(&path)
-            .and_then(|file| {
-                file.set_modified(SystemTime::now() + std::time::Duration::from_secs(1))
-            })
-            .expect("retouch");
-        assert_eq!(
-            recorder.authorize_destructive(&path),
-            Err(ReadDefect::Stale)
-        );
+        let expected = version(&path);
+        recorder.record(path.clone(), true, expected.clone());
+        assert_eq!(recorder.expected_version(&path), Ok(expected));
     }
 
     #[test]
@@ -191,24 +160,17 @@ mod tests {
         touch(&path, "fn a() {}\n");
 
         let recorder = ReadRecorder::new();
-        recorder.record(path.clone(), true);
-        recorder.record(path.clone(), false);
-        assert_eq!(
-            recorder.authorize_destructive(&path),
-            Err(ReadDefect::Partial)
-        );
+        recorder.record(path.clone(), true, version(&path));
+        recorder.record(path.clone(), false, version(&path));
+        assert_eq!(recorder.expected_version(&path), Err(ReadDefect::Partial));
     }
 
     #[test]
     fn each_defect_names_a_different_next_action() {
-        let messages = [ReadDefect::Unread, ReadDefect::Partial, ReadDefect::Stale]
-            .map(|defect| defect.message("src/a.rs"));
+        let messages =
+            [ReadDefect::Unread, ReadDefect::Partial].map(|defect| defect.message("src/a.rs"));
         assert!(messages[0].contains("has not been read"), "{messages:?}");
         assert!(messages[1].contains("only read in part"), "{messages:?}");
-        assert!(
-            messages[2].contains("changed since it was read"),
-            "{messages:?}"
-        );
         assert!(messages.iter().all(|message| message.contains("src/a.rs")));
     }
 }

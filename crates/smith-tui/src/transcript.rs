@@ -382,7 +382,7 @@ impl Transcript {
 
     /// Adds a reviewed local display projection to an existing live call.
     ///
-    /// This is deliberately separate from [`RuntimeEvent`](agent_runtime_core::event::RuntimeEvent)
+    /// This is deliberately separate from [`SmithEventKind`](smith_runtime::client::SmithEventKind)
     /// folding so protected event and journal payloads do not need to carry
     /// argument values. The host calls this again when a tool completes, to
     /// re-project from canonical arguments — that second call replaces

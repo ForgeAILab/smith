@@ -15,6 +15,7 @@ use agent_runtime_core::grant::{
 };
 use agent_runtime_core::security::{AuthorizationRequest, PermissionSet, SecurityResource};
 use async_trait::async_trait;
+use smith_tools::HOST_SHELL_RESOURCE_KIND;
 
 /// Authoritative coverage for every typed permission Smith's built-ins declare.
 #[derive(Debug)]
@@ -29,13 +30,17 @@ impl SmithToolAuthority {
     pub(crate) fn new(workspace_mount: impl Into<String>) -> Self {
         Self {
             id: SecurityCheckId::new("smith-built-in-tool-authority"),
-            revision: SecurityCheckRevision::new("v2"),
+            revision: SecurityCheckRevision::new("v4"),
             workspace_mount: workspace_mount.into(),
             coverage: [
                 Permission::FsRead,
                 Permission::FsWrite,
                 Permission::FsCreate,
                 Permission::FsDelete,
+                Permission::HostFsRead,
+                Permission::HostFsWrite,
+                Permission::ExternalRead,
+                Permission::ExternalWrite,
                 Permission::ProcessSpawn,
                 Permission::NetHttp,
                 Permission::DataEgress,
@@ -105,6 +110,46 @@ impl SecurityCheck for SmithToolAuthority {
                     };
                 }
             }
+        }
+
+        let host_filesystem_permission = request.requested.iter().any(|permission| {
+            matches!(permission, Permission::HostFsRead | Permission::HostFsWrite)
+        });
+        if host_filesystem_permission {
+            if !matches!(
+                &request.resource,
+                SecurityResource::Other { kind, .. } if kind == HOST_SHELL_RESOURCE_KIND
+            ) {
+                return SecurityCheckOutcome::Deny {
+                    code: DecisionCode::other("smith.host_resource_mismatch"),
+                };
+            }
+            // The shell is intentionally host-wide. It is never an exact
+            // workspace read and therefore always reaches the configured
+            // approval policy.
+            return SecurityCheckOutcome::RequireApproval {
+                constraints: GrantConstraints::unconstrained(),
+            };
+        }
+
+        let external_permission = request.requested.iter().any(|permission| {
+            matches!(
+                permission,
+                Permission::ExternalRead | Permission::ExternalWrite
+            )
+        });
+        if external_permission {
+            if !matches!(
+                &request.resource,
+                SecurityResource::Other { kind, .. } if kind == "external-service"
+            ) {
+                return SecurityCheckOutcome::Deny {
+                    code: DecisionCode::other("smith.external_resource_mismatch"),
+                };
+            }
+            return SecurityCheckOutcome::RequireApproval {
+                constraints: GrantConstraints::unconstrained(),
+            };
         }
 
         let artifact_permission = Permission::other(ARTIFACT_READ_PERMISSION);
@@ -219,6 +264,26 @@ mod tests {
         assert!(matches!(
             structural_mismatch,
             SecurityCheckOutcome::Deny { .. }
+        ));
+
+        let host_shell = authority
+            .evaluate(
+                &request(
+                    [
+                        Permission::HostFsRead,
+                        Permission::HostFsWrite,
+                        Permission::ProcessSpawn,
+                        Permission::NetHttp,
+                        Permission::DataEgress,
+                    ],
+                    SecurityResource::other(HOST_SHELL_RESOURCE_KIND, "sha256:action"),
+                ),
+                &Cancellation::new(),
+            )
+            .await;
+        assert!(matches!(
+            host_shell,
+            SecurityCheckOutcome::RequireApproval { .. }
         ));
 
         let artifact = authority

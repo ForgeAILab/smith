@@ -9,13 +9,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use agent_runtime_core::event::{
-    CacheOperationOutcome, CacheOperationReason, CacheState, EstimationConfidence, EventEnvelope,
-    RuntimeEvent,
-};
 use agent_runtime_core::provider::{CacheEvidenceKind, ProviderAttemptPurpose};
 use agent_runtime_core::usage::CounterKind;
 use serde::Serialize;
+use smith_runtime::client::{
+    CacheOperationOutcome, CacheOperationReason, CacheState, EstimationConfidence,
+    SmithEvent as EventEnvelope, SmithEventKind as RuntimeEvent,
+};
 
 /// The fixed cache-miss notice threshold, in tokens.
 pub const MISS_NOTICE_TOKENS: u64 = 20_000;
@@ -1086,7 +1086,6 @@ fn format_usd(micro_usd: u128) -> String {
 #[cfg(test)]
 mod tests {
     use agent_runtime_core::clock::Timestamp;
-    use agent_runtime_core::event::{EventEnvelope, TurnFinish};
     use agent_runtime_core::ids::{
         AttemptId, CacheOperationId, EventId, RequestId, SessionId, TurnId,
     };
@@ -1095,6 +1094,8 @@ mod tests {
     };
     use agent_runtime_core::usage::{Provenance, UsageDelta, UsageRecord, UsageSource};
     use agent_runtime_registry::Fingerprint;
+    use smith_runtime::client::SmithEvent as EventEnvelope;
+    use smith_runtime::client::TurnFinish;
 
     use super::*;
 

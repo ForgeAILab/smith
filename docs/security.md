@@ -20,6 +20,10 @@ arguments, and questionnaire answers cannot grant a permission.
 | Protected checkpoint | Encrypted/authenticated exact in-flight state |
 | Artifact store | Owner-only content plus runtime-enforced session ownership |
 | Child session | Depth-one, scoped tool view, separate artifact ownership |
+| Trusted native module | In-process Rust with Smith's ambient process authority; never a sandbox |
+| MCP server | Explicitly trusted external process/service; unreviewed tools carry possible external-write and egress authority |
+| User-installed executable plugin | Refused until the capability-brokered subprocess protocol exists |
+| Skill/declarative panel | Bounded content only; no executable authority or runtime/renderer handle |
 
 ## Authorization and tool execution
 
@@ -30,16 +34,21 @@ prepared action. Privileged composition fails closed without an authoritative
 security check.
 
 Filesystem resources are canonical segments over an explicit mount, not
-unchecked string prefixes. Traversal and symlink escape are refused. An
-out-of-workspace path is not refused outright: it canonicalizes onto a
-host-root mount, always requires an approval decision — the runtime rejects
-any escape the composed checks would have allowed unattended — and must
-re-resolve to itself at invocation, so a post-approval symlink swap still
-fails. Reads request read authority; edit preparation identifies its exact
-file and read/write set. Shell cannot be safely narrowed from command text, so
-it declares broad workspace mutation, process execution, and network authority.
-Every shell invocation gets a process group, deadline, bounded output, and
-group cancellation.
+unchecked string prefixes. Ordinary filesystem tools operate relative to an
+opened project-directory capability; traversal, symlink escape, magic-link
+escape, and component replacement are refused rather than converted into a
+host-root approval. Reads inspect and consume one opened handle under a
+`max_bytes + 1` limiter. Edits carry an identity, size, timestamp, and content
+hash from that same read and revalidate immediately before publication. Atomic
+replacement preserves supported metadata and synchronizes the file and parent
+directory. Shell cannot be safely narrowed from command text and
+is not sandboxed by its working directory. It therefore declares an explicit
+`host-shell` resource with same-user host filesystem, inherited environment and
+credentials, child-process, network, and data-egress authority. The resource ID
+binds the command, canonical cwd, background flag, timeout, and inherited
+environment policy by digest without reproducing command text. Every shell
+invocation gets a process group, deadline, bounded output, and group
+cancellation.
 
 An approval shows the exact resource, material arguments or patch, typed
 permissions, broad-authority warnings, fingerprint, and deadline. `y`/`a`
@@ -51,10 +60,10 @@ shutdown.
 Headless `ask` cannot wait for a user and exits 4 with redaction-safe prepared
 metadata. `allow-all` is appropriate only inside an already isolated and
 trusted automation boundary. The explicit `--yolo` alias selects that same
-approval mode; it bypasses approval prompts — including the prompt that gates
-out-of-workspace file access — but does not bypass authorization or profile
-capability narrowing. In particular, a `plan` profile remains read-only under
-`--yolo`.
+approval mode; it bypasses approval prompts — including the prompts that gate
+host-shell execution — but does not bypass authorization, ordinary-tool
+workspace containment, or profile capability narrowing. In particular, a
+`plan` profile remains read-only under `--yolo`.
 
 ## Repository and configuration attacks
 
@@ -62,7 +71,7 @@ Smith does not execute configuration, derive authority from repository text,
 or treat a repository as trusted because it was opened. Project-controlled
 files cannot:
 
-- set `approval.mode = "allow-all"` or nonempty `auto_approve`;
+- set `approval.mode = "allow-all"` or add `[[approval.auto]]` grants;
 - disable or redirect user session persistence;
 - store an inline API key;
 - redirect the provider through authorization-bearing headers.
@@ -227,8 +236,9 @@ retrying presentation enrichment cannot change execution or disclosure policy.
 
 The `@file` and leading-`!` composer shortcuts are not alternate authority
 paths. Attachments execute the canonical exact prepared `read`; local shell
-executes the canonical prepared `shell` with its broad permission bound,
-approval, deadline, cancellation, output offload, and checkpoint semantics.
+executes the canonical prepared `host-shell` action with its host-wide
+permission bound, approval, deadline, cancellation, output offload, and
+checkpoint semantics.
 Neither shortcut spends provider tokens during local preparation. Registered
 Child-enabled `@profile` presets are host-resolved, read-only, depth-one
 children and require explicit provider-spend confirmation. A profile may name
@@ -246,9 +256,10 @@ readiness by default.
 
 ## Residual risks and deployment responsibilities
 
-- An approved shell can run arbitrary workspace programs, read data available
-  to the Smith process, and access the network. Use OS/container sandboxing
-  when that authority is too broad.
+- An approved shell can run arbitrary host programs, read or change any
+  same-user file available to the Smith process (including data outside the
+  project), inspect inherited credentials, spawn children, and access the
+  network. Use OS/container sandboxing when that authority is too broad.
 - Another process running as the same OS user may read ordinary session files
   and plaintext user-config credentials.
 - A compromised provider or credential service is outside Smith's process

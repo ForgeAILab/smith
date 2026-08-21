@@ -166,13 +166,14 @@ pub(super) async fn materialize_prepared_submission(
         let canonical = workspace
             .resolve(path)
             .map_err(|error| format!("attachment `@{path}` was not sent: {error}"))?;
-        let contents = smith_tools::support::read_bounded(
+        let contents = smith_tools::support::read_bounded_from_workspace(
+            workspace.clone(),
             std::path::Path::new(&canonical),
             smith_tools::support::MAX_READ_BYTES,
         )
         .await
         .map_err(|error| format!("attachment `@{path}` was not sent: {error}"))?;
-        let all = contents.lines().collect::<Vec<_>>();
+        let all = contents.text.lines().collect::<Vec<_>>();
         if all.is_empty() {
             return Err(format!(
                 "attachment `@{path}` was not sent: the file is empty"

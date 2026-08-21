@@ -7,12 +7,12 @@ use crate::app::{
 };
 use crate::status::{TokenCount, render_elapsed};
 use crate::theme::{Theme, Tone, glyph};
-use agent_runtime_core::event::{PlanItemProjection, PlanItemStatus};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
+use smith_runtime::client::{PlanItemProjection, PlanItemStatus};
 use unicode_width::UnicodeWidthStr;
 
 use super::helpers::*;
@@ -456,7 +456,7 @@ pub(super) fn draw_identity_footer(frame: &mut Frame<'_>, area: Rect, app: &App,
             context,
             theme.style(
                 if app.status.context_plan.as_ref().is_some_and(|plan| {
-                    plan.confidence == agent_runtime_core::event::EstimationConfidence::Exact
+                    plan.confidence == smith_runtime::client::EstimationConfidence::Exact
                 }) {
                     Tone::Default
                 } else {

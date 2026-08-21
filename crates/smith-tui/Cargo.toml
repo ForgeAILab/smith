@@ -19,6 +19,7 @@ ratatui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 smith-host = { workspace = true }
+smith-runtime = { workspace = true }
 smith-tools = { workspace = true }
 time = { workspace = true }
 unicode-width = "0.2"

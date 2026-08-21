@@ -7,6 +7,8 @@
 //! previous response's `next_offset` back in as `offset` and only the output
 //! that arrived since comes back.
 
+use std::sync::Arc;
+
 use agent_runtime_core::error::RuntimeError;
 use agent_runtime_core::security::{PermissionSet, SecurityResource};
 use agent_runtime_core::tool::{
@@ -24,8 +26,23 @@ use crate::support::{invalid, optional_usize, require_str};
 const DEFAULT_LIMIT: usize = 65_536;
 
 /// Reads a background task's status and spooled output.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct TaskOutputTool;
+#[derive(Debug, Clone)]
+pub struct TaskOutputTool {
+    background: Arc<dyn background::BackgroundTaskHost>,
+}
+
+impl TaskOutputTool {
+    /// Builds the tool with the background-task owner for this runtime.
+    pub fn new(background: Arc<dyn background::BackgroundTaskHost>) -> Self {
+        Self { background }
+    }
+}
+
+impl Default for TaskOutputTool {
+    fn default() -> Self {
+        Self::new(background::unavailable())
+    }
+}
 
 #[async_trait]
 impl Tool for TaskOutputTool {
@@ -94,8 +111,8 @@ impl Tool for TaskOutputTool {
             .unwrap_or(DEFAULT_LIMIT)
             .max(1);
 
-        let host = background::installed().ok_or_else(background::host_unavailable)?;
-        let result = host
+        let result = self
+            .background
             .output(ctx.session.clone(), task_id.clone(), offset, limit)
             .await?;
 
@@ -136,17 +153,17 @@ mod tests {
     #[tokio::test]
     async fn without_an_installed_host_the_error_is_clear_rather_than_a_panic() {
         let (_dir, ctx) = project();
-        let err = TaskOutputTool
+        let err = TaskOutputTool::default()
             .invoke(json!({"task_id": "task:1"}), &ctx)
             .await
             .unwrap_err();
-        assert!(err.message.contains("no background task host"), "{err:?}");
+        assert!(err.message.contains("does not provide"), "{err:?}");
     }
 
     #[tokio::test]
     async fn an_empty_task_id_is_rejected_before_any_host_lookup() {
         let (_dir, ctx) = project();
-        let err = TaskOutputTool
+        let err = TaskOutputTool::default()
             .invoke(json!({"task_id": "   "}), &ctx)
             .await
             .unwrap_err();
@@ -156,12 +173,17 @@ mod tests {
     #[tokio::test]
     async fn a_missing_task_id_is_rejected() {
         let (_dir, ctx) = project();
-        assert!(TaskOutputTool.invoke(json!({}), &ctx).await.is_err());
+        assert!(
+            TaskOutputTool::default()
+                .invoke(json!({}), &ctx)
+                .await
+                .is_err()
+        );
     }
 
     #[test]
     fn the_tool_declares_read_only_effects() {
-        let spec = TaskOutputTool.spec();
+        let spec = TaskOutputTool::default().spec();
         assert!(spec.effects.is_read_only());
     }
 }

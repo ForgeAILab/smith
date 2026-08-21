@@ -3,7 +3,7 @@
     #[test]
     fn runtime_timeline_uses_stable_ids_terminal_plan_and_redacted_gate_evidence() {
         use agent_runtime_core::clock::Timestamp;
-        use agent_runtime_core::event::PlanSensitivity;
+        use smith_runtime::client::PlanSensitivity;
         use agent_runtime_core::ids::{EventId, ToolCallId, TurnId};
 
         let session = SessionId::new("session-1");

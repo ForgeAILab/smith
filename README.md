@@ -22,17 +22,26 @@ itself, which the runtime deliberately ships as traits only:
 | `smith-tui` | Transcript, status, composer, theme, key map, and rendering |
 | `smith-cli` | The `smith` binary, terminal host loop, and headless output contracts |
 
+The runtime composition boundary is documented in
+[`docs/architecture.md`](docs/architecture.md); extension trust tiers and the
+future Forge adapter are in [`docs/extensions.md`](docs/extensions.md) and
+[`docs/forge-integration.md`](docs/forge-integration.md).
+
 ### Tools
 
-Every path resolves through the session's workspace, so containment is enforced
-in one place rather than re-implemented per tool. Each invocation is prepared
+Every built-in filesystem-tool path resolves through the session's workspace,
+so its project boundary is enforced in one place rather than re-implemented per
+tool. Each invocation is prepared
 before approval: argument validation and canonical resource resolution produce
 the exact permissions, target, deadline, display, and fingerprint that are
 authorized and then executed. `edit` requests authority for its canonical file,
 narrowed to the operation it was given — `create` asks to create, `delete` asks
 only to read and delete, and neither asks for process or network authority the
-way routing a removal through `shell rm` would. `shell` conservatively declares
-broad workspace, process, and network authority.
+way routing a removal through `shell rm` would. `shell` is deliberately not a
+workspace-contained filesystem tool: it prepares an unsandboxed `host-shell`
+resource covering same-user host files, inherited environment and credentials,
+child processes, network access, and data egress. Its project `cwd` is only the
+initial working directory, not a sandbox boundary.
 The read-only three run without asking. Reads, listings, searches, and command
 output are bounded. Oversized output is stored in the session-private artifact
 store and represented to the model by a bounded preview plus a retrievable
@@ -47,7 +56,9 @@ between the agent's read and its write. An exact `replace` needs no such
 precondition: a stale `old_string` simply fails to match.
 
 `shell` puts each command in its own process group and signals the group, so a
-build script's background watcher does not outlive the invocation.
+build script's background watcher does not outlive the invocation. Unless the
+whole run explicitly uses `allow-all`, every host-shell call reaches the
+approval policy under its exact prepared command digest.
 
 Smith's root surface also composes `ask_user`, `write_todos`, and depth-one
 delegation through Agent Runtime's ability registry — each registered only
@@ -428,7 +439,7 @@ smith -p "inspect" --output-format stream-json
 smith -p "continue" --resume session-...
 ```
 
-`json` emits one schema-v3 result. `stream-json` emits versioned runtime events
+`json` emits one schema-v3 result. `stream-json` emits versioned Smith-client events
 followed by that result. Results project attempt commits/discards, the frozen
 activation epoch, todo counts/items when public, artifact references, recovery
 metadata, optional final goal state and continuation count, prepared approval
@@ -443,9 +454,10 @@ for the complete stdout, schema, redaction, and exit contract.
 `--yolo` is the explicit shorthand for `--approval allow-all`; it never adds
 tools removed by a read-only profile, so `smith --profile plan --yolo` remains
 read-only.
-Repository-controlled config cannot set `allow-all` or `auto_approve` merely
-by being opened; those authority-bearing choices must come from user config or
-an explicit command-line policy. It likewise cannot redirect or disable
+Repository-controlled config cannot set `allow-all` or add `[[approval.auto]]`
+grants merely by being opened; those authority-bearing choices must come from
+user config or an explicit command-line policy. Legacy non-empty
+`approval.auto_approve` tool-name lists are rejected. It likewise cannot redirect or disable
 user-scoped snapshots and journals.
 
 Snapshots and redacted canonical event journals live under

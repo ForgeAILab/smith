@@ -40,7 +40,6 @@ use futures_util::StreamExt;
 use smith_config::resolve::{Overrides, ResolveRequest, ResolvedConfig, resolve};
 use smith_host::{InteractionNotice, InteractiveInteraction, ProjectWorkspace};
 use smith_runtime::artifact::SmithArtifactStore;
-use smith_runtime::background_tasks::BackgroundTaskRegistry;
 use smith_runtime::checkpoint::{
     CheckpointKey, CheckpointKeyProvider, CheckpointProtectionError, SmithCheckpointStore,
 };
@@ -1469,7 +1468,7 @@ async fn project_configuration_cannot_silently_grant_tool_authority() {
     std::fs::create_dir_all(&config_dir).expect("a project config directory");
     std::fs::write(
         config_dir.join("config.toml"),
-        format!("{CONFIG}\n[approval]\nmode = \"allow-all\"\nauto_approve = [\"edit\"]\n"),
+        format!("{CONFIG}\n[approval]\nmode = \"allow-all\"\n"),
     )
     .expect("a project config");
     let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
@@ -1502,19 +1501,23 @@ async fn project_configuration_cannot_silently_grant_tool_authority() {
 }
 
 #[tokio::test]
-async fn project_auto_approving_a_remote_tool_fails_preflight() {
+async fn project_scoped_auto_approval_fails_preflight() {
     let home = tempfile::tempdir().expect("a user root");
     let project = tempfile::tempdir().expect("a project root");
     let config_dir = project.path().join(".smith");
     std::fs::create_dir_all(&config_dir).expect("a project config directory");
-    // A repository declaring a server *and* pre-approving its tools would be
-    // authorizing itself twice over. The approval half is refused here; the
-    // spawn half is refused by execution trust.
     std::fs::write(
         config_dir.join("config.toml"),
         format!(
-            "{CONFIG}\n[mcp.servers.github]\ncommand = \"npx\"\n\n\
-             [approval]\nauto_approve = [\"mcp__github__search\"]\n"
+            "{CONFIG}\n\
+             [[approval.auto]]\n\
+             revision = 1\n\
+             tool = \"smith/edit\"\n\
+             operations = [\"replace\"]\n\
+             permissions = [\"fs.read\", \"fs.write\"]\n\
+             max_risk = \"medium\"\n\
+             mount = \"workspace\"\n\
+             paths = [\"src/**\"]\n"
         ),
     )
     .expect("a project config");
@@ -1530,12 +1533,12 @@ async fn project_auto_approving_a_remote_tool_fails_preflight() {
 
     let error = start(HostSessionRequest::new(runtime, project.path()))
         .await
-        .expect_err("project config must not pre-approve a remote tool");
+        .expect_err("project config must not grant scoped approval authority");
     assert!(
         matches!(
             error,
             HostSessionError::ProjectGrantedAuthority {
-                setting: "approval.auto_approve",
+                setting: "approval.auto",
                 ..
             }
         ),
@@ -2410,7 +2413,8 @@ async fn resume_marks_an_unresolved_background_task_interrupted_without_spawning
         .expect("an explicit interruption marker");
     assert_eq!(interruption.tasks.as_slice(), std::slice::from_ref(&task));
     assert!(
-        BackgroundTaskRegistry::global()
+        resumed
+            .background_tasks()
             .running_tasks(&session_id)
             .is_empty(),
         "resume must never spawn a process for a recovered background task"
@@ -2448,7 +2452,7 @@ async fn shutdown_kills_a_running_background_task_within_the_grace_period() {
         .expect("a hosted session");
     let session_id = host.session().id().clone();
 
-    BackgroundTaskRegistry::global()
+    host.background_tasks()
         .spawn_background_task(
             &session_id,
             "sleep 30".to_owned(),
@@ -2458,9 +2462,7 @@ async fn shutdown_kills_a_running_background_task_within_the_grace_period() {
         .await
         .expect("a background task spawns");
     assert_eq!(
-        BackgroundTaskRegistry::global()
-            .running_tasks(&session_id)
-            .len(),
+        host.background_tasks().running_tasks(&session_id).len(),
         1,
         "the task is registered as running before shutdown"
     );
@@ -2474,7 +2476,7 @@ async fn shutdown_kills_a_running_background_task_within_the_grace_period() {
         "shutdown must not wait out the task's own 30s sleep: {elapsed:?}"
     );
     assert!(
-        BackgroundTaskRegistry::global()
+        host.background_tasks()
             .running_tasks(&session_id)
             .is_empty(),
         "shutdown must kill the task's owned process group before returning"
@@ -2526,7 +2528,7 @@ async fn a_background_task_terminal_notification_reaches_the_parent_model_at_a_s
     let host = start(request).await.expect("a hosted session");
     let session_id = host.session().id().clone();
 
-    BackgroundTaskRegistry::global()
+    host.background_tasks()
         .spawn_background_task(
             &session_id,
             "true".to_owned(),
@@ -2540,7 +2542,8 @@ async fn a_background_task_terminal_notification_reaches_the_parent_model_at_a_s
     // set, then give it one more beat to finish injecting the notification,
     // the same margin `HostSession::shutdown` gives it.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while !BackgroundTaskRegistry::global()
+    while !host
+        .background_tasks()
         .running_tasks(&session_id)
         .is_empty()
     {

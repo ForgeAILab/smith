@@ -419,6 +419,38 @@
         assert!(warning.contains("file deletion"), "{warning}");
     }
 
+    #[test]
+    fn external_service_authority_is_not_presented_as_project_filesystem_access() {
+        let prepared = PreparedToolCall::new(
+            ToolCallId::new("remote-call"),
+            "mcp__github__search",
+            serde_json::json!({"query": "smith"}),
+            [
+                Permission::ExternalRead,
+                Permission::ExternalWrite,
+                Permission::NetHttp,
+                Permission::DataEgress,
+            ]
+            .into_iter()
+            .collect::<PermissionSet>(),
+            SecurityResource::other(
+                "external-service",
+                "mcp:github@revision#https://api.github.test/mcp",
+            ),
+            ToolEffects::new(Vec::new()),
+            ToolCallDisplay::new("Search GitHub"),
+        );
+
+        assert_eq!(
+            security_resource_text(prepared.resource()),
+            "external service mcp:github@revision#https://api.github.test/mcp"
+        );
+        let warning = authority_warning(&prepared).expect("external authority warning");
+        assert!(warning.contains("external service read"), "{warning}");
+        assert!(warning.contains("possible external service mutation"), "{warning}");
+        assert!(!warning.contains("file deletion"), "{warning}");
+    }
+
     #[tokio::test]
     async fn an_edit_approval_shows_a_diff_instead_of_raw_json() {
         let app = edit_approval(

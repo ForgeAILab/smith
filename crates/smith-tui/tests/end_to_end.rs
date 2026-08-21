@@ -17,6 +17,7 @@ use agent_runtime_testkit::scenarios::fake_model_profile;
 use futures_util::StreamExt;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use smith_runtime::client::SmithEvent;
 use smith_tui::app::{Action, App, SubmissionTarget};
 use smith_tui::theme::Theme;
 
@@ -29,7 +30,7 @@ async fn drain(events: &mut RuntimeEventStream, app: &mut App) {
     while let Ok(Some(envelope)) =
         tokio::time::timeout(Duration::from_millis(100), events.next()).await
     {
-        app.apply(&envelope);
+        app.apply(&SmithEvent::project_or_unknown(&envelope));
     }
 }
 

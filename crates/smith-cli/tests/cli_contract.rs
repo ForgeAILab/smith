@@ -588,10 +588,15 @@ fn repository_approval_cannot_self_authorize_but_an_explicit_flag_can() {
     ));
     let refused = auto.run(&["-p", "hello", "--output-format", "json"]);
     assert!(!refused.status.success());
+    assert!(refused.stdout.is_empty(), "preflight wrote machine output");
     assert!(
-        String::from_utf8_lossy(&refused.stderr).contains("approval.auto_approve"),
+        String::from_utf8_lossy(&refused.stderr).contains("[[approval.auto]]"),
         "{}",
         String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(
+        !auto.home.path().join(".smith/sessions").exists(),
+        "legacy authority failure created session state"
     );
 }
 

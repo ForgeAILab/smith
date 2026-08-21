@@ -94,6 +94,9 @@ pub struct HostSessionRequest {
 impl HostSessionRequest {
     /// Creates a request for a fresh session rooted at `project_root`.
     pub fn new(mut runtime: RuntimeRequest, project_root: impl Into<PathBuf>) -> Self {
+        if runtime.background_services.is_none() {
+            runtime.background_services = Some(crate::background_tasks::BackgroundServices::new());
+        }
         if runtime.config.persistence.enabled.value && runtime.semantic_summary.is_none() {
             runtime.semantic_summary = Some(SmithSemanticSummaryConfig::standard());
         }
@@ -150,6 +153,7 @@ impl HostSessionRequest {
 pub struct HostSession {
     runtime: SmithRuntime,
     session: SessionHandle,
+    client: crate::client::SmithSession,
     display_redactor: DefaultRedactor,
     journal: Option<Arc<EventJournal>>,
     paths: Option<SessionPaths>,
@@ -198,6 +202,11 @@ impl HostSession {
         &self.session
     }
 
+    /// Versioned Smith-owned client session used by presentation surfaces.
+    pub fn client(&self) -> &crate::client::SmithSession {
+        &self.client
+    }
+
     /// The Smith runtime composition record.
     pub fn runtime(&self) -> &SmithRuntime {
         &self.runtime
@@ -211,6 +220,14 @@ impl HostSession {
     /// In-session exact/ambiguous mutation attribution.
     pub fn changes(&self) -> &Arc<smith_tools::ChangeRecorder> {
         &self.changes
+    }
+
+    /// Background-task registry owned by this exact composed host.
+    pub fn background_tasks(&self) -> &Arc<BackgroundTaskRegistry> {
+        self.runtime
+            .background_services()
+            .expect("a standard HostSession always resolves background services")
+            .registry()
     }
 
     /// Exact pending interaction restored from the protected checkpoint, when
@@ -306,6 +323,20 @@ impl HostSession {
         Ok(recovery.events().into_iter().cloned().collect())
     }
 
+    /// Returns replayable events projected through the versioned Smith client
+    /// protocol. Presentation clients should prefer this over the canonical
+    /// journal vocabulary.
+    pub async fn client_timeline_events(
+        &self,
+    ) -> Result<Vec<crate::client::SmithEvent>, RuntimeError> {
+        Ok(self
+            .timeline_events()
+            .await?
+            .iter()
+            .map(crate::client::SmithEvent::project_or_unknown)
+            .collect())
+    }
+
     /// Returns the canonical redacted events with sequence numbers in
     /// `first..=last`.
     ///
@@ -370,6 +401,20 @@ impl HostSession {
             );
         }
         Ok(events)
+    }
+
+    /// Returns a replay gap projected through the Smith client protocol.
+    pub async fn client_events_between(
+        &self,
+        first: u64,
+        last: u64,
+    ) -> Result<Vec<crate::client::SmithEvent>, RuntimeError> {
+        Ok(self
+            .journal_events_between(first, last)
+            .await?
+            .iter()
+            .map(crate::client::SmithEvent::project_or_unknown)
+            .collect())
     }
 
     /// Applies the same credential redaction the journal writer applies
@@ -542,9 +587,9 @@ impl HostSession {
         // duration — so each worker's kill and terminal journal marker have
         // a chance to land. A task still running past the bound is abandoned
         // to `kill_on_drop` rather than allowed to hold up exit.
-        BackgroundTaskRegistry::global()
+        self.background_tasks()
             .stop_all_session_tasks(self.session.id(), TaskStatus::Shutdown);
-        wait_for_background_tasks_to_stop(self.session.id()).await;
+        wait_for_background_tasks_to_stop(self.background_tasks(), self.session.id()).await;
 
         let journal = match &self.journal {
             Some(journal) => journal.shutdown().await.map(Some),
@@ -862,7 +907,9 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         .observers
         .push(Arc::new(ChangeTurnObserver(changes.clone())));
 
-    let runtime = crate::factory::build(request.runtime).await?;
+    let harness = crate::harness::resolve(crate::harness::HarnessSpec::trusted(request.runtime))
+        .map_err(FactoryError::from)?;
+    let runtime = crate::factory::build(harness).await?;
 
     // Probe existence before creating the lifecycle lock file. The reads are
     // atomic and side-effect free; an arbitrary missing resume id must not
@@ -1129,12 +1176,16 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         Some(paths) => paths.tasks_dir(session.id())?,
         None => std::env::temp_dir().join(format!("smith-tasks-{}", session.id())),
     };
-    BackgroundTaskRegistry::global().register_session_context(
-        session.id(),
-        Some(session.clone()),
-        journal.clone(),
-        task_spool_dir,
-    );
+    runtime
+        .background_services()
+        .expect("a standard HostSession always resolves background services")
+        .registry()
+        .register_session_context(
+            session.id(),
+            Some(session.clone()),
+            journal.clone(),
+            task_spool_dir,
+        );
 
     let goal_admission_gate = runtime
         .goal_component()
@@ -1192,9 +1243,11 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         changes.clone(),
     );
 
+    let client = crate::client::SmithSession::new(session.clone());
     Ok(HostSession {
         runtime,
         session,
+        client,
         display_redactor: persistence_redactor,
         journal,
         paths,
@@ -1666,6 +1719,17 @@ fn reject_project_granted_authority(
             provenance: auto_approve.source.clone(),
         });
     }
+    if let Some(rule) = config
+        .approval
+        .auto
+        .iter()
+        .find(|rule| controlled_by_project(&rule.source, project_root))
+    {
+        return Err(HostSessionError::ProjectGrantedAuthority {
+            setting: "approval.auto",
+            provenance: rule.source.clone(),
+        });
+    }
     Ok(())
 }
 
@@ -1813,8 +1877,10 @@ fn path_bytes(path: &Path) -> &[u8] {
 const BACKGROUND_TASK_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 const BACKGROUND_TASK_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
-async fn wait_for_background_tasks_to_stop(session_id: &SessionId) {
-    let registry = BackgroundTaskRegistry::global();
+async fn wait_for_background_tasks_to_stop(
+    registry: &BackgroundTaskRegistry,
+    session_id: &SessionId,
+) {
     let deadline = Instant::now() + BACKGROUND_TASK_SHUTDOWN_GRACE;
     while !registry.running_tasks(session_id).is_empty() {
         if Instant::now() >= deadline {

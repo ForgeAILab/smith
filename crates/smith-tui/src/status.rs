@@ -18,11 +18,11 @@ use std::collections::BTreeMap;
 
 use std::time::Duration;
 
-use agent_runtime_core::event::{EstimationConfidence, EventEnvelope};
 use agent_runtime_core::goal::GoalProjection;
 use agent_runtime_core::manifest::SegmentKind;
 use agent_runtime_core::provider::ProviderAttemptPurpose;
 use agent_runtime_core::usage::{CounterKind, UsageDelta, UsageRecord};
+use smith_runtime::client::{EstimationConfidence, SmithEvent as EventEnvelope};
 
 use crate::cache::{CacheLifecycleSummary, CachePrice, CacheProjection, CacheTurnSummary};
 
@@ -1045,7 +1045,7 @@ impl Status {
     pub fn record_cache_event(&mut self, envelope: &EventEnvelope) {
         let identity_event = matches!(
             &envelope.payload,
-            agent_runtime_core::event::RuntimeEvent::ModelProfileResolved { .. }
+            smith_runtime::client::SmithEventKind::ModelProfileResolved { .. }
         );
         self.cache_projection.apply(envelope);
         if identity_event

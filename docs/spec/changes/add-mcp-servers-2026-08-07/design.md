@@ -1,6 +1,6 @@
 ---
 created_at: 2026-08-07T20:26:54Z
-updated_at: 2026-08-07T20:26:54Z
+updated_at: 2026-08-20T22:14:36Z
 ---
 
 # Design: MCP servers in Smith
@@ -117,6 +117,50 @@ know which are sensitive. Arguments are therefore hidden by default and the row
 shows the tool name with an explicit "arguments hidden" marker — which is what
 the existing fixture already asserts.
 
+## Decision: unreviewed tools may mutate external state
+
+MCP annotations are untrusted hints. The current shared package correctly
+refuses to let `readOnlyHint` lower authority, but its default host floor is
+still read plus network and it adds a remote write only when the server says
+`destructiveHint = true`. Omission therefore underdeclares tools such as
+`send_email`, `merge_pull_request`, or `delete_repository`.
+
+The default for every unreviewed tool becomes:
+
+```text
+external read of service:<server>
++ possible external write of service:<server>
++ network to the resolved server endpoint
++ data egress to that endpoint
+```
+
+This is deliberately not `FsRead` or a workspace filesystem resource. External
+service reads and writes are different authority domains and must not inherit
+filesystem containment semantics. Possible writes for one server share a
+server-scoped conflict key so they do not overlap local file writes.
+
+A narrower classification is accepted only from a host-owned record:
+
+```rust
+struct McpToolPolicyKey {
+    server_identity: ServerIdentity,
+    tool_name: String,
+    schema_revision: RegistryRevision,
+}
+```
+
+Changing the server identity, name, schema, or relevant annotations invalidates
+the review. Server-supplied annotations can still add higher-risk categories;
+they cannot select or narrow the host record.
+
+The pinned Agent Runtime currently has only local-looking `Read`/`Write`, bare
+`Network`, and process effects; `DataEgress` exists as a permission but cannot
+be produced by `ToolEffects`. The coordinated upstream change therefore owns
+external read/write resources, endpoint-scoped network, data-egress effect
+mapping, risk derivation, scheduling keys, and MCP binding tests. Smith owns the
+default conservative policy, optional reviewed-policy injection, approval
+presentation, and the compatible dependency pin.
+
 ## Decision: connection is not on the startup critical path
 
 Servers connect concurrently with session start, not before it. A slow `npx`
@@ -141,3 +185,10 @@ is the correct trade — the alternative is a session that hangs on a third part
 
 Failures are sticky and visible rather than logged and forgotten — a server that
 silently contributes nothing is worse than one that says why.
+
+## Remaining authority work
+
+At commit `19e1696`, `McpOptions` does not supply an effect policy and
+`McpServerConfig::new` therefore retains the shared read/network floor. The
+pending Section 7 tasks must complete before this change is archived or called
+policy-correct.

@@ -745,6 +745,136 @@ pub struct ApprovalSection {
     /// Tools that never prompt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_approve: Option<Vec<String>>,
+    /// Prepared-call-scoped automatic approval rules.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auto: Vec<AutoApprovalRuleSection>,
+}
+
+/// One revisioned automatic-approval rule as written in configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AutoApprovalRuleSection {
+    /// Schema revision. Only revision 1 is currently defined.
+    pub revision: u32,
+    /// Module-qualified tool identity, for example `smith/edit`.
+    pub tool: String,
+    /// Exact prepared operations this rule covers.
+    pub operations: Vec<AutoApprovalOperation>,
+    /// Maximum typed permissions the prepared call may request.
+    pub permissions: Vec<AutoApprovalPermission>,
+    /// Maximum derived risk accepted by the rule.
+    pub max_risk: AutoApprovalRisk,
+    /// Resource mount class. Scoped rules currently support only `workspace`.
+    pub mount: AutoApprovalMount,
+    /// Project-relative glob patterns covered by the rule.
+    pub paths: Vec<String>,
+    /// Optional RFC 3339 expiry timestamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+    /// Optional total number of matching calls allowed for this policy instance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_uses: Option<u32>,
+}
+
+/// Prepared operation names understood by scoped automatic approval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AutoApprovalOperation {
+    /// Exact string replacement.
+    Replace,
+    /// Create a new file.
+    Create,
+    /// Replace a complete existing file after a versioned read.
+    Overwrite,
+    /// Delete an existing file after a versioned read.
+    Delete,
+}
+
+impl AutoApprovalOperation {
+    /// Stable prepared-argument spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Replace => "replace",
+            Self::Create => "create",
+            Self::Overwrite => "overwrite",
+            Self::Delete => "delete",
+        }
+    }
+}
+
+/// Permission names accepted in a scoped automatic-approval ceiling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+pub enum AutoApprovalPermission {
+    /// Project filesystem read.
+    #[serde(rename = "fs.read")]
+    FsRead,
+    /// Project filesystem write.
+    #[serde(rename = "fs.write")]
+    FsWrite,
+    /// Project filesystem create.
+    #[serde(rename = "fs.create")]
+    FsCreate,
+    /// Project filesystem delete.
+    #[serde(rename = "fs.delete")]
+    FsDelete,
+    /// Same-user host filesystem read.
+    #[serde(rename = "host.fs.read")]
+    HostFsRead,
+    /// Same-user host filesystem write.
+    #[serde(rename = "host.fs.write")]
+    HostFsWrite,
+    /// External service read.
+    #[serde(rename = "external.read")]
+    ExternalRead,
+    /// External service write.
+    #[serde(rename = "external.write")]
+    ExternalWrite,
+    /// Process creation.
+    #[serde(rename = "process.spawn")]
+    ProcessSpawn,
+    /// Network access.
+    #[serde(rename = "net.http")]
+    NetHttp,
+    /// Data egress.
+    #[serde(rename = "data.egress")]
+    DataEgress,
+    /// Credential use.
+    #[serde(rename = "credential.use")]
+    CredentialUse,
+    /// Standard-input read.
+    #[serde(rename = "stdio.read")]
+    StdioRead,
+    /// Standard-output write.
+    #[serde(rename = "stdio.write")]
+    StdioWrite,
+    /// Clock read.
+    #[serde(rename = "clock.read")]
+    ClockRead,
+    /// Randomness read.
+    #[serde(rename = "random.read")]
+    RandomRead,
+}
+
+/// Coarse risk ceiling for a scoped automatic-approval rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AutoApprovalRisk {
+    /// No meaningful authority.
+    None,
+    /// Read-only or similarly narrow authority.
+    Low,
+    /// Reversible project writes.
+    Medium,
+    /// Deletion or other irreversible authority.
+    High,
+}
+
+/// Resource classes supported by scoped automatic approval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AutoApprovalMount {
+    /// The exact project workspace mount supplied to the runtime.
+    Workspace,
 }
 
 /// What Smith does with a tool call that needs a decision.

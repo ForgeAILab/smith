@@ -11,7 +11,7 @@ use agent_runtime_core::workspace::Workspace;
 use agent_runtime_registry::Permission;
 use serde_json::json;
 use smith_host::workspace::ProjectWorkspace;
-use smith_tools::{EditTool, ListTool, ReadTool, SearchTool, ShellTool};
+use smith_tools::{EditTool, HOST_SHELL_RESOURCE_KIND, ListTool, ReadTool, SearchTool, ShellTool};
 
 struct Project {
     _dir: tempfile::TempDir,
@@ -187,9 +187,9 @@ async fn edit_prepares_distinct_exact_contracts_for_replace_and_create() {
 }
 
 #[tokio::test]
-async fn shell_prepares_broad_workspace_authority_even_for_a_nested_cwd() {
+async fn shell_prepares_host_authority_even_for_a_nested_cwd() {
     let project = Project::new();
-    let prepared = ShellTool
+    let prepared = ShellTool::default()
         .prepare(
             json!({
                 "command": "printf ready",
@@ -202,28 +202,46 @@ async fn shell_prepares_broad_workspace_authority_even_for_a_nested_cwd() {
         .expect("a prepared shell command");
 
     let required = permissions([
-        Permission::FsRead,
-        Permission::FsWrite,
-        Permission::FsCreate,
-        Permission::FsDelete,
+        Permission::HostFsRead,
+        Permission::HostFsWrite,
         Permission::ProcessSpawn,
         Permission::NetHttp,
         Permission::DataEgress,
     ]);
     assert_eq!(prepared.arguments()["cwd"], project.path("src"));
     assert_eq!(prepared.arguments()["timeout_ms"], 600_000);
-    assert_eq!(
-        prepared.resource(),
-        &SecurityResource::filesystem(project.root.clone(), Vec::new())
-    );
+    let SecurityResource::Other { kind, id } = prepared.resource() else {
+        panic!("an unsandboxed shell must not claim a workspace resource")
+    };
+    assert_eq!(kind, HOST_SHELL_RESOURCE_KIND);
+    assert!(id.starts_with("sha256:"));
+    assert!(!id.contains("printf ready"));
+    assert!(prepared.display().title.contains("unsandboxed host shell"));
+    let detail = prepared
+        .display()
+        .detail
+        .as_deref()
+        .expect("host authority detail");
+    for warning in [
+        "same-user files",
+        "inherited environment and credentials",
+        "child processes",
+        "network",
+        "data egress",
+    ] {
+        assert!(
+            detail.contains(warning),
+            "missing `{warning}` in `{detail}`"
+        );
+    }
     assert_eq!(prepared.required_permissions(), &required);
     assert_eq!(
         prepared
             .effects()
-            .write_scopes()
+            .mutation_scopes()
             .map(|scope| scope.as_str())
             .collect::<Vec<_>>(),
-        [project.root.as_str()]
+        ["host:filesystem"]
     );
     assert!(prepared.effects().has_read());
     assert!(prepared.effects().spawns_process());
@@ -231,6 +249,67 @@ async fn shell_prepares_broad_workspace_authority_even_for_a_nested_cwd() {
     assert!(
         prepared
             .required_permissions()
-            .is_subset(&ShellTool.spec().permission_upper_bound)
+            .is_subset(&ShellTool::default().spec().permission_upper_bound)
     );
+}
+
+#[tokio::test]
+async fn host_shell_resource_identity_binds_every_prepared_execution_field() {
+    let project = Project::new();
+    let tool = ShellTool::default();
+    let prepare = |arguments| tool.prepare(arguments, &project.preparation);
+    let baseline = prepare(json!({
+        "command": "printf ready",
+        "cwd": "src",
+        "timeout_ms": 10,
+        "run_in_background": false,
+    }))
+    .await
+    .expect("baseline host shell");
+    let same = prepare(json!({
+        "command": "printf ready",
+        "cwd": "src",
+        "timeout_ms": 10,
+        "run_in_background": false,
+    }))
+    .await
+    .expect("same host shell");
+    assert_eq!(baseline.resource(), same.resource());
+
+    for arguments in [
+        json!({
+            "command": "printf changed",
+            "cwd": "src",
+            "timeout_ms": 10,
+            "run_in_background": false,
+        }),
+        json!({
+            "command": "printf ready",
+            "cwd": ".",
+            "timeout_ms": 10,
+            "run_in_background": false,
+        }),
+        json!({
+            "command": "printf ready",
+            "cwd": "src",
+            "timeout_ms": 11,
+            "run_in_background": false,
+        }),
+        json!({
+            "command": "printf ready",
+            "cwd": "src",
+            "timeout_ms": 10,
+            "run_in_background": true,
+        }),
+    ] {
+        let changed = prepare(arguments).await.expect("changed host shell");
+        assert_ne!(baseline.resource(), changed.resource());
+    }
+
+    let SecurityResource::Other { id, .. } = baseline.resource() else {
+        unreachable!("covered by the host-shell contract test")
+    };
+    assert_eq!(id.len(), "sha256:".len() + 64);
+    assert!(!id.contains("ready"));
+    assert!(!id.contains(&project.root));
 }

@@ -22,8 +22,10 @@ pub mod cache_lifecycle;
 pub mod catalog;
 pub mod chatgpt;
 pub mod checkpoint;
+pub mod client;
 pub mod delegation;
 pub mod factory;
+pub mod harness;
 pub mod host;
 pub mod journal;
 pub mod mcp;
@@ -52,4 +54,7 @@ pub use agent_runtime::delegation::{ChildDurability, ChildState, ChildStatus, Sp
 /// shared runtime. Re-exporting it here keeps production entry points on the
 /// Smith composition boundary instead of depending on the full facade
 /// directly.
+#[deprecated(
+    note = "use the SmithSession client adapter; removal is planned after protocol v1"
+)]
 pub use agent_runtime::runtime::SessionHandle;

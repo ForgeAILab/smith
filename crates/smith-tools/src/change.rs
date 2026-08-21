@@ -586,6 +586,15 @@ pub fn observed_tools(recorder: Arc<ChangeRecorder>) -> Vec<Arc<dyn Tool>> {
     observe(Some(recorder), ReadRecorder::new())
 }
 
+/// Wraps built-in tools with mutation attribution and an explicit background
+/// process owner supplied by the composing runtime.
+pub fn observed_tools_with_background(
+    recorder: Arc<ChangeRecorder>,
+    background: Arc<dyn crate::background::BackgroundTaskHost>,
+) -> Vec<Arc<dyn Tool>> {
+    observe_with_background(Some(recorder), ReadRecorder::new(), background)
+}
+
 /// Wraps the built-in tools with whatever session state they need.
 ///
 /// Mutation attribution is optional — a caller may not want undo — but read
@@ -595,7 +604,15 @@ pub(crate) fn observe(
     recorder: Option<Arc<ChangeRecorder>>,
     reads: Arc<ReadRecorder>,
 ) -> Vec<Arc<dyn Tool>> {
-    crate::built_in()
+    observe_with_background(recorder, reads, crate::background::unavailable())
+}
+
+pub(crate) fn observe_with_background(
+    recorder: Option<Arc<ChangeRecorder>>,
+    reads: Arc<ReadRecorder>,
+    background: Arc<dyn crate::background::BackgroundTaskHost>,
+) -> Vec<Arc<dyn Tool>> {
+    crate::built_in(background)
         .into_iter()
         .map(|inner| {
             Arc::new(ObservedTool {
@@ -637,18 +654,42 @@ impl Tool for ObservedTool {
         // Enforced after the inner prepare so the operation has been validated
         // and normalized, and so a doomed destructive call never reaches the
         // approval prompt. `edit` owns the rule; this supplies the state.
-        if prepared.tool() == "edit"
-            && let Some(defect) = crate::edit::read_state_defect(prepared.arguments(), &self.reads)
-        {
-            let display = prepared
-                .arguments()
-                .get("path")
-                .and_then(Value::as_str)
-                .map_or_else(
-                    || "the target".to_owned(),
-                    |path| display_relative(ctx, path),
-                );
-            return Err(RuntimeError::new(ErrorKind::Tool, defect.message(&display)));
+        if prepared.tool() == "edit" {
+            match crate::edit::expected_read_version(prepared.arguments(), &self.reads) {
+                Err(defect) => {
+                    let display = prepared
+                        .arguments()
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .map_or_else(
+                            || "the target".to_owned(),
+                            |path| display_relative(ctx, path),
+                        );
+                    return Err(RuntimeError::new(ErrorKind::Tool, defect.message(&display)));
+                }
+                Ok(Some(version)) => {
+                    let mut arguments = prepared.arguments().clone();
+                    arguments
+                        .as_object_mut()
+                        .ok_or_else(|| RuntimeError::tool("prepared edit arguments are invalid"))?
+                        .insert(
+                            crate::edit::EXPECTED_VERSION_FIELD.to_owned(),
+                            serde_json::to_value(version).map_err(|_| {
+                                RuntimeError::internal("file version could not be encoded")
+                            })?,
+                        );
+                    return Ok(PreparedToolCall::new(
+                        prepared.call_id().clone(),
+                        prepared.tool(),
+                        arguments,
+                        prepared.required_permissions().clone(),
+                        prepared.resource().clone(),
+                        prepared.effects().clone(),
+                        prepared.display().clone(),
+                    ));
+                }
+                Ok(None) => {}
+            }
         }
         Ok(prepared)
     }
@@ -675,7 +716,7 @@ impl Tool for ObservedTool {
         let edit_path = target("edit");
         let read_path = target("read");
         let before = match &edit_path {
-            Some(path) => bounded_image(path),
+            Some(path) => bounded_capability_image(ctx, path),
             None => Ok(None),
         };
         let outcome = self.inner.invoke(prepared, ctx).await;
@@ -688,7 +729,7 @@ impl Tool for ObservedTool {
                 // which after a successful call is exactly what a completed
                 // delete looks like. Both images absent is the ambiguous case:
                 // nothing existed before and nothing exists now.
-                match (bounded_image(&path), before.is_some()) {
+                match (bounded_capability_image(ctx, &path), before.is_some()) {
                     (Ok(Some(after)), _) => self.record(ToolMutation::Exact(EditMutation {
                         call_id: call_id.clone(),
                         path,
@@ -752,7 +793,15 @@ impl ObservedTool {
                 _ => None,
             });
         let full = matches!((total, shown), (Some(total), Some((1, last))) if last == total);
-        self.reads.record(path.clone(), full);
+        let Some(version) = outcome
+            .value
+            .get("_smith_file_version")
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok())
+        else {
+            return;
+        };
+        self.reads.record(path.clone(), full, version);
     }
 }
 
@@ -772,6 +821,15 @@ fn bounded_image(path: &Path) -> Result<Option<Vec<u8>>, RuntimeError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(io_error(error)),
     }
+}
+
+fn bounded_capability_image(
+    ctx: &InvocationContext,
+    path: &Path,
+) -> Result<Option<Vec<u8>>, RuntimeError> {
+    crate::support::project_workspace(ctx)?
+        .read_optional_bounded(path, MAX_IMAGE_BYTES as usize)
+        .map(|read| read.map(|read| read.bytes))
 }
 
 fn hash(bytes: Option<&[u8]>) -> String {
@@ -1115,6 +1173,46 @@ mod observed_session {
             std::fs::read_to_string(&path).expect("still there"),
             "fn a() { work_in_progress(); }\n",
             "the user's work must survive"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_edit_during_approval_is_rejected_at_commit() {
+        let (dir, tools, ctx) = session();
+        let path = dir.path().join("approval.rs");
+        std::fs::write(&path, "fn approved() {}\n").expect("seed");
+        read_fully(&tools, &ctx, "approval.rs").await;
+        let edit = tools
+            .iter()
+            .find(|tool| tool.spec().name == "edit")
+            .expect("edit tool");
+        let prepared = edit
+            .prepare(
+                json!({
+                    "path": "approval.rs",
+                    "operation": "overwrite",
+                    "new_string": "clobbered\n"
+                }),
+                &crate::testing::preparation_context(&ctx),
+            )
+            .await
+            .expect("prepared before approval");
+
+        // Represents time spent at an approval prompt while the user edits in
+        // another application.
+        std::fs::write(&path, "user change during approval\n").expect("user edit");
+        let error = edit
+            .invoke(prepared, &ctx)
+            .await
+            .expect_err("commit must revalidate after approval");
+
+        assert!(
+            error.message.contains("changed since it was read"),
+            "{error:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "user change during approval\n"
         );
     }
 

@@ -11,12 +11,15 @@ use std::time::{Duration, Instant};
 
 use agent_runtime_core::clock::Timestamp;
 use agent_runtime_core::content::{ContentPart, UserInput};
-use agent_runtime_core::event::{EventEnvelope, PlanItemProjection, PlanSensitivity, RuntimeEvent};
 use agent_runtime_core::ids::{AttemptId, RequestId, TurnId};
 use agent_runtime_core::steer::SteerReceipt;
 use agent_runtime_core::usage::{CounterKind, UsageDelta};
 use smith_host::approval::ApprovalPrompt;
 use smith_host::rotation::RotationPrompt;
+use smith_runtime::client::{
+    PlanItemProjection, PlanSensitivity, SmithEvent as EventEnvelope,
+    SmithEventKind as RuntimeEvent,
+};
 use smith_tools::ToolCallDisplay;
 
 use super::conversation::{Conversation, SpeculativeState};

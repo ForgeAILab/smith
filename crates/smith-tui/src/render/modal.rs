@@ -200,6 +200,9 @@ pub(super) fn security_resource_text(resource: &SecurityResource) -> String {
         SecurityResource::Credential { reference } => {
             format!("credential:{reference}")
         }
+        SecurityResource::Other { kind, id } if kind == "external-service" => {
+            format!("external service {id}")
+        }
         SecurityResource::Other { kind, id } => format!("{kind}:{id}"),
     }
 }
@@ -212,6 +215,12 @@ pub(super) fn authority_warning(prepared: &PreparedToolCall) -> Option<String> {
     }
     if permissions.contains(&Permission::FsDelete) {
         capabilities.push("file deletion");
+    }
+    if permissions.contains(&Permission::ExternalRead) {
+        capabilities.push("external service read");
+    }
+    if permissions.contains(&Permission::ExternalWrite) {
+        capabilities.push("possible external service mutation");
     }
     if matches!(
         prepared.resource(),

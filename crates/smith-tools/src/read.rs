@@ -39,7 +39,7 @@ impl Tool for ReadTool {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Path to the file, relative to the project root. An absolute path outside the project asks the user for permission."
+                        "description": "Path to the file inside the project root. Outside paths are refused; use the explicitly approved host shell for host access."
                     },
                     "offset": {
                         "type": "integer",
@@ -96,8 +96,8 @@ impl Tool for ReadTool {
             return Err(invalid("`limit` must be at least 1"));
         }
 
-        let contents = read_bounded(&path, MAX_READ_BYTES).await?;
-        let all: Vec<&str> = contents.lines().collect();
+        let contents = read_bounded(ctx, &path, MAX_READ_BYTES).await?;
+        let all: Vec<&str> = contents.text.lines().collect();
         let total = all.len();
 
         if offset > total {
@@ -132,6 +132,8 @@ impl Tool for ReadTool {
                 "path": display_path(ctx, &path),
                 "lines": total,
                 "shown": [offset, end],
+                "_smith_file_version": serde_json::to_value(&contents.version)
+                    .map_err(|_| RuntimeError::internal("file version could not be encoded"))?,
             }),
             content: vec![agent_runtime_core::content::ContentPart::text(rendered)].into(),
             is_error: false,
@@ -198,8 +200,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reading_outside_the_project_prepares_an_escaped_resource() {
-        use agent_runtime_core::security::SecurityResource;
+    async fn reading_outside_the_project_is_refused_during_preparation() {
         use agent_runtime_core::tool::PreparationContext;
 
         let (_dir, ctx) = project();
@@ -213,38 +214,25 @@ mod tests {
             cancel: ctx.cancel.clone(),
             deadline: ctx.deadline,
         };
-        let prepared = ReadTool
+        let err = ReadTool
             .prepare(json!({"path": "../../etc/passwd"}), &preparation)
             .await
-            .unwrap();
-
-        // Preparation no longer refuses the escape; it must surface it on a
-        // non-workspace resource so authorization routes it to approval
-        // rather than allowing it as an unattended project read.
-        assert!(
-            matches!(
-                prepared.resource(),
-                SecurityResource::Filesystem { mount, .. }
-                    if mount.as_str() != ctx.workspace.root()
-            ),
-            "{:?}",
-            prepared.resource()
-        );
+            .expect_err("ordinary reads cannot request host paths");
+        assert_eq!(err.kind, agent_runtime_core::error::ErrorKind::Workspace);
     }
 
     #[tokio::test]
-    async fn a_file_outside_the_project_is_read_once_prepared() {
+    async fn a_file_outside_the_project_is_refused() {
         let (_dir, ctx) = project();
         let outside = tempfile::tempdir().unwrap();
         let path = outside.path().join("outside.txt");
         std::fs::write(&path, "beyond the boundary\n").unwrap();
 
-        let outcome = ReadTool
+        let err = ReadTool
             .invoke(json!({"path": path.to_str().unwrap()}), &ctx)
             .await
-            .unwrap();
-        let text = crate::testing::text_of(&outcome);
-        assert!(text.contains("beyond the boundary"), "{text}");
+            .expect_err("ordinary reads are capability-contained");
+        assert_eq!(err.kind, agent_runtime_core::error::ErrorKind::Workspace);
     }
 
     #[tokio::test]

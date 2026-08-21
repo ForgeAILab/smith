@@ -8,6 +8,8 @@
 //! `task_output` poll against a task's natural exit should not have to treat
 //! "it finished first" as a failure.
 
+use std::sync::Arc;
+
 use agent_runtime_core::error::RuntimeError;
 use agent_runtime_core::security::{PermissionSet, SecurityResource};
 use agent_runtime_core::tool::{
@@ -22,8 +24,23 @@ use crate::background;
 use crate::support::{invalid, require_str};
 
 /// Stops a running background shell task.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct TaskStopTool;
+#[derive(Debug, Clone)]
+pub struct TaskStopTool {
+    background: Arc<dyn background::BackgroundTaskHost>,
+}
+
+impl TaskStopTool {
+    /// Builds the tool with the background-task owner for this runtime.
+    pub fn new(background: Arc<dyn background::BackgroundTaskHost>) -> Self {
+        Self { background }
+    }
+}
+
+impl Default for TaskStopTool {
+    fn default() -> Self {
+        Self::new(background::unavailable())
+    }
+}
 
 #[async_trait]
 impl Tool for TaskStopTool {
@@ -76,8 +93,10 @@ impl Tool for TaskStopTool {
         let arguments = prepared.into_arguments();
         let task_id = require_str(&arguments, "task_id")?.to_owned();
 
-        let host = background::installed().ok_or_else(background::host_unavailable)?;
-        let status = host.stop(ctx.session.clone(), task_id.clone()).await?;
+        let status = self
+            .background
+            .stop(ctx.session.clone(), task_id.clone())
+            .await?;
 
         let rendered = format!("task {task_id}: {}", status.as_str());
 
@@ -101,17 +120,17 @@ mod tests {
     #[tokio::test]
     async fn without_an_installed_host_the_error_is_clear_rather_than_a_panic() {
         let (_dir, ctx) = project();
-        let err = TaskStopTool
+        let err = TaskStopTool::default()
             .invoke(json!({"task_id": "task:1"}), &ctx)
             .await
             .unwrap_err();
-        assert!(err.message.contains("no background task host"), "{err:?}");
+        assert!(err.message.contains("does not provide"), "{err:?}");
     }
 
     #[tokio::test]
     async fn an_empty_task_id_is_rejected_before_any_host_lookup() {
         let (_dir, ctx) = project();
-        let err = TaskStopTool
+        let err = TaskStopTool::default()
             .invoke(json!({"task_id": ""}), &ctx)
             .await
             .unwrap_err();
@@ -121,12 +140,17 @@ mod tests {
     #[tokio::test]
     async fn a_missing_task_id_is_rejected() {
         let (_dir, ctx) = project();
-        assert!(TaskStopTool.invoke(json!({}), &ctx).await.is_err());
+        assert!(
+            TaskStopTool::default()
+                .invoke(json!({}), &ctx)
+                .await
+                .is_err()
+        );
     }
 
     #[test]
     fn the_tool_declares_a_process_effect_so_approval_is_reachable() {
-        let spec = TaskStopTool.spec();
+        let spec = TaskStopTool::default().spec();
         assert!(spec.effects.spawns_process());
         assert!(spec.effects.mutates());
     }

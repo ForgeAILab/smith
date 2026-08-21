@@ -16,12 +16,11 @@ use agent_runtime_core::tool::{
 };
 use agent_runtime_registry::Permission;
 use async_trait::async_trait;
-use ignore::WalkBuilder;
 use serde_json::{Value, json};
 
 use crate::support::{
     check_stop, display_path, invalid, looks_binary, optional_bool, optional_str, optional_usize,
-    prepare_path_argument, require_str, resolve,
+    prepare_path_argument, project_workspace, require_str, resolve,
 };
 
 /// How many matches a search returns when the caller does not say.
@@ -55,7 +54,7 @@ impl Tool for SearchTool {
                     },
                     "path": {
                         "type": "string",
-                        "description": "Directory or file to search. Defaults to the project root. An absolute path outside the project asks the user for permission."
+                        "description": "Directory or file to search inside the project root. Defaults to the project root. Outside paths are refused."
                     },
                     "extension": {
                         "type": "string",
@@ -129,32 +128,45 @@ impl Tool for SearchTool {
         let mut files_searched = 0usize;
         let mut truncated = false;
 
-        let mut walker = WalkBuilder::new(&root);
-        walker.hidden(true).git_ignore(true).parents(true);
-        walker.filter_entry(|entry| entry.file_name() != ".git");
+        let workspace = project_workspace(ctx)?.clone();
+        let root_for_walk = root.clone();
+        let entries = tokio::task::spawn_blocking(move || {
+            let root_entry = workspace.entry(&root_for_walk)?;
+            if root_entry.is_file {
+                Ok(vec![root_entry])
+            } else {
+                workspace.entries(root_for_walk, true, false, 100_000)
+            }
+        })
+        .await
+        .map_err(|_| RuntimeError::internal("workspace search walk failed"))??;
 
-        'walk: for entry in walker.build() {
+        'walk: for entry in entries {
             check_stop(ctx)?;
-            let Ok(entry) = entry else { continue };
-            if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            if !entry.is_file {
                 continue;
             }
-            let path = entry.path();
+            let path = entry.relative_path;
             if let Some(wanted) = extension
                 && path.extension().and_then(|ext| ext.to_str()) != Some(wanted)
             {
                 continue;
             }
-            if entry
-                .metadata()
-                .is_ok_and(|meta| meta.len() > MAX_FILE_BYTES)
-            {
+            if entry.size.is_some_and(|size| size > MAX_FILE_BYTES) {
                 continue;
             }
 
-            let Ok(bytes) = tokio::fs::read(path).await else {
+            let workspace = project_workspace(ctx)?.clone();
+            let path_for_read = path.clone();
+            let Ok(read) = tokio::task::spawn_blocking(move || {
+                workspace.read_bounded(path_for_read, MAX_FILE_BYTES as usize)
+            })
+            .await
+            .map_err(|_| RuntimeError::internal("workspace search read failed"))?
+            else {
                 continue;
             };
+            let bytes = read.bytes;
             if looks_binary(&bytes) {
                 continue;
             }
@@ -178,7 +190,7 @@ impl Tool for SearchTool {
                 }
                 matches.push(format!(
                     "{}:{}: {}",
-                    display_path(ctx, path),
+                    path.display(),
                     index + 1,
                     trim_line(line)
                 ));

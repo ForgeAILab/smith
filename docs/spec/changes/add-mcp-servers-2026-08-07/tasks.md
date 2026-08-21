@@ -1,6 +1,6 @@
 ---
 created_at: 2026-08-07T20:26:54Z
-updated_at: 2026-08-08T04:00:00Z
+updated_at: 2026-08-21T01:56:29Z
 completed_at:
 ---
 
@@ -12,6 +12,9 @@ completed_at:
   They do: 50 tests in `agent-runtime-mcp`, 0 failures.
 - [x] 0.3 Record the `agent-runtime-mcp` version this change depends on.
   `=0.1.0`, with the `stdio` and `http` transports. See "Dependency pin" below.
+- [x] 0.4 Propose and approve the coordinated Agent Runtime external-service,
+  endpoint, data-egress, and MCP effect-floor change. Smith implementation of
+  Section 7 waits for that compatible revision.
 
 ## 1. Configuration Surface
 
@@ -114,22 +117,61 @@ bought anything.
   `a_remote_confirmation_names_the_endpoint_and_its_bearer_header`,
   `the_startup_grace_is_bounded_and_leaves_a_slow_server_connecting`, and
   `a_remote_server_this_build_can_reach_fails_loudly_rather_than_silently`.
-- [ ] 6.8 Exercise a successful remote round trip against a real streamable
-  HTTP server. Blocked on the coordinated change's own 6.3 — see "Remaining
-  work" below.
+- [x] 6.8 Exercise a successful remote round trip against a real streamable
+  HTTP server. On 2026-08-20 the official MCP Everything Server was started
+  locally with `streamableHttp`; Smith connected to
+  `http://127.0.0.1:3001/mcp`, registered 13 tools, and invoked `echo` with the
+  successful bounded result `Echo: smith-http-live`.
 - [x] 6.9 Move Smith's own transport to `reqwest 0.13` so the `http` MCP
   transport and the provider transport share one client. See "HTTP client
   unification" below.
 
+## 7. Conservative Remote Tool Authority
+
+- [ ] 7.1 Update to the approved Agent Runtime revision that distinguishes
+  external read/write resources from local filesystem effects, scopes network
+  authority to the resolved server endpoint, and maps data egress into prepared
+  permissions.
+- [x] 7.2 Add a Smith-owned MCP tool authority policy whose default classifies
+  every unreviewed tool as external read, possible external write, network, and
+  data egress. Inject it into every `McpServerConfig`; do not retain the shared
+  read/network default implicitly.
+- [x] 7.3 Permit narrower effects only through a host-owned policy record keyed
+  by server identity, exact tool name, and schema revision. Repository content
+  and server annotations cannot create or select a narrower record.
+- [x] 7.4 Add binding and through-runtime tests for missing annotations,
+  `readOnlyHint = true`, `destructiveHint = false`, and a false benign schema;
+  all unreviewed cases must still request possible external write and data
+  egress before invocation.
+- [x] 7.5 Test that an honest destructive hint may raise presentation risk but
+  cannot lower or replace the host floor, and that changed schema/identity
+  invalidates a reviewed narrow policy.
+- [x] 7.6 Update approval display and machine output to distinguish external
+  service reads/writes from project filesystem access and show the exact server
+  endpoint without credential values.
+- [x] 7.7 Re-run the workspace/all-features suite, shared MCP conformance,
+  consumer-conformance gate, stdio live test, and the pending successful HTTP
+  round trip against the new pinned revision.
+
+Exact-pin evidence (2026-08-20/21): Smith's default and all-features workspace
+suites, shared MCP conformance, the Agent Runtime Smith consumer-conformance
+gate, and full Agent Runtime tests are green with local patching disabled. A
+real stdio CodeGraph connection and invocation passed, as did a real
+streamable-HTTP round trip against the official MCP Everything Server (13 tools;
+`echo` returned `Echo: smith-http-live`). Section 7.1 remains open only until
+Agent Runtime commit `e72390a63ba83c65d781ba701fb3552755a47f29` is published
+to the configured GitHub source; Smith's manifest and lockfile already name and
+validate that exact revision through a clean local Git transport.
+
 ## Dependency pin
 
-`agent-runtime-mcp = "=0.1.0"`, with the `stdio` and `http` transports. The
-manifest entry carries the same git URL and `rev` as the other `agent-runtime`
-crates, but that revision does not yet contain the package: it resolves today
-through the git-ignored `.cargo/config.toml` patch table the workspace already
-uses for sibling development. The entry becomes self-sufficient when
-agent-runtime publishes a revision containing `crates/agent-runtime-mcp` and the
-workspace `rev` moves to it.
+`agent-runtime-mcp = "=0.1.0"`, with the `stdio` and `http` transports. Every
+Agent Runtime manifest entry and lockfile source names exact revision
+`e72390a63ba83c65d781ba701fb3552755a47f29`. Release validation disabled the
+git-ignored sibling patch table and fetched that commit through Git's local URL
+rewrite, proving the dependency graph is self-contained at the pinned commit.
+The coordinated Runtime branch must be pushed before Smith so a clean external
+clone can fetch the same object from the configured GitHub URL.
 
 `cargo deny check` passes unchanged and the local `deny.toml` needed no edit:
 every crate `http` adds is already covered by the licence allow list.

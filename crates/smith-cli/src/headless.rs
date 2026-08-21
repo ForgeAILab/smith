@@ -6,10 +6,6 @@ use std::time::Duration;
 
 use agent_runtime_core::artifact::ArtifactRef;
 use agent_runtime_core::content::{Role, UserInput};
-use agent_runtime_core::event::{
-    EstimationConfidence, EventEnvelope, PlanItemProjection, PlanSensitivity, RuntimeEvent,
-    TurnFinish,
-};
 use agent_runtime_core::goal::{GoalProjection, GoalStatus};
 use agent_runtime_core::ids::SessionId;
 use agent_runtime_core::interaction::InteractionOutcomeKind;
@@ -25,6 +21,10 @@ use smith_host::{
 };
 use smith_runtime::background_tasks::{BackgroundTaskInfo, BackgroundTaskRegistry, TaskStatus};
 use smith_runtime::cache_controller::CacheControllerSnapshot;
+use smith_runtime::client::{
+    EstimationConfidence, PlanItemProjection, PlanSensitivity, SmithEvent as EventEnvelope,
+    SmithEventKind as RuntimeEvent, TurnFinish,
+};
 use smith_runtime::host::HostSession;
 use smith_runtime::journal::{EphemeralInterruptionReason, EphemeralWorkInterruption};
 use smith_runtime::rotation::SharedPool;
@@ -668,10 +668,11 @@ fn background_task_error(running: &[BackgroundTaskInfo]) -> String {
 /// orphaning is not possible — so this only decides what gets reported and
 /// how long the process waits before that happens.
 async fn apply_background_exit_policy(
+    registry: &BackgroundTaskRegistry,
     session_id: &SessionId,
     policy: BackgroundExit,
 ) -> (Option<String>, Option<BackgroundExitOutput>) {
-    let running = BackgroundTaskRegistry::global().running_tasks(session_id);
+    let running = registry.running_tasks(session_id);
     match decide_background_exit(policy, &running) {
         BackgroundExitDecision::Clear => (None, None),
         BackgroundExitDecision::Error(message) => {
@@ -688,7 +689,7 @@ async fn apply_background_exit_policy(
             )
         }
         BackgroundExitDecision::Wait => {
-            let tasks = await_background_tasks(session_id, &running, None).await;
+            let tasks = await_background_tasks(registry, session_id, &running, None).await;
             (
                 None,
                 Some(BackgroundExitOutput {
@@ -698,11 +699,14 @@ async fn apply_background_exit_policy(
             )
         }
         BackgroundExitDecision::Stop => {
-            BackgroundTaskRegistry::global()
-                .stop_all_session_tasks(session_id, TaskStatus::Stopped);
-            let tasks =
-                await_background_tasks(session_id, &running, Some(BACKGROUND_STOP_POLL_BOUND))
-                    .await;
+            registry.stop_all_session_tasks(session_id, TaskStatus::Stopped);
+            let tasks = await_background_tasks(
+                registry,
+                session_id,
+                &running,
+                Some(BACKGROUND_STOP_POLL_BOUND),
+            )
+            .await;
             (
                 None,
                 Some(BackgroundExitOutput {
@@ -720,11 +724,11 @@ async fn apply_background_exit_policy(
 /// run as long as the model let it; only `stop` needs a ceiling, since its
 /// signal should resolve within the worker's own kill grace period.
 async fn await_background_tasks(
+    registry: &BackgroundTaskRegistry,
     session_id: &SessionId,
     running: &[BackgroundTaskInfo],
     bound: Option<Duration>,
 ) -> Vec<BackgroundTaskOutput> {
-    let registry = BackgroundTaskRegistry::global();
     let poll_until_terminal = async {
         loop {
             let running_ids: BTreeSet<String> = registry
@@ -829,9 +833,9 @@ async fn run_with_io(
     }
 
     let session = host.session();
-    let mut events = session.subscribe();
+    let mut events = host.client().events();
     let mut cache_projection = CacheProjection::default();
-    if let Ok(history) = host.timeline_events().await {
+    if let Ok(history) = host.client_timeline_events().await {
         cache_projection.replay(history);
     }
     let initial_activation = activation_output(session);
@@ -1100,7 +1104,7 @@ async fn run_with_io(
     let goal_continuation_turns = final_goal.as_ref().map(|_| goal_continuation_turns);
 
     let (background_exit_error, background_exit_output) =
-        apply_background_exit_policy(session.id(), background_exit).await;
+        apply_background_exit_policy(host.background_tasks(), session.id(), background_exit).await;
 
     let shutdown_error = host.shutdown().await.err().map(|error| error.to_string());
 
@@ -1448,7 +1452,7 @@ async fn shutdown_and_write_stream_tail(
     format: OutputFormat,
     stdout: &mut impl Write,
 ) -> Result<(Option<String>, Option<CacheControllerSnapshot>)> {
-    let mut events = (format == OutputFormat::StreamJson).then(|| host.session().subscribe());
+    let mut events = (format == OutputFormat::StreamJson).then(|| host.client().events());
     let shutdown_error = host.shutdown().await.err().map(|error| error.to_string());
 
     if let Some(events) = events.as_mut() {
@@ -1816,7 +1820,6 @@ mod tests {
     };
     use agent_runtime_core::cancel::CancelReason;
     use agent_runtime_core::clock::Timestamp;
-    use agent_runtime_core::event::CacheState;
     use agent_runtime_core::goal::{GoalTokenUsage, GoalUsageProvenance};
     use agent_runtime_core::ids::{AttemptId, EventId, GoalId, RequestId, TurnId};
     use agent_runtime_core::provider::{
@@ -1828,6 +1831,7 @@ mod tests {
     use smith_runtime::checkpoint::{
         CheckpointKey, CheckpointKeyProvider, CheckpointProtectionError,
     };
+    use smith_runtime::client::CacheState;
     use smith_runtime::factory::{HostSurface, RuntimeRequest};
     use smith_runtime::host::HostSessionRequest;
 
@@ -2233,7 +2237,7 @@ mod tests {
             Some(vec![PlanItemProjection {
                 id: "protected".to_owned(),
                 text: protected_item.to_owned(),
-                status: agent_runtime_core::event::PlanItemStatus::Pending,
+                status: smith_runtime::client::PlanItemStatus::Pending,
                 reason: None,
             }]),
         );
@@ -2280,7 +2284,7 @@ mod tests {
                     items: Some(vec![PlanItemProjection {
                         id: "protected".to_owned(),
                         text: protected_item.to_owned(),
-                        status: agent_runtime_core::event::PlanItemStatus::InProgress,
+                        status: smith_runtime::client::PlanItemStatus::InProgress,
                         reason: None,
                     }]),
                 }),
@@ -2821,7 +2825,7 @@ max_output_tokens = 4096
                     .collect::<Vec<_>>();
                 let complete_result = host
                     .tool_result_text(&agent_runtime_core::ids::ToolCallId::new("call-complete"));
-                let timeline = host.timeline_events().await.unwrap_or_default();
+                let timeline = host.client_timeline_events().await.unwrap_or_default();
                 let errors = timeline
                     .iter()
                     .filter_map(|event| match &event.payload {
@@ -3642,8 +3646,8 @@ max_output_tokens = 4096
         }
     }
 
-    /// A fresh session ID every call, so tests that spawn real background
-    /// tasks through the process-wide registry never collide with each other.
+    /// A fresh session ID every call so task and spool diagnostics stay
+    /// unambiguous even though every test owns an isolated registry.
     fn unique_background_test_session(label: &str) -> SessionId {
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -3717,13 +3721,15 @@ max_output_tokens = 4096
 
     #[tokio::test]
     async fn no_running_tasks_leaves_no_error_and_no_report_under_every_policy() {
+        let registry = BackgroundTaskRegistry::new();
         let session_id = unique_background_test_session("clear");
         for policy in [
             BackgroundExit::Error,
             BackgroundExit::Wait,
             BackgroundExit::Stop,
         ] {
-            let (error, output) = apply_background_exit_policy(&session_id, policy).await;
+            let (error, output) =
+                apply_background_exit_policy(&registry, &session_id, policy).await;
             assert!(error.is_none());
             assert!(output.is_none());
         }
@@ -3732,14 +3738,14 @@ max_output_tokens = 4096
     #[tokio::test]
     async fn error_policy_reports_a_running_task_without_waiting_for_it() {
         let session_id = unique_background_test_session("error");
-        let registry = BackgroundTaskRegistry::global();
+        let registry = BackgroundTaskRegistry::new();
         let (task_id, _spool) = registry
             .spawn_background_task(&session_id, "sleep 2".into(), std::env::temp_dir(), None)
             .await
             .expect("a spawned background task");
 
         let (error, output) =
-            apply_background_exit_policy(&session_id, BackgroundExit::Error).await;
+            apply_background_exit_policy(&registry, &session_id, BackgroundExit::Error).await;
 
         let error = error.expect("the default policy fails closed");
         assert!(error.contains(&task_id), "{error}");
@@ -3759,13 +3765,14 @@ max_output_tokens = 4096
     #[tokio::test]
     async fn wait_policy_blocks_until_the_task_exits_and_reports_its_exit_code() {
         let session_id = unique_background_test_session("wait");
-        let registry = BackgroundTaskRegistry::global();
+        let registry = BackgroundTaskRegistry::new();
         let (task_id, _spool) = registry
             .spawn_background_task(&session_id, "sleep 0.2".into(), std::env::temp_dir(), None)
             .await
             .expect("a spawned background task");
 
-        let (error, output) = apply_background_exit_policy(&session_id, BackgroundExit::Wait).await;
+        let (error, output) =
+            apply_background_exit_policy(&registry, &session_id, BackgroundExit::Wait).await;
 
         assert!(error.is_none());
         let output = output.expect("a background-exit report");
@@ -3780,7 +3787,7 @@ max_output_tokens = 4096
     #[tokio::test]
     async fn stop_policy_ends_a_long_running_task_well_before_its_own_deadline() {
         let session_id = unique_background_test_session("stop");
-        let registry = BackgroundTaskRegistry::global();
+        let registry = BackgroundTaskRegistry::new();
         let (task_id, _spool) = registry
             .spawn_background_task(&session_id, "sleep 30".into(), std::env::temp_dir(), None)
             .await
@@ -3788,7 +3795,7 @@ max_output_tokens = 4096
 
         let (error, output) = tokio::time::timeout(
             HEADLESS_TEST_WATCHDOG,
-            apply_background_exit_policy(&session_id, BackgroundExit::Stop),
+            apply_background_exit_policy(&registry, &session_id, BackgroundExit::Stop),
         )
         .await
         .expect("stop should not wait for the 30s command to finish on its own");
@@ -3840,7 +3847,7 @@ max_output_tokens = 4096
         let host = smith_runtime::host::start(host_request(runtime, project.path()))
             .await
             .expect("a host");
-        let registry = BackgroundTaskRegistry::global();
+        let registry = host.background_tasks().clone();
         let (task_id, _spool) = registry
             .spawn_background_task(
                 host.session().id(),
@@ -3905,7 +3912,7 @@ max_output_tokens = 4096
         let host = smith_runtime::host::start(host_request(runtime, project.path()))
             .await
             .expect("a host");
-        let registry = BackgroundTaskRegistry::global();
+        let registry = host.background_tasks().clone();
         let (task_id, _spool) = registry
             .spawn_background_task(
                 host.session().id(),

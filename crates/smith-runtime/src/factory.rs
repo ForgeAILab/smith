@@ -51,7 +51,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use agent_runtime::ability::SealedAbilities;
 use agent_runtime::ability::activation::{ActivationContext, FailClosedPolicy};
@@ -93,6 +94,7 @@ use agent_runtime_core::provider::{
 use agent_runtime_core::provider_credential::{
     ProviderCredentialSource, ProviderCredentialTarget, StaticProviderCredentialSource,
 };
+use agent_runtime_core::security::{PermissionSet, SecurityResource};
 use agent_runtime_core::store::{Secret, SecretStore, SessionStore};
 use agent_runtime_core::tool::Tool;
 use agent_runtime_core::workspace::Workspace;
@@ -103,11 +105,11 @@ use smith_config::credential::{
     CredentialEnroller, CredentialError, CredentialRef, CredentialRefError, CredentialResolver,
 };
 use smith_config::model::{
-    AgentPosture, ApprovalMode, KIND_ANTHROPIC_MESSAGES, KIND_CHATGPT_RESPONSES, KIND_FAKE,
-    KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES, KIND_XAI_RESPONSES,
-    ProfileUse,
+    AgentPosture, ApprovalMode, AutoApprovalMount, AutoApprovalPermission, AutoApprovalRisk,
+    KIND_ANTHROPIC_MESSAGES, KIND_CHATGPT_RESPONSES, KIND_FAKE, KIND_GEMINI_INTERACTIONS,
+    KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES, KIND_XAI_RESPONSES, ProfileUse,
 };
-use smith_config::resolve::{ResolvedConfig, ResolvedProvider};
+use smith_config::resolve::{AutoApprovalRule, ResolvedConfig, ResolvedProvider, Sourced};
 use smith_config::setup::trusted_model;
 
 use agent_runtime_core::check_set::ActionClass;
@@ -117,7 +119,7 @@ use smith_host::rotation::{HeadlessRotation, RotationPolicy};
 
 use crate::abilities::{INTERACTION_READY_CONFIG, seal_tool_abilities};
 use crate::authority::SmithToolAuthority;
-use crate::background_tasks::RegistryBackgroundTaskHost;
+use crate::background_tasks::BackgroundServices;
 use crate::budget_notice::{BudgetNoticeComponent, DEFAULT_NOTICE_THRESHOLD_TOKENS};
 use crate::catalog::{CatalogLayers, ProfileResolution};
 use crate::chatgpt::{
@@ -128,6 +130,9 @@ use crate::checkpoint::{BarrierCheckpointStore, CheckpointBarrier, SmithCheckpoi
 use crate::delegation::{
     AgentTool, AgentToolProfile, DelegationAuthority, DelegationWaitPolicy, SmithChildFactory,
     SmithChildRoute, SmithDelegation,
+};
+use crate::harness::{
+    HarnessIdentity, HarnessResolutionReport, ResolvedHarness, ResolvedModule, TrustedNativeModule,
 };
 use crate::journal::DefaultRedactor;
 use crate::memory::SmithMemorySource;
@@ -150,6 +155,14 @@ use crate::summary::{
 };
 use crate::transport::{ReqwestTransport, TransportConfig};
 use crate::xai::{XaiCacheIdentityProvider, XaiCredentialSource, XaiOAuthClient, XaiTokenBundle};
+
+mod authority;
+mod capabilities;
+mod compose;
+mod delegation;
+mod persistence;
+mod provider;
+mod resolve;
 
 /// The reply the deterministic development provider gives.
 ///
@@ -302,8 +315,9 @@ pub struct RuntimeRequest {
     /// meters, and to persist a switch. Absent, the factory builds its own and
     /// the choice lasts only for the session.
     pub credential_pool: Option<SharedPool>,
-    /// Tools registered in addition to Smith's built-ins.
-    pub tools: Vec<Arc<dyn Tool>>,
+    /// Trusted in-process Rust contributions registered in addition to Smith's
+    /// built-ins. This is an embedding API, not a sandboxed plugin surface.
+    pub trusted_native: TrustedNativeModule,
     /// Connected MCP servers, whose tools are registered alongside the
     /// built-ins.
     ///
@@ -311,6 +325,10 @@ pub struct RuntimeRequest {
     /// server that connects after composition is picked up at the next
     /// rebuild rather than being lost. Absent means no server is declared.
     pub mcp: Option<Arc<crate::mcp::McpSupervisor>>,
+    /// Explicit host-owned background process services. Standard Smith hosts
+    /// install one before capability assembly; direct embedders may leave it
+    /// absent to get the deliberate unavailable adapter.
+    pub background_services: Option<BackgroundServices>,
     /// Optional host-owned recorder wrapped around built-in mutating tools.
     pub change_recorder: Option<Arc<smith_tools::ChangeRecorder>>,
     /// Smith-owned, descriptor-first skill sources.
@@ -384,8 +402,9 @@ impl RuntimeRequest {
             interaction: None,
             rotation: None,
             credential_pool: None,
-            tools: Vec::new(),
+            trusted_native: TrustedNativeModule::default(),
             mcp: None,
+            background_services: None,
             change_recorder: None,
             skills: crate::built_in_skills::built_in_sources(),
             memory: None,
@@ -559,6 +578,10 @@ pub struct SmithRuntime {
     surface: HostSurface,
     delegation: Option<SmithDelegation>,
     goal_component: Option<Arc<GoalComponent>>,
+    background_services: Option<BackgroundServices>,
+    harness_identity: HarnessIdentity,
+    harness_modules: Arc<[ResolvedModule]>,
+    harness_report: HarnessResolutionReport,
 }
 
 impl SmithRuntime {
@@ -615,6 +638,26 @@ impl SmithRuntime {
     pub fn goal_component(&self) -> Option<&Arc<GoalComponent>> {
         self.goal_component.as_ref()
     }
+
+    /// Host-owned background services retained for this runtime's lifetime.
+    pub fn background_services(&self) -> Option<&BackgroundServices> {
+        self.background_services.as_ref()
+    }
+
+    /// Immutable identity of the resolved product harness.
+    pub fn harness_identity(&self) -> &HarnessIdentity {
+        &self.harness_identity
+    }
+
+    /// Trust-, provenance-, contribution-, and grant-bearing module evidence.
+    pub fn harness_modules(&self) -> &[ResolvedModule] {
+        &self.harness_modules
+    }
+
+    /// Bounded non-secret harness resolution report.
+    pub fn harness_report(&self) -> &HarnessResolutionReport {
+        &self.harness_report
+    }
 }
 
 /// Why a resolved configuration could not become a runtime.
@@ -624,6 +667,10 @@ impl SmithRuntime {
 /// failures from types that redact themselves.
 #[derive(Debug, thiserror::Error)]
 pub enum FactoryError {
+    /// Declarative modules, trust, contributions, or grants did not resolve.
+    #[error(transparent)]
+    Harness(#[from] crate::harness::HarnessResolutionError),
+
     /// Two tools attempted to register the same stable ability name.
     #[error("Smith could not seal its ability catalog: {0}")]
     AbilityRegistry(#[source] agent_runtime::registry::NameConflict),
@@ -1199,13 +1246,6 @@ fn prepare_capability_stage(
     request: &RuntimeRequest,
     agent_tool_profiles: Vec<AgentToolProfile>,
 ) -> Result<CapabilityStage, FactoryError> {
-    // The seam `shell`, `task_output`, and `task_stop` reach through to the
-    // background task registry (`smith_tools::background`). Idempotent, like
-    // the registry's own singleton: composing more than one runtime in this
-    // process must not panic, and every session reaches the same registry
-    // regardless of which composition installed the adapter first.
-    smith_tools::background::install(std::sync::Arc::new(RegistryBackgroundTaskHost));
-
     let mut tools = tools(request);
     // No tool, no projected plan state: a posture that cannot write a plan
     // should not carry one in its context either.
@@ -1219,7 +1259,8 @@ fn prepare_capability_stage(
         ]);
     }
     let host_tool_names = request
-        .tools
+        .trusted_native
+        .tools()
         .iter()
         .map(|tool| tool.spec().name)
         .collect::<BTreeSet<_>>();
@@ -1342,11 +1383,17 @@ async fn prepare_durability_stage(
 /// Async because credential resolution is: the platform credential service is
 /// synchronous and may block on an unlock prompt, so it runs on a blocking
 /// thread rather than on the executor a provider stream will share.
-pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError> {
+pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryError> {
+    let resolved = resolve::accept(harness);
+    let harness_identity = resolved.identity;
+    let harness_modules = resolved.modules;
+    let harness_report = resolved.report;
+    let request = resolved.request;
     // Host policy first. It costs nothing to check and everything to get wrong,
     // and failing here means a misconfigured run never reaches a keychain.
-    let workspace = require_workspace(&request)?;
-    let approval = approval(&request)?;
+    let authority = authority::prepare(&request)?;
+    let workspace = authority.workspace;
+    let approval = authority.approval;
     let PreparedFactoryInputs {
         provider_name,
         provider_kind,
@@ -1359,7 +1406,7 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         context_policy,
         compaction_policy,
         mut loop_config,
-    } = prepare_factory_inputs(&request).await?;
+    } = provider::prepare(&request).await?;
     let agent_posture = request.config.agent.active_posture();
     let agent_profile = request.config.agent.profile.clone();
     let agent_profile_name = agent_profile.name.clone();
@@ -1419,8 +1466,8 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         .ok()
         .map(Arc::new)
     });
-    let capabilities = prepare_capability_stage(&request, agent_tool_profiles)?;
-    let durability = prepare_durability_stage(&request).await?;
+    let capabilities = capabilities::prepare(&request, agent_tool_profiles)?;
+    let durability = persistence::prepare(&request).await?;
 
     let policy = assemble_policy(RuntimePolicy {
         agent_profile: agent_profile_name.clone(),
@@ -1611,8 +1658,8 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         builder = builder.observer(observer);
     }
 
-    let built = build_runtime(builder)?;
-    let delegation = assemble_delegation(capabilities.delegation_slot.clone().map(|slot| {
+    let built = compose::runtime(builder)?;
+    let delegation = delegation::assemble(capabilities.delegation_slot.clone().map(|slot| {
         SmithDelegation {
             factory: Arc::new(SmithChildFactory {
                 default_route: SmithChildRoute {
@@ -1657,7 +1704,27 @@ pub async fn build(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError
         surface: request.surface,
         delegation: delegation.delegation,
         goal_component: capabilities.goal,
+        background_services: request.background_services,
+        harness_identity,
+        harness_modules,
+        harness_report,
     })
+}
+
+/// Protocol-v1 migration adapter for trusted embedders that still construct a
+/// [`RuntimeRequest`] directly.
+///
+/// New hosts must call [`crate::harness::resolve`] themselves and pass the
+/// resulting [`ResolvedHarness`] to [`build`]. This adapter performs no
+/// alternate composition; it resolves and delegates to that single root.
+#[doc(hidden)]
+#[deprecated(
+    since = "0.0.2",
+    note = "resolve HarnessSpec first and call factory::build(ResolvedHarness)"
+)]
+pub async fn build_request(request: RuntimeRequest) -> Result<SmithRuntime, FactoryError> {
+    let harness = crate::harness::resolve(crate::harness::HarnessSpec::trusted(request))?;
+    build(harness).await
 }
 
 async fn prepare_child_profile_routes(
@@ -2527,45 +2594,229 @@ fn approval(request: &RuntimeRequest) -> Result<Arc<dyn ApprovalPolicy>, Factory
         }
     };
 
-    let auto_approve = request
-        .config
-        .approval
-        .auto_approve
-        .as_ref()
-        .map(|tools| tools.value.iter().cloned().collect::<BTreeSet<_>>())
-        .unwrap_or_default();
-    if auto_approve.is_empty() {
+    if request.config.approval.auto.is_empty() {
         Ok(policy)
     } else {
-        Ok(Arc::new(AutoApprove {
-            tools: auto_approve,
+        let workspace_mount =
+            request
+                .workspace
+                .as_ref()
+                .ok_or_else(|| FactoryError::MissingHostPolicy {
+                    what: "workspace",
+                    message: "scoped automatic approval requires the exact workspace mount"
+                        .to_owned(),
+                })?;
+        let rules = request
+            .config
+            .approval
+            .auto
+            .iter()
+            .map(ScopedAutoApprovalRule::compile)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Arc::new(ScopedAutoApprove {
+            workspace_mount: workspace_mount.root().to_owned(),
+            rules,
             fallback: policy,
         }))
     }
 }
 
-/// Allows only explicitly named tools before consulting the configured gate.
-///
-/// This wrapper belongs in the one factory rather than in either surface so
-/// `approval.auto_approve` cannot mean something different in the TUI and
-/// `smith -p`.
+/// Allows only exact, bounded prepared calls before consulting the host gate.
 #[derive(Debug)]
-struct AutoApprove {
-    tools: BTreeSet<String>,
+struct ScopedAutoApprove {
+    workspace_mount: String,
+    rules: Vec<ScopedAutoApprovalRule>,
     fallback: Arc<dyn ApprovalPolicy>,
 }
 
 #[async_trait]
-impl ApprovalPolicy for AutoApprove {
+impl ApprovalPolicy for ScopedAutoApprove {
     async fn decide(
         &self,
         request: &agent_runtime_core::approval::ApprovalRequest,
     ) -> agent_runtime_core::approval::ApprovalDecision {
-        if self.tools.contains(request.prepared().tool()) {
+        if self.rules.iter().any(|rule| {
+            rule.matches_and_consumes(request.prepared(), self.workspace_mount.as_str())
+        }) {
             agent_runtime_core::approval::ApprovalDecision::Allow
         } else {
             self.fallback.decide(request).await
         }
+    }
+}
+
+#[derive(Debug)]
+struct ScopedAutoApprovalRule {
+    tool: String,
+    operations: BTreeSet<String>,
+    permission_ceiling: PermissionSet,
+    max_risk: AutoApprovalRisk,
+    mount: AutoApprovalMount,
+    paths: globset::GlobSet,
+    expires_at_unix_ms: Option<i128>,
+    remaining_uses: Option<AtomicU32>,
+}
+
+impl ScopedAutoApprovalRule {
+    fn compile(rule: &Sourced<AutoApprovalRule>) -> Result<Self, FactoryError> {
+        let mut paths = globset::GlobSetBuilder::new();
+        for pattern in &rule.value.paths {
+            let pattern = globset::GlobBuilder::new(pattern)
+                .literal_separator(true)
+                .build()
+                .map_err(|error| {
+                    FactoryError::Runtime(RuntimeError::config(format!(
+                        "resolved automatic approval rule contains an invalid path pattern: {error}"
+                    )))
+                })?;
+            paths.add(pattern);
+        }
+        let paths = paths.build().map_err(|error| {
+            FactoryError::Runtime(RuntimeError::config(format!(
+                "resolved automatic approval path set is invalid: {error}"
+            )))
+        })?;
+        Ok(Self {
+            tool: rule.value.tool.clone(),
+            operations: rule
+                .value
+                .operations
+                .iter()
+                .map(|operation| operation.as_str().to_owned())
+                .collect(),
+            permission_ceiling: rule
+                .value
+                .permissions
+                .iter()
+                .copied()
+                .map(auto_approval_permission)
+                .collect(),
+            max_risk: rule.value.max_risk,
+            mount: rule.value.mount,
+            paths,
+            expires_at_unix_ms: rule.value.expires_at_unix_ms,
+            remaining_uses: rule.value.max_uses.map(AtomicU32::new),
+        })
+    }
+
+    fn matches_and_consumes(
+        &self,
+        prepared: &agent_runtime_core::tool::PreparedToolCall,
+        workspace_mount: &str,
+    ) -> bool {
+        if self.tool != format!("smith/{}", prepared.tool())
+            || self.is_expired()
+            || categorically_ineligible(prepared)
+        {
+            return false;
+        }
+        let Some(operation) = prepared
+            .arguments()
+            .get("operation")
+            .and_then(|v| v.as_str())
+        else {
+            return false;
+        };
+        if !self.operations.contains(operation)
+            || !prepared
+                .required_permissions()
+                .is_subset(&self.permission_ceiling)
+            || prepared_risk(prepared.required_permissions()) > self.max_risk
+        {
+            return false;
+        }
+        let SecurityResource::Filesystem { mount, segments } = prepared.resource() else {
+            return false;
+        };
+        if self.mount != AutoApprovalMount::Workspace
+            || mount != workspace_mount
+            || segments.iter().any(|segment| {
+                segment.is_empty()
+                    || matches!(segment.as_str(), "." | "..")
+                    || segment.contains('/')
+            })
+            || !self.paths.is_match(segments.join("/"))
+        {
+            return false;
+        }
+        self.consume_use()
+    }
+
+    fn is_expired(&self) -> bool {
+        self.expires_at_unix_ms.is_some_and(|expires_at| {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |duration| {
+                    i128::try_from(duration.as_millis()).unwrap_or(i128::MAX)
+                });
+            now > expires_at
+        })
+    }
+
+    fn consume_use(&self) -> bool {
+        let Some(remaining) = &self.remaining_uses else {
+            return true;
+        };
+        remaining
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current.checked_sub(1)
+            })
+            .is_ok()
+    }
+}
+
+fn categorically_ineligible(prepared: &agent_runtime_core::tool::PreparedToolCall) -> bool {
+    let effects = prepared.effects();
+    effects.spawns_process()
+        || effects.has_network()
+        || effects.has_data_egress()
+        || effects.host_read_kinds().next().is_some()
+        || effects.host_writes().next().is_some()
+        || effects.external_reads().next().is_some()
+        || effects.external_writes().next().is_some()
+        || prepared.required_permissions().iter().any(|permission| {
+            !matches!(
+                permission,
+                Permission::FsRead
+                    | Permission::FsWrite
+                    | Permission::FsCreate
+                    | Permission::FsDelete
+            )
+        })
+}
+
+fn prepared_risk(permissions: &PermissionSet) -> AutoApprovalRisk {
+    if permissions.contains(&Permission::FsDelete) {
+        AutoApprovalRisk::High
+    } else if permissions.contains(&Permission::FsWrite)
+        || permissions.contains(&Permission::FsCreate)
+    {
+        AutoApprovalRisk::Medium
+    } else if permissions.contains(&Permission::FsRead) {
+        AutoApprovalRisk::Low
+    } else {
+        AutoApprovalRisk::None
+    }
+}
+
+fn auto_approval_permission(permission: AutoApprovalPermission) -> Permission {
+    match permission {
+        AutoApprovalPermission::FsRead => Permission::FsRead,
+        AutoApprovalPermission::FsWrite => Permission::FsWrite,
+        AutoApprovalPermission::FsCreate => Permission::FsCreate,
+        AutoApprovalPermission::FsDelete => Permission::FsDelete,
+        AutoApprovalPermission::HostFsRead => Permission::HostFsRead,
+        AutoApprovalPermission::HostFsWrite => Permission::HostFsWrite,
+        AutoApprovalPermission::ExternalRead => Permission::ExternalRead,
+        AutoApprovalPermission::ExternalWrite => Permission::ExternalWrite,
+        AutoApprovalPermission::ProcessSpawn => Permission::ProcessSpawn,
+        AutoApprovalPermission::NetHttp => Permission::NetHttp,
+        AutoApprovalPermission::DataEgress => Permission::DataEgress,
+        AutoApprovalPermission::CredentialUse => Permission::CredentialUse,
+        AutoApprovalPermission::StdioRead => Permission::StdioRead,
+        AutoApprovalPermission::StdioWrite => Permission::StdioWrite,
+        AutoApprovalPermission::ClockRead => Permission::ClockRead,
+        AutoApprovalPermission::RandomRead => Permission::RandomRead,
     }
 }
 
@@ -2712,13 +2963,18 @@ fn loop_config(request: &RuntimeRequest, model: &ModelId) -> LoopConfig {
 /// The tools this run registers.
 fn tools(request: &RuntimeRequest) -> Vec<Arc<dyn Tool>> {
     let read_only = request.config.agent.active_posture().is_read_only();
+    let background = request
+        .background_services
+        .as_ref()
+        .map(BackgroundServices::host)
+        .unwrap_or_else(smith_tools::background::unavailable);
     let mut tools = if request.built_in_tools {
-        request
-            .change_recorder
-            .as_ref()
-            .map_or_else(smith_tools::all, |recorder| {
-                smith_tools::observed_tools(recorder.clone())
-            })
+        request.change_recorder.as_ref().map_or_else(
+            || smith_tools::all_with_background(background.clone()),
+            |recorder| {
+                smith_tools::observed_tools_with_background(recorder.clone(), background.clone())
+            },
+        )
     } else {
         Vec::new()
     };
@@ -2736,7 +2992,8 @@ fn tools(request: &RuntimeRequest) -> Vec<Arc<dyn Tool>> {
     }
     tools.extend(
         request
-            .tools
+            .trusted_native
+            .tools()
             .iter()
             .filter(|tool| !read_only || read_only_extension(tool.spec()))
             .map(Arc::clone),
@@ -2790,17 +3047,58 @@ mod tests {
     use agent_runtime_core::ids::ToolCallId;
     use agent_runtime_core::provider::ProviderAttemptPurpose;
     use agent_runtime_core::tool::{PreparedToolCall, ToolCallDisplay, ToolEffects};
-    use smith_config::model::{CacheMaintenanceMode, ProfileUse};
+    use smith_config::model::{AutoApprovalOperation, CacheMaintenanceMode, ProfileUse};
     use smith_config::resolve::{
-        ResolvedAgent, ResolvedAgentMode, ResolvedAgentProfile, ResolvedCachePolicy,
-        ResolvedChildAgents, ResolvedContext, Source, Sourced, SyntheticCacheSpendAuthority,
+        AutoApprovalRule, ResolvedAgent, ResolvedAgentMode, ResolvedAgentProfile,
+        ResolvedCachePolicy, ResolvedChildAgents, ResolvedContext, Source, Sourced,
+        SyntheticCacheSpendAuthority,
     };
-    use smith_host::HeadlessApproval;
+    use smith_host::{HeadlessApproval, ProjectWorkspace};
 
     const TOKEN: &str = "sk-live-4kQm2ZpX8vRt7nLb1cWs9aYe";
 
     fn sourced<T>(value: T) -> Sourced<T> {
         Sourced::new(value, Source::built_in("test"))
+    }
+
+    fn auto_rule(
+        operations: Vec<AutoApprovalOperation>,
+        permissions: Vec<AutoApprovalPermission>,
+        paths: &[&str],
+    ) -> AutoApprovalRule {
+        AutoApprovalRule {
+            revision: 1,
+            tool: "smith/edit".to_owned(),
+            operations,
+            permissions,
+            max_risk: AutoApprovalRisk::Medium,
+            mount: AutoApprovalMount::Workspace,
+            paths: paths.iter().map(|path| (*path).to_owned()).collect(),
+            expires_at_unix_ms: None,
+            max_uses: None,
+        }
+    }
+
+    fn prepared_edit(
+        mount: &str,
+        operation: &str,
+        path: &[&str],
+        permissions: impl IntoIterator<Item = Permission>,
+    ) -> PreparedToolCall {
+        let permissions: PermissionSet = permissions.into_iter().collect();
+        let effects = ToolEffects::read_only().with_write(path.join("/"));
+        PreparedToolCall::new(
+            ToolCallId::new(format!("call-{operation}-{}", path.join("-"))),
+            "edit",
+            serde_json::json!({"operation": operation, "path": path.join("/")}),
+            permissions,
+            SecurityResource::filesystem(
+                mount,
+                path.iter().map(|segment| (*segment).to_owned()).collect(),
+            ),
+            effects,
+            ToolCallDisplay::new(format!("{operation} {}", path.join("/"))),
+        )
     }
 
     #[test]
@@ -3278,7 +3576,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn auto_approve_is_shared_factory_policy_and_falls_back_for_other_tools() {
+    async fn scoped_auto_approval_is_shared_factory_policy_and_falls_back() {
         let mut config = ResolvedConfig {
             profile: None,
             agent: agent(AgentPosture::Build),
@@ -3297,24 +3595,42 @@ mod tests {
             background: background(),
             mcp: Default::default(),
         };
-        config.approval.auto_approve = Some(sourced(vec!["edit".to_owned()]));
+        config.approval.auto.push(sourced(auto_rule(
+            vec![AutoApprovalOperation::Replace],
+            vec![
+                AutoApprovalPermission::FsRead,
+                AutoApprovalPermission::FsWrite,
+            ],
+            &["src/**"],
+        )));
         let fallback = Arc::new(HeadlessApproval::new());
         let mut request = RuntimeRequest::new(config, HostSurface::Headless);
+        let workspace_root = tempfile::tempdir().expect("workspace root");
+        let workspace = ProjectWorkspace::new(workspace_root.path()).expect("workspace");
+        let mount = workspace.root().to_owned();
+        request.workspace = Some(Arc::new(workspace));
         request.approval = Some(fallback.clone());
         let policy = approval(&request).expect("a composed policy");
-        let call = |tool: &str| {
-            let effects = ToolEffects::read_only().with_write("project:files");
-            let (permissions, resource) = effects.authorization_request(tool, "project");
-            ApprovalRequest::new(
-                PreparedToolCall::new(
+        let call = |tool: &str, operation: &str, segments: &[&str]| {
+            let mut prepared = prepared_edit(
+                &mount,
+                operation,
+                segments,
+                [Permission::FsRead, Permission::FsWrite],
+            );
+            if tool != "edit" {
+                prepared = PreparedToolCall::new(
                     ToolCallId::new(format!("call-{tool}")),
                     tool,
-                    serde_json::json!({"path": "file.txt"}),
-                    permissions,
-                    resource,
-                    effects,
+                    prepared.arguments().clone(),
+                    prepared.required_permissions().clone(),
+                    prepared.resource().clone(),
+                    prepared.effects().clone(),
                     ToolCallDisplay::new(format!("Run {tool}")),
-                ),
+                );
+            }
+            ApprovalRequest::new(
+                prepared,
                 Deadline::never(),
                 ApprovalOrigin::new(
                     agent_runtime_core::ids::SessionId::new("session-1"),
@@ -3323,15 +3639,225 @@ mod tests {
             )
         };
 
-        assert!(policy.decide(&call("edit")).await.is_allowed());
+        assert!(
+            policy
+                .decide(&call("edit", "replace", &["src", "lib.rs"]))
+                .await
+                .is_allowed()
+        );
         assert!(
             fallback.required().is_none(),
             "the explicit allowlist consulted the fallback"
         );
-        assert!(!policy.decide(&call("shell")).await.is_allowed());
+        assert!(
+            !policy
+                .decide(&call("edit", "create", &["src", "new.rs"]))
+                .await
+                .is_allowed()
+        );
+        assert!(
+            !policy
+                .decide(&call("shell", "replace", &["src", "lib.rs"]))
+                .await
+                .is_allowed()
+        );
         assert_eq!(
             fallback.required().expect("a denied fallback").tool,
+            "edit",
+            "the first non-matching prepared operation reached the fallback"
+        );
+    }
+
+    #[test]
+    fn scoped_auto_approval_matches_exact_prepared_authority_and_consumes_uses() {
+        let mut rule = auto_rule(
+            vec![AutoApprovalOperation::Replace],
+            vec![
+                AutoApprovalPermission::FsRead,
+                AutoApprovalPermission::FsWrite,
+                AutoApprovalPermission::FsDelete,
+            ],
+            &["src/**"],
+        );
+        rule.max_uses = Some(1);
+        let compiled = ScopedAutoApprovalRule::compile(&sourced(rule.clone())).expect("rule");
+        let replace = prepared_edit(
+            "/repo",
+            "replace",
+            &["src", "lib.rs"],
+            [Permission::FsRead, Permission::FsWrite],
+        );
+        assert!(compiled.matches_and_consumes(&replace, "/repo"));
+        assert!(
+            !compiled.matches_and_consumes(&replace, "/repo"),
+            "the single use must be consumed atomically"
+        );
+
+        let compiled = ScopedAutoApprovalRule::compile(&sourced(rule.clone())).expect("rule");
+        assert!(!compiled.matches_and_consumes(
+            &prepared_edit(
+                "/repo",
+                "create",
+                &["src", "new.rs"],
+                [Permission::FsCreate]
+            ),
+            "/repo"
+        ));
+        assert!(!compiled.matches_and_consumes(
+            &prepared_edit(
+                "/repo",
+                "replace",
+                &["other", "lib.rs"],
+                [Permission::FsRead, Permission::FsWrite]
+            ),
+            "/repo"
+        ));
+        assert!(!compiled.matches_and_consumes(
+            &prepared_edit(
+                "/repo",
+                "replace",
+                &["src", "lib.rs"],
+                [
+                    Permission::FsRead,
+                    Permission::FsWrite,
+                    Permission::FsDelete
+                ]
+            ),
+            "/repo"
+        ));
+        assert!(!compiled.matches_and_consumes(&replace, "/different-mount"));
+    }
+
+    #[test]
+    fn scoped_auto_approval_rejects_expired_and_categorical_authority() {
+        let mut expired = auto_rule(
+            vec![AutoApprovalOperation::Replace],
+            vec![
+                AutoApprovalPermission::FsRead,
+                AutoApprovalPermission::FsWrite,
+            ],
+            &["src/**"],
+        );
+        expired.expires_at_unix_ms = Some(0);
+        let expired = ScopedAutoApprovalRule::compile(&sourced(expired)).expect("rule");
+        let replace = prepared_edit(
+            "/repo",
+            "replace",
+            &["src", "lib.rs"],
+            [Permission::FsRead, Permission::FsWrite],
+        );
+        assert!(!expired.matches_and_consumes(&replace, "/repo"));
+
+        let broad = ScopedAutoApprovalRule::compile(&sourced(auto_rule(
+            vec![AutoApprovalOperation::Replace],
+            vec![
+                AutoApprovalPermission::HostFsRead,
+                AutoApprovalPermission::HostFsWrite,
+                AutoApprovalPermission::ProcessSpawn,
+                AutoApprovalPermission::NetHttp,
+                AutoApprovalPermission::DataEgress,
+            ],
+            &["**"],
+        )))
+        .expect("rule");
+        let effects = ToolEffects::new(Vec::new())
+            .with_host_read(smith_tools::HOST_SHELL_RESOURCE_KIND)
+            .with_host_write(smith_tools::HOST_SHELL_RESOURCE_KIND, "host:filesystem")
+            .with_spawn()
+            .with_network()
+            .with_data_egress_to("host-network:any");
+        let host = PreparedToolCall::new(
+            ToolCallId::new("call-host-edit"),
+            "edit",
+            serde_json::json!({"operation": "replace", "path": "src/lib.rs"}),
+            [
+                Permission::HostFsRead,
+                Permission::HostFsWrite,
+                Permission::ProcessSpawn,
+                Permission::NetHttp,
+                Permission::DataEgress,
+            ]
+            .into_iter()
+            .collect(),
+            SecurityResource::other(smith_tools::HOST_SHELL_RESOURCE_KIND, "sha256:action"),
+            effects,
+            ToolCallDisplay::new("host action"),
+        );
+        assert!(!broad.matches_and_consumes(&host, "/repo"));
+    }
+
+    #[tokio::test]
+    async fn host_shell_reaches_policy_and_only_explicit_allow_all_allows_it() {
+        let mut config = resolved_config();
+        config.approval.mode = sourced(ApprovalMode::Ask);
+        config.approval.auto.push(sourced(auto_rule(
+            vec![AutoApprovalOperation::Replace],
+            vec![
+                AutoApprovalPermission::HostFsRead,
+                AutoApprovalPermission::HostFsWrite,
+                AutoApprovalPermission::ProcessSpawn,
+                AutoApprovalPermission::NetHttp,
+                AutoApprovalPermission::DataEgress,
+            ],
+            &["**"],
+        )));
+        let headless = Arc::new(HeadlessApproval::new());
+        let mut request = RuntimeRequest::new(config.clone(), HostSurface::Headless);
+        let workspace_root = tempfile::tempdir().expect("workspace root");
+        request.workspace = Some(Arc::new(
+            ProjectWorkspace::new(workspace_root.path()).expect("workspace"),
+        ));
+        request.approval = Some(headless.clone());
+        let policy = approval(&request).expect("a composed policy");
+        let effects = ToolEffects::new(vec![])
+            .with_host_read(smith_tools::HOST_SHELL_RESOURCE_KIND)
+            .with_host_write(smith_tools::HOST_SHELL_RESOURCE_KIND, "host:filesystem")
+            .with_spawn()
+            .with_network()
+            .with_data_egress_to("host-network:any");
+        let call = ApprovalRequest::new(
+            PreparedToolCall::new(
+                ToolCallId::new("call-shell"),
+                "shell",
+                serde_json::json!({"command": "cat ~/.ssh/id_ed25519"}),
+                [
+                    Permission::HostFsRead,
+                    Permission::HostFsWrite,
+                    Permission::ProcessSpawn,
+                    Permission::NetHttp,
+                    Permission::DataEgress,
+                ]
+                .into_iter()
+                .collect(),
+                agent_runtime_core::security::SecurityResource::other(
+                    smith_tools::HOST_SHELL_RESOURCE_KIND,
+                    "sha256:action",
+                ),
+                effects,
+                ToolCallDisplay::new("Run host shell"),
+            ),
+            Deadline::never(),
+            ApprovalOrigin::new(
+                agent_runtime_core::ids::SessionId::new("session-1"),
+                agent_runtime_core::ids::RequestId::new("request-1"),
+            ),
+        );
+
+        assert!(!policy.decide(&call).await.is_allowed());
+        assert_eq!(
+            headless.required().expect("approval was required").tool,
             "shell"
+        );
+
+        config.approval.auto.clear();
+        let mut request = RuntimeRequest::new(config, HostSurface::Headless);
+        request.approval = Some(Arc::new(AllowAll));
+        assert!(
+            approval(&request)
+                .expect("allow-all policy")
+                .decide(&call)
+                .await
+                .is_allowed()
         );
     }
 
@@ -3347,6 +3873,110 @@ mod tests {
         config.persistence.enabled = sourced(false);
         let ephemeral = RuntimeRequest::new(config, HostSurface::Headless);
         assert!(!goal_component_eligible(&ephemeral));
+    }
+
+    #[test]
+    fn equivalent_terminal_and_headless_inputs_resolve_the_same_harness_policy() {
+        let terminal = crate::harness::resolve(crate::harness::HarnessSpec::trusted(
+            RuntimeRequest::new(resolved_config(), HostSurface::Terminal),
+        ))
+        .unwrap();
+        let headless = crate::harness::resolve(crate::harness::HarnessSpec::trusted(
+            RuntimeRequest::new(resolved_config(), HostSurface::Headless),
+        ))
+        .unwrap();
+
+        assert_eq!(terminal.identity, headless.identity);
+        assert_eq!(terminal.provider, headless.provider);
+        assert_eq!(terminal.authority, headless.authority);
+        assert_eq!(terminal.persistence, headless.persistence);
+        assert_eq!(terminal.context, headless.context);
+        assert_eq!(terminal.delegation, headless.delegation);
+        assert_eq!(terminal.modules, headless.modules);
+    }
+
+    #[test]
+    fn policy_changes_receive_distinct_harness_identities() {
+        let ask = crate::harness::resolve(crate::harness::HarnessSpec::trusted(
+            RuntimeRequest::new(resolved_config(), HostSurface::Terminal),
+        ))
+        .unwrap();
+        let mut deny_config = resolved_config();
+        deny_config.approval.mode = sourced(ApprovalMode::Deny);
+        let deny = crate::harness::resolve(crate::harness::HarnessSpec::trusted(
+            RuntimeRequest::new(deny_config, HostSurface::Terminal),
+        ))
+        .unwrap();
+
+        assert_eq!(ask.provider, deny.provider);
+        assert_ne!(ask.authority, deny.authority);
+        assert_ne!(ask.identity, deny.identity);
+    }
+
+    #[test]
+    fn differently_resolved_harnesses_keep_modules_and_grants_isolated() {
+        fn declared(
+            name: &str,
+            capability: crate::harness::Capability,
+        ) -> crate::harness::ModuleSpec {
+            let capabilities = crate::harness::CapabilitySet::from([capability]);
+            crate::harness::ModuleSpec {
+                id: crate::harness::ModuleId::parse(format!("test/{name}")).unwrap(),
+                revision: crate::harness::ModuleRevision::parse("v1").unwrap(),
+                provenance: crate::harness::ModuleProvenance::TrustedHost("test".into()),
+                trust: crate::harness::ModuleTrust::TrustedNative,
+                contributions: vec![crate::harness::Contribution::Tool {
+                    name: name.into(),
+                    required: capabilities.clone(),
+                }],
+                requested_capabilities: capabilities.clone(),
+                granted_capabilities: capabilities,
+            }
+        }
+
+        let first = crate::harness::resolve(
+            crate::harness::HarnessSpec::trusted(RuntimeRequest::new(
+                resolved_config(),
+                HostSurface::Terminal,
+            ))
+            .with_module(declared(
+                "reader",
+                crate::harness::Capability::WorkspaceRead,
+            )),
+        )
+        .unwrap();
+        let second = crate::harness::resolve(
+            crate::harness::HarnessSpec::trusted(RuntimeRequest::new(
+                resolved_config(),
+                HostSurface::Headless,
+            ))
+            .with_module(declared("network", crate::harness::Capability::Network)),
+        )
+        .unwrap();
+
+        assert_ne!(first.identity, second.identity);
+        assert_eq!(first.modules.len(), 1);
+        assert_eq!(second.modules.len(), 1);
+        assert!(
+            first.modules[0]
+                .granted_capabilities
+                .contains(&crate::harness::Capability::WorkspaceRead)
+        );
+        assert!(
+            !first.modules[0]
+                .granted_capabilities
+                .contains(&crate::harness::Capability::Network)
+        );
+        assert!(
+            second.modules[0]
+                .granted_capabilities
+                .contains(&crate::harness::Capability::Network)
+        );
+        assert!(
+            !second.modules[0]
+                .granted_capabilities
+                .contains(&crate::harness::Capability::WorkspaceRead)
+        );
     }
 
     fn limits() -> smith_config::resolve::ResolvedLimits {
@@ -3403,6 +4033,7 @@ mod tests {
         smith_config::resolve::ResolvedApproval {
             mode: sourced(mode),
             auto_approve: None,
+            auto: Vec::new(),
         }
     }
 

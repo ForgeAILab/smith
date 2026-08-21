@@ -9,10 +9,6 @@ mod tests {
     use agent_runtime_core::clock::{Deadline, SystemClock, Timestamp};
     use agent_runtime_core::delegation::WorkspacePolicy;
     use agent_runtime_core::error::RuntimeError;
-    use agent_runtime_core::event::{
-        CacheState, ChildPhase, ChildRecoveryState, EstimationConfidence, EventEnvelope,
-        GoalUpdateCause, PlanItemStatus, RuntimeEvent, TurnFinish,
-    };
     use agent_runtime_core::goal::{
         GoalProjection, GoalStatus, GoalTokenUsage, GoalUsageProvenance,
     };
@@ -29,6 +25,11 @@ mod tests {
     };
     use crossterm::event::{
         KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
+    use smith_runtime::client::{
+        CacheState, ChildPhase, ChildRecoveryState, EstimationConfidence,
+        GoalUpdateCause, PlanItemStatus, SmithEvent as EventEnvelope,
+        SmithEventKind as RuntimeEvent, TurnFinish,
     };
     use smith_host::approval::InteractiveApproval;
 

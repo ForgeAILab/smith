@@ -3,7 +3,6 @@
 use std::collections::VecDeque;
 
 use agent_runtime_core::usage::UsageRecord;
-use smith_runtime::background_tasks::BackgroundTaskRegistry;
 use smith_tui::app::RunningTaskSummary;
 
 use super::*;
@@ -189,7 +188,7 @@ pub(super) async fn run_interactive(
         // session's — so the price is re-resolved rather than left cleared.
         app.status.set_price(resolve_price(policy, &catalog));
     }
-    if let Ok(events) = host.timeline_events().await {
+    if let Ok(events) = host.client_timeline_events().await {
         app.restore_cache_events(events);
     }
     // Old snapshots only carry an aggregate positive cached-input counter.
@@ -326,7 +325,13 @@ fn subscribe_to_child(
     let child = child.clone();
     tokio::spawn(async move {
         while let Some(envelope) = stream.next().await {
-            if events.send((child.clone(), envelope)).is_err() {
+            if events
+                .send((
+                    child.clone(),
+                    smith_runtime::client::SmithEvent::project_or_unknown(&envelope),
+                ))
+                .is_err()
+            {
                 break;
             }
         }
@@ -366,7 +371,7 @@ pub(super) async fn run_tui(
         skills,
     } = inputs;
     let session = host.session();
-    let mut events = session.subscribe();
+    let mut events = host.client().events();
     let mut keys = EventStream::new();
     let mut spinner = tokio::time::interval(SPINNER_TICK);
     let mut frame = tokio::time::interval(FRAME);
@@ -448,7 +453,8 @@ pub(super) async fn run_tui(
                                 // never kills the group, it only asks the
                                 // registry to adopt whatever foreground call
                                 // is currently running, if any.
-                                if BackgroundTaskRegistry::global()
+                                if host
+                                    .background_tasks()
                                     .trigger_manual_backgrounding(session.id())
                                 {
                                     app.transcript.push_notice(
@@ -708,7 +714,7 @@ pub(super) async fn run_tui(
                                     // range first, then retry the parked
                                     // envelope on the honest replay path.
                                     match host
-                                        .journal_events_between(
+                                        .client_events_between(
                                             gap.first_missing,
                                             gap.last_missing,
                                         )
@@ -940,7 +946,7 @@ pub(super) async fn run_tui(
                 // only path by which a task's start or terminal state
                 // reaches operational status and the exit-confirm gate.
                 app.set_running_tasks(
-                    BackgroundTaskRegistry::global()
+                    host.background_tasks()
                         .running_tasks(session.id())
                         .into_iter()
                         .map(|task| RunningTaskSummary {

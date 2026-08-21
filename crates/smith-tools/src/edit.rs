@@ -26,14 +26,16 @@ use agent_runtime_core::tool::{
 use agent_runtime_registry::Permission;
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use tokio::io::AsyncWriteExt;
-use uuid::Uuid;
+use smith_host::workspace::{FileVersion, ProjectWorkspace};
 
 use crate::read_state::{ReadDefect, ReadRecorder};
 use crate::support::{
     MAX_READ_BYTES, display_path, invalid, optional_bool, optional_str, prepare_path_argument,
-    read_bounded, require_str, resolve,
+    project_workspace, read_bounded, require_str, resolve,
 };
+
+/// Internal prepared-argument field carrying the exact prior read version.
+pub(crate) const EXPECTED_VERSION_FIELD: &str = "_smith_expected_file_version";
 
 /// What one `edit` call does to its target.
 ///
@@ -105,7 +107,7 @@ impl Tool for EditTool {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Path to the file, relative to the project root. An absolute path outside the project asks the user for permission."
+                        "description": "Path to a file inside the project root. Outside paths are refused; use the explicitly approved host shell for host access."
                     },
                     "operation": {
                         "type": "string",
@@ -161,7 +163,14 @@ impl Tool for EditTool {
         }
         let path = prepare_path_argument(&mut arguments, "path", None, ctx)?;
         if operation == EditOperation::Create {
-            ensure_existing_parent(std::path::Path::new(&path.canonical), &path.display).await?;
+            let workspace =
+                ProjectWorkspace::from_workspace(ctx.workspace.as_ref()).ok_or_else(|| {
+                    RuntimeError::new(
+                        agent_runtime_core::error::ErrorKind::Workspace,
+                        "Smith built-in filesystem tools require a ProjectWorkspace capability",
+                    )
+                })?;
+            workspace.ensure_parent_directory(&path.canonical)?;
         }
         let object = arguments
             .as_object_mut()
@@ -212,6 +221,7 @@ impl Tool for EditTool {
         let arguments = prepared.into_arguments();
         let raw_path = require_str(&arguments, "path")?;
         let path = resolve(ctx, raw_path)?;
+        let workspace = project_workspace(ctx)?.clone();
         let operation = resolve_operation(&arguments)?;
         let replace_all = optional_bool(&arguments, "replace_all").unwrap_or(false);
         let shown = display_path(ctx, &path);
@@ -219,8 +229,16 @@ impl Tool for EditTool {
         match operation {
             EditOperation::Create => {
                 let new_string = require_str(&arguments, "new_string")?;
-                ensure_existing_parent(&path, &shown).await?;
-                write_new(&path, new_string).await?;
+                let path_for_write = path.clone();
+                let bytes = new_string.as_bytes().to_vec();
+                let created = tokio::task::spawn_blocking(move || {
+                    workspace.create_new(path_for_write, &bytes)
+                })
+                .await
+                .map_err(|_| RuntimeError::internal("workspace create task failed"))?;
+                if let Err(err) = created {
+                    return Ok(ToolOutcome::error(err.message));
+                }
                 return Ok(ToolOutcome {
                     value: json!({"path": shown, "created": true, "replacements": 1}),
                     content: vec![agent_runtime_core::content::ContentPart::text(format!(
@@ -233,12 +251,27 @@ impl Tool for EditTool {
             }
             EditOperation::Overwrite => {
                 let new_string = require_str(&arguments, "new_string")?;
-                if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
+                if workspace.entry(&path).is_err() {
                     return Ok(ToolOutcome::error(format!(
                         "`{shown}` does not exist; use `create` to make a new file"
                     )));
                 }
-                write_atomically(&path, new_string).await?;
+                let expected = match expected_version_argument(&arguments) {
+                    Ok(expected) => expected,
+                    Err(err) => return Ok(ToolOutcome::error(err.message)),
+                };
+                let path_for_write = path.clone();
+                let bytes = new_string.as_bytes().to_vec();
+                tokio::task::spawn_blocking(move || {
+                    workspace.replace_if_version(
+                        path_for_write,
+                        &bytes,
+                        &expected,
+                        MAX_READ_BYTES as usize,
+                    )
+                })
+                .await
+                .map_err(|_| RuntimeError::internal("workspace replace task failed"))??;
                 return Ok(ToolOutcome {
                     value: json!({"path": shown, "created": false, "replacements": 1}),
                     content: vec![agent_runtime_core::content::ContentPart::text(format!(
@@ -250,15 +283,13 @@ impl Tool for EditTool {
                 });
             }
             EditOperation::Delete => {
-                match tokio::fs::remove_file(&path).await {
-                    Ok(()) => {}
-                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                        return Ok(ToolOutcome::error(format!("`{shown}` does not exist")));
-                    }
-                    Err(err) => {
-                        return Err(invalid(format!("cannot delete `{shown}`: {err}")));
-                    }
-                }
+                let expected = expected_version_argument(&arguments)?;
+                let path_for_delete = path.clone();
+                tokio::task::spawn_blocking(move || {
+                    workspace.delete_if_version(path_for_delete, &expected, MAX_READ_BYTES as usize)
+                })
+                .await
+                .map_err(|_| RuntimeError::internal("workspace delete task failed"))??;
                 return Ok(ToolOutcome {
                     value: json!({"path": shown, "deleted": true}),
                     content: vec![agent_runtime_core::content::ContentPart::text(format!(
@@ -279,8 +310,8 @@ impl Tool for EditTool {
             ));
         }
 
-        let contents = read_bounded(&path, MAX_READ_BYTES).await?;
-        let occurrences = contents.matches(old_string).count();
+        let contents = read_bounded(ctx, &path, MAX_READ_BYTES).await?;
+        let occurrences = contents.text.matches(old_string).count();
 
         match occurrences {
             0 => {
@@ -302,11 +333,22 @@ impl Tool for EditTool {
         }
 
         let updated = if replace_all {
-            contents.replace(old_string, new_string)
+            contents.text.replace(old_string, new_string)
         } else {
-            contents.replacen(old_string, new_string, 1)
+            contents.text.replacen(old_string, new_string, 1)
         };
-        write_atomically(&path, &updated).await?;
+        let path_for_write = path.clone();
+        let expected = contents.version;
+        tokio::task::spawn_blocking(move || {
+            workspace.replace_if_version(
+                path_for_write,
+                updated.as_bytes(),
+                &expected,
+                MAX_READ_BYTES as usize,
+            )
+        })
+        .await
+        .map_err(|_| RuntimeError::internal("workspace replace task failed"))??;
 
         Ok(ToolOutcome {
             value: json!({
@@ -330,15 +372,26 @@ impl Tool for EditTool {
 /// wrapper that happens to hold the state: the rule is part of what `edit`
 /// means, and a reader asking "when can this delete a file" should find the
 /// answer in this module.
-pub fn read_state_defect(arguments: &Value, reads: &ReadRecorder) -> Option<ReadDefect> {
-    let operation = resolve_operation(arguments).ok()?;
+pub(crate) fn expected_read_version(
+    arguments: &Value,
+    reads: &ReadRecorder,
+) -> Result<Option<FileVersion>, ReadDefect> {
+    let Ok(operation) = resolve_operation(arguments) else {
+        return Ok(None);
+    };
     if !operation.destroys_unseen_content() {
-        return None;
+        return Ok(None);
     }
-    let path = optional_str(arguments, "path")?;
-    reads
-        .authorize_destructive(std::path::Path::new(path))
-        .err()
+    let path = optional_str(arguments, "path").ok_or(ReadDefect::Unread)?;
+    reads.expected_version(std::path::Path::new(path)).map(Some)
+}
+
+fn expected_version_argument(arguments: &Value) -> Result<FileVersion, RuntimeError> {
+    let value = arguments.get(EXPECTED_VERSION_FIELD).ok_or_else(|| {
+        invalid("destructive edit is missing its prepared file-version precondition")
+    })?;
+    serde_json::from_value(value.clone())
+        .map_err(|_| invalid("destructive edit carries an invalid file-version precondition"))
 }
 
 /// Resolves the operation from arguments, honoring the historical shorthand.
@@ -365,101 +418,6 @@ fn operation_name(operation: EditOperation) -> &'static str {
         EditOperation::Overwrite => "overwrite",
         EditOperation::Delete => "delete",
     }
-}
-
-async fn write_new(path: &std::path::Path, contents: &str) -> Result<(), RuntimeError> {
-    let mut file = tokio::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .await
-        .map_err(|err| {
-            if err.kind() == std::io::ErrorKind::AlreadyExists {
-                invalid(format!(
-                    "cannot create `{}`: it already exists",
-                    path.display()
-                ))
-            } else {
-                invalid(format!("cannot create `{}`: {err}", path.display()))
-            }
-        })?;
-    if let Err(err) = async {
-        file.write_all(contents.as_bytes()).await?;
-        file.sync_all().await
-    }
-    .await
-    {
-        drop(file);
-        let _ = tokio::fs::remove_file(path).await;
-        return Err(invalid(format!(
-            "cannot create `{}`: {err}",
-            path.display()
-        )));
-    }
-    Ok(())
-}
-
-async fn ensure_existing_parent(path: &std::path::Path, shown: &str) -> Result<(), RuntimeError> {
-    let parent = path.parent().ok_or_else(|| {
-        invalid(format!(
-            "cannot create `{shown}`: the target has no parent directory"
-        ))
-    })?;
-    let metadata = tokio::fs::metadata(parent).await.map_err(|err| {
-        invalid(format!(
-            "cannot create `{shown}`: its parent directory must already exist ({err})"
-        ))
-    })?;
-    if !metadata.is_dir() {
-        return Err(invalid(format!(
-            "cannot create `{shown}`: its parent is not a directory"
-        )));
-    }
-    Ok(())
-}
-
-/// Writes via a sibling temporary file and a rename.
-///
-/// The rename is atomic within a filesystem, so a reader either sees the old
-/// file or the new one — never a truncated one. The temporary lives beside the
-/// target rather than in `/tmp` so the rename cannot cross a filesystem. It is
-/// a trusted implementation detail of the prepared exact-target write, not a
-/// separately selectable resource, and this function owns cleanup on every
-/// recoverable exit path.
-async fn write_atomically(path: &std::path::Path, contents: &str) -> Result<(), RuntimeError> {
-    let parent = path.parent().ok_or_else(|| {
-        invalid(format!(
-            "cannot write `{}`: it has no parent directory",
-            path.display()
-        ))
-    })?;
-    let temporary = parent.join(format!(".smith-edit-{}.tmp", Uuid::new_v4()));
-
-    let write = async {
-        // `create_new` is atomic and refuses an existing path, including a
-        // symlink. Keeping this handle open for the entire write avoids
-        // re-opening a path an untrusted repository could swap underneath us.
-        let mut file = tokio::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .await?;
-        file.write_all(contents.as_bytes()).await?;
-        file.sync_all().await
-    };
-    if let Err(err) = write.await {
-        let _ = tokio::fs::remove_file(&temporary).await;
-        return Err(invalid(format!("cannot write `{}`: {err}", path.display())));
-    }
-
-    if let Err(err) = tokio::fs::rename(&temporary, path).await {
-        let _ = tokio::fs::remove_file(&temporary).await;
-        return Err(invalid(format!(
-            "cannot replace `{}`: {err}",
-            path.display()
-        )));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -546,15 +504,15 @@ mod tests {
         let (dir, ctx) = project();
         std::fs::write(dir.path().join("a.rs"), SOURCE).unwrap();
 
-        let error = EditTool
+        let outcome = EditTool
             .invoke(
                 json!({"path": "a.rs", "operation": "create", "new_string": "replaced\n"}),
                 &ctx,
             )
             .await
-            .expect_err("create must not clobber");
+            .expect("create refusal is a tool outcome");
 
-        assert!(error.to_string().contains("already exists"), "{error}");
+        assert!(text_of(&outcome).contains("already exists"), "{outcome:?}");
         assert_eq!(
             std::fs::read_to_string(dir.path().join("a.rs")).unwrap(),
             SOURCE
@@ -724,12 +682,9 @@ mod tests {
                 &ctx,
             )
             .await
-            .unwrap_err();
+            .expect_err("a missing parent is refused during preparation");
 
-        assert!(
-            err.message.contains("parent directory must already exist"),
-            "{err:?}"
-        );
+        assert!(err.message.contains("parent directory"), "{err:?}");
         assert!(
             !dir.path().join("missing").exists(),
             "an exact-file invocation created an unprepared ancestor"
@@ -741,15 +696,15 @@ mod tests {
         let (dir, ctx) = project();
         std::fs::write(dir.path().join("a.rs"), SOURCE).unwrap();
 
-        let err = EditTool
+        let outcome = EditTool
             .invoke(
                 json!({"path": "a.rs", "old_string": "", "new_string": "replaced"}),
                 &ctx,
             )
             .await
-            .unwrap_err();
+            .unwrap();
 
-        assert!(err.message.contains("already exists"), "{err:?}");
+        assert!(text_of(&outcome).contains("already exists"), "{outcome:?}");
         assert_eq!(
             std::fs::read_to_string(dir.path().join("a.rs")).unwrap(),
             SOURCE
@@ -779,11 +734,11 @@ mod tests {
 
         std::fs::write(dir.path().join("raced.rs"), "other process\n")
             .expect("a competing creator wins the race");
-        let err = Tool::invoke(&EditTool, prepared, &ctx)
+        let outcome = Tool::invoke(&EditTool, prepared, &ctx)
             .await
-            .expect_err("create-only invocation must fail closed");
+            .expect("create-only refusal is a tool outcome");
 
-        assert!(err.message.contains("already exists"), "{err:?}");
+        assert!(text_of(&outcome).contains("already exists"), "{outcome:?}");
         assert_eq!(
             std::fs::read_to_string(dir.path().join("raced.rs")).unwrap(),
             "other process\n",
@@ -807,23 +762,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn editing_outside_the_project_works_once_prepared() {
-        // The refusal moved out of the tool: an out-of-project path prepares
-        // with a host-mounted resource, and the runtime's approval gate — not
-        // preparation — decides it (see tests/through_the_runtime.rs).
+    async fn editing_outside_the_project_is_refused() {
         let (_dir, ctx) = project();
         let outside = tempfile::tempdir().unwrap();
         let target = outside.path().join("escape.rs");
         std::fs::write(&target, "a\n").unwrap();
 
-        EditTool
+        let err = EditTool
             .invoke(
                 json!({"path": target.to_str().unwrap(), "old_string": "a", "new_string": "b"}),
                 &ctx,
             )
             .await
-            .unwrap();
-        assert_eq!(std::fs::read_to_string(&target).unwrap(), "b\n");
+            .expect_err("ordinary edit paths are capability-contained");
+        assert_eq!(err.kind, agent_runtime_core::error::ErrorKind::Workspace);
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "a\n");
     }
 
     #[tokio::test]
@@ -849,15 +802,22 @@ mod tests {
 
     #[tokio::test]
     async fn no_temporary_file_survives_a_failed_atomic_replace() {
-        let (dir, _ctx) = project();
+        let (dir, ctx) = project();
         let destination = dir.path().join("occupied");
+        std::fs::write(&destination, "original").unwrap();
+        let workspace = project_workspace(&ctx).unwrap();
+        let expected = workspace.read_bounded(&destination, 1024).unwrap().version;
+        std::fs::remove_file(&destination).unwrap();
         std::fs::create_dir(&destination).unwrap();
         std::fs::write(destination.join("keep"), "unchanged").unwrap();
 
-        let err = write_atomically(&destination, "replacement")
-            .await
+        let err = workspace
+            .replace_if_version(&destination, b"replacement", &expected, 1024)
             .expect_err("renaming a file over a non-empty directory must fail");
-        assert!(err.message.contains("cannot replace"), "{err:?}");
+        assert!(
+            err.message.contains("changed") || err.message.contains("regular file"),
+            "{err:?}"
+        );
         let leftovers: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
             .filter_map(Result::ok)

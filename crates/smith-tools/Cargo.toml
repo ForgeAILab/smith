@@ -19,6 +19,7 @@ ignore = "0.4"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+smith-host = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
 
@@ -30,5 +31,4 @@ nix = { version = "0.31", default-features = false, features = ["signal"] }
 [dev-dependencies]
 agent-runtime = { workspace = true }
 agent-runtime-testkit = { workspace = true }
-smith-host = { workspace = true }
 tempfile = "3"

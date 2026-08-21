@@ -6,10 +6,6 @@ mod tests {
     use agent_runtime_core::cancel::CancelReason;
     use agent_runtime_core::clock::{Deadline, SystemClock, Timestamp};
     use agent_runtime_core::content::{ContentPart, Message, ToolCall, ToolResultBlock};
-    use agent_runtime_core::event::{
-        EstimationConfidence, EventEnvelope, PlanItemProjection, PlanItemStatus, PlanSensitivity,
-        RuntimeEvent, TurnFinish,
-    };
     use agent_runtime_core::goal::{
         GoalProjection, GoalStatus, GoalTokenUsage, GoalUsageProvenance,
     };
@@ -25,6 +21,10 @@ mod tests {
     };
     use crossterm::event::{
         KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
+    use smith_runtime::client::{
+        EstimationConfidence, PlanItemProjection, PlanItemStatus, PlanSensitivity,
+        SmithEvent as EventEnvelope, SmithEventKind as RuntimeEvent, TurnFinish,
     };
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;

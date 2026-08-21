@@ -1,13 +1,5 @@
 //! `shell`'s `run_in_background`, `task_output`, and `task_stop` exercised
-//! against a fake [`BackgroundTaskHost`], in their own process.
-//!
-//! The crate's unit tests (`cargo test -p smith-tools --lib`) deliberately
-//! never install a host — that is what proves the graceful "no host"
-//! error paths. `smith_tools::background::install` is a process-global
-//! `OnceLock`, so a test that installs one must run somewhere that
-//! `OnceLock` cannot leak back into those unit tests. A separate file under
-//! `tests/` is Cargo's own answer to that: it compiles to its own binary,
-//! its own process, its own statics.
+//! against explicitly injected fake [`BackgroundTaskHost`] instances.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -21,7 +13,7 @@ use async_trait::async_trait;
 use serde_json::json;
 use smith_host::workspace::ProjectWorkspace;
 use smith_tools::background::{
-    self, BackgroundTaskHost, BackgroundTaskOutput, BackgroundTaskStatus, SpawnedTask,
+    BackgroundTaskHost, BackgroundTaskOutput, BackgroundTaskStatus, SpawnedTask,
 };
 use smith_tools::{ShellTool, TaskOutputTool, TaskStopTool};
 use tokio::process::Child;
@@ -30,7 +22,7 @@ use tokio::sync::{mpsc, oneshot};
 /// The one task this fake knows about; everything else is "unknown".
 const KNOWN_TASK_ID: &str = "task:1";
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct FakeHost {
     spawn_calls: Mutex<Vec<(String, Option<u64>)>>,
     stop_calls: Mutex<Vec<String>>,
@@ -107,20 +99,9 @@ impl BackgroundTaskHost for FakeHost {
         Ok(BackgroundTaskStatus::Stopped)
     }
 
-    fn register_foreground_signal(&self, _session: SessionId) -> oneshot::Receiver<()> {
-        let (_tx, rx) = oneshot::channel();
-        rx
+    fn register_foreground_signal(&self, _session: SessionId) -> Option<oneshot::Receiver<()>> {
+        None
     }
-}
-
-/// Installs the shared fake host, idempotently.
-///
-/// Every test in this binary that needs a host gets the *same* instance
-/// (only the first `install` call in the process wins), which is fine here
-/// because the fake is stateless canned behavior keyed only on
-/// [`KNOWN_TASK_ID`] — no test needs isolation from another's calls.
-fn install_fake_host() {
-    background::install(Arc::new(FakeHost::default()));
 }
 
 struct Project {
@@ -173,11 +154,13 @@ impl Project {
 
 #[tokio::test]
 async fn unknown_task_id_reports_the_same_stable_error_from_both_tools() {
-    install_fake_host();
+    let host = Arc::new(FakeHost::default());
+    let output = TaskOutputTool::new(host.clone());
+    let stop = TaskStopTool::new(host);
     let project = Project::new();
 
     let output_err = project
-        .invoke(&TaskOutputTool, json!({"task_id": "task:missing"}))
+        .invoke(&output, json!({"task_id": "task:missing"}))
         .await
         .unwrap_err();
     assert!(
@@ -188,7 +171,7 @@ async fn unknown_task_id_reports_the_same_stable_error_from_both_tools() {
     );
 
     let stop_err = project
-        .invoke(&TaskStopTool, json!({"task_id": "task:missing"}))
+        .invoke(&stop, json!({"task_id": "task:missing"}))
         .await
         .unwrap_err();
     assert!(
@@ -201,14 +184,11 @@ async fn unknown_task_id_reports_the_same_stable_error_from_both_tools() {
 
 #[tokio::test]
 async fn task_output_reports_the_hosts_status_and_output_for_a_known_task() {
-    install_fake_host();
+    let tool = TaskOutputTool::new(Arc::new(FakeHost::default()));
     let project = Project::new();
 
     let outcome = project
-        .invoke(
-            &TaskOutputTool,
-            json!({"task_id": KNOWN_TASK_ID, "offset": 3}),
-        )
+        .invoke(&tool, json!({"task_id": KNOWN_TASK_ID, "offset": 3}))
         .await
         .expect("a known task resolves");
     assert!(!outcome.is_error);
@@ -219,11 +199,11 @@ async fn task_output_reports_the_hosts_status_and_output_for_a_known_task() {
 
 #[tokio::test]
 async fn task_stop_reports_the_hosts_terminal_state_for_a_known_task() {
-    install_fake_host();
+    let tool = TaskStopTool::new(Arc::new(FakeHost::default()));
     let project = Project::new();
 
     let outcome = project
-        .invoke(&TaskStopTool, json!({"task_id": KNOWN_TASK_ID}))
+        .invoke(&tool, json!({"task_id": KNOWN_TASK_ID}))
         .await
         .expect("a known task resolves");
     assert!(!outcome.is_error);
@@ -232,12 +212,12 @@ async fn task_stop_reports_the_hosts_terminal_state_for_a_known_task() {
 
 #[tokio::test]
 async fn run_in_background_returns_promptly_with_the_hosts_task_id() {
-    install_fake_host();
+    let tool = ShellTool::new(Arc::new(FakeHost::default()));
     let project = Project::new();
 
     let outcome = project
         .invoke(
-            &ShellTool,
+            &tool,
             json!({"command": "sleep 30", "run_in_background": true}),
         )
         .await

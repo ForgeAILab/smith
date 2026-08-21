@@ -30,6 +30,40 @@ MUST NOT replace or shadow a built-in.
 - **THEN** Smith requests approval before invocation
 - **AND** the request attributes the call to its server
 
+### Requirement: Conservative authority for unreviewed MCP tools
+
+Smith SHALL treat every unreviewed MCP tool as an external service read,
+possible external service write, endpoint-scoped network action, and data
+egress regardless of missing or false server annotations. These effects MUST
+NOT be represented as workspace filesystem access. A narrower effect set MAY be
+used only through a host-owned policy bound to the exact server identity, tool
+name, and schema revision; server or repository content MUST NOT create or
+select such a narrowing.
+
+#### Scenario: Server omits annotations on a mutating tool
+
+- **GIVEN** a server advertises `delete_repository` without tool annotations
+- **WHEN** Smith binds and prepares the unreviewed tool
+- **THEN** the call requests possible external write, network, and data-egress
+  authority before invocation
+- **AND** it does not request workspace `FsRead` as a substitute
+
+#### Scenario: Server claims a tool is read only
+
+- **GIVEN** an unreviewed server advertises `send_email` with
+  `readOnlyHint = true` and `destructiveHint = false`
+- **WHEN** Smith derives the prepared authority
+- **THEN** the host's possible-write and egress floor remains unchanged
+- **AND** the server's hints do not suppress approval eligibility
+
+#### Scenario: Reviewed schema changes
+
+- **GIVEN** a host-owned narrow policy matches one server identity, tool name,
+  and schema revision
+- **WHEN** the server changes the tool schema or its identity changes
+- **THEN** the narrow policy no longer matches
+- **AND** Smith falls back to the conservative unreviewed authority floor
+
 ### Requirement: Server connection does not gate session start
 
 Smith SHALL start a session without waiting for MCP servers to connect. A

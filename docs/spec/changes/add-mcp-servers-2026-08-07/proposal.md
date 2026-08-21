@@ -1,6 +1,6 @@
 ---
 created_at: 2026-08-07T20:26:54Z
-updated_at: 2026-08-07T20:33:17Z
+updated_at: 2026-08-20T22:22:11Z
 ---
 
 ## Why
@@ -24,6 +24,14 @@ whose effects Smith cannot inspect — is specified by
 This proposal owns what that package deliberately excludes: where servers are
 declared, how a user comes to trust one, and how their tools appear.
 
+A post-implementation authority review at Smith commit `19e1696` found one
+unsafe assumption in the coordinated boundary: the shared default effect floor
+is read plus network, and remote mutation is added only when the untrusted
+server supplies `destructiveHint = true`. Smith does not override that floor.
+An unreviewed tool can therefore mutate remote state while being prepared as a
+read/network action. This proposal now includes the conservative fix before the
+MCP change may be archived.
+
 ## What Changes
 
 - Declare MCP servers in layered configuration under an `[mcp.servers.<name>]`
@@ -39,6 +47,10 @@ declared, how a user comes to trust one, and how their tools appear.
 - Register connected servers' tools through the shared ability/tool registry so
   they obtain approval and attribution identically to built-ins — the behavior
   the `extension-system` spec already requires.
+- Treat every unreviewed remote tool as external read, possible external write,
+  endpoint-scoped network, and data egress. Server annotations may raise risk
+  but MUST NOT narrow that host floor. Narrower authority requires a host-owned
+  review keyed by server identity, tool name, and schema revision.
 - Add a `/mcp` command listing configured servers, their connection state, tool
   counts, and failure reasons, plus status-line visibility while servers connect.
 - Render remote tools as `mcp__<server>__<tool>` with arguments hidden by default,
@@ -58,8 +70,10 @@ declared, how a user comes to trust one, and how their tools appear.
 - Public compatibility: additive configuration. Existing projects without
   `[mcp.servers]` behave identically and gain no new dependency at runtime.
 - Security: this is the first path by which repository-controlled configuration
-  can cause Smith to execute a program the user did not compile in. The trust
-  and non-self-authorization requirements are the load-bearing part.
+  can cause Smith to execute a program the user did not compile in and expose
+  tools whose remote effects Smith cannot infer. Execution trust,
+  non-self-authorization, and the conservative per-tool authority floor are all
+  load-bearing.
 - Prerequisite: the coordinated agent-runtime change must land slices 1 through
   4 before this change's Section 3 can begin.
 
@@ -73,8 +87,9 @@ declared, how a user comes to trust one, and how their tools appear.
   HTTP servers were originally deferred out of this change; they are now included
   — the credential path they needed was exercised by the stdio slice, and a
   remote server reuses it unchanged.
-- No per-tool approval configuration beyond what the existing approval policy
-  already expresses.
+- No user-authored per-tool effect claims. A future UI may select a host-reviewed
+  policy record, but neither server metadata nor repository text can narrow the
+  conservative default.
 
 ## Delivery Slices
 
@@ -89,6 +104,9 @@ declared, how a user comes to trust one, and how their tools appear.
 5. Remote servers: the `http` transport, a bearer `credential`, and declared
    headers — all resolved through the same secret path and bound by the same
    trust decision as a local command.
+6. Authority hardening: add external-service effects to Agent Runtime, pin the
+   compatible revision, and prepare every unreviewed MCP call as possible remote
+   mutation plus data egress regardless of missing or false annotations.
 
 Slice 2 must pass before slice 3 spawns anything.
 
@@ -97,3 +115,7 @@ Slice 2 must pass before slice 3 spawns anything.
 Approval authorizes Stage 2 implementation in this repository only. It does not
 authorize the coordinated agent-runtime change, remote HTTP servers, MCP
 resources/prompts/sampling, or any server-installation behavior.
+
+The new authority-hardening slice also requires an explicitly approved
+coordinated Agent Runtime proposal. Smith-side approval does not authorize that
+upstream effect/resource contract change.

@@ -4,10 +4,11 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use agent_runtime_core::clock::Timestamp;
-use agent_runtime_core::event::{
-    ChildPhase, ChildRecoveryState, EventEnvelope, PlanSensitivity, RuntimeEvent, TurnFinish,
-};
 use agent_runtime_core::ids::TurnId;
+use smith_runtime::client::{
+    ChildPhase, ChildRecoveryState, PlanSensitivity, SmithEvent as EventEnvelope,
+    SmithEventKind as RuntimeEvent, TurnFinish,
+};
 
 use crate::status::{Activity, ContextPlanUpdate, render_elapsed, render_terminal_elapsed};
 use crate::transcript::ToolStatus;

@@ -29,9 +29,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use agent_runtime_core::error::RuntimeError;
-use agent_runtime_core::tool::Tool;
+use agent_runtime_core::tool::{Tool, ToolEffects};
 use agent_runtime_mcp::{
-    McpClient, McpConnection, McpError, McpServerConfig, McpTool, McpTransport,
+    McpClient, McpConnection, McpError, McpServerConfig, McpTool, McpToolPolicyKey, McpTransport,
 };
 use async_trait::async_trait;
 use smith_config::credential::{CredentialRef, CredentialResolver};
@@ -119,6 +119,28 @@ pub struct McpOptions {
     pub startup_timeout: Duration,
     /// How much text one remote call may contribute to the transcript.
     pub max_output_bytes: usize,
+    /// Host-reviewed exact per-tool effect classifications.
+    ///
+    /// There is intentionally no Smith configuration deserializer for these
+    /// records: repository and server content cannot create a narrower grant.
+    pub reviewed_tool_policies: Vec<SmithMcpToolPolicy>,
+}
+
+/// One host-owned narrow MCP classification bound to exact reviewed identity.
+#[derive(Debug, Clone)]
+pub struct SmithMcpToolPolicy {
+    /// Exact upstream review key.
+    pub key: McpToolPolicyKey,
+    /// Reviewed effects. Invalid or stale classifications fail closed to the
+    /// conservative unreviewed floor during binding.
+    pub effects: ToolEffects,
+}
+
+impl SmithMcpToolPolicy {
+    /// Creates one host-owned reviewed policy record.
+    pub fn new(key: McpToolPolicyKey, effects: ToolEffects) -> Self {
+        Self { key, effects }
+    }
 }
 
 impl std::fmt::Debug for McpOptions {
@@ -130,6 +152,10 @@ impl std::fmt::Debug for McpOptions {
             .field("credential_timeout_ms", &self.credential_timeout_ms)
             .field("startup_timeout", &self.startup_timeout)
             .field("max_output_bytes", &self.max_output_bytes)
+            .field(
+                "reviewed_tool_policy_count",
+                &self.reviewed_tool_policies.len(),
+            )
             .finish()
     }
 }
@@ -143,6 +169,7 @@ impl McpOptions {
             credential_timeout_ms: 10_000,
             startup_timeout: Duration::from_millis(DEFAULT_STARTUP_TIMEOUT_MS),
             max_output_bytes: agent_runtime_mcp::config::DEFAULT_MAX_OUTPUT_BYTES,
+            reviewed_tool_policies: Vec::new(),
         }
     }
 
@@ -155,6 +182,15 @@ impl McpOptions {
     /// Bounds how much text one remote call contributes to the transcript.
     pub fn with_max_output_bytes(mut self, bytes: usize) -> Self {
         self.max_output_bytes = bytes;
+        self
+    }
+
+    /// Supplies exact host-reviewed remote-tool classifications.
+    pub fn with_reviewed_tool_policies(
+        mut self,
+        policies: impl IntoIterator<Item = SmithMcpToolPolicy>,
+    ) -> Self {
+        self.reviewed_tool_policies = policies.into_iter().collect();
         self
     }
 }
@@ -502,7 +538,23 @@ impl McpSupervisor {
                 headers: self.headers(credential.as_ref(), headers).await?,
             },
         };
-        Ok(McpServerConfig::new(server.name.clone(), transport)
+        let mut config = McpServerConfig::new(server.name.clone(), transport);
+        // Smith supplies its own explicit host floor even though the shared
+        // package currently has the same conservative default. This keeps the
+        // product boundary reviewable and prevents an upstream default change
+        // from silently weakening Smith's policy.
+        let service = config.service_scope();
+        let endpoint = config.endpoint_scope();
+        let floor = ToolEffects::new(Vec::new())
+            .with_external_read(service.clone())
+            .with_external_write(service)
+            .with_network_to(endpoint.clone())
+            .with_data_egress_to(endpoint);
+        config = config.with_effect_floor(floor);
+        for policy in &self.options.reviewed_tool_policies {
+            config = config.with_reviewed_tool_policy(policy.key.clone(), policy.effects.clone());
+        }
+        Ok(config
             .with_startup_timeout(self.options.startup_timeout)
             .with_max_output_bytes(self.options.max_output_bytes))
     }

@@ -1,9 +1,9 @@
 //! The `list` tool.
 //!
-//! Lists directory entries or matches a glob across the project. Ignored paths
-//! — `.git`, `target`, `node_modules`, anything in a `.gitignore` — are skipped
-//! by default, because a listing dominated by build artifacts costs tokens and
-//! buries the files the model actually needs.
+//! Lists directory entries across the project. Hidden paths and common build
+//! directories (`.git`, `target`, `node_modules`) are skipped by default,
+//! because a listing dominated by artifacts costs tokens and buries the files
+//! the model actually needs.
 
 use std::collections::BTreeSet;
 
@@ -15,12 +15,11 @@ use agent_runtime_core::tool::{
 };
 use agent_runtime_registry::Permission;
 use async_trait::async_trait;
-use ignore::WalkBuilder;
 use serde_json::{Value, json};
 
 use crate::support::{
     check_stop, display_path, optional_bool, optional_str, optional_usize, prepare_path_argument,
-    resolve,
+    project_workspace, resolve,
 };
 
 /// How many entries a listing returns when the caller does not say.
@@ -36,14 +35,14 @@ impl Tool for ListTool {
         ToolSpec::new(
             "list",
             "List files and directories in the project. Set `recursive` to walk the \
-             tree. Ignored paths (.git, target, node_modules, .gitignore entries) \
-             are skipped unless `all` is set.",
+             tree. Hidden paths and common build directories (.git, target, \
+             node_modules) are skipped unless `all` is set.",
             json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Directory to list, relative to the project root. Defaults to the root. An absolute path outside the project asks the user for permission."
+                        "description": "Directory to list inside the project root. Defaults to the root. Outside paths are refused."
                     },
                     "recursive": {
                         "type": "boolean",
@@ -51,7 +50,7 @@ impl Tool for ListTool {
                     },
                     "all": {
                         "type": "boolean",
-                        "description": "Include ignored and hidden entries. Defaults to false."
+                        "description": "Include hidden and common build-directory entries. Defaults to false."
                     },
                     "limit": {
                         "type": "integer",
@@ -96,42 +95,30 @@ impl Tool for ListTool {
             .unwrap_or(DEFAULT_LIMIT)
             .max(1);
 
-        if !root.is_dir() {
+        let workspace = project_workspace(ctx)?.clone();
+        let root_entry = workspace.entry(&root)?;
+        if !root_entry.is_dir {
             return Ok(ToolOutcome::error(format!(
                 "`{}` is not a directory",
                 display_path(ctx, &root)
             )));
         }
-
-        let mut walker = WalkBuilder::new(&root);
-        walker
-            .max_depth(if recursive { None } else { Some(1) })
-            .hidden(!all)
-            .git_ignore(!all)
-            .git_global(!all)
-            .git_exclude(!all)
-            .parents(!all);
-        if !all {
-            // `.git` is not listed by `.gitignore`, so it needs its own rule.
-            walker.filter_entry(|entry| entry.file_name() != ".git");
-        }
+        let root_for_walk = root.clone();
+        let mut walked = tokio::task::spawn_blocking(move || {
+            workspace.entries(root_for_walk, recursive, all, limit.saturating_add(1))
+        })
+        .await
+        .map_err(|_| RuntimeError::internal("workspace list task failed"))??;
 
         let mut directories = BTreeSet::new();
         let mut files = BTreeSet::new();
-        let mut truncated = false;
+        let truncated = walked.len() > limit;
+        walked.truncate(limit);
 
-        for entry in walker.build() {
+        for entry in walked {
             check_stop(ctx)?;
-            let Ok(entry) = entry else { continue };
-            if entry.path() == root {
-                continue;
-            }
-            if directories.len() + files.len() >= limit {
-                truncated = true;
-                break;
-            }
-            let shown = display_path(ctx, entry.path());
-            if entry.file_type().is_some_and(|kind| kind.is_dir()) {
+            let shown = entry.relative_path.display().to_string();
+            if entry.is_dir {
                 directories.insert(format!("{shown}/"));
             } else {
                 files.insert(shown);
@@ -258,17 +245,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn listing_outside_the_project_works_once_prepared() {
+    async fn listing_outside_the_project_is_refused() {
         let (_dir, ctx) = project();
         let outside = tempfile::tempdir().unwrap();
         std::fs::write(outside.path().join("beyond.txt"), "x").unwrap();
 
-        let outcome = ListTool
+        let err = ListTool
             .invoke(json!({"path": outside.path().to_str().unwrap()}), &ctx)
             .await
-            .unwrap();
-        let text = crate::testing::text_of(&outcome);
-        assert!(text.contains("beyond.txt"), "{text}");
+            .expect_err("ordinary listings are capability-contained");
+        assert_eq!(err.kind, agent_runtime_core::error::ErrorKind::Workspace);
     }
 
     #[tokio::test]

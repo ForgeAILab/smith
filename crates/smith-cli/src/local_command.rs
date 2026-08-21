@@ -95,7 +95,7 @@ pub(super) async fn handle_local_command(
             );
         }
         CommandAction::Timeline => {
-            let events = match host.timeline_events().await {
+            let events = match host.client_timeline_events().await {
                 Ok(events) => events,
                 Err(error) => {
                     app.show_local_error("timeline", format!("timeline unavailable: {error}"));
@@ -875,8 +875,8 @@ pub(super) fn render_cache_status(status: &Status) -> String {
         |micro| format!("${}.{:06} derived", micro / 1_000_000, micro % 1_000_000),
     );
     let confidence = match summary.confidence {
-        Some(agent_runtime_core::event::EstimationConfidence::Exact) => "exact",
-        Some(agent_runtime_core::event::EstimationConfidence::Estimated) => "estimated",
+        Some(smith_runtime::client::EstimationConfidence::Exact) => "exact",
+        Some(smith_runtime::client::EstimationConfidence::Estimated) => "estimated",
         None => "?",
     };
     append_cache_lifecycle(
@@ -1090,9 +1090,9 @@ pub(super) fn render_resume_capsule_status(
 }
 
 const fn cache_operation_reason(
-    reason: agent_runtime_core::event::CacheOperationReason,
+    reason: smith_runtime::client::CacheOperationReason,
 ) -> &'static str {
-    use agent_runtime_core::event::CacheOperationReason;
+    use smith_runtime::client::CacheOperationReason;
     match reason {
         CacheOperationReason::Unsupported => "unsupported",
         CacheOperationReason::MissingConformance => "missing_conformance",

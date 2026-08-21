@@ -283,6 +283,10 @@ fn permission_affordance(permission: &Permission) -> &'static str {
         Permission::FsWrite => "file-write",
         Permission::FsCreate => "file-create",
         Permission::FsDelete => "file-delete",
+        Permission::HostFsRead => "host-file-read",
+        Permission::HostFsWrite => "host-file-write",
+        Permission::ExternalRead => "external-read",
+        Permission::ExternalWrite => "external-write",
         Permission::NetHttp => "network-http",
         Permission::DataEgress => "data-egress",
         Permission::CredentialUse => "credential-use",
@@ -300,12 +304,16 @@ fn permission_risk(permissions: &[Permission]) -> RiskLevel {
         .iter()
         .map(|permission| match permission {
             Permission::FsDelete
+            | Permission::HostFsRead
+            | Permission::HostFsWrite
+            | Permission::ExternalWrite
             | Permission::DataEgress
             | Permission::CredentialUse
             | Permission::ProcessSpawn
             | Permission::Other(_) => RiskLevel::High,
             Permission::FsWrite
             | Permission::FsCreate
+            | Permission::ExternalRead
             | Permission::NetHttp
             | Permission::StdioRead
             | Permission::StdioWrite => RiskLevel::Medium,
@@ -482,10 +490,8 @@ mod tests {
         assert_eq!(
             permission_sets["shell"],
             BTreeSet::from([
-                Permission::FsRead,
-                Permission::FsWrite,
-                Permission::FsCreate,
-                Permission::FsDelete,
+                Permission::HostFsRead,
+                Permission::HostFsWrite,
                 Permission::ProcessSpawn,
                 Permission::NetHttp,
                 Permission::DataEgress,
@@ -511,7 +517,8 @@ mod tests {
             .collect();
         for expected in [
             "shell-command",
-            "file-delete",
+            "host-file-read",
+            "host-file-write",
             "process-spawn",
             "network-http",
             "data-egress",

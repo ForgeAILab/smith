@@ -4,6 +4,7 @@
 //! the parent, managed root-only through the shared runtime's coordinator,
 //! and their protected results are admitted through Runtime's attributed
 //! child-completion turn when the parent is idle.
+#![allow(deprecated)] // Exercises the documented protocol-v1 embedding adapter.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -276,7 +277,7 @@ fn the_agent_ability_advertises_its_host_defined_delegation_authority() {
 #[tokio::test]
 async fn a_child_surface_gets_no_delegation_tool() {
     let fixture = Fixture::new();
-    let smith = factory::build(RuntimeRequest {
+    let smith = factory::build_request(RuntimeRequest {
         workspace: Some(Arc::new(MemoryWorkspace::new("/repo"))),
         provider: Some(scripted(1, "child reply")),
         ..RuntimeRequest::new(fixture.config(), HostSurface::Child)
@@ -359,7 +360,7 @@ mode = "allow-all"
         catalog_sources: Vec::new(),
     });
 
-    let smith = factory::build(request)
+    let smith = factory::build_request(request)
         .await
         .expect("root with alternate child route");
     let session = smith
@@ -418,7 +419,7 @@ async fn a_durable_child_accepts_a_follow_up_after_parent_restart_with_prior_his
         request
     };
 
-    let first = factory::build(build())
+    let first = factory::build_request(build())
         .await
         .expect("the first Smith runtime");
     let first_session = first
@@ -466,7 +467,7 @@ async fn a_durable_child_accepts_a_follow_up_after_parent_restart_with_prior_his
         .expect("the first parent shuts down");
     tokio::time::sleep(std::time::Duration::from_millis(25)).await;
 
-    let second = factory::build(build())
+    let second = factory::build_request(build())
         .await
         .expect("the resumed Smith runtime");
     let second_session = second
@@ -557,7 +558,7 @@ async fn a_returned_child_question_survives_smith_restart_without_provider_work(
         request
     };
 
-    let first = factory::build(build())
+    let first = factory::build_request(build())
         .await
         .expect("the first Smith runtime");
     let first_session = first
@@ -595,7 +596,7 @@ async fn a_returned_child_question_survives_smith_restart_without_provider_work(
     first_session.shutdown().await.expect("first parent stops");
     tokio::time::sleep(std::time::Duration::from_millis(25)).await;
 
-    let second = factory::build(build())
+    let second = factory::build_request(build())
         .await
         .expect("the resumed Smith runtime");
     let second_session = second
@@ -685,7 +686,7 @@ async fn an_interrupted_smith_child_resumes_exactly_once_and_never_on_startup() 
         request
     };
 
-    let first = factory::build(build(crash_checkpoints.clone()))
+    let first = factory::build_request(build(crash_checkpoints.clone()))
         .await
         .expect("the first Smith runtime");
     let first_session = first
@@ -771,7 +772,7 @@ async fn an_interrupted_smith_child_resumes_exactly_once_and_never_on_startup() 
 
     // Starting a new owner over the persisted records models process loss:
     // no orderly child cancellation or terminal checkpoint occurred.
-    let second = factory::build(build(resume_checkpoints))
+    let second = factory::build_request(build(resume_checkpoints))
         .await
         .expect("the replacement Smith runtime");
     let second_session = second
@@ -903,7 +904,7 @@ async fn a_spawned_child_completes_and_its_result_reaches_the_parent_model() {
             .expect("bounded project instructions");
     runtime_request.project_instructions = Some(project_instructions.clone());
     runtime_request.event_buffer = 1;
-    let smith = factory::build(runtime_request)
+    let smith = factory::build_request(runtime_request)
         .await
         .expect("a runtime with a one-event presentation buffer");
     assert_eq!(
@@ -1069,7 +1070,7 @@ async fn a_child_artifact_is_explicitly_transferred_without_widening_source_owne
         ProjectWorkspace::new(fixture.project.path()).expect("a project workspace"),
     ));
     runtime_request.artifact_store = Some(store.clone());
-    let smith = factory::build(runtime_request)
+    let smith = factory::build_request(runtime_request)
         .await
         .expect("a runtime with protected artifact transfer");
     let session = smith
@@ -1207,7 +1208,7 @@ async fn a_child_tool_call_reaches_the_parent_with_the_identity_its_arguments_re
     runtime_request.workspace = Some(Arc::new(
         ProjectWorkspace::new(fixture.project.path()).expect("a project workspace"),
     ));
-    let smith = factory::build(runtime_request)
+    let smith = factory::build_request(runtime_request)
         .await
         .expect("a runtime that can delegate");
     let session = smith
@@ -1373,7 +1374,7 @@ async fn concurrent_child_needs_input_is_lossless_ordered_and_never_opens_root_u
     ));
     let mut runtime_request = request(&fixture, provider.clone());
     runtime_request.event_buffer = 1;
-    let smith = factory::build(runtime_request)
+    let smith = factory::build_request(runtime_request)
         .await
         .expect("a runtime with a one-event presentation buffer");
     let session = smith
@@ -1475,7 +1476,7 @@ async fn concurrent_child_needs_input_is_lossless_ordered_and_never_opens_root_u
 async fn the_agent_tool_spawns_waits_and_lists() {
     let fixture = Fixture::new();
     let provider = scripted(1, "done");
-    let smith = factory::build(request(&fixture, provider))
+    let smith = factory::build_request(request(&fixture, provider))
         .await
         .expect("a runtime");
     let session = smith
@@ -1568,7 +1569,7 @@ async fn the_agent_tool_spawns_waits_and_lists() {
 async fn the_agent_tool_wait_is_bounded_without_stopping_the_child() {
     let fixture = Fixture::new();
     let provider = Arc::new(CrashThenReplyProvider::new());
-    let smith = factory::build(request(&fixture, provider.clone()))
+    let smith = factory::build_request(request(&fixture, provider.clone()))
         .await
         .expect("a runtime");
     let session = smith
@@ -1643,7 +1644,7 @@ async fn the_agent_tool_wait_is_bounded_without_stopping_the_child() {
 async fn the_default_foreground_wait_releases_the_parent_without_stopping_the_child() {
     let fixture = Fixture::new();
     let provider = Arc::new(CrashThenReplyProvider::new());
-    let smith = factory::build(request(&fixture, provider.clone()))
+    let smith = factory::build_request(request(&fixture, provider.clone()))
         .await
         .expect("a runtime");
     let session = smith
@@ -1872,7 +1873,7 @@ async fn spawn_and_collect_tool_names(
 async fn agent_tool_spawn_resolves_a_named_profile_to_its_preflighted_route() {
     let pf = profile_fixture();
     let parent_provider = scripted(1, "root fallback must not run");
-    let smith = factory::build(root_request_with_review_profile(
+    let smith = factory::build_request(root_request_with_review_profile(
         &pf,
         parent_provider.clone(),
     ))
@@ -1946,7 +1947,7 @@ async fn agent_tool_spawn_resolves_a_named_profile_to_its_preflighted_route() {
 async fn agent_tool_refuses_an_unavailable_profile_and_creates_no_child() {
     let pf = profile_fixture();
     let parent_provider = scripted(1, "root fallback must not run");
-    let smith = factory::build(root_request_with_review_profile(&pf, parent_provider))
+    let smith = factory::build_request(root_request_with_review_profile(&pf, parent_provider))
         .await
         .expect("a runtime with a review child profile");
     let session = smith
@@ -2028,7 +2029,7 @@ async fn agent_tool_refuses_an_unavailable_profile_and_creates_no_child() {
 async fn agent_tool_spawn_without_a_profile_still_inherits_the_parents_route() {
     let pf = profile_fixture();
     let parent_provider = scripted(1, "root handled the inherited spawn");
-    let smith = factory::build(root_request_with_review_profile(
+    let smith = factory::build_request(root_request_with_review_profile(
         &pf,
         parent_provider.clone(),
     ))
@@ -2091,7 +2092,7 @@ async fn agent_tool_spawn_without_a_profile_still_inherits_the_parents_route() {
 async fn child_write_access_needs_full_scope_and_workspace_together() {
     let fixture = Fixture::new();
     let provider = scripted(3, "write-access probe");
-    let smith = factory::build(request(&fixture, provider.clone()))
+    let smith = factory::build_request(request(&fixture, provider.clone()))
         .await
         .expect("a build-posture runtime");
     let session = smith
@@ -2210,7 +2211,7 @@ async fn child_write_access_stays_read_only_under_a_read_only_posture() {
     )
     .expect("a read-only-posture config");
     let provider = scripted(1, "write-access probe");
-    let smith = factory::build(request(&fixture, provider.clone()))
+    let smith = factory::build_request(request(&fixture, provider.clone()))
         .await
         .expect("a read-only-posture runtime");
     let session = smith

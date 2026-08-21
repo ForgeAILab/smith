@@ -25,7 +25,7 @@ use agent_runtime_core::workspace::Workspace;
 use agent_runtime_registry::Permission;
 use agent_runtime_testkit::scenarios::fake_model_profile;
 use async_trait::async_trait;
-use smith_host::approval::{InteractiveApproval, PromptScope};
+use smith_host::approval::{HeadlessApproval, InteractiveApproval, PromptScope};
 use smith_host::workspace::ProjectWorkspace;
 
 #[derive(Debug)]
@@ -47,6 +47,8 @@ impl ProjectToolAuthority {
                 Permission::FsWrite,
                 Permission::FsCreate,
                 Permission::FsDelete,
+                Permission::HostFsRead,
+                Permission::HostFsWrite,
                 Permission::ProcessSpawn,
                 Permission::NetHttp,
                 Permission::DataEgress,
@@ -104,6 +106,27 @@ impl SecurityCheck for ProjectToolAuthority {
                     };
                 }
             }
+        }
+
+        let host_filesystem_authority = request.requested.iter().any(|permission| {
+            matches!(permission, Permission::HostFsRead | Permission::HostFsWrite)
+        });
+        if host_filesystem_authority {
+            return if matches!(
+                &request.resource,
+                SecurityResource::Other { kind, .. }
+                    if kind == smith_tools::HOST_SHELL_RESOURCE_KIND
+            ) {
+                SecurityCheckOutcome::RequireApproval {
+                    constraints: GrantConstraints::unconstrained(),
+                }
+            } else {
+                SecurityCheckOutcome::Deny {
+                    code: agent_runtime_core::grant::DecisionCode::other(
+                        "test.host_resource_mismatch",
+                    ),
+                }
+            };
         }
 
         if request.requested.len() == 1 && request.requested.contains(&Permission::FsRead) {
@@ -372,10 +395,8 @@ async fn the_interactive_gate_carries_the_users_answer_to_the_tool() {
 }
 
 #[tokio::test]
-async fn shell_reaches_approval_with_broad_workspace_authority_before_execution() {
+async fn shell_reaches_approval_with_host_authority_before_execution() {
     let dir = project();
-    let root = std::fs::canonicalize(dir.path()).expect("a canonical project root");
-    let root_string = root.to_string_lossy().into_owned();
     let (approval, mut requests) = InteractiveApproval::new(4);
     let surface = tokio::spawn(async move {
         let prompt = tokio::time::timeout(Duration::from_secs(5), requests.recv())
@@ -383,17 +404,16 @@ async fn shell_reaches_approval_with_broad_workspace_authority_before_execution(
             .expect("a shell prompt arrived")
             .expect("a shell prompt");
         assert_eq!(prompt.tool(), "shell");
-        assert_eq!(
+        assert!(matches!(
             prompt.prepared().resource(),
-            &SecurityResource::filesystem(root_string.clone(), Vec::new())
-        );
+            SecurityResource::Other { kind, id }
+                if kind == smith_tools::HOST_SHELL_RESOURCE_KIND && id.starts_with("sha256:")
+        ));
         assert_eq!(
             prompt.prepared().required_permissions(),
             &[
-                Permission::FsRead,
-                Permission::FsWrite,
-                Permission::FsCreate,
-                Permission::FsDelete,
+                Permission::HostFsRead,
+                Permission::HostFsWrite,
                 Permission::ProcessSpawn,
                 Permission::NetHttp,
                 Permission::DataEgress,
@@ -405,10 +425,10 @@ async fn shell_reaches_approval_with_broad_workspace_authority_before_execution(
             prompt
                 .prepared()
                 .effects()
-                .write_scopes()
+                .mutation_scopes()
                 .map(|scope| scope.as_str())
                 .collect::<Vec<_>>(),
-            [root_string.as_str()]
+            ["host:filesystem"]
         );
         prompt.deny("shell authority was reviewed and declined");
     });
@@ -438,6 +458,72 @@ async fn shell_reaches_approval_with_broad_workspace_authority_before_execution(
 }
 
 #[tokio::test]
+async fn headless_shell_refuses_before_spawning() {
+    let dir = project();
+    let approval = Arc::new(HeadlessApproval::new());
+    let runtime = build(
+        dir.path(),
+        Arc::new(provider(
+            "shell",
+            r#"{"command":"printf unauthorized > shell-ran.txt","cwd":"src"}"#,
+        )),
+        approval.clone(),
+    );
+    let session = runtime
+        .start_session(StartSession::new())
+        .await
+        .expect("a session");
+
+    session
+        .run(UserInput::text("run a command"))
+        .await
+        .expect("the denial is a tool outcome");
+
+    assert_eq!(
+        approval
+            .required()
+            .expect("host approval was required")
+            .tool,
+        "shell"
+    );
+    assert!(!dir.path().join("src/shell-ran.txt").exists());
+}
+
+#[tokio::test]
+async fn explicit_allow_all_host_shell_can_read_outside_the_project() {
+    let dir = project();
+    let outside = tempfile::tempdir().expect("an outside dir");
+    let secret = outside.path().join("host-secret.txt");
+    std::fs::write(&secret, "host-shell-crossed-the-project-boundary\n").unwrap();
+    let arguments = serde_json::json!({
+        "command": format!("cat {}", secret.display()),
+    })
+    .to_string();
+    let runtime = build(
+        dir.path(),
+        Arc::new(provider("shell", &arguments)),
+        Arc::new(AllowAll),
+    );
+    let session = runtime
+        .start_session(StartSession::new())
+        .await
+        .expect("a session");
+
+    session
+        .run(UserInput::text("read an explicitly approved host file"))
+        .await
+        .expect("the host shell runs");
+
+    let results = tool_results(&session);
+    assert!(
+        results
+            .iter()
+            .any(|text| text.contains("host-shell-crossed-the-project-boundary")),
+        "the approved host shell did not reach the host file: {results:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_path_outside_the_project_is_blocked_when_approval_denies() {
     let dir = project();
     let outside = tempfile::tempdir().expect("an outside dir");
@@ -450,8 +536,8 @@ async fn a_path_outside_the_project_is_blocked_when_approval_denies() {
             "read",
             &format!(r#"{{"path":"{}"}}"#, secret.display()),
         )),
-        // An out-of-project path reaches the approval policy instead of being
-        // refused at preparation; a denying policy must still block it.
+        // The capability-rooted filesystem refuses the path before approval;
+        // a denying policy cannot weaken that boundary.
         Arc::new(DenyAll),
     );
     let session = runtime
@@ -472,7 +558,7 @@ async fn a_path_outside_the_project_is_blocked_when_approval_denies() {
 }
 
 #[tokio::test]
-async fn a_path_outside_the_project_is_read_once_approved() {
+async fn approval_cannot_widen_a_read_beyond_the_project_capability() {
     let dir = project();
     let outside = tempfile::tempdir().expect("an outside dir");
     let notes = outside.path().join("notes.txt");
@@ -484,8 +570,8 @@ async fn a_path_outside_the_project_is_read_once_approved() {
             "read",
             &format!(r#"{{"path":"{}"}}"#, notes.display()),
         )),
-        // The workspace is no longer a flat refusal: the user's approval —
-        // here an explicit allow-all — is what lets the read proceed.
+        // Allow-all governs actions inside the granted capability. It cannot
+        // turn an ambient absolute host path into a project file handle.
         Arc::new(AllowAll),
     );
     let session = runtime
@@ -500,10 +586,16 @@ async fn a_path_outside_the_project_is_read_once_approved() {
 
     let results = tool_results(&session);
     assert!(
-        results
+        !results
             .iter()
             .any(|text| text.contains("carried across the boundary")),
-        "an approved outside read must return the content: {results:?}"
+        "approval must not widen the project filesystem capability: {results:?}"
+    );
+    assert!(
+        results
+            .iter()
+            .any(|text| text.contains("outside the project")),
+        "the refusal should identify the capability boundary: {results:?}"
     );
 }
 
