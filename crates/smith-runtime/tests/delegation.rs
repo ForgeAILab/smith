@@ -27,7 +27,7 @@ use agent_runtime_core::artifact::{
 use agent_runtime_core::cancel::CancelReason;
 use agent_runtime_core::cancel::Cancellation;
 use agent_runtime_core::clock::{Deadline, SystemClock};
-use agent_runtime_core::content::UserInput;
+use agent_runtime_core::content::{ContentPart, UserInput};
 use agent_runtime_core::delegation::{
     ChildLimits, ChildModelSelection, ChildSpec, ToolViewScope, WorkspacePolicy,
 };
@@ -271,6 +271,86 @@ fn the_agent_ability_advertises_its_host_defined_delegation_authority() {
     assert!(description.contains("does not open user interface"));
     assert!(description.contains("root ask_user"));
     assert!(description.contains("explicit follow_up"));
+}
+
+#[tokio::test]
+async fn an_unknown_agent_action_is_returned_to_the_model_as_a_tool_error() {
+    let fixture = Fixture::new();
+    let mut invalid_call = tool_call_fragments(
+        0,
+        "invalid-agent-action",
+        AGENT_TOOL_NAME,
+        r#"{"action":"gemini-review"}"#,
+    );
+    invalid_call.push(ProviderStreamEvent::Finish {
+        reason: FinishReason::ToolCalls,
+    });
+    let provider = Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        vec![
+            ScriptedStream::new(invalid_call),
+            ScriptedStream::new(vec![
+                ProviderStreamEvent::TextDelta {
+                    text: "corrected after the tool error".to_owned(),
+                },
+                ProviderStreamEvent::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ]),
+        ],
+    ));
+    let smith = factory::build_request(request(&fixture, provider.clone()))
+        .await
+        .expect("a root runtime");
+    let session = smith
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .expect("a session");
+    let delegation = smith.delegation().expect("a delegation surface");
+    wire_delegation(&session, delegation)
+        .await
+        .expect("delegation wiring");
+
+    session
+        .run(UserInput::text("delegate a review to a sub-agent"))
+        .await
+        .expect("the model can recover from its invalid agent action");
+
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 2, "the tool error must continue the loop");
+    assert!(
+        requests[0]
+            .tools
+            .iter()
+            .any(|schema| schema.name == AGENT_TOOL_NAME),
+        "the provider must have received the agent schema"
+    );
+    let error = requests[1]
+        .messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .find_map(|part| match part {
+            ContentPart::ToolResult(result)
+                if result.call_id.as_str() == "invalid-agent-action" =>
+            {
+                Some(result)
+            }
+            _ => None,
+        })
+        .expect("the continuation request contains the invalid call's result");
+    assert!(error.is_error);
+    let error_text = error
+        .content
+        .iter()
+        .filter_map(|part| part.as_text())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(error_text.contains("gemini-review"), "{error_text}");
+    assert!(error_text.contains("spawn"), "{error_text}");
+
+    session.shutdown().await.expect("a clean shutdown");
 }
 
 /// A child surface never composes the delegation tool.

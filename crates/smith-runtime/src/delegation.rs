@@ -1119,8 +1119,15 @@ impl Tool for AgentTool {
             "action".to_owned(),
             json!({
                 "type": "string",
-                "enum": ["spawn", "list", "wait", "result", "follow_up", "resume", "stop"],
-                "description": "The delegation operation."
+                // Keep the valid values as provider guidance rather than a
+                // schema constraint. The shared runtime classifies completed
+                // calls that fail their advertised schema as malformed
+                // provider output, which aborts the turn before the tool can
+                // report the mistake to the model. AgentAction remains the
+                // authoritative parser, and its preparation error becomes a
+                // canonical tool-error result that the model can correct on
+                // the next loop step.
+                "description": "The delegation operation. Must be one of: spawn, list, wait, result, follow_up, resume, stop."
             }),
         );
         properties.insert(
