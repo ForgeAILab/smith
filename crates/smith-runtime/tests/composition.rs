@@ -42,6 +42,7 @@ use smith_config::credential::{CredentialResolver, Environment, Keychain, Keycha
 use smith_config::model::AgentPosture;
 use smith_config::resolve::{Layer, ResolveRequest, ResolvedConfig, resolve};
 use smith_config::trust::TrustStatus;
+use smith_host::ProjectWorkspace;
 use smith_runtime::factory::{self, FactoryError, HostSurface, RuntimeRequest};
 use smith_runtime::journal::{DefaultRedactor, EventJournal, JournalConfig, Redactor};
 use smith_runtime::mcp::McpSupervisor;
@@ -2173,6 +2174,194 @@ async fn remote_tool_call_requests_approval_and_attributes_its_server() {
                 && id.contains("mcp:docs@")
                 && id.contains("stdio://mcp/docs/")
     ));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn command_provider_receives_connected_mcp_tools_and_canonical_results() {
+    use std::os::unix::fs::PermissionsExt;
+
+    #[derive(Debug, Default)]
+    struct RecordingApproval {
+        tools: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl agent_runtime_core::approval::ApprovalPolicy for RecordingApproval {
+        async fn decide(
+            &self,
+            request: &agent_runtime_core::approval::ApprovalRequest,
+        ) -> agent_runtime_core::approval::ApprovalDecision {
+            self.tools
+                .lock()
+                .expect("approval log")
+                .push(request.prepared().tool().to_owned());
+            agent_runtime_core::approval::ApprovalDecision::Allow
+        }
+    }
+
+    let fixture = Fixture::new_private_user("");
+    let executable = fixture.project.path().join("command-mcp-bridge.sh");
+    let request_log = fixture.project.path().join("command-requests.jsonl");
+    let attempt_count = fixture.project.path().join("command-attempt-count");
+    let script = r#"#!/bin/sh
+log=$1
+count_file=$2
+shift 2
+if [ "$1" = "--smith-provider-probe" ]; then
+  printf '%s\n' "{\"protocol\":\"smith-command-provider\",\"schema_version\":1,\"model\":\"$2\",\"implementation\":\"mcp-fixture\",\"implementation_version\":\"1.0.0\"}"
+  exit 0
+fi
+if [ "$1" = "--smith-provider-attempt" ]; then
+  IFS= read -r request
+  printf '%s\n' "$request" >> "$log"
+  count=0
+  if [ -f "$count_file" ]; then
+    count=$(cat "$count_file")
+  fi
+  count=$((count + 1))
+  printf '%s' "$count" > "$count_file"
+  if [ "$count" -eq 1 ]; then
+    printf '%s\n' '{"protocol":"smith-command-provider","schema_version":1,"type":"error","kind":"rate_limited","message":"fixture retry","retryable":true}'
+    exit 0
+  fi
+  case "$request" in
+    *'"type":"tool_result"'*)
+      printf '%s\n' '{"protocol":"smith-command-provider","schema_version":1,"type":"text_delta","text":"MCP result received."}'
+      printf '%s\n' '{"protocol":"smith-command-provider","schema_version":1,"type":"usage","input_tokens":18,"output_tokens":4}'
+      printf '%s\n' '{"protocol":"smith-command-provider","schema_version":1,"type":"finish","reason":"stop"}'
+      ;;
+    *)
+      printf '%s\n' '{"protocol":"smith-command-provider","schema_version":1,"type":"tool_call_delta","index":0,"id":"remote-1","name":"mcp__docs__search","arguments_fragment":"{\"query\":\"boundaries\"}"}'
+      printf '%s\n' '{"protocol":"smith-command-provider","schema_version":1,"type":"usage","input_tokens":12,"output_tokens":5}'
+      printf '%s\n' '{"protocol":"smith-command-provider","schema_version":1,"type":"finish","reason":"tool_calls"}'
+      ;;
+  esac
+  exit 0
+fi
+exit 2
+"#;
+    std::fs::write(&executable, script).expect("a command bridge fixture");
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))
+        .expect("an executable bridge fixture");
+
+    let user_config = format!(
+        r#"
+default_profile = "local"
+
+[profiles.local]
+provider = "bridge"
+model = "local-model"
+
+[providers.bridge]
+kind = "command-jsonl"
+
+[providers.bridge.command]
+executable = {executable:?}
+args = [{request_log:?}, {attempt_count:?}]
+cwd = "workspace"
+
+[models."bridge/local-model"]
+context_tokens = 32768
+max_input_tokens = 28672
+max_output_tokens = 4096
+
+[limits]
+max_retries = 1
+
+[approval]
+mode = "ask"
+"#,
+        executable = executable.display().to_string(),
+        request_log = request_log.display().to_string(),
+        attempt_count = attempt_count.display().to_string(),
+    );
+    std::fs::write(fixture.home.path().join(".smith/config.toml"), user_config)
+        .expect("a private command-provider config");
+    std::fs::write(
+        fixture.project.path().join(".smith/config.toml"),
+        "[mcp.servers.docs]\ncommand = \"docs-mcp\"\n",
+    )
+    .expect("a project MCP declaration");
+
+    let state = tempfile::tempdir().expect("a state root");
+    let trust = smith_config::trust::TrustStore::open(state.path()).expect("an empty trust store");
+    let mut fixture = McpFixture {
+        fixture,
+        state,
+        trust,
+    };
+    fixture.trust_all();
+    let supervisor = fixture.supervise(FakeConnector::new([("docs", advertising(&["search"]))]));
+    fixture.settled(&supervisor).await;
+
+    let approval = Arc::new(RecordingApproval::default());
+    let recorder = RecordingObserver::shared();
+    let mut runtime = RuntimeRequest::new(fixture.fixture.config(), HostSurface::Headless);
+    runtime.workspace = Some(Arc::new(
+        ProjectWorkspace::new(fixture.fixture.project.path()).expect("a project workspace"),
+    ));
+    runtime.approval = Some(approval.clone());
+    runtime.mcp = Some(supervisor);
+    runtime.observers = vec![recorder.clone() as Arc<dyn EventObserver>];
+
+    let smith = factory::build_request(runtime)
+        .await
+        .expect("a command-backed runtime");
+    let session = smith
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .expect("a session");
+    session
+        .run(UserInput::text(
+            "Use the docs server's search tool to look up boundaries.",
+        ))
+        .await
+        .expect("the command bridge completes an MCP tool loop");
+    session.shutdown().await.expect("clean shutdown");
+
+    assert_eq!(
+        approval.tools.lock().expect("approval log").as_slice(),
+        ["mcp__docs__search"]
+    );
+    let requests = std::fs::read_to_string(request_log).expect("command request log");
+    let requests = requests.lines().collect::<Vec<_>>();
+    assert_eq!(
+        requests.len(),
+        3,
+        "each visible attempt uses a fresh process"
+    );
+    assert!(
+        requests[0].contains("mcp__docs__search") && requests[0].contains("input_schema"),
+        "the connected MCP schema did not reach the first command request"
+    );
+    assert!(
+        requests[1].contains("mcp__docs__search") && !requests[1].contains("tool_result"),
+        "the retry did not replay the same Smith-owned turn in a fresh process"
+    );
+    assert!(
+        requests[2].contains("tool_result") && requests[2].contains("docs answered search"),
+        "Smith's canonical MCP result did not reach the next command request"
+    );
+
+    let events = recorder.payloads();
+    let started = events
+        .iter()
+        .filter(|event| matches!(event, RuntimeEvent::ProviderAttemptStarted { .. }))
+        .count();
+    let discarded = events
+        .iter()
+        .filter(|event| matches!(event, RuntimeEvent::ProviderAttemptOutputDiscarded { .. }))
+        .count();
+    assert_eq!(
+        started, 3,
+        "every fresh bridge process must be a visible attempt"
+    );
+    assert_eq!(
+        discarded, 1,
+        "the retryable attempt must be visibly discarded"
+    );
 }
 
 #[tokio::test]

@@ -188,6 +188,87 @@ fn json_mode_runs_through_config_and_returns_a_resumable_identity() {
     assert_eq!(json(&resumed)["session_id"], session);
 }
 
+#[cfg(unix)]
+#[test]
+fn command_jsonl_provider_runs_a_headless_turn_through_the_normal_host() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::unconfigured();
+    let executable = fixture.project.path().join("command-bridge.sh");
+    let process_log = fixture.project.path().join("command-processes.log");
+    let script = r#"#!/bin/sh
+log=$1
+shift
+printf '%s\n' "$1" >> "$log"
+if [ "$1" = "--smith-provider-probe" ]; then
+  printf '%s\n' "{\"protocol\":\"smith-command-provider\",\"schema_version\":1,\"model\":\"$2\",\"implementation\":\"cli-fixture\",\"implementation_version\":\"1.0.0\"}"
+  exit 0
+fi
+if [ "$1" = "--smith-provider-attempt" ]; then
+  IFS= read -r request
+  printf '%s\n' '{"protocol":"smith-command-provider","schema_version":1,"type":"text_delta","text":"Hello from the command bridge."}'
+  printf '%s\n' '{"protocol":"smith-command-provider","schema_version":1,"type":"usage","input_tokens":12,"output_tokens":6}'
+  printf '%s\n' '{"protocol":"smith-command-provider","schema_version":1,"type":"finish","reason":"stop"}'
+  exit 0
+fi
+exit 2
+"#;
+    std::fs::write(&executable, script).expect("a command bridge fixture");
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))
+        .expect("an executable bridge fixture");
+
+    let user_dir = fixture.home.path().join(".smith");
+    std::fs::create_dir_all(&user_dir).expect("a user config directory");
+    let config = format!(
+        r#"
+default_profile = "local"
+
+[profiles.local]
+provider = "bridge"
+model = "local-model"
+
+[providers.bridge]
+kind = "command-jsonl"
+
+[providers.bridge.command]
+executable = {executable:?}
+args = [{process_log:?}]
+cwd = "workspace"
+
+[models."bridge/local-model"]
+context_tokens = 32768
+max_input_tokens = 28672
+max_output_tokens = 4096
+"#,
+        executable = executable.display().to_string(),
+        process_log = process_log.display().to_string(),
+    );
+    let config_path = user_dir.join("config.toml");
+    std::fs::write(&config_path, config).expect("a command-provider user config");
+    std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o600))
+        .expect("an owner-only user config");
+
+    let output = fixture.run(&["-p", "hello", "--output-format", "json"]);
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result = json(&output);
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["provider"], "bridge");
+    assert_eq!(result["model"], "local-model");
+    assert_eq!(result["output"], "Hello from the command bridge.");
+    assert_eq!(result["usage"]["current_turn"]["input_uncached"], 12);
+    assert_eq!(result["usage"]["current_turn"]["output"], 6);
+    assert_eq!(
+        std::fs::read_to_string(process_log).expect("process log"),
+        "--smith-provider-probe\n--smith-provider-attempt\n",
+        "preflight and the visible attempt each use one fresh process"
+    );
+}
+
 #[test]
 fn unconfigured_headless_and_non_tty_setup_refuse_without_writing_user_state() {
     let fixture = Fixture::unconfigured();

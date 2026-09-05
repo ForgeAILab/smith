@@ -23,6 +23,7 @@ pub mod catalog;
 pub mod chatgpt;
 pub mod checkpoint;
 pub mod client;
+pub mod command_provider;
 pub mod delegation;
 pub mod factory;
 pub mod harness;

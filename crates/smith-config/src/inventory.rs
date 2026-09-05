@@ -7,14 +7,15 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::path::Path;
 
 use crate::catalog::{CatalogModel, CatalogSnapshot, catalog_provider_for};
 use crate::credential::CredentialRef;
 #[cfg(test)]
 use crate::model::ReasoningOnlyBehavior;
 use crate::model::{
-    AgentPosture, ConfigFile, KIND_CHATGPT_RESPONSES, KIND_OPENAI_COMPATIBLE, KIND_XAI_RESPONSES,
-    ModelSection, ProfileUse, ProviderResponseSection, ProviderSection,
+    AgentPosture, ConfigFile, KIND_CHATGPT_RESPONSES, KIND_COMMAND_JSONL, KIND_OPENAI_COMPATIBLE,
+    KIND_XAI_RESPONSES, ModelSection, ProfileUse, ProviderResponseSection, ProviderSection,
 };
 use crate::resolve::{ConfigError, Position, Resolution, Source};
 use crate::setup::trusted_model;
@@ -538,6 +539,16 @@ fn provider_is_selectable(section: &ProviderSection, available: &BTreeSet<&str>)
         return false;
     };
     if !available.contains(kind)
+        || kind == KIND_COMMAND_JSONL
+            && section.command.as_ref().is_none_or(|command| {
+                command.executable.is_empty()
+                    || !Path::new(&command.executable).is_absolute()
+                    || command
+                        .cwd
+                        .as_deref()
+                        .is_some_and(|cwd| cwd != "workspace" && !Path::new(cwd).is_absolute())
+            })
+        || kind != KIND_COMMAND_JSONL && section.command.is_some()
         || matches!(
             kind,
             KIND_OPENAI_COMPATIBLE | KIND_CHATGPT_RESPONSES | KIND_XAI_RESPONSES
@@ -616,6 +627,7 @@ fn merge_provider(target: &mut ProviderSection, source: ProviderSection) {
     overlay(&mut target.base_url, source.base_url);
     overlay(&mut target.credential, source.credential);
     overlay(&mut target.api_key, source.api_key);
+    overlay(&mut target.command, source.command);
     target.headers.extend(source.headers);
     match (&mut target.response, source.response) {
         (Some(target), Some(source)) => merge_response(target, source),

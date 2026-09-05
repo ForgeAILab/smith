@@ -68,6 +68,10 @@ use agent_runtime::harness::{
 };
 use agent_runtime::hub::{ScopeIdentity, ScopeInputs};
 use agent_runtime::provider::anthropic::{AnthropicConfig, AnthropicProvider};
+use agent_runtime::provider::command::{
+    CommandAdapter, CommandConfigError, CommandPreflightError, CommandProcessConfig,
+    CommandProvider, CommandProviderBuildError,
+};
 use agent_runtime::provider::fake::{FakeProvider, ScriptedStream, usage_event};
 use agent_runtime::provider::gemini::{GeminiInteractionsConfig, GeminiInteractionsProvider};
 use agent_runtime::provider::openai::{OpenAiConfig, OpenAiProvider};
@@ -79,8 +83,8 @@ use agent_runtime::runtime::{Runtime, RuntimeBuilder};
 use agent_runtime_core::approval::{AllowAll, ApprovalPolicy, DenyAll};
 use agent_runtime_core::artifact::ArtifactStore;
 use agent_runtime_core::cancel::Cancellation;
+use agent_runtime_core::catalog::{Modality, ModelLimits, ModelRecord};
 use agent_runtime_core::catalog::{ModelCatalogSource, ModelProfileError, ResolvedModelProfile};
-use agent_runtime_core::catalog::{ModelLimits, ModelRecord};
 use agent_runtime_core::checkpoint::{CHECKPOINT_SCHEMA_VERSION, CheckpointStore};
 use agent_runtime_core::clock::{Clock, Deadline, SystemClock};
 use agent_runtime_core::error::RuntimeError;
@@ -106,10 +110,13 @@ use smith_config::credential::{
 };
 use smith_config::model::{
     AgentPosture, ApprovalMode, AutoApprovalMount, AutoApprovalPermission, AutoApprovalRisk,
-    KIND_ANTHROPIC_MESSAGES, KIND_CHATGPT_RESPONSES, KIND_FAKE, KIND_GEMINI_INTERACTIONS,
-    KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES, KIND_XAI_RESPONSES, ProfileUse,
+    KIND_ANTHROPIC_MESSAGES, KIND_CHATGPT_RESPONSES, KIND_COMMAND_JSONL, KIND_FAKE,
+    KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES, KIND_XAI_RESPONSES,
+    ProfileUse,
 };
-use smith_config::resolve::{AutoApprovalRule, ResolvedConfig, ResolvedProvider, Sourced};
+use smith_config::resolve::{
+    AutoApprovalRule, CommandWorkingDirectory, McpValue, ResolvedConfig, ResolvedProvider, Sourced,
+};
 use smith_config::setup::trusted_model;
 
 use agent_runtime_core::check_set::ActionClass;
@@ -127,6 +134,9 @@ use crate::chatgpt::{
     ChatGptTokenBundle,
 };
 use crate::checkpoint::{BarrierCheckpointStore, CheckpointBarrier, SmithCheckpointSetup};
+use crate::command_provider::{
+    CommandAdapterConfigError, CommandJsonlAdapter, CommandProtocolProvider,
+};
 use crate::delegation::{
     AgentTool, AgentToolProfile, DelegationAuthority, DelegationWaitPolicy, SmithChildFactory,
     SmithChildRoute, SmithDelegation,
@@ -215,6 +225,7 @@ pub const AVAILABLE_ADAPTER_KINDS: &[&str] = &[
     KIND_CHATGPT_RESPONSES,
     KIND_XAI_RESPONSES,
     KIND_GEMINI_INTERACTIONS,
+    KIND_COMMAND_JSONL,
     KIND_FAKE,
 ];
 
@@ -681,7 +692,7 @@ pub enum FactoryError {
          does not ship; the available kinds are `{KIND_OPENAI_COMPATIBLE}`, \
          `{KIND_OPENAI_RESPONSES}`, `{KIND_ANTHROPIC_MESSAGES}`, \
          `{KIND_CHATGPT_RESPONSES}`, `{KIND_XAI_RESPONSES}`, `{KIND_GEMINI_INTERACTIONS}`, and \
-         `{KIND_FAKE}`"
+         `{KIND_COMMAND_JSONL}`, and `{KIND_FAKE}`"
     )]
     AdapterUnavailable {
         /// The provider that selected it.
@@ -689,6 +700,30 @@ pub enum FactoryError {
         /// The adapter kind it selected.
         kind: String,
     },
+    /// Static command process settings did not resolve to an executable target.
+    #[error("the command provider process declaration is unusable: {0}")]
+    CommandConfiguration(#[source] CommandConfigError),
+    /// The selected model cannot participate in the revision-1 command protocol.
+    #[error("the command provider adapter is unusable: {0}")]
+    CommandAdapter(#[source] CommandAdapterConfigError),
+    /// The command adapter's fixed local model declaration was contradictory.
+    #[error("the command provider model declaration is unusable: {0}")]
+    CommandProviderBuild(#[source] CommandProviderBuildError),
+    /// One named command environment credential could not cross the secret boundary.
+    #[error("command environment variable `{variable}` could not be resolved: {source}")]
+    CommandEnvironment {
+        /// Environment variable named by configuration; never its value.
+        variable: String,
+        /// Existing redaction-safe credential failure.
+        #[source]
+        source: Box<FactoryError>,
+    },
+    /// The explicit compatibility probe failed before runtime construction.
+    #[error("the command provider compatibility probe failed: {0}")]
+    CommandPreflight(#[source] CommandPreflightError),
+    /// The executable answered the probe but did not accept this exact contract.
+    #[error("the command provider executable is incompatible with protocol revision 1")]
+    CommandIncompatible,
     /// The configured endpoint cannot be used as written.
     #[error("provider `{provider}` has an unusable `base_url`: {message}")]
     Endpoint {
@@ -788,6 +823,8 @@ enum Adapter {
     XaiResponses,
     /// Agent Runtime's native stateless Gemini Interactions adapter.
     GeminiInteractions,
+    /// Smith's revision-1 local command JSONL adapter.
+    CommandJsonl,
     /// Agent Runtime's deterministic fake.
     Fake,
 }
@@ -821,6 +858,8 @@ pub struct FactoryPreflight {
     pub model_profile: ResolvedModelProfile,
     /// Derived reserves the eventual runtime will receive.
     pub context_policy: ContextPolicy,
+    /// Bounded implementation/version evidence from a command probe.
+    pub command_implementation: Option<String>,
 }
 
 struct PreparedFactoryInputs {
@@ -835,6 +874,17 @@ struct PreparedFactoryInputs {
     context_policy: ContextPolicy,
     compaction_policy: CompactionPolicy,
     loop_config: LoopConfig,
+    command: Option<PreparedCommandProvider>,
+}
+
+struct PreparedCommandProvider {
+    provider: Arc<dyn Provider>,
+    implementation: Option<String>,
+}
+
+struct StaticCommandProvider {
+    process: CommandProcessConfig,
+    adapter: CommandJsonlAdapter,
 }
 
 /// Product context assembled before the runtime builder is configured.
@@ -934,6 +984,7 @@ pub async fn preflight(request: &RuntimeRequest) -> Result<FactoryPreflight, Fac
         model: prepared.model,
         model_profile: prepared.profile.profile,
         context_policy: prepared.context_policy,
+        command_implementation: prepared.command.and_then(|command| command.implementation),
     })
 }
 
@@ -1000,6 +1051,7 @@ fn prepare_provider_stage(
     secret: Option<Secret>,
     profile: &ResolvedModelProfile,
     reasoning: &ReasoningRuntimePolicy,
+    command: Option<Arc<dyn Provider>>,
 ) -> Result<Arc<dyn Provider>, FactoryError> {
     if let (Some(secret), Some(redactor)) = (&secret, &request.persistence_redactor) {
         redactor.register_secret(secret);
@@ -1015,10 +1067,13 @@ fn prepare_provider_stage(
             adapter,
             request,
             profile,
-            endpoint,
-            secret,
-            &reasoning.efforts,
-            pool.as_ref(),
+            ProviderConstructionInputs {
+                endpoint,
+                secret,
+                supported_thinking_levels: &reasoning.efforts,
+                pool: pool.as_ref(),
+                command,
+            },
         )?,
     };
     let provider = crate::response::apply_response_policy(
@@ -1406,6 +1461,7 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         context_policy,
         compaction_policy,
         mut loop_config,
+        command,
     } = provider::prepare(&request).await?;
     let agent_posture = request.config.agent.active_posture();
     let agent_profile = request.config.agent.profile.clone();
@@ -1427,6 +1483,9 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         secret,
         &profile.profile,
         &reasoning,
+        command
+            .as_ref()
+            .map(|command| Arc::clone(&command.provider)),
     )?;
 
     let clock: Arc<dyn Clock> = request
@@ -1756,6 +1815,7 @@ async fn prepare_child_profile_routes(
             context_policy,
             compaction_policy: _,
             mut loop_config,
+            command,
         } = prepare_factory_inputs(&route_request).await?;
         let cache_endpoint_identity = cache_endpoint_identity(
             &provider_name,
@@ -1773,10 +1833,13 @@ async fn prepare_child_profile_routes(
             adapter,
             &route_request,
             &profile.profile,
-            endpoint,
-            secret,
-            &reasoning.efforts,
-            route_pool.as_ref(),
+            ProviderConstructionInputs {
+                endpoint,
+                secret,
+                supported_thinking_levels: &reasoning.efforts,
+                pool: route_pool.as_ref(),
+                command: command.map(|command| command.provider),
+            },
         )?;
         let provider = crate::response::apply_response_policy(
             provider,
@@ -1905,11 +1968,33 @@ async fn prepare_factory_inputs(
             Some(smith_config::setup::XAI_ENDPOINT),
         )?),
         Adapter::GeminiInteractions => Some(smith_config::catalog::GEMINI_ENDPOINT.to_owned()),
-        Adapter::Fake => None,
+        Adapter::CommandJsonl | Adapter::Fake => None,
+    };
+
+    // Resolve and canonicalize executable authority before any credential
+    // lookup. Environment values cross the secret boundary only after model
+    // and capability validation below.
+    let static_command = if adapter == Adapter::CommandJsonl {
+        Some(prepare_static_command_provider(request, model.as_str())?)
+    } else {
+        None
     };
 
     let mut layers = CatalogLayers::new(provider_name.clone(), model.clone())
         .with_sources(request.catalog_sources.iter().map(Arc::clone));
+    if let Some(command) = &static_command {
+        let descriptor = command
+            .adapter
+            .describe()
+            .into_iter()
+            .next()
+            .expect("a validated command adapter declares its selected model");
+        let mut record = ModelRecord::new().with_capabilities(descriptor.capabilities);
+        record.input_modalities = Some(vec![Modality::Text]);
+        record.output_modalities = Some(vec![Modality::Text]);
+        record.revision = Some("smith-command-provider-1".to_owned());
+        layers = layers.with_provider_local(record);
+    }
     if let Some(trusted) = trusted_model(&provider_name, model.as_str()) {
         layers = layers.with_embedded(ModelRecord::new().with_limits(ModelLimits::new(
             trusted.context_tokens,
@@ -1997,6 +2082,10 @@ async fn prepare_factory_inputs(
             request.config.provider.name.value
         ))));
     }
+    let command = match static_command {
+        Some(command) => Some(prepare_command_provider(request, command).await?),
+        None => None,
+    };
     let context_policy = context_policy(config, &profile.profile)?;
     let compaction_policy = compaction_policy(config, &profile.profile, &context_policy);
     let mut loop_config = loop_config(request, &model);
@@ -2014,6 +2103,7 @@ async fn prepare_factory_inputs(
         context_policy,
         compaction_policy,
         loop_config,
+        command,
     })
 }
 
@@ -2030,6 +2120,7 @@ fn adapter(provider: &ResolvedProvider) -> Result<Adapter, FactoryError> {
         KIND_CHATGPT_RESPONSES => Ok(Adapter::ChatGptResponses),
         KIND_XAI_RESPONSES => Ok(Adapter::XaiResponses),
         KIND_GEMINI_INTERACTIONS => Ok(Adapter::GeminiInteractions),
+        KIND_COMMAND_JSONL => Ok(Adapter::CommandJsonl),
         KIND_FAKE => Ok(Adapter::Fake),
         kind => Err(FactoryError::AdapterUnavailable {
             provider: provider.name.value.clone(),
@@ -2061,7 +2152,7 @@ fn apply_adapter_cache_capability(
         capabilities.cache_contract = Some(ProviderCacheContract::default());
         return;
     }
-    if matches!(adapter, Adapter::Fake) {
+    if matches!(adapter, Adapter::CommandJsonl | Adapter::Fake) {
         capabilities.cache = false;
         capabilities.prompt_cache = PromptCacheControl::None;
         capabilities.cache_contract = Some(ProviderCacheContract::default());
@@ -2111,6 +2202,84 @@ fn apply_adapter_cache_capability(
         ]);
         contract.conformance = Some(SyntheticConformance::complete());
     }
+}
+
+fn prepare_static_command_provider(
+    request: &RuntimeRequest,
+    model: &str,
+) -> Result<StaticCommandProvider, FactoryError> {
+    let command = request
+        .config
+        .provider
+        .command
+        .as_ref()
+        .ok_or(FactoryError::CommandIncompatible)?;
+    let cwd = match command.cwd.as_ref().map(|cwd| &cwd.value) {
+        None | Some(CommandWorkingDirectory::Workspace) => {
+            std::path::PathBuf::from(require_workspace(request)?.root())
+        }
+        Some(CommandWorkingDirectory::Absolute(path)) => path.clone(),
+    };
+    let process = CommandProcessConfig::new(command.executable.value.clone(), cwd)
+        .map_err(FactoryError::CommandConfiguration)?
+        .with_fixed_args(
+            command
+                .args
+                .as_ref()
+                .map_or_else(Vec::new, |args| args.value.clone()),
+        )
+        .map_err(FactoryError::CommandConfiguration)?;
+    let adapter = CommandJsonlAdapter::new(model).map_err(FactoryError::CommandAdapter)?;
+    Ok(StaticCommandProvider { process, adapter })
+}
+
+async fn prepare_command_provider(
+    request: &RuntimeRequest,
+    command: StaticCommandProvider,
+) -> Result<PreparedCommandProvider, FactoryError> {
+    let declaration = request
+        .config
+        .provider
+        .command
+        .as_ref()
+        .ok_or(FactoryError::CommandIncompatible)?;
+    let mut process = command.process;
+    for (name, value) in &declaration.env {
+        let secret = match &value.value {
+            McpValue::Literal(literal) => literal.clone(),
+            McpValue::Credential(reference) => {
+                secret(request, reference).await.map_err(|source| {
+                    FactoryError::CommandEnvironment {
+                        variable: name.clone(),
+                        source: Box::new(source),
+                    }
+                })?
+            }
+        };
+        if let Some(redactor) = &request.persistence_redactor {
+            redactor.register_secret(&secret);
+        }
+        process = process
+            .with_env(name.clone(), secret.expose().to_owned())
+            .map_err(FactoryError::CommandConfiguration)?;
+    }
+
+    let provider = Arc::new(
+        CommandProvider::new(process, Arc::new(command.adapter))
+            .map_err(FactoryError::CommandProviderBuild)?,
+    );
+    let preflight = provider
+        .preflight()
+        .await
+        .map_err(FactoryError::CommandPreflight)?
+        .ok_or(FactoryError::CommandIncompatible)?;
+    if !preflight.is_compatible() {
+        return Err(FactoryError::CommandIncompatible);
+    }
+    Ok(PreparedCommandProvider {
+        implementation: preflight.version().map(str::to_owned),
+        provider: Arc::new(CommandProtocolProvider::new(provider)) as Arc<dyn Provider>,
+    })
 }
 
 /// Validates the configured endpoint and normalizes it for the adapter.
@@ -2295,16 +2464,29 @@ fn spawn_chatgpt_usage_probe(
 }
 
 /// Constructs the configured provider.
+struct ProviderConstructionInputs<'a> {
+    endpoint: Option<String>,
+    secret: Option<Secret>,
+    supported_thinking_levels: &'a [String],
+    pool: Option<&'a SharedPool>,
+    command: Option<Arc<dyn Provider>>,
+}
+
 fn construct(
     adapter: Adapter,
     request: &RuntimeRequest,
     profile: &ResolvedModelProfile,
-    endpoint: Option<String>,
-    secret: Option<Secret>,
-    supported_thinking_levels: &[String],
-    pool: Option<&SharedPool>,
+    inputs: ProviderConstructionInputs<'_>,
 ) -> Result<Arc<dyn Provider>, FactoryError> {
+    let ProviderConstructionInputs {
+        endpoint,
+        secret,
+        supported_thinking_levels,
+        pool,
+        command,
+    } = inputs;
     match adapter {
+        Adapter::CommandJsonl => command.ok_or(FactoryError::CommandIncompatible),
         Adapter::Fake => Ok(Arc::new(FakeProvider::new(
             request.config.model.value.clone(),
             profile.capabilities.clone(),
@@ -3044,18 +3226,32 @@ mod tests {
     use agent_runtime_core::approval::{ApprovalOrigin, ApprovalRequest};
     use agent_runtime_core::catalog::ModelLimits;
     use agent_runtime_core::clock::Deadline;
-    use agent_runtime_core::ids::ToolCallId;
-    use agent_runtime_core::provider::ProviderAttemptPurpose;
+    use agent_runtime_core::content::Message;
+    use agent_runtime_core::ids::{AttemptId, RequestId, SessionId, ToolCallId};
+    use agent_runtime_core::provider::{
+        ProviderAttemptPurpose, ProviderCallContext, ProviderRequest,
+    };
     use agent_runtime_core::tool::{PreparedToolCall, ToolCallDisplay, ToolEffects};
+    use futures_util::StreamExt;
     use smith_config::model::{AutoApprovalOperation, CacheMaintenanceMode, ProfileUse};
     use smith_config::resolve::{
         AutoApprovalRule, ResolvedAgent, ResolvedAgentMode, ResolvedAgentProfile,
-        ResolvedCachePolicy, ResolvedChildAgents, ResolvedContext, Source, Sourced,
-        SyntheticCacheSpendAuthority,
+        ResolvedCachePolicy, ResolvedChildAgents, ResolvedCommandProvider, ResolvedContext, Source,
+        Sourced, SyntheticCacheSpendAuthority,
     };
     use smith_host::{HeadlessApproval, ProjectWorkspace};
 
     const TOKEN: &str = "sk-live-4kQm2ZpX8vRt7nLb1cWs9aYe";
+
+    #[cfg(unix)]
+    struct FixtureEnvironment;
+
+    #[cfg(unix)]
+    impl smith_config::credential::Environment for FixtureEnvironment {
+        fn value(&self, name: &str) -> Option<Secret> {
+            (name == "BRIDGE_TOKEN_SOURCE").then(|| Secret::new("fixture-secret"))
+        }
+    }
 
     fn sourced<T>(value: T) -> Sourced<T> {
         Sourced::new(value, Source::built_in("test"))
@@ -3153,7 +3349,56 @@ mod tests {
             api_key: None,
             headers: Default::default(),
             response: Default::default(),
+            command: None,
         }
+    }
+
+    #[cfg(unix)]
+    fn command_config(executable: std::path::PathBuf) -> ResolvedConfig {
+        let mut config = resolved_config();
+        config.provider = provider(KIND_COMMAND_JSONL, None);
+        config.provider.command = Some(ResolvedCommandProvider {
+            executable: sourced(executable),
+            args: None,
+            cwd: Some(sourced(CommandWorkingDirectory::Workspace)),
+            env: Default::default(),
+        });
+        config.model_limits.context_tokens = Some(sourced(32_768));
+        config.model_limits.max_input_tokens = Some(sourced(28_672));
+        config.model_limits.max_output_tokens = Some(sourced(4_096));
+        config
+    }
+
+    #[cfg(unix)]
+    fn executable_fixture(root: &std::path::Path, probe_model: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let executable = root.join("smith-command-fixture.sh");
+        let script = format!(
+            r#"#!/bin/sh
+if [ "$1" = "--smith-provider-probe" ]; then
+  printf '%s\n' '{{"protocol":"smith-command-provider","schema_version":1,"model":"{probe_model}","implementation":"factory-fixture","implementation_version":"1.0.0"}}'
+  exit 0
+fi
+if [ "$1" = "--smith-provider-attempt" ]; then
+  IFS= read -r request
+  if [ "$BRIDGE_TOKEN" = "fixture-secret" ] && [ -z "${{CARGO_MANIFEST_DIR+x}}" ]; then
+    text="isolated"
+  else
+    text="leaked"
+  fi
+  printf '%s\n' "{{\"protocol\":\"smith-command-provider\",\"schema_version\":1,\"type\":\"text_delta\",\"text\":\"$text\"}}"
+  printf '%s\n' '{{"protocol":"smith-command-provider","schema_version":1,"type":"usage","input_tokens":2,"output_tokens":1}}'
+  printf '%s\n' '{{"protocol":"smith-command-provider","schema_version":1,"type":"finish","reason":"stop"}}'
+  exit 0
+fi
+exit 2
+"#
+        );
+        std::fs::write(&executable, script).expect("a command-provider fixture");
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))
+            .expect("an executable fixture");
+        executable
     }
 
     fn context(output_reserve: Option<u32>, reasoning_reserve: u32) -> ResolvedContext {
@@ -3281,9 +3526,135 @@ mod tests {
             Adapter::GeminiInteractions
         );
         assert_eq!(
+            adapter(&provider(KIND_COMMAND_JSONL, None)).expect("a known kind"),
+            Adapter::CommandJsonl
+        );
+        assert_eq!(
             adapter(&provider(KIND_FAKE, None)).expect("a known kind"),
             Adapter::Fake
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn command_factory_preflights_and_streams_through_the_shared_provider() {
+        let workspace_root = tempfile::tempdir().expect("a workspace");
+        let executable = executable_fixture(workspace_root.path(), "example-model");
+        let mut config = command_config(executable);
+        config.provider.command.as_mut().unwrap().env.insert(
+            "BRIDGE_TOKEN".to_owned(),
+            sourced(McpValue::Credential("env:BRIDGE_TOKEN_SOURCE".to_owned())),
+        );
+        let mut request = RuntimeRequest::new(config, HostSurface::Headless);
+        request.workspace = Some(Arc::new(
+            ProjectWorkspace::new(workspace_root.path()).expect("a project workspace"),
+        ));
+        let redactor = DefaultRedactor::new();
+        request.persistence_redactor = Some(redactor.clone());
+        request.credentials = Some(
+            CredentialResolver::new(workspace_root.path().join("user-state"))
+                .with_environment(Arc::new(FixtureEnvironment)),
+        );
+
+        let evidence = preflight(&request)
+            .await
+            .expect("command preflight evidence");
+        assert_eq!(evidence.provider_kind, KIND_COMMAND_JSONL);
+        assert_eq!(
+            evidence.command_implementation.as_deref(),
+            Some("factory-fixture/1.0.0")
+        );
+        assert!(evidence.endpoint.is_none());
+        assert!(evidence.credential.is_none());
+        assert!(evidence.model_profile.capabilities.streaming);
+        assert!(evidence.model_profile.capabilities.tools);
+        assert!(evidence.model_profile.capabilities.usage);
+        assert_eq!(
+            evidence.model_profile.capabilities.reasoning,
+            agent_runtime_core::provider::ReasoningSupport::Unsupported
+        );
+        assert!(!evidence.model_profile.capabilities.cache);
+        assert_eq!(evidence.model_profile.input_modalities, [Modality::Text]);
+        assert_eq!(evidence.model_profile.output_modalities, [Modality::Text]);
+        assert_eq!(
+            redactor.redacted_clone(&serde_json::json!({"text":"fixture-secret"})),
+            serde_json::json!({"text":"[redacted]"})
+        );
+
+        let prepared = prepare_factory_inputs(&request)
+            .await
+            .expect("prepared command inputs");
+        let provider = prepared.command.expect("a command provider").provider;
+        let stream = provider
+            .stream(
+                ProviderRequest::new(ModelId::new("example-model"), vec![Message::user("hello")]),
+                ProviderCallContext {
+                    session: SessionId::new("session-command"),
+                    request_id: RequestId::new("request-command"),
+                    attempt_id: AttemptId::new("attempt-command"),
+                    cache_identity: None,
+                    purpose: ProviderAttemptPurpose::Ordinary,
+                    cancel: Cancellation::new(),
+                    deadline: Deadline::never(),
+                },
+            )
+            .await
+            .expect("one supervised command attempt");
+        let events = stream.collect::<Vec<_>>().await;
+        assert!(matches!(
+            &events[0],
+            ProviderStreamEvent::TextDelta { text } if text == "isolated"
+        ));
+        assert!(matches!(
+            events.last(),
+            Some(ProviderStreamEvent::Finish {
+                reason: FinishReason::Stop
+            })
+        ));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn command_paths_fail_before_environment_credential_resolution() {
+        let workspace_root = tempfile::tempdir().expect("a workspace");
+        let missing = workspace_root.path().join("missing-bridge");
+        let mut config = command_config(missing);
+        config.provider.command.as_mut().unwrap().env.insert(
+            "BRIDGE_TOKEN".to_owned(),
+            sourced(McpValue::Credential("env:MUST_NOT_BE_READ".to_owned())),
+        );
+        let mut request = RuntimeRequest::new(config, HostSurface::Headless);
+        request.workspace = Some(Arc::new(
+            ProjectWorkspace::new(workspace_root.path()).expect("a project workspace"),
+        ));
+
+        let error = match prepare_factory_inputs(&request).await {
+            Ok(_) => panic!("the missing executable must fail first"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            FactoryError::CommandConfiguration(CommandConfigError::UnresolvablePath {
+                field: "executable"
+            })
+        ));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn incompatible_command_probe_stops_before_runtime_construction() {
+        let workspace_root = tempfile::tempdir().expect("a workspace");
+        let executable = executable_fixture(workspace_root.path(), "different-model");
+        let config = command_config(executable);
+        let mut request = RuntimeRequest::new(config, HostSurface::Headless);
+        request.workspace = Some(Arc::new(
+            ProjectWorkspace::new(workspace_root.path()).expect("a project workspace"),
+        ));
+
+        let error = preflight(&request)
+            .await
+            .expect_err("an exact model mismatch");
+        assert!(matches!(error, FactoryError::CommandIncompatible));
     }
 
     #[test]

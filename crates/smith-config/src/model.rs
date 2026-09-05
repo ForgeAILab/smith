@@ -515,6 +515,29 @@ pub struct ProviderSection {
     /// Provider-specific response normalization.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response: Option<ProviderResponseSection>,
+    /// Trusted local process declaration for the `command-jsonl` adapter.
+    ///
+    /// This table is accepted only from user configuration during resolution;
+    /// project files may select the provider but cannot define its process.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<CommandProviderSection>,
+}
+
+/// One exact local command implementing Smith's versioned JSONL provider protocol.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommandProviderSection {
+    /// Absolute executable path. Smith never searches `PATH`.
+    pub executable: String,
+    /// Fixed, non-secret argument prefix added before Smith's protocol mode.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    /// `workspace` (the default) or an absolute working directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// Explicit child environment. Values are literals or credential references.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
 }
 
 /// Narrow response-compatibility options for one provider.
@@ -999,6 +1022,9 @@ pub const KIND_XAI_RESPONSES: &str = "xai-responses";
 
 /// The native Google Gemini Interactions adapter.
 pub const KIND_GEMINI_INTERACTIONS: &str = "gemini-interactions";
+
+/// Smith's revisioned local command provider bridge.
+pub const KIND_COMMAND_JSONL: &str = "command-jsonl";
 
 /// The endpoint an `anthropic-messages` provider uses when none is configured.
 pub const ANTHROPIC_DEFAULT_ENDPOINT: &str = "https://api.anthropic.com/v1";

@@ -366,6 +366,8 @@ pub struct ResolvedProvider {
     pub headers: BTreeMap<String, Sourced<String>>,
     /// Provider-specific response normalization.
     pub response: ResolvedProviderResponse,
+    /// Trusted local process declaration for a command-backed provider.
+    pub command: Option<ResolvedCommandProvider>,
 }
 
 impl ResolvedProvider {
@@ -382,6 +384,31 @@ impl ResolvedProvider {
     pub fn has_pool(&self) -> bool {
         self.credentials.len() > 1
     }
+}
+
+/// Fully typed, provenance-bearing command-provider process settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedCommandProvider {
+    /// Absolute executable path; existence and executable permission are
+    /// checked by the process framework before credential resolution.
+    pub executable: Sourced<PathBuf>,
+    /// Fixed, non-secret argument prefix.
+    pub args: Option<Sourced<Vec<String>>>,
+    /// Omitted means the active Smith workspace. An explicit value preserves
+    /// its source for configuration explanation.
+    pub cwd: Option<Sourced<CommandWorkingDirectory>>,
+    /// Explicit child environment, kept as literal secrets or credential
+    /// references until the runtime factory crosses the credential boundary.
+    pub env: BTreeMap<String, Sourced<McpValue>>,
+}
+
+/// Working-directory selection accepted by a command provider.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandWorkingDirectory {
+    /// Use the active Smith workspace root.
+    Workspace,
+    /// Use this exact absolute directory.
+    Absolute(PathBuf),
 }
 
 /// Resolved response compatibility for one provider.

@@ -391,7 +391,117 @@ structure rejects unknown fields.
 | `chatgpt-responses` | ChatGPT Codex Responses | optional, defaults to the ChatGPT endpoint |
 | `xai-responses` | Responses, authenticated by a stored xAI login | required |
 | `gemini-interactions` | Google Gemini Interactions, stateless | fixed native endpoint; not configurable |
+| `command-jsonl` | Smith command-provider protocol revision 1 | not used |
 | `fake` | deterministic local development | not used |
+
+### Local command model providers
+
+`command-jsonl` makes a trusted local bridge available through the same model
+provider boundary as the native HTTP adapters. It is not an arbitrary stdout
+mode: the executable must implement `smith-command-provider` schema revision
+1. Smith still owns canonical history, context planning, built-in and MCP tool
+execution, approvals, retries, cancellation, usage, journals, persistence, and
+both TUI/headless presentation.
+
+Declare the process only in owner-controlled `~/.smith/config.toml`:
+
+```toml
+[providers.local-bridge]
+kind = "command-jsonl"
+
+[providers.local-bridge.command]
+executable = "/Users/me/bin/model-bridge"
+args = ["serve-smith"]
+cwd = "workspace"
+
+[providers.local-bridge.command.env]
+BRIDGE_HOME = "/Users/me/.model-bridge"
+BRIDGE_TOKEN = "env:MODEL_BRIDGE_TOKEN"
+
+[models."local-bridge/local-model"]
+context_tokens = 32768
+max_input_tokens = 28672
+max_output_tokens = 4096
+```
+
+`executable` is required, absolute, canonicalizable, a regular executable
+file, and invoked directly without a shell or `PATH` lookup. `args` are fixed,
+bounded, non-secret argv. `cwd` is the exact token `workspace` (also the
+default when omitted) or an absolute existing directory. The child inherits no
+ambient environment. Every variable must be listed in `command.env`; a value
+is either a credential reference using the normal schemes below or a literal
+held and displayed as a secret. A user config containing a literal environment
+value must be a regular owner-only mode-`0600` file.
+
+Project and project-local configuration may select `local-bridge/local-model`
+through a profile, including declaring model limits, but cannot declare or
+override `kind = "command-jsonl"`, `command.executable`, fixed arguments, cwd,
+or environment. HTTP-only provider settings (`base_url`, top-level
+credentials, pools/rotation, headers, and response normalization) are invalid
+for this kind. Conversely, a native provider cannot carry a `command` table.
+
+Smith first runs one bounded compatibility process with fixed arguments
+`--smith-provider-probe <model>`. It must exit successfully after writing one
+strict JSON object:
+
+```json
+{"protocol":"smith-command-provider","schema_version":1,"model":"local-model","implementation":"example-bridge","implementation_version":"1.2.3"}
+```
+
+Each visible provider attempt then starts a fresh process with
+`--smith-provider-attempt`, writes one newline-terminated request envelope on
+stdin, and decodes newline-delimited frames from stdout. The request is a
+Smith-owned projection rather than a serialized internal runtime type:
+
+```json
+{"protocol":"smith-command-provider","schema_version":1,"attempt_id":"attempt-1","purpose":"ordinary","request":{"model":"local-model","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}],"tools":[{"name":"mcp__docs__lookup","description":"Look up docs","input_schema":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}],"tool_choice":{"type":"auto"},"sampling":{"temperature":0.2,"top_p":0.9},"max_output_tokens":4096,"stop":["DONE"]}}
+```
+
+Message roles are `system`, `user`, `assistant`, or `tool`. Content parts are
+`text`; assistant `tool_call` with `id`, `name`, and object `arguments`; or
+tool `tool_result` with `call_id`, `name`, text-only `content`, and `is_error`.
+Tool choice is `auto`, `none`, `required`, or `named` with a `name`. Omitted
+optional sampling, output-token, and stop fields mean Smith did not request
+them; bridges must not invent hidden defaults that change the declared model
+contract.
+
+Every stdout frame repeats `protocol` and `schema_version` and has one of these
+exact shapes:
+
+```json
+{"protocol":"smith-command-provider","schema_version":1,"type":"text_delta","text":"hello"}
+{"protocol":"smith-command-provider","schema_version":1,"type":"tool_call_delta","index":0,"id":"call-1","name":"mcp__docs__lookup","arguments_fragment":"{\"query\":\"smith\"}"}
+{"protocol":"smith-command-provider","schema_version":1,"type":"usage","input_tokens":12,"output_tokens":4}
+{"protocol":"smith-command-provider","schema_version":1,"type":"finish","reason":"stop"}
+{"protocol":"smith-command-provider","schema_version":1,"type":"error","kind":"server","message":"classified safe detail","retryable":true}
+```
+
+Revision 1 is text-only streaming with tool calling and mandatory usage. It
+does not support reasoning, images, structured output, provider cache
+control/evidence, server-side continuation, or vendor extensions. Tool schemas
+in the request include the same frozen built-ins and connected MCP tools a
+native provider sees. A tool-call frame only asks Smith to run a tool; the
+bridge cannot approve, execute, or inject the result. Runtime validates and
+executes it through the existing authority path, and a later fresh process
+receives the canonical result.
+
+Frames and aggregate stdin/stdout/stderr are bounded. Missing usage, malformed
+or unknown frames, protocol drift, malformed tool fragments, duplicate or
+post-terminal data, unsuccessful exit, timeout, cancellation, and dropped
+streams fail the visible attempt. Raw stderr is drained and discarded. Prompt,
+history, tool results, and other request content remain on stdin rather than
+argv.
+
+The executable is trusted code with the OS authority of the Smith process and
+receives model-visible session data. Environment clearing and Smith tool
+approval do not sandbox the executable itself. Review it and its updates as
+carefully as any local program receiving private source and prompts.
+
+Codex app-server and similar coding CLIs are deliberately not compatible with
+this provider kind: they own agent threads, hidden conversation state, tool/MCP
+execution, approvals, retries, or persistence. Integrating one requires a
+separately specified external-agent backend, not a shim that presents its agent
+events as a stateless model turn.
 
 `openai-responses` is generic over the Responses protocol rather than tied to
 one vendor, so the endpoint decides which deployment is being talked to. xAI's

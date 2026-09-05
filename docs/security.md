@@ -130,6 +130,20 @@ are registered with the persistence redactor. Events, default JSONL journals,
 ordinary snapshots, errors, setup review, and headless machine output are
 tested for non-disclosure.
 
+A user-declared `command-jsonl` provider is trusted executable code, not a
+sandboxed Smith tool. Its absolute executable, fixed argv, cwd, and explicit
+environment may come only from owner-controlled user configuration; project
+configuration may select the provider but cannot alter that invocation. Smith
+uses direct argv, clears ambient environment, resolves declared environment
+credentials through the same bounded secret boundary, and registers every
+resulting value with persistence redaction before its compatibility probe.
+These controls prevent accidental repository authority and secret inheritance,
+but the process still has the Smith user's OS access and receives prompts,
+history, tool schemas, and tool results on stdin. Selecting it is therefore a
+data-egress and local-code trust decision. Smith's approval system governs tool
+calls returned by the bridge; it cannot constrain what the executable itself
+does outside that protocol.
+
 Protected-checkpoint keys are independent of provider credentials. Smith may
 load one from OS protected storage, the dedicated `SMITH_CHECKPOINT_KEY`
 environment value, an owner-only inline `persistence.checkpoint_key`, or an

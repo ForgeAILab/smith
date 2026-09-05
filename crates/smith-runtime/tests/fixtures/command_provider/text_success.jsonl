@@ -1,0 +1,3 @@
+{"protocol":"smith-command-provider","schema_version":1,"type":"text_delta","text":"hello"}
+{"protocol":"smith-command-provider","schema_version":1,"type":"usage","input_tokens":7,"output_tokens":2}
+{"protocol":"smith-command-provider","schema_version":1,"type":"finish","reason":"stop"}

@@ -3,6 +3,8 @@
 #![cfg(unix)]
 
 use std::io::{Read, Write};
+use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -46,6 +48,61 @@ impl Fixture {
         let directory = self.home.path().join(".smith");
         std::fs::create_dir_all(&directory).expect("user config directory");
         std::fs::write(directory.join("config.toml"), config).expect("user config");
+    }
+
+    fn configure_command_bridge(&self) -> PathBuf {
+        let executable = self.project.path().join("command-bridge.sh");
+        let process_log = self.project.path().join("command-processes.log");
+        let script = r#"#!/bin/sh
+log=$1
+shift
+printf '%s\n' "$1" >> "$log"
+if [ "$1" = "--smith-provider-probe" ]; then
+  printf '%s\n' "{\"protocol\":\"smith-command-provider\",\"schema_version\":1,\"model\":\"$2\",\"implementation\":\"tui-fixture\",\"implementation_version\":\"1.0.0\"}"
+  exit 0
+fi
+if [ "$1" = "--smith-provider-attempt" ]; then
+  IFS= read -r request
+  printf '%s\n' '{"protocol":"smith-command-provider","schema_version":1,"type":"text_delta","text":"Hello from the command bridge."}'
+  printf '%s\n' '{"protocol":"smith-command-provider","schema_version":1,"type":"usage","input_tokens":12,"output_tokens":6}'
+  printf '%s\n' '{"protocol":"smith-command-provider","schema_version":1,"type":"finish","reason":"stop"}'
+  exit 0
+fi
+exit 2
+"#;
+        std::fs::write(&executable, script).expect("a command bridge fixture");
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))
+            .expect("an executable bridge fixture");
+
+        let config = format!(
+            r#"
+default_profile = "local"
+
+[profiles.local]
+provider = "bridge"
+model = "local-model"
+
+[providers.bridge]
+kind = "command-jsonl"
+
+[providers.bridge.command]
+executable = {executable:?}
+args = [{process_log:?}]
+cwd = "workspace"
+
+[models."bridge/local-model"]
+context_tokens = 32768
+max_input_tokens = 28672
+max_output_tokens = 4096
+"#,
+            executable = executable.display().to_string(),
+            process_log = process_log.display().to_string(),
+        );
+        self.configure_user(&config);
+        let config_path = self.home.path().join(".smith/config.toml");
+        std::fs::set_permissions(config_path, std::fs::Permissions::from_mode(0o600))
+            .expect("an owner-only user config");
+        process_log
     }
 
     fn install_fresh_catalog_cache(&self) {
@@ -605,6 +662,51 @@ expect {
     );
     assert!(screen.contains("local/example-model"), "{screen}");
     assert!(screen.contains("TERMINAL_RESTORED"), "{screen}");
+}
+
+#[test]
+fn command_jsonl_provider_streams_a_turn_through_the_normal_tui() {
+    let fixture = Fixture::new();
+    let process_log = fixture.configure_command_bridge();
+    let interaction = r#"
+expect {
+    -exact "Ask Smith to do anything" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+send -- "hello\r"
+expect {
+    -exact "bridge." {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+send -- "/quit\r"
+expect {
+    -exact "TERMINAL_RESTORED" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+"#;
+    let Some(output) = fixture.run_expect("--no-color --no-motion", interaction) else {
+        return;
+    };
+    let screen = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "screen: {screen}\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(screen.contains("bridge/local-model"), "{screen}");
+    assert!(
+        screen.contains("Hello") && screen.contains("bridge."),
+        "{screen}"
+    );
+    assert!(screen.contains("TERMINAL_RESTORED"), "{screen}");
+    assert_eq!(
+        std::fs::read_to_string(process_log).expect("process log"),
+        "--smith-provider-probe\n--smith-provider-attempt\n",
+        "the TUI uses one preflight process and one fresh process for the visible attempt"
+    );
 }
 
 #[test]

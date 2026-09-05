@@ -5,9 +5,9 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::model::{
     ApprovalMode, AutoApprovalRuleSection, BackgroundExit, CacheMaintenanceMode,
-    KIND_ANTHROPIC_MESSAGES, KIND_CHATGPT_RESPONSES, KIND_FAKE, KIND_GEMINI_INTERACTIONS,
-    KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES, KIND_XAI_RESPONSES, ReasoningDialect,
-    ReasoningOnlyBehavior,
+    KIND_ANTHROPIC_MESSAGES, KIND_CHATGPT_RESPONSES, KIND_COMMAND_JSONL, KIND_FAKE,
+    KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES, KIND_XAI_RESPONSES,
+    ReasoningDialect, ReasoningOnlyBehavior,
 };
 use agent_runtime_core::store::Secret;
 
@@ -32,6 +32,7 @@ pub(super) fn resolve_provider(
     let credentials = resolve_credential_pool(provenance, &scope)?;
     let rotate_at_percent = resolve_rotate_at_percent(provenance, &scope)?;
     let api_key = secret(provenance, &format!("{scope}.api_key"))?;
+    let command = resolve_command_provider(provenance, &scope)?;
     let reasoning_only = text(provenance, &format!("{scope}.response.reasoning_only"))?
         .map(|value| {
             ReasoningOnlyBehavior::parse(&value.value)
@@ -66,9 +67,184 @@ pub(super) fn resolve_provider(
         api_key,
         headers,
         response: ResolvedProviderResponse { reasoning_only },
+        command,
     };
     validate_provider(&provider)?;
     Ok(provider)
+}
+
+const MAX_COMMAND_ARGUMENTS: usize = 256;
+const MAX_COMMAND_ARGUMENT_BYTES: usize = 64 * 1024;
+const MAX_COMMAND_ENVIRONMENT_ENTRIES: usize = 256;
+const MAX_COMMAND_ENVIRONMENT_BYTES: usize = 1024 * 1024;
+
+fn resolve_command_provider(
+    provenance: &Provenance,
+    scope: &str,
+) -> Result<Option<ResolvedCommandProvider>, ConfigError> {
+    let executable_key = format!("{scope}.command.executable");
+    let Some(executable) = text(provenance, &executable_key)? else {
+        return Ok(None);
+    };
+    require_user_process_source(&executable.source)?;
+    if executable.value.is_empty() || executable.value.contains('\0') {
+        return Err(ConfigError::InvalidValue {
+            source: executable.source,
+            message: "a command provider executable must be a non-empty path without NUL"
+                .to_owned(),
+        });
+    }
+    let executable_path = PathBuf::from(&executable.value);
+    if !executable_path.is_absolute() {
+        return Err(ConfigError::InvalidValue {
+            source: executable.source,
+            message:
+                "a command provider executable must be an absolute path; Smith does not search PATH"
+                    .to_owned(),
+        });
+    }
+    let executable = Sourced::new(executable_path, executable.source);
+
+    let args = list(provenance, &format!("{scope}.command.args"))?;
+    if let Some(args) = &args {
+        require_user_process_source(&args.source)?;
+        if args.value.len() > MAX_COMMAND_ARGUMENTS {
+            return Err(ConfigError::InvalidValue {
+                source: args.source.clone(),
+                message: format!(
+                    "a command provider accepts at most {MAX_COMMAND_ARGUMENTS} fixed arguments"
+                ),
+            });
+        }
+        if args
+            .value
+            .iter()
+            .any(|argument| argument.len() > MAX_COMMAND_ARGUMENT_BYTES || argument.contains('\0'))
+        {
+            return Err(ConfigError::InvalidValue {
+                source: args.source.clone(),
+                message: format!(
+                    "each command argument must be at most {MAX_COMMAND_ARGUMENT_BYTES} bytes and contain no NUL"
+                ),
+            });
+        }
+    }
+
+    let cwd = text(provenance, &format!("{scope}.command.cwd"))?
+        .map(|cwd| {
+            require_user_process_source(&cwd.source)?;
+            let value = if cwd.value == "workspace" {
+                CommandWorkingDirectory::Workspace
+            } else {
+                if cwd.value.is_empty() || cwd.value.contains('\0') {
+                    return Err(ConfigError::InvalidValue {
+                        source: cwd.source,
+                        message: "a command provider cwd must be `workspace` or an absolute path without NUL"
+                            .to_owned(),
+                    });
+                }
+                let path = PathBuf::from(&cwd.value);
+                if !path.is_absolute() {
+                    return Err(ConfigError::InvalidValue {
+                        source: cwd.source,
+                        message: "a command provider cwd must be exactly `workspace` or an absolute path"
+                            .to_owned(),
+                    });
+                }
+                CommandWorkingDirectory::Absolute(path)
+            };
+            Ok(Sourced::new(value, cwd.source))
+        })
+        .transpose()?;
+
+    let env_prefix = format!("{scope}.command.env.");
+    let env_keys: Vec<String> = provenance
+        .keys()
+        .filter(|key| key.starts_with(&env_prefix))
+        .map(str::to_owned)
+        .collect();
+    if env_keys.len() > MAX_COMMAND_ENVIRONMENT_ENTRIES {
+        let source = provenance
+            .winner(&env_keys[0])
+            .expect("a discovered environment key has a winner")
+            .source
+            .clone();
+        return Err(ConfigError::InvalidValue {
+            source,
+            message: format!(
+                "a command provider accepts at most {MAX_COMMAND_ENVIRONMENT_ENTRIES} environment entries"
+            ),
+        });
+    }
+    let mut env = BTreeMap::new();
+    let mut environment_bytes = 0usize;
+    for key in env_keys {
+        let name = unquote_segment(&key[env_prefix.len()..]);
+        let entry = provenance
+            .winner(&key)
+            .expect("a discovered environment key has a winner");
+        require_user_process_source(&entry.source)?;
+        if name.is_empty() || name.contains(['=', '\0']) {
+            return Err(ConfigError::InvalidValue {
+                source: entry.source.clone(),
+                message:
+                    "a command environment name must be non-empty and contain neither `=` nor NUL"
+                        .to_owned(),
+            });
+        }
+        let value = match &entry.value {
+            SettingValue::Text(reference) => {
+                let sourced = Sourced::new(reference.clone(), entry.source.clone());
+                validate_credential(&sourced)?;
+                McpValue::Credential(reference.clone())
+            }
+            SettingValue::Secret(literal) => McpValue::Literal(literal.clone()),
+            other => return Err(wrong_kind(entry, other, "a string")),
+        };
+        let value_len = match &value {
+            McpValue::Credential(reference) => reference.len(),
+            McpValue::Literal(literal) => literal.expose().len(),
+        };
+        if match &value {
+            McpValue::Credential(reference) => reference.contains('\0'),
+            McpValue::Literal(literal) => literal.expose().contains('\0'),
+        } {
+            return Err(ConfigError::InvalidValue {
+                source: entry.source.clone(),
+                message: "a command environment value cannot contain NUL".to_owned(),
+            });
+        }
+        environment_bytes = environment_bytes
+            .saturating_add(name.len())
+            .saturating_add(value_len);
+        if environment_bytes > MAX_COMMAND_ENVIRONMENT_BYTES {
+            return Err(ConfigError::InvalidValue {
+                source: entry.source.clone(),
+                message: format!(
+                    "a command provider environment may contain at most {MAX_COMMAND_ENVIRONMENT_BYTES} bytes"
+                ),
+            });
+        }
+        env.insert(name, Sourced::new(value, entry.source.clone()));
+    }
+
+    Ok(Some(ResolvedCommandProvider {
+        executable,
+        args,
+        cwd,
+        env,
+    }))
+}
+
+fn require_user_process_source(source: &Source) -> Result<(), ConfigError> {
+    if source.layer == Layer::UserFile {
+        return Ok(());
+    }
+    Err(ConfigError::InvalidValue {
+        source: source.clone(),
+        message: "command-provider process settings are user-scoped; project configuration may select an existing provider but cannot define or override its process"
+            .to_owned(),
+    })
 }
 
 /// Resolves the ordered credential pool from either spelling.
@@ -155,6 +331,42 @@ fn resolve_rotate_at_percent(
 /// adapter belongs to the step that consults it. The secret rules apply to
 /// every kind, because they protect the file rather than the adapter.
 pub(super) fn validate_provider(provider: &ResolvedProvider) -> Result<(), ConfigError> {
+    if provider.kind.value == KIND_COMMAND_JSONL {
+        require_user_process_source(&provider.kind.source)?;
+        if provider.command.is_none() {
+            return Err(ConfigError::MissingSetting {
+                key: join_key(&["providers", &provider.name.value, "command", "executable"]),
+                message: format!(
+                    "a `{KIND_COMMAND_JSONL}` provider needs an absolute executable declaration"
+                ),
+            });
+        }
+        if let Some(base_url) = &provider.base_url {
+            return Err(command_option_error(base_url, "base_url"));
+        }
+        if let Some(credential) = provider.credential() {
+            return Err(command_option_error(credential, "credential"));
+        }
+        if let Some(rotation) = &provider.rotate_at_percent {
+            return Err(command_option_error(rotation, "rotate_at_percent"));
+        }
+        if let Some(api_key) = &provider.api_key {
+            return Err(command_option_error(api_key, "api_key"));
+        }
+        if let Some(header) = provider.headers.values().next() {
+            return Err(command_option_error(header, "headers"));
+        }
+        if let Some(response) = &provider.response.reasoning_only {
+            return Err(command_option_error(response, "response"));
+        }
+    } else if let Some(command) = &provider.command {
+        return Err(ConfigError::IncompatibleOption {
+            source: command.executable.source.clone(),
+            kind: provider.kind.value.clone(),
+            message: "a `command` table is accepted only by the `command-jsonl` adapter".to_owned(),
+        });
+    }
+
     if !provider.credentials.is_empty() && provider.api_key.is_some() {
         let source = provider
             .api_key
@@ -395,6 +607,16 @@ pub(super) fn validate_provider(provider: &ResolvedProvider) -> Result<(), Confi
         _ => {}
     }
     Ok(())
+}
+
+fn command_option_error<T>(value: &Sourced<T>, option: &str) -> ConfigError {
+    ConfigError::IncompatibleOption {
+        source: value.source.clone(),
+        kind: KIND_COMMAND_JSONL.to_owned(),
+        message: format!(
+            "`{option}` is an HTTP-provider option; pass bridge secrets only through `command.env`"
+        ),
+    }
 }
 
 /// Checks that a credential is a reference rather than the secret itself.

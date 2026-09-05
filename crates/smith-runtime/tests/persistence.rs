@@ -245,6 +245,31 @@ async fn session_snapshot_v1_compatibility_fixture_is_stable() {
     assert_eq!(actual, expected);
 }
 
+// The pinned runtime keeps the existing manifest vocabulary. Reading an old
+// file must preserve its complete history and audit fingerprints on re-save.
+#[tokio::test]
+async fn legacy_snapshot_loads_and_resaves_without_rewriting_history() {
+    let (_directory, store) = store();
+    let id = SessionId::new("session-fixture");
+    store.paths().ensure_directory().await.unwrap();
+    let path = store.paths().snapshot(&id).unwrap();
+    let fixture = include_str!("fixtures/session-snapshot-v1.json");
+    tokio::fs::write(&path, fixture).await.unwrap();
+
+    let loaded = store.load(&id).await.unwrap().unwrap();
+    assert_eq!(loaded, populated_snapshot(&id));
+    let fingerprint = loaded.manifests[0].manifest.fingerprint();
+    store.save(&loaded).await.unwrap();
+    let actual: serde_json::Value =
+        serde_json::from_slice(&tokio::fs::read(&path).await.unwrap()).unwrap();
+    assert_eq!(
+        actual,
+        serde_json::from_str::<serde_json::Value>(fixture).unwrap()
+    );
+    let reloaded = store.load(&id).await.unwrap().unwrap();
+    assert_eq!(reloaded.manifests[0].manifest.fingerprint(), fingerprint);
+}
+
 #[tokio::test]
 async fn a_session_that_was_never_saved_loads_as_absent() {
     let (_directory, store) = store();

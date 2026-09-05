@@ -178,7 +178,7 @@ API-key input is masked. Authentication offers three explicit storage models:
   the shell or an external secret manager. Smith stores only the variable name.
 - “Store in config (no prompts)” writes `api_key = "…"` only to the owner-only
   user file `~/.smith/config.toml`. This is self-contained and avoids
-  credential-service prompts, but it is plaintext: other processes running as
+credential-service prompts, but it is plaintext: other processes running as
   the same OS user and backups can read it.
 
 The local-config choice is never an automatic fallback. Setup warns before
@@ -187,6 +187,13 @@ and publishes the config through a mode-`0600` atomic replace. Project and
 project-local files cannot contain `api_key`; ordinary startup also refuses an
 inline-key user config that is a symlink, non-regular, owned by another user,
 or group/world accessible.
+
+Trusted local model bridges can also use the `command-jsonl` provider kind.
+They run through the same TUI/headless runtime and Smith-owned MCP/tool loop as
+native providers, with a strict revisioned stdin/JSONL protocol and bounded
+process supervision. This is not direct support for autonomous coding CLIs
+such as Codex app-server. See [Local command model providers](docs/configuration.md#local-command-model-providers)
+for configuration, protocol, and trust requirements.
 
 Before committing, setup shows the secret-free change and exact destination,
 then performs a local factory preflight. A failed preflight restores the exact

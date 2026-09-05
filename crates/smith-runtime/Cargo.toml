@@ -12,7 +12,7 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
-agent-runtime = { workspace = true }
+agent-runtime = { workspace = true, features = ["command-provider"] }
 agent-runtime-ability = { workspace = true, features = ["skill-files"] }
 agent-runtime-core = { workspace = true }
 agent-runtime-mcp = { workspace = true, features = ["http"] }

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::model::{
     AgentModeSection, AgentPosture, ApprovalMode, ApprovalSection, BackgroundExit,
     BackgroundSection, CacheSection, ChildAgentSection, ConfigFile, ContextCacheSection,
-    ContextSection, LimitsSection, PersistenceSection,
+    ContextSection, KIND_COMMAND_JSONL, LimitsSection, PersistenceSection,
 };
 use agent_runtime_core::store::Secret;
 
@@ -390,6 +390,23 @@ pub(super) fn validate_inline_secret_file(
     layer: Layer,
     file: &ConfigFile,
 ) -> Result<(), ConfigError> {
+    if layer != Layer::UserFile
+        && let Some((provider, section)) = file.providers.iter().find(|(_, provider)| {
+            provider.command.is_some() || provider.kind.as_deref() == Some(KIND_COMMAND_JSONL)
+        })
+    {
+        let key = if section.command.is_some() {
+            join_key(&["providers", provider, "command"])
+        } else {
+            join_key(&["providers", provider, "kind"])
+        };
+        return Err(ConfigError::InvalidValue {
+            source: Source::file(layer, path, key),
+            message: "command-provider process settings are user-scoped; project configuration may select an existing provider but cannot define or override it"
+                .to_owned(),
+        });
+    }
+
     let has_inline_provider_key = file
         .providers
         .values()
@@ -423,18 +440,31 @@ pub(super) fn validate_inline_secret_file(
                 .map(|(name, _)| join_key(&["mcp", "servers", server, "env", name]))
         })
     });
+    let command_env_literal = file.providers.iter().find_map(|(provider, section)| {
+        section.command.as_ref().and_then(|command| {
+            command
+                .env
+                .iter()
+                .find(|(_, value)| !is_credential_reference(value))
+                .map(|(name, _)| join_key(&["providers", provider, "command", "env", name]))
+        })
+    });
 
-    let has_inline = has_inline_provider_key || checkpoint_key || mcp_env_literal.is_some();
+    let has_inline = has_inline_provider_key
+        || checkpoint_key
+        || mcp_env_literal.is_some()
+        || command_env_literal.is_some();
     if !has_inline {
         return Ok(());
     }
     let source = Source::file(
         layer,
         path,
-        match (&mcp_env_literal, checkpoint_key) {
-            (Some(key), _) => key.clone(),
-            (None, true) => "persistence.checkpoint_key".to_owned(),
-            (None, false) => "providers.<name>.api_key".to_owned(),
+        match (&command_env_literal, &mcp_env_literal, checkpoint_key) {
+            (Some(key), _, _) => key.clone(),
+            (None, Some(key), _) => key.clone(),
+            (None, None, true) => "persistence.checkpoint_key".to_owned(),
+            (None, None, false) => "providers.<name>.api_key".to_owned(),
         },
     );
     if layer != Layer::UserFile {
@@ -709,7 +739,7 @@ pub(super) fn flatten(
             // carry a token. Which layers may write a literal at all is decided
             // in `validate_inline_secret_file` and `resolve_headers`, on either
             // side of this.
-            other if is_mcp_value(prefix) => {
+            other if is_secret_capable_value(prefix) => {
                 let key = join_owned(prefix);
                 let source = source_for(layer, path, key.clone());
                 match other.as_str() {
@@ -769,11 +799,15 @@ fn is_auto_approval_rules(prefix: &[String]) -> bool {
 ///
 /// Both tables hold the same class of value — something a third party receives,
 /// which may or may not be a secret — so both are classified the same way.
-fn is_mcp_value(prefix: &[String]) -> bool {
+fn is_secret_capable_value(prefix: &[String]) -> bool {
     matches!(
         prefix,
         [root, servers, _name, table, _key]
             if root == "mcp" && servers == "servers" && (table == "env" || table == "headers")
+    ) || matches!(
+        prefix,
+        [providers, _name, command, env, _key]
+            if providers == "providers" && command == "command" && env == "env"
     )
 }
 

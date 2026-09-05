@@ -21,7 +21,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=e72390a63ba83c65d781ba701fb3552755a47f29#e72390a63ba83c65d781ba701fb3552755a47f29"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=93f476bc6e6cbb3e73deef3dde065d132e425d34#93f476bc6e6cbb3e73deef3dde065d132e425d34"
 dependencies = [
  "agent-runtime-ability",
  "agent-runtime-context",
@@ -39,13 +39,14 @@ dependencies = [
  "sha2",
  "thiserror 2.0.19",
  "tokio",
+ "url",
  "uuid",
 ]
 
 [[package]]
 name = "agent-runtime-ability"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=e72390a63ba83c65d781ba701fb3552755a47f29#e72390a63ba83c65d781ba701fb3552755a47f29"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=93f476bc6e6cbb3e73deef3dde065d132e425d34#93f476bc6e6cbb3e73deef3dde065d132e425d34"
 dependencies = [
  "agent-runtime-core",
  "agent-runtime-registry",
@@ -57,7 +58,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-context"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=e72390a63ba83c65d781ba701fb3552755a47f29#e72390a63ba83c65d781ba701fb3552755a47f29"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=93f476bc6e6cbb3e73deef3dde065d132e425d34#93f476bc6e6cbb3e73deef3dde065d132e425d34"
 dependencies = [
  "agent-runtime-core",
  "agent-runtime-registry",
@@ -68,7 +69,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-core"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=e72390a63ba83c65d781ba701fb3552755a47f29#e72390a63ba83c65d781ba701fb3552755a47f29"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=93f476bc6e6cbb3e73deef3dde065d132e425d34#93f476bc6e6cbb3e73deef3dde065d132e425d34"
 dependencies = [
  "agent-runtime-registry",
  "async-trait",
@@ -86,7 +87,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-mcp"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=e72390a63ba83c65d781ba701fb3552755a47f29#e72390a63ba83c65d781ba701fb3552755a47f29"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=93f476bc6e6cbb3e73deef3dde065d132e425d34#93f476bc6e6cbb3e73deef3dde065d132e425d34"
 dependencies = [
  "agent-runtime-ability",
  "agent-runtime-core",
@@ -103,23 +104,26 @@ dependencies = [
 [[package]]
 name = "agent-runtime-provider"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=e72390a63ba83c65d781ba701fb3552755a47f29#e72390a63ba83c65d781ba701fb3552755a47f29"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=93f476bc6e6cbb3e73deef3dde065d132e425d34#93f476bc6e6cbb3e73deef3dde065d132e425d34"
 dependencies = [
  "agent-runtime-core",
  "agent-runtime-registry",
  "async-stream",
  "async-trait",
+ "command-group",
  "futures-core",
  "futures-util",
  "serde",
  "serde_json",
+ "thiserror 2.0.19",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]
 name = "agent-runtime-registry"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=e72390a63ba83c65d781ba701fb3552755a47f29#e72390a63ba83c65d781ba701fb3552755a47f29"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=93f476bc6e6cbb3e73deef3dde065d132e425d34#93f476bc6e6cbb3e73deef3dde065d132e425d34"
 dependencies = [
  "serde",
 ]
@@ -127,7 +131,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-testkit"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=e72390a63ba83c65d781ba701fb3552755a47f29#e72390a63ba83c65d781ba701fb3552755a47f29"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=93f476bc6e6cbb3e73deef3dde065d132e425d34#93f476bc6e6cbb3e73deef3dde065d132e425d34"
 dependencies = [
  "agent-runtime",
  "agent-runtime-core",
@@ -567,6 +571,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "command-group"
+version = "5.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a68fa787550392a9d58f44c21a3022cfb3ea3e2458b7f85d3b399d0ceeccf409"
+dependencies = [
+ "async-trait",
+ "nix 0.27.1",
+ "tokio",
+ "winapi",
+]
+
+[[package]]
 name = "compact_str"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -942,7 +958,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2032,6 +2048,17 @@ dependencies = [
 
 [[package]]
 name = "nix"
+version = "0.27.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2eb04e9c688eff1c89d72b407f168cf79bb9e867a9d3323ed6c01519eb9cc053"
+dependencies = [
+ "bitflags 2.13.1",
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
+name = "nix"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
@@ -2623,7 +2650,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2967,7 +2994,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3034,7 +3061,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3581,7 +3608,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4374,7 +4401,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
