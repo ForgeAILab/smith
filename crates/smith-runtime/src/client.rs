@@ -273,6 +273,33 @@ pub enum SmithEventKind {
         index: u32,
         model: String,
     },
+    /// A turn is running on an installed coding agent rather than Smith's own
+    /// loop. Surfaces carry this so a harness turn is never mistaken for one
+    /// Smith executed itself.
+    ExternalSessionStarted {
+        session: String,
+    },
+    /// Assistant prose from a harness turn.
+    ExternalText {
+        text: String,
+    },
+    /// Reasoning from a harness turn.
+    ExternalReasoning {
+        text: String,
+    },
+    /// A tool the installed agent ran itself.
+    ///
+    /// Smith did not dispatch it, did not approve it, and cannot vouch for it,
+    /// so it is deliberately distinct from `ToolCallRequested`.
+    ExternalToolInvoked {
+        id: String,
+        name: String,
+    },
+    /// The outcome of a tool the installed agent ran itself.
+    ExternalToolCompleted {
+        id: String,
+        ok: bool,
+    },
     TextDelta {
         request: RequestId,
         attempt: AttemptId,
