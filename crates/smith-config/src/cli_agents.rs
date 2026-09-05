@@ -29,7 +29,7 @@ pub struct CliAgentCatalogEntry {
     pub program: &'static str,
     /// Models this agent accepts, offered wherever models are listed.
     pub models: &'static [&'static str],
-    /// Short description for a picker row.
+    /// Human name for the agent, used as the model row's name.
     pub description: &'static str,
 }
 
@@ -41,13 +41,13 @@ pub const CLI_AGENTS: &[CliAgentCatalogEntry] = &[
         // Aliases rather than dated model names: the CLI resolves an alias to
         // the current model, so this list does not go stale every release.
         models: &["sonnet", "opus", "haiku", "fable"],
-        description: "Claude Code CLI",
+        description: "Claude Code",
     },
     CliAgentCatalogEntry {
         kind: "codex",
         program: "codex",
         models: &["gpt-6-astra", "gpt-5.6-sol"],
-        description: "Codex CLI",
+        description: "Codex",
     },
 ];
 

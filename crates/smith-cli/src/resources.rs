@@ -415,9 +415,10 @@ pub(super) fn runtime_resources(
     }
 
     // Installed coding agents appear alongside provider models, under their
-    // own `cli/<agent>/<model>` namespace. They are listed whether or not the
-    // CLI is installed: a row that says the program is missing is more useful
-    // than silently offering nothing, and it is how someone discovers the
+    // own `cli/<agent>/<model>` namespace, and in the same row shape: the
+    // agent and model as the name, then the id and what Smith planned
+    // against. They are listed whether or not the CLI is installed -- a row
+    // that says the program is missing is how someone discovers the
     // capability exists at all.
     let mut models = models;
     let active_cli_model = harness.map(|harness| {
@@ -428,10 +429,18 @@ pub(super) fn runtime_resources(
         for model in entry.models {
             let id = smith_config::cli_agents::cli_model_id(entry.kind, model);
             let active = active_cli_model.as_deref() == Some(id.as_str());
+            // The limits are Smith's own bookkeeping, not the agent's: it owns
+            // its context, so they are labelled as the default they are rather
+            // than dressed up as advertised capability.
             let row = ResourceEntry::new(
-                id,
-                format!("{} · runs the turn itself", entry.description),
-                format!("run this agent on {model}"),
+                id.clone(),
+                format!("{} {model}", entry.description),
+                format!(
+                    "{id} · ctx {} · input {} · output {} [built-in] · agent runs its own tools",
+                    token_quantity(smith_config::cli_agents::CLI_AGENT_CONTEXT_TOKENS),
+                    token_quantity(smith_config::cli_agents::CLI_AGENT_MAX_INPUT_TOKENS),
+                    token_quantity(smith_config::cli_agents::CLI_AGENT_MAX_OUTPUT_TOKENS),
+                ),
             )
             .active(active);
             models.push(match installed {
