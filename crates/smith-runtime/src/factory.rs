@@ -461,6 +461,10 @@ pub struct ChildProfileRequest {
 /// secret — only values that are safe to display.
 #[derive(Clone, PartialEq)]
 pub struct RuntimePolicy {
+    /// The installed coding agent this run's turns execute on, when the
+    /// profile selected one. Surfaces use it to offer the CLI's models rather
+    /// than the provider catalog, and to label the turn.
+    pub harness: Option<smith_config::resolve::ResolvedHarness>,
     /// Active agent profile selected for this run.
     pub agent_profile: String,
     /// Deterministic effective agent-profile revision.
@@ -1529,6 +1533,7 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
     let durability = persistence::prepare(&request).await?;
 
     let policy = assemble_policy(RuntimePolicy {
+        harness: request.config.harness.clone(),
         agent_profile: agent_profile_name.clone(),
         agent_profile_revision: agent_profile.revision.clone(),
         agent_profile_uses: agent_profile.uses.value.clone(),

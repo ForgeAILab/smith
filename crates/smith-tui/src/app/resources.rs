@@ -318,6 +318,14 @@ impl App {
     }
 
     pub(super) fn apply_model_id(&mut self, id: &str) -> Option<Action> {
+        // On a harness profile the picker lists the CLI's own models, which
+        // carry no provider identity because no provider will be called.
+        if self.status.harness.is_some() {
+            self.composer.clear();
+            return Some(Action::Reconfigure(PaletteCommand::HarnessModel {
+                model: id.to_owned(),
+            }));
+        }
         let Some((provider, model)) = model_pair(&self.resources.providers, id) else {
             self.transcript
                 .push_error(format!("model choice `{id}` has no provider identity"));

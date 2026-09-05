@@ -347,12 +347,16 @@ impl McpValue {
 /// A resolved installed coding agent a profile runs its turns on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedHarness {
-    /// Which CLI, as selected by the profile.
+    /// The declaration a profile selected.
     pub name: Sourced<String>,
+    /// Which installed agent that declaration drives.
+    pub kind: Sourced<String>,
     /// Absolute path to the CLI, invoked without a shell.
     pub executable: Sourced<String>,
     /// Model the CLI itself is told to use.
     pub model: Option<Sourced<String>>,
+    /// Models this CLI can be asked to run, offered by the model picker.
+    pub models: Vec<String>,
     /// Fixed, non-secret arguments appended to the built invocation.
     pub args: Vec<String>,
     /// Whether the CLI may run its own tools. Off unless explicitly enabled.

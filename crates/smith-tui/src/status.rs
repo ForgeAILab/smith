@@ -763,6 +763,10 @@ pub struct AccountStatus {
 pub struct Status {
     /// Active main agent profile.
     pub agent: String,
+    /// The installed coding agent executing turns, when the profile selected
+    /// one. Present means the turn runs on a CLI rather than through Smith's
+    /// own loop, which the header labels rather than leaving implicit.
+    pub harness: Option<String>,
     /// The serving provider's name, once resolved.
     pub provider: Option<String>,
     /// The model in use.
@@ -869,6 +873,7 @@ impl Status {
     /// A status for a session that has not yet run a turn.
     pub fn new(model: impl Into<String>, project: impl Into<String>) -> Self {
         Self {
+            harness: None,
             agent: "build".to_owned(),
             provider: None,
             model: model.into(),

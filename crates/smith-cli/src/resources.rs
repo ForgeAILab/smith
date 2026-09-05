@@ -2,6 +2,7 @@
 
 use super::*;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn runtime_resources(
     inventory: SelectionInventory,
     sessions: Vec<SessionListing>,
@@ -10,6 +11,7 @@ pub(super) fn runtime_resources(
     agents: &ResolvedAgent,
     reasoning: &smith_runtime::reasoning::ReasoningRuntimePolicy,
     credential_pool: Option<&SharedPool>,
+    harness: Option<&smith_config::resolve::ResolvedHarness>,
 ) -> RuntimeResources {
     let model_limits = inventory
         .models
@@ -411,6 +413,30 @@ pub(super) fn runtime_resources(
                 .disabled(capability_reason()),
         );
     }
+
+    // On a harness profile the provider catalog is the wrong list entirely:
+    // it advertises models Smith would call, while the turn runs on an
+    // installed CLI that knows nothing about them. Offer what the harness
+    // declared instead.
+    let models = match harness {
+        Some(harness) => harness
+            .models
+            .iter()
+            .map(|model| {
+                let active = harness
+                    .model
+                    .as_ref()
+                    .is_some_and(|selected| selected.value == *model);
+                ResourceEntry::new(
+                    model.clone(),
+                    format!("{} · {}", harness.kind.value, harness.name.value),
+                    format!("run this turn's agent on {model}"),
+                )
+                .active(active)
+            })
+            .collect(),
+        None => models,
+    };
 
     RuntimeResources {
         models,

@@ -94,6 +94,12 @@ pub(super) async fn run_interactive(
         .switch_model(Some(policy.provider_name.clone()), policy.model.as_str());
     app.status.set_price(resolve_price(policy, &catalog));
     app.status.set_agent(policy.agent_profile.clone());
+    // Labels the turn as executed by an installed CLI, and switches the model
+    // picker to that CLI's models rather than the provider catalog.
+    app.status.harness = policy
+        .harness
+        .as_ref()
+        .map(|harness| harness.kind.value.clone());
     match host.goal() {
         Ok(goal) => app.status.set_goal(goal),
         Err(error) => app
@@ -130,6 +136,7 @@ pub(super) async fn run_interactive(
         &agents,
         &policy.reasoning,
         credential_pool.as_ref(),
+        policy.harness.as_ref(),
     ));
     app.status.account = account_status(credential_pool.as_ref());
     app.transcript.replace_from_history(&snapshot.history);

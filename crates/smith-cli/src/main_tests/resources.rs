@@ -47,6 +47,7 @@ output_reserve = 4096
             &resolution.config.agent,
             &smith_runtime::reasoning::ReasoningRuntimePolicy::default(),
             None,
+            None,
         );
         // Derived from the embedded catalog rather than pinned to a literal:
         // the seed is regenerated whenever Models.dev is refreshed, and a

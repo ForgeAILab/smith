@@ -483,12 +483,27 @@ pub struct ChildAgentPolicySection {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HarnessSection {
+    /// Which installed agent this declaration drives.
+    ///
+    /// Absent means the declaration's own name is the kind, so
+    /// `[harness.claude-code]` needs no `kind`. Naming it lets several
+    /// declarations drive the same CLI with different settings -- one per
+    /// model, say -- exactly as several providers can share an adapter kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
     /// Absolute path to the installed CLI, invoked without a shell.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub executable: Option<String>,
     /// Model the CLI should use, when the owner selects one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Models this CLI can be asked to run, offered by `/model`.
+    ///
+    /// Smith cannot enumerate an installed CLI's models -- they are the
+    /// vendor's, they change, and asking the CLI costs a process launch on
+    /// every picker open -- so the owner lists the ones they use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models: Option<Vec<String>>,
     /// Fixed, non-secret arguments appended to the built invocation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<Vec<String>>,

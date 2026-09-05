@@ -585,6 +585,7 @@ pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
                     &command,
                     PaletteCommand::Profile(_)
                         | PaletteCommand::Model { .. }
+                        | PaletteCommand::HarnessModel { .. }
                         | PaletteCommand::Agent(_)
                         | PaletteCommand::Think(_)
                         | PaletteCommand::Effort(_)
@@ -647,6 +648,12 @@ pub(super) fn apply_palette_command(
             selection.profile = None;
             selection.provider = Some(provider);
             selection.model = Some(model);
+            *resume = Some(current_session);
+        }
+        PaletteCommand::HarnessModel { model } => {
+            // The profile stays: it is what selected the harness, and only the
+            // model the CLI runs is changing.
+            selection.harness_model = Some(model);
             *resume = Some(current_session);
         }
         PaletteCommand::Connect(_) | PaletteCommand::Disconnect(_) => {

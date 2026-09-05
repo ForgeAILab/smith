@@ -525,7 +525,7 @@ pub fn backend_for(
     workspace_root: &str,
 ) -> Option<std::sync::Arc<dyn ExternalAgentBackend>> {
     let harness = config.harness.as_ref()?;
-    let kind = CliAgentKind::parse(&harness.name.value)?;
+    let kind = CliAgentKind::parse(&harness.kind.value)?;
     let settings = CliAgentSettings {
         executable: PathBuf::from(&harness.executable.value),
         model: harness.model.as_ref().map(|model| model.value.clone()),

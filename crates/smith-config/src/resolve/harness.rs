@@ -22,17 +22,26 @@ pub(super) fn resolve_harness(
     let Some(name) = text(provenance, "harness")? else {
         return Ok(None);
     };
-    if !KNOWN_HARNESSES.contains(&name.value.as_str()) {
+    let scope = join_key(&["harness", &name.value]);
+
+    // A declaration's `kind` names the CLI; without one the declaration's own
+    // name is the kind, so `[harness.claude-code]` needs no `kind` while
+    // several declarations can still drive the same CLI with different
+    // settings.
+    let kind = match text(provenance, &format!("{scope}.kind"))? {
+        Some(kind) => kind,
+        None => name.clone(),
+    };
+    if !KNOWN_HARNESSES.contains(&kind.value.as_str()) {
         return Err(ConfigError::InvalidValue {
-            source: name.source.clone(),
+            source: kind.source.clone(),
             message: format!(
-                "unknown harness `{}`; Smith drives {}",
-                name.value,
+                "unknown harness kind `{}`; Smith drives {}",
+                kind.value,
                 KNOWN_HARNESSES.join(" or ")
             ),
         });
     }
-    let scope = join_key(&["harness", &name.value]);
 
     let executable = text(provenance, &format!("{scope}.executable"))?.ok_or_else(|| {
         ConfigError::InvalidValue {
@@ -54,6 +63,21 @@ pub(super) fn resolve_harness(
     }
 
     let model = text(provenance, &format!("{scope}.model"))?;
+
+    // Offered by `/model`. Falling back to the configured model keeps the
+    // picker honest: it lists what the owner actually declared rather than a
+    // vendor list Smith would have to guess at and keep current.
+    let models = match list(provenance, &format!("{scope}.models"))? {
+        Some(models) => models.value,
+        None => model.iter().map(|model| model.value.clone()).collect(),
+    };
+
+    // A session-level choice wins over the declared default, which is what
+    // makes the model picker able to change models without editing config.
+    let model = match text(provenance, "harness_model")? {
+        Some(selected) => Some(selected),
+        None => model,
+    };
 
     let args = match list(provenance, &format!("{scope}.args"))? {
         Some(args) => {
@@ -79,6 +103,8 @@ pub(super) fn resolve_harness(
 
     Ok(Some(ResolvedHarness {
         name,
+        kind,
+        models,
         executable,
         model,
         args,
