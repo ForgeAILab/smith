@@ -16,7 +16,6 @@ agent-runtime-core = { workspace = true }
 agent-runtime-registry = { workspace = true }
 async-trait = { workspace = true }
 cap-std = { workspace = true }
-exacl = { workspace = true }
 rustix = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -25,5 +24,19 @@ tokio = { workspace = true }
 uuid = { workspace = true }
 xattr = { workspace = true }
 
+# POSIX ACLs are `system.posix_acl_access` extended attributes on Linux, so the
+# xattr preservation above already carries them and linking `libacl` would be
+# redundant -- and impossible for the static musl artifacts, which have no musl
+# build of it. macOS keeps its ACLs outside the xattr namespace and needs the
+# real library.
+[target.'cfg(target_os = "macos")'.dependencies]
+exacl = { workspace = true }
+
 [dev-dependencies]
 tempfile = "3"
+
+# Tests assert ACL preservation on both platforms, including the Linux path
+# that rides on xattrs, so they read ACLs directly even where the library is
+# not linked into the shipped binary.
+[target.'cfg(unix)'.dev-dependencies]
+exacl = { workspace = true }

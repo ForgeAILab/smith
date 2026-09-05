@@ -39,6 +39,23 @@ pub struct FileVersion {
     pub size: u64,
     /// Exact modified timestamp represented as signed Unix nanoseconds.
     pub modified_unix_nanos: Option<String>,
+    /// Exact inode creation timestamp as Unix nanoseconds, where the
+    /// filesystem records one.
+    ///
+    /// The inode number alone does not identify an object: Linux reuses inode
+    /// numbers immediately, so deleting a file and recreating it with the same
+    /// bytes, size and a restored `mtime` reproduces every other field here.
+    /// Birth time is assigned once when an inode is created and is not
+    /// settable, so it separates the two. `ctime` cannot be used for this --
+    /// renaming an inode updates it, and Smith's own durable replace renames
+    /// the file it is verifying.
+    ///
+    /// Defaulted and compared only when both observations carry one: a
+    /// filesystem without birth time, and a version recorded before this
+    /// field existed, both leave it `None` rather than reporting every read
+    /// stale.
+    #[serde(default)]
+    pub created_unix_nanos: Option<String>,
     /// SHA-256 of the bytes returned from the same handle.
     pub content_sha256: String,
 }
@@ -51,6 +68,13 @@ impl FileVersion {
             && self.size == other.size
             && self.modified_unix_nanos == other.modified_unix_nanos
             && self.content_sha256 == other.content_sha256
+            && match (&self.created_unix_nanos, &other.created_unix_nanos) {
+                (Some(mine), Some(theirs)) => mine == theirs,
+                // One side predates the field, or the filesystem records no
+                // birth time. Every other identity component still has to
+                // agree, so this cannot widen what matches.
+                _ => true,
+            }
     }
 }
 
@@ -82,6 +106,12 @@ struct PreservedMetadata {
     uid: u32,
     gid: u32,
     xattrs: Vec<(OsString, Vec<u8>)>,
+    /// macOS ACL entries.
+    ///
+    /// Linux keeps POSIX ACLs in the `system.posix_acl_access` extended
+    /// attribute, which `xattrs` above already captures and restores; macOS
+    /// ACLs are not extended attributes and need the dedicated interface.
+    #[cfg(target_os = "macos")]
     acl: Vec<exacl::AclEntry>,
 }
 
@@ -289,7 +319,7 @@ impl ProjectWorkspace {
             ));
         }
         Ok(CapabilityRead {
-            version: version_from(&self.display_path(relative), &metadata, &bytes),
+            version: version_from(&self.display_path(relative), &file, &metadata, &bytes),
             bytes,
         })
     }
@@ -535,6 +565,7 @@ impl ProjectWorkspace {
             let observed = file.metadata()?;
             Ok(version_from(
                 &self.display_path(target),
+                &file,
                 &observed,
                 contents,
             ))
@@ -678,7 +709,7 @@ fn read_from_dir(
         ));
     }
     Ok(CapabilityRead {
-        version: version_from(display, &metadata, &bytes),
+        version: version_from(display, &file, &metadata, &bytes),
         bytes,
     })
 }
@@ -732,8 +763,24 @@ fn exchange(directory: &Dir, first: &OsString, second: &OsString) -> std::io::Re
     )?)
 }
 
+/// Durably commits a directory's entries.
+///
+/// cap-std opens directory handles with `O_PATH` on Linux, and `fsync` on an
+/// `O_PATH` descriptor fails with `EBADF` -- it names a location rather than
+/// an open file. Reopening the directory through its own descriptor yields a
+/// syncable handle without widening authority: `openat` relative to a
+/// directory descriptor stays inside that directory, so this is the same
+/// sandbox cap-std already enforces. macOS has no `O_PATH` and would sync the
+/// original handle, but it reopens the same way so both platforms commit
+/// through one path.
 fn sync_directory(directory: &Dir) -> std::io::Result<()> {
-    Ok(rustix::fs::fsync(directory)?)
+    let syncable = rustix::fs::openat(
+        directory,
+        ".",
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?;
+    Ok(rustix::fs::fsync(&syncable)?)
 }
 
 fn preserved_metadata(file: &cap_std::fs::File) -> std::io::Result<PreservedMetadata> {
@@ -750,6 +797,7 @@ fn preserved_metadata(file: &cap_std::fs::File) -> std::io::Result<PreservedMeta
         uid: metadata.uid(),
         gid: metadata.gid(),
         xattrs,
+        #[cfg(target_os = "macos")]
         acl: exacl::getfacl(descriptor_path(&std_file), None)?,
     })
 }
@@ -768,6 +816,7 @@ fn apply_metadata(file: &cap_std::fs::File, metadata: &PreservedMetadata) -> std
     for (name, value) in &metadata.xattrs {
         std_file.set_xattr(name, value)?;
     }
+    #[cfg(target_os = "macos")]
     exacl::setfacl(&[descriptor_path(&std_file)], &metadata.acl, None)?;
     let applied = file.metadata()?;
     if applied.mode() & 0o7777 != metadata.permissions.mode() & 0o7777
@@ -781,25 +830,68 @@ fn apply_metadata(file: &cap_std::fs::File, metadata: &PreservedMetadata) -> std
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
-fn descriptor_path(file: &std::fs::File) -> PathBuf {
-    use std::os::fd::AsRawFd;
-    PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()))
-}
-
+/// Names an open descriptor as a path, for the macOS ACL interface.
+///
+/// Only macOS needs this: Linux carries ACLs in extended attributes, which are
+/// read and written through the descriptor itself.
 #[cfg(target_os = "macos")]
 fn descriptor_path(file: &std::fs::File) -> PathBuf {
     use std::os::fd::AsRawFd;
     PathBuf::from(format!("/dev/fd/{}", file.as_raw_fd()))
 }
 
-fn version_from(path: &Path, metadata: &cap_std::fs::Metadata, bytes: &[u8]) -> FileVersion {
+/// Inode birth time as Unix nanoseconds, where the platform reports one.
+///
+/// cap-std fills `Metadata::created` from the platform `stat` struct, which
+/// carries a birth time on macOS and the BSDs but not on Linux. Linux exposes
+/// it only through `statx`, so ask for it directly rather than accept the
+/// `None` that `Metadata::created` always returns there.
+#[cfg(target_os = "linux")]
+fn created_unix_nanos(file: &cap_std::fs::File) -> Option<String> {
+    use std::os::fd::AsFd;
+
+    let stat = rustix::fs::statx(
+        file.as_fd(),
+        "",
+        rustix::fs::AtFlags::EMPTY_PATH,
+        rustix::fs::StatxFlags::BTIME,
+    )
+    .ok()?;
+    // The mask reports what the filesystem actually answered; a filesystem
+    // without birth time returns success with the bit clear.
+    if stat.stx_mask & rustix::fs::StatxFlags::BTIME.bits() == 0 {
+        return None;
+    }
+    Some(
+        (i128::from(stat.stx_btime.tv_sec) * 1_000_000_000 + i128::from(stat.stx_btime.tv_nsec))
+            .to_string(),
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+fn created_unix_nanos(file: &cap_std::fs::File) -> Option<String> {
+    let created = file.metadata().ok()?.created().ok()?;
+    Some(
+        match created.duration_since(cap_std::time::SystemClock::UNIX_EPOCH) {
+            Ok(duration) => duration.as_nanos().to_string(),
+            Err(error) => format!("-{}", error.duration().as_nanos()),
+        },
+    )
+}
+
+fn version_from(
+    path: &Path,
+    file: &cap_std::fs::File,
+    metadata: &cap_std::fs::Metadata,
+    bytes: &[u8],
+) -> FileVersion {
     let modified_unix_nanos = metadata.modified().ok().map(|modified| {
         match modified.duration_since(cap_std::time::SystemClock::UNIX_EPOCH) {
             Ok(duration) => duration.as_nanos().to_string(),
             Err(error) => format!("-{}", error.duration().as_nanos()),
         }
     });
+    let created_unix_nanos = created_unix_nanos(file);
     let digest = Sha256::digest(bytes);
     FileVersion {
         canonical_path: path.to_string_lossy().into_owned(),
@@ -807,6 +899,7 @@ fn version_from(path: &Path, metadata: &cap_std::fs::Metadata, bytes: &[u8]) -> 
         inode: metadata.ino(),
         size: metadata.len(),
         modified_unix_nanos,
+        created_unix_nanos,
         content_sha256: format!("{digest:x}"),
     }
 }
@@ -999,6 +1092,15 @@ mod tests {
             .and_then(|metadata| metadata.modified())
             .expect("mtime");
         std::fs::remove_file(&path).expect("remove old inode");
+        // Linux hands out a freed inode number again immediately, so with the
+        // bytes, size and mtime all restored below, birth time is the only
+        // field left that separates the two objects. File timestamps advance
+        // on the kernel tick rather than continuously, so a replacement made
+        // inside one tick is genuinely indistinguishable -- and harmless,
+        // since every byte matches what was read. Wait past the tick to
+        // exercise the case that is detectable, which is also the only shape a
+        // real edit-then-replace race takes.
+        std::thread::sleep(std::time::Duration::from_millis(50));
         std::fs::write(&path, "same\n").expect("replacement inode");
         std::fs::File::options()
             .write(true)
