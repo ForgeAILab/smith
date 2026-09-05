@@ -221,10 +221,7 @@ impl ExternalAgentBackend for CliAgentBackend {
             loop {
                 let next = tokio::select! {
                     _ = cancel.cancelled() => None,
-                    line = lines.next_line() => match line {
-                        Ok(line) => line,
-                        Err(_) => None,
-                    },
+                    line = lines.next_line() => line.unwrap_or_default(),
                 };
                 let Some(line) = next else { break };
                 let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
@@ -308,10 +305,10 @@ fn normalize_claude(value: &serde_json::Value) -> Vec<ExternalAgentEvent> {
                         }
                     }
                     Some("thinking") => {
-                        if let Some(text) = string_field(part, "thinking") {
-                            if !text.is_empty() {
-                                events.push(ExternalAgentEvent::Reasoning { text });
-                            }
+                        if let Some(text) =
+                            string_field(part, "thinking").filter(|text| !text.is_empty())
+                        {
+                            events.push(ExternalAgentEvent::Reasoning { text });
                         }
                     }
                     Some("tool_use") => {
@@ -338,8 +335,10 @@ fn normalize_claude(value: &serde_json::Value) -> Vec<ExternalAgentEvent> {
                 .and_then(|message| message.get("content"))
                 .and_then(serde_json::Value::as_array);
             for part in content.into_iter().flatten() {
-                if part.get("type").and_then(serde_json::Value::as_str) == Some("tool_result") {
-                    if let Some(id) = string_field(part, "tool_use_id") {
+                if part.get("type").and_then(serde_json::Value::as_str) == Some("tool_result")
+                    && let Some(id) = string_field(part, "tool_use_id")
+                {
+                    {
                         let failed = part
                             .get("is_error")
                             .and_then(serde_json::Value::as_bool)
