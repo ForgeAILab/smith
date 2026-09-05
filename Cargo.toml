@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.0.2"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
@@ -18,11 +18,11 @@ repository = "https://github.com/ForgeAILab/smith"
 authors = ["Smith contributors"]
 
 [workspace.dependencies]
-smith-config = { path = "crates/smith-config", version = "0.0.2" }
-smith-host = { path = "crates/smith-host", version = "0.0.2" }
-smith-runtime = { path = "crates/smith-runtime", version = "0.0.2" }
-smith-tools = { path = "crates/smith-tools", version = "0.0.2" }
-smith-tui = { path = "crates/smith-tui", version = "0.0.2" }
+smith-config = { path = "crates/smith-config", version = "0.1.0" }
+smith-host = { path = "crates/smith-host", version = "0.1.0" }
+smith-runtime = { path = "crates/smith-runtime", version = "0.1.0" }
+smith-tools = { path = "crates/smith-tools", version = "0.1.0" }
+smith-tui = { path = "crates/smith-tui", version = "0.1.0" }
 
 # The shared runtime. Smith depends on one immutable, reviewed runtime source
 # revision. Local sibling-checkout development uses the git-ignored
@@ -34,6 +34,14 @@ smith-tui = { path = "crates/smith-tui", version = "0.0.2" }
 # that `agent-runtime` on crates.io is an unrelated crate that publishes its
 # own 0.1.0, so the `git`/`rev` keys -- not the version -- are what identify
 # the dependency. Never relax them to a bare version requirement.
+#
+# The pinned revision is also tagged `smith-baseline-v0.1.0` upstream, so it
+# stays reachable -- and `--locked` keeps resolving -- once the
+# `fix/smith-command-provider-compat` branch is retired. It is the
+# compatibility backport of bounded command providers onto the pre-LCM runtime
+# baseline. Upstream `main` carries the same work on top of lossless context
+# memory, whose `SemanticSummary*` -> `Lcm*` rewrite Smith has not migrated
+# to; moving the pin forward means doing that migration, not bumping a rev.
 agent-runtime = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "93f476bc6e6cbb3e73deef3dde065d132e425d34", version = "=0.1.0" }
 agent-runtime-ability = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "93f476bc6e6cbb3e73deef3dde065d132e425d34", version = "=0.1.0" }
 agent-runtime-core = { git = "https://github.com/ForgeAILab/agent-runtime.git", rev = "93f476bc6e6cbb3e73deef3dde065d132e425d34", version = "=0.1.0" }
