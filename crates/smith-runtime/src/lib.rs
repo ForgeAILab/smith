@@ -22,6 +22,7 @@ pub mod cache_lifecycle;
 pub mod catalog;
 pub mod chatgpt;
 pub mod checkpoint;
+pub mod cli_agent;
 pub mod client;
 pub mod command_provider;
 pub mod delegation;
