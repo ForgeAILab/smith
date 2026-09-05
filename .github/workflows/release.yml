@@ -80,7 +80,13 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends libdbus-1-dev pkg-config
+          # `libacl1-dev` is exacl's link dependency: its build script emits
+          # `cargo:rustc-link-lib=acl` for every Linux target, so smith-host
+          # does not link without it.
+          sudo apt-get install --yes --no-install-recommends \
+            libacl1-dev \
+            libdbus-1-dev \
+            pkg-config
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
