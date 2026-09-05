@@ -49,3 +49,28 @@ commit. The runtime's separate CLI/MCP work remains outside Smith's pinned
 compatibility backport.
 The original ignored Cargo patch is backed up at
 `.git/smith-cargo-config.toml.sibling-backup` and is not active.
+
+## Release-prep addendum (2026-09-05)
+
+The pinned revision now carries the annotated upstream tag
+`smith-baseline-v0.1.0`. It was previously reachable only from
+`fix/smith-command-provider-compat`, so retiring that branch would have made
+`cargo build --locked` unresolvable; the tag removes that dependency on a
+working branch.
+
+Neither unmerged branch has anything left to contribute. Upstream `main`
+carries the same command-provider and hardened-fetch work as `b2fbd9f`, which
+shares parent `f369b9e` with `fix/smith-runtime-release-blockers`'s `da9fbf9`
+and is its superset. `fix/smith-command-provider-compat` is a backport of that
+work onto Smith's pre-LCM baseline. Repinning Smith to `main` was attempted
+and does not compile: the semantic-summary surface is renamed and restructured
+to LCM (`SemanticSummaryCoordinator` -> `LcmCoordinator`, `SummaryModel` ->
+`LcmSummaryModel`, `SEMANTIC_SUMMARY_*` -> `LCM_*`), and
+`protected_semantic_summary_from_state` is `pub(crate)` upstream, leaving no
+crate-public legacy import path. The surface is 83 references across 11 files,
+including the 509-line `summary.rs` and the resume-capsule persistence path.
+That migration stays separately scoped.
+
+A detached worktree at the release commit builds
+`cargo build -p smith-cli --release --locked` with no sibling checkout and no
+Cargo patch, and the binary reports `smith 0.1.0`.

@@ -153,3 +153,20 @@ including Smith consumer conformance, all-target/all-feature warning-denied
 Clippy, formatting, dependency policy, and the Rust 1.86 facade/provider check.
 Task 5.4 remains open only for real Linux process execution; Linux and live
 provider integration were not run on this macOS host. See `verification.md`.
+
+Verification (2026-09-05, release prep): the pinned revision is now immutable
+by reference as well as by digest. `93f476bc6e6cbb3e73deef3dde065d132e425d34`
+carries the annotated upstream tag `smith-baseline-v0.1.0`, so `--locked`
+keeps resolving after `fix/smith-command-provider-compat` is retired; before
+the tag the commit was reachable from that branch alone. Upstream `main`
+already carries the same command-provider work on top of lossless context
+memory, so nothing remains to merge; moving the pin forward is the separately
+scoped `SemanticSummary*` -> `Lcm*` migration, measured here at 83 references
+across 11 Smith files with no crate-public legacy import path.
+
+A detached worktree at the release commit, with no sibling checkout and no
+Cargo patch, builds `cargo build -p smith-cli --release --locked` and reports
+`smith 0.1.0`. The workspace passes 1,502 all-feature tests (6 ignored),
+warning-denied Clippy, formatting, and dependency policy; installer and npm
+tests pass. Real Linux process execution is still the one open clause, and
+CI's `Linux · Rust 1.88` leg covers it on push.
