@@ -302,14 +302,6 @@ pub enum PaletteCommand {
         /// Provider model ID.
         model: String,
     },
-    /// Select the model an installed CLI harness is told to run.
-    ///
-    /// Distinct from `Model`: it changes what the CLI runs, not which provider
-    /// Smith would call, and a harness profile resolves both.
-    HarnessModel {
-        /// The model name handed to the CLI.
-        model: String,
-    },
     /// Open the reviewed connection ceremony for a provider or backend.
     Connect(String),
     /// Remove one provider or backend authentication source.

@@ -57,8 +57,18 @@ output_reserve = 4096
             .get("openrouter")
             .map(|provider| provider.models.len())
             .expect("the fixture's provider is in the embedded catalog");
-        assert_eq!(resources.models.len(), catalogued);
+        // Installed coding agents are offered alongside the catalog under
+        // their own `cli/<agent>/<model>` namespace, so the list is the
+        // catalog plus every agent model.
+        let cli_models = smith_config::cli_agents::cli_model_ids();
+        assert_eq!(resources.models.len(), catalogued + cli_models.len());
         assert!(catalogued > 0, "the embedded catalog lost its models");
+        for id in &cli_models {
+            assert!(
+                resources.models.iter().any(|entry| entry.id == *id),
+                "`{id}` is selectable without any configuration"
+            );
+        }
         assert_eq!(
             resources
                 .main_profiles

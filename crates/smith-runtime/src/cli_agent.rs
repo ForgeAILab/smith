@@ -526,9 +526,17 @@ pub fn backend_for(
 ) -> Option<std::sync::Arc<dyn ExternalAgentBackend>> {
     let harness = config.harness.as_ref()?;
     let kind = CliAgentKind::parse(&harness.kind.value)?;
+    // Selecting `cli/claude-code/sonnet` should just work, so the executable
+    // is found on PATH unless the owner named one. A CLI that is not
+    // installed yields no backend, and the run falls back to reporting a
+    // missing agent rather than composing one that cannot start.
+    let executable = match &harness.executable {
+        Some(configured) => PathBuf::from(&configured.value),
+        None => discover_program(&harness.program)?,
+    };
     let settings = CliAgentSettings {
-        executable: PathBuf::from(&harness.executable.value),
-        model: harness.model.as_ref().map(|model| model.value.clone()),
+        executable,
+        model: Some(harness.model.value.clone()),
         args: harness.args.clone(),
         cwd: PathBuf::from(workspace_root),
         env: harness.env.clone(),
@@ -536,6 +544,25 @@ pub fn backend_for(
         instructions: None,
     };
     Some(std::sync::Arc::new(CliAgentBackend::new(kind, settings)))
+}
+
+/// Finds an installed program on `PATH`.
+///
+/// A plain lookup rather than a shell resolution: the same rule the rest of
+/// Smith's process boundaries follow, so nothing a shell would expand can
+/// change which binary runs.
+fn discover_program(program: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|directory| directory.join(program))
+        .find(|candidate| is_executable_file(candidate))
+}
+
+fn is_executable_file(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::metadata(path)
+        .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

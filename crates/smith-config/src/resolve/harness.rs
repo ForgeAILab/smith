@@ -1,82 +1,52 @@
 //! Resolves the installed coding agent a profile runs its turns on.
 //!
+//! An agent is selected by model id -- `cli/claude-code/sonnet` -- so trying
+//! one needs no configuration at all. `[harness.<kind>]` remains available for
+//! what genuinely varies per machine: a non-standard executable path, extra
+//! arguments, the environment, and whether the CLI may run its own tools.
+//!
 //! A harness replaces how a turn is *executed*, not how the model is
-//! identified: the profile still resolves a provider and model, because the
-//! runtime plans against real limits before any work runs. The CLI's own model
-//! is `harness.<name>.model`, which is what the CLI is actually told to use.
+//! identified: the profile still resolves a provider, because the runtime
+//! plans against real limits before any work runs.
 
 use std::collections::BTreeMap;
+
+use crate::cli_agents::parse_cli_model_id;
 
 use super::load::join_key;
 use super::provenance::*;
 use super::provider::{flag, list, text};
 use super::types::*;
 
-/// Harness names Smith knows how to drive.
-const KNOWN_HARNESSES: [&str; 2] = ["claude-code", "codex"];
-
-/// Reads the harness a profile selected, if any.
+/// Reads the installed agent the selected model names, if it names one.
 pub(super) fn resolve_harness(
     provenance: &Provenance,
 ) -> Result<Option<ResolvedHarness>, ConfigError> {
-    let Some(name) = text(provenance, "harness")? else {
+    let Some(model) = text(provenance, "model")? else {
         return Ok(None);
     };
-    let scope = join_key(&["harness", &name.value]);
-
-    // A declaration's `kind` names the CLI; without one the declaration's own
-    // name is the kind, so `[harness.claude-code]` needs no `kind` while
-    // several declarations can still drive the same CLI with different
-    // settings.
-    let kind = match text(provenance, &format!("{scope}.kind"))? {
-        Some(kind) => kind,
-        None => name.clone(),
+    let Some((entry, cli_model)) = parse_cli_model_id(&model.value) else {
+        return Ok(None);
     };
-    if !KNOWN_HARNESSES.contains(&kind.value.as_str()) {
-        return Err(ConfigError::InvalidValue {
-            source: kind.source.clone(),
-            message: format!(
-                "unknown harness kind `{}`; Smith drives {}",
-                kind.value,
-                KNOWN_HARNESSES.join(" or ")
-            ),
-        });
-    }
 
-    let executable = text(provenance, &format!("{scope}.executable"))?.ok_or_else(|| {
-        ConfigError::InvalidValue {
-            source: name.source.clone(),
-            message: format!(
-                "harness `{}` needs `{scope}.executable`, an absolute path to the installed CLI",
-                name.value
-            ),
+    // Optional per-machine overrides. Absent is the ordinary case: the
+    // executable is found on PATH and the CLI runs without its own tools.
+    let scope = join_key(&["harness", entry.kind]);
+
+    let executable = match text(provenance, &format!("{scope}.executable"))? {
+        Some(executable) => {
+            owner_only(&executable.source, &format!("{scope}.executable"))?;
+            if !std::path::Path::new(&executable.value).is_absolute() {
+                return Err(ConfigError::InvalidValue {
+                    source: executable.source.clone(),
+                    message: format!(
+                        "`{scope}.executable` must be an absolute path, invoked without a shell"
+                    ),
+                });
+            }
+            Some(executable)
         }
-    })?;
-    owner_only(&executable.source, &format!("{scope}.executable"))?;
-    if !std::path::Path::new(&executable.value).is_absolute() {
-        return Err(ConfigError::InvalidValue {
-            source: executable.source.clone(),
-            message: format!(
-                "`{scope}.executable` must be an absolute path, invoked without a shell"
-            ),
-        });
-    }
-
-    let model = text(provenance, &format!("{scope}.model"))?;
-
-    // Offered by `/model`. Falling back to the configured model keeps the
-    // picker honest: it lists what the owner actually declared rather than a
-    // vendor list Smith would have to guess at and keep current.
-    let models = match list(provenance, &format!("{scope}.models"))? {
-        Some(models) => models.value,
-        None => model.iter().map(|model| model.value.clone()).collect(),
-    };
-
-    // A session-level choice wins over the declared default, which is what
-    // makes the model picker able to change models without editing config.
-    let model = match text(provenance, "harness_model")? {
-        Some(selected) => Some(selected),
-        None => model,
+        None => None,
     };
 
     let args = match list(provenance, &format!("{scope}.args"))? {
@@ -102,11 +72,10 @@ pub(super) fn resolve_harness(
     let env = resolve_env(provenance, &scope)?;
 
     Ok(Some(ResolvedHarness {
-        name,
-        kind,
-        models,
+        kind: Sourced::new(entry.kind.to_owned(), model.source.clone()),
+        program: entry.program.to_owned(),
+        model: Sourced::new(cli_model, model.source.clone()),
         executable,
-        model,
         args,
         allow_own_tools,
         env,
@@ -115,17 +84,17 @@ pub(super) fn resolve_harness(
 
 /// Refuses a process-bearing value written by a project layer.
 ///
-/// A project may select a harness, because selecting one changes only which
-/// installed program Smith asks to work. It may not say what gets executed,
-/// with which arguments, or whether that program may write to the machine —
-/// the same boundary command providers already enforce.
+/// A project may select an agent, because that only chooses which installed
+/// program Smith asks to work. It may not say what gets executed, with which
+/// arguments, or whether that program may write to the machine -- the same
+/// boundary command providers already enforce.
 fn owner_only(source: &Source, key: &str) -> Result<(), ConfigError> {
     if matches!(source.layer, Layer::ProjectFile | Layer::ProjectLocalFile) {
         return Err(ConfigError::InvalidValue {
             source: source.clone(),
             message: format!(
-                "`{key}` is owner-controlled: a project may select a harness but cannot \
-                 declare what Smith executes; move it to `~/.smith/config.toml`"
+                "`{key}` is owner-controlled: a project may select an installed agent but \
+                 cannot declare what Smith executes; move it to `~/.smith/config.toml`"
             ),
         });
     }

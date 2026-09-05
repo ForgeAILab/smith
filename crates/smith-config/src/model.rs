@@ -326,12 +326,6 @@ pub struct ProfileSection {
     /// delegate regardless of this value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegation: Option<bool>,
-    /// An installed coding agent declared in `[harness.<name>]`.
-    ///
-    /// A profile with a harness runs its turns on that CLI instead of a model
-    /// provider, so `provider`/`model` do not apply to it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub harness: Option<String>,
     /// The name of a provider declared in `[providers.<name>]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
@@ -476,34 +470,18 @@ pub struct ChildAgentPolicySection {
     pub wait_max_timeout_ms: Option<u64>,
 }
 
-/// One installed coding agent Smith can run turns on.
+/// Per-machine overrides for one installed coding agent.
 ///
-/// Process-bearing values are owner-controlled: a project may select a harness
-/// but may not declare or redefine what gets executed.
+/// The agent itself is selected by model id (`cli/claude-code/sonnet`); this
+/// table exists only for what varies per machine. Process-bearing values are
+/// owner-controlled: a project may select an agent but may not declare or
+/// redefine what gets executed.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HarnessSection {
-    /// Which installed agent this declaration drives.
-    ///
-    /// Absent means the declaration's own name is the kind, so
-    /// `[harness.claude-code]` needs no `kind`. Naming it lets several
-    /// declarations drive the same CLI with different settings -- one per
-    /// model, say -- exactly as several providers can share an adapter kind.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
     /// Absolute path to the installed CLI, invoked without a shell.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub executable: Option<String>,
-    /// Model the CLI should use, when the owner selects one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    /// Models this CLI can be asked to run, offered by `/model`.
-    ///
-    /// Smith cannot enumerate an installed CLI's models -- they are the
-    /// vendor's, they change, and asking the CLI costs a process launch on
-    /// every picker open -- so the owner lists the ones they use.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub models: Option<Vec<String>>,
     /// Fixed, non-secret arguments appended to the built invocation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<Vec<String>>,

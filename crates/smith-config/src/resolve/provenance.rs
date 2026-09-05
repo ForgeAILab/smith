@@ -466,11 +466,6 @@ pub struct Overrides {
     pub provider: Option<String>,
     /// Select a model.
     pub model: Option<String>,
-    /// Select the model an installed CLI harness is told to run.
-    ///
-    /// Separate from `model`, which stays Smith's identity and limit record:
-    /// a harness turn resolves both, and they name different things.
-    pub harness_model: Option<String>,
     /// The generation cap asked of the provider.
     pub max_output_tokens: Option<u32>,
     /// Explicit thinking state for subsequent turns.
@@ -574,9 +569,6 @@ impl Overrides {
         }
         if let Some(value) = &self.model {
             push("model", SettingValue::Text(value.clone()));
-        }
-        if let Some(value) = &self.harness_model {
-            push("harness_model", SettingValue::Text(value.clone()));
         }
         if let Some(value) = self.max_output_tokens {
             push("max_output_tokens", SettingValue::Integer(value.into()));

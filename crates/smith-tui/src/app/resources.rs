@@ -7,6 +7,13 @@ use crate::picker::{PickerOutcome, ResourceEntry, ResourcePicker};
 use crate::status::Activity;
 use crate::transcript::LocalResultState;
 
+/// Marks a model id as an installed CLI agent rather than a provider model.
+///
+/// Mirrors `smith_config::cli_agents::CLI_MODEL_PREFIX`. The TUI reads ids it
+/// is handed rather than resolving configuration, so it recognizes the shape
+/// without taking a dependency on the resolver to do it.
+const CLI_MODEL_PREFIX: &str = "cli/";
+
 use super::state::*;
 
 impl App {
@@ -318,11 +325,12 @@ impl App {
     }
 
     pub(super) fn apply_model_id(&mut self, id: &str) -> Option<Action> {
-        // On a harness profile the picker lists the CLI's own models, which
-        // carry no provider identity because no provider will be called.
-        if self.status.harness.is_some() {
+        // An installed agent is selected by id like any other model, so it
+        // needs no provider identity: nothing will be called through one.
+        if id.starts_with(CLI_MODEL_PREFIX) {
             self.composer.clear();
-            return Some(Action::Reconfigure(PaletteCommand::HarnessModel {
+            return Some(Action::Reconfigure(PaletteCommand::Model {
+                provider: String::new(),
                 model: id.to_owned(),
             }));
         }

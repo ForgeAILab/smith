@@ -24,6 +24,7 @@
 
 pub mod auth_file;
 pub mod catalog;
+pub mod cli_agents;
 pub mod credential;
 pub mod inventory;
 pub mod mcp;

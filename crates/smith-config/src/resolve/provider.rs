@@ -690,10 +690,40 @@ pub(super) fn resolve_model_limits(
     model: &str,
 ) -> Result<ResolvedModelLimits, ConfigError> {
     let scope = join_key(&["models", &format!("{provider}/{model}")]);
-    Ok(ResolvedModelLimits {
+    let declared = ResolvedModelLimits {
         context_tokens: optional_u32(provenance, &format!("{scope}.context_tokens"))?,
         max_input_tokens: optional_u32(provenance, &format!("{scope}.max_input_tokens"))?,
         max_output_tokens: optional_u32(provenance, &format!("{scope}.max_output_tokens"))?,
+    };
+    if crate::cli_agents::parse_cli_model_id(model).is_none() {
+        return Ok(declared);
+    }
+    // An installed agent owns its own context, so Smith has no limits to
+    // discover and nothing to enforce with them. Supply defaults rather than
+    // demand a `[models]` table for a number that changes nothing, while
+    // still letting an owner override them.
+    let built_in = |key: &str, fallback: u32| {
+        Sourced::new(fallback, Source::built_in(format!("{scope}.{key}")))
+    };
+    Ok(ResolvedModelLimits {
+        context_tokens: declared.context_tokens.or_else(|| {
+            Some(built_in(
+                "context_tokens",
+                crate::cli_agents::CLI_AGENT_CONTEXT_TOKENS,
+            ))
+        }),
+        max_input_tokens: declared.max_input_tokens.or_else(|| {
+            Some(built_in(
+                "max_input_tokens",
+                crate::cli_agents::CLI_AGENT_MAX_INPUT_TOKENS,
+            ))
+        }),
+        max_output_tokens: declared.max_output_tokens.or_else(|| {
+            Some(built_in(
+                "max_output_tokens",
+                crate::cli_agents::CLI_AGENT_MAX_OUTPUT_TOKENS,
+            ))
+        }),
     })
 }
 

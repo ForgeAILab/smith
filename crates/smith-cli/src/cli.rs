@@ -80,11 +80,6 @@ pub(crate) struct Selection {
     pub provider: Option<String>,
     /// A model override.
     pub model: Option<String>,
-    /// The model an installed CLI harness is told to run.
-    ///
-    /// Session-local: `/model` on a harness profile changes what the CLI runs
-    /// without touching which provider Smith resolved for identity.
-    pub harness_model: Option<String>,
     /// Session-local explicit thinking state.
     pub reasoning_enabled: Option<bool>,
     /// An explicit `/think default` clears a persisted override.
@@ -130,7 +125,6 @@ impl Selection {
         Overrides {
             reasoning_enabled: self.reasoning_enabled,
             reasoning_effort: self.reasoning_effort.clone(),
-            harness_model: self.harness_model.clone(),
             ..Overrides::default()
         }
     }

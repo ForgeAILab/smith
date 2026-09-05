@@ -414,29 +414,32 @@ pub(super) fn runtime_resources(
         );
     }
 
-    // On a harness profile the provider catalog is the wrong list entirely:
-    // it advertises models Smith would call, while the turn runs on an
-    // installed CLI that knows nothing about them. Offer what the harness
-    // declared instead.
-    let models = match harness {
-        Some(harness) => harness
-            .models
-            .iter()
-            .map(|model| {
-                let active = harness
-                    .model
-                    .as_ref()
-                    .is_some_and(|selected| selected.value == *model);
-                ResourceEntry::new(
-                    model.clone(),
-                    format!("{} · {}", harness.kind.value, harness.name.value),
-                    format!("run this turn's agent on {model}"),
-                )
-                .active(active)
-            })
-            .collect(),
-        None => models,
-    };
+    // Installed coding agents appear alongside provider models, under their
+    // own `cli/<agent>/<model>` namespace. They are listed whether or not the
+    // CLI is installed: a row that says the program is missing is more useful
+    // than silently offering nothing, and it is how someone discovers the
+    // capability exists at all.
+    let mut models = models;
+    let active_cli_model = harness.map(|harness| {
+        smith_config::cli_agents::cli_model_id(&harness.kind.value, &harness.model.value)
+    });
+    for entry in smith_config::cli_agents::CLI_AGENTS {
+        let installed = program_on_path(entry.program);
+        for model in entry.models {
+            let id = smith_config::cli_agents::cli_model_id(entry.kind, model);
+            let active = active_cli_model.as_deref() == Some(id.as_str());
+            let row = ResourceEntry::new(
+                id,
+                format!("{} · runs the turn itself", entry.description),
+                format!("run this agent on {model}"),
+            )
+            .active(active);
+            models.push(match installed {
+                true => row,
+                false => row.disabled(format!("`{}` is not on PATH", entry.program)),
+            });
+        }
+    }
 
     RuntimeResources {
         models,
@@ -850,4 +853,17 @@ pub(super) fn abbreviate(path: &str, home: &str) -> String {
         Some(rest) => format!("~{rest}"),
         None => path.to_owned(),
     }
+}
+
+/// Whether a program is present and executable on `PATH`.
+fn program_on_path(program: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|directory| {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::metadata(directory.join(program))
+            .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    })
 }
