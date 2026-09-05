@@ -2330,3 +2330,161 @@ async fn child_write_access_stays_read_only_under_a_read_only_posture() {
 
     session.shutdown().await.expect("a clean shutdown");
 }
+
+/// Spawns a child from inside the parent's own turn and then finishes that
+/// turn without reading the result, which is how a delegating model actually
+/// leaves a ready outcome behind.
+#[derive(Debug)]
+struct SpawnThenFinishProvider {
+    requests: Mutex<Vec<ProviderRequest>>,
+}
+
+impl SpawnThenFinishProvider {
+    fn new() -> Self {
+        Self {
+            requests: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn requests(&self) -> Vec<ProviderRequest> {
+        self.requests
+            .lock()
+            .expect("provider requests poisoned")
+            .clone()
+    }
+}
+
+#[async_trait]
+impl Provider for SpawnThenFinishProvider {
+    fn describe(&self) -> Vec<ModelDescriptor> {
+        Vec::new()
+    }
+
+    fn capabilities(&self, _model: &agent_runtime_core::provider::ModelId) -> Option<Capabilities> {
+        Some(Capabilities::basic_streaming())
+    }
+
+    async fn stream(
+        &self,
+        request: ProviderRequest,
+        _ctx: ProviderCallContext,
+    ) -> Result<ProviderStream, ProviderError> {
+        let wire = serde_json::to_string(&request.messages).expect("provider messages");
+        self.requests
+            .lock()
+            .expect("provider requests poisoned")
+            .push(request);
+        // The child inherits the parent's provider; its own turn is the one
+        // carrying the delegated task text without an `agent` call of its own.
+        let is_child = wire.contains(CHILD_TASK_MARKER) && !wire.contains(AGENT_TOOL_NAME);
+        if is_child {
+            return Ok(Box::pin(futures_util::stream::iter(vec![
+                ProviderStreamEvent::TextDelta {
+                    text: "the child's finding".to_owned(),
+                },
+                usage_event(5, 2),
+                ProviderStreamEvent::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ])));
+        }
+        if !wire.contains(CHILD_TASK_MARKER) {
+            let mut events = tool_call_fragments(
+                0,
+                "spawn-one-child",
+                AGENT_TOOL_NAME,
+                &serde_json::json!({"action": "spawn", "task": CHILD_TASK_MARKER}).to_string(),
+            );
+            events.push(ProviderStreamEvent::Finish {
+                reason: FinishReason::ToolCalls,
+            });
+            return Ok(Box::pin(futures_util::stream::iter(events)));
+        }
+        Ok(Box::pin(futures_util::stream::iter(vec![
+            ProviderStreamEvent::TextDelta {
+                text: "spawned and finished".to_owned(),
+            },
+            usage_event(5, 2),
+            ProviderStreamEvent::Finish {
+                reason: FinishReason::Stop,
+            },
+        ])))
+    }
+}
+
+const CHILD_TASK_MARKER: &str = "inspect-the-repository-for-the-parent";
+
+/// A parent that spawns a child inside its own turn and never reads the
+/// result must still receive it, with no further user turn, tool call, or
+/// runtime event to wake the admission worker.
+///
+/// This asserts the end state the hang violated. It does not by itself
+/// reproduce the refusal race that caused it: behind an in-process fake
+/// provider the parent's turn boundary frees before the worker's first
+/// attempt, so that attempt is accepted. `next_admission_retry_delay` covers
+/// the retry policy the race depends on.
+#[tokio::test]
+async fn a_child_spawned_inside_a_parent_turn_is_delivered_without_another_user_turn() {
+    let fixture = Fixture::new();
+    let provider = Arc::new(SpawnThenFinishProvider::new());
+    let smith = factory::build_request(request(&fixture, provider.clone()))
+        .await
+        .expect("a root runtime");
+    let session = smith
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .expect("a session");
+    let delegation = smith.delegation().expect("a delegation surface");
+    let _lifecycle = wire_delegation(&session, delegation)
+        .await
+        .expect("delegation wires once");
+
+    session
+        .run(UserInput::text("delegate one look at the repository"))
+        .await
+        .expect("the parent turn completes while its child result stays undelivered");
+
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if provider.requests().iter().any(|request| {
+                serde_json::to_string(&request.messages)
+                    .expect("provider messages")
+                    .contains("delegation.child-completion")
+            }) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the ready child outcome reaches the parent on its own");
+
+    session.shutdown().await.expect("a clean shutdown");
+}
+
+/// Runtime answers `Busy` when the parent turn boundary is still occupied.
+/// The admission worker is otherwise woken only by runtime events, so a
+/// refusal arriving after the last event of a run must schedule its own retry
+/// — and a parent that stays occupied must back off rather than spin.
+#[test]
+fn a_repeated_transient_admission_refusal_backs_off_to_a_bounded_delay() {
+    let first = smith_runtime::delegation::next_admission_retry_delay(None);
+    assert_eq!(first, std::time::Duration::from_millis(20));
+
+    let mut delay = first;
+    let mut doublings = 0;
+    while delay < std::time::Duration::from_millis(500) {
+        let next = smith_runtime::delegation::next_admission_retry_delay(Some(delay));
+        assert!(next > delay, "each refusal waits longer than the last");
+        delay = next;
+        doublings += 1;
+        assert!(doublings < 16, "the backoff must reach its ceiling quickly");
+    }
+    assert_eq!(delay, std::time::Duration::from_millis(500));
+    assert_eq!(
+        smith_runtime::delegation::next_admission_retry_delay(Some(delay)),
+        std::time::Duration::from_millis(500),
+        "the ceiling holds instead of growing without bound"
+    );
+}

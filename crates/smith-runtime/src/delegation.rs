@@ -594,6 +594,28 @@ impl Drop for DelegationLifecycle {
     }
 }
 
+/// Shortest delay before a transiently refused child-completion admission is
+/// retried, and the ceiling that repeated refusals back off to.
+///
+/// `Busy` and `Conflict` are races, not answers: Runtime refused *this*
+/// attempt because the parent turn boundary or the protected cursor was
+/// momentarily occupied. The admission worker is otherwise woken only by
+/// runtime events, so a refusal arriving after the last event of a run would
+/// never be retried and the ready outcome would never be delivered.
+const ADMISSION_RETRY_MIN: Duration = Duration::from_millis(20);
+const ADMISSION_RETRY_MAX: Duration = Duration::from_millis(500);
+
+/// Doubles a transient-refusal retry delay up to [`ADMISSION_RETRY_MAX`].
+///
+/// `None` is the first refusal since the last progress, so the worker retries
+/// quickly; a parent that stays occupied backs off instead of spinning.
+pub fn next_admission_retry_delay(previous: Option<Duration>) -> Duration {
+    match previous {
+        None => ADMISSION_RETRY_MIN,
+        Some(delay) => delay.saturating_mul(2).min(ADMISSION_RETRY_MAX),
+    }
+}
+
 /// Starts the local parking projection and Runtime-backed admission worker.
 ///
 /// Runtime's coordinator owns exact outcome payloads, protected cursor
@@ -668,6 +690,7 @@ fn start_delegation_lifecycle_tasks(
     let admission_cancel = cancel.clone();
     let admission_task = tokio::spawn(async move {
         let mut initial_snapshot = true;
+        let mut retry_delay: Option<Duration> = None;
         loop {
             if admission_cancel.is_cancelled() {
                 break;
@@ -680,6 +703,8 @@ fn start_delegation_lifecycle_tasks(
             // snapshot and the select below.
             notified.as_mut().enable();
             let mut progressed = false;
+            // Set only by an admission Runtime refused for a transient reason.
+            let mut transient_refusal = false;
 
             // This is an idempotent protected snapshot, not an acknowledgement.
             // Runtime's child-completion admission remains the only operation
@@ -718,10 +743,13 @@ fn start_delegation_lifecycle_tasks(
                             false,
                         );
                     }
-                    Ok(ChildCompletionAdmission::Busy) => admission_parking
-                        .lock()
-                        .expect("delegation parking state poisoned")
-                        .admission_busy(),
+                    Ok(ChildCompletionAdmission::Busy) => {
+                        transient_refusal = true;
+                        admission_parking
+                            .lock()
+                            .expect("delegation parking state poisoned")
+                            .admission_busy();
+                    }
                     Ok(ChildCompletionAdmission::Stale) => {
                         progressed = true;
                         let revision = coordinator.child_outcome_cursor().revision();
@@ -742,10 +770,13 @@ fn start_delegation_lifecycle_tasks(
                             .shutdown();
                         break;
                     }
-                    Ok(ChildCompletionAdmission::Conflict { .. }) | Err(_) => admission_parking
-                        .lock()
-                        .expect("delegation parking state poisoned")
-                        .admission_conflict(),
+                    Ok(ChildCompletionAdmission::Conflict { .. }) | Err(_) => {
+                        transient_refusal = true;
+                        admission_parking
+                            .lock()
+                            .expect("delegation parking state poisoned")
+                            .admission_conflict();
+                    }
                 }
             }
 
@@ -756,7 +787,20 @@ fn start_delegation_lifecycle_tasks(
             {
                 break;
             }
-            if !progressed {
+            if progressed {
+                retry_delay = None;
+            } else if transient_refusal {
+                // A refused attempt must not wait on an event that a quiet
+                // session will never emit.
+                let delay = next_admission_retry_delay(retry_delay);
+                retry_delay = Some(delay);
+                tokio::select! {
+                    _ = &mut notified => {}
+                    _ = tokio::time::sleep(delay) => {}
+                    _ = admission_cancel.cancelled() => break,
+                }
+            } else {
+                retry_delay = None;
                 tokio::select! {
                     _ = &mut notified => {}
                     _ = admission_cancel.cancelled() => break,
