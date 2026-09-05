@@ -515,6 +515,29 @@ fn normalize_codex(value: &serde_json::Value) -> Vec<ExternalAgentEvent> {
     events
 }
 
+/// Builds a backend for the harness a resolved configuration selected.
+///
+/// Returns `None` when the profile runs on Smith's own provider/tool loop,
+/// which leaves the runtime composed exactly as it was before harnesses
+/// existed.
+pub fn backend_for(
+    config: &smith_config::resolve::ResolvedConfig,
+    workspace_root: &str,
+) -> Option<std::sync::Arc<dyn ExternalAgentBackend>> {
+    let harness = config.harness.as_ref()?;
+    let kind = CliAgentKind::parse(&harness.name.value)?;
+    let settings = CliAgentSettings {
+        executable: PathBuf::from(&harness.executable.value),
+        model: harness.model.as_ref().map(|model| model.value.clone()),
+        args: harness.args.clone(),
+        cwd: PathBuf::from(workspace_root),
+        env: harness.env.clone(),
+        allow_own_tools: harness.allow_own_tools.value,
+        instructions: None,
+    };
+    Some(std::sync::Arc::new(CliAgentBackend::new(kind, settings)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

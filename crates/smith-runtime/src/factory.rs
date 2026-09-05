@@ -1607,6 +1607,12 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         ContextBudget::from_limits(&profile.profile.limits, &context_policy).capability_budget,
         8,
     );
+    // A harness profile runs its turns on an installed CLI. The provider below
+    // is still resolved and still supplies model identity and the limits the
+    // runtime enforces before any work runs; it is simply never called to
+    // produce a turn.
+    let cli_agent = crate::cli_agent::backend_for(&request.config, workspace.root());
+
     let mut builder = RuntimeBuilder::new(model.clone())
         .provider(provider.clone())
         .provider_name(provider_name.clone())
@@ -1650,6 +1656,11 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         .clock(clock.clone())
         .event_buffer(request.event_buffer)
         .shutdown_timeout_ms(request.shutdown_timeout_ms);
+    // A harness replaces how a turn is executed, leaving every other piece of
+    // the composition above in place.
+    if let Some(backend) = cli_agent {
+        builder = builder.external_agent(backend);
+    }
     if let Some(identity) = cache_endpoint_identity.as_ref() {
         builder = builder.cache_endpoint_identity(identity.clone());
     }
@@ -3423,6 +3434,7 @@ exit 2
             profile: None,
             agent: agent(AgentPosture::Build),
             provider: provider(KIND_FAKE, None),
+            harness: None,
             model: sourced("example-model".to_owned()),
             max_output_tokens: None,
             model_limits: Default::default(),
@@ -3828,6 +3840,7 @@ exit 2
             profile: None,
             agent: agent(AgentPosture::Build),
             provider: provider(KIND_FAKE, None),
+            harness: None,
             model: sourced("example-model".to_owned()),
             max_output_tokens: None,
             model_limits: Default::default(),
@@ -3873,6 +3886,7 @@ exit 2
             profile: None,
             agent: agent(AgentPosture::Build),
             provider: provider(KIND_FAKE, None),
+            harness: None,
             model: sourced("example-model".to_owned()),
             max_output_tokens: None,
             model_limits: Default::default(),
@@ -3912,6 +3926,7 @@ exit 2
             profile: None,
             agent: agent(AgentPosture::Build),
             provider: provider(KIND_FAKE, None),
+            harness: None,
             model: sourced("example-model".to_owned()),
             max_output_tokens: None,
             model_limits: Default::default(),
@@ -3952,6 +3967,7 @@ exit 2
             profile: None,
             agent: agent(AgentPosture::Build),
             provider: provider(KIND_FAKE, None),
+            harness: None,
             model: sourced("example-model".to_owned()),
             max_output_tokens: None,
             model_limits: Default::default(),

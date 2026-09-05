@@ -207,6 +207,9 @@ pub struct ConfigFile {
     /// Named providers: `[providers.<name>]`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub providers: BTreeMap<String, ProviderSection>,
+    /// Installed coding agents a profile may run its turns on.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub harness: BTreeMap<String, HarnessSection>,
     /// Model limits keyed `"<provider>/<model>"`: `[models."acme/example-model"]`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub models: BTreeMap<String, ModelSection>,
@@ -323,6 +326,12 @@ pub struct ProfileSection {
     /// delegate regardless of this value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegation: Option<bool>,
+    /// An installed coding agent declared in `[harness.<name>]`.
+    ///
+    /// A profile with a harness runs its turns on that CLI instead of a model
+    /// provider, so `provider`/`model` do not apply to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
     /// The name of a provider declared in `[providers.<name>]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
@@ -465,6 +474,34 @@ pub struct ChildAgentPolicySection {
     /// Maximum accepted `agent.wait.timeout_ms`, in milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wait_max_timeout_ms: Option<u64>,
+}
+
+/// One installed coding agent Smith can run turns on.
+///
+/// Process-bearing values are owner-controlled: a project may select a harness
+/// but may not declare or redefine what gets executed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HarnessSection {
+    /// Absolute path to the installed CLI, invoked without a shell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executable: Option<String>,
+    /// Model the CLI should use, when the owner selects one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Fixed, non-secret arguments appended to the built invocation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
+    /// Whether the CLI may run its own tools.
+    ///
+    /// Absent means off. Enabling it lets the CLI execute reads, writes, and
+    /// commands that Smith never approved, never scoped to the workspace, and
+    /// cannot record as tool history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_own_tools: Option<bool>,
+    /// Environment overlaid on the inherited ambient environment.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
 }
 
 /// One provider declaration.

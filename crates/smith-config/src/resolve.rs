@@ -4,6 +4,7 @@
 //! private child modules.
 
 mod agent;
+mod harness;
 mod load;
 mod mcp;
 mod provenance;

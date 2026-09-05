@@ -185,6 +185,9 @@ pub struct ResolvedConfig {
     pub agent: ResolvedAgent,
     /// The selected provider and its options.
     pub provider: ResolvedProvider,
+    /// The installed coding agent this profile runs its turns on, when it
+    /// selects one. Absent means Smith's own provider/tool loop runs the turn.
+    pub harness: Option<ResolvedHarness>,
     /// The selected model.
     pub model: Sourced<String>,
     /// The generation cap asked of the provider.
@@ -339,6 +342,23 @@ impl McpValue {
             Self::Literal(_) => None,
         }
     }
+}
+
+/// A resolved installed coding agent a profile runs its turns on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedHarness {
+    /// Which CLI, as selected by the profile.
+    pub name: Sourced<String>,
+    /// Absolute path to the CLI, invoked without a shell.
+    pub executable: Sourced<String>,
+    /// Model the CLI itself is told to use.
+    pub model: Option<Sourced<String>>,
+    /// Fixed, non-secret arguments appended to the built invocation.
+    pub args: Vec<String>,
+    /// Whether the CLI may run its own tools. Off unless explicitly enabled.
+    pub allow_own_tools: Sourced<bool>,
+    /// Environment overlaid on the inherited ambient environment.
+    pub env: std::collections::BTreeMap<String, String>,
 }
 
 /// The selected provider, validated against the options its kind supports.

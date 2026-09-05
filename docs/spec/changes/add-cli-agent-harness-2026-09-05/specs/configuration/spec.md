@@ -7,22 +7,23 @@ or `harness = "codex"`. Such a profile SHALL run its turns on that CLI instead
 of a model provider, and MUST be selectable as the main agent or as a delegated
 child through the ordinary `use` list.
 
-A harness profile MUST NOT also carry provider-model settings whose semantics
-the CLI would silently ignore. Smith SHALL reject that combination at
-resolution rather than accept a model choice with no effect.
+A harness profile SHALL still resolve a provider and model. The runtime plans
+against real model limits before any work runs, and those limits come from the
+profile whether or not a provider is ever called. The harness replaces how the
+turn is *executed*, not how the model is identified; the resolved provider is
+never called to produce a harness turn.
+
+The CLI's own model selection is `harness.<name>.model`, which is what the CLI
+is actually told to use. The profile's `model` remains Smith's identity and
+limit record for the run.
 
 #### Scenario: Profile selects a harness
 
-- **GIVEN** a profile with `harness = "claude-code"`
+- **GIVEN** a profile with `harness = "claude-code"` and a resolved provider
 - **WHEN** configuration resolves
-- **THEN** the profile is valid without a provider or model
+- **THEN** the profile is valid
 - **AND** `smith config explain` reports the harness and its source
-
-#### Scenario: Harness profile carries provider-only settings
-
-- **GIVEN** a harness profile that also sets a provider credential or endpoint
-- **WHEN** configuration resolves
-- **THEN** resolution fails naming the conflicting key
+- **AND** the resolved provider is never called to produce a turn
 
 ### Requirement: Harness process settings
 

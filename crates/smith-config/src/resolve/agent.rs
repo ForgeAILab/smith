@@ -541,10 +541,13 @@ pub(super) fn extract(
     let background = resolve_background(provenance)?;
     let mcp = super::mcp::resolve_mcp(provenance, declared)?;
 
+    let harness = super::harness::resolve_harness(provenance)?;
+
     Ok(ResolvedConfig {
         profile,
         agent,
         provider,
+        harness,
         model,
         max_output_tokens: optional_u32(provenance, "max_output_tokens")?,
         model_limits,
