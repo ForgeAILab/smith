@@ -1269,3 +1269,61 @@
         assert_eq!(usage.delegated_contributors, 0);
         assert!(usage.is_empty(), "nothing was ever observed this process");
     }
+
+    #[test]
+    fn a_harness_turn_renders_the_installed_agent_s_answer_and_its_own_tools() {
+        // A harness turn runs on an installed coding agent: no provider
+        // attempt is started, so nothing about it arrives through the
+        // speculative path the direct loop uses. Before these events were
+        // folded, the whole turn rendered as an empty "Worked for 5s".
+        let mut app = app();
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        app.apply(&event(RuntimeEvent::ExternalSessionStarted {
+            session: "thread-1".to_owned(),
+        }));
+        app.apply(&event(RuntimeEvent::ExternalReasoning {
+            text: "checking the file".to_owned(),
+        }));
+        app.apply(&event(RuntimeEvent::ExternalToolInvoked {
+            id: "call-1".to_owned(),
+            name: "Read".to_owned(),
+        }));
+        app.apply(&event(RuntimeEvent::ExternalToolCompleted {
+            id: "call-1".to_owned(),
+            ok: true,
+        }));
+        app.apply(&event(RuntimeEvent::ExternalText {
+            text: "the version ".to_owned(),
+        }));
+        app.apply(&event(RuntimeEvent::ExternalText {
+            text: "is 3".to_owned(),
+        }));
+        app.apply(&event(RuntimeEvent::TurnCompleted {
+            finish: TurnFinish::Completed,
+            visible_output: true,
+        }));
+
+        // Nothing was held back: an installed agent's output arrives already
+        // committed, with no attempt to commit or discard it.
+        assert!(app.speculative_text().is_none());
+        let blocks: Vec<String> = app
+            .transcript
+            .blocks()
+            .iter()
+            .map(|block| match block {
+                Block::Assistant { text, .. } => format!("assistant: {text}"),
+                Block::Reasoning { text, .. } => format!("reasoning: {text}"),
+                Block::Tool { name, status, .. } => format!("tool: {name} {}", status.label()),
+                Block::Notice { source, text } => format!("{source} · {text}"),
+                other => format!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            blocks,
+            vec![
+                "reasoning: checking the file".to_owned(),
+                "tool: Read ok".to_owned(),
+                "assistant: the version is 3".to_owned(),
+            ]
+        );
+    }

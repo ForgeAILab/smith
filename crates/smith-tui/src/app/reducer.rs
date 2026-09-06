@@ -391,6 +391,35 @@ impl App {
             RuntimeEvent::ProviderAttemptFinished { .. } => {
                 self.set_provider_phase(None);
             }
+            // A harness turn has no provider round trip of its own, so the
+            // phase line reports what the installed agent is doing instead of
+            // sitting on "sending" for the whole turn.
+            RuntimeEvent::ExternalText { .. } => {
+                self.set_provider_phase(Some(ProviderPhase::Responding));
+            }
+            RuntimeEvent::ExternalReasoning { .. } => {
+                self.set_provider_phase(Some(ProviderPhase::Thinking));
+            }
+            RuntimeEvent::ExternalToolInvoked { id, name } => {
+                if let Some(work) = &mut self.work {
+                    work.tools.insert(
+                        id.clone(),
+                        (name.clone(), ToolStatus::Running, Some(Instant::now())),
+                    );
+                }
+            }
+            RuntimeEvent::ExternalToolCompleted { id, ok } => {
+                let status = if *ok {
+                    ToolStatus::Ok
+                } else {
+                    ToolStatus::Failed
+                };
+                if let Some(work) = &mut self.work
+                    && let Some((_, work_status, _)) = work.tools.get_mut(id.as_str())
+                {
+                    *work_status = status;
+                }
+            }
             RuntimeEvent::ToolCallRequested { call, name, .. } => {
                 if let Some(work) = &mut self.work {
                     work.tools.insert(

@@ -122,6 +122,29 @@ impl ConversationMut<'_> {
             RuntimeEvent::ProviderAttemptOutputDiscarded { request, attempt } => {
                 self.finish_attempt(request, attempt, false);
             }
+            // A harness turn runs on an installed coding agent, so its
+            // output arrives already committed: there is no provider attempt
+            // to speculate over and nothing to retry away.
+            RuntimeEvent::ExternalText { text } => {
+                self.transcript.push_text_delta(text);
+            }
+            RuntimeEvent::ExternalReasoning { text } => {
+                // No provider signed it, so it is never marked redacted.
+                self.transcript.push_reasoning_delta(text, false);
+            }
+            RuntimeEvent::ExternalToolInvoked { id, name } => {
+                self.transcript.push_external_tool_call(id.as_str(), name);
+            }
+            RuntimeEvent::ExternalToolCompleted { id, ok } => {
+                self.transcript.complete_tool_call(
+                    id.as_str(),
+                    if *ok {
+                        ToolStatus::Ok
+                    } else {
+                        ToolStatus::Failed
+                    },
+                );
+            }
             RuntimeEvent::ToolCallRequested {
                 call,
                 name,

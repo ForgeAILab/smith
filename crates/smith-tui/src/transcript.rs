@@ -352,6 +352,25 @@ impl Transcript {
         });
     }
 
+    /// Records a tool an installed agent ran inside a harness turn.
+    ///
+    /// Smith did not dispatch it, did not approve it, and cannot see its
+    /// arguments, so the row says who ran it rather than borrowing the shape
+    /// of a call Smith made and vouched for.
+    pub fn push_external_tool_call(&mut self, call_id: impl Into<String>, name: &str) {
+        self.close_open();
+        self.blocks.push(Block::Tool {
+            call_id: call_id.into(),
+            name: name.to_owned(),
+            display: None,
+            protected_summary: "run by the agent".to_owned(),
+            status: ToolStatus::Running,
+            result_preview: None,
+            started_at: Some(Instant::now()),
+            enrichment: Vec::new(),
+        });
+    }
+
     /// Resolves every still-running call to `status`.
     ///
     /// Called when a conversation reaches a terminal state with rows left
