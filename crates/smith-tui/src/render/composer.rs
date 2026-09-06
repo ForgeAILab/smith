@@ -15,6 +15,12 @@ use ratatui::widgets::{Paragraph, Wrap};
 use smith_runtime::client::{PlanItemProjection, PlanItemStatus};
 use unicode_width::UnicodeWidthStr;
 
+/// Marks a model id as an installed CLI agent rather than a provider model.
+///
+/// Mirrors `smith_config::cli_agents::CLI_MODEL_PREFIX`; rendering reads the
+/// id it is handed rather than resolving configuration to recognize one.
+const CLI_MODEL_PREFIX: &str = "cli/";
+
 use super::helpers::*;
 use super::layout::*;
 
@@ -390,9 +396,15 @@ pub(super) fn draw_identity_footer(frame: &mut Frame<'_>, area: Rect, app: &App,
             theme.style(Tone::Accent),
         ));
     }
+    // An installed CLI agent's id already names what runs the turn, and the
+    // resolved provider only supplies model identity and limits -- nothing is
+    // called through it. Prefixing it would read as though the turn went to
+    // that provider.
     let model = match &app.status.provider {
-        Some(provider) => format!("{provider}/{}", app.status.model),
-        None => app.status.model.clone(),
+        Some(provider) if !app.status.model.starts_with(CLI_MODEL_PREFIX) => {
+            format!("{provider}/{}", app.status.model)
+        }
+        _ => app.status.model.clone(),
     };
     push_segment(
         &mut identity,
