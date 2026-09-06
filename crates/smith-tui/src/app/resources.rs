@@ -330,7 +330,7 @@ impl App {
         if id.starts_with(CLI_MODEL_PREFIX) {
             self.composer.clear();
             return Some(Action::Reconfigure(PaletteCommand::Model {
-                provider: String::new(),
+                provider: None,
                 model: id.to_owned(),
             }));
         }
@@ -341,7 +341,7 @@ impl App {
         };
         self.composer.clear();
         Some(Action::Reconfigure(PaletteCommand::Model {
-            provider,
+            provider: Some(provider),
             model,
         }))
     }

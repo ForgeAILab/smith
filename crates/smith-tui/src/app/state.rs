@@ -295,11 +295,12 @@ pub enum PaletteCommand {
     Resume(String),
     /// Select a configured profile and clear narrower provider/model flags.
     Profile(String),
-    /// Select a provider/model pair atomically.
+    /// Select a model, with the provider that serves it when there is one.
     Model {
-        /// Serving provider.
-        provider: String,
-        /// Provider model ID.
+        /// Serving provider, absent for an installed CLI agent: nothing is
+        /// called through a provider to run its turn.
+        provider: Option<String>,
+        /// Model ID.
         model: String,
     },
     /// Open the reviewed connection ceremony for a provider or backend.

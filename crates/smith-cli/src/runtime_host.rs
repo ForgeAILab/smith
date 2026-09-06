@@ -644,8 +644,14 @@ pub(super) fn apply_palette_command(
             *resume = Some(current_session);
         }
         PaletteCommand::Model { provider, model } => {
-            selection.profile = None;
-            selection.provider = Some(provider);
+            // A provider-served model narrows the selection to that pair. An
+            // installed CLI agent has none: it runs the turn itself, and the
+            // profile stays selected because its provider is still what
+            // supplies model identity and the limits planned against.
+            if let Some(provider) = provider {
+                selection.profile = None;
+                selection.provider = Some(provider);
+            }
             selection.model = Some(model);
             *resume = Some(current_session);
         }

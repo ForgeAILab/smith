@@ -8,7 +8,7 @@
         assert_eq!(
             action,
             Some(Action::Reconfigure(PaletteCommand::Model {
-                provider: "local".into(),
+                provider: Some("local".into()),
                 model: "model-2".into(),
             })),
             "a slash command runs the same host action as the palette"
@@ -153,14 +153,14 @@
             (
                 "provider local",
                 PaletteCommand::Model {
-                    provider: "local".into(),
+                    provider: Some("local".into()),
                     model: "model-2".into(),
                 },
             ),
             (
                 "model model-2",
                 PaletteCommand::Model {
-                    provider: "local".into(),
+                    provider: Some("local".into()),
                     model: "model-2".into(),
                 },
             ),
@@ -264,7 +264,7 @@
         assert_eq!(
             app.on_key(key(KeyCode::Enter)),
             Some(Action::Reconfigure(PaletteCommand::Model {
-                provider: "openrouter".into(),
+                provider: Some("openrouter".into()),
                 model: "openai/gpt-4o-mini".into(),
             }))
         );
@@ -302,7 +302,7 @@
         assert_eq!(
             app.on_key(key(KeyCode::Enter)),
             Some(Action::Reconfigure(PaletteCommand::Model {
-                provider: "router".into(),
+                provider: Some("router".into()),
                 model: "alpha".into(),
             }))
         );
