@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
@@ -18,11 +18,11 @@ repository = "https://github.com/ForgeAILab/smith"
 authors = ["Smith contributors"]
 
 [workspace.dependencies]
-smith-config = { path = "crates/smith-config", version = "0.1.0" }
-smith-host = { path = "crates/smith-host", version = "0.1.0" }
-smith-runtime = { path = "crates/smith-runtime", version = "0.1.0" }
-smith-tools = { path = "crates/smith-tools", version = "0.1.0" }
-smith-tui = { path = "crates/smith-tui", version = "0.1.0" }
+smith-config = { path = "crates/smith-config", version = "0.2.0" }
+smith-host = { path = "crates/smith-host", version = "0.2.0" }
+smith-runtime = { path = "crates/smith-runtime", version = "0.2.0" }
+smith-tools = { path = "crates/smith-tools", version = "0.2.0" }
+smith-tui = { path = "crates/smith-tui", version = "0.2.0" }
 
 # The shared runtime. Smith depends on one immutable, reviewed runtime source
 # revision. Local sibling-checkout development uses the git-ignored
