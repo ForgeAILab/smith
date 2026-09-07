@@ -75,6 +75,7 @@ use smith_host::ProjectWorkspace;
 
 use crate::abilities::{INTERACTION_READY_CONFIG, seal_tool_abilities};
 use crate::authority::SmithToolAuthority;
+use crate::cli_agent::TurnExecution;
 use crate::factory::CACHE_CAPABILITY_REVISION;
 use crate::prompt::SmithPromptContributor;
 
@@ -214,6 +215,9 @@ pub struct SmithChildRoute {
     /// for a full tool scope and a non-read-only workspace policy — see
     /// [`SmithChildFactory::child_builder`].
     pub(crate) read_only: bool,
+    /// What executes this route's turns: the provider above, or the installed
+    /// agent the profile's model id named.
+    pub(crate) execution: TurnExecution,
 }
 
 /// Opaque Smith host route persisted in the existing child model-selection slot.
@@ -295,6 +299,7 @@ impl ChildRuntimeFactory for SmithChildFactory {
             "skill_names": skill_names,
             "workspace_root": self.workspace.root(),
             "read_only": route.read_only,
+            "execution": route.execution.label(),
         }))
         .map_err(|error| {
             RuntimeError::new(
@@ -373,6 +378,33 @@ impl ChildRuntimeFactory for SmithChildFactory {
             8,
         );
 
+        // A profile that names an installed agent runs its child turns on
+        // that agent. The route's provider stays exactly where it is -- it
+        // supplies model identity and the limits planned against above -- and
+        // is simply never called to produce a turn.
+        let external_agent = match &route.execution {
+            TurnExecution::Provider => None,
+            TurnExecution::InstalledAgent(plan) => Some(plan.backend(
+                std::path::PathBuf::from(workspace.root()),
+                // The CLI runs its own tools under its own permission policy,
+                // outside everything the three keys above decided. A child
+                // that was not granted write-capable tools does not get them
+                // back through the agent it happens to run on.
+                write_capable,
+            )),
+            TurnExecution::MissingProgram { kind, program, .. } => {
+                return Err(RuntimeError::new(
+                    ErrorKind::Config,
+                    format!(
+                        "child profile `{}` runs turns on the installed agent `{kind}`, but \
+                         `{program}` is not on PATH; install it, or declare \
+                         `[harness.{kind}]` with an absolute `executable`",
+                        route.agent_profile_name
+                    ),
+                ));
+            }
+        };
+
         let mut builder = RuntimeBuilder::new(route.model.clone())
             .provider(route.provider.clone())
             .provider_name(route.provider_name.clone())
@@ -416,6 +448,9 @@ impl ChildRuntimeFactory for SmithChildFactory {
             .tool_output_processor(todo_component.clone())
             .turn_commit_hook(todo_component)
             .clock(self.clock.clone());
+        if let Some(backend) = external_agent {
+            builder = builder.external_agent(backend);
+        }
         if let Some(identity) = route.cache_endpoint_identity.as_ref() {
             builder = builder.cache_endpoint_identity(identity.clone());
         }

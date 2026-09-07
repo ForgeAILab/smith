@@ -50,6 +50,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -795,6 +796,19 @@ pub enum FactoryError {
     ContextReserve {
         /// Which reserves conflict with which limits.
         message: String,
+    },
+    /// The selected installed coding agent is not installed on this machine.
+    #[error(
+        "model `{model}` runs turns on the installed agent `{kind}`, but `{program}` is not on \
+         PATH; install it, or declare `[harness.{kind}]` with an absolute `executable`"
+    )]
+    AgentNotInstalled {
+        /// The `cli/<kind>/<model>` id that selected it.
+        model: String,
+        /// The installed agent kind, which is also its `[harness.<kind>]` key.
+        kind: String,
+        /// The program that was looked for.
+        program: String,
     },
     /// A host adapter the composition requires was not supplied.
     #[error("this run needs a {what}: {message}")]
@@ -1616,7 +1630,23 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
     // is still resolved and still supplies model identity and the limits the
     // runtime enforces before any work runs; it is simply never called to
     // produce a turn.
-    let cli_agent = crate::cli_agent::backend_for(&request.config, workspace.root());
+    let execution = crate::cli_agent::turn_execution(&request.config);
+    if let crate::cli_agent::TurnExecution::MissingProgram {
+        model,
+        kind,
+        program,
+    } = &execution
+    {
+        // Refused here rather than composed and left to fail per turn: with
+        // no backend to run them, every turn would go to the provider
+        // carrying a `cli/...` model id it has never heard of, and the run
+        // would report that rejection instead of the missing program.
+        return Err(FactoryError::AgentNotInstalled {
+            model: model.clone(),
+            kind: kind.clone(),
+            program: program.clone(),
+        });
+    }
 
     let mut builder = RuntimeBuilder::new(model.clone())
         .provider(provider.clone())
@@ -1663,8 +1693,8 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         .shutdown_timeout_ms(request.shutdown_timeout_ms);
     // A harness replaces how a turn is executed, leaving every other piece of
     // the composition above in place.
-    if let Some(backend) = cli_agent {
-        builder = builder.external_agent(backend);
+    if let crate::cli_agent::TurnExecution::InstalledAgent(plan) = &execution {
+        builder = builder.external_agent(plan.backend(PathBuf::from(workspace.root()), true));
     }
     if let Some(identity) = cache_endpoint_identity.as_ref() {
         builder = builder.cache_endpoint_identity(identity.clone());
@@ -1751,6 +1781,9 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
                     agent_profile_revision: agent_profile.revision.clone(),
                     agent_profile_posture: agent_profile.posture.value,
                     read_only: agent_profile.posture.value.is_read_only(),
+                    // An inheriting child is the parent's run narrowed, so it
+                    // runs turns wherever the parent's do.
+                    execution,
                 },
                 profile_routes: child_profile_routes,
                 approval,
@@ -1894,6 +1927,17 @@ async fn prepare_child_profile_routes(
         };
         let prompt_contributor = SmithPromptContributor::new(&prompt_context);
         loop_config.system_prompt = None;
+        // A child profile that names an installed agent runs its turns on
+        // that agent, exactly as the same profile does at the root. Without
+        // this the child would be composed against the provider the profile
+        // resolved only for model identity and limits, and every child turn
+        // would die asking that provider for a `cli/...` model.
+        //
+        // A missing program is carried into the route rather than refused
+        // here: one uninstallable child profile must not stop a session that
+        // may never spawn it, and the route reports the real reason if it is
+        // ever spawned.
+        let execution = crate::cli_agent::turn_execution(&route_request.config);
         let route_key =
             crate::delegation::profile_route_key(&agent_profile.name, &agent_profile.revision);
         let replaced = routes.insert(
@@ -1912,6 +1956,7 @@ async fn prepare_child_profile_routes(
                 agent_profile_revision: agent_profile.revision.clone(),
                 agent_profile_posture: agent_profile.posture.value,
                 read_only: agent_profile.posture.value.is_read_only(),
+                execution,
             },
         );
         if replaced.is_some() {

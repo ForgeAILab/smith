@@ -515,35 +515,126 @@ fn normalize_codex(value: &serde_json::Value) -> Vec<ExternalAgentEvent> {
     events
 }
 
-/// Builds a backend for the harness a resolved configuration selected.
+/// One resolved installed-agent selection, minus the directory a turn runs in.
 ///
-/// Returns `None` when the profile runs on Smith's own provider/tool loop,
-/// which leaves the runtime composed exactly as it was before harnesses
-/// existed.
-pub fn backend_for(
-    config: &smith_config::resolve::ResolvedConfig,
-    workspace_root: &str,
-) -> Option<std::sync::Arc<dyn ExternalAgentBackend>> {
-    let harness = config.harness.as_ref()?;
-    let kind = CliAgentKind::parse(&harness.kind.value)?;
+/// The directory is deliberately not part of it: the same profile serves the
+/// root session and every child spawned onto it, and a child may run against
+/// a directory of its own. Resolving the selection once and building a
+/// backend per run is what keeps a child from inheriting its parent's
+/// working directory or its permission to run the CLI's own tools.
+#[derive(Debug, Clone)]
+pub struct CliAgentPlan {
+    kind: CliAgentKind,
+    executable: PathBuf,
+    model: String,
+    args: Vec<String>,
+    env: BTreeMap<String, String>,
+    allow_own_tools: bool,
+}
+
+impl CliAgentPlan {
+    /// Builds the backend that runs turns in `cwd`.
+    ///
+    /// `allow_own_tools` only narrows: a read-only run may withhold the CLI's
+    /// own tools, but no caller can grant what the owner did not configure.
+    pub fn backend(
+        &self,
+        cwd: PathBuf,
+        allow_own_tools: bool,
+    ) -> std::sync::Arc<dyn ExternalAgentBackend> {
+        let settings = CliAgentSettings {
+            executable: self.executable.clone(),
+            model: Some(self.model.clone()),
+            args: self.args.clone(),
+            cwd,
+            env: self.env.clone(),
+            allow_own_tools: self.allow_own_tools && allow_own_tools,
+            instructions: None,
+        };
+        std::sync::Arc::new(CliAgentBackend::new(self.kind, settings))
+    }
+
+    /// Stable label naming what this plan executes, for policy fingerprints.
+    pub fn label(&self) -> String {
+        format!("cli:{}/{}", self.kind.as_str(), self.model)
+    }
+}
+
+/// What executes a turn for one resolved configuration.
+#[derive(Debug, Clone)]
+pub enum TurnExecution {
+    /// No installed agent was selected; the resolved provider runs the turn,
+    /// which leaves the composition exactly as it was before harnesses
+    /// existed.
+    Provider,
+    /// The installed agent turns run on.
+    InstalledAgent(CliAgentPlan),
+    /// An installed agent was selected, but its program is not installed.
+    ///
+    /// Carried rather than collapsed into [`Self::Provider`]: falling back
+    /// would send the agent's `cli/<kind>/<model>` id to an HTTP provider
+    /// that has never heard of it, so the run would report that provider
+    /// rejecting an unknown model instead of the program being missing.
+    MissingProgram {
+        /// The `cli/<kind>/<model>` id that selected it.
+        model: String,
+        /// The installed agent kind, which is also its `[harness.<kind>]` key.
+        kind: String,
+        /// The program that was looked for.
+        program: String,
+    },
+}
+
+impl TurnExecution {
+    /// Stable label naming what executes a turn, for policy fingerprints.
+    pub fn label(&self) -> String {
+        match self {
+            Self::Provider => "provider".to_owned(),
+            Self::InstalledAgent(plan) => plan.label(),
+            Self::MissingProgram { kind, .. } => format!("cli-missing:{kind}"),
+        }
+    }
+}
+
+/// Reads what a resolved configuration says should execute its turns.
+pub fn turn_execution(config: &smith_config::resolve::ResolvedConfig) -> TurnExecution {
+    config
+        .harness
+        .as_ref()
+        .map_or(TurnExecution::Provider, selection)
+}
+
+/// Resolves one installed-agent selection against this machine.
+fn selection(harness: &smith_config::resolve::ResolvedHarness) -> TurnExecution {
+    let Some(kind) = CliAgentKind::parse(&harness.kind.value) else {
+        return TurnExecution::Provider;
+    };
     // Selecting `cli/claude-code/sonnet` should just work, so the executable
-    // is found on PATH unless the owner named one. A CLI that is not
-    // installed yields no backend, and the run falls back to reporting a
-    // missing agent rather than composing one that cannot start.
+    // is found on PATH unless the owner named one.
     let executable = match &harness.executable {
         Some(configured) => PathBuf::from(&configured.value),
-        None => discover_program(&harness.program)?,
+        None => match discover_program(&harness.program) {
+            Some(executable) => executable,
+            None => {
+                return TurnExecution::MissingProgram {
+                    model: smith_config::cli_agents::cli_model_id(
+                        &harness.kind.value,
+                        &harness.model.value,
+                    ),
+                    kind: harness.kind.value.clone(),
+                    program: harness.program.clone(),
+                };
+            }
+        },
     };
-    let settings = CliAgentSettings {
+    TurnExecution::InstalledAgent(CliAgentPlan {
+        kind,
         executable,
-        model: Some(harness.model.value.clone()),
+        model: harness.model.value.clone(),
         args: harness.args.clone(),
-        cwd: PathBuf::from(workspace_root),
         env: harness.env.clone(),
         allow_own_tools: harness.allow_own_tools.value,
-        instructions: None,
-    };
-    Some(std::sync::Arc::new(CliAgentBackend::new(kind, settings)))
+    })
 }
 
 /// Finds an installed program on `PATH`.
@@ -569,6 +660,8 @@ fn is_executable_file(path: &std::path::Path) -> bool {
 mod tests {
     use super::*;
 
+    use smith_config::resolve::{ResolvedHarness, Source, Sourced};
+
     fn settings(allow_own_tools: bool) -> CliAgentSettings {
         CliAgentSettings {
             executable: PathBuf::from("/usr/local/bin/agent"),
@@ -579,6 +672,77 @@ mod tests {
             allow_own_tools,
             instructions: None,
         }
+    }
+
+    fn harness(program: &str, executable: Option<&str>, allow_own_tools: bool) -> ResolvedHarness {
+        ResolvedHarness {
+            kind: Sourced::new("claude-code".to_owned(), Source::built_in("model")),
+            program: program.to_owned(),
+            model: Sourced::new("sonnet".to_owned(), Source::built_in("model")),
+            executable: executable
+                .map(|path| Sourced::new(path.to_owned(), Source::built_in("harness.executable"))),
+            args: Vec::new(),
+            allow_own_tools: Sourced::new(
+                allow_own_tools,
+                Source::built_in("harness.allow_own_tools"),
+            ),
+            env: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn an_agent_whose_program_is_not_installed_is_named_rather_than_run_on_the_provider() {
+        let execution = selection(&harness("smith-no-such-agent-program", None, false));
+        let TurnExecution::MissingProgram {
+            model,
+            kind,
+            program,
+        } = execution
+        else {
+            panic!("a missing program must not resolve to a runnable plan: {execution:?}");
+        };
+        assert_eq!(model, "cli/claude-code/sonnet");
+        assert_eq!(kind, "claude-code");
+        assert_eq!(program, "smith-no-such-agent-program");
+    }
+
+    #[test]
+    fn a_plan_narrows_the_cli_s_own_tools_but_never_widens_them() {
+        let TurnExecution::InstalledAgent(permitted) =
+            selection(&harness("claude", Some("/usr/local/bin/claude"), true))
+        else {
+            panic!("a configured executable needs no PATH lookup");
+        };
+        let TurnExecution::InstalledAgent(withheld) =
+            selection(&harness("claude", Some("/usr/local/bin/claude"), false))
+        else {
+            panic!("a configured executable needs no PATH lookup");
+        };
+
+        let allow_list = |plan: &CliAgentPlan, write_capable: bool| {
+            let backend = CliAgentBackend::new(
+                plan.kind,
+                CliAgentSettings {
+                    allow_own_tools: plan.allow_own_tools && write_capable,
+                    ..settings(false)
+                },
+            );
+            let args = backend.argv("hello", None);
+            args.iter().any(|arg| arg == "--permission-mode")
+        };
+
+        assert!(
+            allow_list(&permitted, true),
+            "a write-capable run keeps the tools the owner configured"
+        );
+        assert!(
+            !allow_list(&permitted, false),
+            "a read-only run must not receive the CLI's own tools"
+        );
+        assert!(
+            !allow_list(&withheld, true),
+            "no caller may grant tools the owner did not configure"
+        );
     }
 
     #[test]
