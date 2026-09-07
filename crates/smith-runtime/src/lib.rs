@@ -27,6 +27,7 @@ pub mod client;
 pub mod command_provider;
 pub mod delegation;
 pub mod factory;
+pub mod gemini;
 pub mod harness;
 pub mod host;
 pub mod journal;

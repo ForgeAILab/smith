@@ -2805,7 +2805,11 @@ fn construct(
                 transport, config, target, source,
             )
             .map_err(FactoryError::Transport)?;
-            Ok(Arc::new(provider))
+            // Wrapped here rather than at either call site, so the root
+            // session and every preflighted child route get the same
+            // treatment: an attributed internal turn is delivered on
+            // whichever of them the delegation happened on.
+            Ok(crate::gemini::accept_internal_turns(Arc::new(provider)))
         }
     }
 }
