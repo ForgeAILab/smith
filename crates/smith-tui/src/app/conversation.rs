@@ -16,6 +16,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use agent_runtime_core::ids::{AttemptId, RequestId};
 use smith_runtime::client::SmithEventKind as RuntimeEvent;
 
+use smith_tools::external_tool_result_text;
+
 use crate::transcript::{ToolStatus, Transcript};
 
 use super::state::{AttemptOutputKey, SpeculativeAttempt, SpeculativeChunk};
@@ -132,10 +134,11 @@ impl ConversationMut<'_> {
                 // No provider signed it, so it is never marked redacted.
                 self.transcript.push_reasoning_delta(text, false);
             }
-            RuntimeEvent::ExternalToolInvoked { id, name } => {
-                self.transcript.push_external_tool_call(id.as_str(), name);
+            RuntimeEvent::ExternalToolInvoked { id, name, detail } => {
+                self.transcript
+                    .push_external_tool_call(id.as_str(), name, detail);
             }
-            RuntimeEvent::ExternalToolCompleted { id, ok } => {
+            RuntimeEvent::ExternalToolCompleted { id, ok, detail } => {
                 self.transcript.complete_tool_call(
                     id.as_str(),
                     if *ok {
@@ -144,6 +147,14 @@ impl ConversationMut<'_> {
                         ToolStatus::Failed
                     },
                 );
+                // The agent's own account of the outcome is the only one
+                // there is: Smith dispatched nothing, so there is no
+                // canonical tool result for the host to read back and
+                // redact. It is bounded and sanitized on the way in like
+                // every other preview.
+                if let Some(text) = external_tool_result_text(detail) {
+                    self.transcript.set_tool_result_preview(id.as_str(), text);
+                }
             }
             RuntimeEvent::ToolCallRequested {
                 call,

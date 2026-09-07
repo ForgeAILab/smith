@@ -1287,10 +1287,22 @@
         app.apply(&event(RuntimeEvent::ExternalToolInvoked {
             id: "call-1".to_owned(),
             name: "Read".to_owned(),
+            detail: serde_json::json!({"file_path": "src/main.rs"}),
         }));
         app.apply(&event(RuntimeEvent::ExternalToolCompleted {
             id: "call-1".to_owned(),
             ok: true,
+            detail: serde_json::json!("1\tfn main() {}"),
+        }));
+        app.apply(&event(RuntimeEvent::ExternalToolInvoked {
+            id: "call-2".to_owned(),
+            name: "SomeToolThisBuildDoesNotKnow".to_owned(),
+            detail: serde_json::json!({"whatever": "shape"}),
+        }));
+        app.apply(&event(RuntimeEvent::ExternalToolCompleted {
+            id: "call-2".to_owned(),
+            ok: true,
+            detail: serde_json::Value::Null,
         }));
         app.apply(&event(RuntimeEvent::ExternalText {
             text: "the version ".to_owned(),
@@ -1313,16 +1325,36 @@
             .map(|block| match block {
                 Block::Assistant { text, .. } => format!("assistant: {text}"),
                 Block::Reasoning { text, .. } => format!("reasoning: {text}"),
-                Block::Tool { name, status, .. } => format!("tool: {name} {}", status.label()),
+                Block::Tool {
+                    name,
+                    status,
+                    display,
+                    result_preview,
+                    enrichment,
+                    ..
+                } => format!(
+                    "tool: {name} {} {} {} [{}]",
+                    status.label(),
+                    display
+                        .as_ref()
+                        .map(smith_tools::ToolCallDisplay::invocation)
+                        .unwrap_or_else(|| "-".to_owned()),
+                    result_preview.clone().unwrap_or_else(|| "-".to_owned()),
+                    enrichment.join(" ")
+                ),
                 Block::Notice { source, text } => format!("{source} · {text}"),
                 other => format!("{other:?}"),
             })
             .collect();
+        // The agent's reported detail is decoded into the same shape a
+        // built-in call renders with, marked as the agent's own; a tool with
+        // no reviewed projection keeps the value-free row.
         assert_eq!(
             blocks,
             vec![
                 "reasoning: checking the file".to_owned(),
-                "tool: Read ok".to_owned(),
+                "tool: Read ok Read(src/main.rs) 1 fn main() {} [agent]".to_owned(),
+                "tool: SomeToolThisBuildDoesNotKnow ok - - []".to_owned(),
                 "assistant: the version is 3".to_owned(),
             ]
         );

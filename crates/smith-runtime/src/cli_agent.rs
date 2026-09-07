@@ -17,7 +17,7 @@
 //!   its own login, `PATH`, and home directory; clearing the environment makes
 //!   it report "not logged in" rather than doing any work.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::process::Stdio;
 
@@ -261,17 +261,20 @@ impl ExternalAgentBackend for CliAgentBackend {
 #[derive(Debug, Default)]
 struct TurnState {
     terminated: bool,
+    /// Tool items already reported as started, so the completed item that
+    /// follows resolves that row instead of opening a second one.
+    invoked: BTreeSet<String>,
 }
 
 /// Translates one CLI event into zero or more runtime events.
 fn normalize(
     kind: CliAgentKind,
     value: &serde_json::Value,
-    _state: &mut TurnState,
+    state: &mut TurnState,
 ) -> Vec<ExternalAgentEvent> {
     match kind {
         CliAgentKind::ClaudeCode => normalize_claude(value),
-        CliAgentKind::Codex => normalize_codex(value),
+        CliAgentKind::Codex => normalize_codex(value, state),
     }
 }
 
@@ -381,6 +384,27 @@ fn normalize_claude(value: &serde_json::Value) -> Vec<ExternalAgentEvent> {
     events
 }
 
+/// A Codex item's identity, which correlates its started and completed
+/// reports. An item without one cannot be correlated, so every such item
+/// shares one identity rather than opening rows nothing ever closes.
+fn codex_item_id(item: &serde_json::Value) -> String {
+    string_field(item, "id").unwrap_or_else(|| "item".to_owned())
+}
+
+/// The invocation event for one Codex tool item, or `None` when the item is
+/// not a tool.
+fn codex_tool_invocation(item: &serde_json::Value, id: &str) -> Option<ExternalAgentEvent> {
+    let name = match item.get("type").and_then(serde_json::Value::as_str)? {
+        name @ ("command_execution" | "file_change" | "mcp_tool_call") => name,
+        _ => return None,
+    };
+    Some(ExternalAgentEvent::ToolInvoked {
+        id: id.to_owned(),
+        name: name.to_owned(),
+        detail: item.clone(),
+    })
+}
+
 fn counter(value: &serde_json::Value, key: &str) -> u64 {
     value
         .get(key)
@@ -428,17 +452,30 @@ fn codex_usage(usage: &serde_json::Value) -> UsageDelta {
         )
 }
 
-fn normalize_codex(value: &serde_json::Value) -> Vec<ExternalAgentEvent> {
+fn normalize_codex(value: &serde_json::Value, state: &mut TurnState) -> Vec<ExternalAgentEvent> {
     let mut events = Vec::new();
     match value.get("type").and_then(serde_json::Value::as_str) {
         Some("thread.started") => {
             events.extend(session_event(string_field(value, "thread_id")));
         }
+        // A command Codex is still running is reported as a started item
+        // first. Opening the row here is what makes a slow command visible
+        // while it runs rather than appearing, already finished, at the end.
+        Some("item.started") => {
+            let Some(item) = value.get("item") else {
+                return events;
+            };
+            let id = codex_item_id(item);
+            if let Some(invoked) = codex_tool_invocation(item, &id) {
+                state.invoked.insert(id);
+                events.push(invoked);
+            }
+        }
         Some("item.completed") => {
             let Some(item) = value.get("item") else {
                 return events;
             };
-            let id = string_field(item, "id").unwrap_or_else(|| "item".to_owned());
+            let id = codex_item_id(item);
             match item.get("type").and_then(serde_json::Value::as_str) {
                 Some("agent_message") => {
                     if let Some(text) = string_field(item, "text") {
@@ -450,41 +487,26 @@ fn normalize_codex(value: &serde_json::Value) -> Vec<ExternalAgentEvent> {
                         events.push(ExternalAgentEvent::Reasoning { text });
                     }
                 }
-                // Codex reports a tool as one completed item carrying both the
-                // invocation and its outcome, so both events are emitted here.
-                Some("command_execution") => {
-                    let command =
-                        string_field(item, "command").unwrap_or_else(|| "command".to_owned());
+                // The completed item carries the invocation as well as the
+                // outcome, so a tool whose start was never reported still
+                // gets its row -- just once, which is what the started set
+                // above is for.
+                Some("command_execution") | Some("file_change") | Some("mcp_tool_call") => {
+                    if !state.invoked.remove(&id)
+                        && let Some(invoked) = codex_tool_invocation(item, &id)
+                    {
+                        events.push(invoked);
+                    }
                     let exit = item.get("exit_code").and_then(serde_json::Value::as_i64);
-                    events.push(ExternalAgentEvent::ToolInvoked {
-                        id: id.clone(),
-                        name: "command_execution".to_owned(),
-                        detail: serde_json::json!({ "command": command }),
-                    });
                     events.push(ExternalAgentEvent::ToolCompleted {
                         id,
-                        ok: exit == Some(0),
+                        // Only a command reports an exit status; a file change
+                        // or an MCP call that completed at all succeeded.
+                        ok: exit.is_none_or(|exit| exit == 0),
                         detail: item
                             .get("aggregated_output")
                             .cloned()
                             .unwrap_or(serde_json::Value::Null),
-                    });
-                }
-                Some("file_change") | Some("mcp_tool_call") => {
-                    let name = item
-                        .get("type")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("tool")
-                        .to_owned();
-                    events.push(ExternalAgentEvent::ToolInvoked {
-                        id: id.clone(),
-                        name,
-                        detail: item.clone(),
-                    });
-                    events.push(ExternalAgentEvent::ToolCompleted {
-                        id,
-                        ok: true,
-                        detail: serde_json::Value::Null,
                     });
                 }
                 // `error` items also carry benign local warnings — a malformed
@@ -811,7 +833,7 @@ mod tests {
             "type": "item.completed",
             "item": {"id": "item_0", "type": "error", "message": "clamping hook timeout"}
         });
-        assert!(normalize_codex(&value).is_empty());
+        assert!(normalize_codex(&value, &mut TurnState::default()).is_empty());
     }
 
     #[test]
@@ -827,11 +849,71 @@ mod tests {
                 "status": "completed"
             }
         });
-        let events = normalize_codex(&value);
+        let events = normalize_codex(&value, &mut TurnState::default());
         assert!(matches!(events[0], ExternalAgentEvent::ToolInvoked { .. }));
         assert!(matches!(
             events[1],
             ExternalAgentEvent::ToolCompleted { ok: true, .. }
+        ));
+    }
+
+    #[test]
+    fn a_codex_command_reported_as_started_opens_exactly_one_row() {
+        let mut state = TurnState::default();
+        let item = serde_json::json!({
+            "id": "item_7",
+            "type": "command_execution",
+            "command": "/bin/zsh -lc 'echo hi'",
+            "aggregated_output": "",
+            "exit_code": serde_json::Value::Null,
+            "status": "in_progress"
+        });
+        let started = normalize_codex(
+            &serde_json::json!({"type": "item.started", "item": item}),
+            &mut state,
+        );
+        assert!(matches!(
+            started.as_slice(),
+            [ExternalAgentEvent::ToolInvoked { name, .. }] if name == "command_execution"
+        ));
+
+        let mut completed_item = item;
+        completed_item["aggregated_output"] = serde_json::json!("hi\n");
+        completed_item["exit_code"] = serde_json::json!(0);
+        completed_item["status"] = serde_json::json!("completed");
+        let completed = normalize_codex(
+            &serde_json::json!({"type": "item.completed", "item": completed_item}),
+            &mut state,
+        );
+        assert!(
+            matches!(
+                completed.as_slice(),
+                [ExternalAgentEvent::ToolCompleted { ok: true, .. }]
+            ),
+            "the started row is resolved, not duplicated: {completed:?}"
+        );
+    }
+
+    #[test]
+    fn a_codex_file_change_completes_without_an_exit_status() {
+        let events = normalize_codex(
+            &serde_json::json!({
+                "type": "item.completed",
+                "item": {
+                    "id": "item_8",
+                    "type": "file_change",
+                    "changes": [{"path": "/repo/note.txt", "kind": "add"}],
+                    "status": "completed"
+                }
+            }),
+            &mut TurnState::default(),
+        );
+        assert!(matches!(
+            events.as_slice(),
+            [
+                ExternalAgentEvent::ToolInvoked { name, .. },
+                ExternalAgentEvent::ToolCompleted { ok: true, .. }
+            ] if name == "file_change"
         ));
     }
 

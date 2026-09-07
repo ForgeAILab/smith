@@ -400,7 +400,7 @@ impl App {
             RuntimeEvent::ExternalReasoning { .. } => {
                 self.set_provider_phase(Some(ProviderPhase::Thinking));
             }
-            RuntimeEvent::ExternalToolInvoked { id, name } => {
+            RuntimeEvent::ExternalToolInvoked { id, name, .. } => {
                 if let Some(work) = &mut self.work {
                     work.tools.insert(
                         id.clone(),
@@ -408,7 +408,7 @@ impl App {
                     );
                 }
             }
-            RuntimeEvent::ExternalToolCompleted { id, ok } => {
+            RuntimeEvent::ExternalToolCompleted { id, ok, .. } => {
                 let status = if *ok {
                     ToolStatus::Ok
                 } else {

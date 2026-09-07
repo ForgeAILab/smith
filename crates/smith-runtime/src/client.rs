@@ -291,14 +291,29 @@ pub enum SmithEventKind {
     ///
     /// Smith did not dispatch it, did not approve it, and cannot vouch for it,
     /// so it is deliberately distinct from `ToolCallRequested`.
+    ///
+    /// `detail` is what the agent reported the call was: for Claude Code the
+    /// tool-use input, for Codex the completed item. It is the only account
+    /// of the call that exists -- there is no canonical tool history to read
+    /// it back from, because the runtime never dispatched it -- so it is
+    /// carried here rather than dropped, and every field a client displays is
+    /// selected and bounded by a reviewed projector. Absent in events
+    /// projected from a journal written before it was carried.
     ExternalToolInvoked {
         id: String,
         name: String,
+        #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+        detail: serde_json::Value,
     },
     /// The outcome of a tool the installed agent ran itself.
+    ///
+    /// `detail` is the agent's own account of the outcome; see
+    /// [`Self::ExternalToolInvoked`].
     ExternalToolCompleted {
         id: String,
         ok: bool,
+        #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+        detail: serde_json::Value,
     },
     TextDelta {
         request: RequestId,
@@ -659,6 +674,51 @@ mod tests {
         assert!(matches!(
             projected.payload,
             SmithEventKind::TextDelta { ref text, .. } if text == "hello"
+        ));
+    }
+
+    /// The only account of a tool an installed agent ran is what the agent
+    /// reported: the runtime dispatched nothing, so there is no canonical
+    /// tool history a client could read the call back from. Dropping the
+    /// detail here left every such row with a name and nothing else.
+    #[test]
+    fn an_installed_agent_s_reported_tool_detail_survives_projection() {
+        let canonical = CanonicalEvent::new(
+            8,
+            EventId::new("event-8"),
+            SessionId::new("session"),
+            Some(TurnId::new("turn")),
+            Timestamp(10),
+            RuntimeEvent::ExternalToolInvoked {
+                id: "toolu_1".into(),
+                name: "Read".into(),
+                detail: serde_json::json!({"file_path": "/repo/README.md"}),
+            },
+        );
+        let projected = SmithEvent::project(&canonical).unwrap();
+        assert!(matches!(
+            projected.payload,
+            SmithEventKind::ExternalToolInvoked { ref detail, .. }
+                if detail["file_path"] == "/repo/README.md"
+        ));
+
+        let completed = CanonicalEvent::new(
+            9,
+            EventId::new("event-9"),
+            SessionId::new("session"),
+            Some(TurnId::new("turn")),
+            Timestamp(11),
+            RuntimeEvent::ExternalToolCompleted {
+                id: "toolu_1".into(),
+                ok: true,
+                detail: serde_json::json!("1\thello"),
+            },
+        );
+        let projected = SmithEvent::project(&completed).unwrap();
+        assert!(matches!(
+            projected.payload,
+            SmithEventKind::ExternalToolCompleted { ref detail, .. }
+                if detail == "1\thello"
         ));
     }
 

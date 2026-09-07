@@ -53,7 +53,10 @@ pub use change::{
     ChangeRecorder, EditMutation, ToolMutation, TurnChangeSet, observed_tools,
     observed_tools_with_background,
 };
-pub use display::{ToolCallDisplay, has_tool_call_display_schema, project_tool_call_display};
+pub use display::{
+    ToolCallDisplay, external_tool_result_text, has_tool_call_display_schema,
+    project_external_tool_call_display, project_tool_call_display,
+};
 pub use edit::EditTool;
 pub use list::ListTool;
 pub use read::ReadTool;

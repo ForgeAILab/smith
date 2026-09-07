@@ -17,7 +17,10 @@ use std::time::Instant;
 
 use agent_runtime_core::content::{ContentPart, Message, Role};
 use serde_json::Value;
-use smith_tools::{ToolCallDisplay, has_tool_call_display_schema, project_tool_call_display};
+use smith_tools::{
+    ToolCallDisplay, has_tool_call_display_schema, project_external_tool_call_display,
+    project_tool_call_display,
+};
 
 pub(crate) const MAX_LOCAL_RESULT_BYTES: usize = 512 * 1024;
 const MAX_LOCAL_RESULT_LINES: usize = 4_096;
@@ -354,20 +357,33 @@ impl Transcript {
 
     /// Records a tool an installed agent ran inside a harness turn.
     ///
-    /// Smith did not dispatch it, did not approve it, and cannot see its
-    /// arguments, so the row says who ran it rather than borrowing the shape
-    /// of a call Smith made and vouched for.
-    pub fn push_external_tool_call(&mut self, call_id: impl Into<String>, name: &str) {
+    /// Smith did not dispatch it and did not approve it, but the agent says
+    /// what it ran, and a row that withholds that tells the reader less than
+    /// the stream already carries. So the call is projected from the agent's
+    /// own reported detail through the same reviewed, bounded projector a
+    /// built-in call goes through, and the row keeps `agent` as its last
+    /// qualifier so the origin stays on screen beside the shape. A tool this
+    /// build has no reviewed projection for keeps the value-free row.
+    pub fn push_external_tool_call(
+        &mut self,
+        call_id: impl Into<String>,
+        name: &str,
+        detail: &Value,
+    ) {
         self.close_open();
+        let display = project_external_tool_call_display(name, detail);
         self.blocks.push(Block::Tool {
             call_id: call_id.into(),
             name: name.to_owned(),
-            display: None,
+            enrichment: match display {
+                Some(_) => vec!["agent".to_owned()],
+                None => Vec::new(),
+            },
+            display,
             protected_summary: "run by the agent".to_owned(),
             status: ToolStatus::Running,
             result_preview: None,
             started_at: Some(Instant::now()),
-            enrichment: Vec::new(),
         });
     }
 
