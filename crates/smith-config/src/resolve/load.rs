@@ -862,6 +862,15 @@ pub(super) fn quote_segment(part: &str) -> String {
     }
 }
 
+/// `SMITH_*` variables that belong to the host process rather than to
+/// configuration, and so are neither settings nor mistakes.
+///
+/// Without this, the one variable `smith-cli`'s logging module documents --
+/// `SMITH_LOG`, its tracing level -- could not be set at all: the unknown-key
+/// rule below would refuse to resolve any configuration while it was in the
+/// environment, so turning logging up broke startup instead.
+const HOST_ENV_VARIABLES: &[&str] = &["SMITH_LOG"];
+
 /// Reads `SMITH_*` variables into contributions.
 ///
 /// Variable names are matched without regard to case, because an environment
@@ -874,7 +883,7 @@ pub(super) fn env_contributions(
     let mut claimed: BTreeMap<&str, Vec<(&str, &str)>> = BTreeMap::new();
     for (name, value) in env {
         let upper = name.to_uppercase();
-        if !upper.starts_with(ENV_PREFIX) {
+        if !upper.starts_with(ENV_PREFIX) || HOST_ENV_VARIABLES.contains(&upper.as_str()) {
             continue;
         }
         match setting_for_env(&upper) {
