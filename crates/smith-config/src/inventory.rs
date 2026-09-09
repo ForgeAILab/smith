@@ -17,7 +17,8 @@ use crate::model::{
     AgentPosture, ConfigFile, KIND_CHATGPT_RESPONSES, KIND_COMMAND_JSONL, KIND_OPENAI_COMPATIBLE,
     KIND_XAI_RESPONSES, ModelSection, ProfileUse, ProviderResponseSection, ProviderSection,
 };
-use crate::resolve::{ConfigError, Position, Resolution, Source};
+use crate::output_budget::{OutputBudget, resolve_output_budget};
+use crate::resolve::{ConfigError, Layer, Position, Resolution, Source};
 use crate::setup::trusted_model;
 
 /// A locally configured profile.
@@ -124,6 +125,8 @@ pub struct ModelInventoryEntry {
     pub max_input_tokens: Option<InventoryLimit>,
     /// Maximum model output.
     pub max_output_tokens: Option<InventoryLimit>,
+    /// Effective provider request and context-reserve budget.
+    pub output_budget: Option<OutputBudget>,
     /// Whether the catalog advertises tool calling, when catalog-backed.
     pub tool_call: Option<bool>,
     /// Whether the catalog advertises reasoning, when catalog-backed.
@@ -370,6 +373,35 @@ pub fn local_inventory_with_catalog(
                 snapshot: catalog,
             },
         );
+        // A trusted model's built-in request default is model-specific. While
+        // inventory enumerates another candidate, derive that candidate's own
+        // trusted default instead of carrying the active model's value across.
+        // User, profile, environment, flag, and session values intentionally
+        // remain active policy when previewing a model switch.
+        let configured_request_tokens = match resolution.config.max_output_tokens.as_ref() {
+            Some(request) if request.source.layer != Layer::BuiltIn => Some(request.value),
+            _ => trusted.and_then(|record| {
+                (record.request_output_tokens != 0).then_some(record.request_output_tokens)
+            }),
+        };
+        let output_budget =
+            context_tokens
+                .as_ref()
+                .zip(max_output_tokens.as_ref())
+                .map(|(context, output)| {
+                    resolve_output_budget(
+                        context.value,
+                        output.value,
+                        configured_request_tokens,
+                        resolution
+                            .config
+                            .context
+                            .output_reserve
+                            .as_ref()
+                            .map(|reserve| reserve.value),
+                        resolution.config.context.reasoning_reserve.value,
+                    )
+                });
         if catalog_model.is_none()
             && (context_tokens.is_none()
                 || max_input_tokens.is_none()
@@ -402,27 +434,15 @@ pub fn local_inventory_with_catalog(
                 Some("effective model input or output limit exceeds its context window".to_owned());
         }
         if disabled_reason.is_none()
-            && let (Some(context), Some(output)) = (&context_tokens, &max_output_tokens)
+            && let Some(Err(error)) = output_budget.as_ref()
         {
-            let output_reserve = resolution
-                .config
-                .context
-                .output_reserve
-                .as_ref()
-                .or(resolution.config.max_output_tokens.as_ref())
-                .map_or(output.value, |sourced| sourced.value);
-            let reasoning_reserve = resolution.config.context.reasoning_reserve.value;
-            if output_reserve.saturating_add(reasoning_reserve) >= context.value {
-                disabled_reason = Some(format!(
-                    "output reserve {output_reserve} + reasoning reserve {reasoning_reserve} \
-                     leaves no input budget"
-                ));
-            }
+            disabled_reason = Some(error.to_string());
         }
         let selectable = disabled_reason.is_none()
             && context_tokens.is_some()
             && max_input_tokens.is_some()
-            && max_output_tokens.is_some();
+            && max_output_tokens.is_some()
+            && output_budget.as_ref().is_some_and(Result::is_ok);
         let associated_profiles = resolution
             .config
             .agent
@@ -455,6 +475,7 @@ pub fn local_inventory_with_catalog(
             context_tokens,
             max_input_tokens,
             max_output_tokens,
+            output_budget: output_budget.and_then(Result::ok),
             profiles: associated_profiles,
             selectable,
             disabled_reason,

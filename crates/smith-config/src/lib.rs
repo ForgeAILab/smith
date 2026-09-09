@@ -29,6 +29,7 @@ pub mod credential;
 pub mod inventory;
 pub mod mcp;
 pub mod model;
+pub mod output_budget;
 pub mod resolve;
 pub mod setup;
 pub mod trust;

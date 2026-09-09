@@ -13,6 +13,7 @@ use std::sync::Arc;
 use agent_runtime::registry::Permission;
 use agent_runtime_core::tool::Tool;
 use sha2::{Digest, Sha256};
+use smith_config::output_budget::OutputBudget;
 use smith_config::resolve::Source;
 
 use crate::factory::RuntimeRequest;
@@ -22,6 +23,24 @@ use crate::factory::RuntimeRequest;
 pub struct HarnessIdentity {
     /// Stable digest of policy-bearing resolved inputs.
     pub revision: String,
+}
+
+impl HarnessIdentity {
+    /// Finalizes the declaration identity with model-dependent output policy.
+    pub(crate) fn with_output_budget(&self, budget: &OutputBudget) -> Self {
+        let request_tokens = budget.request_tokens.to_string();
+        let output_reserve = budget.output_reserve.to_string();
+        Self {
+            revision: digest([
+                "harness-output-budget-v1",
+                self.revision.as_str(),
+                request_tokens.as_str(),
+                budget.request_origin.label(),
+                output_reserve.as_str(),
+                budget.reserve_origin.label(),
+            ]),
+        }
+    }
 }
 
 /// Stable module identity within one harness.
@@ -211,6 +230,29 @@ pub struct ResolvedPolicyRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HarnessResolutionReport {
     pub entries: Vec<String>,
+}
+
+impl HarnessResolutionReport {
+    /// Replaces the provisional identity and records the effective output policy.
+    pub(crate) fn finalize_output_budget(
+        &mut self,
+        identity: &HarnessIdentity,
+        budget: &OutputBudget,
+    ) {
+        if let Some(entry) = self.entries.first_mut() {
+            *entry = format!("harness={}", identity.revision);
+        }
+        self.entries.insert(
+            self.entries.len().min(2),
+            format!(
+                "output=request:{}:{} reserve:{}:{}",
+                budget.request_tokens,
+                budget.request_origin.label(),
+                budget.output_reserve,
+                budget.reserve_origin.label()
+            ),
+        );
+    }
 }
 
 /// Declarative input to harness resolution.
@@ -684,6 +726,7 @@ fn digest<'a>(parts: impl IntoIterator<Item = &'a str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use smith_config::output_budget::OutputBudgetOrigin;
 
     fn module(
         trust: ModuleTrust,
@@ -721,6 +764,45 @@ mod tests {
             error,
             HarnessResolutionError::UndeclaredCapability { .. }
         ));
+    }
+
+    #[test]
+    fn effective_output_budget_finalizes_identity_and_report() {
+        let provisional = HarnessIdentity {
+            revision: "sha256:provisional".to_owned(),
+        };
+        let automatic = OutputBudget {
+            request_tokens: 32_768,
+            request_origin: OutputBudgetOrigin::Automatic,
+            output_reserve: 32_768,
+            reserve_origin: OutputBudgetOrigin::Automatic,
+        };
+        let configured = OutputBudget {
+            request_origin: OutputBudgetOrigin::Configured,
+            reserve_origin: OutputBudgetOrigin::Configured,
+            ..automatic
+        };
+
+        let identity = provisional.with_output_budget(&automatic);
+        assert_ne!(identity, provisional);
+        assert_ne!(
+            identity,
+            provisional.with_output_budget(&configured),
+            "policy provenance is part of the immutable identity"
+        );
+
+        let mut report = HarnessResolutionReport {
+            entries: vec![
+                format!("harness={}", provisional.revision),
+                "provider=xai/grok-4.6".to_owned(),
+            ],
+        };
+        report.finalize_output_budget(&identity, &automatic);
+        assert_eq!(report.entries[0], format!("harness={}", identity.revision));
+        assert_eq!(
+            report.entries[2],
+            "output=request:32768:automatic reserve:32768:automatic"
+        );
     }
 
     #[test]

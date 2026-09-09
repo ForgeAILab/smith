@@ -63,11 +63,10 @@ pub const XAI_CREDENTIAL: &str = "authfile:xai";
 /// the endpoint binds this provider to the Models.dev catalog entry, which is
 /// where its context window and capabilities come from.
 ///
-/// Not the highest version number available. Grok 4.5 advertises an output
-/// limit equal to its whole context window, so reserving room for its output
-/// leaves no input budget and Smith refuses to select it. This one advertises
-/// a 1M context against a 30k output cap, which is a shape the reserve
-/// arithmetic can actually satisfy.
+/// This is Smith's reviewed connection default, not a workaround for catalog
+/// limit shapes. Models whose published output ceiling approaches their whole
+/// context window remain selectable because Smith derives a bounded automatic
+/// request budget without changing the advertised ceiling.
 pub const XAI_DEFAULT_MODEL: &str = "grok-4.3";
 
 /// Provider name used by the native Gemini connection.

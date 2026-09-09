@@ -94,6 +94,16 @@ output_reserve = 4096
         assert!(current.active);
         assert!(current.detail.contains("tools"), "{}", current.detail);
         assert!(current.detail.contains("advertised"), "{}", current.detail);
+        assert!(
+            current.detail.contains("output ceiling"),
+            "{}",
+            current.detail
+        );
+        assert!(
+            current.detail.contains("request 32768 [automatic]"),
+            "{}",
+            current.detail
+        );
         let incompatible = resources
             .models
             .iter()
@@ -120,4 +130,120 @@ output_reserve = 4096
         assert!(!resources.providers.iter().any(|entry| entry.id == "chatgpt"));
         assert!(!resources.models.iter().any(|entry| entry.id.starts_with("chatgpt/")));
         assert!(!resources.disconnections.iter().any(|entry| entry.id == "chatgpt"));
+    }
+
+    #[test]
+    fn configured_request_budgets_are_labeled_in_resource_metadata() {
+        let budget = smith_config::output_budget::OutputBudget {
+            request_tokens: 8_192,
+            request_origin: smith_config::output_budget::OutputBudgetOrigin::Configured,
+            output_reserve: 8_192,
+            reserve_origin: smith_config::output_budget::OutputBudgetOrigin::Automatic,
+        };
+
+        assert_eq!(
+            render_optional_output_budget(Some(&budget)),
+            "8192 [configured]"
+        );
+    }
+
+    #[test]
+    fn grok_shaped_catalog_limits_are_selectable_unless_an_explicit_reserve_conflicts() {
+        let snapshot: smith_config::catalog::CatalogSnapshot =
+            serde_json::from_str(smith_runtime::model_catalog::EMBEDDED_MODELS_DEV_SEED)
+                .expect("embedded catalog");
+        let xai = snapshot
+            .providers
+            .get(smith_config::catalog::XAI_CATALOG_PROVIDER)
+            .expect("the embedded catalog has xAI");
+        let model = xai
+            .models
+            .values()
+            .find(|model| {
+                model.limits.as_ref().is_some_and(|limits| {
+                    limits.context_tokens == 500_000 && limits.max_output_tokens == 500_000
+                })
+            })
+            .expect("the embedded catalog retains a Grok-shaped limit fixture");
+        let pair = format!("{}/{}", smith_config::setup::XAI_PROVIDER, model.id);
+
+        let resolve_resources = |reserve: Option<u32>| {
+            let home = tempfile::tempdir().expect("home");
+            let project = tempfile::tempdir().expect("project");
+            std::fs::create_dir_all(project.path().join(".smith")).expect("config directory");
+            let reserve = reserve.map_or_else(String::new, |tokens| {
+                format!("\n[context]\noutput_reserve = {tokens}\n")
+            });
+            std::fs::write(
+                project.path().join(".smith/config.toml"),
+                format!(
+                    r#"
+default_profile = "grok"
+
+[profiles.grok]
+provider = "{provider}"
+model = "{model}"
+
+[providers.{provider}]
+kind = "{kind}"
+base_url = "{endpoint}"
+credential = "env:XAI_API_KEY"
+{reserve}
+"#,
+                    provider = smith_config::setup::XAI_PROVIDER,
+                    model = model.id,
+                    kind = smith_config::model::KIND_XAI_RESPONSES,
+                    endpoint = smith_config::setup::XAI_ENDPOINT,
+                ),
+            )
+            .expect("config");
+            let resolution =
+                resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+                    .expect("resolution");
+            let inventory = local_inventory_with_catalog(
+                &resolution,
+                AVAILABLE_ADAPTER_KINDS,
+                Some(&snapshot),
+            )
+            .expect("catalog inventory");
+            runtime_resources(
+                inventory,
+                Vec::new(),
+                "session",
+                project.path(),
+                &resolution.config.agent,
+                &smith_runtime::reasoning::ReasoningRuntimePolicy::default(),
+                None,
+                None,
+            )
+        };
+
+        let resources = resolve_resources(None);
+        let entry = resources
+            .models
+            .iter()
+            .find(|entry| entry.id == pair)
+            .expect("the Grok-shaped model is listed");
+        assert!(entry.disabled_reason.is_none(), "{}", entry.detail);
+        assert!(entry.detail.contains("output ceiling 500k"), "{}", entry.detail);
+        assert!(
+            entry.detail.contains("request 32768 [automatic]"),
+            "{}",
+            entry.detail
+        );
+
+        let resources = resolve_resources(Some(500_000));
+        let entry = resources
+            .models
+            .iter()
+            .find(|entry| entry.id == pair)
+            .expect("the conflicting model remains visible");
+        assert!(
+            entry
+                .disabled_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("leaves no input budget")),
+            "{:?}",
+            entry.disabled_reason
+        );
     }

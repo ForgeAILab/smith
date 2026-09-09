@@ -115,6 +115,7 @@ use smith_config::model::{
     KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES, KIND_XAI_RESPONSES,
     ProfileUse,
 };
+use smith_config::output_budget::{OutputBudget, resolve_output_budget};
 use smith_config::resolve::{
     AutoApprovalRule, CommandWorkingDirectory, McpValue, ResolvedConfig, ResolvedProvider, Sourced,
 };
@@ -889,6 +890,7 @@ struct PreparedFactoryInputs {
     model: ModelId,
     profile: ProfileResolution,
     reasoning: ReasoningRuntimePolicy,
+    output_budget: OutputBudget,
     context_policy: ContextPolicy,
     compaction_policy: CompactionPolicy,
     loop_config: LoopConfig,
@@ -1458,9 +1460,9 @@ async fn prepare_durability_stage(
 /// thread rather than on the executor a provider stream will share.
 pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryError> {
     let resolved = resolve::accept(harness);
-    let harness_identity = resolved.identity;
+    let mut harness_identity = resolved.identity;
     let harness_modules = resolved.modules;
-    let harness_report = resolved.report;
+    let mut harness_report = resolved.report;
     let request = resolved.request;
     // Host policy first. It costs nothing to check and everything to get wrong,
     // and failing here means a misconfigured run never reaches a keychain.
@@ -1476,11 +1478,14 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         model,
         profile,
         reasoning,
+        output_budget,
         context_policy,
         compaction_policy,
         mut loop_config,
         command,
     } = provider::prepare(&request).await?;
+    harness_identity = harness_identity.with_output_budget(&output_budget);
+    harness_report.finalize_output_budget(&harness_identity, &output_budget);
     let agent_posture = request.config.agent.active_posture();
     let agent_profile = request.config.agent.profile.clone();
     let agent_profile_name = agent_profile.name.clone();
@@ -1861,6 +1866,7 @@ async fn prepare_child_profile_routes(
             model,
             profile,
             reasoning,
+            output_budget: _,
             context_policy,
             compaction_policy: _,
             mut loop_config,
@@ -2103,6 +2109,16 @@ async fn prepare_factory_inputs(
             agent_runtime_core::provider::ReasoningSupport::Controllable;
     }
 
+    // Resolve model-dependent request and context policy before credentials.
+    // The same immutable result feeds both the provider loop and planner, so a
+    // choice accepted by inventory cannot acquire a different output budget at
+    // execution time.
+    let output_budget = effective_output_budget(config, &profile.profile)?;
+    let context_policy = context_policy(config, &output_budget);
+    let compaction_policy = compaction_policy(config, &profile.profile, &context_policy);
+    let mut loop_config = loop_config(request, &model, &output_budget);
+    loop_config.reasoning = reasoning.request_config();
+
     // Capability and requested-value validation precede credential lookup, so
     // an invalid effort never opens a keychain prompt.
     let secret = match (
@@ -2147,11 +2163,6 @@ async fn prepare_factory_inputs(
         Some(command) => Some(prepare_command_provider(request, command).await?),
         None => None,
     };
-    let context_policy = context_policy(config, &profile.profile)?;
-    let compaction_policy = compaction_policy(config, &profile.profile, &context_policy);
-    let mut loop_config = loop_config(request, &model);
-    loop_config.reasoning = reasoning.request_config();
-
     Ok(PreparedFactoryInputs {
         provider_name,
         provider_kind,
@@ -2161,6 +2172,7 @@ async fn prepare_factory_inputs(
         model,
         profile,
         reasoning,
+        output_budget,
         context_policy,
         compaction_policy,
         loop_config,
@@ -3067,36 +3079,31 @@ fn auto_approval_permission(permission: AutoApprovalPermission) -> Permission {
     }
 }
 
-/// Derives the context policy from configuration and the resolved limits.
-///
-/// `context.output_reserve` has no built-in default because it depends on the
-/// model, so it falls back to the generation cap this profile asks for and then
-/// to the model's own declared ceiling. Both are declared values rather than
-/// guesses — the ceiling comes from the profile that just resolved — which is
-/// what keeps "never default a context window" intact while still producing an
-/// enforceable reserve.
-fn context_policy(
+/// Resolves Smith's request-output policy against one immutable model profile.
+fn effective_output_budget(
     config: &ResolvedConfig,
     profile: &ResolvedModelProfile,
-) -> Result<ContextPolicy, FactoryError> {
-    let reasoning_reserve = config.context.reasoning_reserve.value;
-    let output_reserve = config
-        .context
-        .output_reserve
-        .as_ref()
-        .or(config.max_output_tokens.as_ref())
-        .map_or(profile.limits.max_output_tokens, |sourced| sourced.value);
+) -> Result<OutputBudget, FactoryError> {
+    resolve_output_budget(
+        profile.limits.context_tokens,
+        profile.limits.max_output_tokens,
+        config.max_output_tokens.as_ref().map(|value| value.value),
+        config
+            .context
+            .output_reserve
+            .as_ref()
+            .map(|value| value.value),
+        config.context.reasoning_reserve.value,
+    )
+    .map_err(|error| FactoryError::ContextReserve {
+        message: format!("model `{}`: {error}", profile.model),
+    })
+}
 
-    let held_back = output_reserve.saturating_add(reasoning_reserve);
-    if held_back >= profile.limits.context_tokens {
-        return Err(FactoryError::ContextReserve {
-            message: format!(
-                "an output reserve of {output_reserve} and a reasoning reserve of \
-                 {reasoning_reserve} leave nothing of model `{}`'s {} token window for input",
-                profile.model, profile.limits.context_tokens
-            ),
-        });
-    }
+/// Derives context planning from configuration and the effective output budget.
+fn context_policy(config: &ResolvedConfig, output_budget: &OutputBudget) -> ContextPolicy {
+    let reasoning_reserve = config.context.reasoning_reserve.value;
+    let output_reserve = output_budget.output_reserve;
 
     let capability_budget = config.context.capability_budget.as_ref().map(|s| s.value);
     let max_estimated_slack = config.context.max_estimated_slack.as_ref().map(|s| s.value);
@@ -3116,7 +3123,7 @@ fn context_policy(
     if let Some(slack) = max_estimated_slack {
         policy = policy.with_max_estimated_slack(slack);
     }
-    Ok(policy)
+    policy
 }
 
 /// Resolves Smith's percentage watermarks against the same enforceable input
@@ -3175,7 +3182,11 @@ fn policy_revision(
 /// because the generation cap has no setter of its own, and splitting one
 /// coherent loop configuration across two mechanisms is how half of it ends up
 /// forgotten.
-fn loop_config(request: &RuntimeRequest, model: &ModelId) -> LoopConfig {
+fn loop_config(
+    request: &RuntimeRequest,
+    model: &ModelId,
+    output_budget: &OutputBudget,
+) -> LoopConfig {
     let config = &request.config;
     let mut loop_config = LoopConfig::new(model.clone());
     // Smith installs product instructions through `SmithPromptContributor` so
@@ -3199,7 +3210,7 @@ fn loop_config(request: &RuntimeRequest, model: &ModelId) -> LoopConfig {
         .then_some(config.limits.turn_time_limit_ms.value);
     loop_config.output_limit =
         usize::try_from(config.limits.tool_output_limit_bytes.value).unwrap_or(usize::MAX);
-    loop_config.max_output_tokens = config.max_output_tokens.as_ref().map(|s| s.value);
+    loop_config.max_output_tokens = Some(output_budget.request_tokens);
     // Explicit rather than inherited: an unsupported capability must fail
     // before network I/O unless a named downgrade was configured, and Smith
     // configuration has no downgrade keys to configure one with yet.
@@ -3888,7 +3899,7 @@ exit 2
     }
 
     #[test]
-    fn an_absent_output_reserve_falls_back_to_a_declared_limit_not_a_guess() {
+    fn an_absent_request_budget_is_derived_and_shared_with_context_policy() {
         let profile = profile(ModelLimits::new(128_000, 124_000, 4_096));
         let mut config = ResolvedConfig {
             profile: None,
@@ -3910,27 +3921,37 @@ exit 2
             mcp: Default::default(),
         };
 
-        // Nothing configured: the model's own declared ceiling.
-        let policy = context_policy(&config, &profile).expect("a policy");
+        // The small model ceiling is below every automatic bound.
+        let budget = effective_output_budget(&config, &profile).expect("a budget");
+        let policy = context_policy(&config, &budget);
+        assert_eq!(budget.request_tokens, 4_096);
         assert_eq!(policy.output_reserve, 4_096);
 
-        // The profile's generation ask outranks the ceiling.
+        // The profile's generation ask outranks the automatic value.
         config.max_output_tokens = Some(sourced(1_024));
-        assert_eq!(
-            context_policy(&config, &profile)
-                .expect("a policy")
-                .output_reserve,
-            1_024
-        );
+        let budget = effective_output_budget(&config, &profile).expect("a budget");
+        assert_eq!(budget.request_tokens, 1_024);
+        assert_eq!(context_policy(&config, &budget).output_reserve, 1_024);
 
         // And an explicit reserve outranks both.
         config.context = context(Some(8_192), 0);
-        assert_eq!(
-            context_policy(&config, &profile)
-                .expect("a policy")
-                .output_reserve,
-            8_192
-        );
+        let budget = effective_output_budget(&config, &profile).expect("a budget");
+        assert_eq!(budget.request_tokens, 1_024);
+        assert_eq!(context_policy(&config, &budget).output_reserve, 8_192);
+    }
+
+    #[test]
+    fn automatic_budget_reaches_both_loop_and_context_policy() {
+        let profile = profile(ModelLimits::new(500_000, 500_000, 500_000));
+        let config = resolved_config();
+        let budget = effective_output_budget(&config, &profile).expect("an automatic budget");
+        let policy = context_policy(&config, &budget);
+        let request = RuntimeRequest::new(config, HostSurface::Terminal);
+        let loop_config = loop_config(&request, &ModelId::new("example-model"), &budget);
+
+        assert_eq!(budget.request_tokens, 32_768);
+        assert_eq!(policy.output_reserve, 32_768);
+        assert_eq!(loop_config.max_output_tokens, Some(32_768));
     }
 
     #[test]
@@ -3956,7 +3977,7 @@ exit 2
             mcp: Default::default(),
         };
 
-        let err = context_policy(&config, &profile).expect_err("no room to plan");
+        let err = effective_output_budget(&config, &profile).expect_err("no room to plan");
         assert!(matches!(err, FactoryError::ContextReserve { .. }));
     }
 
@@ -3996,7 +4017,8 @@ exit 2
             mcp: Default::default(),
         };
 
-        let context_policy = context_policy(&config, &profile).expect("a context policy");
+        let budget = effective_output_budget(&config, &profile).expect("an output budget");
+        let context_policy = context_policy(&config, &budget);
         let compact = compaction_policy(&config, &profile, &context_policy);
         assert_eq!(
             ContextBudget::from_limits(&profile.limits, &context_policy).input_budget,

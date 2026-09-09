@@ -1555,6 +1555,86 @@ async fn catalog_only_selection_resolves_frozen_limits_before_any_provider_reque
 }
 
 #[tokio::test]
+async fn catalog_ceiling_equal_to_context_gets_one_frozen_automatic_budget() {
+    let fixture = Fixture::new(NO_LIMITS_CONFIG);
+    let source = StaticSource::new("models.dev", CatalogSource::CachedRemote).with_model(
+        "example-model",
+        ModelRecord::new()
+            .with_limits(ModelLimits::new(500_000, 500_000, 500_000))
+            .with_revision("models-dev-equal-ceiling"),
+    );
+    let provider = Arc::new(FakeProvider::text_reply("unused"));
+    let request = RuntimeRequest {
+        provider: Some(provider.clone() as Arc<dyn Provider>),
+        catalog_sources: vec![Arc::new(source)],
+        ..request(&fixture, HostSurface::Headless)
+    };
+
+    let smith = factory::build_request(request)
+        .await
+        .expect("an automatically budgeted runtime");
+    assert_eq!(
+        smith.policy().model_profile.limits,
+        ModelLimits::new(500_000, 500_000, 500_000),
+        "automatic policy must not rewrite the catalog ceiling"
+    );
+    assert_eq!(smith.policy().max_output_tokens, Some(32_768));
+    assert_eq!(smith.policy().context_policy.output_reserve, 32_768);
+    assert!(
+        smith
+            .harness_report()
+            .entries
+            .iter()
+            .any(|entry| entry == "output=request:32768:automatic reserve:32768:automatic")
+    );
+    assert!(
+        provider.requests().is_empty(),
+        "composition must not spend a provider request"
+    );
+}
+
+#[tokio::test]
+async fn explicit_reserve_conflict_fails_before_credential_resolution() {
+    const CONFLICTING_RESERVE_CONFIG: &str = r#"
+default_profile = "dev"
+
+[profiles.dev]
+provider = "remote"
+model = "example-model"
+
+[providers.remote]
+kind = "openai-compatible"
+base_url = "https://api.example.test/v1"
+credential = "env:MUST_NOT_BE_READ"
+
+[models."remote/example-model"]
+context_tokens = 8000
+max_input_tokens = 8000
+max_output_tokens = 4000
+
+[context]
+output_reserve = 6000
+reasoning_reserve = 2000
+
+[approval]
+mode = "allow-all"
+"#;
+
+    let fixture = Fixture::new(CONFLICTING_RESERVE_CONFIG);
+    let credentials = CredentialResolver::new("/nonexistent-user-state")
+        .with_environment(Arc::new(PanicsIfCredentialResolved));
+    let request = RuntimeRequest {
+        credentials: Some(credentials),
+        ..request(&fixture, HostSurface::Headless)
+    };
+
+    let error = factory::build_request(request)
+        .await
+        .expect_err("explicit reserves consume the context");
+    assert!(matches!(error, FactoryError::ContextReserve { .. }));
+}
+
+#[tokio::test]
 async fn explicit_limits_beat_catalog_metadata_and_both_provenances_survive() {
     const PARTIAL_LIMITS_CONFIG: &str = r#"
 default_profile = "dev"

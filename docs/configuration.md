@@ -671,6 +671,17 @@ embedded metadata, or a validated endpoint-bound catalog. Explicit fields win
 independently. `profiles.<name>.max_output_tokens` is the per-request ask and
 cannot exceed the model's resolved ceiling.
 
+When the per-request ask is omitted, Smith keeps the resolved model ceiling
+unchanged and derives one automatic request budget for the run. The budget is
+the smallest of the model output ceiling, 32,768 tokens, one quarter of the
+context window, and the space remaining after reasoning while preserving at
+least one input token. The same frozen value becomes the default context output
+reserve and the provider request cap. An explicit
+`profiles.<name>.max_output_tokens` and an explicit `context.output_reserve`
+each win for their own setting and are validated rather than silently clamped.
+Model resources therefore label the catalog value as `output ceiling` and show
+the effective `request` separately as `[automatic]` or `[configured]`.
+
 For the endpoint-bound Z.AI Coding Plan `glm-5.2` catalog entry, Smith keeps
 the provider model ceiling (`131072`) separate from its product request budget
 and defaults the latter to `32768`. An owner-controlled profile, environment,

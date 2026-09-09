@@ -534,9 +534,11 @@ may come from Smith's frozen Models.dev snapshot as well as explicit TOML. The e
 endpoint binding is a trust boundary; a matching provider name alone is not.
 Catalog rows retain the configured provider alias, show the catalog display
 name and provider-qualified ID, summarize limits and coding capabilities, and
-label the source revision and age as `advertised`. That word is deliberate:
-the row does not claim that the current account, plan, region, or credential
-is entitled to use the model.
+label the source revision and age as `advertised`. Output metadata distinguishes
+the model's published `output ceiling` from Smith's effective `request` budget,
+including whether that request value is automatic or configured. The word
+`advertised` is deliberate: the row does not claim that the current account,
+plan, region, or credential is entitled to use the model.
 
 Deprecated catalog entries are absent. Entries lacking text output, tool
 calling, complete valid limits, or input space after effective reserves remain

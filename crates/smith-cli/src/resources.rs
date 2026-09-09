@@ -20,10 +20,11 @@ pub(super) fn runtime_resources(
             (
                 model.id(),
                 format!(
-                    "ctx {} · input {} · output {}",
+                    "ctx {} · input {} · output ceiling {} · request {}",
                     render_optional_inventory_limit(model.context_tokens.as_ref()),
                     render_optional_inventory_limit(model.max_input_tokens.as_ref()),
                     render_optional_inventory_limit(model.max_output_tokens.as_ref()),
+                    render_optional_output_budget(model.output_budget.as_ref()),
                 ),
             )
         })
@@ -228,10 +229,11 @@ pub(super) fn runtime_resources(
                 id.clone(),
                 model.label,
                 format!(
-                    "{id} · ctx {} · input {} · output {}{capabilities}{provenance}{profiles}",
+                    "{id} · ctx {} · input {} · output ceiling {} · request {}{capabilities}{provenance}{profiles}",
                     render_optional_inventory_limit(model.context_tokens.as_ref()),
                     render_optional_inventory_limit(model.max_input_tokens.as_ref()),
                     render_optional_inventory_limit(model.max_output_tokens.as_ref()),
+                    render_optional_output_budget(model.output_budget.as_ref()),
                 ),
             )
             .active(model.active);
@@ -659,6 +661,21 @@ pub(super) fn render_inventory_limit(limit: &InventoryLimit) -> String {
 
 pub(super) fn render_optional_inventory_limit(limit: Option<&InventoryLimit>) -> String {
     limit.map_or_else(|| "unknown".to_owned(), render_inventory_limit)
+}
+
+pub(super) fn render_optional_output_budget(
+    budget: Option<&smith_config::output_budget::OutputBudget>,
+) -> String {
+    budget.map_or_else(
+        || "unknown".to_owned(),
+        |budget| {
+            format!(
+                "{} [{}]",
+                token_quantity(budget.request_tokens),
+                budget.request_origin.label()
+            )
+        },
+    )
 }
 
 pub(super) fn catalog_age(retrieved_at_ms: u64) -> String {

@@ -14,6 +14,7 @@ use smith_config::model::{
     ConfigFile, ConfigSecret, ContextSection, ModelSection, ProfileSection, ProviderSection,
     ReasoningOnlyBehavior,
 };
+use smith_config::output_budget::OutputBudgetOrigin;
 use smith_config::resolve::{
     ConfigError, ConfigReadiness, Layer, Overrides, ResolveRequest, inspect, resolve,
 };
@@ -1264,12 +1265,11 @@ fn xai_catalog_snapshot() -> CatalogSnapshot {
     }
 }
 
-/// Guards the model choice itself. Picking the highest version number looks
-/// like an upgrade and is not one: a model whose advertised output limit
-/// equals its context window leaves no input budget once the output is
-/// reserved, so it lists as disabled and the connection is unusable again.
+/// A provider ceiling is not Smith's ordinary request size. Models.dev may
+/// advertise the whole context window as the output ceiling, and the automatic
+/// request policy must leave that model useful without a local limit guess.
 #[test]
-fn the_default_xai_model_leaves_input_budget_after_its_output_reserve() {
+fn an_xai_model_whose_output_ceiling_equals_context_gets_an_automatic_budget() {
     let fixture = Fixture::new();
     fixture.write_user(&format!(
         r#"
@@ -1332,10 +1332,11 @@ credential = "{credential}"
         .iter()
         .find(|model| model.model == "output-equals-context")
         .expect("the model is listed");
-    assert!(
-        !squeezed.selectable,
-        "a model whose output reserve consumes its whole context cannot be chosen; \
-         this is why `{}` is the default rather than the highest version",
-        smith_config::setup::XAI_DEFAULT_MODEL
-    );
+    assert!(squeezed.selectable);
+    assert_eq!(squeezed.max_output_tokens.as_ref().unwrap().value, 500_000);
+    let budget = squeezed.output_budget.expect("an automatic output budget");
+    assert_eq!(budget.request_tokens, 32_768);
+    assert_eq!(budget.output_reserve, 32_768);
+    assert_eq!(budget.request_origin, OutputBudgetOrigin::Automatic);
+    assert_eq!(budget.reserve_origin, OutputBudgetOrigin::Automatic);
 }
