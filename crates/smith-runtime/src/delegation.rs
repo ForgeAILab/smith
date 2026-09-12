@@ -1115,6 +1115,10 @@ fn status_json(status: &ChildStatus) -> Value {
         "max_turns": (status.max_turns != u32::MAX).then_some(status.max_turns),
         "tokens_used": status.tokens_used,
         "incompatibility": status.incompatibility,
+        // Why the last task failed, when one did. A model reading a `failed`
+        // state with no reason has to guess, and the guess is usually that it
+        // should try the same thing again.
+        "error": status.last_error.as_ref().map(|error| error.message.clone()),
         "result": status.last_result,
     })
 }
