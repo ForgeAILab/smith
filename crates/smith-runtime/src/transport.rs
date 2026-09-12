@@ -67,6 +67,18 @@ const ENDPOINT_KEY: &str = "transport.endpoint";
 /// The metadata key carrying the HTTP status of a rejected request.
 const STATUS_KEY: &str = "http.status";
 
+/// The metadata key carrying the provider's own reason for a rejection.
+const DETAIL_KEY: &str = "provider.detail";
+
+/// How much of an error body is read before classification gives up. A
+/// conforming provider error is a few hundred bytes; this only has to be large
+/// enough to reach the fields below in a body that leads with something else.
+const MAX_ERROR_BODY_BYTES: usize = 8 * 1024;
+
+/// The cap on the extracted reason. Long enough to carry a provider sentence,
+/// short enough that nothing bulk can ride along inside one.
+const MAX_DETAIL_CHARS: usize = 300;
+
 /// How a [`ReqwestTransport`] behaves on the wire.
 ///
 /// The knobs are limited on purpose. There is no proxy setting and no TLS
@@ -181,6 +193,7 @@ impl ReqwestTransport {
             )
         })?;
         let endpoint = endpoint_label(&url);
+        let url_secrets = url_secrets(&url);
         let headers = header_map(&request.headers, &endpoint)?;
 
         // One absolute instant governs both the handshake and the body, so a
@@ -193,7 +206,7 @@ impl ReqwestTransport {
             .body(request.body)
             .send();
 
-        let response = match tokio::time::timeout_at(deadline, send).await {
+        let mut response = match tokio::time::timeout_at(deadline, send).await {
             Ok(Ok(response)) => response,
             Ok(Err(err)) => return Err(send_error(&err, &endpoint)),
             Err(_) => {
@@ -213,15 +226,23 @@ impl ReqwestTransport {
         // is credential-bearing.
         let observed = observed_headers(response.headers());
 
-        if let Some(err) = classify_status(status, response.headers(), &endpoint) {
+        if let Some(mut err) = classify_status(status, response.headers(), &endpoint) {
+            // The body is read but never carried verbatim. A provider error
+            // body commonly echoes the offending request, authorization header
+            // included, so only the two named reason fields below cross this
+            // boundary and only when the body parses as the error object a
+            // provider documents. Anything else is dropped exactly as it was
+            // before this path read anything at all.
+            let secrets = sent_secrets(&request.headers, &url_secrets);
+            if let Some(detail) = error_detail(&mut response, deadline, &secrets).await {
+                err.metadata.insert(DETAIL_KEY, detail);
+            }
             tracing::debug!(
                 status = status.as_u16(),
                 endpoint = %endpoint,
+                detail = err.metadata.get(DETAIL_KEY).map(|value| value.to_string()),
                 "the provider rejected the request"
             );
-            // `response` is dropped unread on this path, and that is the point:
-            // a provider error body commonly echoes the offending request,
-            // authorization header included.
             return Err(exhaustion_aware(err, status.as_u16(), &observed));
         }
 
@@ -562,11 +583,192 @@ fn header_map(headers: &[(String, String)], endpoint: &str) -> Result<HeaderMap,
     Ok(map)
 }
 
+/// Extracts a provider's own reason for rejecting a request.
+///
+/// Reads at most [`MAX_ERROR_BODY_BYTES`] and returns something only when the
+/// body parses as JSON carrying the error shape providers document: Google and
+/// OpenAI-compatible endpoints both nest `message` under `error`, and Google
+/// adds a symbolic `status` such as `INVALID_ARGUMENT`. The echoed request that
+/// motivated dropping these bodies lives in neither field, and an unparseable
+/// or unrecognized body yields `None` rather than a raw excerpt.
+async fn error_detail(
+    response: &mut reqwest::Response,
+    deadline: Instant,
+    secrets: &[String],
+) -> Option<String> {
+    let mut body = Vec::new();
+    loop {
+        let chunk = tokio::time::timeout_at(deadline, response.chunk()).await;
+        match chunk {
+            Ok(Ok(Some(chunk))) => {
+                let room = MAX_ERROR_BODY_BYTES.saturating_sub(body.len());
+                body.extend_from_slice(&chunk[..chunk.len().min(room)]);
+                if body.len() >= MAX_ERROR_BODY_BYTES {
+                    break;
+                }
+            }
+            Ok(Ok(None)) => break,
+            // A body that will not arrive is not worth failing over: the
+            // status already classified the rejection.
+            Ok(Err(_)) | Err(_) => return None,
+        }
+    }
+    detail_from_body(&body, secrets)
+}
+
+/// Every value this request carried that must not come back out.
+///
+/// Header values are secret by default and named innocuous by exception: a
+/// provider that authenticates with a header this module has never heard of
+/// still has its credential withheld. The URL's password and query values join
+/// them because an endpoint that takes its key in the query has put a
+/// credential somewhere a reflected error can repeat.
+fn sent_secrets(headers: &[(String, String)], url_secrets: &[String]) -> Vec<String> {
+    const PUBLIC_HEADERS: &[&str] = &[
+        "accept",
+        "accept-encoding",
+        "content-type",
+        "content-length",
+        "user-agent",
+    ];
+    headers
+        .iter()
+        .filter(|(name, _)| !PUBLIC_HEADERS.contains(&name.to_ascii_lowercase().as_str()))
+        .map(|(_, value)| value.clone())
+        .chain(url_secrets.iter().cloned())
+        .filter(|secret| !secret.is_empty())
+        .collect()
+}
+
+/// The credential-bearing parts of a request URL.
+fn url_secrets(url: &Url) -> Vec<String> {
+    let mut secrets = Vec::new();
+    if let Some(password) = url.password() {
+        secrets.push(password.to_owned());
+    }
+    secrets.extend(url.query_pairs().map(|(_, value)| value.into_owned()));
+    secrets
+}
+
+/// Pulls the documented reason fields out of an error body, or nothing.
+fn detail_from_body(body: &[u8], secrets: &[String]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let error = value.get("error")?;
+    let message = error.get("message").and_then(serde_json::Value::as_str);
+    let status = error.get("status").and_then(serde_json::Value::as_str);
+    let detail = match (status, message) {
+        (Some(status), Some(message)) => format!("{status}: {message}"),
+        (Some(status), None) => status.to_owned(),
+        (None, Some(message)) => message.to_owned(),
+        (None, None) => return None,
+    };
+    let detail = detail.trim();
+    if detail.is_empty() {
+        return None;
+    }
+    // A provider that reflected one credential back has already shown it will
+    // reflect the request, so the whole reason is dropped rather than patched:
+    // redacting the secrets this module happens to know about would leave
+    // whatever else that body chose to echo.
+    if secrets
+        .iter()
+        .any(|secret| detail.contains(secret.as_str()))
+    {
+        return None;
+    }
+    Some(truncate_chars(detail, MAX_DETAIL_CHARS))
+}
+
+/// Truncates on a character boundary, marking that it happened.
+fn truncate_chars(value: &str, max: usize) -> String {
+    if value.chars().count() <= max {
+        return value.to_owned();
+    }
+    let kept: String = value.chars().take(max).collect();
+    format!("{kept}…")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const TOKEN: &str = "sk-live-4kQm2ZpX8vRt7nLb1cWs9aYe";
+
+    #[test]
+    fn an_error_body_yields_only_its_named_reason_fields() {
+        let body = br#"{"error":{"code":400,"status":"INVALID_ARGUMENT","message":"Input blocked: the prompt contains sensitive words."}}"#;
+        assert_eq!(
+            detail_from_body(body, &[]).as_deref(),
+            Some("INVALID_ARGUMENT: Input blocked: the prompt contains sensitive words.")
+        );
+    }
+
+    #[test]
+    fn an_error_body_never_carries_the_echoed_request() {
+        // Google nests the offending request under `details`, which is where
+        // an authorization header would ride along. Only `status` and
+        // `message` cross the boundary.
+        let body = format!(
+            r#"{{"error":{{"status":"INVALID_ARGUMENT","message":"bad request","details":[{{"authorization":"Bearer {TOKEN}","prompt":"the whole prompt"}}]}}}}"#
+        );
+        let detail = detail_from_body(body.as_bytes(), &[]).expect("a reason");
+        assert_eq!(detail, "INVALID_ARGUMENT: bad request");
+        assert!(!detail.contains(TOKEN));
+        assert!(!detail.contains("the whole prompt"));
+    }
+
+    #[test]
+    fn a_body_without_the_documented_shape_yields_nothing() {
+        assert_eq!(detail_from_body(b"upstream connect error", &[]), None);
+        assert_eq!(detail_from_body(br#"{"message":"top level"}"#, &[]), None);
+        assert_eq!(detail_from_body(br#"{"error":{"code":400}}"#, &[]), None);
+        assert_eq!(
+            detail_from_body(br#"{"error":{"message":"   "}}"#, &[]),
+            None
+        );
+    }
+
+    #[test]
+    fn a_long_reason_is_truncated_on_a_character_boundary() {
+        let message = "字".repeat(MAX_DETAIL_CHARS + 50);
+        let body = format!(r#"{{"error":{{"message":"{message}"}}}}"#);
+        let detail = detail_from_body(body.as_bytes(), &[]).expect("a reason");
+        assert_eq!(detail.chars().count(), MAX_DETAIL_CHARS + 1);
+        assert!(detail.ends_with('…'));
+    }
+
+    #[test]
+    fn a_reason_that_echoes_a_sent_credential_is_dropped_whole() {
+        let body = format!(r#"{{"error":{{"message":"bad key Bearer {TOKEN}"}}}}"#);
+        let secrets = vec![format!("Bearer {TOKEN}")];
+        assert_eq!(detail_from_body(body.as_bytes(), &secrets), None);
+    }
+
+    #[test]
+    fn header_values_are_secret_unless_named_public() {
+        let headers = vec![
+            ("content-type".to_owned(), "application/json".to_owned()),
+            ("Accept".to_owned(), "text/event-stream".to_owned()),
+            ("authorization".to_owned(), format!("Bearer {TOKEN}")),
+            ("x-unheard-of-auth".to_owned(), "s3cret".to_owned()),
+        ];
+        let secrets = sent_secrets(&headers, &["url-pw".to_owned()]);
+        assert!(secrets.contains(&format!("Bearer {TOKEN}")));
+        assert!(secrets.contains(&"s3cret".to_owned()));
+        assert!(secrets.contains(&"url-pw".to_owned()));
+        // A public header must not be able to suppress every reason.
+        assert!(!secrets.contains(&"application/json".to_owned()));
+        assert!(!secrets.contains(&"text/event-stream".to_owned()));
+    }
+
+    #[test]
+    fn url_secrets_cover_the_password_and_every_query_value() {
+        let url = Url::parse("https://smith:pw@api.example.test/v1?api_key=qs&model=flash")
+            .expect("a parsable url");
+        let secrets = url_secrets(&url);
+        assert!(secrets.contains(&"pw".to_owned()));
+        assert!(secrets.contains(&"qs".to_owned()));
+    }
 
     #[test]
     fn an_endpoint_label_drops_userinfo_path_and_query() {
