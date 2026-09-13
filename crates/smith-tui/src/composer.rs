@@ -8,6 +8,8 @@
 use std::collections::VecDeque;
 use std::ops::Range;
 
+use unicode_width::UnicodeWidthChar;
+
 /// Composer history is intentionally bounded, process-local UI state.
 const MAX_HISTORY_ENTRIES: usize = 100;
 
@@ -216,7 +218,7 @@ impl Composer {
     }
 
     /// Moves the cursor to a `(line, column)` position, both zero-based and
-    /// counted in characters, clamping to the nearest real position.
+    /// counted in display columns, clamping to the nearest real position.
     ///
     /// This is the mouse-click inverse of [`Self::cursor_position`]: a click
     /// past the end of a line lands at that line's end, and a click below the
@@ -238,10 +240,13 @@ impl Composer {
                 }
             }
         }
-        for character in chars.take(column) {
-            if character == '\n' {
+        let mut current_col = 0usize;
+        for character in chars {
+            if character == '\n' || current_col >= column {
                 break;
             }
+            let char_width = UnicodeWidthChar::width(character).unwrap_or(0);
+            current_col += char_width;
             index += 1;
         }
         self.cursor = index;
@@ -371,7 +376,7 @@ impl Composer {
     }
 
     /// The cursor as a `(line, column)` pair, both zero-based and counted in
-    /// characters.
+    /// display columns (taking character display width into account).
     pub fn cursor_position(&self) -> (usize, usize) {
         let mut line = 0;
         let mut column = 0;
@@ -383,7 +388,7 @@ impl Composer {
                 line += 1;
                 column = 0;
             } else {
-                column += 1;
+                column += UnicodeWidthChar::width(ch).unwrap_or(0);
             }
         }
         (line, column)
@@ -537,6 +542,26 @@ mod tests {
         assert_eq!(composer.cursor_position(), (1, 2));
         composer.move_home();
         assert_eq!(composer.cursor_position(), (1, 0));
+    }
+
+    #[test]
+    fn cursor_position_counts_display_width_for_wide_characters() {
+        let mut composer = Composer::new();
+        composer.insert_str("中文测试");
+        assert_eq!(composer.cursor_position(), (0, 8));
+
+        composer.move_home();
+        assert_eq!(composer.cursor_position(), (0, 0));
+
+        composer.move_right();
+        assert_eq!(composer.cursor_position(), (0, 2));
+
+        composer.move_right();
+        assert_eq!(composer.cursor_position(), (0, 4));
+
+        composer.move_to_position(0, 6);
+        assert_eq!(composer.cursor(), 3);
+        assert_eq!(composer.cursor_position(), (0, 6));
     }
 
     #[test]
