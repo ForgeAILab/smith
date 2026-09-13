@@ -99,6 +99,10 @@ pub enum ModelLimitOrigin {
         /// Retrieval time in Unix milliseconds.
         retrieved_at_ms: u64,
     },
+    /// Smith's own bookkeeping for a model namespace Smith owns, such as the
+    /// installed coding-agent ids. Bookkeeping for planning, not an advertised
+    /// provider capability.
+    BuiltIn,
 }
 
 /// One enforceable model limit and its provenance.
@@ -337,6 +341,22 @@ pub fn local_inventory_with_catalog(
         let catalog_entry = catalog_models.get(&(provider.clone(), model.clone()));
         let catalog_model = catalog_entry.map(|(_, entry)| *entry);
         let catalog_limits = catalog_model.and_then(|entry| entry.limits);
+        // An installed coding agent owns its own context; Smith has no limits
+        // to discover, so the inventory falls back to the same built-in
+        // bookkeeping constants `resolve_model_limits` supplies when the
+        // profile is actually resolved. Explicit `[models]` tables still win.
+        let cli_bookkeeping = crate::cli_agents::parse_cli_model_id(&model).map(|_| {
+            (
+                crate::cli_agents::CLI_AGENT_CONTEXT_TOKENS,
+                crate::cli_agents::CLI_AGENT_MAX_INPUT_TOKENS,
+                crate::cli_agents::CLI_AGENT_MAX_OUTPUT_TOKENS,
+            )
+        });
+        let fallback = |built_in: Option<u32>, catalog_value: Option<u32>| CatalogLimit {
+            built_in,
+            value: catalog_value,
+            snapshot: catalog,
+        };
         let context_tokens = inventory_limit(
             resolution,
             &identity,
@@ -344,10 +364,10 @@ pub fn local_inventory_with_catalog(
             explicit.and_then(|section| section.context_tokens),
             trusted.map(|record| record.context_tokens),
             trusted.map(|record| (record.catalog, record.revision)),
-            CatalogLimit {
-                value: catalog_limits.map(|limits| limits.context_tokens),
-                snapshot: catalog,
-            },
+            fallback(
+                cli_bookkeeping.map(|(context, _, _)| context),
+                catalog_limits.map(|limits| limits.context_tokens),
+            ),
         );
         let max_input_tokens = inventory_limit(
             resolution,
@@ -356,10 +376,10 @@ pub fn local_inventory_with_catalog(
             explicit.and_then(|section| section.max_input_tokens),
             trusted.map(|record| record.max_input_tokens),
             trusted.map(|record| (record.catalog, record.revision)),
-            CatalogLimit {
-                value: catalog_limits.map(|limits| limits.max_input_tokens),
-                snapshot: catalog,
-            },
+            fallback(
+                cli_bookkeeping.map(|(_, input, _)| input),
+                catalog_limits.map(|limits| limits.max_input_tokens),
+            ),
         );
         let max_output_tokens = inventory_limit(
             resolution,
@@ -368,18 +388,28 @@ pub fn local_inventory_with_catalog(
             explicit.and_then(|section| section.max_output_tokens),
             trusted.map(|record| record.max_output_tokens),
             trusted.map(|record| (record.catalog, record.revision)),
-            CatalogLimit {
-                value: catalog_limits.map(|limits| limits.max_output_tokens),
-                snapshot: catalog,
-            },
+            fallback(
+                cli_bookkeeping.map(|(_, _, output)| output),
+                catalog_limits.map(|limits| limits.max_output_tokens),
+            ),
         );
         // A trusted model's built-in request default is model-specific. While
         // inventory enumerates another candidate, derive that candidate's own
         // trusted default instead of carrying the active model's value across.
-        // User, profile, environment, flag, and session values intentionally
-        // remain active policy when previewing a model switch.
+        // Values from layers that survive a selection change — user-global
+        // configuration, environment, flags, session overrides — remain
+        // active policy when previewing a switch. A value scoped to the
+        // active profile does not survive selecting another profile or model
+        // candidate, so it previews as that candidate's own automatic budget
+        // instead of disabling it.
+        let active_pair = provider == *active_provider && model == *active_model;
         let configured_request_tokens = match resolution.config.max_output_tokens.as_ref() {
-            Some(request) if request.source.layer != Layer::BuiltIn => Some(request.value),
+            Some(request)
+                if request.source.layer != Layer::BuiltIn
+                    && (active_pair || !profile_scoped(&request.source)) =>
+            {
+                Some(request.value)
+            }
             _ => trusted.and_then(|record| {
                 (record.request_output_tokens != 0).then_some(record.request_output_tokens)
             }),
@@ -398,6 +428,7 @@ pub fn local_inventory_with_catalog(
                             .context
                             .output_reserve
                             .as_ref()
+                            .filter(|reserve| active_pair || !profile_scoped(&reserve.source))
                             .map(|reserve| reserve.value),
                         resolution.config.context.reasoning_reserve.value,
                     )
@@ -602,6 +633,7 @@ fn provider_is_selectable(section: &ProviderSection, available: &BTreeSet<&str>)
 }
 
 struct CatalogLimit<'a> {
+    built_in: Option<u32>,
     value: Option<u32>,
     snapshot: Option<&'a CatalogSnapshot>,
 }
@@ -613,7 +645,7 @@ fn inventory_limit(
     explicit: Option<u32>,
     trusted: Option<u32>,
     trusted_source: Option<(&str, u32)>,
-    catalog: CatalogLimit<'_>,
+    fallback: CatalogLimit<'_>,
 ) -> Option<InventoryLimit> {
     if let Some(value) = explicit {
         let key = format!("models.{}.{}", quote(identity), field);
@@ -632,15 +664,30 @@ fn inventory_limit(
             },
         });
     }
-    let snapshot = catalog.snapshot?;
+    if let Some(value) = fallback.built_in {
+        return Some(InventoryLimit {
+            value,
+            origin: ModelLimitOrigin::BuiltIn,
+        });
+    }
+    let snapshot = fallback.snapshot?;
     Some(InventoryLimit {
-        value: catalog.value?,
+        value: fallback.value?,
         origin: ModelLimitOrigin::Catalog {
             catalog: "models.dev".to_owned(),
             revision: snapshot.revision().to_owned(),
             retrieved_at_ms: snapshot.retrieved_at_ms,
         },
     })
+}
+
+/// Whether a provenance key addresses a value scoped to one profile.
+///
+/// A profile-scoped value belongs to the profile that supplied it: selecting a
+/// different profile or model candidate replaces it with that candidate's own
+/// effective policy rather than carrying it across.
+fn profile_scoped(source: &Source) -> bool {
+    source.key.starts_with("profiles.")
 }
 
 fn merge_provider(target: &mut ProviderSection, source: ProviderSection) {

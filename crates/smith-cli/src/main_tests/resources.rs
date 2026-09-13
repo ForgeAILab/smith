@@ -247,3 +247,75 @@ credential = "env:XAI_API_KEY"
             entry.disabled_reason
         );
     }
+
+    #[test]
+    fn installed_agent_models_render_once_and_their_profiles_stay_selectable() {
+        let home = tempfile::tempdir().expect("home");
+        let project = tempfile::tempdir().expect("project");
+        std::fs::create_dir_all(project.path().join(".smith")).expect("config directory");
+        std::fs::write(
+            project.path().join(".smith/config.toml"),
+            r#"
+default_profile = "dev"
+profile_order = ["dev", "cc"]
+
+[profiles.dev]
+provider = "local"
+model = "parent-model"
+posture = "build"
+use = ["main"]
+
+[profiles.cc]
+provider = "local"
+model = "cli/claude-code/sonnet"
+posture = "build"
+use = ["main", "child"]
+
+[providers.local]
+kind = "fake"
+
+[models."local/parent-model"]
+context_tokens = 128000
+max_input_tokens = 124000
+max_output_tokens = 4096
+"#,
+        )
+        .expect("config");
+        let resolution = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+            .expect("resolution");
+        let inventory = smith_config::inventory::local_inventory(&resolution, AVAILABLE_ADAPTER_KINDS)
+            .expect("local inventory");
+        let resources = runtime_resources(
+            inventory,
+            Vec::new(),
+            "session",
+            project.path(),
+            &resolution.config.agent,
+            &smith_runtime::reasoning::ReasoningRuntimePolicy::default(),
+            None,
+            None,
+        );
+
+        // The curated namespace is the one display row for the agent model.
+        assert_eq!(
+            resources
+                .models
+                .iter()
+                .filter(|entry| entry.id == "cli/claude-code/sonnet")
+                .count(),
+            1
+        );
+        assert!(
+            !resources
+                .models
+                .iter()
+                .any(|entry| entry.id == "local/cli/claude-code/sonnet"),
+            "the provider-qualified pair must not render a duplicate row"
+        );
+        let cc = resources
+            .profiles
+            .iter()
+            .find(|entry| entry.id == "cc")
+            .expect("the cc profile row");
+        assert!(cc.disabled_reason.is_none(), "{:?}", cc.disabled_reason);
+    }

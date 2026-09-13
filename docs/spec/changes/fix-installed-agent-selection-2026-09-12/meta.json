@@ -1,0 +1,12 @@
+{
+  "change_id": "fix-installed-agent-selection",
+  "change_ref": "fix-installed-agent-selection-2026-09-12",
+  "created_at": "2026-09-12T21:05:00Z",
+  "updated_at": "2026-09-12T21:55:00Z",
+  "completed_at": null,
+  "status": "implementing",
+  "reapproval_required": false,
+  "depends_on": [],
+  "external_dependencies": [],
+  "implementation_started_at": "2026-09-12T21:20:00Z"
+}

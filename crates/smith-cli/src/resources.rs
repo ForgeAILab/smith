@@ -184,6 +184,12 @@ pub(super) fn runtime_resources(
     let models = inventory
         .models
         .into_iter()
+        // Installed coding agents are rendered once, through the curated
+        // `cli/<kind>/<model>` rows below that carry the PATH check and the
+        // `[built-in]` limit labeling. The provider-qualified inventory pairs
+        // exist for profile matching and direct selection, not as a second
+        // display row for the same agent.
+        .filter(|model| smith_config::cli_agents::parse_cli_model_id(&model.model).is_none())
         .map(|model| {
             let id = model.id();
             let profiles = if model.profiles.is_empty() {
@@ -655,6 +661,7 @@ pub(super) fn render_inventory_limit(limit: &InventoryLimit) -> String {
             revision: _,
             retrieved_at_ms: _,
         } => catalog.clone(),
+        ModelLimitOrigin::BuiltIn => "built-in".to_owned(),
     };
     format!("{} [{provenance}]", token_quantity(limit.value))
 }
