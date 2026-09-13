@@ -34,6 +34,7 @@ pub mod render;
 pub mod selection;
 pub mod setup;
 pub mod status;
+pub mod terminal_title;
 pub mod theme;
 pub mod transcript;
 pub mod usage_log;

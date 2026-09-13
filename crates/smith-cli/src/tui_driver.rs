@@ -405,6 +405,13 @@ pub(super) async fn run_tui(
             .map(|restored| restored.request_id().as_str().to_owned()),
     );
     let mut dirty = true;
+    // The terminal window title follows the same state the header does, but
+    // is written outside the frame: it is one OSC sequence per *change*, not
+    // per draw. Guarded and deduped inside the tracker, so a non-terminal
+    // stdout (or an unchanged title) costs nothing.
+    let mut window_title = smith_tui::terminal_title::TerminalTitleState::new();
+    // One failed write costs a stale title, not the session.
+    let _ = window_title.refresh(&app.status);
 
     let exit = loop {
         tokio::select! {
@@ -1000,6 +1007,11 @@ pub(super) async fn run_tui(
                             .collect(),
                     );
                 }
+                // The title rides the redraw cadence: every input that can
+                // change it (model switch, project label, activity
+                // transition) marks the frame dirty on its way in, and the
+                // tracker turns that into at most one OSC write per change.
+                let _ = window_title.refresh(&app.status);
                 terminal.draw(|frame| smith_tui::draw_synced(frame, &mut app, theme))?;
                 dirty = false;
             }
@@ -1015,6 +1027,12 @@ pub(super) async fn run_tui(
             );
         }
     };
+    // A normal exit clears the title exactly once, ahead of the caller's
+    // terminal restore. An I/O error leaving the loop through `?` skips this
+    // and leaves the last title standing until the shell's own prompt hook
+    // reasserts its title on the next prompt -- that same hook is why
+    // restoring a remembered pre-session title is deliberately not attempted.
+    let _ = window_title.clear();
     Ok(exit)
 }
 
