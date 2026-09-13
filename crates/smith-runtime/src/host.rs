@@ -69,7 +69,6 @@ use crate::resume_capsule::{
     restore_summary_artifact,
 };
 use crate::session::{FileSessionStore, ProjectId, SessionListing, SessionPaths};
-use crate::summary::SmithSemanticSummaryConfig;
 
 /// A request to start one standard Smith-hosted session.
 #[derive(Debug)]
@@ -97,9 +96,12 @@ impl HostSessionRequest {
         if runtime.background_services.is_none() {
             runtime.background_services = Some(crate::background_tasks::BackgroundServices::new());
         }
-        if runtime.config.persistence.enabled.value && runtime.semantic_summary.is_none() {
-            runtime.semantic_summary = Some(SmithSemanticSummaryConfig::standard());
-        }
+        // Semantic summarization is off unless a caller asks for it. Turning it
+        // on with persistence meant every ordinary session carried a second
+        // model route and an idle summarization budget for a projection almost
+        // nothing read; structural compaction, which is what actually keeps a
+        // long session inside its budget, is installed separately and is
+        // unaffected.
         Self {
             runtime,
             project_root: project_root.into(),

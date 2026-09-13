@@ -368,6 +368,48 @@ async fn protected_checkpoint_availability_is_explicit_and_encrypted() {
 }
 
 #[tokio::test]
+async fn persistence_does_not_switch_on_semantic_summarization() {
+    const KEY: &str = "5151515151515151515151515151515151515151515151515151515151515151";
+    let home = tempfile::tempdir().expect("a user root");
+    let project = tempfile::tempdir().expect("a project root");
+    let config_dir = home.path().join(".smith");
+    std::fs::create_dir_all(&config_dir).expect("a user config directory");
+    let config_path = config_dir.join("config.toml");
+    std::fs::write(
+        &config_path,
+        format!("{CONFIG}\n[persistence]\nenabled = true\ncheckpoint_key = \"{KEY}\"\n"),
+    )
+    .expect("a private user config");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o600))
+            .expect("private config permissions");
+    }
+    let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+        .expect("the configured checkpoint key resolves")
+        .config;
+    assert!(config.persistence.enabled.value, "persistence is on");
+
+    let runtime = RuntimeRequest {
+        workspace: Some(Arc::new(
+            ProjectWorkspace::new(project.path()).expect("a project workspace"),
+        )),
+        approval: Some(Arc::new(AllowAll)),
+        ..RuntimeRequest::new(config, HostSurface::Headless)
+    };
+    let request = HostSessionRequest::new(runtime, project.path());
+
+    // Persistence says where a session is stored, not that a second model
+    // route should summarize it. A caller that wants summarization still asks
+    // for it explicitly.
+    assert!(
+        request.runtime.semantic_summary.is_none(),
+        "enabling persistence must not install a semantic-summary coordinator"
+    );
+}
+
+#[tokio::test]
 async fn configured_clear_checkpoint_key_makes_children_durable_without_keychain_fallback() {
     const KEY: &str = "5151515151515151515151515151515151515151515151515151515151515151";
     let home = tempfile::tempdir().expect("a user root");
@@ -629,7 +671,7 @@ async fn persistent_sessions_use_incremental_recoverable_semantic_summaries_with
     // completed-turn floor is what decides here.
     let mut summary_config = smith_runtime::summary::SmithSemanticSummaryConfig::standard();
     summary_config.policy.min_turns = 6;
-    request.runtime.semantic_summary = Some(summary_config);
+    request.runtime.semantic_summary = Some(summary_config.clone());
     let host = start(request).await.expect("a hosted session");
     let summary_policy = host
         .runtime()
@@ -823,6 +865,9 @@ async fn persistent_sessions_use_incremental_recoverable_semantic_summaries_with
         .request(HostSurface::Headless)
         .resume(session_id.clone());
     resume.checkpoint_keys = Some(Arc::new(UnavailableCheckpointKeys));
+    // Summarization is opt-in per session, resume included: a session does
+    // not inherit a second model route from the fact that it once had one.
+    resume.runtime.semantic_summary = Some(summary_config);
     let resumed = start(resume)
         .await
         .expect("protected summary state restores from the capsule artifact");
