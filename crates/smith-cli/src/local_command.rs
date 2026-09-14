@@ -173,10 +173,16 @@ pub(super) async fn handle_local_command(
                     }
                 },
                 |set| {
-                    if set.is_fully_attributable() && !set.undone {
+                    if set.undone || !set.has_exact_mutations() {
+                        format!("Smith turn {} · automatic undo unavailable", set.turn)
+                    } else if set.is_fully_attributable() {
                         format!("Smith turn {} · undo available", set.turn)
                     } else {
-                        format!("Smith turn {} · automatic undo unavailable", set.turn)
+                        format!(
+                            "Smith turn {} · undo covers Smith's own edits; \
+                             ambiguous changes need /diff",
+                            set.turn
+                        )
                     }
                 },
             );

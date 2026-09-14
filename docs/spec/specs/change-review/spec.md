@@ -68,7 +68,8 @@ arguments or credentials.
   ownership of the complete delta
 - **WHEN** the turn completes
 - **THEN** the observed change is visible in `/diff`
-- **AND** the change set marks the turn ineligible for automatic `/undo`
+- **AND** the change set marks that delta ineligible for automatic `/undo`
+  without withdrawing the exact patches recorded beside it
 
 #### Scenario: Historical journal lacks attribution
 
@@ -79,10 +80,13 @@ arguments or credentials.
 
 ### Requirement: Safe last-turn undo
 
-`/undo` SHALL target only the newest completed, not-yet-undone Smith turn whose
-change set is fully attributable. Smith MUST show the complete reverse patch,
-require explicit confirmation with no default action, and apply it only when
-every affected path matches the recorded post-image.
+`/undo` SHALL target only the newest completed, not-yet-undone Smith turn that
+recorded at least one exact attributable patch. Smith MUST show the complete
+reverse patch, require explicit confirmation with no default action, and apply
+it only when every affected path matches the recorded post-image. When the same
+turn also produced an ambiguous delta, `/undo` SHALL reverse the exact patches
+only, MUST name the unattributable tools in the preview, and MUST leave every
+path it cannot attribute untouched.
 
 #### Scenario: Undo an attributable turn
 
@@ -99,12 +103,30 @@ every affected path matches the recorded post-image.
 - **THEN** Smith refuses without modifying any affected path
 - **AND** points the user to `/diff` and selective `/revert`
 
-#### Scenario: Mixed attributable and ambiguous turn blocks undo
+#### Scenario: Mixed turn undoes Smith's own edits and names the rest
 
-- **GIVEN** the newest turn contains an ambiguous shell or extension delta
+- **GIVEN** the newest turn contains both an exact Smith edit and an ambiguous
+  shell or extension delta
+- **WHEN** the user invokes `/undo`, reviews the preview, and confirms
+- **THEN** Smith reverses the exact edit after its post-image check
+- **AND** the preview names the unattributable tools and no path outside the
+  exact patches is modified
+
+#### Scenario: Turn with no exact patch has nothing to undo
+
+- **GIVEN** the newest turn changed the workspace only through ambiguous shell
+  or extension deltas
 - **WHEN** the user invokes `/undo`
-- **THEN** Smith previews the known state but refuses automatic reversal
-- **AND** does not partially undo the turn
+- **THEN** Smith refuses without modifying any path
+- **AND** points the user to `/diff` and selective `/revert`
+
+#### Scenario: Concurrent write blocks the exact half of a mixed turn
+
+- **GIVEN** a mixed turn whose Smith-edited path no longer matches its recorded
+  post-image
+- **WHEN** the user invokes `/undo`
+- **THEN** Smith refuses without modifying any affected path
+- **AND** does not fall back to reversing the ambiguous delta
 
 ### Requirement: Explicit selective revert
 
@@ -187,7 +209,9 @@ no protected arguments, and preserve the root composer draft.
 `/redo` SHALL target only the newest successful undo or selective revert whose
 recorded forward patch is exact and whose current paths match the expected
 pre-image. Smith MUST preview the complete patch, require explicit non-default
-confirmation, apply atomically, and journal the result.
+confirmation, apply atomically, and journal the result. Redo SHALL cover
+exactly what the matching undo reversed, so an undo limited to the exact
+patches of a mixed turn stays reversible on the same terms.
 
 #### Scenario: Redo an exact undo
 - **GIVEN** Smith successfully undid one fully attributable edit turn and no
@@ -202,8 +226,16 @@ confirmation, apply atomically, and journal the result.
 - **THEN** Smith refuses without modifying any path
 - **AND** points to `/diff` and `/timeline` with a structured conflict
 
+#### Scenario: Redo restores the exact half of a mixed turn
+- **GIVEN** Smith undid the exact patches of a turn that also produced an
+  ambiguous delta, and no affected path changed afterward
+- **WHEN** the user invokes `/redo`, reviews, and confirms
+- **THEN** Smith reapplies exactly those patches
+- **AND** the ambiguous delta is neither reapplied nor reversed
+
 #### Scenario: Ambiguous shell delta is not redoable
-- **GIVEN** a prior recovery record depends on an unattributable shell delta
+- **GIVEN** a prior recovery record holds no exact patch, only an
+  unattributable shell delta
 - **WHEN** the user invokes `/redo`
 - **THEN** Smith reports that no exact redo candidate exists
 - **AND** does not synthesize or apply a patch from observed Git state

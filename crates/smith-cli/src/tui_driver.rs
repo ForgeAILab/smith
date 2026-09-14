@@ -547,9 +547,12 @@ pub(super) async fn run_tui(
                                 }
                             }
                             Some(Action::ApplyUndo) => match host.changes().undo_latest() {
+                                // Accurate for a mixed turn too: the preview
+                                // the user just confirmed named the deltas
+                                // this does not touch.
                                 Ok(()) => app.transcript.push_notice(
                                     "undo",
-                                    "last attributable Smith turn was restored",
+                                    "restored the edits Smith made in the last turn",
                                 ),
                                 Err(error) => app.transcript.push_error(error.message),
                             },
@@ -770,8 +773,11 @@ pub(super) async fn run_tui(
                                 last_change_turn = Some(set.turn);
                                 let attribution = if set.is_fully_attributable() {
                                     "undo available"
+                                } else if set.has_exact_mutations() {
+                                    "contains ambiguous changes; /undo covers Smith's own \
+                                     edits, /diff shows the rest"
                                 } else {
-                                    "contains ambiguous changes; use /diff"
+                                    "contains ambiguous changes only; use /diff"
                                 };
                                 app.transcript.push_notice(
                                     "changes",

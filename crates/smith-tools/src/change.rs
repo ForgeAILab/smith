@@ -4,7 +4,10 @@
 //! checked undo. The persisted journal receives hashes and path metadata only;
 //! arbitrary file contents and protected tool arguments are never serialized.
 //! Shell mutations are marked ambiguous because observing a Git delta does not
-//! prove that every concurrent byte belongs to the command.
+//! prove that every concurrent byte belongs to the command. A turn that mixes
+//! both stays recoverable for the edits Smith performed itself: `/undo`
+//! reverses those exact images and reports the ambiguous delta beside them
+//! rather than reconstructing or silently dropping it.
 
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -83,6 +86,39 @@ impl TurnChangeSet {
                 .iter()
                 .all(|mutation| matches!(mutation, ToolMutation::Exact(_)))
     }
+
+    /// The mutations Smith performed through its own editing tools, in order.
+    ///
+    /// Automatic recovery works from exactly these: each one carries both
+    /// images, so reversing it is a checked write rather than a guess. A turn
+    /// that also ran a shell command keeps those exact edits recoverable —
+    /// the ambiguous delta beside them is reported, never reconstructed.
+    pub fn exact_mutations(&self) -> impl Iterator<Item = &EditMutation> {
+        self.mutations.iter().filter_map(|mutation| match mutation {
+            ToolMutation::Exact(edit) => Some(edit),
+            ToolMutation::Ambiguous { .. } => None,
+        })
+    }
+
+    /// Whether automatic recovery has any exact image to work from.
+    pub fn has_exact_mutations(&self) -> bool {
+        self.exact_mutations().next().is_some()
+    }
+
+    /// Distinct tools whose delta could not be attributed file by file.
+    pub fn ambiguous_tools(&self) -> Vec<&str> {
+        let mut tools = self
+            .mutations
+            .iter()
+            .filter_map(|mutation| match mutation {
+                ToolMutation::Ambiguous { tool, .. } => Some(tool.as_str()),
+                ToolMutation::Exact(_) => None,
+            })
+            .collect::<Vec<_>>();
+        tools.sort_unstable();
+        tools.dedup();
+        tools
+    }
 }
 
 #[derive(Debug, Default)]
@@ -160,6 +196,8 @@ impl ChangeRecorder {
             set.turn,
             if set.is_fully_attributable() {
                 "exact"
+            } else if set.has_exact_mutations() {
+                "mixed"
             } else {
                 "ambiguous"
             },
@@ -248,23 +286,13 @@ impl ChangeRecorder {
                 "the newest attributable turn was already undone",
             ));
         }
-        if !set.is_fully_attributable() {
+        if !set.has_exact_mutations() {
             return Err(unavailable(
-                "the newest turn contains ambiguous shell or extension changes; use /diff and /revert",
+                "the newest turn changed the workspace only through shell or extension \
+                 deltas Smith cannot attribute file by file; use /diff and /revert",
             ));
         }
-        let mut output = format!("Smith turn {}\n", set.turn);
-        for mutation in &set.mutations {
-            let ToolMutation::Exact(edit) = mutation else {
-                unreachable!("checked above");
-            };
-            output.push_str(&format!(
-                "\n--- current {}\n+++ restore {}\n",
-                edit.path.display(),
-                edit.path.display()
-            ));
-            output.push_str(&textual_reverse(edit));
-        }
+        let output = undo_preview_text(&set);
         let fingerprint = hash(Some(output.as_bytes()));
         self.persist(&JournalEntry::RecoveryRequest {
             operation: "undo",
@@ -280,21 +308,8 @@ impl ChangeRecorder {
     pub fn record_undo_cancelled(&self) {
         let fingerprint = self
             .latest()
-            .filter(|set| !set.undone && set.is_fully_attributable())
-            .map(|set| {
-                let mut output = format!("Smith turn {}\n", set.turn);
-                for mutation in &set.mutations {
-                    if let ToolMutation::Exact(edit) = mutation {
-                        output.push_str(&format!(
-                            "\n--- current {}\n+++ restore {}\n",
-                            edit.path.display(),
-                            edit.path.display()
-                        ));
-                        output.push_str(&textual_reverse(edit));
-                    }
-                }
-                hash(Some(output.as_bytes()))
-            })
+            .filter(|set| !set.undone && set.has_exact_mutations())
+            .map(|set| hash(Some(undo_preview_text(&set).as_bytes())))
             .unwrap_or_else(|| "unavailable".to_owned());
         self.persist(&JournalEntry::RecoveryRequest {
             operation: "undo",
@@ -310,19 +325,12 @@ impl ChangeRecorder {
         let set = self
             .latest()
             .ok_or_else(|| unavailable("no Smith turn has attributable changes"))?;
-        if set.undone || !set.is_fully_attributable() {
+        let edits = set.exact_mutations().collect::<Vec<_>>();
+        if set.undone || edits.is_empty() {
             return Err(unavailable(
                 "the newest turn is not eligible for automatic undo",
             ));
         }
-        let edits = set
-            .mutations
-            .iter()
-            .filter_map(|mutation| match mutation {
-                ToolMutation::Exact(edit) => Some(edit),
-                ToolMutation::Ambiguous { .. } => None,
-            })
-            .collect::<Vec<_>>();
 
         for edit in &edits {
             let current = bounded_image(&edit.path)?;
@@ -387,7 +395,8 @@ impl ChangeRecorder {
             .ok_or_else(|| unavailable("no exact redo candidate exists"))?;
         let direction = redo_direction(&set).ok_or_else(|| {
             unavailable(
-                "no exact redo candidate exists; ambiguous shell changes are never redoable",
+                "no exact redo candidate exists; changes Smith cannot attribute file by file \
+                 are never reapplied automatically",
             )
         })?;
         let output = redo_preview_text(&set, direction);
@@ -426,14 +435,7 @@ impl ChangeRecorder {
             .ok_or_else(|| unavailable("no exact redo candidate exists"))?;
         let direction = redo_direction(&set)
             .ok_or_else(|| unavailable("the newest change set is not eligible for exact redo"))?;
-        let edits = set
-            .mutations
-            .iter()
-            .filter_map(|mutation| match mutation {
-                ToolMutation::Exact(edit) => Some(edit),
-                ToolMutation::Ambiguous { .. } => None,
-            })
-            .collect::<Vec<_>>();
+        let edits = set.exact_mutations().collect::<Vec<_>>();
         for edit in &edits {
             let current = bounded_image(&edit.path)?;
             let expected_hash = match direction {
@@ -887,15 +889,12 @@ fn textual_forward(edit: &EditMutation) -> String {
 }
 
 fn redo_direction(set: &TurnChangeSet) -> Option<RedoDirection> {
-    if !set.is_fully_attributable() {
+    if !set.has_exact_mutations() {
         return None;
     }
-    let is_revert = set.mutations.iter().all(|mutation| {
-        matches!(
-            mutation,
-            ToolMutation::Exact(edit) if edit.call_id == "recovery:revert"
-        )
-    });
+    let is_revert = set
+        .exact_mutations()
+        .all(|edit| edit.call_id == "recovery:revert");
     if is_revert {
         (!set.undone).then_some(RedoDirection::ReapplyRevertedChange)
     } else {
@@ -903,12 +902,50 @@ fn redo_direction(set: &TurnChangeSet) -> Option<RedoDirection> {
     }
 }
 
+/// The reverse patch `/undo` would apply, with the deltas it leaves alone
+/// named first.
+///
+/// Preview and cancellation journal a fingerprint of this exact text, so both
+/// callers must render it the same way.
+fn undo_preview_text(set: &TurnChangeSet) -> String {
+    let mut output = format!("Smith turn {}\n", set.turn);
+    if let Some(note) = ambiguous_note(set) {
+        output.push_str(&note);
+    }
+    for edit in set.exact_mutations() {
+        output.push_str(&format!(
+            "\n--- current {}\n+++ restore {}\n",
+            edit.path.display(),
+            edit.path.display()
+        ));
+        output.push_str(&textual_reverse(edit));
+    }
+    output
+}
+
+/// Names what the turn changed outside Smith's own editing tools.
+///
+/// Recovery never reconstructs these: a Git delta observed around a shell
+/// command does not prove which bytes the command wrote. Saying so beside the
+/// reverse patch is what keeps a partial undo honest.
+fn ambiguous_note(set: &TurnChangeSet) -> Option<String> {
+    let tools = set.ambiguous_tools();
+    if tools.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "this turn also changed the workspace through {}; those changes are not \
+         attributable file by file and are left untouched — use /diff and /revert\n",
+        tools.join(", ")
+    ))
+}
+
 fn redo_preview_text(set: &TurnChangeSet, direction: RedoDirection) -> String {
     let mut output = format!("Smith turn {} redo\n", set.turn);
-    for mutation in &set.mutations {
-        let ToolMutation::Exact(edit) = mutation else {
-            unreachable!("redo direction requires exact mutations");
-        };
+    if let Some(note) = ambiguous_note(set) {
+        output.push_str(&note);
+    }
+    for edit in set.exact_mutations() {
         output.push_str(&format!(
             "\n--- current {}\n+++ reapply {}\n",
             edit.path.display(),
@@ -1351,7 +1388,7 @@ mod tests {
     }
 
     #[test]
-    fn an_ambiguous_mutation_blocks_automatic_undo() {
+    fn a_turn_with_nothing_but_ambiguous_deltas_has_no_undo_candidate() {
         let recorder = ChangeRecorder::new(None);
         recorder.start_turn();
         recorder.record(ToolMutation::Ambiguous {
@@ -1360,12 +1397,76 @@ mod tests {
         });
         let set = recorder.finish_turn().expect("set");
         assert!(!set.is_fully_attributable());
+        assert!(!set.has_exact_mutations());
         assert!(
             recorder
                 .undo_preview()
                 .unwrap_err()
                 .message
-                .contains("ambiguous")
+                .contains("attribute file by file")
+        );
+        assert!(recorder.undo_latest().is_err());
+    }
+
+    #[test]
+    fn a_mixed_turn_undoes_smiths_own_edits_and_names_what_it_leaves() {
+        let dir = tempfile::tempdir().expect("temp");
+        let edited = dir.path().join("edited.txt");
+        let shelled = dir.path().join("shelled.txt");
+        std::fs::write(&edited, b"after\n").expect("edited");
+        std::fs::write(&shelled, b"shell wrote this\n").expect("shelled");
+        let recorder = ChangeRecorder::new(None);
+        recorder.start_turn();
+        recorder.record(exact(&edited, Some(b"before\n"), b"after\n"));
+        recorder.record(ToolMutation::Ambiguous {
+            call_id: "shell-1".to_owned(),
+            tool: "shell".to_owned(),
+        });
+        let set = recorder.finish_turn().expect("set");
+        assert!(!set.is_fully_attributable());
+        assert!(set.has_exact_mutations());
+
+        let preview = recorder.undo_preview().expect("preview");
+        assert!(preview.contains("-after"), "{preview}");
+        assert!(
+            preview.contains("shell") && preview.contains("left untouched"),
+            "the preview must name the delta it will not reverse: {preview}"
+        );
+
+        recorder.undo_latest().expect("undo");
+        assert_eq!(std::fs::read(&edited).expect("edited"), b"before\n");
+        assert_eq!(
+            std::fs::read(&shelled).expect("shelled"),
+            b"shell wrote this\n",
+            "an unattributable path must survive the partial undo untouched"
+        );
+
+        // The exact half is recoverable in both directions.
+        recorder.redo_latest().expect("redo");
+        assert_eq!(std::fs::read(&edited).expect("edited"), b"after\n");
+    }
+
+    #[test]
+    fn a_mixed_turn_refuses_when_its_own_edit_was_overwritten() {
+        let dir = tempfile::tempdir().expect("temp");
+        let edited = dir.path().join("edited.txt");
+        std::fs::write(&edited, b"after\n").expect("edited");
+        let recorder = ChangeRecorder::new(None);
+        recorder.start_turn();
+        recorder.record(exact(&edited, Some(b"before\n"), b"after\n"));
+        recorder.record(ToolMutation::Ambiguous {
+            call_id: "shell-1".to_owned(),
+            tool: "shell".to_owned(),
+        });
+        recorder.finish_turn().expect("set");
+
+        // A formatter run after the edit is exactly the case the post-image
+        // check exists for: the recorded reverse no longer describes the file.
+        std::fs::write(&edited, b"after, reformatted\n").expect("overwrite");
+        assert!(recorder.undo_latest().is_err());
+        assert_eq!(
+            std::fs::read(&edited).expect("edited"),
+            b"after, reformatted\n"
         );
     }
 
