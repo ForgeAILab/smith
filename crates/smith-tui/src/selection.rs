@@ -18,7 +18,7 @@
 //! clears it. [`Selection::stale_after_redraw`] is the single place that rule
 //! lives.
 
-use ratatui::buffer::Buffer;
+use ratatui::buffer::{Buffer, CellWidth};
 use ratatui::layout::Rect;
 
 /// An in-progress or completed pointer selection over rendered cells.
@@ -125,6 +125,27 @@ impl Selection {
     }
 }
 
+/// Widens a column span so it begins and ends on whole glyphs.
+///
+/// A double-width glyph — every CJK character, and plenty of emoji — is drawn
+/// from one cell but occupies two, and a drag can land on either of them.
+/// Touching any cell of a glyph selects all of it, so a character is never
+/// half-highlighted on screen or half-copied to the clipboard. Both callers go
+/// through here so the highlight marks exactly what the copy takes.
+pub fn snap_span_to_glyphs(buffer: &Buffer, area: Rect, row: u16, span: (u16, u16)) -> (u16, u16) {
+    let (from, to) = span;
+    let mut snapped = span;
+    for (start, end) in glyph_bounds(buffer, area, row) {
+        if start <= from && from < end {
+            snapped.0 = start;
+        }
+        if start < to && to < end {
+            snapped.1 = end;
+        }
+    }
+    snapped
+}
+
 /// Reads the selected text out of a rendered frame buffer.
 ///
 /// Returns `None` when the selection covers nothing but blank cells, so a stray
@@ -139,20 +160,14 @@ pub fn text_from_buffer(selection: &Selection, buffer: &Buffer, area: Rect) -> O
     }
     let mut rows = Vec::new();
     for row in area.y..area.y.saturating_add(area.height) {
-        let Some((from, to)) = selection.span_on_row(row, area) else {
+        let Some(span) = selection.span_on_row(row, area) else {
             continue;
         };
-        let mut text = String::new();
-        for column in from..to {
-            // A wide glyph occupies two cells: the second carries an empty
-            // symbol, and skipping it keeps the copy free of padding while
-            // preserving the character itself from the first cell.
-            let symbol = buffer[(column, row)].symbol();
-            if symbol.is_empty() {
-                continue;
-            }
-            text.push_str(symbol);
-        }
+        let (from, to) = snap_span_to_glyphs(buffer, area, row, span);
+        let text = glyph_bounds(buffer, area, row)
+            .filter(|&(start, _)| start >= from && start < to)
+            .map(|(start, _)| buffer[(start, row)].symbol())
+            .collect::<String>();
         rows.push(text.trim_end().to_owned());
     }
     // Interior blank rows are real content — a paragraph break — but leading
@@ -164,6 +179,33 @@ pub fn text_from_buffer(selection: &Selection, buffer: &Buffer, area: Rect) -> O
         rows.pop();
     }
     (!rows.is_empty()).then(|| rows.join("\n"))
+}
+
+/// The glyphs drawn across one row, as half-open `(start, end)` column spans.
+///
+/// Walking the row from its left edge is the only way to tell a cell that
+/// holds a character from the trailing cell of a double-width one: the buffer
+/// stores that trailing cell as a blank, indistinguishable from a real space
+/// when read on its own. Reading cell by cell instead is what put a stray
+/// space after every Chinese character in a copied line.
+pub(crate) fn glyph_bounds(
+    buffer: &Buffer,
+    area: Rect,
+    row: u16,
+) -> impl Iterator<Item = (u16, u16)> + use<'_> {
+    let right = area.x.saturating_add(area.width);
+    let mut column = area.x;
+    std::iter::from_fn(move || {
+        if column >= right {
+            return None;
+        }
+        let start = column;
+        // A zero-width symbol would never advance the walk, so every cell
+        // counts for at least the one it was written into.
+        let width = buffer[(start, row)].symbol().cell_width().max(1);
+        column = start.saturating_add(width).min(right);
+        Some((start, column))
+    })
 }
 
 #[cfg(test)]
@@ -232,6 +274,40 @@ mod tests {
 
         let text = text_from_buffer(&selection, &buffer, area()).expect("text");
         assert_eq!(text, "hello\nsecon");
+    }
+
+    #[test]
+    fn wide_characters_copy_without_the_padding_cell_between_them() {
+        // The buffer stores 你好 across four cells; reading them one by one
+        // yields "你 好 ", which is what a user sees pasted back.
+        let buffer = buffer(["你好 ok", "", "", ""]);
+        let mut selection = Selection::begin(0, 0);
+        selection.drag_to(6, 0);
+
+        let text = text_from_buffer(&selection, &buffer, area()).expect("text");
+        assert_eq!(text, "你好 ok");
+    }
+
+    #[test]
+    fn a_drag_that_stops_inside_a_wide_character_still_copies_it_whole() {
+        let buffer = buffer(["中文字", "", "", ""]);
+        // Column 3 is the trailing cell of 文 and column 0 the leading cell of
+        // 中: both ends land mid-glyph.
+        let mut selection = Selection::begin(1, 0);
+        selection.drag_to(2, 0);
+
+        let text = text_from_buffer(&selection, &buffer, area()).expect("text");
+        assert_eq!(text, "中文");
+    }
+
+    #[test]
+    fn a_span_that_splits_a_wide_character_snaps_outward() {
+        let buffer = buffer(["a中b", "", "", ""]);
+
+        // 中 occupies columns 1 and 2.
+        assert_eq!(snap_span_to_glyphs(&buffer, area(), 0, (2, 4)), (1, 4));
+        assert_eq!(snap_span_to_glyphs(&buffer, area(), 0, (0, 2)), (0, 3));
+        assert_eq!(snap_span_to_glyphs(&buffer, area(), 0, (1, 3)), (1, 3));
     }
 
     #[test]

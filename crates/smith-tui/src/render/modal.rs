@@ -15,7 +15,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block as WidgetBlock, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block as WidgetBlock, Borders, Clear, Paragraph};
 
 use super::helpers::*;
 use super::layout::*;
@@ -480,7 +480,10 @@ pub(super) fn draw_palette(
             theme.style(Tone::Danger),
         )));
     }
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+    frame.render_widget(
+        Paragraph::new(super::wrap::wrap_lines(&lines, area.width)),
+        area,
+    );
 }
 
 pub(super) fn desired_palette_rows(app: &App, error: Option<&str>) -> u16 {
@@ -725,7 +728,11 @@ pub(super) fn draw_modal(
 
     frame.render_widget(Clear, modal);
     frame.render_widget(
-        Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+        Paragraph::new(super::wrap::wrap_lines(
+            &lines,
+            modal.width.saturating_sub(2),
+        ))
+        .block(
             WidgetBlock::default()
                 .borders(Borders::ALL)
                 .border_style(theme.style(accent))

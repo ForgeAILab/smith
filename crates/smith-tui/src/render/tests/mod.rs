@@ -40,11 +40,20 @@ mod tests {
         terminal
             .draw(|frame| draw(frame, app, theme))
             .expect("a frame");
-        let buffer = terminal.backend().buffer().clone();
+        screen_text(terminal.backend().buffer())
+    }
+
+    /// The drawn frame as the terminal shows it, one row per line.
+    ///
+    /// Walks glyphs rather than cells so a double-width character reads back
+    /// as itself: the trailing cell of a wide glyph is stored blank, and
+    /// collecting cells one by one would put a space inside every Chinese
+    /// word an assertion looks for.
+    fn screen_text(buffer: &Buffer) -> String {
         (0..buffer.area.height)
             .map(|y| {
-                (0..buffer.area.width)
-                    .map(|x| buffer[(x, y)].symbol().to_owned())
+                crate::selection::glyph_bounds(buffer, buffer.area, y)
+                    .map(|(x, _)| buffer[(x, y)].symbol())
                     .collect::<String>()
                     .trim_end()
                     .to_owned()
@@ -58,17 +67,7 @@ mod tests {
         terminal
             .draw(|frame| draw_synced(frame, app, theme))
             .expect("a frame");
-        let buffer = terminal.backend().buffer().clone();
-        (0..buffer.area.height)
-            .map(|y| {
-                (0..buffer.area.width)
-                    .map(|x| buffer[(x, y)].symbol().to_owned())
-                    .collect::<String>()
-                    .trim_end()
-                    .to_owned()
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        screen_text(terminal.backend().buffer())
     }
 
     fn event(payload: RuntimeEvent) -> EventEnvelope {

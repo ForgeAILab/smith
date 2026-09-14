@@ -1142,3 +1142,48 @@
             "the transcript is untouched by a server connecting or failing"
         );
     }
+
+    /// A Chinese draft reaches the right edge at half the character count, so
+    /// the composer wraps far sooner than an English one. The cursor has to
+    /// follow it onto the wrapped row instead of walking off the surface.
+    #[test]
+    fn the_cursor_follows_a_wrapped_chinese_draft_onto_the_next_row() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        let draft = "请解释一下重试策略的实现方式和它的退避曲线";
+        app.composer.replace(draft);
+
+        use ratatui::backend::Backend as _;
+        let mut terminal = Terminal::new(TestBackend::new(40, 12)).expect("a test terminal");
+        terminal
+            .draw(|frame| draw(frame, &app, Theme::new().without_color()))
+            .expect("a frame");
+        let position = terminal
+            .backend_mut()
+            .get_cursor_position()
+            .expect("a cursor position");
+        let buffer = terminal.backend().buffer().clone();
+
+        let rows: Vec<String> = (0..buffer.area.height)
+            .map(|y| {
+                crate::selection::glyph_bounds(&buffer, buffer.area, y)
+                    .map(|(x, _)| buffer[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
+            .collect();
+        let composer_row = rows
+            .iter()
+            .position(|row| row.starts_with('›'))
+            .expect("the composer row");
+        // `› ` plus nineteen characters fills the forty columns, so the
+        // draft's last two characters wrap onto the row below it.
+        assert_eq!(rows[composer_row], "› 请解释一下重试策略的实现方式和它的退避");
+        assert_eq!(rows[composer_row + 1], "曲线");
+        assert_eq!(
+            (position.x, usize::from(position.y)),
+            (4, composer_row + 1),
+            "the cursor left the wrapped text:\n{}",
+            rows.join("\n")
+        );
+    }

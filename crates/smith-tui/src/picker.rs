@@ -8,7 +8,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::theme::{Theme, Tone};
 
@@ -205,8 +205,10 @@ pub fn draw_resource_picker(
     let [body, footer] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(footer_rows)]).areas(inner);
     frame.render_widget(
-        Paragraph::new(picker_lines(picker, usize::from(body.height), theme))
-            .wrap(Wrap { trim: false }),
+        Paragraph::new(crate::render::wrap::wrap_lines(
+            &picker_lines(picker, usize::from(body.height), theme),
+            body.width,
+        )),
         body,
     );
     frame.render_widget(

@@ -4,7 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, ProviderPhase};
@@ -14,6 +14,7 @@ use crate::transcript::{Block, LocalResultState, ToolStatus};
 use smith_tools::ToolCallDisplay;
 
 use super::helpers::*;
+use super::wrap::{wrap_lines, wrapped_row_count};
 
 pub(super) fn draw_transcript(
     frame: &mut Frame<'_>,
@@ -30,9 +31,7 @@ pub(super) fn draw_transcript(
         max_scroll.saturating_sub(app.scroll_back)
     };
 
-    let paragraph = Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .scroll((offset, 0));
+    let paragraph = Paragraph::new(wrap_lines(&lines, area.width)).scroll((offset, 0));
     frame.render_widget(paragraph, area);
 }
 
@@ -46,12 +45,7 @@ pub(super) fn visual_scroll_limit(lines: &[Line<'static>], area: Rect) -> u16 {
 /// character-wrap guess undercounts word-wrapped prose, which clips the newest
 /// transcript rows and truncates modal action bars.
 pub(super) fn rendered_rows(lines: &[Line<'static>], width: u16) -> usize {
-    if lines.is_empty() {
-        return 0;
-    }
-    Paragraph::new(lines.to_vec())
-        .wrap(Wrap { trim: false })
-        .line_count(width.max(1))
+    wrapped_row_count(lines, width)
 }
 
 pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<'static>> {

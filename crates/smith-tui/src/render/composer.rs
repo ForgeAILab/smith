@@ -11,7 +11,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::widgets::Paragraph;
 use smith_runtime::client::{PlanItemProjection, PlanItemStatus};
 use unicode_width::UnicodeWidthStr;
 
@@ -23,6 +23,7 @@ const CLI_MODEL_PREFIX: &str = "cli/";
 
 use super::helpers::*;
 use super::layout::*;
+use super::wrap::wrap_line_with_offsets;
 
 pub(super) fn draw_composer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
     let input_area = Rect::new(
@@ -32,40 +33,57 @@ pub(super) fn draw_composer(frame: &mut Frame<'_>, area: Rect, app: &App, theme:
         area.height.saturating_sub(2),
     );
     let empty = app.composer.text().is_empty();
-    let lines: Vec<Line<'static>> = app
-        .composer
-        .lines()
-        .iter()
-        .enumerate()
-        .map(|(index, line)| {
-            let marker = if index == 0 { glyph::USER } else { " " };
-            let mut spans = vec![Span::styled(
-                format!("{marker} "),
-                theme.style(Tone::Default).add_modifier(Modifier::BOLD),
-            )];
-            if empty && index == 0 {
-                spans.push(Span::styled(
-                    "Ask Smith to do anything",
-                    theme.style(Tone::Dim),
-                ));
-            } else {
-                spans.extend(paste_placeholder_spans(line, app, theme));
-            }
-            Line::from(spans)
-        })
-        .collect();
+    // Each typed line is wrapped on its own so the cursor can be followed
+    // through the wrap: the rows one line produces, and the column each row
+    // starts at, are exactly what turns a position in the text into a cell.
+    let (cursor_line, cursor_column) = app.composer.cursor_position();
+    let mut rows: Vec<Line<'static>> = Vec::new();
+    let mut cursor = None;
+    for (index, line) in app.composer.lines().iter().enumerate() {
+        let marker = if index == 0 { glyph::USER } else { " " };
+        let mut spans = vec![Span::styled(
+            format!("{marker} "),
+            theme.style(Tone::Default).add_modifier(Modifier::BOLD),
+        )];
+        if empty && index == 0 {
+            spans.push(Span::styled(
+                "Ask Smith to do anything",
+                theme.style(Tone::Dim),
+            ));
+        } else {
+            spans.extend(paste_placeholder_spans(line, app, theme));
+        }
+        let (wrapped, offsets) = wrap_line_with_offsets(&Line::from(spans), input_area.width);
+        if index == cursor_line {
+            // The marker column is part of the drawn line, so the cursor is
+            // measured from the same left edge the wrap was.
+            let column = cursor_column.saturating_add(MARKER_WIDTH);
+            let row = offsets
+                .iter()
+                .rposition(|start| *start <= column)
+                .unwrap_or(0);
+            cursor = Some((
+                column.saturating_sub(offsets.get(row).copied().unwrap_or(0)),
+                rows.len().saturating_add(row),
+            ));
+        }
+        rows.extend(wrapped);
+    }
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), input_area);
+    frame.render_widget(Paragraph::new(rows), input_area);
 
     if app.overlay.is_none() || matches!(app.overlay, Some(Overlay::Palette { .. })) {
-        let (line, column) = app.composer.cursor_position();
-        let x = input_area.x + 2 + u16::try_from(column).unwrap_or(0);
-        let y = input_area.y + u16::try_from(line).unwrap_or(0);
+        let (column, row) = cursor.unwrap_or((MARKER_WIDTH, 0));
+        let x = input_area.x + u16::try_from(column).unwrap_or(0);
+        let y = input_area.y + u16::try_from(row).unwrap_or(0);
         if x < input_area.right() && y < input_area.bottom() {
             frame.set_cursor_position((x, y));
         }
     }
 }
+
+/// Columns the `›` marker and its trailing space take ahead of typed text.
+const MARKER_WIDTH: usize = 2;
 
 /// Splits one composer line so registered paste placeholders render accented,
 /// making the collapsed chunk visually distinct from typed text.

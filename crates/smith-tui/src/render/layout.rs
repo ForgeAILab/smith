@@ -239,9 +239,12 @@ fn paint_selection(frame: &mut Frame<'_>, app: &App, theme: Theme) {
     let style = theme.selection();
     let buffer = frame.buffer_mut();
     for row in area.y..area.y.saturating_add(area.height) {
-        let Some((from, to)) = selection.span_on_row(row, area) else {
+        let Some(span) = selection.span_on_row(row, area) else {
             continue;
         };
+        // Snapped to whole glyphs so a drag that stops on the second cell of a
+        // wide character still highlights the character the copy will take.
+        let (from, to) = crate::selection::snap_span_to_glyphs(buffer, area, row, span);
         for column in from..to {
             // Patched, not replaced: the cell keeps its own color and the
             // highlight reads as a highlight rather than a repaint.

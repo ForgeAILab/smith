@@ -12,7 +12,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::picker::{PickerOutcome, ResourceEntry, ResourcePicker, draw_resource_picker};
 use crate::theme::{Theme, Tone};
@@ -1113,11 +1113,13 @@ pub fn draw_setup(frame: &mut Frame<'_>, app: &SetupApp, theme: Theme) {
             let [message, rest] =
                 Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(inner);
             frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(
-                    format!("error: {error}"),
-                    theme.style(Tone::Danger),
-                )))
-                .wrap(Wrap { trim: false }),
+                Paragraph::new(crate::render::wrap::wrap_lines(
+                    &[Line::from(Span::styled(
+                        format!("error: {error}"),
+                        theme.style(Tone::Danger),
+                    ))],
+                    message.width,
+                )),
                 message,
             );
             rest
@@ -1179,7 +1181,10 @@ pub fn draw_setup(frame: &mut Frame<'_>, app: &SetupApp, theme: Theme) {
             theme.style(Tone::Danger),
         )));
     }
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
+    frame.render_widget(
+        Paragraph::new(crate::render::wrap::wrap_lines(&lines, body.width)),
+        body,
+    );
     let footer_text = if inner.width < 60 {
         if app.step == Step::Review {
             " Enter confirm · Back: Shift+Tab\n Esc Cancel"
