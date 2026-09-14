@@ -1239,7 +1239,14 @@ fn yes_no(value: bool) -> &'static str {
 
 fn bound(mut value: String, limit: usize) -> String {
     if value.len() > limit {
-        value.truncate(limit);
+        // The budget is bytes, but the cut must not land inside a character:
+        // `String::truncate` panics on a non-boundary offset, and a long
+        // Chinese preview reaches the limit mid-character more often than not.
+        let mut end = limit;
+        while !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        value.truncate(end);
         value.push('…');
     }
     value
@@ -1253,6 +1260,17 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn bound_cuts_on_a_character_boundary_instead_of_panicking() {
+        // 重 is three bytes, so a 1_024-byte budget lands inside the 342nd
+        // character — exactly where String::truncate would panic. Chinese
+        // error text and collision previews reach this path for real.
+        let long = "重".repeat(400);
+        let bounded = bound(long, 1_024);
+        assert!(bounded.ends_with('…'), "{bounded}");
+        assert_eq!(bounded.trim_end_matches('…').chars().count(), 341);
     }
 
     fn choose(app: &mut SetupApp, id: &str) {
@@ -1271,10 +1289,12 @@ mod tests {
             })
             .expect("draw");
         let buffer = terminal.backend().buffer();
+        // Read glyphs, not cells: the trailing cell of a wide character is
+        // stored blank, so cell-by-cell collection garbles Chinese content.
         (0..buffer.area.height)
             .map(|y| {
-                (0..buffer.area.width)
-                    .map(|x| buffer[(x, y)].symbol())
+                crate::selection::glyph_bounds(buffer, buffer.area, y)
+                    .map(|(x, _)| buffer[(x, y)].symbol())
                     .collect::<String>()
             })
             .collect::<Vec<_>>()
