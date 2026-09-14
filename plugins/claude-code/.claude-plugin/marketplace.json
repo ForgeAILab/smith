@@ -5,13 +5,13 @@
   },
   "metadata": {
     "description": "Delegate coding work from Claude Code to a local Smith agent.",
-    "version": "0.1.0"
+    "version": "0.3.0"
   },
   "plugins": [
     {
       "name": "smith",
       "description": "Hand a task to Smith, a terminal coding agent running on your own configured provider.",
-      "version": "0.1.0",
+      "version": "0.3.0",
       "source": "./plugins/smith"
     }
   ]

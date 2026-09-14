@@ -64,8 +64,10 @@ your reconstruction of it.
 plugins/smith/
   .claude-plugin/plugin.json
   agents/smith-delegate.md          thin forwarder; no repository access
-  commands/{task,resume,sessions}.md
+  commands/{task,resume,sessions,profiles}.md
   skills/smith-cli-runtime/SKILL.md  the CLI contract and result envelope
+  skills/smith-profiles/SKILL.md     discovering profiles and picking one
+  scripts/smith-profiles             prints the configured profile table
 ```
 
 The subagent deliberately holds only `Bash`. It forwards and reports; it does

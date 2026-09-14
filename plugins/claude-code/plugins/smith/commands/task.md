@@ -18,6 +18,9 @@ Routing:
   commands. Do not add `--write` on your own initiative.
 - `--resume <SESSION_ID>` continues an existing Smith session.
 - `--profile`, `--model`, and `--project` pass through to `smith` unchanged.
+  If the request asks for a hard read-only run, an independent review, or a
+  named model rather than the default, consult the `smith-profiles` skill to
+  pick a profile that is actually configured on this machine.
 - Every one of those is a routing control. Strip them from the task text.
 
 Do not investigate the repository before dispatching. Smith reads the workspace

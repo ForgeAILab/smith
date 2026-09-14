@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+"""List the Smith agent profiles configured on this machine.
+
+Reads only the [profiles.*] tables of ~/.smith/config.toml and resolves
+`extends` chains, so every row shows what the profile actually runs. It never
+reads auth.json or accounts.json, and never emits [providers.*] — that table
+holds plaintext api_key values.
+
+Usage:
+  smith-profiles          aligned table
+  smith-profiles --json   one JSON object on stdout
+"""
+import json
+import os
+import pathlib
+import subprocess
+import sys
+
+INHERITED = ("provider", "model", "description", "posture", "use",
+             "max_output_tokens", "reasoning")
+
+
+def config_path() -> pathlib.Path:
+    for env in ("SMITH_CONFIG", "SMITH_HOME"):
+        raw = os.environ.get(env)
+        if raw:
+            p = pathlib.Path(raw).expanduser()
+            return p if p.suffix == ".toml" else p / "config.toml"
+    return pathlib.Path.home() / ".smith" / "config.toml"
+
+
+def resolve(name, profiles, seen=None):
+    """Flatten a profile through its `extends` chain; nearest value wins."""
+    seen = seen or set()
+    if name in seen or name not in profiles:
+        return {}
+    seen.add(name)
+    own = dict(profiles[name])
+    parent = own.pop("extends", None)
+    base = resolve(parent, profiles, seen) if parent else {}
+    merged = dict(base)
+    for k in INHERITED:
+        if k in own:
+            merged[k] = own[k]
+    merged["_extends"] = parent
+    return merged
+
+
+def effort_of(p):
+    r = p.get("reasoning")
+    return r.get("effort") if isinstance(r, dict) else None
+
+
+def main() -> int:
+    path = config_path()
+    if not path.is_file():
+        print(f"smith-profiles: no config at {path} — run `smith setup`",
+              file=sys.stderr)
+        return 1
+
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        # Python < 3.11: fall back to the CLI, which exposes names only.
+        try:
+            out = subprocess.run(["smith", "config", "explain", "profile_order"],
+                                 capture_output=True, text=True, timeout=20)
+            print(out.stdout.strip() or out.stderr.strip())
+            print("\n(python >= 3.11 needed for the full table)", file=sys.stderr)
+            return 0
+        except Exception as e:
+            print(f"smith-profiles: {e}", file=sys.stderr)
+            return 1
+
+    data = tomllib.loads(path.read_text())
+    profiles = data.get("profiles", {})
+    if not profiles:
+        print(f"smith-profiles: no [profiles.*] in {path}", file=sys.stderr)
+        return 1
+
+    default = data.get("default_profile")
+    order = [n for n in data.get("profile_order", []) if n in profiles]
+    order += [n for n in profiles if n not in order]
+
+    rows = []
+    for name in order:
+        p = resolve(name, profiles)
+        use = p.get("use")
+        rows.append({
+            "name": name,
+            "default": name == default,
+            "provider": p.get("provider"),
+            "model": p.get("model"),
+            "posture": p.get("posture"),
+            "effort": effort_of(p),
+            # An absent `use` is main-enabled; only an explicit list can exclude.
+            "main": use is None or "main" in use,
+            "child": use is None or "child" in use,
+            "extends": p.get("_extends"),
+            "description": p.get("description"),
+        })
+
+    if "--json" in sys.argv:
+        json.dump({"config": str(path), "default_profile": default,
+                   "profiles": rows}, sys.stdout, indent=2)
+        print()
+        return 0
+
+    def model_of(r):
+        return f"{r['provider']}/{r['model']}" if r["provider"] and r["model"] else "—"
+
+    def flags(r):
+        f = []
+        if r["posture"]:
+            f.append(r["posture"])
+        if r["effort"]:
+            f.append(f"effort={r['effort']}")
+        if not r["main"]:
+            f.append("child-only")
+        return " ".join(f) or "—"
+
+    head = ("PROFILE", "PROVIDER/MODEL", "POSTURE", "DESCRIPTION")
+    cells = [(r["name"] + (" *" if r["default"] else ""), model_of(r), flags(r),
+              r["description"] or "—") for r in rows]
+    w = [max(len(c[i]) for c in (cells + [head])) for i in range(3)]
+
+    print(f"{head[0]:<{w[0]}}  {head[1]:<{w[1]}}  {head[2]:<{w[2]}}  {head[3]}")
+    print(f"{'-' * w[0]}  {'-' * w[1]}  {'-' * w[2]}  {'-' * 11}")
+    for c in cells:
+        print(f"{c[0]:<{w[0]}}  {c[1]:<{w[1]}}  {c[2]:<{w[2]}}  {c[3]}")
+
+    print(f"\n* default ({default}) — used when --profile is omitted."
+          f"  source: {path}")
+    print("posture `plan`/`review` never registers edit or shell, "
+          "a harder guarantee than --approval deny.")
+    ro = [r["name"] for r in rows if r["posture"] in ("plan", "review") and r["main"]]
+    if ro:
+        print("read-only profiles: " + ", ".join(ro))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
