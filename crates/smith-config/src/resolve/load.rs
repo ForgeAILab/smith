@@ -317,8 +317,11 @@ pub(super) fn built_in_defaults(user_dir: &Path) -> ConfigFile {
             max_children: Some(4),
             max_monitors: Some(8),
         }),
+        // A significant cache miss is money already spent, and only the local
+        // surface can say so while the user can still act on it. It defaults
+        // on; presentation-only, so no layer can change the request.
         cache: Some(CacheSection {
-            miss_notices: Some(false),
+            miss_notices: Some(true),
         }),
         ..ConfigFile::default()
     }

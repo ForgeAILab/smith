@@ -388,17 +388,29 @@ fn explain_lists_every_layer_that_was_overridden_highest_first() {
 }
 
 #[test]
-fn cache_miss_notices_default_to_disabled_and_keep_provenance() {
+fn cache_miss_notices_default_to_enabled_and_keep_provenance() {
     let resolution = resolve_project(BASE_PROJECT_CONFIG).expect("a resolved run");
 
-    assert!(!resolution.cache_miss_notices.value);
+    assert!(resolution.cache_miss_notices.value);
     assert_eq!(resolution.cache_miss_notices.source.layer, Layer::BuiltIn);
     let explanation = resolution
         .provenance
         .explain("cache.miss_notices")
         .expect("the built-in cache notice policy");
-    assert_eq!(explanation.value, SettingValue::Flag(false));
+    assert_eq!(explanation.value, SettingValue::Flag(true));
     assert_eq!(explanation.source.layer, Layer::BuiltIn);
+}
+
+#[test]
+fn cache_miss_notices_can_be_disabled_by_a_profile() {
+    let fixture = Fixture::new();
+    fixture.write_project(&format!(
+        "{BASE_PROJECT_CONFIG}\n[profiles.work.cache]\nmiss_notices = false\n"
+    ));
+
+    let resolution = resolve(&fixture.request()).expect("a resolved run");
+    assert!(!resolution.cache_miss_notices.value);
+    assert_eq!(resolution.cache_miss_notices.source.layer, Layer::Profile);
 }
 
 #[test]

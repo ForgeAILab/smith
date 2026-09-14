@@ -460,11 +460,20 @@ uncached, cached, and cache-write usage.
 ### Requirement: Significant cache-miss notices are factual and optional
 
 Smith SHALL gate local cache-miss transcript notices behind the layered
-`cache.miss_notices` setting, defaulting to disabled. When enabled, it SHALL
+`cache.miss_notices` setting, defaulting to enabled. When enabled, it SHALL
 emit at most one notice for a completed root turn whose canonical misses total
 at least 20,000 tokens or whose known derived extra cost is at least $0.10.
 Elapsed idle time MAY be displayed as factual context but MUST NOT establish or
 claim expiry.
+
+#### Scenario: Notices are on without configuration
+
+- **GIVEN** no configuration layer declares `cache.miss_notices`
+- **AND** a completed root turn crosses the significant-miss threshold
+- **WHEN** the turn completes
+- **THEN** Smith appends one bounded factual miss notice
+- **AND** a layer that sets the flag to `false` suppresses it without changing
+  provider requests or canonical cache evidence
 
 #### Scenario: Large miss follows an idle gap
 

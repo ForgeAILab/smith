@@ -55,17 +55,19 @@ for one key is an ambiguity and fails.
 ## Prompt-cache miss notices
 
 Local cache-miss notices are controlled by the explainable layered Boolean
-`cache.miss_notices`. It defaults to `false`, so cache state and machine output
-remain available without adding transcript or stderr notices. Enable it in a
-file or for one run with the matching environment variable:
+`cache.miss_notices`. It defaults to `true`: a significant miss is money
+already spent, and only the local surface can report it while the user can
+still act on it. The setting is presentation-only — cache state and machine
+output are identical either way. Disable it in a file or for one run with the
+matching environment variable:
 
 ```toml
 [cache]
-miss_notices = true
+miss_notices = false
 ```
 
 ```sh
-SMITH_CACHE_MISS_NOTICES=true smith -p "inspect this repository"
+SMITH_CACHE_MISS_NOTICES=false smith -p "inspect this repository"
 ```
 
 The setting changes only local human-facing presentation. It does not change
