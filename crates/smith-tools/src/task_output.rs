@@ -6,6 +6,13 @@
 //! it might be done, so this stays cheap to call repeatedly: pass the
 //! previous response's `next_offset` back in as `offset` and only the output
 //! that arrived since comes back.
+//!
+//! The spool is runtime-owned session state addressed by task ID, not a path
+//! the caller names, so this claims [`Permission::StdioRead`] over a
+//! `background_task` resource rather than filesystem authority. A filesystem
+//! permission must be paired with a [`SecurityResource::Filesystem`]; claiming
+//! `FsRead` over the task-ID resource made every call fail its effect check
+//! before the host was ever asked.
 
 use std::sync::Arc;
 
@@ -24,6 +31,12 @@ use crate::support::{invalid, optional_usize, require_str};
 
 /// Output slice size when the caller does not say.
 const DEFAULT_LIMIT: usize = 65_536;
+
+/// The security-resource kind a background task's spool is addressed under.
+///
+/// Shared with `task_stop`, so an approval reviewing one background task
+/// reviews the same resource identity whichever of the two asked.
+pub const BACKGROUND_TASK_RESOURCE_KIND: &str = "background_task";
 
 /// Reads a background task's status and spooled output.
 #[derive(Debug, Clone)]
@@ -74,9 +87,9 @@ impl Tool for TaskOutputTool {
                 "required": ["task_id"],
                 "additionalProperties": false
             }),
-            ToolEffects::read_only(),
+            ToolEffects::default(),
         )
-        .with_permission_upper_bound(PermissionSet::single(Permission::FsRead))
+        .with_permission_upper_bound(PermissionSet::single(Permission::StdioRead))
     }
 
     async fn prepare(
@@ -92,9 +105,9 @@ impl Tool for TaskOutputTool {
             ctx.call_id.clone(),
             "task_output",
             arguments,
-            PermissionSet::single(Permission::FsRead),
-            SecurityResource::other("background_task", task_id.clone()),
-            ToolEffects::read_only(),
+            PermissionSet::single(Permission::StdioRead),
+            SecurityResource::other(BACKGROUND_TASK_RESOURCE_KIND, task_id.clone()),
+            ToolEffects::default(),
             ToolCallDisplay::new(format!("Read output of task {task_id}")),
         ))
     }
@@ -148,7 +161,7 @@ impl Tool for TaskOutputTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::project;
+    use crate::testing::{preparation_context, project};
 
     #[tokio::test]
     async fn without_an_installed_host_the_error_is_clear_rather_than_a_panic() {
@@ -185,5 +198,40 @@ mod tests {
     fn the_tool_declares_read_only_effects() {
         let spec = TaskOutputTool::default().spec();
         assert!(spec.effects.is_read_only());
+    }
+
+    /// The executor pairs every declared permission against the prepared
+    /// resource before a host ever sees the call. A filesystem permission
+    /// demands a `SecurityResource::Filesystem`, and this tool's resource is
+    /// a task ID, so the two must not be paired: that mismatch failed every
+    /// poll with "prepared filesystem permission requires a filesystem
+    /// resource".
+    #[tokio::test]
+    async fn polling_claims_stdio_authority_over_the_task_resource() {
+        let (_dir, ctx) = project();
+        let prepared = TaskOutputTool::default()
+            .prepare(json!({"task_id": "task_1"}), &preparation_context(&ctx))
+            .await
+            .expect("a prepared call");
+        assert_eq!(
+            prepared.required_permissions(),
+            &PermissionSet::single(Permission::StdioRead)
+        );
+        assert!(
+            matches!(
+                prepared.resource(),
+                SecurityResource::Other { kind, id }
+                    if kind == BACKGROUND_TASK_RESOURCE_KIND && id == "task_1"
+            ),
+            "{:?}",
+            prepared.resource()
+        );
+        assert!(
+            prepared
+                .effects()
+                .permission_upper_bound()
+                .is_subset(prepared.required_permissions()),
+            "the prepared effects must not exercise undeclared permissions"
+        );
     }
 }

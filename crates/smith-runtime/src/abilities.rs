@@ -429,7 +429,13 @@ mod tests {
             // set is what the approval prompt actually shows.
             ("edit", RiskLevel::High),
             ("shell", RiskLevel::High),
-            ("task_output", RiskLevel::Low),
+            // `task_output` claims `StdioRead` over the background-task
+            // resource — the spool is a captured stream, not a workspace file
+            // — which classifies `Medium`. Pairing it with `FsRead` instead
+            // read as `Low` but failed the executor's effect check on every
+            // call, because a filesystem permission demands a filesystem
+            // resource and this tool's resource is a task ID.
+            ("task_output", RiskLevel::Medium),
             // `task_stop` reaches for `Permission::ProcessSpawn` — the closest
             // fit the fixed vocabulary offers for "controls a process" — which
             // classifies as `High` the same way `shell`'s does.
@@ -499,7 +505,7 @@ mod tests {
         );
         assert_eq!(
             permission_sets["task_output"],
-            BTreeSet::from([Permission::FsRead])
+            BTreeSet::from([Permission::StdioRead])
         );
         assert_eq!(
             permission_sets["task_stop"],

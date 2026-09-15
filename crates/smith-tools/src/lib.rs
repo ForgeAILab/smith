@@ -63,7 +63,7 @@ pub use read::ReadTool;
 pub use read_state::{ReadDefect, ReadObservation, ReadRecorder};
 pub use search::SearchTool;
 pub use shell::{HOST_SHELL_RESOURCE_KIND, ShellTool};
-pub use task_output::TaskOutputTool;
+pub use task_output::{BACKGROUND_TASK_RESOURCE_KIND, TaskOutputTool};
 pub use task_stop::TaskStopTool;
 
 use std::sync::Arc;

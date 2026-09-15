@@ -5,6 +5,12 @@
 //! may proceed unattended, while every write/create/delete, process, network,
 //! or data-egress action — and any filesystem access outside the project
 //! root — remains eligible only after the configured approval policy answers.
+//!
+//! Polling a background task's spool (`task_output`) joins session-artifact
+//! reads on the unattended side. It reads runtime-owned session state the
+//! agent already caused by starting the task, addressed by task ID rather
+//! than by a path the model chooses, so prompting on every poll would ask the
+//! user to re-approve output they already authorized producing.
 
 use agent_runtime::harness::ARTIFACT_READ_PERMISSION;
 use agent_runtime::registry::Permission;
@@ -15,7 +21,7 @@ use agent_runtime_core::grant::{
 };
 use agent_runtime_core::security::{AuthorizationRequest, PermissionSet, SecurityResource};
 use async_trait::async_trait;
-use smith_tools::HOST_SHELL_RESOURCE_KIND;
+use smith_tools::{BACKGROUND_TASK_RESOURCE_KIND, HOST_SHELL_RESOURCE_KIND};
 
 /// Authoritative coverage for every typed permission Smith's built-ins declare.
 #[derive(Debug)]
@@ -30,7 +36,7 @@ impl SmithToolAuthority {
     pub(crate) fn new(workspace_mount: impl Into<String>) -> Self {
         Self {
             id: SecurityCheckId::new("smith-built-in-tool-authority"),
-            revision: SecurityCheckRevision::new("v4"),
+            revision: SecurityCheckRevision::new("v5"),
             workspace_mount: workspace_mount.into(),
             coverage: [
                 Permission::FsRead,
@@ -42,6 +48,7 @@ impl SmithToolAuthority {
                 Permission::ExternalRead,
                 Permission::ExternalWrite,
                 Permission::ProcessSpawn,
+                Permission::StdioRead,
                 Permission::NetHttp,
                 Permission::DataEgress,
                 Permission::other(ARTIFACT_READ_PERMISSION),
@@ -152,6 +159,21 @@ impl SecurityCheck for SmithToolAuthority {
             };
         }
 
+        // Stdio authority is Smith's background-task spool and nothing else:
+        // bound to the task resource so it can never be borrowed to read some
+        // other stream.
+        let stdio_permission = request.requested.contains(&Permission::StdioRead);
+        if stdio_permission
+            && !matches!(
+                &request.resource,
+                SecurityResource::Other { kind, .. } if kind == BACKGROUND_TASK_RESOURCE_KIND
+            )
+        {
+            return SecurityCheckOutcome::Deny {
+                code: DecisionCode::other("smith.background_task_resource_mismatch"),
+            };
+        }
+
         let artifact_permission = Permission::other(ARTIFACT_READ_PERMISSION);
         let artifact_requested = request.requested.contains(&artifact_permission);
         if artifact_requested
@@ -172,7 +194,8 @@ impl SecurityCheck for SmithToolAuthority {
                 SecurityResource::Filesystem { mount, .. } if mount == &self.workspace_mount
             );
         let artifact_read = request.requested.len() == 1 && artifact_requested;
-        if read_only || artifact_read {
+        let task_output = request.requested.len() == 1 && stdio_permission;
+        if read_only || artifact_read || task_output {
             SecurityCheckOutcome::Allow {
                 constraints: GrantConstraints::unconstrained(),
             }
@@ -296,6 +319,35 @@ mod tests {
             )
             .await;
         assert!(matches!(artifact, SecurityCheckOutcome::Allow { .. }));
+
+        // Polling a task the agent already started is unattended, or every
+        // `task_output` call in a background build would raise a prompt.
+        let task_output = authority
+            .evaluate(
+                &request(
+                    [Permission::StdioRead],
+                    SecurityResource::other(BACKGROUND_TASK_RESOURCE_KIND, "task_1"),
+                ),
+                &Cancellation::new(),
+            )
+            .await;
+        assert!(matches!(task_output, SecurityCheckOutcome::Allow { .. }));
+
+        // ...but only over a background task. Stdio authority is not a
+        // general licence to read streams.
+        let wrong_task_resource = authority
+            .evaluate(
+                &request(
+                    [Permission::StdioRead],
+                    SecurityResource::other(HOST_SHELL_RESOURCE_KIND, "sha256:action"),
+                ),
+                &Cancellation::new(),
+            )
+            .await;
+        assert!(matches!(
+            wrong_task_resource,
+            SecurityCheckOutcome::Deny { .. }
+        ));
 
         let wrong_artifact_resource = authority
             .evaluate(
