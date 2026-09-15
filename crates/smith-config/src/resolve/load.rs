@@ -271,6 +271,7 @@ pub(super) fn built_in_defaults(user_dir: &Path) -> ConfigFile {
             ),
         ]),
         context: Some(ContextSection {
+            tool_output_inline_bytes: Some(8 * 1024),
             reasoning_reserve: Some(0),
             compaction_high_watermark_percent: Some(85),
             compaction_low_watermark_percent: Some(60),

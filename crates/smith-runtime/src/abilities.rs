@@ -711,4 +711,35 @@ mod tests {
         assert!(descriptor.permissions().is_empty());
         assert_eq!(descriptor.risk(), RiskLevel::None);
     }
+
+    #[test]
+    fn artifact_discovery_guidance_selects_the_artifact_reader_not_the_file_reader() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::session::SessionPaths::new(
+            dir.path(),
+            &crate::session::ProjectId::new("artifact-discovery").unwrap(),
+        );
+        let store = Arc::new(crate::artifact::SmithArtifactStore::new(paths));
+        let policy = crate::tool_output::ToolOutputContextPolicy {
+            inline_bytes: 8192,
+            artifact_page_bytes: 2048,
+        };
+        let mut tools = built_in_and_agent_tools();
+        tools.push(Arc::new(policy.reader(store)));
+        let view = view_for(tools);
+        let query = RoutingQuery::derive(
+            crate::tool_output::ARTIFACT_DISCOVERY_QUERY,
+            Vec::<String>::new(),
+        );
+        let candidates = CapabilityResolver::new().retrieve(&view, &query).candidates;
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(
+            candidates[0].descriptor.id(),
+            &RegistryId::tool(ARTIFACT_READ_TOOL_NAME)
+        );
+        assert_eq!(
+            selected_from(&view, crate::tool_output::ARTIFACT_DISCOVERY_QUERY),
+            BTreeSet::from([RegistryId::tool(ARTIFACT_READ_TOOL_NAME)])
+        );
+    }
 }

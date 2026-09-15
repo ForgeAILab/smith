@@ -1273,8 +1273,17 @@ async fn a_spawned_child_completes_and_its_result_reaches_the_parent_model() {
 
 #[tokio::test]
 async fn a_child_artifact_is_explicitly_transferred_without_widening_source_ownership() {
+    child_artifact_policy_case(10_000, 8192).await;
+}
+
+#[tokio::test]
+async fn a_child_uses_the_resolved_small_inline_threshold_not_the_runtime_default() {
+    child_artifact_policy_case(100, 1024).await;
+}
+
+async fn child_artifact_policy_case(lines: usize, inline_bytes: u32) {
     let fixture = Fixture::new();
-    let large_fixture = "child-owned artifact line\n".repeat(10_000);
+    let large_fixture = "child-owned artifact line\n".repeat(lines);
     std::fs::write(
         fixture.project.path().join("child-artifact.txt"),
         large_fixture,
@@ -1320,6 +1329,11 @@ async fn a_child_artifact_is_explicitly_transferred_without_widening_source_owne
         ProjectWorkspace::new(fixture.project.path()).expect("a project workspace"),
     ));
     runtime_request.artifact_store = Some(store.clone());
+    runtime_request
+        .config
+        .context
+        .tool_output_inline_bytes
+        .value = inline_bytes;
     let smith = factory::build_request(runtime_request)
         .await
         .expect("a runtime with protected artifact transfer");

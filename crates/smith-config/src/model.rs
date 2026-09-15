@@ -710,6 +710,10 @@ pub struct ModelReasoningSection {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ContextSection {
+    /// Serialized tool outcomes larger than this are stored as artifacts instead
+    /// of replayed inline. This is a byte threshold, not an exact token budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_output_inline_bytes: Option<u32>,
     /// Tokens held back for the model's response.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_reserve: Option<u32>,

@@ -1392,6 +1392,18 @@ pub(super) fn render_context_view(status: &Status, policy: &RuntimePolicy) -> St
             exact(policy.compaction_policy.low_watermark),
         ));
     }
+    lines.push(if policy.artifact_offloading {
+        format!(
+            "tool context: offload above {} serialized bytes · artifact pages up to {} bytes",
+            policy.tool_output_context.inline_bytes, policy.tool_output_context.artifact_page_bytes,
+        )
+    } else {
+        "tool context: artifact storage unavailable; ordinary output limits still apply".to_owned()
+    });
+    lines.push(
+        "Input occupancy above is the last planned request, not cumulative session usage."
+            .to_owned(),
+    );
     lines.push(format!(
         "provider input (session): {}",
         status.context.render()

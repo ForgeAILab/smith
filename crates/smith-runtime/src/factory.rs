@@ -63,9 +63,8 @@ use agent_runtime::context::{
     CompactionPolicy, ContextBudget, ContextPolicy, ProviderCacheCapability, StructuralCompactor,
 };
 use agent_runtime::harness::{
-    ArtifactOffloader, ArtifactReadTool, CreateGoalTool, GetGoalTool, GoalComponent,
-    MemoryContributor, MemorySource, QuestionnaireTool, SemanticSummaryCoordinator, SummaryModel,
-    TodoComponent, UpdateGoalTool, WriteTodosTool,
+    CreateGoalTool, GetGoalTool, GoalComponent, MemoryContributor, MemorySource, QuestionnaireTool,
+    SemanticSummaryCoordinator, SummaryModel, TodoComponent, UpdateGoalTool, WriteTodosTool,
 };
 use agent_runtime::hub::{ScopeIdentity, ScopeInputs};
 use agent_runtime::provider::anthropic::{AnthropicConfig, AnthropicProvider};
@@ -165,6 +164,7 @@ use crate::skills::{ResolvedSmithSkills, SkillIndexEntry, SmithSkillSources};
 use crate::summary::{
     SemanticSummaryRuntimePolicy, SmithProviderSummaryModel, SmithSemanticSummaryConfig,
 };
+use crate::tool_output::ToolOutputContextPolicy;
 use crate::transport::{ReqwestTransport, TransportConfig};
 use crate::xai::{XaiCacheIdentityProvider, XaiCredentialSource, XaiOAuthClient, XaiTokenBundle};
 
@@ -546,6 +546,10 @@ pub struct RuntimePolicy {
     pub turn_time_limit_ms: Option<u64>,
     /// The model-facing tool output limit.
     pub output_limit: usize,
+    /// Effective inline threshold and bounded artifact retrieval policy.
+    pub tool_output_context: ToolOutputContextPolicy,
+    /// Whether full tool outcomes can actually be retained by this composition.
+    pub artifact_offloading: bool,
     /// The generation cap asked of the provider.
     pub max_output_tokens: Option<u32>,
     /// The registered tool names, in registration order.
@@ -1610,6 +1614,8 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         max_tool_steps: loop_config.max_tool_steps,
         turn_time_limit_ms: loop_config.turn_time_limit_ms,
         output_limit: loop_config.output_limit,
+        tool_output_context: ToolOutputContextPolicy::from_config(config),
+        artifact_offloading: request.artifact_store.is_some(),
         max_output_tokens: loop_config.max_output_tokens,
         tools: capabilities
             .tools
@@ -1793,8 +1799,8 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         builder = builder.secret_store(store);
     }
     if let Some(store) = request.artifact_store.clone() {
-        let offloader = ArtifactOffloader::new(store)
-            .with_threshold_bytes(loop_config.output_limit)
+        let offloader = ToolOutputContextPolicy::from_config(config)
+            .offloader(store)
             .map_err(FactoryError::Runtime)?;
         builder = builder.tool_output_processor(Arc::new(offloader));
     }
@@ -1814,6 +1820,7 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
                     model,
                     model_profile: profile.profile.clone(),
                     context_policy,
+                    tool_output_context: ToolOutputContextPolicy::from_config(config),
                     loop_config,
                     prompt_contributor: prompt.contributor.clone(),
                     agent_profile_name: agent_profile.name.clone(),
@@ -1990,6 +1997,7 @@ async fn prepare_child_profile_routes(
                 model,
                 model_profile: profile.profile,
                 context_policy,
+                tool_output_context: ToolOutputContextPolicy::from_config(&route_request.config),
                 loop_config,
                 prompt_contributor,
                 agent_profile_name: agent_profile.name.clone(),
@@ -3317,7 +3325,9 @@ fn tools(request: &RuntimeRequest) -> Vec<Arc<dyn Tool>> {
         tools.push(Arc::new(QuestionnaireTool::new()));
     }
     if let Some(store) = request.artifact_store.clone() {
-        tools.push(Arc::new(ArtifactReadTool::new(store)));
+        tools.push(Arc::new(
+            ToolOutputContextPolicy::from_config(&request.config).reader(store),
+        ));
     }
     if todo_planning_eligible(request) {
         tools.push(Arc::new(WriteTodosTool::new()));
@@ -3553,6 +3563,7 @@ exit 2
 
     fn context(output_reserve: Option<u32>, reasoning_reserve: u32) -> ResolvedContext {
         ResolvedContext {
+            tool_output_inline_bytes: sourced(8 * 1024),
             output_reserve: output_reserve.map(sourced),
             reasoning_reserve: sourced(reasoning_reserve),
             capability_budget: None,
