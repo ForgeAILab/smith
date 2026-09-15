@@ -22,6 +22,9 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 use smith_config::resolve::ResolvedConfig;
 
+/// Dedicated retrieval affordance: a broad `read` query can rank the file reader first.
+pub const ARTIFACT_DISCOVERY_QUERY: &str = "artifact-read";
+
 /// Resolved byte bounds. These are not tokenizer-exact or whole-request limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToolOutputContextPolicy {
@@ -233,7 +236,7 @@ fn text_preview(outcome: &ToolOutcome, limit: usize) -> String {
         .collect::<Vec<_>>()
         .join(" · ");
     sections.push(prefix(&metadata, limit / 4));
-    sections.push("Read more with artifact.read; discover it with registry.search (query: artifact read) if absent.".into());
+    sections.push(format!("Read more with artifact.read; discover it with registry.search (query: {ARTIFACT_DISCOVERY_QUERY}) if absent."));
     let text = outcome
         .content
         .as_inline()

@@ -229,7 +229,7 @@ async fn many_medium_tool_results_in_one_task_survive_restart_without_replaying_
             tool_stream(
                 "discover-after-restart",
                 "registry.search",
-                serde_json::json!({"query": "artifact read", "max_results": 1}),
+                serde_json::json!({"query": smith_runtime::tool_output::ARTIFACT_DISCOVERY_QUERY, "max_results": 1}),
             ),
             tool_stream(
                 "read-after-restart",
@@ -280,7 +280,8 @@ async fn many_medium_tool_results_in_one_task_survive_restart_without_replaying_
             .tools
             .iter()
             .any(|tool| tool.name == "artifact.read"),
-        "discovery must advertise the reader at the next provider boundary"
+        "discovery must advertise the reader at the next provider boundary: {:?}",
+        resumed_requests[1].messages
     );
     let page = resumed_requests[2]
         .messages
