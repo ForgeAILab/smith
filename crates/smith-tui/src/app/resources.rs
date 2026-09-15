@@ -457,6 +457,7 @@ impl App {
             let name = match &command {
                 CommandAction::Help => "help",
                 CommandAction::Status => "status",
+                CommandAction::Diagnostics => "diagnostics",
                 CommandAction::Goal(_) => "goal",
                 CommandAction::Context => "context",
                 CommandAction::Details => "details",

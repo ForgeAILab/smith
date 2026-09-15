@@ -254,27 +254,7 @@ pub(super) fn deadline_text(deadline: Deadline) -> String {
         return "no deadline".to_owned();
     };
     let millis = expires.as_millis();
-    let local = time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(millis) * 1_000_000)
-        .map(|instant| {
-            instant
-                .to_offset(time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC))
-        })
-        .ok();
-    let absolute = local.map_or_else(
-        || format!("{millis}ms since epoch"),
-        |instant| {
-            format!(
-                "{:04}-{:02}-{:02} {:02}:{:02}:{:02} {}",
-                instant.year(),
-                u8::from(instant.month()),
-                instant.day(),
-                instant.hour(),
-                instant.minute(),
-                instant.second(),
-                instant.offset()
-            )
-        },
-    );
+    let absolute = crate::time_display::local_timestamp(millis);
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))

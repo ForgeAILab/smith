@@ -156,6 +156,11 @@ pub(super) async fn run_interactive(
             app.restore_child(child.child.as_str(), state, Some(detail));
         }
     }
+    if let Some(turn) = host.session().interrupted_on_resume() {
+        app.transcript.push_notice("session restored", format!(
+            "Available tools changed since turn {turn} was saved. Your conversation is restored; the unfinished action was not retried. Check previous changes before continuing. Any active goal is paused; use /goal resume to continue it.",
+        ));
+    }
     if let Some(interruption) = host.recovered_ephemeral_work() {
         app.present_recovered_ephemeral_work(
             interruption.children.len(),

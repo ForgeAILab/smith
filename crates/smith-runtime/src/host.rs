@@ -977,7 +977,7 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
 
     let mut resume_identity_floor = None;
     let mut recovered_ephemeral_work = None;
-    let restored_interaction = checkpoint.as_ref().and_then(|checkpoint| {
+    let mut restored_interaction = checkpoint.as_ref().and_then(|checkpoint| {
         if let TurnState::AwaitingInteraction {
             request,
             response: None,
@@ -1000,7 +1000,7 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
                 let recovery = read_journal(&journal_path).await?;
                 recovered_ephemeral_work = unresolved_ephemeral_work(&recovery);
                 match checkpoint.as_ref() {
-                    Some(checkpoint) if !matches!(checkpoint.state, TurnState::Terminal { .. }) => {
+                    Some(checkpoint) if !checkpoint.state.is_terminal() => {
                         let reconciled = reconcile_nonterminal_journal(
                             &journal_path,
                             checkpoint.watermark.event_sequence,
@@ -1061,7 +1061,9 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         }
     };
 
-    let mut start = StartSession::new().with_id(session_id.clone());
+    let mut start = StartSession::new()
+        .with_id(session_id.clone())
+        .with_checkpoint_recovery(CheckpointRecoveryPolicy::ResumeOrInterrupt);
     if let Some(floor) = resume_identity_floor {
         start = start.with_resume_identity_floor(floor);
     }
@@ -1077,6 +1079,10 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
             return Err(error.into());
         }
     };
+
+    if session.interrupted_on_resume().is_some() {
+        restored_interaction = None;
+    }
 
     // Agent Runtime has now loaded its canonical and protected startup
     // candidates through the wrapped stores.  Select the capsule candidates
@@ -1188,6 +1194,22 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
             journal.clone(),
             task_spool_dir,
         );
+
+    if session.interrupted_on_resume().is_some()
+        && let Some(component) = runtime.goal_component()
+        && let Some(goal) = session.goal(component)?
+        && goal.status == agent_runtime_core::goal::GoalStatus::Active
+    {
+        session
+            .control_goal(
+                component,
+                GoalCommand::Pause {
+                    id: goal.id,
+                    generation: goal.generation,
+                },
+            )
+            .await?;
+    }
 
     let goal_admission_gate = runtime
         .goal_component()

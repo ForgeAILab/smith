@@ -298,6 +298,7 @@
         .expect("a skill context");
         let commands = [
             CommandAction::Status,
+            CommandAction::Diagnostics,
             CommandAction::Context,
             CommandAction::Agent(None),
             CommandAction::Diff(None),
@@ -348,6 +349,7 @@
             results,
             [
                 ("status", LocalResultState::Info),
+                ("diagnostics", LocalResultState::Info),
                 ("context", LocalResultState::Info),
                 ("agents", LocalResultState::Empty),
                 ("diff", LocalResultState::Error),
@@ -373,15 +375,31 @@
                 _ => None,
             })
             .expect("status output");
+        assert!(status_content.contains("profile: dev"), "{status_content}");
+        assert!(status_content.contains("/diagnostics"), "{status_content}");
+        assert!(!status_content.contains("posture build"), "{status_content}");
+        assert!(!status_content.contains("cache: state"), "{status_content}");
+        assert!(!status_content.contains("resume capsule:"), "{status_content}");
+        let diagnostics_content = app
+            .transcript
+            .blocks()
+            .iter()
+            .find_map(|block| match block {
+                Block::LocalResult { title, content, .. } if title == "diagnostics" => {
+                    Some(content.as_str())
+                }
+                _ => None,
+            })
+            .expect("diagnostic output");
         assert!(
-            status_content.contains("~98% input left"),
-            "{status_content}"
+            diagnostics_content.contains("~98% input left"),
+            "{diagnostics_content}"
         );
         assert!(
-            status_content.contains("profile: dev · posture build · use main · rev"),
-            "{status_content}"
+            diagnostics_content.contains("profile: dev · posture build · use main · rev"),
+            "{diagnostics_content}"
         );
-        assert!(status_content.contains("source"), "{status_content}");
+        assert!(diagnostics_content.contains("source"), "{diagnostics_content}");
         // No usage has been recorded yet, so `/status` reports "nothing
         // spent yet" rather than either a zero dollar figure or "unknown" —
         // there is nothing to price, which is a different fact from a
@@ -432,4 +450,26 @@
             "{compacted}"
         );
         host.shutdown().await.expect("shutdown");
+    }
+
+    #[test]
+    fn disabled_maintenance_is_not_rendered_as_an_authority_failure() {
+        let controller = smith_runtime::cache_controller::CacheControllerSnapshot {
+            requested_maintenance: smith_runtime::cache_lifecycle::CacheMaintenanceMode::Off,
+            effective_maintenance: smith_runtime::cache_lifecycle::CacheMaintenanceMode::Off,
+            ..Default::default()
+        };
+        let rendered = crate::local_command::render_cache_controller_summary(&controller);
+        assert_eq!(rendered, "cache maintenance: off");
+        assert!(!rendered.contains("denied"));
+        assert!(!rendered.contains("lease"));
+        assert!(!rendered.contains("idle attempted"));
+    }
+
+    #[test]
+    fn observe_only_maintenance_names_its_no_spend_behavior() {
+        let controller = smith_runtime::cache_controller::CacheControllerSnapshot::default();
+        let rendered = crate::local_command::render_cache_controller_summary(&controller);
+        assert_eq!(rendered, "cache maintenance: observe only (no background requests)");
+        assert!(!rendered.contains("denied"));
     }

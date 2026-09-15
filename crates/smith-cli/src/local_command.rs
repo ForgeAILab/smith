@@ -154,7 +154,8 @@ pub(super) async fn handle_local_command(
                 app.show_local_result("timeline", lines.join("\n"));
             }
         }
-        CommandAction::Status => {
+        action @ (CommandAction::Status | CommandAction::Diagnostics) => {
+            let detailed = matches!(action, CommandAction::Diagnostics);
             let policy = host.runtime().policy();
             let git = GitChanges::discover(project)
                 .and_then(|git| git.status_summary())
@@ -230,8 +231,32 @@ pub(super) async fn handle_local_command(
                 app.status.price(),
                 (&policy.provider_name, policy.model.as_str()),
             );
+            if !detailed {
+                let cache = app
+                    .status
+                    .cache_summary()
+                    .and_then(|summary| summary.render_usage())
+                    .unwrap_or_else(|| "prompt cache: usage not reported".to_owned());
+                let maintenance = host
+                    .cache_lifecycle()
+                    .map(|controller| render_cache_controller_summary(&controller))
+                    .unwrap_or_else(|| "cache maintenance: off".to_owned());
+                let saved = host
+                    .resume_capsule()
+                    .map(|capsule| render_resume_summary(&capsule))
+                    .unwrap_or_else(|| "resume checkpoint: not available".to_owned());
+                app.show_local_result("status", format!(
+                    "session: {}\nprofile: {}\nprovider: {} · model: {}\npermission: {:?}\n{reasoning}\n\
+                     {cache}\n{maintenance}\n{saved}\nproject: {}\nGit: {git}\ngoal: {goal}\n\
+                     children: {child_count}\nusage: {usage}\ncost: {cost}\n\
+                     /diagnostics shows detailed cache and recovery information",
+                    host.session().id(), policy.agent_profile, policy.provider_name, policy.model,
+                    policy.approval_mode, project.display(),
+                ));
+                return;
+            }
             app.show_local_result(
-                "status",
+                "diagnostics",
                 format!(
                     "session: {}\nprofile: {} · posture {} · use {} · rev {} · source {}{}\n\
                      provider: {}\nmodel: {}\npermission: {:?}\n\
@@ -920,22 +945,101 @@ fn append_cache_lifecycle(mut line: String, status: &Status) -> String {
     line
 }
 
-/// Renders Smith's bounded adaptive scheduler without conflating structural
-/// preservation, provider evidence, or calculated economics.
+/// Readable enum words. Never run this over route names, IDs, or user text.
+fn diagnostic_label(value: impl std::fmt::Debug) -> String {
+    let mut result = String::new();
+    let mut previous_lowercase = false;
+    for ch in format!("{value:?}").chars() {
+        if ch.is_ascii_uppercase() && previous_lowercase {
+            result.push(' ');
+        }
+        result.push(ch.to_ascii_lowercase());
+        previous_lowercase = ch.is_ascii_lowercase() || ch.is_ascii_digit();
+    }
+    result
+}
+
+pub(super) fn render_cache_controller_summary(
+    controller: &smith_runtime::cache_controller::CacheControllerSnapshot,
+) -> String {
+    use smith_runtime::cache_lifecycle::CacheMaintenanceMode;
+    if !controller.synthetic_attempts.is_empty() {
+        let usage = controller
+            .synthetic_attempts
+            .iter()
+            .fold([0u64; 5], |mut total, attempt| {
+                for (sum, value) in total.iter_mut().zip([
+                    attempt.usage.input_uncached,
+                    attempt.usage.input_cached,
+                    attempt.usage.cache_write,
+                    attempt.usage.output,
+                    attempt.usage.reasoning,
+                ]) {
+                    *sum = sum.saturating_add(value);
+                }
+                total
+            });
+        return format!(
+            "cache maintenance: {} attempts · input {} · cached {} · writes {} · output {} · reasoning {}",
+            controller.synthetic_attempts.len(),
+            usage[0],
+            usage[1],
+            usage[2],
+            usage[3],
+            usage[4]
+        );
+    }
+    if controller.requested_maintenance == CacheMaintenanceMode::Off {
+        return "cache maintenance: off".to_owned();
+    }
+    if controller.effective_maintenance == CacheMaintenanceMode::Off {
+        return "cache maintenance: unavailable under the current provider or policy; see /diagnostics".to_owned();
+    }
+    if controller.operation_in_flight {
+        return "cache maintenance: running".to_owned();
+    }
+    if controller.effective_maintenance == CacheMaintenanceMode::Observe {
+        return "cache maintenance: observe only (no background requests)".to_owned();
+    }
+    if let Some(at) = controller.scheduled_for {
+        return format!(
+            "cache maintenance: scheduled for {}",
+            smith_tui::time_display::local_timestamp(at.0)
+        );
+    }
+    "cache maintenance: idle".to_owned()
+}
+
+pub(super) fn render_resume_summary(
+    capsule: &smith_runtime::resume_capsule::RedactedResumeCapsule,
+) -> String {
+    capsule.last_persisted_at.map_or_else(
+        || "resume checkpoint: not yet saved".to_owned(),
+        |at| {
+            format!(
+                "resume checkpoint: saved {}",
+                smith_tui::time_display::local_timestamp(at.0)
+            )
+        },
+    )
+}
+
+/// Renders Smith's bounded adaptive scheduler diagnostics.
 pub(super) fn render_cache_controller_status(
     controller: &smith_runtime::cache_controller::CacheControllerSnapshot,
 ) -> String {
     let requested = format!("{:?}", controller.requested_maintenance).to_ascii_lowercase();
     let effective = format!("{:?}", controller.effective_maintenance).to_ascii_lowercase();
-    let scheduled = controller
-        .scheduled_for
-        .map_or_else(|| "none".to_owned(), |at| format!("{}ms", at.0));
+    let scheduled = controller.scheduled_for.map_or_else(
+        || "none".to_owned(),
+        |at| smith_tui::time_display::local_timestamp(at.0),
+    );
     let decision = controller.decision.as_ref().map_or_else(
         || "none".to_owned(),
         |decision| {
-            let mut rendered = format!("{:?}", decision.disposition).to_ascii_lowercase();
+            let mut rendered = diagnostic_label(decision.disposition);
             if let Some(reason) = decision.reason {
-                rendered.push_str(&format!("/{reason:?}").to_ascii_lowercase());
+                rendered.push_str(&format!(" / {}", diagnostic_label(reason)));
             }
             rendered
         },
@@ -959,9 +1063,10 @@ pub(super) fn render_cache_controller_status(
             controller.policy.max_maintenance_calls,
         );
     };
-    let guarantee = lease
-        .guaranteed_until
-        .map_or_else(|| "?".to_owned(), |at| format!("{}ms", at.0));
+    let guarantee = lease.guaranteed_until.map_or_else(
+        || "?".to_owned(),
+        |at| smith_tui::time_display::local_timestamp(at.0),
+    );
     let reads = lease
         .observed_read_tokens
         .map_or_else(|| "?".to_owned(), |tokens| tokens.to_string());
@@ -1018,7 +1123,6 @@ fn render_synthetic_attempt_status(
         attempt.latency_ms,
         attempt.status,
     )
-    .to_ascii_lowercase()
 }
 
 fn render_idle_compaction_status(
@@ -1082,16 +1186,16 @@ pub(super) fn render_resume_capsule_status(
                 summary.provenance.source_coverage.len(),
                 summary.provenance.outcome,
             )
-            .to_ascii_lowercase()
         },
     );
     format!(
         "resume capsule: schema {} · watermark {} · persisted {} · summary {summary}",
         capsule.schema_version,
         capsule.last_persisted_watermark,
-        capsule
-            .last_persisted_at
-            .map_or_else(|| "?".to_owned(), |at| format!("{}ms", at.0)),
+        capsule.last_persisted_at.map_or_else(
+            || "not yet saved".to_owned(),
+            |at| smith_tui::time_display::local_timestamp(at.0)
+        ),
     )
 }
 
@@ -1436,4 +1540,20 @@ pub(super) enum LocalOutcome {
         content: String,
         is_error: bool,
     },
+}
+
+#[cfg(test)]
+mod diagnostic_label_tests {
+    use super::diagnostic_label;
+    #[test]
+    fn enum_words_are_readable() {
+        #[derive(Debug)]
+        enum Reason {
+            ProviderEvidenceUnavailable,
+        }
+        assert_eq!(
+            diagnostic_label(Reason::ProviderEvidenceUnavailable),
+            "provider evidence unavailable"
+        );
+    }
 }

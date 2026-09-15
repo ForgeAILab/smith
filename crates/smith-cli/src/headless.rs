@@ -503,6 +503,8 @@ struct InteractionOutput {
 #[derive(Debug, Serialize)]
 struct RecoveryOutput {
     reason: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    interrupted_turn: Option<String>,
     interrupted_children: Vec<String>,
     interrupted_monitors: Vec<String>,
     interrupted_tasks: Vec<String>,
@@ -515,6 +517,7 @@ impl From<&EphemeralWorkInterruption> for RecoveryOutput {
         };
         Self {
             reason,
+            interrupted_turn: None,
             interrupted_children: interruption
                 .children
                 .iter()
@@ -524,6 +527,21 @@ impl From<&EphemeralWorkInterruption> for RecoveryOutput {
             interrupted_tasks: interruption.tasks.clone(),
         }
     }
+}
+
+fn recovery_output(host: &HostSession) -> Option<RecoveryOutput> {
+    let mut recovery = host.recovered_ephemeral_work().map(RecoveryOutput::from);
+    if let Some(turn) = host.session().interrupted_on_resume() {
+        let record = recovery.get_or_insert_with(|| RecoveryOutput {
+            reason: "activation_changed",
+            interrupted_turn: None,
+            interrupted_children: Vec::new(),
+            interrupted_monitors: Vec::new(),
+            interrupted_tasks: Vec::new(),
+        });
+        record.interrupted_turn = Some(turn.as_str().to_owned());
+    }
+    recovery
 }
 
 impl From<InteractionRequired> for InteractionOutput {
@@ -1215,7 +1233,7 @@ async fn run_with_io(
         account: account_output(credential_pool, rotation),
         approval_required: approval_required.map(Into::into),
         interaction_required: interaction_required.map(Into::into),
-        recovery: host.recovered_ephemeral_work().map(Into::into),
+        recovery: recovery_output(host),
         background_exit: background_exit_output,
         reasoning: Some(ReasoningOutput::of(&host.runtime().policy().reasoning)),
         cache,
@@ -1340,7 +1358,7 @@ async fn write_restored_interaction_required(
         artifacts: Vec::new(),
         approval_required: None,
         interaction_required: Some(required.into()),
-        recovery: host.recovered_ephemeral_work().map(Into::into),
+        recovery: recovery_output(host),
         account: None,
         background_exit: None,
         reasoning: Some(ReasoningOutput::of(&host.runtime().policy().reasoning)),
@@ -1423,7 +1441,7 @@ async fn write_submission_failure(
         artifacts: Vec::new(),
         approval_required: None,
         interaction_required: None,
-        recovery: host.recovered_ephemeral_work().map(Into::into),
+        recovery: recovery_output(host),
         account: None,
         background_exit: None,
         reasoning: Some(ReasoningOutput::of(&host.runtime().policy().reasoning)),
@@ -1643,49 +1661,18 @@ fn write_text_projection(writer: &mut impl Write, result: &ResultEnvelope) -> Re
         lines.push(format!("todo plan revision {} · {counts}", plan.revision));
     }
     if let Some(cache) = &result.cache {
-        let state = cache
-            .state
-            .map_or_else(|| "unknown".to_owned(), |state| state.as_str().to_owned());
-        let ch = cache
-            .cache_read_percent
-            .map_or_else(|| "?".to_owned(), |percent| format!("{percent}%"));
-        let confidence = cache.confidence.map_or_else(
-            || "?".to_owned(),
-            |confidence| match confidence {
-                EstimationConfidence::Exact => "exact".to_owned(),
-                EstimationConfidence::Estimated => "estimated".to_owned(),
-            },
-        );
-        let mut line = format!("cache: {state} · CH {ch} · confidence {confidence}");
-        if let Some(identity) = &cache.cache_identity {
-            line.push_str(&format!(" · identity {identity}"));
+        if let Some(line) = smith_tui::cache::render_cache_read_usage(
+            cache.cache_read_percent,
+            cache.observed_read_tokens,
+        ) {
+            lines.push(line);
         }
-        if let Some(expected) = cache.expected_read_tokens {
-            line.push_str(&format!(" · expected {expected}"));
-        }
-        if let Some(observed) = cache.observed_read_tokens {
-            line.push_str(&format!(" · observed {observed}"));
-        }
-        if let Some(missed) = cache.missed_tokens {
-            line.push_str(&format!(" · missed {missed}"));
-        }
-        if let Some(rebilled) = cache.rebilled_tokens {
-            line.push_str(&format!(" · re-billed {rebilled}"));
-        }
-        if let Some(lifecycle) = &cache.lifecycle {
-            line.push_str(&format!(
-                " · maintenance calls {}",
-                lifecycle.maintenance_calls_used
-            ));
-            if let Some(guaranteed_until_ms) = lifecycle.guaranteed_until_ms {
-                line.push_str(&format!(" · guaranteed until {guaranteed_until_ms}ms"));
-            }
-        }
-        lines.push(line);
         if let Some(controller) = &cache.controller {
-            lines.push(crate::local_command::render_cache_controller_status(
-                controller,
-            ));
+            if !controller.synthetic_attempts.is_empty() {
+                lines.push(crate::local_command::render_cache_controller_summary(
+                    controller,
+                ));
+            }
         }
     }
     if !result.usage.synthetic_cache.is_empty() {
@@ -1700,29 +1687,7 @@ fn write_text_projection(writer: &mut impl Write, result: &ResultEnvelope) -> Re
         lines.push(format!("cache synthetic usage: {purposes}"));
     }
     if let Some(capsule) = &result.resume_capsule {
-        let summary = capsule.semantic_summary.as_ref().map_or_else(
-            || "none".to_owned(),
-            |summary| {
-                format!(
-                    "{:?}/{}/{} · rev {} · coverage {} · {:?}",
-                    summary.provenance.purpose,
-                    summary.provenance.provider,
-                    summary.provenance.model,
-                    summary.provenance.revision,
-                    summary.provenance.source_coverage.len(),
-                    summary.provenance.outcome,
-                )
-                .to_ascii_lowercase()
-            },
-        );
-        lines.push(format!(
-            "resume capsule: schema {} · watermark {} · persisted {} · summary {summary}",
-            capsule.schema_version,
-            capsule.last_persisted_watermark,
-            capsule
-                .last_persisted_at
-                .map_or_else(|| "?".to_owned(), |at| format!("{}ms", at.0)),
-        ));
+        lines.push(crate::local_command::render_resume_summary(capsule));
     }
     for artifact in &result.artifacts {
         lines.push(format!(
@@ -1731,12 +1696,20 @@ fn write_text_projection(writer: &mut impl Write, result: &ResultEnvelope) -> Re
         ));
     }
     if let Some(recovery) = &result.recovery {
-        lines.push(format!(
+        if let Some(turn) = &recovery.interrupted_turn {
+            lines.push(format!("session restored: tools changed since turn {turn}; unfinished action not retried; check previous changes before continuing"));
+        }
+        if !recovery.interrupted_children.is_empty()
+            || !recovery.interrupted_monitors.is_empty()
+            || !recovery.interrupted_tasks.is_empty()
+        {
+            lines.push(format!(
             "recovery {} · {} child(ren) interrupted · {} monitor(s) interrupted · not restarted",
             recovery.reason,
             recovery.interrupted_children.len(),
             recovery.interrupted_monitors.len()
         ));
+        }
     }
 
     for line in lines {
@@ -1794,7 +1767,10 @@ fn approval_diagnostic(required: &ApprovalOutput) -> String {
         required.tool, required.preparation_fingerprint
     );
     if let Some(deadline) = required.deadline_at_ms {
-        diagnostic.push_str(&format!(" · deadline_ms {deadline}"));
+        diagnostic.push_str(&format!(
+            " · deadline {}",
+            smith_tui::time_display::local_timestamp(deadline)
+        ));
     }
     if !required.authority_warnings.is_empty() {
         diagnostic.push_str(&format!(
@@ -2308,6 +2284,7 @@ mod tests {
             approval_required: None,
             interaction_required: None,
             recovery: Some(RecoveryOutput {
+                interrupted_turn: None,
                 reason: "process_exit",
                 interrupted_children: vec!["child-1".into()],
                 interrupted_monitors: vec!["monitor-1".into()],
@@ -2485,8 +2462,9 @@ mod tests {
         let mut stderr = Vec::new();
         write_text_projection(&mut stderr, &result).expect("text cache projection");
         let text = String::from_utf8(stderr).expect("UTF-8 projection");
-        assert!(text.contains("cache: miss_observed · CH 0% · confidence exact"));
-        assert!(text.contains("missed 20000 · re-billed 20000"));
+        assert!(text.contains("prompt cache: 0% of input read from cache"));
+        assert!(!text.contains("miss_observed"));
+        assert!(!text.contains("identity ?"));
     }
 
     #[test]
@@ -2507,7 +2485,8 @@ mod tests {
         assert!(diagnostic.contains("resource `/repo/src/lib.rs`"));
         assert!(diagnostic.contains("permissions fs.read, fs.write"));
         assert!(diagnostic.contains("workspace_root_mutation"));
-        assert!(diagnostic.contains("deadline_ms 1750000000000"));
+        assert!(diagnostic.contains(" · deadline "));
+        assert!(!diagnostic.contains("1750000000000"));
         assert!(diagnostic.contains("0123456789abcdef0123456789abcdef"));
         assert!(diagnostic.contains("argument values protected"));
         assert!(!diagnostic.contains("new_string"));

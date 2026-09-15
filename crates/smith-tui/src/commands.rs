@@ -29,6 +29,8 @@ pub enum CommandAction {
     Account(Option<String>),
     /// Render resolved local status.
     Status,
+    /// Render detailed cache, recovery, and runtime diagnostics.
+    Diagnostics,
     /// Inspect or mutate the persistent session goal.
     Goal(GoalAction),
     /// Visualize the latest model-facing context plan.
@@ -126,10 +128,17 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "status",
-        argument_hint: "",
-        description: "show runtime and workspace status",
+        argument_hint: "[--verbose]",
+        description: "show session, usage, and workspace status",
         requires_idle: false,
         advanced: false,
+    },
+    CommandSpec {
+        name: "diagnostics",
+        argument_hint: "",
+        description: "show detailed cache and recovery diagnostics",
+        requires_idle: false,
+        advanced: true,
     },
     CommandSpec {
         name: "goal",
@@ -306,7 +315,8 @@ pub fn matches(input: &str) -> Vec<&'static CommandSpec> {
 
 /// Completes the selected command without executing it.
 pub fn completion(command: &CommandSpec) -> String {
-    if command.argument_hint.is_empty() {
+    // /status is complete by itself; its diagnostic flag is optional.
+    if command.argument_hint.is_empty() || command.name == "status" {
         format!("/{}", command.name)
     } else {
         format!("/{} ", command.name)
@@ -371,7 +381,17 @@ pub fn parse(input: &str) -> Result<CommandAction, String> {
 
     Ok(match name {
         "help" => CommandAction::Help,
-        "status" => CommandAction::Status,
+        "status" => match argument.as_deref() {
+            None => CommandAction::Status,
+            Some("--verbose") => CommandAction::Diagnostics,
+            _ => return Err("use `/status` or `/status --verbose`".to_owned()),
+        },
+        "diagnostics" => {
+            if argument.is_some() {
+                return Err("`/diagnostics` takes no arguments".to_owned());
+            }
+            CommandAction::Diagnostics
+        }
         "context" => CommandAction::Context,
         "details" => CommandAction::Details,
         "timeline" => CommandAction::Timeline,
@@ -481,6 +501,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn status_completion_remains_a_complete_bare_command() {
+        let status = COMMANDS
+            .iter()
+            .find(|command| command.name == "status")
+            .unwrap();
+        assert_eq!(completion(status), "/status");
+        assert_eq!(parse(&completion(status)).unwrap(), CommandAction::Status);
+        assert_eq!(
+            parse("/status --verbose").unwrap(),
+            CommandAction::Diagnostics
+        );
+        let model = COMMANDS
+            .iter()
+            .find(|command| command.name == "model")
+            .unwrap();
+        assert_eq!(completion(model), "/model ");
+    }
+
+    #[test]
     fn help_and_completion_share_the_complete_registry() {
         let help = help();
         for command in COMMANDS {
@@ -570,5 +609,20 @@ mod tests {
         );
         assert!(parse("/goal edit").unwrap_err().contains("objective"));
         assert!(parse("/goal budget 0").unwrap_err().contains("positive"));
+    }
+}
+
+#[cfg(test)]
+mod diagnostics_tests {
+    use super::*;
+    #[test]
+    fn diagnostics_are_explicit_and_status_stays_concise() {
+        assert_eq!(parse("/status").unwrap(), CommandAction::Status);
+        assert_eq!(
+            parse("/status --verbose").unwrap(),
+            CommandAction::Diagnostics
+        );
+        assert_eq!(parse("/diagnostics").unwrap(), CommandAction::Diagnostics);
+        assert!(parse("/status nonsense").is_err());
     }
 }
