@@ -1,0 +1,32 @@
+name: Context integration review
+on:
+  push:
+    branches: [feat/bounded-context-working-set]
+    paths: [.github/workflows/context-review.yml]
+permissions:
+  contents: read
+jobs:
+  sources:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: smith
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ForgeAILab/agent-runtime
+          ref: b4840bcf063849a6ae317a3d869c720186e61216
+          path: agent-runtime
+          persist-credentials: false
+      - run: |
+          mkdir -p sources/smith sources/agent-runtime
+          git -C smith archive HEAD | tar -x -C sources/smith
+          git -C agent-runtime archive HEAD | tar -x -C sources/agent-runtime
+          tar -czf context-sources.tar.gz -C sources .
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: context-integration-sources
+          path: context-sources.tar.gz
+          retention-days: 1
