@@ -1195,22 +1195,20 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
             task_spool_dir,
         );
 
-    if session.interrupted_on_resume().is_some() {
-        if let Some(component) = runtime.goal_component() {
-            if let Some(goal) = session.goal(component)? {
-                if goal.status == agent_runtime_core::goal::GoalStatus::Active {
-                    session
-                        .control_goal(
-                            component,
-                            GoalCommand::Pause {
-                                id: goal.id,
-                                generation: goal.generation,
-                            },
-                        )
-                        .await?;
-                }
-            }
-        }
+    if session.interrupted_on_resume().is_some()
+        && let Some(component) = runtime.goal_component()
+        && let Some(goal) = session.goal(component)?
+        && goal.status == agent_runtime_core::goal::GoalStatus::Active
+    {
+        session
+            .control_goal(
+                component,
+                GoalCommand::Pause {
+                    id: goal.id,
+                    generation: goal.generation,
+                },
+            )
+            .await?;
     }
 
     let goal_admission_gate = runtime

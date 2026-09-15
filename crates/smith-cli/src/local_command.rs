@@ -962,7 +962,7 @@ fn diagnostic_label(value: impl std::fmt::Debug) -> String {
 pub(super) fn render_cache_controller_summary(
     controller: &smith_runtime::cache_controller::CacheControllerSnapshot,
 ) -> String {
-    use smith_config::model::CacheMaintenanceMode;
+    use smith_runtime::cache_lifecycle::CacheMaintenanceMode;
     if !controller.synthetic_attempts.is_empty() {
         let usage = controller
             .synthetic_attempts
