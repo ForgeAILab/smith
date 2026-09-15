@@ -61,10 +61,11 @@ async fn skills_list_groups_by_layer_and_names_the_winner() {
         listed.contains("smith.security · shadowed by the user skill of the same name"),
         "a shadowed built-in must stay visible and say so: {listed}"
     );
+    // Matched on the exact name plus its separator: the reference also
+    // registers one `smith.security.<section>` skill per section, and a bare
+    // substring count would sweep every one of them in.
     assert_eq!(
-        listed
-            .matches("smith.security")
-            .count(),
+        listed.matches("smith.security · ").count(),
         2,
         "both entries for a shadowed name are listed: {listed}"
     );
