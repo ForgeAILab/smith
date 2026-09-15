@@ -998,6 +998,9 @@ pub(super) fn render_cache_controller_summary(
     if controller.operation_in_flight {
         return "cache maintenance: running".to_owned();
     }
+    if controller.effective_maintenance == CacheMaintenanceMode::Observe {
+        return "cache maintenance: observe only (no background requests)".to_owned();
+    }
     if let Some(at) = controller.scheduled_for {
         return format!(
             "cache maintenance: scheduled for {}",

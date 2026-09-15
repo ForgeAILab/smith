@@ -315,7 +315,8 @@ pub fn matches(input: &str) -> Vec<&'static CommandSpec> {
 
 /// Completes the selected command without executing it.
 pub fn completion(command: &CommandSpec) -> String {
-    if command.argument_hint.is_empty() {
+    // /status is complete by itself; its diagnostic flag is optional.
+    if command.argument_hint.is_empty() || command.name == "status" {
         format!("/{}", command.name)
     } else {
         format!("/{} ", command.name)
@@ -498,6 +499,25 @@ fn push_help_line(output: &mut String, command: &CommandSpec) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_completion_remains_a_complete_bare_command() {
+        let status = COMMANDS
+            .iter()
+            .find(|command| command.name == "status")
+            .unwrap();
+        assert_eq!(completion(status), "/status");
+        assert_eq!(parse(&completion(status)).unwrap(), CommandAction::Status);
+        assert_eq!(
+            parse("/status --verbose").unwrap(),
+            CommandAction::Diagnostics
+        );
+        let model = COMMANDS
+            .iter()
+            .find(|command| command.name == "model")
+            .unwrap();
+        assert_eq!(completion(model), "/model ");
+    }
 
     #[test]
     fn help_and_completion_share_the_complete_registry() {
