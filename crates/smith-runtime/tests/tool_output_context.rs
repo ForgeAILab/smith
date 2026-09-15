@@ -181,6 +181,7 @@ async fn many_medium_tool_results_in_one_task_survive_restart_without_replaying_
     let final_wire = serde_json::to_string(&requests.last().unwrap().messages).unwrap();
     assert!(final_wire.contains("DO_NOT_CHANGE_PUBLIC_API"));
     assert!(final_wire.contains("MIDDLE_DIAGNOSTIC_EXCERPT"));
+    assert!(final_wire.contains("discover it with registry.search"));
     assert!(
         final_wire.len() < CALLS * text.len() / 2,
         "inline wire bytes {} vs raw captured text {}",
@@ -226,6 +227,11 @@ async fn many_medium_tool_results_in_one_task_survive_restart_without_replaying_
         Capabilities::basic_streaming(),
         vec![
             tool_stream(
+                "discover-after-restart",
+                "registry.search",
+                serde_json::json!({"query": "artifact read", "max_results": 1}),
+            ),
+            tool_stream(
                 "read-after-restart",
                 "artifact.read",
                 serde_json::json!({"id": id, "limit": 65536}),
@@ -261,8 +267,22 @@ async fn many_medium_tool_results_in_one_task_survive_restart_without_replaying_
         .await
         .unwrap();
     let resumed_requests = resumed_provider.requests();
-    assert_eq!(resumed_requests.len(), 2);
-    let page = resumed_requests[1]
+    assert_eq!(resumed_requests.len(), 3);
+    assert!(
+        !resumed_requests[0]
+            .tools
+            .iter()
+            .any(|tool| tool.name == "artifact.read"),
+        "the fixture must exercise actual lazy discovery, not an eagerly exposed tool"
+    );
+    assert!(
+        resumed_requests[1]
+            .tools
+            .iter()
+            .any(|tool| tool.name == "artifact.read"),
+        "discovery must advertise the reader at the next provider boundary"
+    );
+    let page = resumed_requests[2]
         .messages
         .iter()
         .flat_map(|message| &message.content)
@@ -273,7 +293,7 @@ async fn many_medium_tool_results_in_one_task_survive_restart_without_replaying_
             (result.name == "artifact.read").then_some(result)
         })
         .expect("an actual bounded artifact result");
-    assert!(!page.is_error);
+    assert!(!page.is_error, "artifact tool failed: {page:?}");
     let value: serde_json::Value =
         serde_json::from_str(page.content[0].as_text().unwrap()).unwrap();
     assert_eq!(value["next_offset"], 2048);

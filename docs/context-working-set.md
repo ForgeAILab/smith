@@ -41,6 +41,9 @@ processor. Existing tool capture/truncation flags are preserved in exact evidenc
 limit. Smith uses a smaller default and clamps larger valid limits during
 preparation, before authorization of the prepared call. The raw page bound is
 `clamp(effective_inline_bytes / 4, 1, 4096)`, so the default is **2048 bytes**.
+If `artifact.read` is not in the current tool list, first call `registry.search`
+with query `artifact read`; the next provider request advertises the authorized
+reader. Previews include this guidance rather than eagerly activating every tool.
 Follow `next_offset` to inspect more evidence rather than loading everything.
 The stored object is the original serialized tool outcome, not a changed raw-text
 file format. Pages may be UTF-8 or byte arrays using the existing runtime format.

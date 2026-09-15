@@ -233,6 +233,7 @@ fn text_preview(outcome: &ToolOutcome, limit: usize) -> String {
         .collect::<Vec<_>>()
         .join(" · ");
     sections.push(prefix(&metadata, limit / 4));
+    sections.push("Read more with artifact.read; discover it with registry.search (query: artifact read) if absent.".into());
     let text = outcome
         .content
         .as_inline()
@@ -476,6 +477,14 @@ mod tests {
         );
         assert!(reader.spec().description.contains("at most 2048 raw bytes"));
         let prep = preparation();
+        let stale = ArtifactReadTool::new(reopened.clone())
+            .prepare(json!({"id": reference.id.as_str(), "limit": 65536}), &prep)
+            .await
+            .unwrap();
+        assert!(
+            reader.invoke(stale, &invocation(&prep)).await.is_err(),
+            "an old prepared call must not bypass the current cap"
+        );
         for limit in [None, Some(65536)] {
             let mut args = json!({"id": reference.id.as_str()});
             if let Some(limit) = limit {
