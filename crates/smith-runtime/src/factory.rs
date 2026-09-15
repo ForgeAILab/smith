@@ -184,6 +184,32 @@ mod resolve;
 pub const DEVELOPMENT_REPLY: &str = "This session is running Smith's deterministic fake provider; \
      configure a real provider to talk to a model.";
 
+/// The share of a model's input budget the capability lane gets when
+/// configuration does not name one, as a percentage.
+///
+/// See [`derived_capability_budget`] for why this is a share rather than a
+/// count.
+const CAPABILITY_BUDGET_PERCENT: u32 = 15;
+
+/// The floor and ceiling on a derived capability budget.
+///
+/// The floor holds Smith's built-in tool schemas with room for the reference
+/// sections beside them; the ceiling stops a very large window from reserving
+/// far more of the capability lane than any activation could use.
+const MIN_DERIVED_CAPABILITY_BUDGET: u32 = 8_192;
+/// See [`MIN_DERIVED_CAPABILITY_BUDGET`].
+const MAX_DERIVED_CAPABILITY_BUDGET: u32 = 65_536;
+
+/// The share of the capability budget skill instructions may take, as a
+/// percentage. See [`skill_instruction_budget`].
+const SKILL_BUDGET_PERCENT: u32 = 10;
+
+/// The floor under the skill share, so one reference section always fits.
+///
+/// Sections run to roughly 2.7k tokens, so this clears the largest with room
+/// for the outline that routes to it.
+const MIN_SKILL_INSTRUCTION_BUDGET: u32 = 4_096;
+
 /// The schema revision of the context policy Smith derives from configuration.
 ///
 /// Bumped when the *shape* of that derivation changes. The resolved reserves
@@ -1627,10 +1653,18 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
                 agent_profile_name.as_str()
             }),
     );
-    let activation_budget = ActivationBudget::new(
-        ContextBudget::from_limits(&profile.profile.limits, &context_policy).capability_budget,
-        8,
-    );
+    let capability_budget =
+        ContextBudget::from_limits(&profile.profile.limits, &context_policy).capability_budget;
+    // Skills are the asymmetric half of the capability budget. A tool schema
+    // is a few hundred tokens; a reference skill is instruction prose and can
+    // be thousands, and activation is monotonic — one bound speculatively on
+    // the first turn still holds its tokens on the last. Left uncapped, two
+    // or three of them fill the budget and the next tool the task needs
+    // overflows it, which fails the turn outright. A tenth keeps discovery
+    // possible while leaving the schemas the room they need; a reference too
+    // large to fit is a reference that needs splitting, not a larger share.
+    let activation_budget = ActivationBudget::new(capability_budget, 8)
+        .with_instruction_budget(skill_instruction_budget(capability_budget));
     // A harness profile runs its turns on an installed CLI. The provider below
     // is still resolved and still supplies model identity and the limits the
     // runtime enforces before any work runs; it is simply never called to
@@ -2114,7 +2148,7 @@ async fn prepare_factory_inputs(
     // choice accepted by inventory cannot acquire a different output budget at
     // execution time.
     let output_budget = effective_output_budget(config, &profile.profile)?;
-    let context_policy = context_policy(config, &output_budget);
+    let context_policy = context_policy(config, &profile.profile.limits, &output_budget);
     let compaction_policy = compaction_policy(config, &profile.profile, &context_policy);
     let mut loop_config = loop_config(request, &model, &output_budget);
     loop_config.reasoning = reasoning.request_config();
@@ -3100,12 +3134,22 @@ fn effective_output_budget(
     })
 }
 
-/// Derives context planning from configuration and the effective output budget.
-fn context_policy(config: &ResolvedConfig, output_budget: &OutputBudget) -> ContextPolicy {
+/// Derives context planning from configuration, the model's own limits, and
+/// the effective output budget.
+fn context_policy(
+    config: &ResolvedConfig,
+    limits: &ModelLimits,
+    output_budget: &OutputBudget,
+) -> ContextPolicy {
     let reasoning_reserve = config.context.reasoning_reserve.value;
     let output_reserve = output_budget.output_reserve;
 
-    let capability_budget = config.context.capability_budget.as_ref().map(|s| s.value);
+    let configured = config.context.capability_budget.as_ref().map(|s| s.value);
+    let capability_budget = Some(configured.unwrap_or_else(|| {
+        derived_capability_budget(
+            limits.input_budget(output_reserve.saturating_add(reasoning_reserve)),
+        )
+    }));
     let max_estimated_slack = config.context.max_estimated_slack.as_ref().map(|s| s.value);
     let mut policy = ContextPolicy::new(
         RegistryRevision::new(policy_revision(
@@ -3124,6 +3168,36 @@ fn context_policy(config: &ResolvedConfig, output_budget: &OutputBudget) -> Cont
         policy = policy.with_max_estimated_slack(slack);
     }
     policy
+}
+
+/// The capability budget for a model whose configuration does not name one.
+///
+/// A share of the model's own input budget rather than a fixed count: the
+/// same absolute number is a comfortable allowance on a million-token window
+/// and an instant failure on a small one, and nothing about a run tells the
+/// user which they have. The clamps keep both ends sane — a large window does
+/// not hand the capability lane more than it can use, and a small one still
+/// gets enough to hold the built-in tools. `ContextBudget::from_limits`
+/// narrows the result to the input budget again, so a model too small for the
+/// floor is bounded by its own window rather than by this.
+fn derived_capability_budget(input_budget: u32) -> u32 {
+    (input_budget / 100)
+        .saturating_mul(CAPABILITY_BUDGET_PERCENT)
+        .clamp(MIN_DERIVED_CAPABILITY_BUDGET, MAX_DERIVED_CAPABILITY_BUDGET)
+}
+
+/// The share of the capability budget skill instructions may take.
+///
+/// The percentage is what the budget is *for*; the floor is what keeps it
+/// usable. A tenth of a small capability budget cannot hold one reference
+/// section, which would make those sections permanently unreachable, so the
+/// floor lifts the share to where a single section still fits — capped at
+/// half the budget, because skills must never be able to crowd the tool
+/// schemas out entirely.
+fn skill_instruction_budget(capability_budget: u32) -> u32 {
+    let share = (capability_budget / 100).saturating_mul(SKILL_BUDGET_PERCENT);
+    let floor = MIN_SKILL_INSTRUCTION_BUDGET.min(capability_budget / 2);
+    share.max(floor)
 }
 
 /// Resolves Smith's percentage watermarks against the same enforceable input
@@ -3923,7 +3997,7 @@ exit 2
 
         // The small model ceiling is below every automatic bound.
         let budget = effective_output_budget(&config, &profile).expect("a budget");
-        let policy = context_policy(&config, &budget);
+        let policy = context_policy(&config, &profile.limits, &budget);
         assert_eq!(budget.request_tokens, 4_096);
         assert_eq!(policy.output_reserve, 4_096);
 
@@ -3931,13 +4005,93 @@ exit 2
         config.max_output_tokens = Some(sourced(1_024));
         let budget = effective_output_budget(&config, &profile).expect("a budget");
         assert_eq!(budget.request_tokens, 1_024);
-        assert_eq!(context_policy(&config, &budget).output_reserve, 1_024);
+        assert_eq!(
+            context_policy(&config, &profile.limits, &budget).output_reserve,
+            1_024
+        );
 
         // And an explicit reserve outranks both.
         config.context = context(Some(8_192), 0);
         let budget = effective_output_budget(&config, &profile).expect("a budget");
         assert_eq!(budget.request_tokens, 1_024);
-        assert_eq!(context_policy(&config, &budget).output_reserve, 8_192);
+        assert_eq!(
+            context_policy(&config, &profile.limits, &budget).output_reserve,
+            8_192
+        );
+    }
+
+    /// The capability budget follows the model, because the same absolute
+    /// count is a comfortable allowance on one window and an instant failure
+    /// on another. Configuration still wins when it names a value.
+    #[test]
+    fn an_unconfigured_capability_budget_scales_with_the_model_window() {
+        let budget_for = |limits: ModelLimits| {
+            let profile = profile(limits);
+            let config = resolved_config();
+            let output = effective_output_budget(&config, &profile).expect("an output budget");
+            let policy = context_policy(&config, &profile.limits, &output);
+            ContextBudget::from_limits(&profile.limits, &policy).capability_budget
+        };
+
+        let small = budget_for(ModelLimits::new(128_000, 124_000, 4_096));
+        let large = budget_for(ModelLimits::new(1_000_000, 1_000_000, 32_768));
+        assert!(
+            small < large,
+            "a larger window must earn a larger capability budget: {small} vs {large}"
+        );
+        for budget in [small, large] {
+            assert!(
+                (MIN_DERIVED_CAPABILITY_BUDGET..=MAX_DERIVED_CAPABILITY_BUDGET).contains(&budget),
+                "{budget} is outside the derived clamps"
+            );
+        }
+
+        // A tiny window is bounded by the window itself, not by the floor.
+        let tiny = budget_for(ModelLimits::new(8_000, 8_000, 4_096));
+        assert!(tiny < MIN_DERIVED_CAPABILITY_BUDGET, "{tiny}");
+
+        // An explicit value still outranks the derivation.
+        let profile = profile(ModelLimits::new(1_000_000, 1_000_000, 32_768));
+        let mut config = resolved_config();
+        config.context.capability_budget = Some(sourced(12_000));
+        let output = effective_output_budget(&config, &profile).expect("an output budget");
+        let policy = context_policy(&config, &profile.limits, &output);
+        assert_eq!(
+            ContextBudget::from_limits(&profile.limits, &policy).capability_budget,
+            12_000
+        );
+    }
+
+    /// The skill share exists to stop instruction prose crowding out tool
+    /// schemas, but it is useless if it cannot hold one reference section.
+    #[test]
+    fn the_skill_share_always_holds_a_reference_section_without_taking_over() {
+        /// The largest single built-in reference section, in tokens.
+        const LARGEST_SECTION: u32 = 2_800;
+
+        for capability_budget in [
+            12_000,
+            MIN_DERIVED_CAPABILITY_BUDGET,
+            32_768,
+            MAX_DERIVED_CAPABILITY_BUDGET,
+        ] {
+            let share = skill_instruction_budget(capability_budget);
+            assert!(
+                share >= LARGEST_SECTION,
+                "a {capability_budget} budget leaves {share} for skills, too little \
+                 for a reference section"
+            );
+            assert!(
+                share <= capability_budget / 2,
+                "a {capability_budget} budget gives skills {share}, crowding the \
+                 tool schemas"
+            );
+        }
+
+        // A budget too small to seat a section still refuses to hand skills
+        // more than half of it.
+        let cramped = skill_instruction_budget(2_000);
+        assert_eq!(cramped, 1_000);
     }
 
     #[test]
@@ -3945,7 +4099,7 @@ exit 2
         let profile = profile(ModelLimits::new(500_000, 500_000, 500_000));
         let config = resolved_config();
         let budget = effective_output_budget(&config, &profile).expect("an automatic budget");
-        let policy = context_policy(&config, &budget);
+        let policy = context_policy(&config, &profile.limits, &budget);
         let request = RuntimeRequest::new(config, HostSurface::Terminal);
         let loop_config = loop_config(&request, &ModelId::new("example-model"), &budget);
 
@@ -4018,7 +4172,7 @@ exit 2
         };
 
         let budget = effective_output_budget(&config, &profile).expect("an output budget");
-        let context_policy = context_policy(&config, &budget);
+        let context_policy = context_policy(&config, &profile.limits, &budget);
         let compact = compaction_policy(&config, &profile, &context_policy);
         assert_eq!(
             ContextBudget::from_limits(&profile.limits, &context_policy).input_budget,
