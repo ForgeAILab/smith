@@ -484,6 +484,8 @@ pub struct ResolvedModelReasoning {
 /// Resolved context policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedContext {
+    /// Serialized tool-outcome offload threshold, independent of capture limits.
+    pub tool_output_inline_bytes: Sourced<u32>,
     /// Tokens held back for the response. Model-dependent, so it has no
     /// built-in default.
     pub output_reserve: Option<Sourced<u32>>,

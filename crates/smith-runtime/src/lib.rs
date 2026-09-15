@@ -47,6 +47,7 @@ pub mod rotation;
 pub mod session;
 pub mod skills;
 pub mod summary;
+pub mod tool_output;
 pub mod transport;
 pub mod xai;
 

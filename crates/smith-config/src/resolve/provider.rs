@@ -819,6 +819,12 @@ pub(super) fn resolve_context(
     // inactivity timer can be constructed downstream.
     let idle_compaction_ms = cache.inactivity_limit_ms.clone();
     Ok(ResolvedContext {
+        tool_output_inline_bytes: bounded_u32(
+            provenance,
+            "context.tool_output_inline_bytes",
+            256,
+            1024 * 1024,
+        )?,
         output_reserve: optional_u32(provenance, "context.output_reserve")?,
         reasoning_reserve: required_u32(provenance, "context.reasoning_reserve")?,
         capability_budget: optional_u32(provenance, "context.capability_budget")?,

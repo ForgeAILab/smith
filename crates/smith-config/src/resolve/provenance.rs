@@ -114,6 +114,7 @@ pub(super) const SETTINGS: &[(&str, ValueKind)] = &[
     ("context.max_estimated_slack", ValueKind::Integer),
     ("context.output_reserve", ValueKind::Integer),
     ("context.reasoning_reserve", ValueKind::Integer),
+    ("context.tool_output_inline_bytes", ValueKind::Integer),
     ("limits.max_retries", ValueKind::Integer),
     ("limits.max_tool_steps", ValueKind::Integer),
     ("limits.tool_output_limit_bytes", ValueKind::Integer),

@@ -35,8 +35,7 @@ use agent_runtime::delegation::{
     DelegationConfig, DelegationCoordinator, DelegationLimits, DurableChildSpec, SpawnOutcome,
 };
 use agent_runtime::harness::{
-    ArtifactOffloader, ArtifactReadTool, MemoryContributor, QuestionnaireTool,
-    SemanticSummaryCoordinator, TodoComponent, WriteTodosTool,
+    MemoryContributor, QuestionnaireTool, SemanticSummaryCoordinator, TodoComponent, WriteTodosTool,
 };
 use agent_runtime::hub::{ScopeIdentity, ScopeInputs};
 use agent_runtime::registry::{Fingerprint, Permission, RegistryRevision, RegistrySource};
@@ -204,6 +203,7 @@ pub struct SmithChildRoute {
     pub(crate) model: ModelId,
     pub(crate) model_profile: ResolvedModelProfile,
     pub(crate) context_policy: ContextPolicy,
+    pub(crate) tool_output_context: crate::tool_output::ToolOutputContextPolicy,
     pub(crate) loop_config: LoopConfig,
     pub(crate) prompt_contributor: SmithPromptContributor,
     pub(crate) agent_profile_name: String,
@@ -357,7 +357,7 @@ impl ChildRuntimeFactory for SmithChildFactory {
         tools.push(Arc::new(QuestionnaireTool::new()));
         tools.push(Arc::new(WriteTodosTool::new()));
         if let Some(store) = self.artifact_store.clone() {
-            tools.push(Arc::new(ArtifactReadTool::new(store)));
+            tools.push(Arc::new(route.tool_output_context.reader(store)));
         }
         let todo_component = Arc::new(TodoComponent::public());
         let abilities = seal_tool_abilities(
@@ -463,7 +463,8 @@ impl ChildRuntimeFactory for SmithChildFactory {
                 .turn_commit_hook(coordinator);
         }
         if let Some(store) = self.artifact_store.clone() {
-            builder = builder.tool_output_processor(Arc::new(ArtifactOffloader::new(store)));
+            builder = builder
+                .tool_output_processor(Arc::new(route.tool_output_context.offloader(store)?));
         }
         if let Some(store) = self.session_store.clone() {
             builder = builder.session_store(store);
