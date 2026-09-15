@@ -28,7 +28,7 @@ jobs:
           git diff --name-only -- '*.rs' > /tmp/review-rust-files
           xargs rustfmt --edition 2024 < /tmp/review-rust-files
           git add Cargo.toml Cargo.lock crates docs
-          git rm .github/smith-resume-review.patch.gz.b64 .github/workflows/resume-ux-review.yml
+          git rm -f .github/smith-resume-review.patch.gz.b64 .github/workflows/resume-ux-review.yml
           git rm --ignore-unmatch .github/smith-payload-repair.py
           git diff --cached --check
           git config user.name 'github-actions[bot]'
