@@ -1,0 +1,37 @@
+name: Resume UX review workspace
+
+on:
+  push:
+    branches: [fix/resume-upgrade-status-ux]
+    paths: [.github/workflows/resume-ux-review.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: smith
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ForgeAILab/agent-runtime
+          ref: 52918447aede9d909a5a6a76914a82454f2b236a
+          path: agent-runtime
+          persist-credentials: false
+      - name: Archive tracked source only
+        shell: bash
+        run: |
+          mkdir -p source/smith source/agent-runtime
+          git -C smith archive HEAD | tar -x -C source/smith
+          git -C agent-runtime archive HEAD | tar -x -C source/agent-runtime
+          tar -czf review-source.tar.gz -C source .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: resume-ux-review-source
+          path: review-source.tar.gz
+          retention-days: 1
