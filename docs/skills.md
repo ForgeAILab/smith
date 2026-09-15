@@ -99,17 +99,28 @@ session picks the skill up at the next idle boundary without restarting.
 
 ## Built-in harness references
 
-Smith ships one built-in skill per shipped reference document. Each body is
+Smith ships built-in skills for its own reference documentation. Each body is
 embedded at compile time, so the activated instructions are byte-identical to
 the documentation at the revision the binary was built from and are available
 in any workspace, offline:
 
-| Skill | Embedded document | Covers |
+| Outline | Embedded document | Covers |
 | --- | --- | --- |
 | `smith.configuration` | `docs/configuration.md` | Config layering, profiles, providers, credentials, model limits, reasoning controls, policy keys, environment variables, CLI flags |
 | `smith.headless` | `docs/headless-protocol.md` | `smith -p` input modes, output formats, event framing, non-interactive resume |
 | `smith.persistence` | `docs/persistence-recovery.md` | Session snapshots, journals, protected checkpoints, resume and recovery |
 | `smith.security` | `docs/security.md` | Trust boundaries, approvals, credential handling, why text is not authority |
+
+A whole reference is far too large to activate speculatively — several run to
+thousands of tokens, and the capability budget they are charged against is
+shared with the tool schemas. So each entry above is an *outline*: it names
+the document's sections and costs a few hundred tokens. Every `##` section is
+its own activatable skill, named `<outline>.<section-slug>` — for example
+`smith.security.credentials-and-secret-handling`. Bind the outline to see what
+a reference covers, then bind only the section that answers the question at
+hand. The split happens by heading when the skills are built, so the documents
+stay whole on disk and an activated section still matches the shipped bytes
+exactly.
 
 The interactive TUI and `smith -p` compose the same built-in set through the
 shared `smith-runtime` factory. A direct embedder that supplies its own skill

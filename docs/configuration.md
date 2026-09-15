@@ -309,7 +309,6 @@ effort = "high"
 [profiles.work.context]
 output_reserve = 4096
 reasoning_reserve = 0
-capability_budget = 12000
 max_estimated_slack = 256
 compaction_high_watermark_percent = 85
 compaction_low_watermark_percent = 60
@@ -750,12 +749,33 @@ layer lower; a flag on the same run wins.
 
 ## Policy keys and defaults
 
+### The capability budget
+
+`context.capability_budget` bounds what activated tool schemas and skill
+instructions may take together. Leave it unset: Smith sizes it from the
+model's own input budget, because the same absolute count is a comfortable
+allowance on a million-token window and an immediate failure on a small one.
+The derived value is 15% of the input budget, clamped to 8,192-65,536 tokens
+and never larger than the input budget itself.
+
+Skills take a bounded share of whatever that budget is — roughly a tenth,
+floored so one reference section always fits and capped at half so instruction
+prose can never crowd out the tool schemas beside it.
+
+Setting the key explicitly overrides the derivation for every model the
+profile runs, so a value that suits one window will not suit another. A budget
+smaller than the activated capabilities need does not fail the turn: the
+overflow is reported on `context_planned` as `capability_overflow`, and
+capabilities that do not fit are simply not bound.
+
+
 Smith's defaults claim no provider, model, model limit, model-dependent output
-reserve, capability budget, or estimated-count slack.
+reserve, or estimated-count slack.
 
 | Key | Built-in default | Meaning |
 | --- | ---: | --- |
 | `context.reasoning_reserve` | `0` | Continuation/reasoning reserve |
+| `context.capability_budget` | derived | Tokens activated tool schemas and skill instructions share |
 | `context.compaction_high_watermark_percent` | `85` | Pressure trigger |
 | `context.compaction_low_watermark_percent` | `60` | Post-compaction target |
 | `context.cache.maintenance` | `"off"` | Requested cache maintenance: `off`, `observe`, or `adaptive` |
