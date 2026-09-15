@@ -383,51 +383,16 @@ fn report_session_usage(
             println!("{cost_line}");
         }
     }
-    if let Some(cache) = cache {
-        let identity = cache.cache_identity.as_deref().unwrap_or("?");
-        let expected = cache
-            .expected_read_tokens
-            .map_or_else(|| "?".to_owned(), |tokens| tokens.to_string());
-        let observed = cache
-            .observed_read_tokens
-            .map_or_else(|| "?".to_owned(), |tokens| tokens.to_string());
-        let missed = cache
-            .missed_tokens
-            .map_or_else(|| "?".to_owned(), |tokens| tokens.to_string());
-        let cost = cache.extra_cost_micro_usd.map_or_else(
-            || "?".to_owned(),
-            |micro| format!("${}.{:06} derived", micro / 1_000_000, micro % 1_000_000),
-        );
-        let confidence = match cache.confidence {
-            Some(smith_runtime::client::EstimationConfidence::Exact) => "exact",
-            Some(smith_runtime::client::EstimationConfidence::Estimated) => "estimated",
-            None => "?",
-        };
-        println!(
-            "cache: state {} · identity {} · CH {} · expected {} · observed {} · missed {} · confidence {} · misses {} · re-billed {} · extra cost {}",
-            cache.state.as_str(),
-            identity,
-            cache.render_ch(),
-            expected,
-            observed,
-            missed,
-            confidence,
-            usage.cache_miss_count,
-            usage.cache_rebilled_tokens,
-            cost,
-        );
+    if let Some(line) = cache.and_then(smith_tui::cache::CacheTurnSummary::render_usage) {
+        println!("{line}");
     }
     if let Some(controller) = host.cache_lifecycle() {
-        println!(
-            "{}",
-            crate::local_command::render_cache_controller_status(&controller)
-        );
-    }
-    if let Some(capsule) = host.resume_capsule() {
-        println!(
-            "{}",
-            crate::local_command::render_resume_capsule_status(&capsule)
-        );
+        if !controller.synthetic_attempts.is_empty() {
+            println!(
+                "{}",
+                crate::local_command::render_cache_controller_summary(&controller)
+            );
+        }
     }
     // Printed even for a session that spent nothing: an empty session is
     // exactly the one a user is most likely to want to pick back up, and the

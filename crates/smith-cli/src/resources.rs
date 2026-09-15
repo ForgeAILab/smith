@@ -586,8 +586,8 @@ pub(super) fn session_resource_entries(
                 entry
             } else {
                 entry.disabled(format!(
-                    "snapshot schema {} is newer than this build",
-                    session.schema_version
+                    "snapshot schema {} is unsupported by this build (expects {})",
+                    session.schema_version, SNAPSHOT_SCHEMA_VERSION
                 ))
             }
         })
@@ -595,9 +595,13 @@ pub(super) fn session_resource_entries(
 }
 
 pub(super) fn format_session_updated(timestamp: Timestamp) -> String {
-    let offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
-    let now = time::OffsetDateTime::now_utc().to_offset(offset);
-    format_session_updated_at(timestamp, offset, now)
+    let offset = smith_tui::time_display::local_offset_at(timestamp.as_millis())
+        .unwrap_or(time::UtcOffset::UTC);
+    let now = time::OffsetDateTime::now_utc();
+    let now_millis = u64::try_from(now.unix_timestamp_nanos() / 1_000_000).unwrap_or(0);
+    let now_offset =
+        smith_tui::time_display::local_offset_at(now_millis).unwrap_or(time::UtcOffset::UTC);
+    format_session_updated_at(timestamp, offset, now.to_offset(now_offset))
 }
 
 pub(super) fn format_session_updated_at(
@@ -609,7 +613,7 @@ pub(super) fn format_session_updated_at(
     let Ok(instant) =
         time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(millis) * 1_000_000)
     else {
-        return format!("{millis}ms");
+        return "invalid timestamp".to_owned();
     };
     let instant = instant.to_offset(offset);
     if instant <= now && instant.date() == now.date() {

@@ -205,7 +205,30 @@ pub struct CacheLifecycleSummary {
     pub suspension_reason: Option<CacheOperationReason>,
 }
 
+/// Provider-reported cache reads, without implying a lease or cache guarantee.
+/// Missing counters are not zero. The lifecycle may be unsupported even when
+/// the provider reports cached input, so do not use it to gate this display.
+pub fn render_cache_read_usage(percent: Option<u8>, tokens: Option<u64>) -> Option<String> {
+    match (percent, tokens) {
+        (Some(percent), Some(tokens)) => Some(format!(
+            "prompt cache: {percent}% of input read from cache · {} cached tokens",
+            compact_tokens(tokens),
+        )),
+        (Some(percent), None) => Some(format!("prompt cache: {percent}% of input read from cache")),
+        (None, Some(tokens)) => Some(format!(
+            "prompt cache: {} cached input tokens",
+            compact_tokens(tokens)
+        )),
+        (None, None) => None,
+    }
+}
+
 impl CacheTurnSummary {
+    /// Usage from the last completed root turn; not a prediction for the next.
+    pub fn render_usage(&self) -> Option<String> {
+        render_cache_read_usage(self.cache_read_percent, self.observed_read_tokens)
+            .map(|line| format!("{line} (last turn)"))
+    }
     /// The footer's compact cache-hit metric.
     pub fn render_ch(&self) -> String {
         self.cache_read_percent
@@ -2119,6 +2142,33 @@ mod tests {
                 )
                 .extra_cost_micro_usd,
             None
+        );
+    }
+}
+
+#[cfg(test)]
+mod readable_usage_tests {
+    use super::*;
+    #[test]
+    fn reported_cache_reads_do_not_require_a_controllable_cache() {
+        let line = render_cache_read_usage(Some(72), Some(30_400)).unwrap();
+        assert!(line.contains("72% of input read from cache"));
+        assert!(line.contains("30.4k"));
+        assert!(!line.contains("unsupported"));
+        assert!(!line.contains('?'));
+    }
+    #[test]
+    fn missing_and_zero_cache_usage_are_distinct() {
+        assert_eq!(render_cache_read_usage(None, None), None);
+        assert!(
+            render_cache_read_usage(Some(0), Some(0))
+                .unwrap()
+                .contains("0%")
+        );
+        assert!(
+            render_cache_read_usage(None, Some(0))
+                .unwrap()
+                .contains("0 cached")
         );
     }
 }

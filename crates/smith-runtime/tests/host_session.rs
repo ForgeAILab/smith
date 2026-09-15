@@ -3404,3 +3404,87 @@ fn non_utf8_project_paths_keep_distinct_session_partitions() {
         "lossy path conversion merged distinct projects"
     );
 }
+
+#[tokio::test]
+async fn upgrading_a_hosted_session_interrupts_only_the_unfinished_turn() {
+    let fixture = Fixture::new();
+    let first = start(fixture.request(HostSurface::Headless)).await.unwrap();
+    let paths = first.paths().unwrap().clone();
+    let mut snapshot = first.session().snapshot();
+    first.shutdown().await.unwrap();
+    let session_id = snapshot.id.clone();
+    snapshot.history = vec![
+        agent_runtime_core::content::Message::user("previous question"),
+        agent_runtime_core::content::Message::assistant(vec![
+            agent_runtime_core::content::ContentPart::text("previous answer"),
+        ]),
+        UserInput::text("unfinished request").into_message(),
+    ];
+    // The immutable registry fingerprint changes when embedded skills or tool
+    // definitions change. Keep all other persisted activation data intact.
+    snapshot
+        .extension_state
+        .get_mut("runtime.core.live_abilities")
+        .unwrap()
+        .value["snapshot"] = serde_json::json!("registry-before-upgrade");
+    let checkpoint = TurnCheckpoint::accepted(
+        TurnId::new("upgrade-interrupted-turn"),
+        UserInput::text("unfinished request"),
+        snapshot.clone(),
+        2,
+        Deadline::never(),
+        1,
+        snapshot.identity.event_seq + 1,
+        Timestamp::ZERO,
+    )
+    .unwrap();
+    let checkpoints = SmithCheckpointStore::initialize_with(paths.clone(), test_checkpoint_keys())
+        .await
+        .unwrap();
+    checkpoints.save(&checkpoint).await.unwrap();
+    let provider = Arc::new(FakeProvider::text_reply("new answer"));
+    let mut request = fixture
+        .request(HostSurface::Headless)
+        .resume(session_id.clone());
+    request.runtime.provider = Some(provider.clone() as Arc<dyn Provider>);
+    let resumed = start(request)
+        .await
+        .expect("upgrade keeps the conversation resumable");
+    assert_eq!(
+        resumed.session().interrupted_on_resume(),
+        Some(&checkpoint.turn)
+    );
+    assert_eq!(resumed.session().history(), snapshot.history);
+    assert!(
+        provider.requests().is_empty(),
+        "startup must not replay or spend"
+    );
+    assert!(
+        checkpoints
+            .load_latest(&session_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state
+            .is_terminal()
+    );
+    resumed
+        .session()
+        .run(UserInput::text("continue deliberately"))
+        .await
+        .unwrap();
+    assert_eq!(provider.requests().len(), 1);
+    resumed.shutdown().await.unwrap();
+    let again = start(fixture.request(HostSurface::Headless).resume(session_id))
+        .await
+        .unwrap();
+    assert!(again.session().interrupted_on_resume().is_none());
+    assert!(
+        again
+            .session()
+            .history()
+            .iter()
+            .any(|message| message.joined_text() == "previous answer")
+    );
+    again.shutdown().await.unwrap();
+}

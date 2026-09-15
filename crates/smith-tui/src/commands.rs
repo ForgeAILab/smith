@@ -29,6 +29,8 @@ pub enum CommandAction {
     Account(Option<String>),
     /// Render resolved local status.
     Status,
+    /// Render detailed cache, recovery, and runtime diagnostics.
+    Diagnostics,
     /// Inspect or mutate the persistent session goal.
     Goal(GoalAction),
     /// Visualize the latest model-facing context plan.
@@ -126,10 +128,17 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "status",
-        argument_hint: "",
-        description: "show runtime and workspace status",
+        argument_hint: "[--verbose]",
+        description: "show session, usage, and workspace status",
         requires_idle: false,
         advanced: false,
+    },
+    CommandSpec {
+        name: "diagnostics",
+        argument_hint: "",
+        description: "show detailed cache and recovery diagnostics",
+        requires_idle: false,
+        advanced: true,
     },
     CommandSpec {
         name: "goal",
@@ -371,7 +380,17 @@ pub fn parse(input: &str) -> Result<CommandAction, String> {
 
     Ok(match name {
         "help" => CommandAction::Help,
-        "status" => CommandAction::Status,
+        "status" => match argument.as_deref() {
+            None => CommandAction::Status,
+            Some("--verbose") => CommandAction::Diagnostics,
+            _ => return Err("use `/status` or `/status --verbose`".to_owned()),
+        },
+        "diagnostics" => {
+            if argument.is_some() {
+                return Err("`/diagnostics` takes no arguments".to_owned());
+            }
+            CommandAction::Diagnostics
+        }
         "context" => CommandAction::Context,
         "details" => CommandAction::Details,
         "timeline" => CommandAction::Timeline,
@@ -570,5 +589,20 @@ mod tests {
         );
         assert!(parse("/goal edit").unwrap_err().contains("objective"));
         assert!(parse("/goal budget 0").unwrap_err().contains("positive"));
+    }
+}
+
+#[cfg(test)]
+mod diagnostics_tests {
+    use super::*;
+    #[test]
+    fn diagnostics_are_explicit_and_status_stays_concise() {
+        assert_eq!(parse("/status").unwrap(), CommandAction::Status);
+        assert_eq!(
+            parse("/status --verbose").unwrap(),
+            CommandAction::Diagnostics
+        );
+        assert_eq!(parse("/diagnostics").unwrap(), CommandAction::Diagnostics);
+        assert!(parse("/status nonsense").is_err());
     }
 }
