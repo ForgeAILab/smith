@@ -26,12 +26,18 @@ Examples:
   npx ${PACKAGE.name}                           # interactive TUI
   npx ${PACKAGE.name} -p "explain this repo"    # one headless turn
   npx ${PACKAGE.name} setup                     # guided provider/model setup
+  npx ${PACKAGE.name} --install                 # install 'smith' into ~/.local/bin
+  npx ${PACKAGE.name} --uninstall               # remove that installed binary
 
 Options handled by the bootstrapper:
+  --install                 Copy the smith binary onto your PATH, then exit
+  --uninstall               Remove a smith binary this bootstrapper installed
+  --install-dir <dir>       Install/uninstall location (default: ~/.local/bin)
   --release <tag|latest>    Download a specific GitHub release tag
   --version                 Show the npm bootstrapper version
   --help                    Show this help
 
+--install never needs sudo: it writes to a user-owned directory.
 All other options are passed through to the smith binary.`);
 }
 
@@ -43,11 +49,17 @@ function isVersion(args) {
   return args.includes("--version") || args.includes("-V");
 }
 
+function defaultInstallDir(env = process.env, homedir = os.homedir()) {
+  return env.SMITH_INSTALL_DIR || path.join(homedir, ".local", "bin");
+}
+
 function parseArgs(argv, packageVersion = PACKAGE.version, env = process.env) {
   const args = [...argv];
   let release =
     env.SMITH_NPX_TAG ||
     (packageVersion === "0.0.0" ? "latest" : `v${packageVersion}`);
+  let installDir = defaultInstallDir(env);
+  let mode = "run";
   const passthrough = [];
 
   for (let i = 0; i < args.length; i += 1) {
@@ -65,10 +77,31 @@ function parseArgs(argv, packageVersion = PACKAGE.version, env = process.env) {
       release = arg.slice("--release=".length);
       continue;
     }
+    if (arg === "--install-dir") {
+      const value = args[i + 1];
+      if (!value) {
+        throw new Error("--install-dir requires a directory value");
+      }
+      installDir = value;
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith("--install-dir=")) {
+      installDir = arg.slice("--install-dir=".length);
+      continue;
+    }
+    if (arg === "--install") {
+      mode = "install";
+      continue;
+    }
+    if (arg === "--uninstall") {
+      mode = "uninstall";
+      continue;
+    }
     passthrough.push(arg);
   }
 
-  return { passthrough, release };
+  return { passthrough, release, mode, installDir };
 }
 
 function platformInfo(platform = process.platform, archInput = process.arch) {
@@ -284,6 +317,44 @@ async function ensureRelease(release) {
   return { binaryPath, installDir, tag };
 }
 
+function onPath(dir, env = process.env) {
+  const entries = (env.PATH || "").split(path.delimiter).filter(Boolean);
+  return entries.some((entry) => path.resolve(entry) === path.resolve(dir));
+}
+
+function installBinary(sourcePath, installDir, tag) {
+  const target = path.join(installDir, "smith");
+  fs.mkdirSync(installDir, { recursive: true });
+
+  const temp = `${target}.tmp-${process.pid}`;
+  fs.copyFileSync(sourcePath, temp);
+  fs.chmodSync(temp, 0o755);
+  fs.renameSync(temp, target);
+
+  console.log(`Installed Smith ${tag} -> ${target}`);
+  if (onPath(installDir)) {
+    console.log("Run 'smith --help' to get started.");
+  } else {
+    console.log(`${installDir} is not on your PATH. Add it:`);
+    console.log(`    export PATH="${installDir}:$PATH"`);
+  }
+  return target;
+}
+
+function uninstallBinary(installDir) {
+  const target = path.join(installDir, "smith");
+  try {
+    fs.unlinkSync(target);
+    console.log(`Removed ${target}`);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      console.log(`Nothing to remove: ${target} does not exist`);
+      return;
+    }
+    throw error;
+  }
+}
+
 function runBinary(binary, args, env) {
   const child = childProcess.spawn(binary, args, {
     env,
@@ -318,11 +389,23 @@ async function main() {
   }
 
   const options = parseArgs(rawArgs);
+
+  if (options.mode === "uninstall") {
+    uninstallBinary(options.installDir);
+    return;
+  }
+
   const release = await ensureRelease(options.release);
+
+  if (options.mode === "install") {
+    installBinary(release.binaryPath, options.installDir, release.tag);
+    return;
+  }
+
   runBinary(release.binaryPath, options.passthrough, { ...process.env });
 }
 
-module.exports = { parseArgs, platformInfo };
+module.exports = { defaultInstallDir, onPath, parseArgs, platformInfo };
 
 if (require.main === module) {
   main().catch((error) => {

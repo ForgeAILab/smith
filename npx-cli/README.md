@@ -21,6 +21,21 @@ npx @forgeailab/smith setup                     # guided provider/model setup
 npx @forgeailab/smith --help
 ```
 
+## Installing a permanent `smith` command
+
+`--install` copies the downloaded binary onto your PATH so later runs skip npm
+entirely. It writes to a user-owned directory, so it never needs sudo:
+
+```bash
+npx @forgeailab/smith --install                      # -> ~/.local/bin/smith
+npx @forgeailab/smith --install --install-dir ~/bin  # somewhere else
+SMITH_INSTALL_DIR=~/bin npx @forgeailab/smith --install
+npx @forgeailab/smith --uninstall                    # remove it again
+```
+
+If the install directory is not on your `PATH`, the command prints the
+`export PATH=...` line to add to your shell profile.
+
 By default, the wrapper downloads the GitHub release tag that matches the npm
 package version. For testing a different release:
 

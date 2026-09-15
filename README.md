@@ -97,12 +97,31 @@ questionnaires are never queued implicitly.
 ## Installation
 
 ```sh
-# Run instantly through npm (macOS / Linux)
+# Run instantly through npm, without installing anything (macOS / Linux)
 npx @forgeailab/smith
 
-# Or install via the curl installer
+# Install the binary onto your PATH at ~/.local/bin — no sudo, no npm at runtime
+npx @forgeailab/smith --install
+
+# Or install via the curl installer, which also defaults to ~/.local/bin
 curl -fsSL https://raw.githubusercontent.com/ForgeAILab/smith/main/install.sh | bash
 ```
+
+Both installers write to your own `~/.local` prefix, so neither needs root.
+After either one, `smith` is a normal command; `npx` is no longer involved.
+Pick a different location, or install machine-wide, with:
+
+```sh
+npx @forgeailab/smith --install --install-dir ~/bin
+npx @forgeailab/smith --uninstall              # removes ~/.local/bin/smith
+
+curl -fsSL .../install.sh | bash -s -- --dir ~/bin
+curl -fsSL .../install.sh | bash -s -- --system         # /usr/local/bin, uses sudo
+curl -fsSL .../install.sh | bash -s -- --release v0.2.9 # pin a release tag
+```
+
+If the install directory is not already on your `PATH`, both installers print
+the `export PATH=...` line to add to your shell profile.
 
 Prefer to build from source? Smith requires Rust 1.88 or newer.
 
