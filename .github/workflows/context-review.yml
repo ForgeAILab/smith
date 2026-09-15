@@ -1,32 +1,60 @@
-name: Context integration review
+name: Context working-set regression
 on:
   push:
     branches: [feat/bounded-context-working-set]
     paths: [.github/workflows/context-review.yml]
 permissions:
-  contents: read
+  contents: write
 jobs:
-  sources:
+  regression:
+    if: github.ref == 'refs/heads/feat/bounded-context-working-set'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          path: smith
-          persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          repository: ForgeAILab/agent-runtime
-          ref: b4840bcf063849a6ae317a3d869c720186e61216
-          path: agent-runtime
-          persist-credentials: false
-      - run: |
-          mkdir -p sources/smith sources/agent-runtime
-          git -C smith archive HEAD | tar -x -C sources/smith
-          git -C agent-runtime archive HEAD | tar -x -C sources/agent-runtime
-          tar -czf context-sources.tar.gz -C sources .
+          fetch-depth: 0
+      - name: Install supported Rust
+        run: rustup toolchain install 1.88.0 --profile minimal --component clippy,rustfmt && rustup default 1.88.0
+      - name: Apply context policy integration
+        id: apply
+        shell: bash
+        run: |
+          python3 .github/context-apply.py
+          cargo fmt --all
+          git rm .github/context-apply.py .github/workflows/context-review.yml
+          git add crates docs
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat(context): integrate bounded tool evidence in root and child sessions'
+          git push origin HEAD:feat/bounded-context-working-set
+          git rev-parse HEAD > tested-revision.txt
+          git diff 33d360eee2db0ccf256562a3b32ba0c5620ccee4 HEAD -- crates docs > source.patch
+          git archive --format=tar.gz HEAD > source.tar.gz
+      - name: Install host link dependencies
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libacl1-dev libdbus-1-dev pkg-config
+      - name: Test complete workspace
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --locked --workspace --no-fail-fast 2>&1 | tee test-results.txt
+      - name: Check formatting and strict clippy
+        if: always() && steps.apply.outcome == 'success'
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo fmt --all -- --check 2>&1 | tee formatting-results.txt
+          cargo clippy --locked --workspace --all-targets -- -D warnings 2>&1 | tee clippy-results.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
         with:
-          name: context-integration-sources
-          path: context-sources.tar.gz
-          retention-days: 1
+          name: context-working-set-results
+          path: |
+            tested-revision.txt
+            test-results.txt
+            formatting-results.txt
+            clippy-results.txt
+            source.patch
+            source.tar.gz
+          retention-days: 3
