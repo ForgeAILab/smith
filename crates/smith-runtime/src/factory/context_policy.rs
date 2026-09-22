@@ -121,17 +121,17 @@ pub(super) fn resolve_context_window_selection(
     let active = match default_name {
         Some(name) => match windows.get(&name) {
             Some(window) => Some(window.clone()),
-            None if let Some(pin) = pinned_by => {
-                return Err(context_window_error(
-                    provider,
-                    &ModelId::new(model),
-                    format!(
-                        "window `{name}` is pinned by flat model limit `{}`; remove that limit to select a named window",
-                        pin.key
-                    ),
-                ));
-            }
             None => {
+                if let Some(pin) = pinned_by {
+                    return Err(context_window_error(
+                        provider,
+                        &ModelId::new(model),
+                        format!(
+                            "window `{name}` is pinned by flat model limit `{}`; remove that limit to select a named window",
+                            pin.key
+                        ),
+                    ));
+                }
                 let options = if available.is_empty() {
                     "none declared".to_owned()
                 } else {

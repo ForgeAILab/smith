@@ -245,7 +245,7 @@ fn project_generate_image(arguments: &Map<String, Value>) -> Option<ToolCallDisp
         if count > 5 {
             return None;
         }
-        qualifiers.push(format!("{} recent image(s)", count));
+        qualifiers.push(format!("{count} recent image(s)"));
     }
     Some(display("Generate Image", target, qualifiers))
 }
