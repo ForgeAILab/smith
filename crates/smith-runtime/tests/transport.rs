@@ -167,6 +167,15 @@ async fn next_chunk(stream: &mut ByteStream) -> Option<Result<Vec<u8>, ProviderE
 /// Runs one request against a stub answering with `status` and `headers`, and
 /// returns the resulting classified error.
 async fn classify(status: &'static str, headers: &[(&'static str, &'static str)]) -> ProviderError {
+    classify_with_body(status, headers, r#"{"error":"denied"}"#).await
+}
+
+/// `classify` with control over the rejection body.
+async fn classify_with_body(
+    status: &'static str,
+    headers: &[(&'static str, &'static str)],
+    body: &'static str,
+) -> ProviderError {
     let headers: Vec<(String, String)> = headers
         .iter()
         .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
@@ -176,7 +185,7 @@ async fn classify(status: &'static str, headers: &[(&'static str, &'static str)]
             .iter()
             .map(|(name, value)| (name.as_str(), value.as_str()))
             .collect();
-        respond(&mut socket, status, &borrowed, r#"{"error":"denied"}"#).await;
+        respond(&mut socket, status, &borrowed, body).await;
     })
     .await;
 
@@ -324,6 +333,26 @@ async fn a_server_error_response_is_retryable() {
     assert_eq!(err.kind, ProviderErrorKind::Server);
     assert!(err.retryable);
     assert_eq!(err.metadata.get("http.status").unwrap().to_string(), "500");
+}
+
+/// The provider's own reason must ride on the message, not only on a debug
+/// log: this string is the one surface a retried-then-exhausted turn can show.
+#[tokio::test]
+async fn a_server_error_names_the_provider_s_reason() {
+    let err = classify_with_body(
+        "503 Service Unavailable",
+        &[],
+        r#"{"error":{"type":"service_unavailable","message":"The service is temporarily unavailable. Please try again later."}}"#,
+    )
+    .await;
+    assert_eq!(err.kind, ProviderErrorKind::Server);
+    assert!(err.retryable);
+    assert!(
+        err.message.contains("The service is temporarily unavailable"),
+        "the provider's reason must reach the message: {}",
+        err.message
+    );
+    assert_eq!(err.to_string(), format!("Server: {}", err.message));
 }
 
 #[tokio::test]

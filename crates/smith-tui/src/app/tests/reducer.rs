@@ -1,6 +1,61 @@
 // reducer behavior tests.
 
     #[test]
+    fn a_retryable_attempt_failure_is_visible_while_retrying() {
+        let mut app = app();
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        app.apply(&event(RuntimeEvent::ProviderAttemptFinished {
+            attempt: AttemptId::new("attempt-fixture"),
+            finish: agent_runtime_core::provider::FinishReason::Error,
+            retryable: true,
+            error: Some(agent_runtime_core::provider::ProviderError::new(
+                agent_runtime_core::provider::ProviderErrorKind::Server,
+                "upstream 503",
+            )),
+        }));
+        let notices = app
+            .transcript
+            .blocks()
+            .iter()
+            .filter_map(|block| match block {
+                Block::Notice { source, text } if source == "provider" => Some(text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            notices.len(),
+            1,
+            "a retrying failure is visible while the loop still works: {notices:?}"
+        );
+        assert!(notices[0].contains("upstream 503"));
+        assert!(notices[0].contains("retrying"));
+
+        // A terminal attempt failure is not retrying: the turn's own error
+        // event reports it, so the transcript must not duplicate it.
+        app.apply(&event(RuntimeEvent::ProviderAttemptFinished {
+            attempt: AttemptId::new("attempt-fixture-2"),
+            finish: agent_runtime_core::provider::FinishReason::Error,
+            retryable: false,
+            error: Some(agent_runtime_core::provider::ProviderError::new(
+                agent_runtime_core::provider::ProviderErrorKind::Server,
+                "terminal failure",
+            )),
+        }));
+        assert_eq!(
+            app.transcript
+                .blocks()
+                .iter()
+                .filter_map(|block| match block {
+                    Block::Notice { source, text } if source == "provider" => Some(text.clone()),
+                    _ => None,
+                })
+                .count(),
+            1,
+            "only retryable failures announce themselves"
+        );
+    }
+
+    #[test]
     fn goal_events_reduce_identically_without_duplicating_transcript_history() {
         let update = event(RuntimeEvent::GoalUpdated {
             cause: GoalUpdateCause::TurnCommit,
@@ -478,6 +533,7 @@
             attempt: AttemptId::new("attempt-fixture"),
             finish: agent_runtime_core::provider::FinishReason::Stop,
             retryable: false,
+            error: None,
         }));
         assert!(
             app.provider_phase().is_none(),
@@ -615,6 +671,7 @@
                     attempt: ordinary_attempt,
                     finish: FinishReason::Stop,
                     retryable: false,
+                    error: None,
                 },
             ),
             (
@@ -655,6 +712,7 @@
                     attempt: failed_attempt,
                     finish: FinishReason::Error,
                     retryable: true,
+                    error: None,
                 },
             ),
             (
@@ -687,6 +745,7 @@
                     attempt: successful_attempt,
                     finish: FinishReason::ToolCalls,
                     retryable: false,
+                    error: None,
                 },
             ),
             (
@@ -803,6 +862,7 @@
                     attempt: final_attempt,
                     finish: FinishReason::Stop,
                     retryable: false,
+                    error: None,
                 },
             ),
             (

@@ -869,6 +869,7 @@ async fn run_with_io(
     let mut turn_usage = UsageDelta::new();
     let mut cache: Option<CacheOutput> = None;
     let mut last_error = None;
+    let mut last_attempt_error = None;
     let mut last_sequence = None;
     let mut sequence_error = None;
     let mut pending_interaction: Option<InteractionRequired> = None;
@@ -948,6 +949,13 @@ async fn run_with_io(
                     });
                 }
                 RuntimeEvent::Error { error } => last_error = Some(error.to_string()),
+                // An attempt that ended in an error reports its own cause
+                // even when the retry loop then spends the attempt budget
+                // without a terminal error event; it is the only account of
+                // why a `limit_reached` turn produced nothing.
+                RuntimeEvent::ProviderAttemptFinished {
+                    error: Some(error), ..
+                } => last_attempt_error = Some(error.to_string()),
                 RuntimeEvent::ProviderAttemptOutputCommitted { .. } => {
                     lifecycle.attempts_committed = lifecycle.attempts_committed.saturating_add(1);
                 }
@@ -1198,9 +1206,7 @@ async fn run_with_io(
         .or(event_interaction_required);
     let lifecycle_error = shutdown_error.or(stream_error).or(sequence_error);
     let error = background_exit_error.or(lifecycle_error).or_else(|| {
-        matches!(finish, Some(TurnFinish::Failed))
-            .then_some(last_error)
-            .flatten()
+        terminal_error(finish.as_ref(), last_error, last_attempt_error)
     });
     let (status, exit_code) = outcome(
         finish.as_ref(),
@@ -1550,6 +1556,27 @@ fn plan_output(
     }
 }
 
+/// The turn's own account of why it ended without an answer.
+///
+/// A failed turn reports the runtime's terminal error, or failing that the
+/// last error an attempt reported about itself. A turn stopped by a limit
+/// reports an attempt error only: the limit terminal carries no cause, and a
+/// turn that exhausted its provider attempts (or its deadline while retrying)
+/// failed for a reason the attempts already named. Budget limits such as
+/// output length and tool steps end attempts without errors, so they keep the
+/// causeless `limit_reached` status.
+fn terminal_error(
+    finish: Option<&TurnFinish>,
+    last_error: Option<String>,
+    last_attempt_error: Option<String>,
+) -> Option<String> {
+    match finish {
+        Some(TurnFinish::Failed) => last_error.or(last_attempt_error),
+        Some(TurnFinish::LimitReached { .. }) => last_attempt_error,
+        _ => None,
+    }
+}
+
 fn outcome(
     finish: Option<&TurnFinish>,
     goal: Option<&GoalProjection>,
@@ -1785,6 +1812,71 @@ fn approval_diagnostic(required: &ApprovalOutput) -> String {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+
+    use smith_runtime::client::LimitKind;
+
+    /// A turn stopped by the provider-attempt budget reports the last
+    /// attempt's error: the limit terminal carries no cause of its own, and
+    /// without this the result would claim a causeless limit.
+    #[test]
+    fn an_exhausted_attempt_budget_reports_the_last_attempt_error() {
+        let finish = TurnFinish::LimitReached {
+            limit: LimitKind::ProviderAttempts,
+        };
+        assert_eq!(
+            terminal_error(
+                Some(&finish),
+                None,
+                Some("upstream 503: service unavailable".to_owned()),
+            )
+            .as_deref(),
+            Some("upstream 503: service unavailable"),
+        );
+    }
+
+    /// Budget limits that end attempts without errors keep the causeless
+    /// limit status: there is no provider error to promote.
+    #[test]
+    fn an_output_limit_keeps_its_causeless_status() {
+        let finish = TurnFinish::LimitReached {
+            limit: LimitKind::Output,
+        };
+        assert_eq!(terminal_error(Some(&finish), None, None), None);
+    }
+
+    /// A completed turn never reports an earlier attempt's error: a retry
+    /// that eventually succeeded is history, not the outcome.
+    #[test]
+    fn a_completed_turn_never_reports_a_retried_error() {
+        assert_eq!(
+            terminal_error(
+                Some(&TurnFinish::Completed),
+                None,
+                Some("upstream 503: service unavailable".to_owned()),
+            ),
+            None,
+        );
+    }
+
+    /// A failed turn prefers its terminal error and falls back to the last
+    /// attempt's own account when the stream never delivered one.
+    #[test]
+    fn a_failed_turn_prefers_its_terminal_error() {
+        assert_eq!(
+            terminal_error(
+                Some(&TurnFinish::Failed),
+                Some("terminal".to_owned()),
+                Some("attempt".to_owned()),
+            )
+            .as_deref(),
+            Some("terminal"),
+        );
+        assert_eq!(
+            terminal_error(Some(&TurnFinish::Failed), None, Some("attempt".to_owned()))
+                .as_deref(),
+            Some("attempt"),
+        );
+    }
 
     use agent_runtime::provider::fake::{
         FakeProvider, ScriptedStream, tool_call_fragments, usage_event,

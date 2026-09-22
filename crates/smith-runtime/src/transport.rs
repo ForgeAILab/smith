@@ -235,6 +235,12 @@ impl ReqwestTransport {
             // before this path read anything at all.
             let secrets = sent_secrets(&request.headers, &url_secrets);
             if let Some(detail) = error_detail(&mut response, deadline, &secrets).await {
+                // The same composition the Gemini adapter uses upstream: the
+                // fixed message bounds what this transport asserts, and the
+                // provider's own reason makes the rejection one a reader can
+                // act on. `error_detail` has already dropped reflected
+                // secrets and truncated, so the message stays redaction-safe.
+                err.message = format!("{}: {detail}", err.message);
                 err.metadata.insert(DETAIL_KEY, detail);
             }
             tracing::debug!(

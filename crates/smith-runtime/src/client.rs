@@ -27,6 +27,7 @@ use agent_runtime_core::manifest::{ActivatedCapability, SegmentId, SegmentKind, 
 use agent_runtime_core::metadata::Metadata;
 use agent_runtime_core::provider::{
     CacheAvailabilityEvidence, CacheIdentity, FinishReason, ModelId, ProviderAttemptPurpose,
+    ProviderError,
 };
 use agent_runtime_core::steer::{SteerDiscardReason, SteerRejectionReason};
 use agent_runtime_core::usage::UsageRecord;
@@ -453,6 +454,11 @@ pub enum SmithEventKind {
         attempt: AttemptId,
         finish: FinishReason,
         retryable: bool,
+        /// The attempt's own account of an error finish. Older Agent Runtime
+        /// revisions omit it; a client must treat absence as "no cause
+        /// reported", never as "the attempt succeeded".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<ProviderError>,
     },
     LimitReached {
         limit: LimitKind,
@@ -674,6 +680,55 @@ mod tests {
         assert!(matches!(
             projected.payload,
             SmithEventKind::TextDelta { ref text, .. } if text == "hello"
+        ));
+    }
+
+    /// A failed attempt's own error must survive projection: it is the only
+    /// cause a limit terminal turn ever reports, so dropping it here would
+    /// strand the headless result and the TUI with a causeless limit.
+    #[test]
+    fn a_failed_attempt_s_error_survives_projection() {
+        let canonical = CanonicalEvent::new(
+            9,
+            EventId::new("event-9"),
+            SessionId::new("session"),
+            Some(TurnId::new("turn")),
+            Timestamp(11),
+            RuntimeEvent::ProviderAttemptFinished {
+                attempt: AttemptId::new("attempt"),
+                finish: agent_runtime_core::provider::FinishReason::Error,
+                retryable: true,
+                error: Some(agent_runtime_core::provider::ProviderError::new(
+                    agent_runtime_core::provider::ProviderErrorKind::Server,
+                    "upstream 503",
+                )),
+            },
+        );
+        let projected = SmithEvent::project(&canonical).unwrap();
+        match projected.payload {
+            SmithEventKind::ProviderAttemptFinished {
+                error: Some(error),
+                retryable: true,
+                ..
+            } => assert_eq!(error.message, "upstream 503"),
+            payload => panic!("unexpected payload: {payload:?}"),
+        }
+    }
+
+    /// An older Agent Runtime revision omits the error field entirely; the
+    /// projection must read that as "no cause reported", not fail.
+    #[test]
+    fn an_attempt_without_a_reported_error_still_projects() {
+        let value = serde_json::json!({
+            "event": "provider_attempt_finished",
+            "attempt": "att-1",
+            "finish": "error",
+            "retryable": true,
+        });
+        let kind: SmithEventKind = serde_json::from_value(value).unwrap();
+        assert!(matches!(
+            kind,
+            SmithEventKind::ProviderAttemptFinished { error: None, .. }
         ));
     }
 
