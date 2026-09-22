@@ -582,6 +582,7 @@ attempt without executing or approving it.
 - **THEN** the prior synthetic no-execution shape does not mutate the parent's
   canonical ability epoch
 - **AND** normal tool validation remains governed by the parent runtime
+
 ### Requirement: Normalized provider rate-limit snapshots
 
 Direct provider adapters SHALL parse provider-reported rate-limit and usage
@@ -717,3 +718,17 @@ rotation or manual switch changes it.
 - **GIVEN** rotation moved the pool to its second member yesterday
 - **WHEN** Smith starts a new session for the same provider
 - **THEN** the second member is the active member without re-testing the first
+
+### Requirement: Shrinking the context window compacts before the next request
+
+Smith SHALL compact the transcript, or report that it cannot, before the
+next provider request whenever a session switches to a window whose input
+budget is smaller than the current transcript. It MUST NOT send a request
+that the planner already knows exceeds the new window.
+
+#### Scenario: Switch from 872k to 272k with a large transcript
+
+- **GIVEN** a transcript of 400,000 tokens under the `872k` window
+- **WHEN** the user selects `272k` and sends the next message
+- **THEN** compaction runs before the provider request
+- **AND** the request fits the `272k` input budget
