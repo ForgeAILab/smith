@@ -1,0 +1,23 @@
+
+ ┌ Smith setup · no agent session or provider request exists yet ─────────────┐
+ │API base URL                                                                │
+ │› invalid endpoint                                                          │
+ │                                                                            │
+ │error: Enter a complete http:// or https:// API base URL.                   │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │ Enter continue · Shift+Tab Back · Esc Cancel                               │
+ │                                                                            │
+ └────────────────────────────────────────────────────────────────────────────┘

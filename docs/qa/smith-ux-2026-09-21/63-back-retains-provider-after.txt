@@ -1,0 +1,23 @@
+
+ ┌ Smith setup · no agent session or provider request exists yet ─────────────┐
+ │Provider name                                                               │
+ │A stable local name, for example openrouter                                 │
+ │                                                                            │
+ │› back-fixture                                                              │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │ Enter continue · Shift+Tab Back · Esc Cancel                               │
+ │                                                                            │
+ └────────────────────────────────────────────────────────────────────────────┘

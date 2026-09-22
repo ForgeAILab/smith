@@ -1,0 +1,16 @@
+nd workspace status
+/goal [OBJECTIVE|edit …|budget N|pause|resum
+e|clear]  inspect or control a persistent m
+ulti-turn goal
+/context  show current context usage
+  Choose model · type to filter · 1/9
+› example-model · current  local/example-mod
+  small-model  local/small-model · ctx 32768
+  alternative-model  other/alternative-model
+  Claude Code sonnet · unavailable: `claude`
+  Claude Code opus · unavailable: `claude` i
+
+› Ask Smith to do anything
+
+  ▼ following paused · End/Ctrl+L newest
+  enter choose · esc cancel

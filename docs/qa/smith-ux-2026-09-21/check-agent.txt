@@ -1,0 +1,32 @@
+
+Available capacity
+■ system instructions: ? (not counted yet)
+◆ tool schemas: ? (not counted yet)
+· free input: 123.9k
+□ output/reasoning reserve: 4k
+model window: 128k total · 123.9k input budget
+counting: waiting for first context plan
+compaction: enabled on overflow · 74.3k recovery target
+tool context: offload above 8192 serialized bytes · artifact pages up to 2048 bytes
+Input occupancy above is the last planned request, not cumulative session usage.
+provider input (session): ?
+cache read (session): ?
+cache: state unknown · CH ? · misses 0 · re-billed 0 · guarantee ? · maintenance calls 0
+reasoning: provider default · effort provider default · provider/model default
+reasoning controls: unsupported · switch unavailable · efforts none · resolved model catalog (presen
+ce only)
+
+/goal
+• No persistent goal. Create one with `/goal <objective>`.
+
+• details · bounded tool details shown
+
+/timeline
+• No turns, children, or recovery actions yet.
+
+/agents
+• No child agents in this session.
+
+› Ask Smith to do anything
+
+  build · local/example-model · /private/tmp/smith-ux-audit-2026-09-21/project:main · ? ctx

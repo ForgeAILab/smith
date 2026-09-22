@@ -49,7 +49,6 @@ pub fn draw(frame: &mut Frame<'_>, app: &App, theme: Theme) {
 pub fn draw_synced(frame: &mut Frame<'_>, app: &mut App, theme: Theme) {
     let area = frame.area();
     if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
-        app.sync_scroll_limit(0);
         draw_too_small(frame, area, theme);
         return;
     }
@@ -58,6 +57,13 @@ pub fn draw_synced(frame: &mut Frame<'_>, app: &mut App, theme: Theme) {
     let lines = transcript_lines(app, theme, transcript.width);
     let limit = visual_scroll_limit(&lines, transcript);
     app.sync_scroll_limit(limit);
+    if app.inspected_child.is_none()
+        && let Some(block) = app.scroll_to_block.take()
+        && let Some(offset) = block_start_row(app, block, theme, transcript.width)
+    {
+        app.scroll_back = limit.saturating_sub(offset);
+        app.following = app.scroll_back == 0;
+    }
     draw_surface(frame, app, theme, Some(lines));
 }
 

@@ -1,0 +1,16 @@
+│  resume checkpoint:    not yet saved     │
+│  project:              /private/tmp/smit │
+│                        h-ux-audit-2026-0 │
+│                        9-21/project      │
+│  Git:                  clean             │
+│  goal:                 none              │
+│  children:             0                 │
+│  usage:                nothing spent yet │
+│  cost:                 nothing spent yet │
+│ /diagnostics shows detailed cache and re │
+│ covery information                       │
+╰──────────────────────────────────────────╯
+
+› Ask Smith to do anything
+
+  build · local/example-model

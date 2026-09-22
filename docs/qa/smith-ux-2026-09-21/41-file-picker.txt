@@ -1,0 +1,32 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Attach file or invoke agent · filter: README
+ › README.md  file · 75 bytes
+
+› Ask Smith to do anything
+
+  build · local/example-model · /private/tmp/smith-ux-audit-2026-09-21/project:main · ? ctx
+  type to filter · ↑↓ choose · enter confirm · esc cancel

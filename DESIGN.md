@@ -69,6 +69,8 @@ Regions, top to bottom:
 
 Typing `/` opens command completion as a compact bottom-pane list directly
 above the fixed composer, following the same selected-row grammar as Codex.
+The command list shows at most five single-line rows and scrolls its selected
+window; long descriptions yield before the command name and selection.
 Local resource choices opened by `/model`, `/provider`, `/profile`, `/resume`,
 or `@` reuse that placement and show at most five matching rows; moving the
 selection scrolls the bounded window instead of expanding or covering the
@@ -85,6 +87,12 @@ one interactive surface is visible at a time. Runtime-originated approvals and
 questionnaires wait in a stable FIFO prompt queue; a new prompt never
 supersedes, implicitly denies, or drops an older one. The footer names the
 visible prompt and remaining queue count.
+
+An empty, idle transcript shows a compact getting-started guide: type a task,
+choose a model with `/model`, add a connection with `/connect`, and discover
+commands with `/help`. It uses existing text and accent tokens, disappears
+when transcript content or active work exists, and never enters session
+history. The composer and identity footer retain their ordinary placement.
 
 ### Narrow and short terminals
 
@@ -107,12 +115,21 @@ replace user state. Non-interactive and machine-output launches never open
 setup.
 
 Setup is a keyboard-first sequence of one choice or one field per screen:
-action, provider, authentication, model, explicit limits, response
-compatibility, default selection, and review. The review names every
-non-secret value, the exact user-config destination, and the pending local
-preflight. API-key text is rendered only as masking glyphs. `Shift+Tab` goes
-back and `Esc` cancels without writes; a denied credential service returns to
-authentication with the environment-reference option still available.
+action, provider, authentication, model, automatic limit discovery, response
+compatibility, default selection, and review. For a custom model Smith first
+checks the endpoint's bounded model listing, then the trusted catalog. Only
+when neither source knows the model window does setup ask for one numeric
+value: the total context window. Smith derives the input ceiling from that
+window and the output ceiling from its automatic request-budget rule; it does
+not present separate input/output token fields. The review names every
+non-secret value and its provenance, the exact user-config destination, and
+the pending local preflight. API-key text is rendered only as masking glyphs.
+`Shift+Tab` goes back with the previous non-secret provider name, endpoint,
+and model available for editing. Returning to a field invalidates any pending
+collision approval so changed values pass through review again. Secret input
+is never restored. `Esc` cancels without writes; a denied credential
+service returns to authentication with the environment-reference option still
+available.
 
 Publication is transactional. Smith enrolls the reviewed credential, writes a
 same-directory atomic user-config edit, then exercises the shared runtime
@@ -278,7 +295,11 @@ Typing `/` at the start of a composer draft opens a filtered completion menu.
 Each result has a command name, one-line description, and argument hint.
 `Tab` completes the selected command without executing it; `Shift+Tab` moves
 selection backward; `Enter` executes; and `Esc` dismisses the menu while
-preserving the draft. `Ctrl+P` opens the same registry and parser. `//` sends a
+preserving the draft. Name-prefix matches take priority; if none exist, the
+menu searches registered descriptions. Enter executes the highlighted match
+when the input names no exact command. An exact command retains its explicit
+arguments and parser errors. All actions keep their existing idle and approval
+checks. `Ctrl+P` opens the same registry and parser. `//` sends a
 literal leading slash to the provider.
 
 Outside an overlay, a non-empty ordinary prompt has two distinct busy-turn
@@ -427,6 +448,11 @@ The initial command set is deliberately bounded:
 Read-only local commands append an attributed transcript block. The command
 itself is a magenta transcript line rather than a generic result marker:
 
+`/help` and the empty-composer `?` shortcut open at the beginning of their new
+result, with a short starting-work guide before the complete command and
+keyboard reference. Ordinary results keep following the newest content;
+scrolling and `Ctrl+L` retain their existing behavior.
+
 ```text
 /status
 ╭──────────────────────────────╮
@@ -505,8 +531,13 @@ Omitted selector arguments open the same reusable resource-picker grammar:
 type to filter bounded local metadata, `Up`/`Down` to move, `Enter` to choose,
 and `Esc` to restore the untouched composer draft. Active choices are labelled
 `current`; incompatible or incomplete entries remain visible with an
-`unavailable` reason but cannot be selected. Empty model and provider views
-point to `smith setup`; an empty session view says there is nothing to resume.
+`unavailable` reason but cannot be selected. These state labels precede optional
+metadata so long capability descriptions cannot hide them. Empty model and
+provider inventories point to `smith setup`; an empty session inventory says
+there is nothing to resume. An unmatched filter instead says there are no
+matches and offers `Ctrl+U` to clear the query without choosing a resource.
+At 44 columns, resource-picker hints preserve Enter/choose and Esc/cancel;
+optional filtering guidance yields first.
 Filtering and selection resolve no credential, read no model history, make no
 network request, and spend no provider tokens.
 

@@ -1,0 +1,132 @@
+[
+  {
+    "command": "/status",
+    "expected": "session",
+    "pass": true
+  },
+  {
+    "command": "/diagnostics",
+    "expected": "cache maintenance",
+    "pass": true
+  },
+  {
+    "command": "/context",
+    "expected": "system",
+    "pass": true
+  },
+  {
+    "command": "/goal",
+    "expected": "goal",
+    "pass": true
+  },
+  {
+    "command": "/details",
+    "expected": "detail",
+    "pass": true
+  },
+  {
+    "command": "/timeline",
+    "expected": "timeline",
+    "pass": true
+  },
+  {
+    "command": "/agent",
+    "expected": "agent",
+    "pass": true
+  },
+  {
+    "command": "/mcp",
+    "expected": "MCP",
+    "pass": true
+  },
+  {
+    "command": "/skills",
+    "expected": "smith.security",
+    "pass": true
+  },
+  {
+    "command": "/diff",
+    "expected": "changes",
+    "pass": true
+  },
+  {
+    "command": "/review",
+    "expected": "review",
+    "pass": true
+  },
+  {
+    "command": "/undo",
+    "expected": "no Smith turn has attributable changes",
+    "pass": true
+  },
+  {
+    "command": "/redo",
+    "expected": "redo",
+    "pass": true
+  },
+  {
+    "command": "/revert",
+    "expected": "revert",
+    "pass": true
+  },
+  {
+    "command": "/account",
+    "expected": "credential",
+    "pass": true
+  },
+  {
+    "command": "/think",
+    "expected": "thinking",
+    "pass": true
+  },
+  {
+    "command": "/effort",
+    "expected": "effort",
+    "pass": true
+  },
+  {
+    "command": "/model",
+    "expected": "Choose model",
+    "pass": true
+  },
+  {
+    "command": "/provider",
+    "expected": "Choose provider",
+    "pass": true
+  },
+  {
+    "command": "/profile",
+    "expected": "Choose profile",
+    "pass": true
+  },
+  {
+    "command": "/connect",
+    "expected": "Connect provider",
+    "pass": true
+  },
+  {
+    "command": "/disconnect",
+    "expected": "Disconnect provider",
+    "pass": true
+  },
+  {
+    "command": "/resume",
+    "expected": "Resume session",
+    "pass": true
+  },
+  {
+    "command": "first prompt",
+    "expected": "Worked for",
+    "pass": true
+  },
+  {
+    "command": "/model local/small-model",
+    "expected": "local/small-model",
+    "pass": true
+  },
+  {
+    "command": "/profile plan",
+    "expected": "plan",
+    "pass": true
+  }
+]

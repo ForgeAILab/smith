@@ -1,0 +1,32 @@
+  smith.security.provider-and-prompt-injection-risks · active · Smith security threat model referenc
+e, section "Provider and prompt-injection risks". user content sent to it.
+  smith.security.repository-and-configuration-attacks · active · Smith security threat model referen
+ce, section "Repository and configuration attacks". or treat a repository as trusted because it was
+opened.
+  smith.security.residual-risks-and-deployment-responsibilities · active · Smith security threat mod
+el reference, section "Residual risks and deployment responsibilities". network.
+  smith.security.trust-boundaries · active · Smith security threat model reference, section "Trust b
+oundaries".
+
+/diff · all uncommitted
+• No changes in this scope.
+
+• review · No changes in this scope.
+
+■ no Smith turn has attributable changes
+
+/redo
+■ no exact redo candidate exists
+
+■ usage: /revert FILE or /revert FILE#HUNK; use /diff to choose a scope
+  Choose model · type to filter · 1/9
+› example-model · current  local/example-model · ctx 128k [user config] · input 124k [user config] ·
+  small-model  local/small-model · ctx 32768 [user config] · input 28672 [user config] · output ceil
+  alternative-model  other/alternative-model · ctx 64k [user config] · input 60k [user config] · out
+  Claude Code sonnet · unavailable: `claude` is not on PATH  cli/claude-code/sonnet · ctx 200k · inp
+  Claude Code opus · unavailable: `claude` is not on PATH  cli/claude-code/opus · ctx 200k · input 1
+
+› Ask Smith to do anything
+
+  build · local/example-model · /private/tmp/smith-ux-audit-2026-09-21/project:main · ? ctx
+  type to filter · ↑↓ choose · enter confirm · esc cancel

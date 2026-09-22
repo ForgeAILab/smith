@@ -37,6 +37,7 @@ pub mod model_catalog;
 pub mod pool;
 pub mod pool_state;
 mod private_storage;
+pub mod probe;
 pub mod project_instructions;
 pub mod prompt;
 pub mod reasoning;

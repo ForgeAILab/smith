@@ -1,0 +1,16 @@
+  Type a task below and press Enter.
+
+  /model    Choose a model
+  /connect  Add a connection
+  /help     Explore commands
+  Choose model · type to filter · 1/9
+› example-model · current  local/example-mod
+  small-model  local/small-model · ctx 32768
+  alternative-model  other/alternative-model
+  Claude Code sonnet · unavailable: `claude`
+  Claude Code opus · unavailable: `claude` i
+
+› Ask Smith to do anything
+
+  build · local/example-model
+  enter choose · esc cancel

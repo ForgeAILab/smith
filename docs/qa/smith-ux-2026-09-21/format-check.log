@@ -1,0 +1,47 @@
+Diff in /Volumes/Data/codes/ai/tui/crates/smith-cli/src/headless.rs:1205:
+         .and_then(HeadlessInteraction::required)
+         .or(event_interaction_required);
+     let lifecycle_error = shutdown_error.or(stream_error).or(sequence_error);
+[31m-    let error = background_exit_error.or(lifecycle_error).or_else(|| {
+(B[m[31m-        terminal_error(finish.as_ref(), last_error, last_attempt_error)
+(B[m[31m-    });
+(B[m[32m+    let error = background_exit_error
+(B[m[32m+        .or(lifecycle_error)
+(B[m[32m+        .or_else(|| terminal_error(finish.as_ref(), last_error, last_attempt_error));
+(B[m     let (status, exit_code) = outcome(
+         finish.as_ref(),
+         final_goal.as_ref(),
+Diff in /Volumes/Data/codes/ai/tui/crates/smith-cli/src/headless.rs:1872:
+             Some("terminal"),
+         );
+         assert_eq!(
+[31m-            terminal_error(Some(&TurnFinish::Failed), None, Some("attempt".to_owned()))
+(B[m[31m-                .as_deref(),
+(B[m[32m+            terminal_error(Some(&TurnFinish::Failed), None, Some("attempt".to_owned())).as_deref(),
+(B[m             Some("attempt"),
+         );
+     }
+Diff in /Volumes/Data/codes/ai/tui/crates/smith-runtime/tests/transport.rs:348:
+     assert_eq!(err.kind, ProviderErrorKind::Server);
+     assert!(err.retryable);
+     assert!(
+[31m-        err.message.contains("The service is temporarily unavailable"),
+(B[m[32m+        err.message
+(B[m[32m+            .contains("The service is temporarily unavailable"),
+(B[m         "the provider's reason must reach the message: {}",
+         err.message
+     );
+Diff in /Volumes/Data/codes/ai/tui/crates/smith-tui/src/app/conversation.rs:201:
+                 error: Some(error),
+                 retryable: true,
+                 ..
+[31m-            } => self.transcript.push_notice(
+(B[m[31m-                "provider",
+(B[m[31m-                format!("attempt failed, retrying: {error}"),
+(B[m[31m-            ),
+(B[m[32m+            } => self
+(B[m[32m+                .transcript
+(B[m[32m+                .push_notice("provider", format!("attempt failed, retrying: {error}")),
+(B[m             RuntimeEvent::Downgrade { capability, detail } => self
+                 .transcript
+                 .push_notice("downgrade", format!("{capability}: {detail}")),

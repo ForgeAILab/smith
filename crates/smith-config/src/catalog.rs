@@ -91,6 +91,55 @@ impl CatalogSnapshot {
     pub fn revision(&self) -> &str {
         &self.source_revision
     }
+
+    /// Finds one catalog model for a locally typed model ID by name alone.
+    ///
+    /// Used only to prefill setup values for review: the catalog entry
+    /// describes one deployment's model, so a same-name match at a different
+    /// endpoint is a proposal, never silent resolution. Tiers are tried in
+    /// order — exact ID, case-folded ID, case-folded final path segment
+    /// (gateway IDs such as `Qwen/Qwen2.5-Coder-32B-Instruct`), then a final
+    /// segment whose `.`, `_`, and `-` separators are folded together. The
+    /// last tier covers gateway aliases such as `claude-fable-5-1` for the
+    /// catalog ID `anthropic/claude-fable-5.1` without dropping any version
+    /// component. Within a tier providers are visited in stable map order, so
+    /// the match is deterministic. Entries without complete limits never
+    /// match.
+    pub fn resolve_model_by_id(&self, model: &str) -> Option<(&str, &CatalogModel)> {
+        let matches_tier = |tier: usize, id: &str| match tier {
+            0 => id == model,
+            1 => id.eq_ignore_ascii_case(model),
+            2 => final_segment(id).eq_ignore_ascii_case(final_segment(model)),
+            _ => folded_model_alias(id) == folded_model_alias(model),
+        };
+        (0..4).find_map(|tier| {
+            self.providers.iter().find_map(|(provider, catalog)| {
+                catalog
+                    .models
+                    .values()
+                    .find(|entry| entry.limits.is_some() && matches_tier(tier, &entry.id))
+                    .map(|entry| (provider.as_str(), entry))
+            })
+        })
+    }
+}
+
+/// The part of a model ID after the last `/`, or the whole ID.
+fn final_segment(value: &str) -> &str {
+    value.rsplit('/').next().unwrap_or(value)
+}
+
+/// Case-folds one final model-ID segment and treats separators commonly
+/// rewritten by gateways as equivalent. Version components remain present,
+/// so `model-5-1` can match `model-5.1` but cannot match `model-5`.
+fn folded_model_alias(value: &str) -> String {
+    final_segment(value)
+        .chars()
+        .map(|character| match character {
+            '.' | '_' | '-' => '-',
+            character => character.to_ascii_lowercase(),
+        })
+        .collect()
 }
 
 /// One provider catalog after Smith-owned normalization.
@@ -396,5 +445,105 @@ mod tests {
             ),
             None
         );
+    }
+
+    fn snapshot_with(provider: &str, models: &[(&str, Option<CatalogLimits>)]) -> CatalogSnapshot {
+        CatalogSnapshot {
+            schema_revision: 1,
+            source_url: "https://example.test".to_owned(),
+            source_digest: "digest".to_owned(),
+            content_digest: "content".to_owned(),
+            source_revision: "revision".to_owned(),
+            retrieved_at_ms: 0,
+            providers: BTreeMap::from([(
+                provider.to_owned(),
+                CatalogProvider {
+                    id: provider.to_owned(),
+                    name: provider.to_owned(),
+                    models: BTreeMap::from_iter(
+                        models
+                            .iter()
+                            .map(|(id, limits)| {
+                                (
+                                    (*id).to_owned(),
+                                    CatalogModel {
+                                        id: (*id).to_owned(),
+                                        name: (*id).to_owned(),
+                                        limits: *limits,
+                                        input_modalities: Vec::new(),
+                                        output_modalities: vec![CatalogModality::Text],
+                                        tool_call: true,
+                                        reasoning: false,
+                                        reasoning_controls: None,
+                                        structured_output: false,
+                                        cost: None,
+                                        disabled_reason: None,
+                                    },
+                                )
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+                },
+            )]),
+        }
+    }
+
+    fn limits() -> Option<CatalogLimits> {
+        Some(CatalogLimits {
+            context_tokens: 32_768,
+            max_input_tokens: 30_000,
+            max_output_tokens: 4_096,
+        })
+    }
+
+    #[test]
+    fn same_name_resolution_walks_exact_folded_and_segment_tiers_in_order() {
+        let snapshot = snapshot_with(
+            "qwen",
+            &[
+                ("qwen2.5-coder-32b-instruct", limits()),
+                ("Qwen3-Coder", limits()),
+            ],
+        );
+        assert_eq!(
+            snapshot
+                .resolve_model_by_id("qwen2.5-coder-32b-instruct")
+                .map(|(provider, _)| provider),
+            Some("qwen")
+        );
+        // Gateway-style IDs keep their vendor prefix; only the final segment
+        // has to agree, case-insensitively.
+        assert_eq!(
+            snapshot
+                .resolve_model_by_id("Qwen/Qwen2.5-Coder-32B-Instruct")
+                .map(|(_, model)| model.id.as_str()),
+            Some("qwen2.5-coder-32b-instruct")
+        );
+        // A folded whole-ID match must win over a segment match elsewhere.
+        assert_eq!(
+            snapshot
+                .resolve_model_by_id("QWEN3-CODER")
+                .map(|(_, model)| model.id.as_str()),
+            Some("Qwen3-Coder")
+        );
+    }
+
+    #[test]
+    fn same_name_resolution_folds_gateway_version_separators_without_dropping_them() {
+        let snapshot = snapshot_with("anthropic", &[("anthropic/claude-fable-5.1", limits())]);
+        assert_eq!(
+            snapshot
+                .resolve_model_by_id("claude-fable-5-1")
+                .map(|(_, model)| model.id.as_str()),
+            Some("anthropic/claude-fable-5.1")
+        );
+        assert_eq!(snapshot.resolve_model_by_id("claude-fable-5"), None);
+    }
+
+    #[test]
+    fn same_name_resolution_ignores_entries_without_complete_limits() {
+        let no_limits = snapshot_with("bare", &[("lonely-model", None)]);
+        assert_eq!(no_limits.resolve_model_by_id("lonely-model"), None);
+        assert_eq!(no_limits.resolve_model_by_id("nothing"), None);
     }
 }

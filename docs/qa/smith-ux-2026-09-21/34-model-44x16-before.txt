@@ -1,0 +1,15 @@
+
+
+
+
+
+  Choose model · type to filter · 1/9
+ › example-model  local/example-model · ctx
+   small-model  local/small-model · ctx 3276
+   alternative-model  other/alternative-mode
+   Claude Code sonnet  cli/claude-code/sonne
+   Claude Code opus  cli/claude-code/opus ·
+
+› Ask Smith to do anything
+
+  build · local/example-model

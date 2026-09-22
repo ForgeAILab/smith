@@ -1,0 +1,24 @@
+/goal [OBJECTIVE|edit …|budget N|pause|resume|clear]  inspect or control a pers
+istent multi-turn goal
+/context  show current context usage
+/details  toggle bounded live tool detail
+/timeline  show local turn, child, and recovery history
+/new  start a fresh session
+/resume [ID]  resume a saved session
+/connect [PROVIDER]  connect or reconnect a provider
+/disconnect [PROVIDER]  disconnect a provider
+/model [PROVIDER/MODEL]  switch model
+/think [on|off|default]  set thinking for the next turn
+/effort [LEVEL|default]  set reasoning effort for the next turn
+/account [N]  show provider accounts and their usage
+  Choose model · type to filter · 1/9
+› example-model · current  local/example-model · ctx 128k [user config] · input
+  small-model  local/small-model · ctx 32768 [user config] · input 28672 [user c
+  alternative-model  other/alternative-model · ctx 64k [user config] · input 60k
+  Claude Code sonnet · unavailable: `claude` is not on PATH  cli/claude-code/son
+  Claude Code opus · unavailable: `claude` is not on PATH  cli/claude-code/opus
+
+› Ask Smith to do anything
+
+  ▼ following paused · End/Ctrl+L newest · build · local/example-model
+  type to filter · ↑↓ choose · enter confirm · esc cancel

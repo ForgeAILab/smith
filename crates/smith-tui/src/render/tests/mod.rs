@@ -222,4 +222,6 @@ mod tests {
     include!("transcript.rs");
     include!("composer.rs");
     include!("modal.rs");
+    include!("startup.rs");
+    include!("picker_startup.rs");
 }

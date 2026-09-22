@@ -1,0 +1,276 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s
+     Running unittests src/lib.rs (/Volumes/Data/codes/ai/agent-runtime/target/debug/deps/agent_runtime_testkit-fede12e3ecbd0a4e)
+
+running 64 tests
+test clock::tests::zero_is_a_real_boundary_and_advance_to_is_monotonic ... ok
+test clock::tests::activity_and_cache_touch_boundaries_are_independent ... ok
+test clock::tests::advance_to_rejects_time_travel - should panic ... ok
+test conformance::ability::tests::a_stale_expected_revision_also_fails_structurally_before_any_handle_runs ... ok
+test conformance::ability::tests::the_ability_crate_satisfies_the_conformance_suite ... ok
+test conformance::adaptive_cache::tests::resource_operation_evidence_is_canonical ... ok
+test conformance::adaptive_cache::tests::context_plan_facade_builds_the_synthetic_request ... ok
+test conformance::adaptive_cache::tests::adaptive_cache_contracts_are_deterministic ... ok
+test conformance::adaptive_cache::tests::synthetic_request_cancellation_is_bounded ... ok
+test conformance::adaptive_cache::tests::synthetic_request_is_safe_and_attributed ... ok
+test conformance::cache::tests::a_fully_supported_capability_reports_nothing_unsupported ... ok
+test conformance::cache::tests::the_context_engines_cache_plan_satisfies_the_conformance_suite ... ok
+test conformance::cache::tests::the_unsupported_hint_assertion_actually_checks_the_capability_it_is_given - should panic ... ok
+test conformance::catalog::tests::an_empty_catalog_fails_the_unknown_model_assertion_closed ... ok
+test conformance::catalog::tests::precedence_is_proven_independent_of_registration_order ... ok
+test conformance::catalog::tests::a_layered_catalog_satisfies_the_conformance_suite ... ok
+test conformance::compaction::tests::structural_compaction_cannot_split_a_pair_across_priorities ... ok
+test conformance::compaction::tests::structural_compactor_and_validate_compacted_satisfy_the_conformance_suite ... ok
+test conformance::compaction::tests::structural_compactor_never_emits_a_summary_fragment_or_provenance ... ok
+test conformance::compaction::tests::structural_compactor_never_folds_secret_history_into_a_summary ... ok
+test conformance::context::tests::framing_conformance_is_not_trivially_satisfied - should panic ... ok
+test conformance::compaction::tests::required_content_conformance_is_not_trivially_satisfied - should panic ... ok
+test conformance::context::tests::the_context_planner_and_char_ratio_sizer_satisfy_the_conformance_suite ... ok
+test conformance::adaptive_cache::tests::synthetic_capability_requires_host_endpoint_partition ... ok
+test conformance::event_schema::tests::unattributed_output_fixtures_are_rejected_by_v6 ... ok
+test conformance::event_schema::tests::legacy_cache_observation_remains_readable_without_attribution ... ok
+test conformance::event_schema::tests::v11_golden_fixture_is_exactly_compatible ... ok
+test conformance::event_schema::tests::v10_golden_fixture_is_exactly_compatible ... ok
+test conformance::event_schema::tests::v1_golden_fixture_is_rejected_by_the_current_schema ... ok
+test conformance::event_schema::tests::v13_cache_golden_fixture_is_exactly_compatible ... ok
+test conformance::event_schema::tests::v6_golden_fixture_is_exactly_compatible ... ok
+test conformance::event_schema::tests::v5_golden_fixture_is_exactly_compatible ... ok
+test conformance::event_schema::tests::v7_golden_fixture_is_exactly_compatible ... ok
+test conformance::event_schema::tests::v8_golden_fixture_is_exactly_compatible ... ok
+test conformance::event_schema::tests::v9_golden_fixture_is_exactly_compatible ... ok
+test conformance::event_schema::tests::v14_cache_lifecycle_fixture_is_exactly_compatible ... ok
+test conformance::replay::tests::a_manifest_with_no_required_revisions_at_all_still_replays_equivalently ... ok
+test conformance::replay::tests::run_manifest_replay_satisfies_the_conformance_suite ... ok
+test conformance::replay::tests::the_labeled_replay_assertion_refuses_to_run_without_a_real_mismatch - should panic ... ok
+test conformance::registry::tests::a_denied_domain_is_also_indistinguishable_from_absence ... ok
+test conformance::registry::tests::the_registry_kernel_satisfies_the_conformance_suite ... ok
+test conformance::retrieval::tests::dependency_completeness_is_not_trivially_satisfied - should panic ... ok
+test credentials::tests::acquisition_barrier_observes_cancellation ... ok
+test conformance::retrieval::tests::a_bound_dependency_is_proven_dependency_complete ... ok
+test conformance::retrieval::tests::the_capability_resolver_satisfies_the_conformance_suite ... ok
+test credentials::tests::current_revision_invalidation_promotes_one_replacement ... ok
+test credentials::tests::source_refreshes_proactively_and_stale_invalidation_keeps_newer_lease ... ok
+test stores::tests::later_boundary_requires_explicit_fixture_seeding ... ok
+test stores::tests::same_revision_is_idempotent_only_for_the_exact_record ... ok
+test stores::tests::terminal_to_new_turn_continues_the_session_watermark ... ok
+test workspace::tests::contains_children_but_not_escapes ... ok
+test credentials::tests::acquisition_barrier_observes_deadline ... ok
+test scenarios::tests::steering_barrier_is_a_reusable_same_turn_continuation_scenario ... ok
+test conformance::adaptive_cache::tests::persisted_in_flight_reservation_rejects_after_terminal_save_failure ... ok
+test conformance::adaptive_cache::tests::handoff_restart_returns_metadata_without_output_or_provider_replay ... ok
+test conformance::adaptive_cache::tests::completed_cache_result_survives_restart_without_provider_replay ... ok
+test conformance::adaptive_cache::tests::checkpoint_only_terminal_cache_state_survives_missing_session_store ... ok
+test conformance::adaptive_cache::tests::checkpoint_prepared_failure_recovers_rejection_without_provider_replay ... ok
+test conformance::adaptive_cache::tests::transient_result_ready_failure_repairs_live_handle_without_replay ... ok
+test conformance::adaptive_cache::tests::checkpoint_started_failure_recovers_sparse_usage_without_provider_replay ... ok
+test conformance::adaptive_cache::tests::checkpoint_result_ready_failure_replays_tail_once_and_preserves_result ... ok
+test conformance::adaptive_cache::tests::terminal_checkpoint_survives_final_session_store_failure ... ok
+test conformance::adaptive_cache::tests::checkpoint_terminal_failure_restores_result_and_allows_next_turn ... ok
+test conformance::adaptive_cache::tests::persist_gate_preserves_cache_result_against_delayed_ordinary_save ... ok
+
+test result: ok. 64 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/consumer_nyx.rs (/Volumes/Data/codes/ai/agent-runtime/target/debug/deps/consumer_nyx-a08eb4b65a39b616)
+
+running 1 test
+test nyx_adapter_passes_shared_conformance ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/consumer_open_forge.rs (/Volumes/Data/codes/ai/agent-runtime/target/debug/deps/consumer_open_forge-03eb648408e6a943)
+
+running 1 test
+test open_forge_adapter_passes_shared_conformance ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/consumer_smith.rs (/Volumes/Data/codes/ai/agent-runtime/target/debug/deps/consumer_smith-ff6923f559d7c20b)
+
+running 3 tests
+test smith_can_compose_the_native_gemini_facade_types ... ok
+test smith_adapter_consumes_typed_steering_without_a_future_turn ... ok
+test smith_adapter_passes_shared_conformance ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/delegation_conformance.rs (/Volumes/Data/codes/ai/agent-runtime/target/debug/deps/delegation_conformance-38e521442ea0d009)
+
+running 56 tests
+test a_competing_coordinator_lease_fails_closed ... ok
+test an_invalid_spec_is_rejected_with_no_side_effects ... ok
+test approval_sees_what_a_spawn_would_do ... ok
+test capacity_is_a_structured_result_under_the_reject_policy ... ok
+test calling_model_checkpoint_refuses_resume_without_constructing_a_provider ... ok
+test children_stop_with_their_parent ... ok
+test child_outcome_observers_can_reenter_without_deadlock ... ok
+test a_child_session_cannot_manage_children ... ok
+test a_reasoning_only_child_answer_survives_as_the_result ... ok
+test child_completion_persistence_failure_is_observable_and_not_exposed ... ok
+test concurrent_spawn_respects_retained_child_limit ... ok
+test child_completion_admission_is_atomic_and_user_prioritized ... ok
+test child_completion_persistence_failure_races_ordinary_persist ... ok
+test child_completion_acceptance_failure_rolls_back_protected_state ... ok
+test child_completion_admission_barrier_race_is_serialized ... ok
+test child_completion_admission_abort_at_checkpoint_boundary_is_atomic ... ok
+test child_completion_persists_before_crash_without_an_explicit_flush ... ok
+test durable_child_requires_a_protected_parent_checkpoint_store ... ok
+test child_completion_acceptance_failure_races_public_persist ... ok
+test durable_child_requires_a_durable_parent_session_store ... ok
+test ephemeral_child_outcomes_do_not_poison_parent_restart ... ok
+test expired_durable_child_remains_non_resumable ... ok
+test policy_fingerprint_failure_releases_shared_capacity ... ok
+test durable_child_ownership_and_policy_fail_closed ... ok
+test follow_ups_reuse_the_child_and_the_turn_cap_is_enforced ... ok
+test child_completion_cursor_replays_without_reinjection_after_restart ... ok
+test follow_up_persists_ready_removal_before_send ... ok
+test follow_up_after_parent_restart_reuses_child_session_and_history ... ok
+test queue_policy_promotes_waiting_child_after_slot_release ... ok
+test follow_up_bind_save_failure_rolls_back_dormant_state ... ok
+test restored_child_outcome_cursor_rejects_completed_turn_splice ... ok
+test restored_child_catalog_rejects_workspace_mismatch ... ok
+test restored_child_catalog_rejects_duplicate_child_ids ... ok
+test restored_child_outcome_cursor_rejects_duplicates ... ok
+test restored_child_catalog_rejects_limit_mismatch ... ok
+test restored_child_outcome_cursor_rejects_unknown_children ... ok
+test retained_child_limit_rejects_without_side_effects ... ok
+test restored_child_outcome_cursor_rejects_variant_mismatch ... ok
+test spawn_is_denied_fail_closed_without_authoritative_coverage ... ok
+test resume_bind_save_failure_rolls_back_dormant_state ... ok
+test spawn_lifecycle_is_ordered_and_carries_the_final_result ... ok
+test stop_wins_completion_publication_race ... ok
+test stopped_durable_child_remains_terminal_after_restart ... ok
+test terminal_parent_save_ambiguity_recovers_same_process ... ok
+test scoped_views_exclude_write_and_delegation_tools ... ok
+test foreign_artifact_results_fail_closed_without_completion_event ... ok
+test task_outcome_uses_numeric_turn_order ... ok
+test interrupted_child_requires_explicit_idempotent_resume ... ok
+test reverse_arrival_child_inputs_are_delivered_in_canonical_order ... ok
+test returned_child_input_is_lossless_and_pairs_the_parallel_suffix ... ok
+test child_artifact_results_are_transferred_into_parent_ownership ... ok
+test returned_child_input_survives_parent_restart_without_provider_work ... ok
+test delegation_waits_are_bounded_and_cancellation_is_distinct ... ok
+test terminal_artifacts_recover_after_parent_ledger_failure ... ok
+test stop_propagates_cancellation_and_emits_one_terminal_event ... ok
+test malicious_artifact_transfer_overrides_fail_closed ... ok
+
+test result: ok. 56 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+     Running tests/goal_conformance.rs (/Volumes/Data/codes/ai/agent-runtime/target/debug/deps/goal_conformance-37db0a98b3861b65)
+
+running 9 tests
+test conditional_admission_rejects_stale_goal_generation ... ok
+test host_controls_are_serialized_persisted_and_optimistic ... ok
+test terminal_provider_rate_limit_stops_the_goal_as_usage_limited ... ok
+test internal_turn_is_attributed_checkpointed_and_not_user_history ... ok
+test busy_goal_pause_interrupts_only_the_serving_internal_turn ... ok
+test controller_shutdown_cancels_and_does_not_detach_goal_work ... ok
+test controller_runs_one_internal_turn_and_stops_on_complete ... ok
+test restored_active_goal_continues_only_after_a_later_controller_attaches ... ok
+test controller_attached_before_model_creation_observes_the_idle_boundary ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/provider_conformance.rs (/Volumes/Data/codes/ai/agent-runtime/target/debug/deps/provider_conformance-7166073b72501579)
+
+running 19 tests
+test fake_adapter_meets_normalized_contract ... ok
+test fake_adapter_normalizes_reasoning ... ok
+test provider_observes_cancellation ... ok
+test fake_and_openai_produce_the_same_reasoning_event_kinds ... ok
+test fake_and_openai_produce_the_same_event_kinds ... ok
+test openai_adapter_meets_normalized_contract ... ok
+test openai_wire_request_carries_reasoning_content_back ... ok
+test openai_adapter_requests_and_injects_a_proactively_refreshed_lease ... ok
+test openai_adapter_normalizes_reasoning ... ok
+test responses_adapter_redacts_auth_failure_details ... ok
+test responses_model_policy_is_resolved_from_the_host_catalog ... ok
+test responses_adapter_meets_normalized_contract ... ok
+test responses_adapter_normalizes_encrypted_reasoning ... ok
+test responses_adapter_normalizes_parallel_function_calls ... ok
+test responses_adapter_preserves_unsigned_signed_and_encrypted_only_reasoning ... ok
+test gemini_adapter_normalizes_signed_reasoning ... ok
+test gemini_adapter_meets_normalized_contract ... ok
+test fake_and_gemini_produce_the_same_text_event_kinds ... ok
+test cache_presence_and_read_write_separation_conform_across_adapters ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/runtime_conformance.rs (/Volumes/Data/codes/ai/agent-runtime/target/debug/deps/runtime_conformance-b54f014f0b656060)
+
+running 69 tests
+test provider_loop::attempt_deadline_is_capped_by_turn_deadline ... ok
+test provider_loop::exhausted_provider_attempts_emit_structured_limit ... ok
+test provider_loop::credential_recovery_is_denied_after_semantic_output ... ok
+test provider_loop::length_with_tool_calls_does_not_poison_canonical_history ... ok
+test interaction::interaction_response_cannot_authorize_or_invoke_an_effectful_action ... ok
+test provider_loop::error_and_cancel_finish_reasons_discard_speculative_output ... ok
+test provider_loop::malformed_assembled_call_marks_attempt_usage_failed ... ok
+test provider_loop::one_attempt_policy_does_not_hide_a_credential_replay ... ok
+test provider_loop::pre_output_credential_recovery_replays_once_as_a_visible_attempt ... ok
+test provider_loop::events_are_versioned_and_roundtrip ... ok
+test local_action::local_tool_recovery_executes_prepared_once_and_never_replays_a_durable_outcome ... ok
+test provider_loop::provider_finish_reasons_reach_attempt_and_turn_terminals ... ok
+test provider_loop::provider_tool_call_records_result_and_continues ... ok
+test provider_loop::replacement_auth_rejection_is_terminal_without_a_third_attempt ... ok
+test provider_loop::registered_tool_arguments_are_schema_validated_before_exposure ... ok
+test provider_loop::renewable_credentials_never_cross_observable_or_persisted_boundaries ... ok
+test provider_loop::retry_backoff_stops_promptly_on_cancellation ... ok
+test provider_loop::pending_approval_is_checkpointed_before_the_host_decides ... ok
+test provider_loop::streaming_text_precedes_completion ... ok
+test provider_loop::retryable_partial_stream_is_discarded_from_transcript ... ok
+test provider_loop::retries_keep_both_attempts_visible ... ok
+test local_action::local_tool_action_is_checkpointed_offloaded_and_never_spends_provider_tokens ... ok
+test provider_loop::tool_loop_preserves_exact_provider_message_order ... ok
+test provider_loop::tool_step_limit_emits_structured_terminal ... ok
+test provider_loop::unsupported_reasoning_downgrades_when_allowed ... ok
+test provider_loop::unknown_tool_becomes_error_result_and_loop_continues ... ok
+test provider_loop::unsupported_reasoning_fails_closed_when_strict ... ok
+test provider_loop::two_hosts_produce_equivalent_canonical_events ... ok
+test recovery::accepted_recovery_keeps_the_exact_active_input_boundary ... ok
+test recovery::model_response_is_not_committed_before_its_checkpoint ... ok
+test recovery::completed_turn_is_persisted_before_shutdown ... ok
+test recovery::fresh_session_ids_do_not_collide_across_runtime_restarts ... ok
+test local_action::artifact_offload_workflow_keeps_large_output_retrievable ... ok
+test recovery::awaiting_approval_reauthorizes_exact_preparation_without_persisting_a_grant ... ok
+test recovery::model_response_ready_reuses_the_attempt_and_restores_identity_floor ... ok
+test recovery::one_runtime_leases_each_explicit_session_identity_once ... ok
+test recovery::ordinary_session_store_resume_restores_the_previous_cache_plan ... ok
+test recovery::executing_tools_recovery_keeps_committed_parallel_prefix_and_never_replays ... ok
+test local_action::local_tool_approval_observes_turn_cancellation_and_deadline ... ok
+test recovery::provider_switch_rebases_only_the_incompatible_previous_cache_baseline ... ok
+test recovery::planning_calling_and_completing_boundaries_have_explicit_recovery_policy ... ok
+test recovery::publishing_terminal_recovery_preserves_commit_hook_state_and_usage_without_rerun ... ok
+test recovery::resumed_session_continues_ids_and_event_sequences ... ok
+test recovery::resume_preserves_all_historical_manifests ... ok
+test recovery::terminal_resume_prefers_non_regressing_canonical_session_snapshot ... ok
+test recovery::session_resumes_from_store ... ok
+test recovery::mixed_ready_denied_and_pure_batch_recovers_in_source_order ... ok
+test session::bounded_shutdown_emits_terminal ... ok
+test recovery::terminal_publication_recovers_before_or_after_the_event_exactly_once ... ok
+test recovery::raw_tool_outcome_checkpoint_failure_never_replays_the_invocation ... ok
+test session::cancellation_terminates_turn ... ok
+test session::inline_run_participates_in_shutdown_drain ... ok
+test session::concurrent_sends_are_serialized_in_submission_order ... ok
+test session::live_context_compaction_emits_its_current_plan_outcome ... ok
+test session::queued_interrupted_turn_does_not_contaminate_history ... ok
+test recovery::every_checkpoint_and_session_store_failure_has_one_live_terminal ... ok
+test session::terminal_session_cancellation_and_shutdown_reject_future_submissions ... ok
+test session::all_consumer_fixtures_run_the_shared_loop ... ok
+test session::every_async_harness_phase_observes_turn_interruption ... ok
+test session::live_initial_activation_uses_the_smallest_authorized_intent_bundle ... ok
+test session::two_sessions_from_one_runtime_keep_requests_events_and_manifests_isolated ... ok
+test interaction::unavailable_interaction_is_not_advertised_but_forced_calls_fail_fast ... ok
+test interaction::questionnaire_mixed_batch_is_sequential_bounded_and_metadata_only ... ok
+test interaction::answered_interaction_checkpoint_commits_without_representing ... ok
+test session::a_hung_harness_phase_is_bounded_by_the_turn_deadline ... ok
+test session::interrupting_one_turn_allows_a_later_turn_to_complete ... ok
+test interaction::pending_interaction_recovers_from_both_pre_barrier_boundaries ... ok
+test session::one_shutdown_deadline_bounds_all_active_turns ... ok
+test interaction::interaction_timeout_and_cancellation_close_the_broker ... ok
+
+test result: ok. 69 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+   Doc-tests agent_runtime_testkit
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

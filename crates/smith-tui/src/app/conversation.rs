@@ -201,10 +201,9 @@ impl ConversationMut<'_> {
                 error: Some(error),
                 retryable: true,
                 ..
-            } => self.transcript.push_notice(
-                "provider",
-                format!("attempt failed, retrying: {error}"),
-            ),
+            } => self
+                .transcript
+                .push_notice("provider", format!("attempt failed, retrying: {error}")),
             RuntimeEvent::Downgrade { capability, detail } => self
                 .transcript
                 .push_notice("downgrade", format!("{capability}: {detail}")),

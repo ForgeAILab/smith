@@ -1,0 +1,32 @@
+/goal [OBJECTIVE|edit …|budget N|pause|resume|clear]  inspect or control a persistent multi-turn go
+al
+/context  show current context usage
+/details  toggle bounded live tool detail
+/timeline  show local turn, child, and recovery history
+/new  start a fresh session
+/resume [ID]  resume a saved session
+/connect [PROVIDER]  connect or reconnect a provider
+/disconnect [PROVIDER]  disconnect a provider
+/model [PROVIDER/MODEL]  switch model
+/think [on|off|default]  set thinking for the next turn
+/effort [LEVEL|default]  set reasoning effort for the next turn
+/account [N]  show provider accounts and their usage
+/agent [ID|resume ID]  list, inspect, or resume an existing agent
+/mcp [trust NAME]  show MCP servers, or trust one so it may run
+/skills [trust NAME]  show indexed skills, or trust one this project ships
+/diff [SCOPE]  inspect workspace changes
+/review [SCOPE]  run a read-only change review
+/undo  undo the last attributable turn
+/redo  reapply the newest exact undone turn
+/revert [FILE]  selectively revert a file or hunk
+  Choose model · type to filter · 1/9
+› example-model · current  local/example-model · ctx 128k [user config] · input 124k [user config] ·
+  small-model  local/small-model · ctx 32768 [user config] · input 28672 [user config] · output ceil
+  alternative-model  other/alternative-model · ctx 64k [user config] · input 60k [user config] · out
+  Claude Code sonnet · unavailable: `claude` is not on PATH  cli/claude-code/sonnet · ctx 200k · inp
+  Claude Code opus · unavailable: `claude` is not on PATH  cli/claude-code/opus · ctx 200k · input 1
+
+› Ask Smith to do anything
+
+  ▼ following paused · End/Ctrl+L newest · build · local/example-model
+  type to filter · ↑↓ choose · enter confirm · esc cancel

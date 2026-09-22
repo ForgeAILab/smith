@@ -386,13 +386,13 @@ fn report_session_usage(
     if let Some(line) = cache.and_then(smith_tui::cache::CacheTurnSummary::render_usage) {
         println!("{line}");
     }
-    if let Some(controller) = host.cache_lifecycle() {
-        if !controller.synthetic_attempts.is_empty() {
-            println!(
-                "{}",
-                crate::local_command::render_cache_controller_summary(&controller)
-            );
-        }
+    if let Some(controller) = host.cache_lifecycle()
+        && !controller.synthetic_attempts.is_empty()
+    {
+        println!(
+            "{}",
+            crate::local_command::render_cache_controller_summary(&controller)
+        );
     }
     // Printed even for a session that spent nothing: an empty session is
     // exactly the one a user is most likely to want to pick back up, and the

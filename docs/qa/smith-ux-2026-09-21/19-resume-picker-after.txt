@@ -1,0 +1,32 @@
+  Get started
+  Type a task below and press Enter.
+
+  /model    Choose a model
+  /connect  Add a connection
+  /help     Explore commands
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Resume session · type to filter
+› session-2fec… · Hello from the isolated UX audit  1 turns · local/example-model · updated just now
+  session-8fc3… · No user preview  1 turns · unknown provider/model · updated 17 minutes ago
+  session-e0bb… · Hello from the isolated UX audit  1 turns · local/example-model · updated 20 minut
+  session-6c35… · No user preview  1 turns · unknown provider/model · updated 21 minutes ago
+  session-14c6… · Hello from the isolated UX audit  1 turns · local/example-model · updated 22 minut
+
+› Ask Smith to do anything
+
+  plan · local/example-model · /private/tmp/smith-ux-audit-2026-09-21/project:main · ? ctx
+  type to filter · ↑↓ choose · enter confirm · esc cancel

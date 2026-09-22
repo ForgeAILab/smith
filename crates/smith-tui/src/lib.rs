@@ -63,8 +63,8 @@ pub use references::{
 };
 pub use render::{draw, draw_synced, selected_text};
 pub use setup::{
-    SetupApp, SetupCredential, SetupEffect, SetupMode, SetupModelLimits, SetupSubmission,
-    draw_setup,
+    ResolveModelLimits, ResolvedModelLimits, SetupApp, SetupCredential, SetupEffect, SetupMode,
+    SetupModelLimits, SetupSubmission, draw_setup,
 };
 pub use status::{
     Activity, Confidence, ContextPlanStatus, ContextPlanUpdate, McpStatus, Status, TokenCount,

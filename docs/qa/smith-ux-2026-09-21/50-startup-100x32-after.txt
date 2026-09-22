@@ -1,0 +1,32 @@
+  Get started
+  Type a task below and press Enter.
+
+  /model    Choose a model
+  /connect  Add a connection
+  /help     Explore commands
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+› Ask Smith to do anything
+
+  build · local/example-model · /private/tmp/smith-ux-audit-2026-09-21/project:main · ? ctx

@@ -12,28 +12,55 @@
     fn catalog_inventory_becomes_searchable_resource_metadata_with_disabled_reasons() {
         let home = tempfile::tempdir().expect("home");
         let project = tempfile::tempdir().expect("project");
+        let snapshot: smith_config::catalog::CatalogSnapshot =
+            serde_json::from_str(smith_runtime::model_catalog::EMBEDDED_MODELS_DEV_SEED)
+                .expect("embedded catalog");
+        let openrouter = snapshot
+            .providers
+            .get("openrouter")
+            .expect("the fixture's provider is in the embedded catalog");
+        let current_model = openrouter
+            .models
+            .values()
+            .find(|model| {
+                model.disabled_reason.is_none()
+                    && model.tool_call
+                    && model.has_text_output()
+                    && model.limits.is_some_and(|limits| {
+                        limits.context_tokens >= 131_072
+                            && limits.max_output_tokens >= 32_768
+                    })
+            })
+            .expect("a selectable nested model with an automatic 32768 request budget");
+        let current_id = current_model.id.clone();
+        let current_name = current_model.name.clone();
+        let incompatible_id = openrouter
+            .models
+            .values()
+            .find(|model| !model.tool_call)
+            .map(|model| model.id.clone())
+            .expect("an advertised model without tool support");
         std::fs::create_dir_all(project.path().join(".smith")).expect("config directory");
         std::fs::write(
             project.path().join(".smith/config.toml"),
-            r#"
+            format!(
+                r#"
 default_profile = "router"
 [profiles.router]
 provider = "openrouter"
-model = "~openai/gpt-latest"
+model = "{current_id}"
 [providers.openrouter]
 kind = "openai-compatible"
 base_url = "https://openrouter.ai/api/v1"
 credential = "env:OPENROUTER_API_KEY"
 [context]
 output_reserve = 4096
-"#,
+"#
+            ),
         )
         .expect("config");
         let resolution = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
             .expect("resolution");
-        let snapshot: smith_config::catalog::CatalogSnapshot =
-            serde_json::from_str(smith_runtime::model_catalog::EMBEDDED_MODELS_DEV_SEED)
-                .expect("embedded catalog");
         let inventory =
             local_inventory_with_catalog(&resolution, AVAILABLE_ADAPTER_KINDS, Some(&snapshot))
                 .expect("catalog inventory");
@@ -52,11 +79,7 @@ output_reserve = 4096
         // Derived from the embedded catalog rather than pinned to a literal:
         // the seed is regenerated whenever Models.dev is refreshed, and a
         // hard-coded total turns every refresh into a spurious failure.
-        let catalogued = snapshot
-            .providers
-            .get("openrouter")
-            .map(|provider| provider.models.len())
-            .expect("the fixture's provider is in the embedded catalog");
+        let catalogued = openrouter.models.len();
         // Installed coding agents are offered alongside the catalog under
         // their own `cli/<agent>/<model>` namespace, so the list is the
         // catalog plus every agent model.
@@ -88,9 +111,9 @@ output_reserve = 4096
         let current = resources
             .models
             .iter()
-            .find(|entry| entry.id == "openrouter/~openai/gpt-latest")
+            .find(|entry| entry.id == format!("openrouter/{current_id}"))
             .expect("nested catalog model");
-        assert_eq!(current.label, "OpenAI GPT Latest");
+        assert_eq!(current.label, current_name);
         assert!(current.active);
         assert!(current.detail.contains("tools"), "{}", current.detail);
         assert!(current.detail.contains("advertised"), "{}", current.detail);
@@ -107,7 +130,7 @@ output_reserve = 4096
         let incompatible = resources
             .models
             .iter()
-            .find(|entry| entry.id == "openrouter/mancer/weaver")
+            .find(|entry| entry.id == format!("openrouter/{incompatible_id}"))
             .expect("advertised incompatible model");
         assert!(
             incompatible
@@ -125,6 +148,13 @@ output_reserve = 4096
             entry.id == "google"
                 && entry.detail.contains("AI Studio API key")
                 && entry.detail.contains("native Gemini endpoint")
+                && !entry.active
+        }));
+        assert!(resources.connections.iter().any(|entry| {
+            entry.id == "openai-compatible"
+                && entry.detail.contains("API key")
+                && entry.detail.contains("base URL")
+                && entry.detail.contains("reviewed model")
                 && !entry.active
         }));
         assert!(!resources.providers.iter().any(|entry| entry.id == "chatgpt"));

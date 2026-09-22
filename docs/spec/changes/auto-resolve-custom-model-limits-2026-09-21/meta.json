@@ -1,0 +1,11 @@
+{
+  "change_id": "auto-resolve-custom-model-limits",
+  "change_ref": "auto-resolve-custom-model-limits-2026-09-21",
+  "created_at": "2026-09-21T00:00:00Z",
+  "updated_at": "2026-09-21T00:00:00Z",
+  "completed_at": null,
+  "status": "proposed",
+  "reapproval_required": false,
+  "depends_on": ["connect-openai-compatible"],
+  "external_dependencies": []
+}

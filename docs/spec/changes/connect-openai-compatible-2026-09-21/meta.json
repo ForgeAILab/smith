@@ -1,0 +1,11 @@
+{
+  "change_id": "connect-openai-compatible",
+  "change_ref": "connect-openai-compatible-2026-09-21",
+  "created_at": "2026-09-21T00:00:00Z",
+  "updated_at": "2026-09-21T00:00:00Z",
+  "completed_at": null,
+  "status": "proposed",
+  "reapproval_required": false,
+  "depends_on": [],
+  "external_dependencies": []
+}

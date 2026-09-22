@@ -1,0 +1,23 @@
+
+ ┌ Smith setup · no agent session or provider request exists yet ─────────────┐
+ │API base URL                                                                │
+ │OpenAI-compatible base, for example https://openrouter.ai/api/v1            │
+ │                                                                            │
+ │› http://127.0.0.1:18491/v1                                                 │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │ Enter continue · Shift+Tab Back · Esc Cancel                               │
+ │                                                                            │
+ └────────────────────────────────────────────────────────────────────────────┘

@@ -1,0 +1,32 @@
+› Hello from the isolated UX audit
+
+• This session is running Smith's deterministic fake provider; configure a real provider to talk to
+a model.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+› Ask Smith to do anything
+
+  plan · local/example-model · /private/tmp/smith-ux-audit-2026-09-21/project:main · ? ctx · CH ?

@@ -1,0 +1,31 @@
+
+      ┌ Smith setup · no agent session or provider request exists yet ───────────────────────┐
+      │┌ Authentication ────────────────────────────────────────────────────────────────────┐│
+      ││ filter: type to search                                                             ││
+      ││ › Store API key securely  macOS Keychain / Linux Secret Service                    ││
+      ││   Use existing secure entry  keychain:smith/<provider>                             ││
+      ││   Store in config (no prompts)  plaintext at rest · readable by same-user processes││
+      ││and backups                                                                         ││
+      ││   Use environment variable  record a reference; Smith does not read or copy it now ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││ ↑/↓ choose · Enter confirm · Esc cancel                                            ││
+      │└────────────────────────────────────────────────────────────────────────────────────┘│
+      └──────────────────────────────────────────────────────────────────────────────────────┘

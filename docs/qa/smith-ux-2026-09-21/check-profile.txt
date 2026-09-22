@@ -1,0 +1,32 @@
+  smith.security.persistence-and-recovery-attacks · active · Smith security threat model reference,
+section "Persistence and recovery attacks". conversation content.
+  smith.security.provider-and-prompt-injection-risks · active · Smith security threat model referenc
+e, section "Provider and prompt-injection risks". user content sent to it.
+  smith.security.repository-and-configuration-attacks · active · Smith security threat model referen
+ce, section "Repository and configuration attacks". or treat a repository as trusted because it was
+opened.
+  smith.security.residual-risks-and-deployment-responsibilities · active · Smith security threat mod
+el reference, section "Residual risks and deployment responsibilities". network.
+  smith.security.trust-boundaries · active · Smith security threat model reference, section "Trust b
+oundaries".
+
+/diff · all uncommitted
+• No changes in this scope.
+
+• review · No changes in this scope.
+
+■ no Smith turn has attributable changes
+
+/redo
+■ no exact redo candidate exists
+
+■ usage: /revert FILE or /revert FILE#HUNK; use /diff to choose a scope
+  Choose profile · type to filter
+ › build  build · use main+child · local/example-model · Make and test changes · rev 47f9a1b006ea… ·
+   plan  plan · use main+child · local/example-model · Plan before changing files · rev d755c7e9fa30
+   review  review · use main+child · local/example-model · Read-only change review · rev 1e1ffccf7f4
+
+› Ask Smith to do anything
+
+  build · local/example-model · /private/tmp/smith-ux-audit-2026-09-21/project:main · ? ctx
+  type to filter · ↑↓ choose · enter confirm · esc cancel

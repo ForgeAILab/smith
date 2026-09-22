@@ -1,0 +1,32 @@
+ce only)
+protected mid-turn recovery: available
+registry snapshot: waiting for live lifecycle
+context window: not planned yet (? used / 123.9k input budget)
+model window: 128k total · 4k reserved
+context plan: waiting for first turn
+compaction: enabled on overflow · 74.3k recovery target
+provider input (session): ?
+cache read (session): ?
+cache: state unknown · CH ? · misses 0 · re-billed 0 · guarantee ? · maintenance calls 0
+reasoning: provider default · effort provider default · provider/model default
+reasoning controls: unsupported · switch unavailable · efforts none · resolved model catalog (presen
+ce only)
+cache maintenance: requested off · effective off · authority denied · lease none · calls 0/1 · sched
+uled none · decision none · narrowed idle compaction disabled because no protected semantic-summary
+route is installed · idle attempted false · idle decision none · idle outcome none · idle reason non
+e · idle latency ? · idle route ?/?/? · idle usage in/cached/write/out/reasoning 0/0/0/0/0 · synthet
+ic attempts 0
+resume capsule: schema 1 · watermark 0 · persisted not yet saved · summary none
+project: /private/tmp/smith-ux-audit-2026-09-21/project
+Git: clean
+goal: none
+connections: local (remove only the configured authentication source · fake), other (remove only the
+ configured authentication source · fake)
+children: 0
+usage: nothing spent yet
+cost: nothing spent yet
+change attribution: no attributable turn recorded
+
+› Ask Smith to do anything
+
+  build · local/example-model · /private/tmp/smith-ux-audit-2026-09-21/project:main · ? ctx

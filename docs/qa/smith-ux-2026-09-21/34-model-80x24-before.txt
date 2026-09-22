@@ -1,0 +1,24 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Choose model · type to filter · 1/9
+ › example-model  local/example-model · ctx 128k [user config] · input 124k [use
+   small-model  local/small-model · ctx 32768 [user config] · input 28672 [user
+   alternative-model  other/alternative-model · ctx 64k [user config] · input 60
+   Claude Code sonnet  cli/claude-code/sonnet · ctx 200k · input 180k · output 3
+   Claude Code opus  cli/claude-code/opus · ctx 200k · input 180k · output 32k [
+
+› Ask Smith to do anything
+
+  build · local/example-model
+  type to filter · ↑↓ choose · enter confirm · esc cancel

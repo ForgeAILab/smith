@@ -633,7 +633,7 @@ INTERACTIVE COMPOSER:
   @PROFILE TASK                 Confirm a child-enabled read-only profile
   !COMMAND                      Run the canonical prepared local shell path
   @@ / !!                       Send a literal leading @ / !
-  /connect /disconnect         Manage provider auth, Google Gemini, or ChatGPT OAuth
+  /connect /disconnect         Manage provider auth, custom endpoints, or ChatGPT OAuth
   /details /timeline /redo      Inspect work, history, or exact recovery
 
 Headless runs fail closed at approval boundaries unless an explicit policy or

@@ -37,8 +37,8 @@ use smith_runtime::factory::{
 use smith_runtime::model_catalog::{CatalogLoader, runtime_catalog_source};
 use smith_tui::picker::ResourceEntry;
 use smith_tui::setup::{
-    SetupApp, SetupCredential, SetupEffect, SetupMode, SetupModelLimits, SetupSubmission,
-    draw_setup,
+    ResolveModelLimits, ResolvedModelLimits, SetupApp, SetupCredential, SetupEffect, SetupMode,
+    SetupModelLimits, SetupSubmission, draw_setup,
 };
 use smith_tui::theme::Theme;
 use zeroize::Zeroizing;
@@ -425,6 +425,15 @@ pub(crate) async fn run_surface(
                     terminal.restore().context("restoring the terminal")?;
                     return Ok(SetupOutcome::Cancelled);
                 }
+                SetupEffect::ResolveModelLimits { request } => {
+                    // One bounded, non-inference read; the surface stays busy
+                    // and key-blind until the result lands.
+                    terminal
+                        .draw(|frame| draw_setup(frame, &app, theme))
+                        .context("drawing setup limit resolution")?;
+                    let resolved = resolve_model_limits(&context, &request).await;
+                    app.apply_resolved_limits(resolved);
+                }
                 SetupEffect::Submit {
                     submission,
                     allow_collisions,
@@ -657,6 +666,135 @@ struct PlannedCredential {
     reference: Option<CredentialRef>,
     api_key: Option<ConfigSecret>,
     enrollment_secret: Option<agent_runtime_core::store::Secret>,
+}
+
+/// Runs the bounded automatic limit resolution for one entered model.
+///
+/// The endpoint's own listing wins when it publishes a context window — the
+/// server that will enforce the limit is the most authoritative source for
+/// it — with the frozen trusted catalog as the same-name fallback. Either
+/// way the input and output ceilings default from the context exactly as the
+/// single manual context fallback does, and every failure is simply "nothing
+/// resolved".
+async fn resolve_model_limits(
+    context: &SetupContext,
+    request: &ResolveModelLimits,
+) -> Option<ResolvedModelLimits> {
+    let (endpoint, bearer) = match request.endpoint.as_deref() {
+        Some(endpoint) => (
+            Some(endpoint.to_owned()),
+            request
+                .bearer
+                .as_ref()
+                .map(|secret| secret.expose().to_owned())
+                .or_else(|| read_environment_bearer(request.environment_variable.as_deref())),
+        ),
+        None => configured_probe_target(context, request.provider.as_deref()?).await,
+    };
+    if let Some(endpoint) = endpoint {
+        let probe = smith_runtime::probe::openai_compatible_model_limits(
+            &endpoint,
+            bearer.as_deref(),
+            &request.model,
+        )
+        .await;
+        if let Ok(Some(limits)) = probe
+            && let Some(context_tokens) = limits.context_tokens
+        {
+            let max_input_tokens = limits.max_input_tokens.unwrap_or(context_tokens);
+            let max_output_tokens = limits
+                .max_output_tokens
+                .unwrap_or_else(|| smith_runtime::probe::derived_output_ceiling(context_tokens));
+            let mut source = "endpoint /models listing".to_owned();
+            if limits.max_input_tokens.is_none() || limits.max_output_tokens.is_none() {
+                source.push_str(" · missing ceilings defaulted");
+            }
+            return Some(ResolvedModelLimits {
+                context_tokens,
+                max_input_tokens,
+                max_output_tokens,
+                source,
+            });
+        }
+    }
+    let (provider, model) = context.catalog.resolve_model_by_id(&request.model)?;
+    let limits = model.limits?;
+    Some(ResolvedModelLimits {
+        context_tokens: limits.context_tokens,
+        max_input_tokens: limits.max_input_tokens,
+        max_output_tokens: limits.max_output_tokens,
+        source: format!("trusted catalog match {provider}/{}", model.id),
+    })
+}
+
+/// Reads a bearer from a chosen environment variable, when it is exported.
+fn read_environment_bearer(variable: Option<&str>) -> Option<String> {
+    std::env::var(variable?)
+        .ok()
+        .filter(|value| !value.is_empty())
+}
+
+/// Reads one provider's effective section from the local config layers.
+///
+/// The resolved run configuration keeps only the active provider, so the
+/// user and project files are read directly — the same layered pair setup
+/// itself reads and writes, with the user layer winning on a shared name.
+fn configured_provider_section(context: &SetupContext, provider: &str) -> Option<ProviderSection> {
+    let mut section = None;
+    for path in [
+        context.project.join(".smith/config.toml"),
+        context.user_dir.join("config.toml"),
+    ] {
+        let file = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| ConfigFile::parse(&text).ok());
+        if let Some(found) = file.and_then(|file| {
+            file.providers
+                .into_iter()
+                .find(|(name, _)| name == provider)
+                .map(|(_, section)| section)
+        }) {
+            section = Some(found);
+        }
+    }
+    section
+}
+
+/// Resolves a configured provider's OpenAI-compatible endpoint and bearer.
+///
+/// Add-model flows reach models through a provider that already exists, so
+/// the probe target comes from its stored section rather than fresh input.
+async fn configured_probe_target(
+    context: &SetupContext,
+    provider: &str,
+) -> (Option<String>, Option<String>) {
+    let Some(section) = configured_provider_section(context, provider) else {
+        return (None, None);
+    };
+    if section.kind.as_deref() != Some(KIND_OPENAI_COMPATIBLE) {
+        // Only the OpenAI-compatible listing is probed: other adapters speak
+        // different listing protocols Smith has not reviewed.
+        return (None, None);
+    }
+    let endpoint = section.base_url.clone();
+    let reference = section
+        .credential
+        .clone()
+        .or_else(|| section.credentials.first().cloned())
+        .and_then(|value| CredentialRef::parse(&value).ok());
+    let bearer = match reference {
+        Some(CredentialRef::Env { variable }) => read_environment_bearer(Some(&variable)),
+        Some(reference @ (CredentialRef::Keychain { .. } | CredentialRef::AuthFile { .. })) => {
+            let resolver = smith_config::credential::CredentialResolver::new(&context.user_dir);
+            tokio::task::spawn_blocking(move || resolver.resolve_blocking(&reference))
+                .await
+                .ok()
+                .and_then(|resolved| resolved.ok())
+                .map(|secret| secret.expose().to_owned())
+        }
+        _ => None,
+    };
+    (endpoint, bearer)
 }
 
 async fn apply_submission(
@@ -1279,6 +1417,117 @@ mod tests {
             *self.value.lock().expect("value") = None;
             Ok(())
         }
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_endpoint_falls_back_to_a_same_name_catalog_match() {
+        let context = setup_context_for(
+            tempfile::tempdir().expect("home").path().to_path_buf(),
+            tempfile::tempdir().expect("project").path().to_path_buf(),
+        );
+        // Any catalog id works and survives seed regeneration, so pick one
+        // the embedded snapshot actually carries.
+        let (provider, model) = context
+            .catalog
+            .providers
+            .iter()
+            .find_map(|(provider, catalog)| {
+                catalog
+                    .models
+                    .values()
+                    .find(|model| model.limits.is_some())
+                    .map(|model| (provider.clone(), model.id.clone()))
+            })
+            .expect("the embedded catalog carries a limited model");
+        let request = ResolveModelLimits {
+            // Port 9 refuses connections immediately, so the test stays
+            // offline and the probe fails fast.
+            endpoint: Some("http://127.0.0.1:9/v1".to_owned()),
+            bearer: None,
+            environment_variable: None,
+            provider: None,
+            model: model.clone(),
+        };
+        let resolved = resolve_model_limits(&context, &request)
+            .await
+            .expect("the catalog fallback resolves");
+        let limits = context
+            .catalog
+            .resolve_model_by_id(&model)
+            .expect("the same match again")
+            .1
+            .limits
+            .expect("complete limits");
+        assert_eq!(resolved.context_tokens, limits.context_tokens);
+        assert_eq!(resolved.max_input_tokens, limits.max_input_tokens);
+        assert_eq!(resolved.max_output_tokens, limits.max_output_tokens);
+        assert_eq!(
+            resolved.source,
+            format!("trusted catalog match {provider}/{model}")
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unknown_model_on_an_unreachable_endpoint_resolves_nothing() {
+        let context = setup_context_for(
+            tempfile::tempdir().expect("home").path().to_path_buf(),
+            tempfile::tempdir().expect("project").path().to_path_buf(),
+        );
+        let request = ResolveModelLimits {
+            endpoint: Some("http://127.0.0.1:9/v1".to_owned()),
+            bearer: None,
+            environment_variable: None,
+            provider: None,
+            model: "no-such-model-anywhere".to_owned(),
+        };
+        assert!(resolve_model_limits(&context, &request).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_gateway_spelled_claude_fable_alias_resolves_from_the_embedded_catalog() {
+        let context = setup_context_for(
+            tempfile::tempdir().expect("home").path().to_path_buf(),
+            tempfile::tempdir().expect("project").path().to_path_buf(),
+        );
+        let request = ResolveModelLimits {
+            endpoint: Some("http://127.0.0.1:9/v1".to_owned()),
+            bearer: None,
+            environment_variable: None,
+            provider: None,
+            model: "claude-fable-5-1".to_owned(),
+        };
+        let resolved = resolve_model_limits(&context, &request)
+            .await
+            .expect("the separator-normalized catalog alias resolves");
+        assert_eq!(resolved.context_tokens, 1_000_000);
+        assert_eq!(resolved.max_input_tokens, 1_000_000);
+        assert_eq!(resolved.max_output_tokens, 128_000);
+        assert!(
+            resolved
+                .source
+                .contains("openrouter/anthropic/claude-fable-5.1"),
+            "{}",
+            resolved.source
+        );
+    }
+
+    #[tokio::test]
+    async fn a_configured_non_openai_compatible_provider_is_not_probed() {
+        let home = tempfile::tempdir().expect("home");
+        let project = tempfile::tempdir().expect("project");
+        std::fs::create_dir_all(project.path().join(".smith")).expect("project config dir");
+        std::fs::write(
+            project.path().join(".smith/config.toml"),
+            "[providers.native]\nkind = \"gemini-interactions\"\nbase_url = \"https://example.test/v1\"\n",
+        )
+        .expect("config");
+        let context = setup_context_for(home.path().to_path_buf(), project.path().to_path_buf());
+        // The section exists, but its adapter is not the one whose listing
+        // protocol Smith reviewed, so no probe target is derived.
+        assert!(configured_provider_section(&context, "native").is_some());
+        let (endpoint, bearer) = configured_probe_target(&context, "native").await;
+        assert_eq!(endpoint, None);
+        assert_eq!(bearer, None);
     }
 
     fn setup_context_for(user_dir: PathBuf, project: PathBuf) -> SetupContext {

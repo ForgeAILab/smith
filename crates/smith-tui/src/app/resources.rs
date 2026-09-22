@@ -524,6 +524,7 @@ impl App {
             CommandAction::Help => {
                 self.accept_composer_input();
                 self.show_local_result("help", commands::help());
+                self.scroll_to_block = self.transcript.len().checked_sub(1);
                 None
             }
             CommandAction::Details => {

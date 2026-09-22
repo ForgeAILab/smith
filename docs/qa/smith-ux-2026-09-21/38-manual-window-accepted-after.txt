@@ -1,0 +1,23 @@
+
+ ┌ Smith setup · no agent session or provider request exists yet ─────────────┐
+ │┌ Response compatibility ──────────────────────────────────────────────────┐│
+ ││ filter: type to search                                                   ││
+ ││› Preserve response fields  recommended for ordinary OpenAI-compatible end││
+ ││  Reasoning-only success is visible text  for endpoints that put final ans││
+ ││                                                                          ││
+ ││                                                                          ││
+ ││                                                                          ││
+ ││                                                                          ││
+ ││                                                                          ││
+ ││                                                                          ││
+ ││                                                                          ││
+ ││                                                                          ││
+ ││                                                                          ││
+ ││                                                                          ││
+ ││                                                                          ││
+ ││                                                                          ││
+ ││                                                                          ││
+ ││                                                                          ││
+ ││ ↑/↓ choose · Enter confirm · Esc cancel                                  ││
+ │└──────────────────────────────────────────────────────────────────────────┘│
+ └────────────────────────────────────────────────────────────────────────────┘

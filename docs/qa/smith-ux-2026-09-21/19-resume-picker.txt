@@ -1,0 +1,32 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Resume session · type to filter
+ › session-e0bb… · Hello from the isolated UX audit  1 turns · local/example-model · updated just no
+   session-6c35… · No user preview  1 turns · unknown provider/model · updated just now
+   session-14c6… · Hello from the isolated UX audit  1 turns · local/example-model · updated 2 minut
+
+› Ask Smith to do anything
+
+  plan · local/example-model · /private/tmp/smith-ux-audit-2026-09-21/project:main · ? ctx
+  type to filter · ↑↓ choose · enter confirm · esc cancel

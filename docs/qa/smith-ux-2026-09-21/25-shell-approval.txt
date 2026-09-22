@@ -1,0 +1,32 @@
+• shell · $ printf smith-ux-shell-ok
+
+• shell(command, cwd, timeout_ms · details unavailable) · running 0s
+
+● Working… · 0s
+
+
+
+
+
+
+
+
+
+
+
+
+? approval required  host-shell:sha256:b1d5a895f37c2b4c1946ed27c4f560fba782d16f9da35f9bfe4e0481b995c
+  shell  Run unsandboxed host shell in .
+  action  printf smith-ux-shell-okHost access: same-user files, inherited environment and credential
+  grants  host.fs.read, host.fs.write, net.http, data.egress, process.spawn
+  ⚠ authority warning: process execution, data egress, outbound network access
+{
+  "command": "printf smith-ux-shell-ok",
+  "cwd": "/private/tmp/smith-ux-audit-2026-09-21/project",
+  "timeout_ms": 600000
+}
+  y allow once   a allow this target for the session   n deny
+
+› Ask Smith to do anything
+
+  y allow once · a allow this target · n deny

@@ -307,10 +307,35 @@ pub const COMMANDS: &[CommandSpec] = &[
 pub fn matches(input: &str) -> Vec<&'static CommandSpec> {
     let query = input.trim().trim_start_matches('/');
     let name = query.split_whitespace().next().unwrap_or_default();
-    COMMANDS
+    let name_matches = COMMANDS
         .iter()
         .filter(|command| command.name.starts_with(name))
+        .collect::<Vec<_>>();
+    if !name_matches.is_empty() || name.is_empty() {
+        return name_matches;
+    }
+
+    // A command's description is part of its discoverable surface. Keep name
+    // prefixes authoritative so `/mod` never turns into a description search,
+    // then let intent words such as `switch` find the same registered rows.
+    let query = query.to_ascii_lowercase();
+    COMMANDS
+        .iter()
+        .filter(|command| command.description.to_ascii_lowercase().contains(&query))
         .collect()
+}
+
+/// Whether the first token names a registered command exactly.
+///
+/// The palette uses this distinction to decide whether Enter should preserve
+/// parser errors for an explicitly named command or activate its highlighted
+/// completion for a partial/intent query.
+pub fn has_exact_name(input: &str) -> bool {
+    let query = input.trim().trim_start_matches('/');
+    let Some(name) = query.split_whitespace().next() else {
+        return false;
+    };
+    COMMANDS.iter().any(|command| command.name == name)
 }
 
 /// Completes the selected command without executing it.
@@ -455,7 +480,14 @@ fn parse_goal(argument: &str) -> Result<CommandAction, String> {
 
 /// Finished `/help` output, derived from the registry.
 pub fn help() -> String {
-    let mut output = String::from("Primary\n");
+    let mut output = String::from(
+        "Getting started\n\
+         Type a task and press Enter.\n\
+         /model — Choose a model\n\
+         /connect — Add a connection\n\
+         /help — Explore all commands\n\n\
+         Primary\n",
+    );
     for command in COMMANDS.iter().filter(|command| !command.advanced) {
         push_help_line(&mut output, command);
     }
@@ -522,6 +554,8 @@ mod tests {
     #[test]
     fn help_and_completion_share_the_complete_registry() {
         let help = help();
+        assert!(help.starts_with("Getting started\n"));
+        assert!(help.contains("/model — Choose a model"));
         for command in COMMANDS {
             assert!(help.contains(&format!("/{}", command.name)), "{help}");
         }
@@ -534,6 +568,26 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["review", "revert"]
         );
+    }
+
+    #[test]
+    fn description_search_is_used_only_after_name_prefixes() {
+        assert_eq!(
+            matches("switch")
+                .into_iter()
+                .map(|command| command.name)
+                .collect::<Vec<_>>(),
+            ["model", "profile", "provider"]
+        );
+        assert_eq!(
+            matches("/pro")
+                .into_iter()
+                .map(|command| command.name)
+                .collect::<Vec<_>>(),
+            ["profile", "provider"]
+        );
+        assert!(has_exact_name("/status --verbose"));
+        assert!(!has_exact_name("/sta"));
     }
 
     #[test]

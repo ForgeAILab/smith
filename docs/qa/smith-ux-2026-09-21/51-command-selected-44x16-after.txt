@@ -1,0 +1,16 @@
+  Get started
+  Type a task below and press Enter.
+
+  /model    Choose a model
+  /connect  Add a connection
+  /help     Explore commands
+
+  /help  list available commands
+› /status [--verbose]  show session, usage,
+  /diagnostics  show detailed cache and reco
+  /goal [OBJECTIVE|edit …|budget N|pause|res
+  /context  show current context usage
+
+› /
+
+  build · local/example-model

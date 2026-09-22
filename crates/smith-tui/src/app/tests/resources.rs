@@ -410,12 +410,93 @@
     }
 
     #[test]
-    fn enter_completes_a_bare_reasoning_command_prefix() {
+    fn enter_activates_the_highlighted_command_from_the_unfiltered_palette() {
+        let mut app = app();
+        type_text(&mut app, "/");
+        app.on_key(key(KeyCode::Down));
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Some(Action::Command(CommandAction::Status))
+        );
+        assert!(app.overlay.is_none());
+        assert!(app.composer.is_empty());
+        app.on_key(key(KeyCode::Up));
+        assert_eq!(app.composer.text(), "/status");
+    }
+
+    #[test]
+    fn enter_activates_a_bare_reasoning_command_prefix() {
         let mut app = app();
         type_text(&mut app, "/eff");
         assert_eq!(app.on_key(key(KeyCode::Enter)), None);
-        assert_eq!(app.composer.text(), "/effort ");
+        assert!(matches!(
+            app.overlay,
+            Some(Overlay::ResourcePicker {
+                target: ResourceTarget::Effort,
+                ..
+            })
+        ));
+        assert!(app.composer.is_empty());
+    }
+
+    #[test]
+    fn description_search_finds_switchable_resources_after_name_prefixes() {
+        assert_eq!(
+            commands::matches("switch")
+                .into_iter()
+                .map(|command| command.name)
+                .collect::<Vec<_>>(),
+            ["model", "profile", "provider"]
+        );
+    }
+
+    #[test]
+    fn enter_activates_a_description_match_without_turning_it_into_text() {
+        let mut app = app();
+        app.on_key(ctrl('p'));
+        type_text(&mut app, "switch");
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert!(matches!(
+            app.overlay,
+            Some(Overlay::ResourcePicker {
+                target: ResourceTarget::Model,
+                ..
+            })
+        ));
+        assert!(app.composer.is_empty());
+        assert!(!app
+            .transcript
+            .blocks()
+            .iter()
+            .any(|block| matches!(block, Block::User { .. })));
+    }
+
+    #[test]
+    fn exact_commands_with_invalid_arguments_keep_parser_errors_and_drafts() {
+        let mut app = app();
+        type_text(&mut app, "/status unexpected");
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert_eq!(app.composer.text(), "/status unexpected");
+        let error = match &app.overlay {
+            Some(Overlay::Palette {
+                error: Some(error), ..
+            }) => error,
+            other => panic!("expected the parser error to remain visible, got {other:?}"),
+        };
+        assert!(error.contains("/status"), "{error}");
+    }
+
+    #[test]
+    fn a_busy_selected_completion_preserves_the_original_search_draft() {
+        let mut app = app();
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        type_text(&mut app, "/eff");
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
         assert!(app.overlay.is_none());
+        assert_eq!(app.composer.text(), "/eff");
+        assert!(app.transcript.blocks().iter().any(|block| {
+            matches!(block, Block::Notice { text, .. } if text.contains("requires an idle turn"))
+        }));
     }
 
     #[test]

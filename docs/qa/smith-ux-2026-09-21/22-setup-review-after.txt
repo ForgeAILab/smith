@@ -1,0 +1,31 @@
+
+      ┌ Smith setup · no agent session or provider request exists yet ───────────────────────┐
+      │Review the complete non-secret setup change:                                          │
+      │                                                                                      │
+      │  action: Add OpenAI-compatible provider                                              │
+      │  provider: ux-local                                                                  │
+      │  endpoint: http://127.0.0.1:18491/v1                                                 │
+      │  credential: env:UX_API_KEY                                                          │
+      │  model: ux-local/audit-model                                                         │
+      │  limits: context 128000 · max input 128000 · max output 8192 (endpoint /models       │
+      │listing · missing ceilings defaulted)                                                 │
+      │  response: preserve provider classifications                                         │
+      │  make default: yes                                                                   │
+      │  destination: /private/tmp/smith-ux-audit-2026-09-21/fresh-after/.smith/config.toml  │
+      │  pending action: write user config, then run local preflight                         │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │ Enter confirm · Shift+Tab Back · Esc Cancel                                          │
+      │                                                                                      │
+      └──────────────────────────────────────────────────────────────────────────────────────┘

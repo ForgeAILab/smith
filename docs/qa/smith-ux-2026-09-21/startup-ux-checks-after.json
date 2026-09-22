@@ -1,0 +1,162 @@
+[
+  {
+    "check": "guide 100x32-after",
+    "pass": true
+  },
+  {
+    "check": "bounded command menu 100x32-after",
+    "pass": true
+  },
+  {
+    "check": "highlighted status executes 100x32-after",
+    "pass": true
+  },
+  {
+    "check": "help opens at start 100x32-after",
+    "pass": true
+  },
+  {
+    "check": "help scrolling 100x32-after",
+    "pass": true
+  },
+  {
+    "check": "model current state 100x32-after",
+    "pass": true
+  },
+  {
+    "check": "model action hints 100x32-after",
+    "pass": true
+  },
+  {
+    "check": "filter miss recovery 100x32-after",
+    "pass": true
+  },
+  {
+    "check": "filter miss does not suggest setup 100x32-after",
+    "pass": true
+  },
+  {
+    "check": "clear filter without choosing 100x32-after",
+    "pass": true
+  },
+  {
+    "check": "description search 100x32-after",
+    "pass": true
+  },
+  {
+    "check": "intent selection opens model 100x32-after",
+    "pass": true
+  },
+  {
+    "check": "guide 80x24-after",
+    "pass": true
+  },
+  {
+    "check": "bounded command menu 80x24-after",
+    "pass": true
+  },
+  {
+    "check": "highlighted status executes 80x24-after",
+    "pass": true
+  },
+  {
+    "check": "help opens at start 80x24-after",
+    "pass": true
+  },
+  {
+    "check": "help scrolling 80x24-after",
+    "pass": true
+  },
+  {
+    "check": "model current state 80x24-after",
+    "pass": true
+  },
+  {
+    "check": "model action hints 80x24-after",
+    "pass": true
+  },
+  {
+    "check": "filter miss recovery 80x24-after",
+    "pass": true
+  },
+  {
+    "check": "filter miss does not suggest setup 80x24-after",
+    "pass": true
+  },
+  {
+    "check": "clear filter without choosing 80x24-after",
+    "pass": true
+  },
+  {
+    "check": "description search 80x24-after",
+    "pass": true
+  },
+  {
+    "check": "intent selection opens model 80x24-after",
+    "pass": true
+  },
+  {
+    "check": "guide 44x16-after",
+    "pass": true
+  },
+  {
+    "check": "bounded command menu 44x16-after",
+    "pass": true
+  },
+  {
+    "check": "highlighted status executes 44x16-after",
+    "pass": true
+  },
+  {
+    "check": "help opens at start 44x16-after",
+    "pass": true
+  },
+  {
+    "check": "help scrolling 44x16-after",
+    "pass": true
+  },
+  {
+    "check": "model current state 44x16-after",
+    "pass": true
+  },
+  {
+    "check": "model action hints 44x16-after",
+    "pass": true
+  },
+  {
+    "check": "filter miss recovery 44x16-after",
+    "pass": true
+  },
+  {
+    "check": "filter miss does not suggest setup 44x16-after",
+    "pass": true
+  },
+  {
+    "check": "clear filter without choosing 44x16-after",
+    "pass": true
+  },
+  {
+    "check": "description search 44x16-after",
+    "pass": true
+  },
+  {
+    "check": "intent selection opens model 44x16-after",
+    "pass": true
+  },
+  {
+    "check": "no-color picker keeps state and actions",
+    "pass": true
+  },
+  {
+    "check": "Back retains endpoint",
+    "pass": true
+  },
+  {
+    "check": "Back retains provider",
+    "pass": true
+  },
+  {
+    "check": "cancel setup writes no config",
+    "pass": true
+  }
+]

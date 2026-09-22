@@ -1,0 +1,11 @@
+{
+  "change_id": "improve-starting-work-ux",
+  "change_ref": "improve-starting-work-ux-2026-09-21",
+  "created_at": "2026-09-21T00:00:00Z",
+  "updated_at": "2026-09-22T03:52:10Z",
+  "completed_at": "2026-09-22T03:52:10Z",
+  "status": "implemented",
+  "reapproval_required": false,
+  "depends_on": [],
+  "external_dependencies": []
+}

@@ -1,0 +1,31 @@
+
+      ┌ Smith setup · no agent session or provider request exists yet ───────────────────────┐
+      │┌ Smith setup ───────────────────────────────────────────────────────────────────────┐│
+      ││ filter: type to search                                                             ││
+      ││ › Quick start with GLM  Z.AI Coding Plan endpoint with trusted GLM-5.2 limits      ││
+      ││   Connect OpenRouter  OpenRouter API key with a fixed endpoint and reviewed model  ││
+      ││limits                                                                              ││
+      ││   Custom OpenAI-compatible provider  Enter an endpoint, model ID, and enforceable  ││
+      ││model limits                                                                        ││
+      ││   Anthropic Messages API  Native Claude endpoint with images and thinking; enter a ││
+      ││model ID and limits                                                                 ││
+      ││   Connect ChatGPT (experimental)  Smith OAuth and direct Responses calls;          ││
+      ││unsupported public API boundary                                                     ││
+      ││   Connect xAI Grok  Browser login with `/connect xai`, or an API key;              ││
+      ││catalog-backed Grok limits                                                          ││
+      ││   Connect Google Gemini  AI Studio API key with a fixed native Gemini Interactions ││
+      ││endpoint                                                                            ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││                                                                                    ││
+      ││ ↑/↓ choose · Enter confirm · Esc cancel                                            ││
+      │└────────────────────────────────────────────────────────────────────────────────────┘│
+      └──────────────────────────────────────────────────────────────────────────────────────┘

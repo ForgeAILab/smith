@@ -1,0 +1,31 @@
+
+      ┌ Smith setup · no agent session or provider request exists yet ───────────────────────┐
+      │API base URL                                                                          │
+      │OpenAI-compatible base, for example https://openrouter.ai/api/v1                      │
+      │                                                                                      │
+      │› type a value                                                                        │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │ Enter continue · Shift+Tab Back · Esc Cancel                                         │
+      │                                                                                      │
+      └──────────────────────────────────────────────────────────────────────────────────────┘

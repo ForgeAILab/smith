@@ -154,6 +154,49 @@ pub enum SetupSubmission {
     },
 }
 
+/// Complete limits one automatic source resolved, with review provenance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedModelLimits {
+    /// Total context window.
+    pub context_tokens: u32,
+    /// Enforced input ceiling.
+    pub max_input_tokens: u32,
+    /// Enforced output ceiling.
+    pub max_output_tokens: u32,
+    /// Bounded provenance shown in review, e.g. `endpoint /models listing`.
+    pub source: String,
+}
+
+/// A best-effort automatic limit resolution the driver must complete.
+#[derive(Clone)]
+pub struct ResolveModelLimits {
+    /// The flow's known OpenAI-compatible base URL, when it has one.
+    pub endpoint: Option<String>,
+    /// A bearer the flow already holds, when it holds one.
+    pub bearer: Option<Secret>,
+    /// Chosen environment variable holding the bearer, when chosen.
+    pub environment_variable: Option<String>,
+    /// Locally configured provider name the driver can resolve instead.
+    pub provider: Option<String>,
+    /// The model ID just entered.
+    pub model: String,
+}
+
+impl fmt::Debug for ResolveModelLimits {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The bearer is a secret on its way to a probe; effects reach test
+        // output and must not carry it, even redacted-by-convention.
+        formatter
+            .debug_struct("ResolveModelLimits")
+            .field("endpoint", &self.endpoint)
+            .field("bearer", &self.bearer.as_ref().map(|_| "[redacted]"))
+            .field("environment_variable", &self.environment_variable)
+            .field("provider", &self.provider)
+            .field("model", &self.model)
+            .finish()
+    }
+}
+
 /// Effect requested by one setup key.
 #[derive(Debug, Clone)]
 pub enum SetupEffect {
@@ -161,6 +204,12 @@ pub enum SetupEffect {
     None,
     /// Exit successfully without writing or starting a session.
     Cancel,
+    /// Run the bounded automatic limit resolution and feed it back through
+    /// [`SetupApp::apply_resolved_limits`].
+    ResolveModelLimits {
+        /// Everything the driver needs to try each source.
+        request: ResolveModelLimits,
+    },
     /// Persist and preflight the reviewed submission.
     Submit {
         /// Reviewed setup values.
@@ -207,8 +256,6 @@ enum Step {
     ModelChoice,
     ModelName,
     ContextTokens,
-    MaxInputTokens,
-    MaxOutputTokens,
     ResponseBehavior,
     DefaultChoice,
     Review,
@@ -278,6 +325,10 @@ pub struct SetupApp {
     make_default: bool,
     input: String,
     error: Option<String>,
+    /// Why the surface is busy, shown instead of the default applying note.
+    busy_note: Option<String>,
+    /// Provenance of automatically resolved limits, shown in review.
+    limits_source: Option<String>,
     collision_preview: Option<String>,
     allow_collisions: bool,
     destination: String,
@@ -346,6 +397,8 @@ impl SetupApp {
             make_default: true,
             input: String::new(),
             error: None,
+            busy_note: None,
+            limits_source: None,
             collision_preview: None,
             allow_collisions: false,
             destination: "~/.smith/config.toml".into(),
@@ -422,6 +475,40 @@ impl SetupApp {
     /// Whether setup is waiting for an external persistence/preflight effect.
     pub fn is_busy(&self) -> bool {
         self.step == Step::Busy
+    }
+
+    /// Why the busy step is busy, when a specific reason was recorded.
+    pub fn busy_note(&self) -> Option<&str> {
+        self.busy_note.as_deref()
+    }
+
+    /// Continues after the driver's bounded automatic limit resolution.
+    ///
+    /// `None` means no source knew the context window, so the user enters that
+    /// one value. Smith derives both ceilings without presenting more numeric
+    /// fields. Resolved limits skip numeric entry; Back still exposes the
+    /// prefilled context window for an intentional override.
+    pub fn apply_resolved_limits(&mut self, resolved: Option<ResolvedModelLimits>) {
+        self.busy_note = None;
+        // Restore the model step as the back target; Busy must never remain
+        // reachable, because it ignores every key.
+        self.step = self.history.pop().unwrap_or(Step::ModelName);
+        match resolved {
+            None => self.enter(Step::ContextTokens, true),
+            Some(resolved) => {
+                self.context_tokens = Some(resolved.context_tokens);
+                self.max_input_tokens = Some(resolved.max_input_tokens);
+                self.max_output_tokens = Some(resolved.max_output_tokens);
+                self.limits_source = Some(resolved.source);
+                let next = if self.action == Some(SetupAction::AddProvider) {
+                    Step::ResponseBehavior
+                } else {
+                    Step::DefaultChoice
+                };
+                self.enter(next, true);
+                self.history.push(Step::ContextTokens);
+            }
+        }
     }
 
     /// Returns setup to an actionable step with a bounded external error.
@@ -654,7 +741,24 @@ impl SetupApp {
     fn back(&mut self) {
         if let Some(step) = self.history.pop() {
             self.step = step;
-            self.input.clear();
+            self.input = match step {
+                Step::ProviderName => self.provider.clone(),
+                Step::Endpoint => self.endpoint.clone(),
+                Step::ModelName => self.model.clone(),
+                // A context window already chosen by resolution is what Back
+                // is there to edit, so it is what the only numeric field
+                // shows.
+                Step::ContextTokens => self
+                    .context_tokens
+                    .map_or_else(String::new, |value| value.to_string()),
+                _ => String::new(),
+            };
+            // Secret input is deliberately never restored by navigation. If
+            // Back reaches authentication again, require a fresh key rather
+            // than retaining the previously entered credential.
+            if matches!(step, Step::CredentialMethod | Step::CredentialValue) {
+                self.secret.clear();
+            }
             self.error = None;
             // Leaving the review invalidates a collision approval: anything
             // edited on the way back must be re-reviewed before it can
@@ -927,34 +1031,68 @@ impl SetupApp {
                     self.error = Some("Enter the provider's exact model ID.".into());
                 } else {
                     self.model = value;
+                    if matches!(
+                        self.action,
+                        Some(SetupAction::AddProvider | SetupAction::AddModel)
+                    ) {
+                        // Custom models are the only ones whose limits nobody
+                        // has reviewed yet, so they are the only ones worth a
+                        // bounded read of the endpoint's own advertisement.
+                        self.busy_note = Some(
+                            "Resolving model limits from the endpoint and trusted catalog…".into(),
+                        );
+                        self.enter(Step::Busy, true);
+                        return SetupEffect::ResolveModelLimits {
+                            request: ResolveModelLimits {
+                                endpoint: if self.action == Some(SetupAction::AddProvider)
+                                    && !self.endpoint.is_empty()
+                                {
+                                    Some(self.endpoint.clone())
+                                } else {
+                                    None
+                                },
+                                bearer: match self.credential_method {
+                                    Some(method)
+                                        if method.takes_secret() && !self.secret.is_empty() =>
+                                    {
+                                        Some(self.secret.secret())
+                                    }
+                                    _ => None,
+                                },
+                                environment_variable: if self.credential_method
+                                    == Some(CredentialMethod::Environment)
+                                {
+                                    Some(self.environment_variable.clone())
+                                } else {
+                                    None
+                                },
+                                provider: (!self.provider.is_empty())
+                                    .then(|| self.provider.clone()),
+                                model: self.model.clone(),
+                            },
+                        };
+                    }
                     self.enter(Step::ContextTokens, true);
                 }
             }
             Step::ContextTokens => match positive_u32(&value) {
                 Ok(value) => {
+                    let unchanged_resolution =
+                        self.context_tokens == Some(value) && self.limits_source.is_some();
                     self.context_tokens = Some(value);
-                    self.enter(Step::MaxInputTokens, true);
-                }
-                Err(error) => self.error = Some(error),
-            },
-            Step::MaxInputTokens => match positive_u32(&value) {
-                Ok(value) if Some(value) <= self.context_tokens => {
-                    self.max_input_tokens = Some(value);
-                    self.enter(Step::MaxOutputTokens, true);
-                }
-                Ok(_) => self.error = Some("Maximum input cannot exceed context tokens.".into()),
-                Err(error) => self.error = Some(error),
-            },
-            Step::MaxOutputTokens => match positive_u32(&value) {
-                Ok(value) if Some(value) <= self.context_tokens => {
-                    self.max_output_tokens = Some(value);
+                    if !unchanged_resolution {
+                        self.max_input_tokens = Some(value);
+                        self.max_output_tokens =
+                            Some(smith_runtime::probe::derived_output_ceiling(value));
+                        self.limits_source =
+                            Some("context entered manually · ceilings derived".into());
+                    }
                     if self.action == Some(SetupAction::AddProvider) {
                         self.enter(Step::ResponseBehavior, true);
                     } else {
                         self.enter(Step::DefaultChoice, true);
                     }
                 }
-                Ok(_) => self.error = Some("Maximum output cannot exceed context tokens.".into()),
                 Err(error) => self.error = Some(error),
             },
             Step::Review => {
@@ -1042,23 +1180,24 @@ impl SetupApp {
 
     fn limits_review(&self) -> String {
         format!(
-            "limits: context {} · max input {} · max output {} (explicit)",
+            "limits: context {} · max input {} · max output {} ({})",
             self.context_tokens.unwrap_or_default(),
             self.max_input_tokens.unwrap_or_default(),
-            self.max_output_tokens.unwrap_or_default()
+            self.max_output_tokens.unwrap_or_default(),
+            self.limits_source.as_deref().unwrap_or("entered manually")
         )
     }
 
-    fn prompt(&self) -> (&'static str, &'static str, bool) {
+    fn prompt(&self) -> (&'static str, String, bool) {
         match self.step {
             Step::ProviderName => (
                 "Provider name",
-                "A stable local name, for example openrouter",
+                "A stable local name, for example openrouter".to_owned(),
                 false,
             ),
             Step::Endpoint => (
                 "API base URL",
-                "OpenAI-compatible base, for example https://openrouter.ai/api/v1",
+                "OpenAI-compatible base, for example https://openrouter.ai/api/v1".to_owned(),
                 false,
             ),
             Step::CredentialValue
@@ -1072,24 +1211,36 @@ impl SetupApp {
                         "Plaintext in owner-only config; readable by same-user processes and backups"
                     } else {
                         "Stored only in the platform credential service"
-                    },
+                    }
+                    .to_owned(),
                     true,
                 )
             }
             Step::CredentialValue => (
                 "Environment variable",
-                "Smith records the name only and does not read its value during setup",
+                "Smith records the name only and does not read its value during setup".to_owned(),
                 false,
             ),
             Step::ModelName => (
                 "Model ID",
-                "Use the provider's exact identifier; Smith will not guess limits",
+                "Exact identifier; limits resolve automatically when the endpoint or catalog publishes them"
+                    .to_owned(),
                 false,
             ),
-            Step::ContextTokens => ("Context tokens", "Total context window", false),
-            Step::MaxInputTokens => ("Maximum input tokens", "Enforced input ceiling", false),
-            Step::MaxOutputTokens => ("Maximum output tokens", "Provider output ceiling", false),
-            _ => ("", "", false),
+            Step::ContextTokens => (
+                "Model context window",
+                match self.limits_source.as_deref() {
+                    Some(source) => format!(
+                        "Resolved from {source} · edit only to override; input/output ceilings follow automatically"
+                    ),
+                    None => {
+                        "Not published by the endpoint or catalog · input/output ceilings are derived"
+                            .to_owned()
+                    }
+                },
+                false,
+            ),
+            _ => ("", String::new(), false),
         }
     }
 }
@@ -1136,9 +1287,12 @@ pub fn draw_setup(frame: &mut Frame<'_>, app: &SetupApp, theme: Theme) {
         Step::Review | Step::Busy => {
             lines.push(Line::from(Span::styled(
                 if app.step == Step::Busy {
-                    "Applying reviewed setup and running local preflight…"
+                    match app.busy_note() {
+                        Some(note) => note.to_owned(),
+                        None => "Applying reviewed setup and running local preflight…".to_owned(),
+                    }
                 } else {
-                    "Review the complete non-secret setup change:"
+                    "Review the complete non-secret setup change:".to_owned()
                 },
                 theme.style(Tone::Accent),
             )));
@@ -1475,7 +1629,7 @@ mod tests {
     }
 
     #[test]
-    fn custom_limits_are_required_and_cross_field_validated() {
+    fn an_unknown_custom_model_asks_only_for_context_and_derives_ceilings() {
         let mut app = SetupApp::new(SetupMode::AddProvider, Vec::new(), Vec::new());
         for character in "router".chars() {
             app.on_key(key(KeyCode::Char(character)));
@@ -1489,21 +1643,229 @@ mod tests {
         for character in "model".chars() {
             app.on_key(key(KeyCode::Char(character)));
         }
-        app.on_key(key(KeyCode::Enter));
-        for character in "100".chars() {
-            app.on_key(key(KeyCode::Char(character)));
-        }
-        app.on_key(key(KeyCode::Enter));
-        for character in "101".chars() {
-            app.on_key(key(KeyCode::Char(character)));
-        }
-        app.on_key(key(KeyCode::Enter));
-        assert_eq!(app.step, Step::MaxInputTokens);
+        // The driver feeds a failed resolution back before any numeric value
+        // is requested.
+        assert!(matches!(
+            app.on_key(key(KeyCode::Enter)),
+            SetupEffect::ResolveModelLimits { .. }
+        ));
+        assert_eq!(app.step, Step::Busy);
+        app.apply_resolved_limits(None);
+        assert_eq!(app.step, Step::ContextTokens);
+        let rendered = render_setup(&app, 92, 20);
+        assert!(rendered.contains("Model context window"), "{rendered}");
         assert!(
-            app.error
-                .as_deref()
-                .is_some_and(|error| error.contains("exceed"))
+            rendered.contains("input/output ceilings are derived"),
+            "{rendered}"
         );
+        assert!(!rendered.contains("Maximum input tokens"), "{rendered}");
+        assert!(!rendered.contains("Maximum output tokens"), "{rendered}");
+        app.on_key(key(KeyCode::Enter));
+        assert_eq!(app.step, Step::ContextTokens);
+        assert!(app.error.is_some(), "an empty context window was accepted");
+        for character in "64000".chars() {
+            app.on_key(key(KeyCode::Char(character)));
+        }
+        app.on_key(key(KeyCode::Enter));
+        assert_eq!(app.step, Step::ResponseBehavior);
+        assert_eq!(app.context_tokens, Some(64_000));
+        assert_eq!(app.max_input_tokens, Some(64_000));
+        assert_eq!(app.max_output_tokens, Some(16_000));
+        assert!(
+            app.review_lines()
+                .iter()
+                .any(|line| line.contains("context entered manually · ceilings derived"))
+        );
+    }
+
+    #[test]
+    fn a_model_step_resolution_request_carries_the_flow_facts() {
+        let mut app = SetupApp::new(SetupMode::AddProvider, Vec::new(), Vec::new());
+        for character in "router".chars() {
+            app.on_key(key(KeyCode::Char(character)));
+        }
+        app.on_key(key(KeyCode::Enter));
+        for character in "https://example.test/v1".chars() {
+            app.on_key(key(KeyCode::Char(character)));
+        }
+        app.on_key(key(KeyCode::Enter));
+        choose(&mut app, "keychain");
+        for character in "sk-test".chars() {
+            app.on_key(key(KeyCode::Char(character)));
+        }
+        app.on_key(key(KeyCode::Enter));
+        for character in "model".chars() {
+            app.on_key(key(KeyCode::Char(character)));
+        }
+        let SetupEffect::ResolveModelLimits { request } = app.on_key(key(KeyCode::Enter)) else {
+            panic!("the custom model step requests resolution");
+        };
+        assert_eq!(request.endpoint.as_deref(), Some("https://example.test/v1"));
+        assert_eq!(request.provider.as_deref(), Some("router"));
+        assert_eq!(request.model, "model");
+        assert!(request.bearer.is_some(), "the typed key rides along");
+        assert_eq!(request.environment_variable, None);
+        // The busy note is the reason the surface is blocked, and no key
+        // escapes it while the driver works.
+        assert!(
+            app.busy_note()
+                .is_some_and(|note| note.contains("Resolving"))
+        );
+        assert!(matches!(app.on_key(key(KeyCode::Esc)), SetupEffect::None));
+    }
+
+    #[test]
+    fn resolved_limits_skip_input_and_only_context_is_editable() {
+        let mut app = SetupApp::new(SetupMode::AddProvider, Vec::new(), Vec::new());
+        app.action = Some(SetupAction::AddProvider);
+        app.endpoint = "https://example.test/v1".into();
+        app.enter(Step::ModelName, false);
+        for character in "model".chars() {
+            app.on_key(key(KeyCode::Char(character)));
+        }
+        app.on_key(key(KeyCode::Enter));
+        app.apply_resolved_limits(Some(ResolvedModelLimits {
+            context_tokens: 200_000,
+            max_input_tokens: 200_000,
+            max_output_tokens: 32_768,
+            source: "endpoint /models listing".to_owned(),
+        }));
+        assert_eq!(app.step, Step::ResponseBehavior);
+        assert!(
+            app.review_lines()
+                .iter()
+                .any(|line| line.contains("(endpoint /models listing)")),
+            "{:?}",
+            app.review_lines()
+        );
+        // Back walks into the one context-window fallback with its value
+        // prefilled, not into the busy step the resolution passed through.
+        app.on_key(key(KeyCode::BackTab));
+        assert_eq!(app.step, Step::ContextTokens);
+        assert_eq!(app.input, "200000");
+        let rendered = render_setup(&app, 92, 20);
+        assert!(
+            rendered.contains("Resolved from endpoint /models listing"),
+            "{rendered}"
+        );
+        app.input.clear();
+        for character in "100000".chars() {
+            app.on_key(key(KeyCode::Char(character)));
+        }
+        app.on_key(key(KeyCode::Enter));
+        assert_eq!(app.step, Step::ResponseBehavior);
+        assert_eq!(app.max_input_tokens, Some(100_000));
+        assert_eq!(app.max_output_tokens, Some(25_000));
+        assert!(
+            app.review_lines()
+                .iter()
+                .any(|line| line.contains("(context entered manually · ceilings derived)")),
+            "{:?}",
+            app.review_lines()
+        );
+    }
+
+    #[test]
+    fn unchanged_resolved_context_preserves_published_ceilings() {
+        let mut app = SetupApp::new(
+            SetupMode::AddModel { provider: None },
+            Vec::new(),
+            Vec::new(),
+        );
+        app.action = Some(SetupAction::AddModel);
+        app.provider = "local".into();
+        app.enter(Step::ModelName, false);
+        for character in "m".chars() {
+            app.on_key(key(KeyCode::Char(character)));
+        }
+        app.on_key(key(KeyCode::Enter));
+        app.apply_resolved_limits(Some(ResolvedModelLimits {
+            context_tokens: 64_000,
+            max_input_tokens: 60_000,
+            max_output_tokens: 4_000,
+            source: "endpoint /models listing".to_owned(),
+        }));
+        assert_eq!(app.step, Step::DefaultChoice);
+        app.on_key(key(KeyCode::BackTab));
+        assert_eq!(app.step, Step::ContextTokens);
+        assert_eq!(app.input, "64000");
+        app.on_key(key(KeyCode::Enter));
+        assert_eq!(app.step, Step::DefaultChoice);
+        assert_eq!(app.max_input_tokens, Some(60_000));
+        assert_eq!(app.max_output_tokens, Some(4_000));
+        assert_eq!(
+            app.limits_source.as_deref(),
+            Some("endpoint /models listing")
+        );
+    }
+
+    #[test]
+    fn back_restores_custom_non_secret_fields_and_clears_secret_input() {
+        let provider = "router";
+        let endpoint = "https://example.test/v1";
+        let model = "custom-model";
+        let secret = "sk-never-restored";
+        let mut app = SetupApp::new(SetupMode::AddProvider, Vec::new(), Vec::new());
+
+        for character in provider.chars() {
+            app.on_key(key(KeyCode::Char(character)));
+        }
+        app.on_key(key(KeyCode::Enter));
+        for character in endpoint.chars() {
+            app.on_key(key(KeyCode::Char(character)));
+        }
+        app.on_key(key(KeyCode::Enter));
+        choose(&mut app, "keychain");
+        for character in secret.chars() {
+            app.on_key(key(KeyCode::Char(character)));
+        }
+        app.on_key(key(KeyCode::Enter));
+        for character in model.chars() {
+            app.on_key(key(KeyCode::Char(character)));
+        }
+        assert!(matches!(
+            app.on_key(key(KeyCode::Enter)),
+            SetupEffect::ResolveModelLimits { .. }
+        ));
+        app.apply_resolved_limits(None);
+        for character in "64000".chars() {
+            app.on_key(key(KeyCode::Char(character)));
+        }
+        app.on_key(key(KeyCode::Enter));
+        choose(&mut app, "normal");
+        choose(&mut app, "yes");
+        assert_eq!(app.step, Step::Review);
+
+        app.review_collisions("[providers.router]\n- endpoint = \"old\"\n+ endpoint = \"new\"");
+        assert!(app.allow_collisions);
+
+        // Back immediately revokes the collision approval, then the actual
+        // setup history exposes the retained non-secret fields in order.
+        app.on_key(key(KeyCode::BackTab));
+        assert_eq!(app.step, Step::DefaultChoice);
+        assert!(app.collision_preview.is_none());
+        assert!(!app.allow_collisions);
+        app.on_key(key(KeyCode::BackTab));
+        assert_eq!(app.step, Step::ResponseBehavior);
+        app.on_key(key(KeyCode::BackTab));
+        assert_eq!(app.step, Step::ContextTokens);
+        assert_eq!(app.input, "64000");
+        app.on_key(key(KeyCode::BackTab));
+        assert_eq!(app.step, Step::ModelName);
+        assert_eq!(app.input, model);
+        app.on_key(key(KeyCode::BackTab));
+        assert_eq!(app.step, Step::CredentialValue);
+        assert!(app.input.is_empty());
+        assert!(app.secret.is_empty());
+        app.on_key(key(KeyCode::BackTab));
+        assert_eq!(app.step, Step::CredentialMethod);
+        assert!(app.secret.is_empty());
+        app.on_key(key(KeyCode::BackTab));
+        assert_eq!(app.step, Step::Endpoint);
+        assert_eq!(app.input, endpoint);
+        app.on_key(key(KeyCode::BackTab));
+        assert_eq!(app.step, Step::ProviderName);
+        assert_eq!(app.input, provider);
     }
 
     #[test]

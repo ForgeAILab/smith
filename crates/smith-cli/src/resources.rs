@@ -158,6 +158,16 @@ pub(super) fn runtime_resources(
             "AI Studio API key · fixed native Gemini endpoint · catalog-backed model",
         ));
     }
+    if !connections
+        .iter()
+        .any(|entry| entry.id == "openai-compatible")
+    {
+        connections.push(ResourceEntry::new(
+            "openai-compatible",
+            "OpenAI-compatible endpoint",
+            "API key · any OpenAI-compatible base URL · adds a first reviewed model",
+        ));
+    }
     let providers = inventory
         .providers
         .into_iter()

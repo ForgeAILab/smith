@@ -196,9 +196,15 @@ pub(super) async fn connect(
         SetupMode::OpenRouter
     } else if provider == GOOGLE_PROVIDER {
         SetupMode::Google
+    } else if provider == "openai-compatible" {
+        // Not a provider name: the generic entry for endpoints with no
+        // built-in ceremony, so it opens the same reviewed add-provider flow
+        // as `smith setup add-provider` instead of a credential swap.
+        SetupMode::AddProvider
     } else {
         anyhow::bail!(
-            "provider `{provider}` is not configured; add custom providers with `smith setup add-provider`"
+            "provider `{provider}` is not configured; connect a custom OpenAI-compatible endpoint \
+             with `/connect openai-compatible`, or run `smith setup add-provider`"
         );
     };
     Ok(matches!(

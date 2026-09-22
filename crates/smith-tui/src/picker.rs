@@ -71,7 +71,7 @@ pub struct ResourcePicker {
     pub entries: Vec<ResourceEntry>,
     /// Selected index within the filtered list.
     pub selected: usize,
-    /// Guidance shown when nothing matches or exists.
+    /// Guidance shown when the local inventory is empty.
     pub empty_guidance: String,
 }
 
@@ -149,6 +149,11 @@ impl ResourcePicker {
                 }
                 PickerOutcome::Pending
             }
+            (KeyCode::Char('u' | 'U'), modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.query.clear();
+                self.selected = 0;
+                PickerOutcome::Pending
+            }
             (KeyCode::Enter, _) => match self.selected_entry() {
                 Some(entry) if entry.disabled_reason.is_none() => {
                     PickerOutcome::Selected(entry.id.clone())
@@ -204,13 +209,21 @@ pub fn draw_resource_picker(
     let footer_rows = if inner.width < 60 { 2 } else { 1 };
     let [body, footer] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(footer_rows)]).areas(inner);
-    frame.render_widget(
-        Paragraph::new(crate::render::wrap::wrap_lines(
-            &picker_lines(picker, usize::from(body.height), theme),
-            body.width,
-        )),
-        body,
-    );
+    let lines = picker_lines(picker, usize::from(body.height), theme);
+    // Empty-inventory guidance may be longer than a narrow pane and should
+    // still expose its setup command. Entry metadata, by contrast, is kept
+    // one row so it cannot consume the rows needed by the next state label.
+    let lines = if picker.filtered_indices().is_empty() && lines.len() > 1 {
+        let mut wrapped = vec![lines[0].clone()];
+        wrapped.extend(crate::render::wrap::wrap_lines(&lines[1..], body.width));
+        wrapped
+    } else {
+        lines
+    };
+    // Entry metadata is optional one-line context. Let it clip at the edge so
+    // a long capability description cannot consume the rows needed to show
+    // the next resource or its availability state.
+    frame.render_widget(Paragraph::new(lines), body);
     frame.render_widget(
         Paragraph::new(if footer_rows == 1 {
             " ↑/↓ choose · Enter confirm · Esc cancel"
@@ -289,8 +302,13 @@ fn picker_entry_lines(picker: &ResourcePicker, height: usize, theme: Theme) -> V
     let mut lines = Vec::new();
     let indices = picker.filtered_indices();
     if indices.is_empty() {
+        let guidance = if picker.entries.is_empty() {
+            picker.empty_guidance.clone()
+        } else {
+            "No matches · Ctrl+U clear filter".to_owned()
+        };
         lines.push(Line::from(Span::styled(
-            format!(" {}", picker.empty_guidance),
+            format!(" {guidance}"),
             theme.style(Tone::Warning),
         )));
     } else {
@@ -302,17 +320,17 @@ fn picker_entry_lines(picker: &ResourcePicker, height: usize, theme: Theme) -> V
         for (filtered_index, raw_index) in indices.iter().enumerate().skip(start).take(capacity) {
             let entry = &picker.entries[*raw_index];
             let marker = if filtered_index == selected {
-                "›"
+                "› "
             } else {
-                " "
+                "  "
             };
-            let mut suffix = String::new();
+            let mut state = String::new();
             if entry.active {
-                suffix.push_str(" · current");
+                state.push_str(" · current");
             }
             if let Some(reason) = &entry.disabled_reason {
-                suffix.push_str(" · unavailable: ");
-                suffix.push_str(reason);
+                state.push_str(" · unavailable: ");
+                state.push_str(reason);
             }
             let tone = if entry.disabled_reason.is_some() {
                 Tone::Dim
@@ -321,13 +339,20 @@ fn picker_entry_lines(picker: &ResourcePicker, height: usize, theme: Theme) -> V
             } else {
                 Tone::Default
             };
-            lines.push(Line::from(vec![
-                Span::styled(format!(" {marker} {}", entry.label), theme.style(tone)),
-                Span::styled(
-                    format!("  {}{suffix}", entry.detail),
+            let mut spans = vec![Span::styled(
+                format!("{marker}{}", entry.label),
+                theme.style(tone),
+            )];
+            if !state.is_empty() {
+                spans.push(Span::styled(state, theme.style(tone)));
+            }
+            if !entry.detail.is_empty() {
+                spans.push(Span::styled(
+                    format!("  {}", entry.detail),
                     theme.style(Tone::Dim),
-                ),
-            ]));
+                ));
+            }
+            lines.push(Line::from(spans));
         }
     }
     lines
@@ -379,6 +404,107 @@ mod tests {
         );
         assert_eq!(picker.on_key(key(KeyCode::Enter)), PickerOutcome::Pending);
         picker.query = "absent".into();
+        assert_eq!(picker.on_key(key(KeyCode::Enter)), PickerOutcome::Pending);
+    }
+
+    #[test]
+    fn empty_inventory_and_unmatched_filter_have_distinct_guidance() {
+        let empty = ResourcePicker::new(
+            "Models",
+            Vec::new(),
+            "No local model is selectable · run smith setup add-model",
+        );
+        let empty_lines = picker_lines(
+            &empty,
+            3,
+            Theme::from_env().without_color().without_motion(),
+        );
+        let empty_text = empty_lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(empty_text.contains("run smith setup add-model"));
+        assert!(!empty_text.contains("No matches"));
+
+        let mut filtered = ResourcePicker::new(
+            "Models",
+            vec![ResourceEntry::new("local/model", "local/model", "local")],
+            "No local model is selectable · run smith setup add-model",
+        );
+        filtered.query = "does-not-exist".to_owned();
+        filtered.selected = 4;
+        let filtered_lines = picker_lines(
+            &filtered,
+            3,
+            Theme::from_env().without_color().without_motion(),
+        );
+        let filtered_text = filtered_lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(filtered_text.contains("No matches"), "{filtered_text}");
+        assert!(
+            filtered_text.contains("Ctrl+U clear filter"),
+            "{filtered_text}"
+        );
+
+        assert_eq!(
+            filtered.on_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL,)),
+            PickerOutcome::Pending
+        );
+        assert!(filtered.query.is_empty());
+        assert_eq!(filtered.selected, 0);
+        assert_eq!(
+            filtered.selected_entry().map(|entry| entry.id.as_str()),
+            Some("local/model")
+        );
+    }
+
+    #[test]
+    fn state_labels_precede_long_metadata_and_unavailable_stays_disabled() {
+        let long_detail =
+            "advertised capabilities, context window, output ceiling, and request budget "
+                .repeat(4);
+        let mut picker = ResourcePicker::new(
+            "Models",
+            vec![
+                ResourceEntry::new("local/model", "model", long_detail.clone()).active(true),
+                ResourceEntry::new("broken/model", "broken", long_detail)
+                    .disabled("missing limits"),
+            ],
+            "run setup",
+        );
+
+        let mut terminal = Terminal::new(TestBackend::new(44, 10)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                draw_resource_picker(
+                    frame,
+                    frame.area(),
+                    &picker,
+                    Theme::from_env().without_color().without_motion(),
+                );
+            })
+            .expect("draw");
+        let rendered = (0..terminal.backend().buffer().area.height)
+            .map(|y| {
+                (0..terminal.backend().buffer().area.width)
+                    .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let current = rendered.find("current").expect("current state is visible");
+        let metadata = rendered.find("advertised").expect("metadata is visible");
+        assert!(current < metadata, "{rendered}");
+        assert!(
+            rendered.contains("unavailable: missing limits"),
+            "{rendered}"
+        );
+
+        picker.query = "broken".to_owned();
         assert_eq!(picker.on_key(key(KeyCode::Enter)), PickerOutcome::Pending);
     }
 

@@ -1,0 +1,4 @@
+    Checking smith-runtime v0.2.9 (/Volumes/Data/codes/ai/tui/crates/smith-runtime)
+    Checking smith-tui v0.2.9 (/Volumes/Data/codes/ai/tui/crates/smith-tui)
+    Checking smith-cli v0.2.9 (/Volumes/Data/codes/ai/tui/crates/smith-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.44s

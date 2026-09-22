@@ -181,7 +181,7 @@
             };
 
             let completion_y = (0..buffer.area.height)
-                .find(|y| row(*y).contains("/help"))
+                .find(|y| row(*y).starts_with("› /help "))
                 .expect("selected completion row");
             let composer_y = (0..buffer.area.height)
                 .find(|y| row(*y).trim_end() == "› /")

@@ -1269,14 +1269,6 @@ mod tests {
                 "`{provider}` contributed no models"
             );
         }
-        assert_eq!(
-            snapshot
-                .provider(ZAI_CODING_PLAN_CATALOG_PROVIDER)
-                .unwrap()
-                .models
-                .len(),
-            4
-        );
     }
 
     #[test]

@@ -348,7 +348,8 @@ async fn a_server_error_names_the_provider_s_reason() {
     assert_eq!(err.kind, ProviderErrorKind::Server);
     assert!(err.retryable);
     assert!(
-        err.message.contains("The service is temporarily unavailable"),
+        err.message
+            .contains("The service is temporarily unavailable"),
         "the provider's reason must reach the message: {}",
         err.message
     );

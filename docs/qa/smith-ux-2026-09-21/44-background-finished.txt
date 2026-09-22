@@ -1,0 +1,32 @@
+• shell · $ sleep 4; printf smith-background-complete
+
+• shell(command, cwd, timeout_ms · details unavailable) · ok
+
+• background · command moved to the background
+
+• changes · Smith turn 1 · contains ambiguous changes only; use /diff
+
+/shell
+(no output)
+[moved to the background by the user as task task:1; it has NOT completed — poll `task_output` with
+this task ID for its result, or stop it with task_stop]
+
+  Worked for 816ms
+
+
+
+
+
+
+
+
+
+
+
+
+› Ask Smith to do anything
+
+  build · local/example-model · bg task:1 · /private/tmp/smith-ux-audit-2026-09-21/project:main
+
+  ● main
+  ○ task:1  sleep 4; printf smith-background-complete                                             0s

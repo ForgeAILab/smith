@@ -705,19 +705,45 @@ impl App {
                 let input = self.composer.text().to_owned();
                 match commands::parse(&input) {
                     Ok(command) => self.dispatch_command(command),
-                    Err(message) => {
-                        let needs_value = matches.get(selected).is_some_and(|command| {
-                            matches!(
-                                command.name,
-                                "resume" | "profile" | "provider" | "model" | "think" | "effort"
-                            )
-                        });
-                        if needs_value && self.composer.text().split_whitespace().count() == 1 {
-                            let command = matches[selected];
-                            self.composer.replace(commands::completion(command));
-                            self.overlay = None;
+                    Err(message) if !commands::has_exact_name(&input) => {
+                        let Some(command) = matches.get(selected).copied() else {
+                            if let Some(Overlay::Palette { error, .. }) = &mut self.overlay {
+                                *error = Some(message);
+                            }
                             return None;
+                        };
+                        let completed = commands::completion(command);
+                        match commands::parse(&completed) {
+                            Ok(command) => {
+                                // Dispatch the selected command as the text
+                                // the user chose, so accepted history records
+                                // `/status` or `/effort`, rather than the
+                                // search query. If an idle guard or a direct
+                                // resource validation rejects it, restore the
+                                // original query so the draft remains intact.
+                                let original = input.clone();
+                                self.composer.replace(completed.clone());
+                                let action = self.dispatch_command(command);
+                                if self.composer.text() == completed {
+                                    self.composer.replace(original);
+                                } else if let Some(Overlay::ResourcePicker {
+                                    restore_on_escape,
+                                    ..
+                                }) = &mut self.overlay
+                                {
+                                    *restore_on_escape = original;
+                                }
+                                action
+                            }
+                            Err(completion_error) => {
+                                if let Some(Overlay::Palette { error, .. }) = &mut self.overlay {
+                                    *error = Some(completion_error);
+                                }
+                                None
+                            }
                         }
+                    }
+                    Err(message) => {
                         if let Some(Overlay::Palette { error, .. }) = &mut self.overlay {
                             *error = Some(message);
                         }
@@ -1017,7 +1043,11 @@ impl App {
 
     /// Scrolls up, which pauses following.
     pub fn scroll_up(&mut self, lines: u16) {
-        if self.scroll_limit == 0 || lines == 0 {
+        if lines == 0 {
+            return;
+        }
+        self.scroll_to_block = None;
+        if self.scroll_limit == 0 {
             return;
         }
         self.scroll_back = self
@@ -1029,6 +1059,10 @@ impl App {
 
     /// Scrolls down, resuming following at the bottom.
     pub fn scroll_down(&mut self, lines: u16) {
+        if lines == 0 {
+            return;
+        }
+        self.scroll_to_block = None;
         self.scroll_back = self
             .scroll_back
             .min(self.scroll_limit)
@@ -1040,6 +1074,7 @@ impl App {
 
     /// Jumps to newest output and resumes following.
     pub fn follow_newest(&mut self) {
+        self.scroll_to_block = None;
         self.scroll_back = 0;
         self.following = true;
     }

@@ -1,0 +1,16 @@
+nd workspace status
+/goal [OBJECTIVE|edit …|budget N|pause|resum
+e|clear]  inspect or control a persistent m
+ulti-turn goal
+/context  show current context usage
+/details  toggle bounded live tool detail
+/timeline  show local turn, child, and reco
+very history
+/new  start a fresh session
+  Choose model · filter: zz-no-such-model
+ No matches · Ctrl+U clear filter
+
+› Ask Smith to do anything
+
+  ▼ following paused · End/Ctrl+L newest
+  enter choose · esc cancel

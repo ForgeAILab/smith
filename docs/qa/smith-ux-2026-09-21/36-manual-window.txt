@@ -1,0 +1,23 @@
+
+ ┌ Smith setup · no agent session or provider request exists yet ─────────────┐
+ │Model context window                                                        │
+ │Not published by the endpoint or catalog · input/output ceilings are derived│
+ │                                                                            │
+ │› type a value                                                              │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │                                                                            │
+ │ Enter continue · Shift+Tab Back · Esc Cancel                               │
+ │                                                                            │
+ └────────────────────────────────────────────────────────────────────────────┘

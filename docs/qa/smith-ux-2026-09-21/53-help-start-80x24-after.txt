@@ -1,0 +1,24 @@
+/help
+Getting started
+Type a task and press Enter.
+/model  Choose a model
+/connect  Add a connection
+/help  Explore all commands
+
+Primary
+/help  list available commands
+/status [--verbose]  show session, usage, and workspace status
+/goal [OBJECTIVE|edit …|budget N|pause|resume|clear]  inspect or control a pers
+istent multi-turn goal
+/context  show current context usage
+/details  toggle bounded live tool detail
+/timeline  show local turn, child, and recovery history
+/new  start a fresh session
+/resume [ID]  resume a saved session
+/connect [PROVIDER]  connect or reconnect a provider
+/disconnect [PROVIDER]  disconnect a provider
+/model [PROVIDER/MODEL]  switch model
+
+› Ask Smith to do anything
+
+  ▼ following paused · End/Ctrl+L newest · build · local/example-model

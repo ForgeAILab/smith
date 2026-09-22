@@ -414,7 +414,13 @@ expect {{
         "screen: {screen}\nstderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(screen.contains("plaintext at rest"), "{screen}");
+    // Ratatui updates individual cells, so cursor-position escapes can split
+    // the warning's words across writes. The rendered wording is covered by
+    // setup snapshots; here retain the process-level warning and masking checks.
+    assert!(
+        screen.contains("plaintext") && screen.contains("same-user"),
+        "{screen}"
+    );
     assert!(screen.contains("[redacted]"), "{screen}");
     assert!(!screen.contains(SECRET), "{screen}");
     assert!(screen.contains("zai/glm-5.2"), "{screen}");
@@ -527,7 +533,7 @@ expect {
 }
 send -- "openrouter\r"
 after 250
-send -- "https://openrouter.ai/api/v1\r"
+send -- "http://127.0.0.1:9/v1\r"
 after 250
 send -- "\033\[B\033\[B\033\[B\r"
 after 250
@@ -536,10 +542,6 @@ after 250
 send -- "openai/gpt-test\r"
 after 250
 send -- "128000\r"
-after 250
-send -- "120000\r"
-after 250
-send -- "8000\r"
 after 250
 send -- "\r"
 after 250
@@ -583,7 +585,7 @@ fn add_model_accepts_a_valid_second_provider_that_has_no_models_yet() {
         "{FAKE_CONFIG}\n\
          [providers.empty]\n\
          kind = \"openai-compatible\"\n\
-         base_url = \"https://empty.example/v1\"\n\
+         base_url = \"http://127.0.0.1:9/v1\"\n\
          credential = \"env:ZAI_API_KEY\"\n"
     ));
     let interaction = r#"
@@ -595,10 +597,6 @@ expect {
 send -- "first-model\r"
 after 250
 send -- "64000\r"
-after 250
-send -- "60000\r"
-after 250
-send -- "4000\r"
 after 250
 send -- "\r"
 after 500

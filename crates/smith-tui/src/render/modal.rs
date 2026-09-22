@@ -21,6 +21,10 @@ use super::helpers::*;
 use super::layout::*;
 use super::transcript::*;
 
+/// Command completion keeps the transcript visible by reserving at most five
+/// single-line rows for the selected window.
+const MAX_VISIBLE_PALETTE_ROWS: usize = 5;
+
 pub(super) fn draw_questionnaire(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -429,8 +433,10 @@ pub(super) fn draw_palette(
             theme.style(Tone::Warning),
         )));
     } else {
-        let capacity = usize::from(area.height).saturating_sub(usize::from(error.is_some()));
-        let visible = capacity.min(matches.len());
+        let error_rows = usize::from(error.is_some());
+        let capacity = usize::from(area.height).saturating_sub(error_rows);
+        let visible = capacity.min(MAX_VISIBLE_PALETTE_ROWS).min(matches.len());
+        let selected = selected.min(matches.len().saturating_sub(1));
         let start = selected
             .saturating_sub(visible / 2)
             .min(matches.len().saturating_sub(visible));
@@ -460,14 +466,16 @@ pub(super) fn draw_palette(
             theme.style(Tone::Danger),
         )));
     }
-    frame.render_widget(
-        Paragraph::new(super::wrap::wrap_lines(&lines, area.width)),
-        area,
-    );
+    // Deliberately do not wrap palette rows. The command label and selection
+    // marker stay on the left, while long hints/descriptions yield to the
+    // terminal edge instead of pushing the error or selected row away.
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 pub(super) fn desired_palette_rows(app: &App, error: Option<&str>) -> u16 {
-    let matches = commands::matches(app.composer.text()).len().max(1);
+    let matches = commands::matches(app.composer.text())
+        .len()
+        .clamp(1, MAX_VISIBLE_PALETTE_ROWS);
     u16::try_from(matches.saturating_add(usize::from(error.is_some()))).unwrap_or(u16::MAX)
 }
 

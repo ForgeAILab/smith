@@ -1,0 +1,63 @@
+    Checking agent-runtime-registry v0.1.0 (https://github.com/ForgeAILab/agent-runtime.git?rev=91f54549f5d9d07f1e74b5e07795b63a9a612f6d#91f54549)
+    Checking agent-runtime-core v0.1.0 (https://github.com/ForgeAILab/agent-runtime.git?rev=91f54549f5d9d07f1e74b5e07795b63a9a612f6d#91f54549)
+    Checking smith-config v0.2.9 (/Volumes/Data/codes/ai/tui/crates/smith-config)
+    Checking agent-runtime-ability v0.1.0 (https://github.com/ForgeAILab/agent-runtime.git?rev=91f54549f5d9d07f1e74b5e07795b63a9a612f6d#91f54549)
+    Checking agent-runtime-provider v0.1.0 (https://github.com/ForgeAILab/agent-runtime.git?rev=91f54549f5d9d07f1e74b5e07795b63a9a612f6d#91f54549)
+    Checking agent-runtime-context v0.1.0 (https://github.com/ForgeAILab/agent-runtime.git?rev=91f54549f5d9d07f1e74b5e07795b63a9a612f6d#91f54549)
+    Checking smith-host v0.2.9 (/Volumes/Data/codes/ai/tui/crates/smith-host)
+    Checking smith-tools v0.2.9 (/Volumes/Data/codes/ai/tui/crates/smith-tools)
+    Checking agent-runtime-mcp v0.1.0 (https://github.com/ForgeAILab/agent-runtime.git?rev=91f54549f5d9d07f1e74b5e07795b63a9a612f6d#91f54549)
+    Checking agent-runtime v0.1.0 (https://github.com/ForgeAILab/agent-runtime.git?rev=91f54549f5d9d07f1e74b5e07795b63a9a612f6d#91f54549)
+    Checking smith-runtime v0.2.9 (/Volumes/Data/codes/ai/tui/crates/smith-runtime)
+    Checking agent-runtime-testkit v0.1.0 (https://github.com/ForgeAILab/agent-runtime.git?rev=91f54549f5d9d07f1e74b5e07795b63a9a612f6d#91f54549)
+    Checking smith-tui v0.2.9 (/Volumes/Data/codes/ai/tui/crates/smith-tui)
+    Checking smith-cli v0.2.9 (/Volumes/Data/codes/ai/tui/crates/smith-cli)
+error: this `if` statement can be collapsed
+    --> crates/smith-cli/src/headless.rs:1697:9
+     |
+1697 | /         if let Some(controller) = &cache.controller {
+1698 | |             if !controller.synthetic_attempts.is_empty() {
+1699 | |                 lines.push(crate::local_command::render_cache_controller_summary(
+1700 | |                     controller,
+...    |
+1703 | |         }
+     | |_________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#collapsible_if
+     = note: `-D clippy::collapsible-if` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+     |
+1697 ~         if let Some(controller) = &cache.controller
+1698 ~             && !controller.synthetic_attempts.is_empty() {
+1699 |                 lines.push(crate::local_command::render_cache_controller_summary(
+1700 |                     controller,
+1701 |                 ));
+1702 ~             }
+     |
+
+error: this `if` statement can be collapsed
+   --> crates/smith-cli/src/runtime_host.rs:389:5
+    |
+389 | /     if let Some(controller) = host.cache_lifecycle() {
+390 | |         if !controller.synthetic_attempts.is_empty() {
+391 | |             println!(
+392 | |                 "{}",
+...   |
+396 | |     }
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+389 ~     if let Some(controller) = host.cache_lifecycle()
+390 ~         && !controller.synthetic_attempts.is_empty() {
+391 |             println!(
+...
+394 |             );
+395 ~         }
+    |
+
+error: could not compile `smith-cli` (bin "smith") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `smith-cli` (bin "smith" test) due to 2 previous errors

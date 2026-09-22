@@ -1,0 +1,32 @@
+• shell · $ printf smith-ux-shell-ok
+
+• shell(command, cwd, timeout_ms · details unavailable) · ok
+
+• changes · Smith turn 1 · contains ambiguous changes only; use /diff
+
+/shell
+smith-ux-shell-ok
+
+  Worked for 748ms
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+› scratch draft
+
+  build · local/example-model · /private/tmp/smith-ux-audit-2026-09-21/project:main · ? ctx · CH ?

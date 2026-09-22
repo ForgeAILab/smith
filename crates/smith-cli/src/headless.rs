@@ -1205,9 +1205,9 @@ async fn run_with_io(
         .and_then(HeadlessInteraction::required)
         .or(event_interaction_required);
     let lifecycle_error = shutdown_error.or(stream_error).or(sequence_error);
-    let error = background_exit_error.or(lifecycle_error).or_else(|| {
-        terminal_error(finish.as_ref(), last_error, last_attempt_error)
-    });
+    let error = background_exit_error
+        .or(lifecycle_error)
+        .or_else(|| terminal_error(finish.as_ref(), last_error, last_attempt_error));
     let (status, exit_code) = outcome(
         finish.as_ref(),
         final_goal.as_ref(),
@@ -1694,12 +1694,12 @@ fn write_text_projection(writer: &mut impl Write, result: &ResultEnvelope) -> Re
         ) {
             lines.push(line);
         }
-        if let Some(controller) = &cache.controller {
-            if !controller.synthetic_attempts.is_empty() {
-                lines.push(crate::local_command::render_cache_controller_summary(
-                    controller,
-                ));
-            }
+        if let Some(controller) = &cache.controller
+            && !controller.synthetic_attempts.is_empty()
+        {
+            lines.push(crate::local_command::render_cache_controller_summary(
+                controller,
+            ));
         }
     }
     if !result.usage.synthetic_cache.is_empty() {
@@ -1872,8 +1872,7 @@ mod tests {
             Some("terminal"),
         );
         assert_eq!(
-            terminal_error(Some(&TurnFinish::Failed), None, Some("attempt".to_owned()))
-                .as_deref(),
+            terminal_error(Some(&TurnFinish::Failed), None, Some("attempt".to_owned())).as_deref(),
             Some("attempt"),
         );
     }

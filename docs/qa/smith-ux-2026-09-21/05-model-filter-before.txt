@@ -1,0 +1,32 @@
+/redo  reapply the newest exact undone turn
+/revert [FILE]  selectively revert a file or hunk
+
+Advanced
+/diagnostics  show detailed cache and recovery diagnostics
+/profile [NAME]  switch configured profile
+/provider [NAME]  switch provider
+/quit  exit Smith
+
+Composer
+? or /help shows this local guide without contacting the model.
+Tab cycles the configured profile order only while empty and idle.
+While work is serving, Enter steers an ordinary prompt and Tab queues it.
+Alt+Up restores the newest explicit queued turn for editing.
+Esc interrupts; uncommitted steers are resent only after cancellation discards them.
+Ctrl+B moves a running foreground shell command to the background without killing it.
+@ completes exact files and read-only agents; @@ sends a literal @.
+! runs a prepared local shell action; !! sends a literal !.
+PageUp/PageDown/Home/End or the mouse wheel scrolls the transcript.
+Up/Down browse accepted and Ctrl+C-stashed input without losing your draft.
+Down past the newest draft walks the delegated agents; the transcript shows
+that agent's log, Enter continues it, and Esc returns to the root timeline.
+Ctrl+R searches composer history; Enter restores a match and Esc cancels.
+Ctrl+C twice within 1s exits; the first press stashes and clears the draft.
+Start a message with // to send a literal leading slash.
+  Choose model · filter: zz-no-such-model
+ No local model is selectable · run smith setup add-model
+
+› Ask Smith to do anything
+
+  build · local/example-model · /private/tmp/smith-ux-audit-2026-09-21/project:main · ? ctx
+  type to filter · ↑↓ choose · enter confirm · esc cancel

@@ -1,0 +1,24 @@
+│                                                                              │
+│  session:              session-e532bd21-fd6c-4372-abb5-abd1df9bf45e          │
+│  profile:              build                                                 │
+│  provider:             local · model: example-model                          │
+│  permission:           Ask                                                   │
+│  reasoning:            provider default · effort provider default · provider │
+│                        /model default                                        │
+│  reasoning controls:   unsupported · switch unavailable · efforts none · res │
+│                        olved model catalog (presence only)                   │
+│  prompt cache:         usage not reported                                    │
+│  cache maintenance:    off                                                   │
+│  resume checkpoint:    not yet saved                                         │
+│  project:              /private/tmp/smith-ux-audit-2026-09-21/project        │
+│  Git:                  clean                                                 │
+│  goal:                 none                                                  │
+│  children:             0                                                     │
+│  usage:                nothing spent yet                                     │
+│  cost:                 nothing spent yet                                     │
+│ /diagnostics shows detailed cache and recovery information                   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+› Ask Smith to do anything
+
+  build · local/example-model

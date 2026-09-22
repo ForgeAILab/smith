@@ -25,7 +25,13 @@ pub(super) fn draw_transcript(
 ) {
     let lines = lines.unwrap_or_else(|| transcript_lines(app, theme, area.width));
     let max_scroll = visual_scroll_limit(&lines, area);
-    let offset = if app.following {
+    let pending_offset = app
+        .scroll_to_block
+        .filter(|_| app.inspected_child.is_none())
+        .and_then(|block| block_start_row(app, block, theme, area.width));
+    let offset = if let Some(offset) = pending_offset {
+        offset.min(max_scroll)
+    } else if app.following {
         max_scroll
     } else {
         max_scroll.saturating_sub(app.scroll_back)
@@ -48,12 +54,33 @@ pub(super) fn rendered_rows(lines: &[Line<'static>], width: u16) -> usize {
     wrapped_row_count(lines, width)
 }
 
+/// Find a local result's start using the same block suppression and wrapping
+/// as the transcript, including the separator after preceding visible blocks.
+pub(super) fn block_start_row(app: &App, block: usize, theme: Theme, width: u16) -> Option<u16> {
+    let blocks = app.transcript.blocks();
+    if block >= blocks.len() {
+        return None;
+    }
+    let preceding = block_lines(&blocks[..block], theme, width);
+    let rows = rendered_rows(&preceding, width) + usize::from(!preceding.is_empty());
+    Some(u16::try_from(rows).unwrap_or(u16::MAX))
+}
+
 pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<'static>> {
     // The inspector borrows the transcript region rather than floating over
     // it: a child's history is read, scrolled, and selected exactly like the
     // root timeline, and one Esc gives the region back unchanged.
     if let Some(child) = &app.inspected_child {
         return child_lines(app, child, theme, width);
+    }
+    if app.transcript.is_empty()
+        && app.status.activity == Activity::Idle
+        && !app.has_live_work()
+        && app.live_child_count() == 0
+        && app.speculative_text().is_none()
+        && app.turn_summary.is_none()
+    {
+        return getting_started_lines(theme);
     }
     let mut lines = block_lines(app.transcript.blocks(), theme, width);
 
@@ -144,6 +171,28 @@ pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<
         }
     }
 
+    lines
+}
+
+fn getting_started_lines(theme: Theme) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        Line::from(Span::styled("  Get started", theme.style(Tone::Heading))),
+        Line::from(Span::styled(
+            "  Type a task below and press Enter.",
+            theme.style(Tone::Default),
+        )),
+        Line::default(),
+    ];
+    for (command, description) in [
+        ("/model", "Choose a model"),
+        ("/connect", "Add a connection"),
+        ("/help", "Explore commands"),
+    ] {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {command:<10}"), theme.style(Tone::Code)),
+            Span::styled(description, theme.style(Tone::Dim)),
+        ]));
+    }
     lines
 }
 
@@ -841,7 +890,7 @@ pub(super) fn styled_local_line(title: &str, raw: &str, theme: Theme) -> Line<'s
         return Line::default();
     }
     if title == "help" {
-        if matches!(raw, "Primary" | "Advanced") {
+        if matches!(raw, "Getting started" | "Primary" | "Advanced") {
             return Line::from(Span::styled(raw.to_owned(), theme.style(Tone::Heading)));
         }
         if let Some((command, description)) = raw.split_once(" — ") {
