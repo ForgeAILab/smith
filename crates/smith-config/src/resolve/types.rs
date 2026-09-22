@@ -179,6 +179,8 @@ pub struct Layout {
 /// carrying the source that supplied it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedConfig {
+    /// User-local state directory, `<home>/.smith`.
+    pub user_dir: PathBuf,
     /// The selected profile, if any layer selected one.
     pub profile: Option<Sourced<String>>,
     /// Selected unified agent profile plus transition-release legacy adapters.
@@ -194,6 +196,8 @@ pub struct ResolvedConfig {
     pub max_output_tokens: Option<Sourced<u32>>,
     /// Configured limits for the selected `"<provider>/<model>"` pair.
     pub model_limits: ResolvedModelLimits,
+    /// Selected context window, when a profile, flag, or session chose one.
+    pub context_window: Option<Sourced<String>>,
     /// Layered reasoning defaults. Omitted values preserve provider behavior.
     pub reasoning: ResolvedReasoning,
     /// Exact control metadata for the selected configured model.
@@ -219,6 +223,21 @@ pub struct ResolvedConfig {
     pub background: ResolvedBackground,
     /// Declared Model Context Protocol servers.
     pub mcp: ResolvedMcp,
+    /// Provenance-carrying configuration for the image-generation tool.
+    pub image_generation: ResolvedImageGeneration,
+}
+
+/// Resolved image-generation tool settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedImageGeneration {
+    /// Whether the tool is enabled when its provider supports it.
+    pub enabled: Sourced<bool>,
+    /// Images API model.
+    pub model: Sourced<String>,
+    /// Images API quality.
+    pub quality: Sourced<String>,
+    /// Images API size.
+    pub size: Sourced<String>,
 }
 
 /// Every declared MCP server, resolved but not contacted.
@@ -453,6 +472,22 @@ pub struct ResolvedModelLimits {
     pub max_input_tokens: Option<Sourced<u32>>,
     /// The largest output the model can produce, in tokens.
     pub max_output_tokens: Option<Sourced<u32>>,
+    /// Named context windows declared by layered configuration.
+    pub context_windows: BTreeMap<String, ResolvedContextWindow>,
+    /// Default named window declared by layered configuration.
+    pub default_context_window: Option<Sourced<String>>,
+    /// Flat configured limit that pins this model to its single configured
+    /// context shape, when present.
+    pub flat_context_source: Option<Source>,
+}
+
+/// Layered source-explainable limits for one named context window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedContextWindow {
+    /// Total context window, in tokens.
+    pub context_tokens: Sourced<u32>,
+    /// Largest input, when written explicitly.
+    pub max_input_tokens: Option<Sourced<u32>>,
 }
 
 /// Layered, source-explainable reasoning defaults.

@@ -88,6 +88,8 @@ pub struct HostSessionRequest {
     reasoning_reset_enabled: bool,
     reasoning_reset_effort: bool,
     reasoning_effort_shadowed: bool,
+    context_window_reset: bool,
+    context_window_shadowed: bool,
 }
 
 impl HostSessionRequest {
@@ -111,6 +113,8 @@ impl HostSessionRequest {
             reasoning_reset_enabled: false,
             reasoning_reset_effort: false,
             reasoning_effort_shadowed: false,
+            context_window_reset: false,
+            context_window_shadowed: false,
         }
     }
 
@@ -148,6 +152,20 @@ impl HostSessionRequest {
         self.reasoning_effort_shadowed = shadowed;
         self
     }
+
+    /// Clears a persisted context-window override when the user chose default.
+    #[must_use]
+    pub fn context_window_reset(mut self, reset: bool) -> Self {
+        self.context_window_reset = reset;
+        self
+    }
+
+    /// Suppresses a persisted context window for this run without discarding it.
+    #[must_use]
+    pub fn context_window_shadowed(mut self, shadowed: bool) -> Self {
+        self.context_window_shadowed = shadowed;
+        self
+    }
 }
 
 /// A running Smith session and the host resources that must shut down with it.
@@ -155,6 +173,7 @@ impl HostSessionRequest {
 pub struct HostSession {
     runtime: SmithRuntime,
     session: SessionHandle,
+    image_history_registration: crate::image_history::SessionImageRegistration,
     client: crate::client::SmithSession,
     display_redactor: DefaultRedactor,
     journal: Option<Arc<EventJournal>>,
@@ -582,6 +601,7 @@ impl HostSession {
         // projection while the worker drains; the final Runtime save must be
         // the last session-store write.
         let session = self.session.shutdown().await;
+        self.image_history_registration.unregister();
 
         // Background tasks are session-owned, process-group work, not runtime
         // state: nothing else stops them. Signal every running task before
@@ -790,6 +810,7 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         // A saved effort a higher layer answered for this run, kept so the
         // run's own selection cannot erase the session's choice on save.
         let mut shadowed_effort = None;
+        let mut shadowed_context_window = None;
         if request.session_id.is_some() {
             let snapshot = inner.load(&session_id).await?;
             resume_snapshot_exists = snapshot.is_some();
@@ -812,13 +833,18 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
                 .and_then(|snapshot| snapshot.extension_state.get(SESSION_STATE_NAMESPACE))
             {
                 let restored = PersistedReasoningOverride::restore(state)?;
-                restored.apply(
+                restored.apply_with_context_window(
                     &mut config,
                     request.reasoning_reset_enabled,
                     request.reasoning_reset_effort || request.reasoning_effort_shadowed,
+                    request.context_window_reset,
+                    request.context_window_shadowed,
                 );
                 if request.reasoning_effort_shadowed && !request.reasoning_reset_effort {
                     shadowed_effort = restored.effort.clone();
+                }
+                if request.context_window_shadowed && !request.context_window_reset {
+                    shadowed_context_window = restored.context_window.clone();
                 }
                 request.runtime.config = config.clone();
             }
@@ -826,6 +852,9 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         let mut reasoning_override = PersistedReasoningOverride::from_config(&config);
         if reasoning_override.effort.is_none() {
             reasoning_override.effort = shadowed_effort;
+        }
+        if reasoning_override.context_window.is_none() {
+            reasoning_override.context_window = shadowed_context_window;
         }
         let store = Arc::new(RedactingSessionStore::new(
             inner,
@@ -1267,10 +1296,12 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         changes.clone(),
     );
 
+    let image_history_registration = runtime.image_history().register(session.clone());
     let client = crate::client::SmithSession::new(session.clone());
     Ok(HostSession {
         runtime,
         session,
+        image_history_registration,
         client,
         display_redactor: persistence_redactor,
         journal,

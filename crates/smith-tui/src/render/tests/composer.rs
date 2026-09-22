@@ -76,6 +76,16 @@
     }
 
     #[test]
+    fn active_context_window_is_named_in_the_identity_footer() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.status.context_window = Some("872k".to_owned());
+
+        let screen = render(&app, 74, 16, Theme::new().without_color());
+        let footer = screen.lines().last().unwrap_or_default();
+        assert!(footer.contains("gpt-5.3 · 872k"), "{footer}");
+    }
+
+    #[test]
     fn registered_paste_and_image_labels_keep_their_compact_accented_surface() {
         let mut app = App::new("gpt-5.3", "~/work/api");
         app.on_paste("one\ntwo\nthree");
@@ -97,10 +107,10 @@
         let rendered = (0..buffer.area.width)
             .map(|x| buffer[(x, row)].symbol())
             .collect::<String>();
-        let paste_x = u16::try_from(rendered.find("[Pasted").expect("paste label"))
-            .expect("paste position fits");
-        let image_x = u16::try_from(rendered.find("[Image").expect("image label"))
-            .expect("image position fits");
+        let paste_x =
+            u16::try_from(rendered.find("[Pasted").expect("paste label")).expect("paste position fits");
+        let image_x =
+            u16::try_from(rendered.find("[Image").expect("image label")).expect("image position fits");
         assert_eq!(buffer[(paste_x, row)].fg, Color::Cyan);
         assert_eq!(buffer[(image_x, row)].fg, Color::Cyan);
     }
@@ -414,8 +424,11 @@
         app.set_child_tool_display(
             child.as_str(),
             "child-call-1",
-            smith_tools::project_tool_call_display("read", &serde_json::json!({"path": "src/retry.rs"}))
-                .expect("reviewed read projection"),
+            smith_tools::project_tool_call_display(
+                "read",
+                &serde_json::json!({"path": "src/retry.rs"}),
+            )
+            .expect("reviewed read projection"),
         );
         app.set_child_counts(std::collections::BTreeMap::from([(
             child.to_string(),
@@ -430,7 +443,7 @@
         assert!(
             screen.contains("○ child-1  review · Read(src/retry.rs) · 2/5 turns · 12.4k tokens"),
             "the row shows the reviewed projection, not the bare tool name, beside the \
-             child's profile and the coordinator's own counts:\n{screen}"
+                 child's profile and the coordinator's own counts:\n{screen}"
         );
     }
 
@@ -468,10 +481,9 @@
             // `query` is the argument's *key* — safe metadata the fallback
             // always names — never a value, since none was ever supplied
             // here or anywhere on this honest-fallback path.
-            row.contains("mcp__docs__some_third_party_tool(query")
-                && row.contains("arguments hidden"),
+            row.contains("mcp__docs__some_third_party_tool(query") && row.contains("arguments hidden"),
             "the tool is named with an honest unavailable label rather than a raw argument \
-             value: {row}"
+                 value: {row}"
         );
     }
 
@@ -515,12 +527,12 @@
         assert!(
             row.trim_end().ends_with("0s"),
             "the elapsed clock stays docked at the right edge even though the activity is \
-             long enough to clip: {row:?}"
+                 long enough to clip: {row:?}"
         );
         assert!(
             !row.contains("argument_key_number_11"),
             "the key list is bounded, not an unbounded dump, and the whole thing still \
-             clips well short of the clock: {row}"
+                 clips well short of the clock: {row}"
         );
     }
 
@@ -621,8 +633,7 @@
         app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         let restored = render(&app, 80, 24, Theme::new().without_color());
         assert!(
-            restored.contains("explain the retry policy")
-                && !restored.contains("child-a · running"),
+            restored.contains("explain the retry policy") && !restored.contains("child-a · running"),
             "esc gives the region back unchanged:\n{restored}"
         );
     }
@@ -674,7 +685,10 @@
         app.set_running_tasks(Vec::new());
         let cleared = render(&app, 80, 24, Theme::new().without_color());
         assert!(!cleared.contains("○ task:3"), "{cleared}");
-        assert!(!cleared.contains("● main"), "an empty panel vanishes:\n{cleared}");
+        assert!(
+            !cleared.contains("● main"),
+            "an empty panel vanishes:\n{cleared}"
+        );
     }
 
     #[test]
@@ -736,12 +750,7 @@
             .find(|line| line.spans.iter().any(|span| span.content == "child-done"))
             .expect("an inspector heading");
         assert_eq!(
-            heading
-                .spans
-                .last()
-                .expect("the state segment")
-                .style
-                .fg,
+            heading.spans.last().expect("the state segment").style.fg,
             Some(Color::Green)
         );
     }
@@ -799,8 +808,6 @@
         assert_eq!(code.style.fg, Some(Color::Cyan));
     }
 
-
-
     #[test]
     fn a_child_answer_draws_exactly_as_the_root_timeline_draws_one() {
         use agent_runtime_core::delegation::WorkspacePolicy;
@@ -810,11 +817,7 @@
         let styled = |lines: &[Line<'static>], needle: &str| {
             lines
                 .iter()
-                .filter(|line| {
-                    line.spans
-                        .iter()
-                        .any(|span| span.content.contains(needle))
-                })
+                .filter(|line| line.spans.iter().any(|span| span.content.contains(needle)))
                 .map(|line| {
                     line.spans
                         .iter()
@@ -852,7 +855,7 @@
                 styled(&child_lines, needle),
                 from_root,
                 "a delegated child is an agent that reports back, so its answer \
-                 must draw through the same renderer, down to the styles"
+                     must draw through the same renderer, down to the styles"
             );
         }
     }
@@ -1032,7 +1035,7 @@
         assert!(
             screen.contains("(+1 done)"),
             "two items are completed, so the cancelled item must not inflate \
-             the hidden count to two:\n{screen}"
+                 the hidden count to two:\n{screen}"
         );
     }
 
@@ -1074,7 +1077,7 @@
         assert!(
             !after_stop.contains("Todo") && !after_stop.contains("Run the focused tests"),
             "once the turn is no longer running, a fully-completed plan retires \
-             instead of pinning the finished list until the next turn:\n{after_stop}"
+                 instead of pinning the finished list until the next turn:\n{after_stop}"
         );
     }
 
@@ -1178,7 +1181,10 @@
             .expect("the composer row");
         // `› ` plus nineteen characters fills the forty columns, so the
         // draft's last two characters wrap onto the row below it.
-        assert_eq!(rows[composer_row], "› 请解释一下重试策略的实现方式和它的退避");
+        assert_eq!(
+            rows[composer_row],
+            "› 请解释一下重试策略的实现方式和它的退避"
+        );
         assert_eq!(rows[composer_row + 1], "曲线");
         assert_eq!(
             (position.x, usize::from(position.y)),

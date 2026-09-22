@@ -9,6 +9,78 @@
     }
 
     #[test]
+    fn model_resources_show_named_context_windows_and_the_active_choice() {
+        let home = tempfile::tempdir().expect("home");
+        let project = tempfile::tempdir().expect("project");
+        std::fs::create_dir_all(project.path().join(".smith")).expect("config directory");
+        std::fs::write(
+            project.path().join(".smith/config.toml"),
+            r#"
+    default_profile = "dev"
+
+    [profiles.dev]
+    provider = "local"
+    model = "example-model"
+
+    [providers.local]
+    kind = "fake"
+
+    [models."local/example-model"]
+    default_context_window = "128k"
+    max_output_tokens = 4096
+
+    [models."local/example-model".context_windows."128k"]
+    context_tokens = 131072
+    max_input_tokens = 126976
+
+    [models."local/example-model".context_windows."256k"]
+    context_tokens = 262144
+    max_input_tokens = 258048
+    "#,
+        )
+        .expect("config");
+        let resolution = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+            .expect("resolution");
+        let inventory = smith_config::inventory::local_inventory(&resolution, AVAILABLE_ADAPTER_KINDS)
+            .expect("local inventory");
+        let resources = runtime_resources(
+            inventory,
+            Vec::new(),
+            "session",
+            project.path(),
+            &resolution.config.agent,
+            &smith_runtime::reasoning::ReasoningRuntimePolicy::default(),
+            &["128k".to_owned(), "256k".to_owned()],
+            Some("128k"),
+            None,
+            None,
+        );
+
+        let model = resources
+            .models
+            .iter()
+            .find(|entry| entry.id == "local/example-model")
+            .expect("configured model resource");
+        assert!(model.active);
+        assert!(
+            model
+                .detail
+                .contains("windows 128k/256k · active window 128k"),
+            "{}",
+            model.detail
+        );
+        assert_eq!(
+            resources
+                .context_windows
+                .iter()
+                .filter(|entry| entry.active)
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            ["128k"]
+        );
+    }
+
+    #[test]
     fn catalog_inventory_becomes_searchable_resource_metadata_with_disabled_reasons() {
         let home = tempfile::tempdir().expect("home");
         let project = tempfile::tempdir().expect("project");
@@ -27,8 +99,7 @@
                     && model.tool_call
                     && model.has_text_output()
                     && model.limits.is_some_and(|limits| {
-                        limits.context_tokens >= 131_072
-                            && limits.max_output_tokens >= 32_768
+                        limits.context_tokens >= 131_072 && limits.max_output_tokens >= 32_768
                     })
             })
             .expect("a selectable nested model with an automatic 32768 request budget");
@@ -45,17 +116,17 @@
             project.path().join(".smith/config.toml"),
             format!(
                 r#"
-default_profile = "router"
-[profiles.router]
-provider = "openrouter"
-model = "{current_id}"
-[providers.openrouter]
-kind = "openai-compatible"
-base_url = "https://openrouter.ai/api/v1"
-credential = "env:OPENROUTER_API_KEY"
-[context]
-output_reserve = 4096
-"#
+    default_profile = "router"
+    [profiles.router]
+    provider = "openrouter"
+    model = "{current_id}"
+    [providers.openrouter]
+    kind = "openai-compatible"
+    base_url = "https://openrouter.ai/api/v1"
+    credential = "env:OPENROUTER_API_KEY"
+    [context]
+    output_reserve = 4096
+    "#
             ),
         )
         .expect("config");
@@ -73,6 +144,8 @@ output_reserve = 4096
             project.path(),
             &resolution.config.agent,
             &smith_runtime::reasoning::ReasoningRuntimePolicy::default(),
+            &[],
+            None,
             None,
             None,
         );
@@ -157,9 +230,24 @@ output_reserve = 4096
                 && entry.detail.contains("reviewed model")
                 && !entry.active
         }));
-        assert!(!resources.providers.iter().any(|entry| entry.id == "chatgpt"));
-        assert!(!resources.models.iter().any(|entry| entry.id.starts_with("chatgpt/")));
-        assert!(!resources.disconnections.iter().any(|entry| entry.id == "chatgpt"));
+        assert!(
+            !resources
+                .providers
+                .iter()
+                .any(|entry| entry.id == "chatgpt")
+        );
+        assert!(
+            !resources
+                .models
+                .iter()
+                .any(|entry| entry.id.starts_with("chatgpt/"))
+        );
+        assert!(
+            !resources
+                .disconnections
+                .iter()
+                .any(|entry| entry.id == "chatgpt")
+        );
     }
 
     #[test]
@@ -208,18 +296,18 @@ output_reserve = 4096
                 project.path().join(".smith/config.toml"),
                 format!(
                     r#"
-default_profile = "grok"
+    default_profile = "grok"
 
-[profiles.grok]
-provider = "{provider}"
-model = "{model}"
+    [profiles.grok]
+    provider = "{provider}"
+    model = "{model}"
 
-[providers.{provider}]
-kind = "{kind}"
-base_url = "{endpoint}"
-credential = "env:XAI_API_KEY"
-{reserve}
-"#,
+    [providers.{provider}]
+    kind = "{kind}"
+    base_url = "{endpoint}"
+    credential = "env:XAI_API_KEY"
+    {reserve}
+    "#,
                     provider = smith_config::setup::XAI_PROVIDER,
                     model = model.id,
                     kind = smith_config::model::KIND_XAI_RESPONSES,
@@ -227,15 +315,11 @@ credential = "env:XAI_API_KEY"
                 ),
             )
             .expect("config");
-            let resolution =
-                resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
-                    .expect("resolution");
-            let inventory = local_inventory_with_catalog(
-                &resolution,
-                AVAILABLE_ADAPTER_KINDS,
-                Some(&snapshot),
-            )
-            .expect("catalog inventory");
+            let resolution = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+                .expect("resolution");
+            let inventory =
+                local_inventory_with_catalog(&resolution, AVAILABLE_ADAPTER_KINDS, Some(&snapshot))
+                    .expect("catalog inventory");
             runtime_resources(
                 inventory,
                 Vec::new(),
@@ -243,6 +327,8 @@ credential = "env:XAI_API_KEY"
                 project.path(),
                 &resolution.config.agent,
                 &smith_runtime::reasoning::ReasoningRuntimePolicy::default(),
+                &[],
+                None,
                 None,
                 None,
             )
@@ -255,7 +341,11 @@ credential = "env:XAI_API_KEY"
             .find(|entry| entry.id == pair)
             .expect("the Grok-shaped model is listed");
         assert!(entry.disabled_reason.is_none(), "{}", entry.detail);
-        assert!(entry.detail.contains("output ceiling 500k"), "{}", entry.detail);
+        assert!(
+            entry.detail.contains("output ceiling 500k"),
+            "{}",
+            entry.detail
+        );
         assert!(
             entry.detail.contains("request 32768 [automatic]"),
             "{}",
@@ -286,29 +376,29 @@ credential = "env:XAI_API_KEY"
         std::fs::write(
             project.path().join(".smith/config.toml"),
             r#"
-default_profile = "dev"
-profile_order = ["dev", "cc"]
+    default_profile = "dev"
+    profile_order = ["dev", "cc"]
 
-[profiles.dev]
-provider = "local"
-model = "parent-model"
-posture = "build"
-use = ["main"]
+    [profiles.dev]
+    provider = "local"
+    model = "parent-model"
+    posture = "build"
+    use = ["main"]
 
-[profiles.cc]
-provider = "local"
-model = "cli/claude-code/sonnet"
-posture = "build"
-use = ["main", "child"]
+    [profiles.cc]
+    provider = "local"
+    model = "cli/claude-code/sonnet"
+    posture = "build"
+    use = ["main", "child"]
 
-[providers.local]
-kind = "fake"
+    [providers.local]
+    kind = "fake"
 
-[models."local/parent-model"]
-context_tokens = 128000
-max_input_tokens = 124000
-max_output_tokens = 4096
-"#,
+    [models."local/parent-model"]
+    context_tokens = 128000
+    max_input_tokens = 124000
+    max_output_tokens = 4096
+    "#,
         )
         .expect("config");
         let resolution = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
@@ -322,6 +412,8 @@ max_output_tokens = 4096
             project.path(),
             &resolution.config.agent,
             &smith_runtime::reasoning::ReasoningRuntimePolicy::default(),
+            &[],
+            None,
             None,
             None,
         );

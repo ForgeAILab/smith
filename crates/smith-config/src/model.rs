@@ -225,6 +225,9 @@ pub struct ConfigFile {
     /// Session persistence policy: `[persistence]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persistence: Option<PersistenceSection>,
+    /// Built-in tool settings: `[tools]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<ToolsSection>,
     /// Tool approval policy: `[approval]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<ApprovalSection>,
@@ -332,6 +335,9 @@ pub struct ProfileSection {
     /// The model this profile sends to that provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Default named context window for this profile's selected model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<String>,
     /// Root agent mode selected with this provider/model profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
@@ -366,6 +372,36 @@ pub struct ProfileSection {
     /// Profile-scoped `[cache]` overrides.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache: Option<CacheSection>,
+    /// Profile-scoped `[tools]` overrides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<ToolsSection>,
+}
+
+/// Built-in tool settings under `[tools]`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolsSection {
+    /// Image generation settings under `[tools.image_generation]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_generation: Option<ImageGenerationSection>,
+}
+
+/// Image-generation tool settings.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImageGenerationSection {
+    /// Whether Smith registers `generate_image` when the provider supports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// Images API model. Defaults to `gpt-image-2`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Images API quality. Defaults to `auto`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<String>,
+    /// Images API size. Defaults to `auto`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
 }
 
 /// Local cache presentation policy.
@@ -624,9 +660,27 @@ pub struct ModelSection {
     /// The largest output the model can produce, in tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
+    /// Named context limits: `[models."p/m".context_windows.<name>]`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub context_windows: BTreeMap<String, ContextWindowSection>,
+    /// Name selected when no profile, flag, or session override wins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_context_window: Option<String>,
     /// Exact, owner-controlled reasoning capability metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<ModelReasoningSection>,
+}
+
+/// Enforceable limits for one named context window.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextWindowSection {
+    /// Total context window, in tokens.
+    pub context_tokens: u32,
+    /// Largest input Smith may plan for, in tokens. When omitted, the runtime
+    /// derives it from `context_tokens` and the model's output ceiling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_input_tokens: Option<u32>,
 }
 
 /// A layered request for the provider/model reasoning state.

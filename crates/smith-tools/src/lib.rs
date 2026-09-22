@@ -37,6 +37,7 @@ pub mod background;
 pub mod change;
 pub mod display;
 pub mod edit;
+pub mod image;
 pub mod list;
 pub mod read;
 pub mod read_state;
@@ -58,6 +59,11 @@ pub use display::{
     project_external_tool_call_display, project_tool_call_display,
 };
 pub use edit::EditTool;
+pub use image::{
+    GenerateImageTool, ImageGenerationBackend, ImageGenerationRequest, ImageReference,
+    MAX_GENERATED_PNG_BYTES, MAX_RECENT_IMAGE_DATA_URL_BYTES, MAX_REFERENCE_BYTES,
+    RecentImageSource,
+};
 pub use list::ListTool;
 pub use read::ReadTool;
 pub use read_state::{ReadDefect, ReadObservation, ReadRecorder};

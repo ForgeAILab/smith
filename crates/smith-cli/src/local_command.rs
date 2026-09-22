@@ -88,10 +88,16 @@ pub(super) async fn handle_local_command(
                 "connection commands must run at the safe session-rebuild boundary",
             );
         }
-        CommandAction::Context => {
+        CommandAction::Context(None) => {
             app.show_local_result(
                 "context",
                 render_context_view(&app.status, host.runtime().policy()),
+            );
+        }
+        CommandAction::Context(Some(_)) => {
+            app.show_local_error(
+                "context",
+                "context-window selection must run at the safe session boundary",
             );
         }
         CommandAction::Timeline => {
@@ -1264,6 +1270,23 @@ pub(super) fn render_context_view(status: &Status, policy: &RuntimePolicy) -> St
     };
 
     let mut lines = vec!["Context usage".to_owned()];
+    if !policy.context_windows.is_empty() {
+        lines.push(format!(
+            "available context windows: {}",
+            policy
+                .context_windows
+                .iter()
+                .map(|name| {
+                    if policy.context_window.as_deref() == Some(name.as_str()) {
+                        format!("{name} (active)")
+                    } else {
+                        name.clone()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     if let Some(plan) = &status.context_plan {
         let percent_prefix = if plan.confidence == EstimationConfidence::Estimated {
             "~"

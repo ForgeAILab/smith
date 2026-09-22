@@ -10,6 +10,8 @@ pub(super) fn runtime_resources(
     project: &std::path::Path,
     agents: &ResolvedAgent,
     reasoning: &smith_runtime::reasoning::ReasoningRuntimePolicy,
+    context_windows: &[String],
+    context_window: Option<&str>,
     credential_pool: Option<&SharedPool>,
     harness: Option<&smith_config::resolve::ResolvedHarness>,
 ) -> RuntimeResources {
@@ -241,11 +243,23 @@ pub(super) fn runtime_resources(
                 ),
                 _ => String::new(),
             };
+            let window_detail = if model.context_windows.len() > 1 {
+                let active = if model.active {
+                    context_window
+                        .map(|name| format!(" · active window {name}"))
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                format!(" · windows {}{active}", model.context_windows.join("/"))
+            } else {
+                String::new()
+            };
             let entry = ResourceEntry::new(
                 id.clone(),
                 model.label,
                 format!(
-                    "{id} · ctx {} · input {} · output ceiling {} · request {}{capabilities}{provenance}{profiles}",
+                    "{id} · ctx {} · input {} · output ceiling {} · request {}{capabilities}{provenance}{profiles}{window_detail}",
                     render_optional_inventory_limit(model.context_tokens.as_ref()),
                     render_optional_inventory_limit(model.max_input_tokens.as_ref()),
                     render_optional_inventory_limit(model.max_output_tokens.as_ref()),
@@ -474,6 +488,18 @@ pub(super) fn runtime_resources(
         connections,
         disconnections,
         profiles,
+        context_windows: context_windows
+            .iter()
+            .map(|name| {
+                ResourceEntry::new(
+                    name.clone(),
+                    name.clone(),
+                    "select this model context window",
+                )
+                .active(context_window == Some(name.as_str()))
+            })
+            .collect(),
+        context_window: context_window.map(str::to_owned),
         sessions: session_entries,
         files,
         child_agents,

@@ -34,7 +34,7 @@ pub enum CommandAction {
     /// Inspect or mutate the persistent session goal.
     Goal(GoalAction),
     /// Visualize the latest model-facing context plan.
-    Context,
+    Context(Option<String>),
     /// Toggle bounded active-work detail.
     Details,
     /// Render the bounded local root/child/recovery timeline.
@@ -149,8 +149,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "context",
-        argument_hint: "",
-        description: "show current context usage",
+        argument_hint: "[NAME|default]",
+        description: "show context usage or select a named window",
         requires_idle: false,
         advanced: false,
     },
@@ -417,7 +417,7 @@ pub fn parse(input: &str) -> Result<CommandAction, String> {
             }
             CommandAction::Diagnostics
         }
-        "context" => CommandAction::Context,
+        "context" => CommandAction::Context(argument),
         "details" => CommandAction::Details,
         "timeline" => CommandAction::Timeline,
         "new" => CommandAction::NewSession,
@@ -600,7 +600,18 @@ mod tests {
             parse("/diff staged").expect("diff"),
             CommandAction::Diff(Some("staged".into()))
         );
-        assert_eq!(parse("/context").expect("context"), CommandAction::Context);
+        assert_eq!(
+            parse("/context").expect("context"),
+            CommandAction::Context(None)
+        );
+        assert_eq!(
+            parse("/context 272k").expect("named context window"),
+            CommandAction::Context(Some("272k".into()))
+        );
+        assert_eq!(
+            parse("/context default").expect("default context window"),
+            CommandAction::Context(Some("default".into()))
+        );
         assert_eq!(parse("/model").expect("picker"), CommandAction::Model(None));
         assert_eq!(
             parse("/connect openrouter").expect("connection"),

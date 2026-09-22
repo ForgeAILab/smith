@@ -114,6 +114,7 @@ pub(super) const SETTINGS: &[(&str, ValueKind)] = &[
     ("context.max_estimated_slack", ValueKind::Integer),
     ("context.output_reserve", ValueKind::Integer),
     ("context.reasoning_reserve", ValueKind::Integer),
+    ("context_window", ValueKind::Text),
     ("context.tool_output_inline_bytes", ValueKind::Integer),
     ("limits.max_retries", ValueKind::Integer),
     ("limits.max_tool_steps", ValueKind::Integer),
@@ -130,6 +131,10 @@ pub(super) const SETTINGS: &[(&str, ValueKind)] = &[
     ("provider", ValueKind::Text),
     ("reasoning.effort", ValueKind::Text),
     ("reasoning.enabled", ValueKind::Flag),
+    ("tools.image_generation.enabled", ValueKind::Flag),
+    ("tools.image_generation.model", ValueKind::Text),
+    ("tools.image_generation.quality", ValueKind::Text),
+    ("tools.image_generation.size", ValueKind::Text),
 ];
 
 /// One layer of the precedence order.
@@ -282,7 +287,10 @@ impl fmt::Display for Source {
 /// Smith's flag vocabulary names the *control*, not the key path, so a
 /// diagnostic that derived the flag from the key alone would name an option
 /// nobody can type. Only the flags that actually exist are listed.
-const FLAG_SPELLINGS: &[(&str, &str)] = &[("reasoning.effort", "effort")];
+const FLAG_SPELLINGS: &[(&str, &str)] = &[
+    ("reasoning.effort", "effort"),
+    ("context_window", "context-window"),
+];
 
 /// The flag spelling of a setting key, for diagnostics.
 fn flag_spelling(key: &str) -> String {
@@ -431,6 +439,13 @@ impl Provenance {
         self.entries.get(key).and_then(|entries| entries.last())
     }
 
+    pub(super) fn keys_with_prefix(&self, prefix: &str) -> impl Iterator<Item = &str> {
+        self.entries
+            .keys()
+            .filter(move |key| key.starts_with(prefix))
+            .map(String::as_str)
+    }
+
     pub(super) fn extend(&mut self, contributions: Vec<Contribution>) {
         for contribution in contributions {
             self.entries
@@ -441,6 +456,16 @@ impl Provenance {
                     source: contribution.source,
                 });
         }
+    }
+
+    pub(super) fn prepend(&mut self, contribution: Contribution) {
+        self.entries.entry(contribution.key).or_default().insert(
+            0,
+            Entry {
+                value: contribution.value,
+                source: contribution.source,
+            },
+        );
     }
 }
 
@@ -467,6 +492,8 @@ pub struct Overrides {
     pub provider: Option<String>,
     /// Select a model.
     pub model: Option<String>,
+    /// Named context window selection.
+    pub context_window: Option<String>,
     /// The generation cap asked of the provider.
     pub max_output_tokens: Option<u32>,
     /// Explicit thinking state for subsequent turns.
@@ -570,6 +597,9 @@ impl Overrides {
         }
         if let Some(value) = &self.model {
             push("model", SettingValue::Text(value.clone()));
+        }
+        if let Some(value) = &self.context_window {
+            push("context_window", SettingValue::Text(value.clone()));
         }
         if let Some(value) = self.max_output_tokens {
             push("max_output_tokens", SettingValue::Integer(value.into()));

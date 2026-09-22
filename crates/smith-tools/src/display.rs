@@ -91,6 +91,7 @@ pub fn project_tool_call_display(name: &str, arguments: &Value) -> Option<ToolCa
         "shell" => project_shell(arguments),
         "task_output" => project_task_output(arguments),
         "task_stop" => project_task_stop(arguments),
+        "generate_image" => project_generate_image(arguments),
         "registry.search" => project_registry_search(arguments),
         "agent" => project_agent(arguments),
         _ => None,
@@ -108,6 +109,7 @@ pub fn has_tool_call_display_schema(name: &str) -> bool {
             | "shell"
             | "task_output"
             | "task_stop"
+            | "generate_image"
             | "registry.search"
             | "agent"
     )
@@ -224,6 +226,28 @@ fn project_task_output(arguments: &Map<String, Value>) -> Option<ToolCallDisplay
 fn project_task_stop(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
     let target = required_target(arguments, "task_id")?;
     Some(display("Task Stop", target, Vec::new()))
+}
+
+fn project_generate_image(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
+    let prompt = required_value(arguments, "prompt")?;
+    let target = serde_json::to_string(&prompt).ok()?;
+    let mut qualifiers = Vec::new();
+    if let Some(paths) = arguments.get("reference_paths") {
+        let paths = paths.as_array()?;
+        if paths.len() > 5 || paths.iter().any(|path| !path.is_string()) {
+            return None;
+        }
+        if !paths.is_empty() {
+            qualifiers.push(format!("{} reference image(s)", paths.len()));
+        }
+    }
+    if let Some(count) = optional_positive_integer(arguments, "recent_images")? {
+        if count > 5 {
+            return None;
+        }
+        qualifiers.push(format!("{} recent image(s)", count));
+    }
+    Some(display("Generate Image", target, qualifiers))
 }
 
 /// The delegation tool (`agent`) is dispatched on its own tagged `action`

@@ -135,6 +135,8 @@ pub(super) async fn run_interactive(
         project,
         &agents,
         &policy.reasoning,
+        &policy.context_windows,
+        policy.context_window.as_deref(),
         credential_pool.as_ref(),
         policy.harness.as_ref(),
     ));

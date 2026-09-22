@@ -698,6 +698,9 @@ mod tests {
                 attempt: AttemptId::new("attempt"),
                 finish: agent_runtime_core::provider::FinishReason::Error,
                 retryable: true,
+                index: None,
+                max_attempts: None,
+                retry_delay_ms: None,
                 error: Some(agent_runtime_core::provider::ProviderError::new(
                     agent_runtime_core::provider::ProviderErrorKind::Server,
                     "upstream 503",

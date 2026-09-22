@@ -459,7 +459,7 @@ impl App {
                 CommandAction::Status => "status",
                 CommandAction::Diagnostics => "diagnostics",
                 CommandAction::Goal(_) => "goal",
-                CommandAction::Context => "context",
+                CommandAction::Context(_) => "context",
                 CommandAction::Details => "details",
                 CommandAction::Timeline => "timeline",
                 CommandAction::NewSession => "new",
@@ -487,7 +487,10 @@ impl App {
             unreachable!("parsed commands always have registry entries");
         };
 
-        if spec.requires_idle && (self.is_busy() || self.has_pending_input()) {
+        let context_selection_requires_idle = matches!(command, CommandAction::Context(Some(_)));
+        if (spec.requires_idle || context_selection_requires_idle)
+            && (self.is_busy() || self.has_pending_input())
+        {
             self.overlay = None;
             self.transcript.push_notice(
                 "smith",
@@ -732,6 +735,40 @@ impl App {
             }
             CommandAction::Effort(Some(value)) => {
                 self.apply_direct_reasoning_choice(ResourceTarget::Effort, &value, restore)
+            }
+            CommandAction::Context(Some(value)) if value == "default" => {
+                self.accept_composer_input();
+                Some(Action::Reconfigure(PaletteCommand::ContextWindow(None)))
+            }
+            CommandAction::Context(Some(value)) => {
+                if self.resources.context_windows.is_empty() {
+                    self.transcript.push_error(
+                        "the active model has no selectable context windows".to_owned(),
+                    );
+                    None
+                } else if self
+                    .resources
+                    .context_windows
+                    .iter()
+                    .any(|entry| entry.id == value && entry.disabled_reason.is_none())
+                {
+                    self.accept_composer_input();
+                    Some(Action::Reconfigure(PaletteCommand::ContextWindow(Some(
+                        value,
+                    ))))
+                } else {
+                    let available = self
+                        .resources
+                        .context_windows
+                        .iter()
+                        .map(|entry| entry.id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    self.transcript.push_error(format!(
+                        "context window `{value}` is unavailable; choose one of {available}, or `default`"
+                    ));
+                    None
+                }
             }
             CommandAction::AgentResume(child_id) => {
                 if self.is_busy() {

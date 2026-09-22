@@ -690,10 +690,21 @@ pub(super) fn resolve_model_limits(
     model: &str,
 ) -> Result<ResolvedModelLimits, ConfigError> {
     let scope = join_key(&["models", &format!("{provider}/{model}")]);
+    let context_tokens = optional_u32(provenance, &format!("{scope}.context_tokens"))?;
+    let max_input_tokens = optional_u32(provenance, &format!("{scope}.max_input_tokens"))?;
+    let max_output_tokens = optional_u32(provenance, &format!("{scope}.max_output_tokens"))?;
+    let flat_context_source = [context_tokens.as_ref(), max_input_tokens.as_ref()]
+        .into_iter()
+        .flatten()
+        .max_by_key(|limit| limit.source.layer.precedence())
+        .map(|limit| limit.source.clone());
     let declared = ResolvedModelLimits {
-        context_tokens: optional_u32(provenance, &format!("{scope}.context_tokens"))?,
-        max_input_tokens: optional_u32(provenance, &format!("{scope}.max_input_tokens"))?,
-        max_output_tokens: optional_u32(provenance, &format!("{scope}.max_output_tokens"))?,
+        context_tokens,
+        max_input_tokens,
+        max_output_tokens,
+        context_windows: resolve_context_windows(provenance, &scope)?,
+        default_context_window: text(provenance, &format!("{scope}.default_context_window"))?,
+        flat_context_source,
     };
     if crate::cli_agents::parse_cli_model_id(model).is_none() {
         return Ok(declared);
@@ -724,7 +735,44 @@ pub(super) fn resolve_model_limits(
                 crate::cli_agents::CLI_AGENT_MAX_OUTPUT_TOKENS,
             ))
         }),
+        context_windows: declared.context_windows,
+        default_context_window: declared.default_context_window,
+        flat_context_source: declared.flat_context_source,
     })
+}
+
+fn resolve_context_windows(
+    provenance: &Provenance,
+    model_scope: &str,
+) -> Result<BTreeMap<String, ResolvedContextWindow>, ConfigError> {
+    let prefix = format!("{model_scope}.context_windows.");
+    let names = provenance
+        .keys_with_prefix(&prefix)
+        .filter_map(|key| {
+            key.strip_prefix(&prefix)?
+                .split_once('.')
+                .map(|(name, _)| name)
+        })
+        .collect::<BTreeSet<_>>();
+    let mut windows = BTreeMap::new();
+    for name in names {
+        let context_key = format!("{prefix}{name}.context_tokens");
+        let context_tokens =
+            optional_u32(provenance, &context_key)?.ok_or_else(|| ConfigError::MissingSetting {
+                key: context_key.clone(),
+                message: "every named context window needs `context_tokens`".to_owned(),
+            })?;
+        let max_input_tokens =
+            optional_u32(provenance, &format!("{prefix}{name}.max_input_tokens"))?;
+        windows.insert(
+            name.to_owned(),
+            ResolvedContextWindow {
+                context_tokens,
+                max_input_tokens,
+            },
+        );
+    }
+    Ok(windows)
 }
 
 pub(super) fn resolve_model_reasoning(

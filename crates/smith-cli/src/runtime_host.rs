@@ -138,10 +138,13 @@ pub(super) async fn start_host(
         // the parent's valid override.
         child_selection.reasoning_enabled = None;
         child_selection.reasoning_effort = None;
+        child_selection.context_window = None;
+        child_selection.context_window_reset = false;
         // `--effort` is chosen against the main binding for the same reason,
         // and a child profile may sit on a binding with no effort ladder at
         // all.
         child_selection.effort = None;
+        child_selection.context_window_flag = None;
         let (_, child_request) = resolution_request(&child_selection)?;
         let child_resolution = resolve(&child_request.with_profile_use(ProfileUse::Child))
             .map_err(|error| anyhow::anyhow!("{error}"))
@@ -268,10 +271,12 @@ pub(super) async fn start_host(
             selection.reasoning_enabled_reset,
             selection.reasoning_effort_reset,
         )
+        .context_window_reset(selection.context_window_reset)
         // `--effort` is this run's answer, so it shadows a resumed session's
         // saved effort without rewriting it: drop the flag on a later resume
         // and the session's own `/effort` choice is back.
-        .reasoning_effort_shadowed(selection.effort.is_some());
+        .reasoning_effort_shadowed(selection.effort.is_some())
+        .context_window_shadowed(selection.context_window_flag.is_some());
     if let Some(session) = resume {
         request = request.resume(SessionId::new(session));
     }
@@ -553,6 +558,7 @@ pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
                         | PaletteCommand::Agent(_)
                         | PaletteCommand::Think(_)
                         | PaletteCommand::Effort(_)
+                        | PaletteCommand::ContextWindow(_)
                 )
                 .then_some(catalog);
                 apply_palette_command(&mut args.selection, &mut resume, current_session, command);
@@ -640,6 +646,11 @@ pub(super) fn apply_palette_command(
         PaletteCommand::Effort(effort) => {
             selection.reasoning_effort = effort;
             selection.reasoning_effort_reset = selection.reasoning_effort.is_none();
+            *resume = Some(current_session);
+        }
+        PaletteCommand::ContextWindow(window) => {
+            selection.context_window_reset = window.is_none();
+            selection.context_window = window;
             *resume = Some(current_session);
         }
     }

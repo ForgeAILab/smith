@@ -492,6 +492,7 @@ pub(super) fn agent_profile_revision(
 /// Reads the ledger into the typed configuration and validates it.
 pub(super) fn extract(
     provenance: &Provenance,
+    user_dir: std::path::PathBuf,
     profile: Option<Sourced<String>>,
     declared: &Declarations,
     agent_profiles: BTreeMap<String, ResolvedAgentProfile>,
@@ -528,6 +529,7 @@ pub(super) fn extract(
     )?;
     let provider = resolve_provider(provenance, provider_name)?;
     let model_limits = resolve_model_limits(provenance, &provider.name.value, &model.value)?;
+    let context_window = text(provenance, "context_window")?;
     let reasoning = ResolvedReasoning {
         enabled: flag(provenance, "reasoning.enabled")?,
         effort: text(provenance, "reasoning.effort")?,
@@ -540,10 +542,33 @@ pub(super) fn extract(
     let approval = resolve_approval(provenance)?;
     let background = resolve_background(provenance)?;
     let mcp = super::mcp::resolve_mcp(provenance, declared)?;
+    let image_generation = ResolvedImageGeneration {
+        enabled: required_flag(provenance, "tools.image_generation.enabled")?,
+        model: required_text(provenance, "tools.image_generation.model")?,
+        quality: required_text(provenance, "tools.image_generation.quality")?,
+        size: required_text(provenance, "tools.image_generation.size")?,
+    };
+    for (key, value) in [
+        ("model", &image_generation.model.value),
+        ("quality", &image_generation.quality.value),
+        ("size", &image_generation.size.value),
+    ] {
+        if value.trim().is_empty() || value.chars().count() > 80 {
+            return Err(ConfigError::InvalidValue {
+                source: match key {
+                    "model" => image_generation.model.source.clone(),
+                    "quality" => image_generation.quality.source.clone(),
+                    _ => image_generation.size.source.clone(),
+                },
+                message: format!("`tools.image_generation.{key}` must contain 1 to 80 characters"),
+            });
+        }
+    }
 
     let harness = super::harness::resolve_harness(provenance)?;
 
     Ok(ResolvedConfig {
+        user_dir,
         profile,
         agent,
         provider,
@@ -551,6 +576,7 @@ pub(super) fn extract(
         model,
         max_output_tokens: optional_u32(provenance, "max_output_tokens")?,
         model_limits,
+        context_window,
         reasoning,
         model_reasoning,
         context,
@@ -561,6 +587,7 @@ pub(super) fn extract(
         approval,
         background,
         mcp,
+        image_generation,
     })
 }
 

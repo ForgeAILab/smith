@@ -1,0 +1,11 @@
+{
+  "change_id": "refactor-cache-headless-ownership",
+  "change_ref": "refactor-cache-headless-ownership-2026-09-22",
+  "created_at": "2026-09-22T20:59:10Z",
+  "updated_at": "2026-09-22T22:08:22Z",
+  "approved_at": "2026-09-22T20:59:10Z",
+  "implementation_started_at": "2026-09-22T20:59:10Z",
+  "status": "implementing",
+  "depends_on": [],
+  "completed_at": "2026-09-22T22:08:22Z"
+}

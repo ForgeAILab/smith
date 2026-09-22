@@ -55,12 +55,10 @@
 
     #[test]
     fn cache_controller_status_projects_idle_compaction_metadata_and_usage() {
-        let mut controller =
-            smith_runtime::cache_controller::CacheControllerSnapshot::default();
+        let mut controller = smith_runtime::cache_controller::CacheControllerSnapshot::default();
         controller.idle_compaction.attempted = true;
-        controller.idle_compaction_outcome = Some(
-            smith_runtime::cache_controller::IdleCompactionOutcome::Completed,
-        );
+        controller.idle_compaction_outcome =
+            Some(smith_runtime::cache_controller::IdleCompactionOutcome::Completed);
         controller.idle_compaction_reason = Some("artifact_projection_unavailable".to_owned());
         controller.idle_compaction_latency_ms = Some(17);
         controller.idle_compaction_provider = Some("summary-provider".to_owned());
@@ -176,9 +174,14 @@
         let home = tempfile::tempdir().expect("home");
         let project = tempfile::tempdir().expect("project");
         std::fs::create_dir_all(project.path().join(".smith")).expect("config directory");
+        let config_with_windows = LOCAL_COMMAND_CONFIG.replace(
+                "context_tokens = 128000\nmax_input_tokens = 124000\nmax_output_tokens = 4096",
+                "default_context_window = \"128k\"\nmax_output_tokens = 4096\n\n[models.\"local/example-model\".context_windows.\"128k\"]\ncontext_tokens = 128000\nmax_input_tokens = 124000\n\n[models.\"local/example-model\".context_windows.\"256k\"]\ncontext_tokens = 256000\nmax_input_tokens = 252000",
+            );
+        assert_ne!(config_with_windows, LOCAL_COMMAND_CONFIG);
         std::fs::write(
             project.path().join(".smith/config.toml"),
-            LOCAL_COMMAND_CONFIG,
+            config_with_windows,
         )
         .expect("config");
         let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
@@ -211,6 +214,10 @@
             "{before_plan}"
         );
         let before_context = render_context_view(&app.status, host.runtime().policy());
+        assert!(
+            before_context.contains("available context windows: 128k (active), 256k"),
+            "{before_context}"
+        );
         assert!(
             before_context.contains("usage unavailable until the first turn"),
             "{before_context}"
@@ -299,7 +306,7 @@
         let commands = [
             CommandAction::Status,
             CommandAction::Diagnostics,
-            CommandAction::Context,
+            CommandAction::Context(None),
             CommandAction::Agent(None),
             CommandAction::Diff(None),
             CommandAction::Skills(smith_tui::SkillsAction::List),
@@ -377,9 +384,15 @@
             .expect("status output");
         assert!(status_content.contains("profile: dev"), "{status_content}");
         assert!(status_content.contains("/diagnostics"), "{status_content}");
-        assert!(!status_content.contains("posture build"), "{status_content}");
+        assert!(
+            !status_content.contains("posture build"),
+            "{status_content}"
+        );
         assert!(!status_content.contains("cache: state"), "{status_content}");
-        assert!(!status_content.contains("resume capsule:"), "{status_content}");
+        assert!(
+            !status_content.contains("resume capsule:"),
+            "{status_content}"
+        );
         let diagnostics_content = app
             .transcript
             .blocks()
@@ -399,7 +412,10 @@
             diagnostics_content.contains("profile: dev · posture build · use main · rev"),
             "{diagnostics_content}"
         );
-        assert!(diagnostics_content.contains("source"), "{diagnostics_content}");
+        assert!(
+            diagnostics_content.contains("source"),
+            "{diagnostics_content}"
+        );
         // No usage has been recorded yet, so `/status` reports "nothing
         // spent yet" rather than either a zero dollar figure or "unknown" —
         // there is nothing to price, which is a different fact from a
@@ -421,6 +437,10 @@
             .expect("context output");
         assert!(
             context_content.contains("Estimated usage by category"),
+            "{context_content}"
+        );
+        assert!(
+            context_content.contains("available context windows: 128k (active), 256k"),
             "{context_content}"
         );
 
@@ -470,6 +490,9 @@
     fn observe_only_maintenance_names_its_no_spend_behavior() {
         let controller = smith_runtime::cache_controller::CacheControllerSnapshot::default();
         let rendered = crate::local_command::render_cache_controller_summary(&controller);
-        assert_eq!(rendered, "cache maintenance: observe only (no background requests)");
+        assert_eq!(
+            rendered,
+            "cache maintenance: observe only (no background requests)"
+        );
         assert!(!rendered.contains("denied"));
     }

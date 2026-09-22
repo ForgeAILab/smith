@@ -51,6 +51,9 @@ pub struct PersistedReasoningOverride {
     /// Provider-advertised effort name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// Session-local named context window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<String>,
 }
 
 impl PersistedReasoningOverride {
@@ -63,12 +66,15 @@ impl PersistedReasoningOverride {
             effort: config.reasoning.effort.as_ref().and_then(|value| {
                 (value.source.layer == Layer::SessionOverride).then(|| value.value.clone())
             }),
+            context_window: config.context_window.as_ref().and_then(|value| {
+                (value.source.layer == Layer::SessionOverride).then(|| value.value.clone())
+            }),
         }
     }
 
     /// Whether there is anything to persist.
     pub fn is_empty(&self) -> bool {
-        self.enabled.is_none() && self.effort.is_none()
+        self.enabled.is_none() && self.effort.is_none() && self.context_window.is_none()
     }
 
     /// Encodes the additive state for ordinary redaction-safe persistence.
@@ -100,6 +106,19 @@ impl PersistedReasoningOverride {
 
     /// Applies saved values as the highest-precedence session layer.
     pub fn apply(&self, config: &mut ResolvedConfig, reset_enabled: bool, reset_effort: bool) {
+        self.apply_with_context_window(config, reset_enabled, reset_effort, false, false);
+    }
+
+    /// Applies saved reasoning and context selections while respecting this
+    /// invocation's reset and shadow layers.
+    pub fn apply_with_context_window(
+        &self,
+        config: &mut ResolvedConfig,
+        reset_enabled: bool,
+        reset_effort: bool,
+        reset_context_window: bool,
+        context_window_shadowed: bool,
+    ) {
         let explicit_enabled = config
             .reasoning
             .enabled
@@ -124,6 +143,20 @@ impl PersistedReasoningOverride {
             config.reasoning.effort = Some(Sourced::new(
                 effort.clone(),
                 Source::session("reasoning.effort"),
+            ));
+        }
+        let explicit_context_window = config
+            .context_window
+            .as_ref()
+            .is_some_and(|value| value.source.layer == Layer::SessionOverride);
+        if !reset_context_window
+            && !context_window_shadowed
+            && !explicit_context_window
+            && let Some(context_window) = &self.context_window
+        {
+            config.context_window = Some(Sourced::new(
+                context_window.clone(),
+                Source::session("context_window"),
             ));
         }
     }
@@ -1351,6 +1384,7 @@ max_output_tokens = 4096
         let saved = PersistedReasoningOverride {
             enabled: Some(true),
             effort: Some("low".to_owned()),
+            context_window: None,
         };
 
         let mut config = resolved_config();
@@ -1375,6 +1409,7 @@ max_output_tokens = 4096
         let override_value = PersistedReasoningOverride {
             enabled: Some(false),
             effort: Some("high".to_owned()),
+            context_window: Some("872k".to_owned()),
         };
         let state = override_value.versioned().expect("versioned state");
         assert_eq!(state.sensitivity, SessionStateSensitivity::RedactionSafe);
@@ -1389,6 +1424,7 @@ max_output_tokens = 4096
         let saved = PersistedReasoningOverride {
             enabled: Some(false),
             effort: Some("high".to_owned()),
+            context_window: None,
         };
 
         let mut restored = resolved_config();
@@ -1418,6 +1454,58 @@ max_output_tokens = 4096
         saved.apply(&mut reset, true, true);
         assert!(reset.reasoning.enabled.is_none());
         assert!(reset.reasoning.effort.is_none());
+    }
+
+    #[test]
+    fn saved_context_window_restores_as_session_state_and_honors_reset_or_flag() {
+        let saved = PersistedReasoningOverride {
+            context_window: Some("872k".to_owned()),
+            ..PersistedReasoningOverride::default()
+        };
+
+        let mut persisted_config = resolved_config();
+        persisted_config.context_window = Some(Sourced::new(
+            "872k".to_owned(),
+            Source::session("context_window"),
+        ));
+        assert_eq!(
+            PersistedReasoningOverride::from_config(&persisted_config).context_window,
+            Some("872k".to_owned())
+        );
+
+        let mut restored = resolved_config();
+        saved.apply_with_context_window(&mut restored, false, false, false, false);
+        let selected = restored.context_window.expect("saved context window");
+        assert_eq!(selected.value, "872k");
+        assert_eq!(selected.source.layer, Layer::SessionOverride);
+
+        let mut reset = resolved_config();
+        saved.apply_with_context_window(&mut reset, false, false, true, false);
+        assert!(reset.context_window.is_none());
+
+        let mut flagged = resolved_config();
+        flagged.context_window = Some(Sourced::new(
+            "272k".to_owned(),
+            Source::flag("context_window"),
+        ));
+        saved.apply_with_context_window(&mut flagged, false, false, false, true);
+        let selected = flagged.context_window.expect("invocation flag remains");
+        assert_eq!(selected.value, "272k");
+        assert_eq!(selected.source.layer, Layer::CommandLine);
+
+        let mut session_choice = resolved_config();
+        session_choice.context_window = Some(Sourced::new(
+            "272k".to_owned(),
+            Source::session("context_window"),
+        ));
+        saved.apply_with_context_window(&mut session_choice, false, false, false, false);
+        assert_eq!(
+            session_choice
+                .context_window
+                .expect("current session choice remains")
+                .value,
+            "272k"
+        );
     }
 
     #[test]

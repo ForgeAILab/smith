@@ -771,6 +771,8 @@ pub struct Status {
     pub provider: Option<String>,
     /// The model in use.
     pub model: String,
+    /// Active named context window for models that expose alternatives.
+    pub context_window: Option<String>,
     /// Compact non-default reasoning override, when one is active.
     pub reasoning_hint: Option<String>,
     /// The credential-pool account serving attempts, when the provider
@@ -877,6 +879,7 @@ impl Status {
             agent: "build".to_owned(),
             provider: None,
             model: model.into(),
+            context_window: None,
             reasoning_hint: None,
             account: None,
             project: project.into(),
@@ -1170,6 +1173,7 @@ impl Status {
     pub fn switch_model(&mut self, provider: Option<String>, model: impl Into<String>) {
         self.provider = provider;
         self.model = model.into();
+        self.context_window = None;
         self.cache_read = None;
         self.cache_projection.suspend();
         self.context_plan = None;

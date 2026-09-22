@@ -436,6 +436,11 @@ pub(super) fn draw_identity_footer(frame: &mut Frame<'_>, area: Rect, app: &App,
         }
         _ => app.status.model.clone(),
     };
+    let model = if let Some(window) = &app.status.context_window {
+        format!("{model} · {window}")
+    } else {
+        model
+    };
     push_segment(
         &mut identity,
         theme,

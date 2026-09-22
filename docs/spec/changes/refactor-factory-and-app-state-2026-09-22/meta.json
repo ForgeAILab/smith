@@ -1,0 +1,13 @@
+{
+  "change_id": "refactor-factory-and-app-state",
+  "change_ref": "refactor-factory-and-app-state-2026-09-22",
+  "created_at": "2026-09-22T20:50:03Z",
+  "updated_at": "2026-09-22T22:08:21Z",
+  "approved_at": "2026-09-22T20:50:03Z",
+  "status": "approved",
+  "depends_on": [
+    "add-selectable-context-windows-2026-09-22",
+    "add-image-generation-tool-2026-09-22"
+  ],
+  "completed_at": "2026-09-22T22:08:21Z"
+}

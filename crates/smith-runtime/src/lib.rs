@@ -30,6 +30,8 @@ pub mod factory;
 pub mod gemini;
 pub mod harness;
 pub mod host;
+pub mod image_api;
+pub mod image_history;
 pub mod journal;
 pub mod mcp;
 pub mod memory;

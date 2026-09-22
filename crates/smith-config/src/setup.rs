@@ -108,6 +108,21 @@ pub struct TrustedModelRecord {
     pub request_output_tokens: u32,
     /// Default output reserve used by context planning.
     pub output_reserve: u32,
+    /// Trusted selectable windows, when the model has a known alternative.
+    pub context_windows: Option<&'static [TrustedContextWindow]>,
+    /// Name selected when no higher-precedence layer chooses one.
+    pub default_context_window: Option<&'static str>,
+}
+
+/// One trusted named context limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrustedContextWindow {
+    /// Stable selectable name.
+    pub name: &'static str,
+    /// Total context window, in tokens.
+    pub context_tokens: u32,
+    /// Maximum input, in tokens. `None` derives it from the model output cap.
+    pub max_input_tokens: Option<u32>,
 }
 
 /// One provider path shown by setup.
@@ -152,6 +167,8 @@ pub const GLM_4_7: TrustedModelRecord = TrustedModelRecord {
     max_output_tokens: 131_072,
     request_output_tokens: 8_192,
     output_reserve: 8_192,
+    context_windows: None,
+    default_context_window: None,
 };
 
 /// GLM-5.2 metadata verified for the Z.AI Coding Plan endpoint.
@@ -166,7 +183,22 @@ pub const GLM_5_2: TrustedModelRecord = TrustedModelRecord {
     max_output_tokens: 131_072,
     request_output_tokens: 32_768,
     output_reserve: 32_768,
+    context_windows: None,
+    default_context_window: None,
 };
+
+const CHATGPT_CONTEXT_WINDOWS: &[TrustedContextWindow] = &[
+    TrustedContextWindow {
+        name: "272k",
+        context_tokens: 272_000,
+        max_input_tokens: Some(255_616),
+    },
+    TrustedContextWindow {
+        name: "872k",
+        context_tokens: 872_000,
+        max_input_tokens: Some(855_616),
+    },
+];
 
 /// First reviewed model binding for Smith's experimental direct ChatGPT path.
 ///
@@ -184,10 +216,61 @@ pub const CHATGPT_TERRA: TrustedModelRecord = TrustedModelRecord {
     max_output_tokens: 16_384,
     request_output_tokens: 16_384,
     output_reserve: 16_384,
+    context_windows: Some(CHATGPT_CONTEXT_WINDOWS),
+    default_context_window: Some("272k"),
+};
+
+/// Trusted metadata for the ChatGPT GPT-5.6 Sol binding.
+pub const CHATGPT_SOL: TrustedModelRecord = TrustedModelRecord {
+    provider: CHATGPT_PROVIDER,
+    model: "gpt-5.6-sol",
+    label: "GPT-5.6 Sol (experimental ChatGPT)",
+    catalog: TRUSTED_MODEL_CATALOG_NAME,
+    revision: TRUSTED_MODEL_CATALOG_REVISION,
+    context_tokens: 272_000,
+    max_input_tokens: 255_616,
+    max_output_tokens: 16_384,
+    request_output_tokens: 16_384,
+    output_reserve: 16_384,
+    context_windows: Some(CHATGPT_CONTEXT_WINDOWS),
+    default_context_window: Some("272k"),
+};
+
+/// Trusted metadata for the ChatGPT GPT-5.6 Luna binding.
+pub const CHATGPT_LUNA: TrustedModelRecord = TrustedModelRecord {
+    provider: CHATGPT_PROVIDER,
+    model: "gpt-5.6-luna",
+    label: "GPT-5.6 Luna (experimental ChatGPT)",
+    catalog: TRUSTED_MODEL_CATALOG_NAME,
+    revision: TRUSTED_MODEL_CATALOG_REVISION,
+    context_tokens: 272_000,
+    max_input_tokens: 255_616,
+    max_output_tokens: 16_384,
+    request_output_tokens: 16_384,
+    output_reserve: 16_384,
+    context_windows: Some(CHATGPT_CONTEXT_WINDOWS),
+    default_context_window: Some("272k"),
+};
+
+/// Trusted metadata for the ChatGPT GPT-6 Astra binding.
+pub const CHATGPT_ASTRA: TrustedModelRecord = TrustedModelRecord {
+    provider: CHATGPT_PROVIDER,
+    model: "gpt-6-astra",
+    label: "GPT-6 Astra (experimental ChatGPT)",
+    catalog: TRUSTED_MODEL_CATALOG_NAME,
+    revision: TRUSTED_MODEL_CATALOG_REVISION,
+    context_tokens: 272_000,
+    max_input_tokens: 255_616,
+    max_output_tokens: 16_384,
+    request_output_tokens: 16_384,
+    output_reserve: 16_384,
+    context_windows: Some(CHATGPT_CONTEXT_WINDOWS),
+    default_context_window: Some("272k"),
 };
 
 const GLM_MODELS: &[TrustedModelRecord] = &[GLM_5_2, GLM_4_7];
-const CHATGPT_MODELS: &[TrustedModelRecord] = &[CHATGPT_TERRA];
+const CHATGPT_MODELS: &[TrustedModelRecord] =
+    &[CHATGPT_SOL, CHATGPT_TERRA, CHATGPT_LUNA, CHATGPT_ASTRA];
 
 const DESCRIPTORS: &[ProviderSetupDescriptor] = &[
     ProviderSetupDescriptor {
@@ -298,6 +381,13 @@ pub fn trusted_model(provider: &str, model: &str) -> Option<&'static TrustedMode
         .iter()
         .flat_map(|descriptor| descriptor.models)
         .find(|record| record.provider == provider && record.model == model)
+}
+
+/// Every trusted model record in this build, in stable descriptor order.
+pub fn trusted_models() -> impl Iterator<Item = &'static TrustedModelRecord> {
+    DESCRIPTORS
+        .iter()
+        .flat_map(|descriptor| descriptor.models.iter())
 }
 
 #[cfg(test)]
@@ -411,7 +501,10 @@ mod tests {
         assert_eq!(descriptor.adapter, KIND_CHATGPT_RESPONSES);
         assert!(descriptor.credentials.is_empty());
         assert!(descriptor.description.contains("unsupported"));
-        assert_eq!(descriptor.models, &[CHATGPT_TERRA]);
+        assert_eq!(
+            descriptor.models,
+            &[CHATGPT_SOL, CHATGPT_TERRA, CHATGPT_LUNA, CHATGPT_ASTRA]
+        );
         assert_eq!(
             (
                 CHATGPT_TERRA.context_tokens,
@@ -421,6 +514,20 @@ mod tests {
             ),
             (272_000, 255_616, 16_384, 16_384)
         );
+        for record in descriptor.models {
+            assert_eq!(record.default_context_window, Some("272k"));
+            assert_eq!(record.context_windows, Some(CHATGPT_CONTEXT_WINDOWS));
+            assert_eq!(
+                record
+                    .context_windows
+                    .expect("the selectable window records")
+                    .iter()
+                    .map(|window| (window.name, window.context_tokens))
+                    .collect::<Vec<_>>(),
+                vec![("272k", 272_000), ("872k", 872_000)]
+            );
+            assert_eq!(record.max_output_tokens, 16_384);
+        }
     }
 
     #[test]

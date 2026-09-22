@@ -23,6 +23,32 @@
     }
 
     #[test]
+    fn context_window_commands_reconfigure_at_the_idle_boundary() {
+        let mut app = app();
+        app.set_resources(RuntimeResources {
+            context_windows: vec![
+                ResourceEntry::new("272k", "272k", "smaller context window"),
+                ResourceEntry::new("1m", "1m", "larger context window"),
+            ],
+            context_window: Some("1m".into()),
+            ..RuntimeResources::default()
+        });
+        type_text(&mut app, "/context 272k");
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Some(Action::Reconfigure(PaletteCommand::ContextWindow(Some(
+                "272k".into()
+            ))))
+        );
+
+        type_text(&mut app, "/context default");
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Some(Action::Reconfigure(PaletteCommand::ContextWindow(None)))
+        );
+    }
+
+    #[test]
     fn an_unknown_slash_command_fails_locally_and_names_help() {
         let mut app = app();
         type_text(&mut app, "/frobnicate");

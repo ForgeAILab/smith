@@ -495,6 +495,84 @@
         );
     }
 
+    #[test]
+    fn generate_image_rows_show_progress_saved_path_and_provider_errors() {
+        let theme = Theme::new().without_color().without_motion();
+        let success_args = serde_json::json!({
+            "prompt": "A quiet lake at sunrise",
+            "reference_paths": ["assets/shore.png"]
+        });
+        let mut success = App::new("gpt-5.3", "~/work/api");
+        success.apply(&event(RuntimeEvent::ToolCallRequested {
+            call: ToolCallId::new("image-success"),
+            name: "generate_image".to_owned(),
+            argument_keys: vec!["prompt".to_owned(), "reference_paths".to_owned()],
+            argument_fingerprint: agent_runtime_registry::Fingerprint::of("image arguments"),
+            arguments: Some(success_args.clone()),
+        }));
+        let display = smith_tools::project_tool_call_display("generate_image", &success_args)
+            .expect("reviewed generate_image projection");
+        success.set_tool_display("image-success", display.clone());
+
+        let running = render(&success, 100, 20, theme);
+        assert!(running.contains("Generate Image("), "{running}");
+        assert!(running.contains("A quiet lake at sunrise"), "{running}");
+        assert!(running.contains("1 reference"), "{running}");
+        assert!(running.contains(" · running 0s"), "{running}");
+
+        success.apply(&event(RuntimeEvent::ToolCallCompleted {
+            call: ToolCallId::new("image-success"),
+            name: "generate_image".to_owned(),
+            is_error: false,
+        }));
+        // Completion re-projects from canonical arguments, as the host does.
+        success.set_tool_display("image-success", display);
+        success.set_tool_result_preview(
+            "image-success",
+            "Saved ~/.smith/generated_images/session/image-success.png (1024x1024)",
+        );
+
+        let completed = render(&success, 100, 20, theme);
+        assert!(completed.contains("Generate Image("), "{completed}");
+        assert!(completed.contains(" · ok"), "{completed}");
+        assert!(
+            completed.contains("Saved ~/.smith/generated_images/session/image-success.png (1024x1024)"),
+            "{completed}"
+        );
+
+        let failure_args = serde_json::json!({"prompt": "Watercolor meadow"});
+        let mut failure = App::new("gpt-5.3", "~/work/api");
+        failure.apply(&event(RuntimeEvent::ToolCallRequested {
+            call: ToolCallId::new("image-failure"),
+            name: "generate_image".to_owned(),
+            argument_keys: vec!["prompt".to_owned()],
+            argument_fingerprint: agent_runtime_registry::Fingerprint::of("image arguments"),
+            arguments: Some(failure_args.clone()),
+        }));
+        failure.set_tool_display(
+            "image-failure",
+            smith_tools::project_tool_call_display("generate_image", &failure_args)
+                .expect("reviewed generate_image projection"),
+        );
+        failure.apply(&event(RuntimeEvent::ToolCallCompleted {
+            call: ToolCallId::new("image-failure"),
+            name: "generate_image".to_owned(),
+            is_error: true,
+        }));
+        failure.set_tool_result_preview(
+            "image-failure",
+            "Image provider error: request timed out",
+        );
+
+        let failed = render(&failure, 100, 20, theme);
+        assert!(failed.contains("Generate Image("), "{failed}");
+        assert!(failed.contains(" · failed"), "{failed}");
+        assert!(
+            failed.contains("Image provider error: request timed out"),
+            "{failed}"
+        );
+    }
+
     // -- Reviewed redundant-row suppression (tool-call-display group 2) ----
 
     #[test]

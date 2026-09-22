@@ -55,9 +55,11 @@ pub fn resolve(request: &ResolveRequest) -> Result<Resolution, ConfigError> {
     provenance.extend(cli);
     provenance.extend(session);
     apply_product_model_defaults(&mut provenance);
+    apply_image_generation_defaults(&mut provenance);
 
     let config = extract(
         &provenance,
+        layout.user_dir.clone(),
         selected,
         &declared,
         agent_profiles,
@@ -74,9 +76,6 @@ pub fn resolve(request: &ResolveRequest) -> Result<Resolution, ConfigError> {
 }
 
 pub(super) fn apply_product_model_defaults(provenance: &mut Provenance) {
-    if provenance.winner("max_output_tokens").is_some() {
-        return;
-    }
     let (Some(provider), Some(model)) = (provenance.winner("provider"), provenance.winner("model"))
     else {
         return;
@@ -85,20 +84,149 @@ pub(super) fn apply_product_model_defaults(provenance: &mut Provenance) {
     else {
         return;
     };
-    let Some(record) = crate::setup::trusted_model(provider, model) else {
-        return;
-    };
-    if record.request_output_tokens == 0 {
-        return;
+    let provider = provider.clone();
+    let model = model.clone();
+    if provenance.winner("max_output_tokens").is_none()
+        && let Some(record) = crate::setup::trusted_model(&provider, &model)
+        && record.request_output_tokens != 0
+    {
+        provenance.extend(vec![Contribution {
+            key: "max_output_tokens".to_owned(),
+            value: SettingValue::Integer(i64::from(record.request_output_tokens)),
+            source: Source::built_in(format!(
+                "trusted catalog {}@{} models.\"{}/{}\".request_output_tokens",
+                record.catalog, record.revision, record.provider, record.model
+            )),
+        }]);
     }
-    provenance.extend(vec![Contribution {
-        key: "max_output_tokens".to_owned(),
-        value: SettingValue::Integer(i64::from(record.request_output_tokens)),
-        source: Source::built_in(format!(
-            "trusted catalog {}@{} models.\"{}/{}\".request_output_tokens",
-            record.catalog, record.revision, record.provider, record.model
-        )),
-    }]);
+
+    let scope = join_key(&["models", &format!("{provider}/{model}")]);
+    let model_default = provenance
+        .winner(&format!("{scope}.default_context_window"))
+        .cloned();
+    let trusted = crate::setup::trusted_model(&provider, &model);
+    let kind = provenance
+        .winner(&format!("providers.{}.kind", quote_segment(&provider)))
+        .and_then(|entry| match &entry.value {
+            SettingValue::Text(value) => Some(value.clone()),
+            _ => None,
+        });
+    let base_url = provenance
+        .winner(&format!("providers.{}.base_url", quote_segment(&provider)))
+        .and_then(|entry| match &entry.value {
+            SettingValue::Text(value) => Some(value.clone()),
+            _ => None,
+        });
+    let catalog_default = kind
+        .as_deref()
+        .zip(base_url.as_deref())
+        .and_then(|(kind, base_url)| {
+            crate::catalog::endpoint_context_windows(kind, Some(base_url), &model)
+        })
+        .and_then(|windows| windows.iter().find(|window| window.default));
+
+    let selected_default = model_default
+        .as_ref()
+        .and_then(|entry| match &entry.value {
+            SettingValue::Text(value) => Some((value.clone(), entry.source.clone())),
+            _ => None,
+        })
+        .or_else(|| {
+            trusted.and_then(|record| {
+                record.default_context_window.map(|name| {
+                    (
+                        name.to_owned(),
+                        Source::built_in(format!(
+                            "trusted catalog {}@{} models.\"{}/{}\".default_context_window",
+                            record.catalog, record.revision, record.provider, record.model
+                        )),
+                    )
+                })
+            })
+        })
+        .or_else(|| {
+            catalog_default.map(|window| {
+                (
+                    window.name.to_owned(),
+                    Source::built_in(format!(
+                        "OpenAI endpoint model catalog models.\"{provider}/{model}\".default_context_window"
+                    )),
+                )
+            })
+        });
+    let flat_source = provenance
+        .source(&format!("{scope}.context_tokens"))
+        .or_else(|| provenance.source(&format!("{scope}.max_input_tokens")));
+    if let Some((name, source)) = selected_default
+        && flat_source.is_none_or(|flat| flat.layer.precedence() < source.layer.precedence())
+    {
+        provenance.prepend(Contribution {
+            key: "context_window".to_owned(),
+            value: SettingValue::Text(name),
+            source,
+        });
+    }
+}
+
+/// Adds image-tool defaults after provider selection so `enabled` defaults to
+/// true only for ChatGPT or the exact official OpenAI Platform endpoint.
+pub(super) fn apply_image_generation_defaults(provenance: &mut Provenance) {
+    let provider = provenance
+        .winner("provider")
+        .and_then(|entry| match &entry.value {
+            SettingValue::Text(provider) => Some(provider.clone()),
+            _ => None,
+        });
+    let supported = provider.is_some_and(|provider| {
+        let prefix = format!("providers.{provider}.");
+        let kind = provenance
+            .winner(&format!("{prefix}kind"))
+            .and_then(|entry| match &entry.value {
+                SettingValue::Text(kind) => Some(kind.as_str()),
+                _ => None,
+            });
+        if kind == Some(crate::model::KIND_CHATGPT_RESPONSES) {
+            return true;
+        }
+        let endpoint =
+            provenance
+                .winner(&format!("{prefix}base_url"))
+                .and_then(|entry| match &entry.value {
+                    SettingValue::Text(endpoint) => Some(endpoint.trim_end_matches('/')),
+                    _ => None,
+                });
+        matches!(
+            kind,
+            Some(crate::model::KIND_OPENAI_COMPATIBLE) | Some(crate::model::KIND_OPENAI_RESPONSES)
+        ) && endpoint == Some(crate::catalog::OPENAI_ENDPOINT.trim_end_matches('/'))
+    });
+
+    for (key, value) in [
+        (
+            "tools.image_generation.enabled",
+            SettingValue::Flag(supported),
+        ),
+        (
+            "tools.image_generation.model",
+            SettingValue::Text("gpt-image-2".to_owned()),
+        ),
+        (
+            "tools.image_generation.quality",
+            SettingValue::Text("auto".to_owned()),
+        ),
+        (
+            "tools.image_generation.size",
+            SettingValue::Text("auto".to_owned()),
+        ),
+    ] {
+        if provenance.winner(key).is_none() {
+            provenance.extend(vec![Contribution {
+                key: key.to_owned(),
+                value,
+                source: Source::built_in(key),
+            }]);
+        }
+    }
 }
 
 /// Inspects whether an invocation is ready, genuinely unconfigured, or
@@ -596,6 +724,7 @@ pub(super) fn contributions_of(
     layer: Layer,
     path: Option<&Path>,
 ) -> Result<Vec<Contribution>, ConfigError> {
+    validate_model_context_windows(file, layer, path)?;
     let table = toml::Table::try_from(file).map_err(|err| ConfigError::Unrepresentable {
         message: err.to_string(),
     })?;
@@ -621,6 +750,114 @@ pub(super) fn contributions_of(
         });
     }
     Ok(out)
+}
+
+fn validate_model_context_windows(
+    file: &ConfigFile,
+    layer: Layer,
+    path: Option<&Path>,
+) -> Result<(), ConfigError> {
+    for (identity, model) in &file.models {
+        let scope = join_key(&["models", identity]);
+        let windows_key = format!("{scope}.context_windows");
+        let default_key = format!("{scope}.default_context_window");
+        if model.context_windows.is_empty() {
+            if model.default_context_window.is_some() {
+                return Err(ConfigError::InvalidValue {
+                    source: source_for(layer, path, default_key),
+                    message: "`default_context_window` requires at least one declared `context_windows` entry".to_owned(),
+                });
+            }
+            continue;
+        }
+
+        if model.context_tokens.is_some() || model.max_input_tokens.is_some() {
+            let flat_key = if model.context_tokens.is_some() {
+                format!("{scope}.context_tokens")
+            } else {
+                format!("{scope}.max_input_tokens")
+            };
+            return Err(ConfigError::Ambiguous {
+                key: format!("{scope}.context_windows"),
+                sources: vec![
+                    source_for(layer, path, flat_key),
+                    source_for(layer, path, windows_key),
+                ],
+            });
+        }
+
+        let default =
+            model
+                .default_context_window
+                .as_deref()
+                .ok_or_else(|| ConfigError::InvalidValue {
+                    source: source_for(layer, path, windows_key.clone()),
+                    message:
+                        "one declared context window must be selected by `default_context_window`"
+                            .to_owned(),
+                })?;
+        if !model.context_windows.contains_key(default) {
+            return Err(ConfigError::InvalidValue {
+                source: source_for(layer, path, default_key),
+                message: format!(
+                    "default context window `{default}` is not declared; choose one of {}",
+                    model
+                        .context_windows
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            });
+        }
+
+        for (name, window) in &model.context_windows {
+            let key = format!("{scope}.context_windows.{name}");
+            if !valid_context_window_name(name) {
+                return Err(ConfigError::InvalidValue {
+                    source: source_for(layer, path, key),
+                    message: "context window names must be 1–32 ASCII letters, digits, `-`, or `_`; `default` is reserved".to_owned(),
+                });
+            }
+            if window.context_tokens == 0 {
+                return Err(ConfigError::InvalidValue {
+                    source: source_for(layer, path, format!("{key}.context_tokens")),
+                    message: "`context_tokens` must be positive".to_owned(),
+                });
+            }
+            if window
+                .max_input_tokens
+                .is_some_and(|input| input == 0 || input > window.context_tokens)
+            {
+                return Err(ConfigError::InvalidValue {
+                    source: source_for(layer, path, format!("{key}.max_input_tokens")),
+                    message:
+                        "`max_input_tokens` must be positive and no greater than `context_tokens`"
+                            .to_owned(),
+                });
+            }
+            if model
+                .max_output_tokens
+                .is_some_and(|output| output > window.context_tokens)
+            {
+                return Err(ConfigError::InvalidValue {
+                    source: source_for(layer, path, format!("{key}.context_tokens")),
+                    message:
+                        "the model's `max_output_tokens` cannot exceed a declared context window"
+                            .to_owned(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn valid_context_window_name(name: &str) -> bool {
+    (1..=32).contains(&name.len())
+        && name != "default"
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
 /// Maps the one-release `context.idle_compaction_ms` spelling onto the

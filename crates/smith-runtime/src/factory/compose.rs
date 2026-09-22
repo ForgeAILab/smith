@@ -1,9 +1,9 @@
 //! Final neutral Agent Runtime composition stage.
 
-use agent_runtime::runtime::RuntimeBuilder;
-
-use super::{BuilderStage, FactoryError, build_runtime};
+use super::*;
 
 pub(super) fn runtime(builder: RuntimeBuilder) -> Result<BuilderStage, FactoryError> {
-    build_runtime(builder)
+    Ok(BuilderStage {
+        runtime: builder.build().map_err(FactoryError::Runtime)?,
+    })
 }

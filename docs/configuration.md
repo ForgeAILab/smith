@@ -357,9 +357,16 @@ reasoning_only = "reasoning"
 x-client-name = "smith"
 
 [models."remote/vendor/model-id"]
-context_tokens = 128000
-max_input_tokens = 124000
 max_output_tokens = 4096
+default_context_window = "128k"
+
+[models."remote/vendor/model-id".context_windows."32k"]
+context_tokens = 32768
+
+[models."remote/vendor/model-id".context_windows."128k"]
+context_tokens = 128000
+# max_input_tokens is optional; when omitted Smith derives it as
+# context_tokens minus the model's resolved output ceiling.
 
 [models."remote/vendor/model-id".reasoning]
 toggle = true
@@ -592,6 +599,40 @@ checkpoints already exist under the selected session root, changing sources
 refuses before modifying config; retire or resume that state deliberately
 before choosing another key.
 
+## Image generation
+
+The built-in `generate_image` tool is available on the ChatGPT provider or when
+an OpenAI-compatible/Responses provider uses the exact OpenAI Platform endpoint
+`https://api.openai.com/v1`. It is not enabled for other OpenAI-compatible
+services. Availability also requires built-in tools, an enabled setting, and a
+writable posture; the tool is omitted in `plan` posture. Provider-side account
+eligibility is determined by the Images API response.
+
+Configure it with the layered `[tools.image_generation]` section:
+
+```toml
+[tools.image_generation]
+enabled = true
+model = "gpt-image-2"
+quality = "auto"
+size = "auto"
+```
+
+The default is enabled when a supported provider is active and disabled for
+other providers. `config explain tools.image_generation.enabled` (or one of the
+other three keys) shows the winning source and any overridden values. The tool
+accepts a prompt and either up to five `reference_paths` inside the project or
+Smith's generated-image directory, or `recent_images = 1..=5` to edit images
+from the current session's conversation. Child agent runs do not register this
+tool in v1.
+
+Generated PNGs are saved privately at
+`~/.smith/generated_images/<session>/<call>.png` (0600 files on Unix). The tool
+returns the image and a text hint with its path and dimensions. Calls use the
+active provider credential, including the current credential-pool member, and
+pass through the network approval policy. Ineligible accounts receive the
+provider's Images API error.
+
 ## Runtime connections
 
 `/connect [PROVIDER]` and `/disconnect [PROVIDER]` are idle-only local TUI
@@ -666,11 +707,57 @@ conservative 16,384-token output cap. The underlying subscription-token API is
 not a supported public OpenAI Platform contract. No Codex installation or auth
 cache is used.
 
+The GPT-5.6 family (`gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`) and
+`gpt-6-astra` on ChatGPT offer the default `272k` window and an `872k` option.
+Usage beyond 272k counts about twice as much, so the extended window can cost
+more. On the exact OpenAI Platform endpoint, those model IDs offer `1m`
+(1,050,000 tokens) by default and `272k`; input beyond 272k is billed at the
+premium tier.
+
 The selected `provider/model` must resolve exact `context_tokens`,
 `max_input_tokens`, and `max_output_tokens` from configured values, trusted
 embedded metadata, or a validated endpoint-bound catalog. Explicit fields win
 independently. `profiles.<name>.max_output_tokens` is the per-request ask and
 cannot exceed the model's resolved ceiling.
+
+Named windows can be declared under `[models."provider/model".context_windows]`.
+Each named entry requires a positive `context_tokens`; its optional
+`max_input_tokens` defaults to the window size minus the resolved model output
+ceiling. Set `default_context_window` on the model table to one of those names.
+Do not combine named windows with flat `context_tokens` or `max_input_tokens`
+in the same config layer. A flat context limit from a higher or equal layer
+pins the binding to its single configured window; a named choice then reports
+the key that pins it.
+
+Selection precedence is the model's declared default, the selected profile's
+`context_window`, `--context-window NAME`, then the session's `/context NAME`
+override. `/context default` clears the session choice; `/context` by itself
+keeps the context usage report and lists every available window with the active
+choice marked. `smith config explain context_window` shows the winning value
+and overridden sources. Unknown names fail during startup before credential
+lookup or provider I/O. On a model with multiple windows, the active name also
+appears in the model picker and status line.
+
+For example, a profile can choose the smaller window while the model table
+keeps the larger window as its default:
+
+```toml
+[models."remote/vendor/model-id"]
+default_context_window = "128k"
+
+[models."remote/vendor/model-id".context_windows."32k"]
+context_tokens = 32768
+
+[models."remote/vendor/model-id".context_windows."128k"]
+context_tokens = 128000
+
+[profiles.work]
+context_window = "32k"
+```
+
+An idle-boundary change rebuilds the runtime with the selected limits. Before
+the next provider request, Smith compacts the existing transcript when it no
+longer fits the smaller input budget.
 
 When the per-request ask is omitted, Smith keeps the resolved model ceiling
 unchanged and derives one automatic request budget for the run. The budget is
@@ -846,6 +933,7 @@ The run surface accepts:
 --agent MODE                  # deprecated legacy mode compatibility
 --provider NAME
 --model ID
+--context-window NAME         # select a named model context window
 --effort NAME                 # one provider-advertised reasoning effort
 --approval ask|deny|allow-all
 --yolo                       # explicit alias for --approval allow-all

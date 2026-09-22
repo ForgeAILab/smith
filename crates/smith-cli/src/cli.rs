@@ -96,6 +96,12 @@ pub(crate) struct Selection {
     /// two never have to pretend to be each other in diagnostics or in what a
     /// resumed session saves.
     pub effort: Option<String>,
+    /// `--context-window <NAME>`: context selection for this invocation.
+    pub context_window_flag: Option<String>,
+    /// Session-local context-window choice from `/context`.
+    pub context_window: Option<String>,
+    /// An explicit `/context default` clears a persisted selection.
+    pub context_window_reset: bool,
     /// An approval policy override.
     pub approval: Option<ApprovalMode>,
     /// A background-exit policy override.
@@ -113,6 +119,7 @@ impl Selection {
             provider: self.provider.clone(),
             model: self.model.clone(),
             reasoning_effort: self.effort.clone(),
+            context_window: self.context_window_flag.clone(),
             approval_mode: self.approval,
             background_exit: self.background_exit,
             ..Overrides::default()
@@ -125,6 +132,7 @@ impl Selection {
         Overrides {
             reasoning_enabled: self.reasoning_enabled,
             reasoning_effort: self.reasoning_effort.clone(),
+            context_window: self.context_window.clone(),
             ..Overrides::default()
         }
     }
@@ -446,6 +454,10 @@ fn parse_selection_flag(
             let parsed = text_value(flag, inline, args)?;
             set_once(&mut selection.effort, parsed, flag)
         }
+        "--context-window" => {
+            let parsed = text_value(flag, inline, args)?;
+            set_once(&mut selection.context_window_flag, parsed, flag)
+        }
         "--approval" => {
             let raw = text_value(flag, inline, args)?;
             let parsed = ApprovalMode::parse(&raw).ok_or_else(|| {
@@ -616,6 +628,7 @@ RUN OPTIONS:
       --provider <NAME>         Select a configured provider
       --model <MODEL>           Select a configured model
       --effort <NAME>           Select a provider-advertised reasoning effort
+      --context-window <NAME>   Select a named model context window
       --approval <POLICY>       ask | deny | allow-all
       --yolo                    Alias for --approval allow-all
       --background-exit <MODE>  error | wait | stop
@@ -812,6 +825,41 @@ mod tests {
         );
 
         let missing = parse(["--effort"].map(OsString::from)).expect_err("effort requires a value");
+        assert!(
+            missing.to_string().contains("requires a value"),
+            "{missing}"
+        );
+    }
+
+    #[test]
+    fn context_window_flag_is_an_invocation_selection_not_a_session_override() {
+        for args in [
+            vec!["--context-window", "872k"],
+            vec!["--context-window=872k"],
+            vec!["-p", "review", "--context-window", "872k"],
+        ] {
+            let Command::Run(run) = command(&args) else {
+                panic!("expected a run");
+            };
+            assert_eq!(run.selection.context_window_flag.as_deref(), Some("872k"));
+            assert_eq!(run.selection.context_window, None);
+            assert_eq!(
+                run.selection.overrides().context_window.as_deref(),
+                Some("872k")
+            );
+            assert_eq!(run.selection.session_overrides().context_window, None);
+        }
+
+        let duplicate =
+            parse(["--context-window", "272k", "--context-window", "872k"].map(OsString::from))
+                .expect_err("context window is one selection");
+        assert!(
+            duplicate.to_string().contains("supplied twice"),
+            "{duplicate}"
+        );
+
+        let missing = parse(["--context-window"].map(OsString::from))
+            .expect_err("context window requires a value");
         assert!(
             missing.to_string().contains("requires a value"),
             "{missing}"

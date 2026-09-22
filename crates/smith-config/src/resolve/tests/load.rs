@@ -13,6 +13,90 @@
     }
 
     #[test]
+    fn image_generation_defaults_follow_provider_support_and_keep_provenance() {
+        fn defaults(kind: &str, endpoint: Option<&str>, explicit: Option<bool>) -> Provenance {
+            let mut entries = vec![
+                Contribution {
+                    key: "provider".to_owned(),
+                    value: SettingValue::Text("active".to_owned()),
+                    source: Source::built_in("provider"),
+                },
+                Contribution {
+                    key: "providers.active.kind".to_owned(),
+                    value: SettingValue::Text(kind.to_owned()),
+                    source: Source::built_in("kind"),
+                },
+            ];
+            if let Some(endpoint) = endpoint {
+                entries.push(Contribution {
+                    key: "providers.active.base_url".to_owned(),
+                    value: SettingValue::Text(endpoint.to_owned()),
+                    source: Source::built_in("base_url"),
+                });
+            }
+            if let Some(enabled) = explicit {
+                entries.push(Contribution {
+                    key: "tools.image_generation.enabled".to_owned(),
+                    value: SettingValue::Flag(enabled),
+                    source: Source::built_in("explicit image setting"),
+                });
+            }
+            let mut provenance = Provenance::default();
+            provenance.extend(entries);
+            apply_image_generation_defaults(&mut provenance);
+            provenance
+        }
+
+        let chatgpt = defaults(crate::model::KIND_CHATGPT_RESPONSES, None, None);
+        assert_eq!(
+            chatgpt.explain("tools.image_generation.enabled").unwrap().value,
+            SettingValue::Flag(true)
+        );
+        assert_eq!(
+            chatgpt.explain("tools.image_generation.model").unwrap().value,
+            SettingValue::Text("gpt-image-2".to_owned())
+        );
+        assert_eq!(
+            defaults(
+                crate::model::KIND_OPENAI_COMPATIBLE,
+                Some(crate::catalog::OPENAI_ENDPOINT),
+                None,
+            )
+            .explain("tools.image_generation.enabled")
+            .unwrap()
+            .value,
+            SettingValue::Flag(true)
+        );
+        assert_eq!(
+            defaults(
+                crate::model::KIND_OPENAI_COMPATIBLE,
+                Some("https://open.bigmodel.cn/api/paas/v4"),
+                None,
+            )
+            .explain("tools.image_generation.enabled")
+            .unwrap()
+            .value,
+            SettingValue::Flag(false),
+            "a GLM compatible endpoint stays excluded"
+        );
+        assert_eq!(
+            defaults(crate::model::KIND_FAKE, None, Some(false))
+                .explain("tools.image_generation.enabled")
+                .unwrap()
+                .value,
+            SettingValue::Flag(false)
+        );
+        assert_eq!(
+            chatgpt.explain("tools.image_generation.quality").unwrap().value,
+            SettingValue::Text("auto".to_owned())
+        );
+        assert_eq!(
+            chatgpt.explain("tools.image_generation.size").unwrap().value,
+            SettingValue::Text("auto".to_owned())
+        );
+    }
+
+    #[test]
     fn keys_with_punctuation_are_quoted_so_they_round_trip() {
         assert_eq!(
             join_key(&["models", "acme/example-model", "context_tokens"]),

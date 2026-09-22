@@ -56,6 +56,49 @@ pub const GEMINI_ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1b
 /// The exact normalized Z.AI Coding Plan endpoint Smith binds to its catalog.
 pub const ZAI_CODING_PLAN_ENDPOINT: &str = "https://api.z.ai/api/coding/paas/v4";
 
+/// One trusted alternative on an endpoint-bound model's context-window ladder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelectableContextWindow {
+    /// Stable user-facing name.
+    pub name: &'static str,
+    /// Explicit context size for an alternative. `None` uses the catalog's
+    /// existing model limit.
+    pub context_tokens: Option<u32>,
+    /// Whether the existing catalog limit remains the default.
+    pub default: bool,
+}
+
+const OPENAI_GPT_CONTEXT_WINDOWS: &[SelectableContextWindow] = &[
+    SelectableContextWindow {
+        name: "1m",
+        context_tokens: None,
+        default: true,
+    },
+    SelectableContextWindow {
+        name: "272k",
+        context_tokens: Some(272_000),
+        default: false,
+    },
+];
+
+/// Selectable OpenAI Platform window alternatives for the exact reviewed
+/// GPT-5.6/GPT-6 bindings. The `1m` entry preserves the Models.dev ceiling.
+pub fn endpoint_context_windows(
+    kind: &str,
+    base_url: Option<&str>,
+    model: &str,
+) -> Option<&'static [SelectableContextWindow]> {
+    if catalog_provider_for(kind, base_url)? != OPENAI_CATALOG_PROVIDER
+        || !matches!(
+            model,
+            "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna" | "gpt-6-astra"
+        )
+    {
+        return None;
+    }
+    Some(OPENAI_GPT_CONTEXT_WINDOWS)
+}
+
 /// An immutable, normalized Models.dev snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

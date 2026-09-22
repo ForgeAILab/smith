@@ -9,7 +9,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
-use crate::catalog::{CatalogModel, CatalogSnapshot, catalog_provider_for};
+use crate::catalog::{
+    CatalogModel, CatalogSnapshot, catalog_provider_for, endpoint_context_windows,
+};
 use crate::credential::CredentialRef;
 #[cfg(test)]
 use crate::model::ReasoningOnlyBehavior;
@@ -18,8 +20,8 @@ use crate::model::{
     KIND_XAI_RESPONSES, ModelSection, ProfileUse, ProviderResponseSection, ProviderSection,
 };
 use crate::output_budget::{OutputBudget, resolve_output_budget};
-use crate::resolve::{ConfigError, Layer, Position, Resolution, Source};
-use crate::setup::trusted_model;
+use crate::resolve::{ConfigError, Layer, Position, Resolution, Source, Sourced};
+use crate::setup::{trusted_model, trusted_models};
 
 /// A locally configured profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,6 +133,8 @@ pub struct ModelInventoryEntry {
     pub max_output_tokens: Option<InventoryLimit>,
     /// Effective provider request and context-reserve budget.
     pub output_budget: Option<OutputBudget>,
+    /// Named alternatives available for this exact binding.
+    pub context_windows: Vec<String>,
     /// Whether the catalog advertises tool calling, when catalog-backed.
     pub tool_call: Option<bool>,
     /// Whether the catalog advertises reasoning, when catalog-backed.
@@ -300,6 +304,11 @@ pub fn local_inventory_with_catalog(
             candidate_pairs.insert((provider.value.clone(), model.value.clone()));
         }
     }
+    for record in trusted_models() {
+        if record.context_windows.is_some() && providers.contains_key(record.provider) {
+            candidate_pairs.insert((record.provider.to_owned(), record.model.to_owned()));
+        }
+    }
 
     let mut catalog_models = BTreeMap::<(String, String), (&str, &CatalogModel)>::new();
     if let Some(snapshot) = catalog {
@@ -341,6 +350,68 @@ pub fn local_inventory_with_catalog(
         let catalog_entry = catalog_models.get(&(provider.clone(), model.clone()));
         let catalog_model = catalog_entry.map(|(_, entry)| *entry);
         let catalog_limits = catalog_model.and_then(|entry| entry.limits);
+        let model_scope = format!("models.{}.", quote(&identity));
+        let active_pair = provider == *active_provider && model == *active_model;
+        let selected_window = active_pair
+            .then_some(resolution.config.context_window.as_ref())
+            .flatten()
+            .and_then(|selection| {
+                resolution
+                    .config
+                    .model_limits
+                    .context_windows
+                    .get(&selection.value)
+            });
+        let mut context_windows = BTreeMap::<String, u8>::new();
+        if let Some(section) = explicit {
+            for name in section.context_windows.keys() {
+                let precedence = resolution
+                    .provenance
+                    .source(&format!(
+                        "{model_scope}context_windows.{name}.context_tokens"
+                    ))
+                    .map_or(0, |source| source.layer.precedence());
+                context_windows
+                    .entry(name.clone())
+                    .and_modify(|current| *current = (*current).max(precedence))
+                    .or_insert(precedence);
+            }
+        }
+        if let Some(windows) = trusted.and_then(|record| record.context_windows) {
+            for window in windows {
+                context_windows.entry(window.name.to_owned()).or_insert(0);
+            }
+        }
+        if let Some(provider_section) = providers.get(&provider)
+            && let Some(windows) = endpoint_context_windows(
+                provider_section.kind.as_deref().unwrap_or_default(),
+                provider_section.base_url.as_deref(),
+                &model,
+            )
+        {
+            for window in windows {
+                context_windows.entry(window.name.to_owned()).or_insert(0);
+            }
+        }
+        let flat_source = [
+            resolution
+                .provenance
+                .source(&format!("{model_scope}context_tokens")),
+            resolution
+                .provenance
+                .source(&format!("{model_scope}max_input_tokens")),
+        ]
+        .into_iter()
+        .flatten()
+        .max_by_key(|source| source.layer.precedence());
+        if let Some(flat) = flat_source {
+            context_windows.retain(|_, precedence| *precedence > flat.layer.precedence());
+        }
+        let context_windows = if context_windows.len() > 1 {
+            context_windows.into_keys().collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         // An installed coding agent owns its own context; Smith has no limits
         // to discover, so the inventory falls back to the same built-in
         // bookkeeping constants `resolve_model_limits` supplies when the
@@ -357,42 +428,62 @@ pub fn local_inventory_with_catalog(
             value: catalog_value,
             snapshot: catalog,
         };
-        let context_tokens = inventory_limit(
-            resolution,
-            &identity,
-            "context_tokens",
-            explicit.and_then(|section| section.context_tokens),
-            trusted.map(|record| record.context_tokens),
-            trusted.map(|record| (record.catalog, record.revision)),
-            fallback(
-                cli_bookkeeping.map(|(context, _, _)| context),
-                catalog_limits.map(|limits| limits.context_tokens),
-            ),
-        );
-        let max_input_tokens = inventory_limit(
-            resolution,
-            &identity,
-            "max_input_tokens",
-            explicit.and_then(|section| section.max_input_tokens),
-            trusted.map(|record| record.max_input_tokens),
-            trusted.map(|record| (record.catalog, record.revision)),
-            fallback(
-                cli_bookkeeping.map(|(_, input, _)| input),
-                catalog_limits.map(|limits| limits.max_input_tokens),
-            ),
-        );
-        let max_output_tokens = inventory_limit(
-            resolution,
-            &identity,
-            "max_output_tokens",
-            explicit.and_then(|section| section.max_output_tokens),
-            trusted.map(|record| record.max_output_tokens),
-            trusted.map(|record| (record.catalog, record.revision)),
-            fallback(
-                cli_bookkeeping.map(|(_, _, output)| output),
-                catalog_limits.map(|limits| limits.max_output_tokens),
-            ),
-        );
+        let context_tokens = selected_window
+            .map(|window| configured_limit(&window.context_tokens))
+            .or_else(|| {
+                inventory_limit(
+                    resolution,
+                    &identity,
+                    "context_tokens",
+                    explicit.and_then(|section| section.context_tokens),
+                    trusted.map(|record| record.context_tokens),
+                    trusted.map(|record| (record.catalog, record.revision)),
+                    fallback(
+                        cli_bookkeeping.map(|(context, _, _)| context),
+                        catalog_limits.map(|limits| limits.context_tokens),
+                    ),
+                )
+            });
+        let max_input_tokens = selected_window
+            .and_then(|window| window.max_input_tokens.as_ref())
+            .or_else(|| {
+                active_pair
+                    .then_some(resolution.config.model_limits.max_input_tokens.as_ref())
+                    .flatten()
+            })
+            .map(configured_limit)
+            .or_else(|| {
+                inventory_limit(
+                    resolution,
+                    &identity,
+                    "max_input_tokens",
+                    explicit.and_then(|section| section.max_input_tokens),
+                    trusted.map(|record| record.max_input_tokens),
+                    trusted.map(|record| (record.catalog, record.revision)),
+                    fallback(
+                        cli_bookkeeping.map(|(_, input, _)| input),
+                        catalog_limits.map(|limits| limits.max_input_tokens),
+                    ),
+                )
+            });
+        let max_output_tokens = active_pair
+            .then_some(resolution.config.model_limits.max_output_tokens.as_ref())
+            .flatten()
+            .map(configured_limit)
+            .or_else(|| {
+                inventory_limit(
+                    resolution,
+                    &identity,
+                    "max_output_tokens",
+                    explicit.and_then(|section| section.max_output_tokens),
+                    trusted.map(|record| record.max_output_tokens),
+                    trusted.map(|record| (record.catalog, record.revision)),
+                    fallback(
+                        cli_bookkeeping.map(|(_, _, output)| output),
+                        catalog_limits.map(|limits| limits.max_output_tokens),
+                    ),
+                )
+            });
         // A trusted model's built-in request default is model-specific. While
         // inventory enumerates another candidate, derive that candidate's own
         // trusted default instead of carrying the active model's value across.
@@ -402,7 +493,6 @@ pub fn local_inventory_with_catalog(
         // active profile does not survive selecting another profile or model
         // candidate, so it previews as that candidate's own automatic budget
         // instead of disabling it.
-        let active_pair = provider == *active_provider && model == *active_model;
         let configured_request_tokens = match resolution.config.max_output_tokens.as_ref() {
             Some(request)
                 if request.source.layer != Layer::BuiltIn
@@ -507,6 +597,7 @@ pub fn local_inventory_with_catalog(
             max_input_tokens,
             max_output_tokens,
             output_budget: output_budget.and_then(Result::ok),
+            context_windows,
             profiles: associated_profiles,
             selectable,
             disabled_reason,
@@ -638,6 +729,13 @@ struct CatalogLimit<'a> {
     snapshot: Option<&'a CatalogSnapshot>,
 }
 
+fn configured_limit(value: &Sourced<u32>) -> InventoryLimit {
+    InventoryLimit {
+        value: value.value,
+        origin: ModelLimitOrigin::Configured(value.source.clone()),
+    }
+}
+
 fn inventory_limit(
     resolution: &Resolution,
     identity: &str,
@@ -712,6 +810,11 @@ fn merge_model(target: &mut ModelSection, source: ModelSection) {
     overlay(&mut target.context_tokens, source.context_tokens);
     overlay(&mut target.max_input_tokens, source.max_input_tokens);
     overlay(&mut target.max_output_tokens, source.max_output_tokens);
+    target.context_windows.extend(source.context_windows);
+    overlay(
+        &mut target.default_context_window,
+        source.default_context_window,
+    );
 }
 
 fn overlay<T>(target: &mut Option<T>, source: Option<T>) {
