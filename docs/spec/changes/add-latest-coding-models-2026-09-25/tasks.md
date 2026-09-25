@@ -1,7 +1,7 @@
 ---
 created_at: 2026-09-25T16:30:00-04:00
-updated_at: 2026-09-25T20:10:47Z
-completed_at:
+updated_at: 2026-09-25T20:16:43Z
+completed_at: 2026-09-25T20:16:43Z
 ---
 
 # Tasks: Add the latest coding models
@@ -22,6 +22,6 @@ completed_at:
 
 - [x] 3.1 Run formatting, focused model-catalog tests, workspace tests, and
       Clippy with warnings denied.
-- [ ] 3.2 Commit the release and install the exact release commit locally.
+- [x] 3.2 Commit the release and install the exact release commit locally.
 - [x] 3.3 Upgrade Codex and Claude Code through their built-in updaters and
       verify the installed versions and Smith model inventory.
