@@ -2,6 +2,12 @@
 
 use super::*;
 
+#[test]
+fn a_failed_parent_does_not_wait_for_pending_child_delivery() {
+    assert!(finish_waits_for_required_follow_up(&TurnFinish::Completed));
+    assert!(!finish_waits_for_required_follow_up(&TurnFinish::Failed));
+}
+
 #[tokio::test]
 async fn rejected_headless_submission_is_a_structured_machine_result() {
     const CONFIG: &str = r#"

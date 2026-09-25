@@ -268,6 +268,12 @@ pub(super) async fn run_with_io(
         {
             active_child_completion_turns.remove(turn.as_str());
         }
+        if finish
+            .as_ref()
+            .is_some_and(|finish| !finish_waits_for_required_follow_up(finish))
+        {
+            break;
+        }
         if finish.is_some() {
             match host.goal() {
                 Ok(Some(goal)) if goal.status == GoalStatus::Active => {}
@@ -472,6 +478,20 @@ pub(super) async fn run_with_io(
     }
 
     Ok(Outcome { exit_code })
+}
+
+/// Whether a terminal root turn may keep a headless process alive for required
+/// automatic work. Only normal completion can be extended by goal or child
+/// continuations; every non-success finish must proceed to cleanup and its
+/// structured terminal result.
+pub(super) fn finish_waits_for_required_follow_up(finish: &TurnFinish) -> bool {
+    match finish {
+        TurnFinish::Completed => true,
+        TurnFinish::Cancelled { .. }
+        | TurnFinish::LimitReached { .. }
+        | TurnFinish::NeedsInput { .. }
+        | TurnFinish::Failed => false,
+    }
 }
 
 pub(super) fn has_required_child_work(host: &HostSession) -> bool {
