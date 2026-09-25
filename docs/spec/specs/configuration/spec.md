@@ -1289,7 +1289,8 @@ MAY carry `max_input_tokens`. When a window omits
 model's resolved output ceiling. One configuration layer MUST NOT declare
 both windows and a flat `context_tokens` or `max_input_tokens` for the same
 binding. An explicit flat limit SHALL override lower-layer windows and pin
-the binding to one window.
+the binding to one window. Smith SHALL ship reviewed direct-ChatGPT metadata
+for every GPT-6 model advertised by the installed Codex catalog.
 
 #### Scenario: Window limits resolve
 
@@ -1310,7 +1311,8 @@ the binding to one window.
 
 - **GIVEN** no `[models]` block for the model
 - **WHEN** Smith resolves `chatgpt/gpt-5.6-sol`, `chatgpt/gpt-5.6-terra`,
-  `chatgpt/gpt-5.6-luna`, or `chatgpt/gpt-6-astra`
+  `chatgpt/gpt-5.6-luna`, `chatgpt/gpt-6-astra`, `chatgpt/gpt-6-sol`, or
+  `chatgpt/gpt-6-luna`
 - **THEN** the model resolves with the `272k` window as default
 - **AND** `872k` is selectable
 
@@ -1361,3 +1363,50 @@ report each value's provenance through `smith config explain`.
 - **GIVEN** `[tools.image_generation] enabled = false`
 - **WHEN** a ChatGPT session builds its tool list
 - **THEN** `generate_image` is absent
+
+### Requirement: Embedded provider catalog fallback
+
+Smith SHALL bundle a normalized Models.dev snapshot recent enough to include
+the coding models supported at release time, including GPT-6 Sol, GPT-6 Luna,
+and Claude Opus 5.5. A valid last-good user cache MAY supersede that snapshot.
+
+#### Scenario: Offline startup sees the release catalog
+
+- **GIVEN** Smith 0.2.14 starts without a user catalog cache and cannot refresh
+  Models.dev
+- **WHEN** it loads the embedded catalog
+- **THEN** GPT-6 Sol, GPT-6 Luna, and Claude Opus 5.5 metadata is available to
+  compatible endpoint-bound providers and exact model setup review
+
+### Requirement: Explicit native Anthropic reasoning metadata
+
+Smith SHALL accept `anthropic-effort` as a trusted reasoning request dialect
+for an exact explicitly configured provider/model binding. The metadata SHALL
+be able to declare mandatory reasoning, an ordered effort ladder, defaults,
+and provenance. Smith MUST NOT infer this dialect from a provider alias,
+endpoint shape, or model-name prefix.
+
+#### Scenario: Explicit Fable 5.1 controls resolve
+
+- **GIVEN** an exact dddai Fable 5.1 model entry declares mandatory reasoning,
+  efforts `low`, `medium`, `high`, `xhigh`, and `max`, default effort `high`,
+  and dialect `anthropic-effort`
+- **WHEN** Smith resolves the model profile
+- **THEN** the capability snapshot retains the ordered effort ladder and
+  mandatory-on state
+- **AND** its provenance identifies the exact explicit model metadata
+
+#### Scenario: Anthropic-looking model lacks explicit controls
+
+- **GIVEN** a model name begins with `claude-` or `fable-`
+- **BUT** its exact trusted metadata does not declare a reasoning dialect
+- **WHEN** Smith resolves the model profile
+- **THEN** Smith does not infer Anthropic effort controls
+- **AND** an attempted effort selection fails before credential or provider I/O
+
+#### Scenario: Unsupported Anthropic effort is selected
+
+- **GIVEN** exact metadata advertises the five Fable 5.1 effort levels
+- **WHEN** configuration or invocation selects a different value
+- **THEN** startup fails locally with the requested value and supported ladder
+- **AND** no provider request is made

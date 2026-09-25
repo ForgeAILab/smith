@@ -1621,3 +1621,54 @@ report and add the available windows, marking the active one.
 - **GIVEN** a session ran with the `/context 872k` override
 - **WHEN** that session is resumed
 - **THEN** the `872k` window is still active
+
+### Requirement: Current installed-agent model choices
+
+Smith SHALL list GPT-6 Astra, GPT-6 Sol, and GPT-6 Luna as selectable models
+for an installed Codex CLI. Smith SHALL use Claude Code's stable rolling model
+aliases rather than pinning dated Claude CLI model identifiers.
+
+#### Scenario: Codex exposes current GPT-6 choices
+
+- **GIVEN** `codex` is available on `PATH`
+- **WHEN** the user opens Smith's model picker
+- **THEN** `cli/codex/gpt-6-astra`, `cli/codex/gpt-6-sol`, and
+  `cli/codex/gpt-6-luna` are selectable
+
+#### Scenario: Claude tracks the latest version through an alias
+
+- **GIVEN** an updated `claude` executable is available on `PATH`
+- **WHEN** the user selects `cli/claude-code/opus`
+- **THEN** Smith passes `opus` to Claude Code
+- **AND** Claude Code resolves that alias to its current Opus release
+
+### Requirement: Mandatory Anthropic effort selection is capability-driven
+
+Smith SHALL make its existing `/think`, `/effort`, `--effort`, `/status`, and
+`/context` surfaces use the resolved capability snapshot for an exact binding
+configured with mandatory `anthropic-effort` controls, without provider
+probing or special-casing the model name. They MUST NOT expose raw reasoning
+content.
+
+#### Scenario: Fable 5.1 effort picker opens locally
+
+- **GIVEN** the idle binding advertises `low`, `medium`, `high`, `xhigh`, and
+  `max` through trusted Anthropic metadata
+- **WHEN** the user opens `/effort`
+- **THEN** the picker lists those levels in advertised order plus provider
+  default
+- **AND** opening or choosing the setting sends no provider request
+
+#### Scenario: Mandatory adaptive thinking cannot be disabled
+
+- **GIVEN** the binding marks Anthropic adaptive thinking mandatory
+- **WHEN** the user opens `/think` or submits `/think off`
+- **THEN** the off choice is unavailable with a written reason
+- **AND** the direct command fails locally without provider I/O
+
+#### Scenario: Invocation effort keeps ordinary provenance
+
+- **GIVEN** the user starts the exact binding with `--effort xhigh`
+- **WHEN** Smith explains or displays the effective reasoning state
+- **THEN** the selection is `xhigh` and retains command-line provenance
+- **AND** status never renders the model's raw reasoning content
