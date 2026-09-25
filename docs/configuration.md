@@ -402,6 +402,16 @@ structure rejects unknown fields.
 | `command-jsonl` | Smith command-provider protocol revision 1 | not used |
 | `fake` | deterministic local development | not used |
 
+### Installed coding agents
+
+Smith exposes installed coding-agent CLIs in the model picker without a
+`[models]` declaration. The current Codex choices include
+`cli/codex/gpt-6-astra`, `cli/codex/gpt-6-sol`, and
+`cli/codex/gpt-6-luna`. Claude Code is intentionally exposed through its
+rolling aliases—`cli/claude-code/opus`, `sonnet`, `fable`, and `haiku`—so an
+updated Claude executable resolves the alias to the current Claude release
+without requiring a new Smith release for every dated model.
+
 ### Local command model providers
 
 `command-jsonl` makes a trusted local bridge available through the same model
@@ -708,11 +718,11 @@ not a supported public OpenAI Platform contract. No Codex installation or auth
 cache is used.
 
 The GPT-5.6 family (`gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`) and
-`gpt-6-astra` on ChatGPT offer the default `272k` window and an `872k` option.
-Usage beyond 272k counts about twice as much, so the extended window can cost
-more. On the exact OpenAI Platform endpoint, those model IDs offer `1m`
-(1,050,000 tokens) by default and `272k`; input beyond 272k is billed at the
-premium tier.
+the GPT-6 family (`gpt-6-astra`, `gpt-6-sol`, and `gpt-6-luna`) on ChatGPT
+offer the default `272k` window and an `872k` option. Usage beyond 272k counts
+about twice as much, so the extended window can cost more. On the exact OpenAI
+Platform endpoint, those model IDs offer `1m` (1,050,000 tokens) by default
+and `272k`; input beyond 272k is billed at the premium tier.
 
 The selected `provider/model` must resolve exact `context_tokens`,
 `max_input_tokens`, and `max_output_tokens` from configured values, trusted

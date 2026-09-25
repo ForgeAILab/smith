@@ -91,7 +91,12 @@ pub fn endpoint_context_windows(
     if catalog_provider_for(kind, base_url)? != OPENAI_CATALOG_PROVIDER
         || !matches!(
             model,
-            "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna" | "gpt-6-astra"
+            "gpt-5.6-sol"
+                | "gpt-5.6-terra"
+                | "gpt-5.6-luna"
+                | "gpt-6-astra"
+                | "gpt-6-sol"
+                | "gpt-6-luna"
         )
     {
         return None;
@@ -588,5 +593,21 @@ mod tests {
         let no_limits = snapshot_with("bare", &[("lonely-model", None)]);
         assert_eq!(no_limits.resolve_model_by_id("lonely-model"), None);
         assert_eq!(no_limits.resolve_model_by_id("nothing"), None);
+    }
+
+    #[test]
+    fn current_gpt_6_models_share_the_reviewed_openai_windows() {
+        for model in ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"] {
+            let windows =
+                endpoint_context_windows(KIND_OPENAI_COMPATIBLE, Some(OPENAI_ENDPOINT), model)
+                    .unwrap_or_else(|| panic!("{model} should expose reviewed windows"));
+            assert_eq!(
+                windows
+                    .iter()
+                    .map(|window| (window.name, window.context_tokens, window.default))
+                    .collect::<Vec<_>>(),
+                vec![("1m", None, true), ("272k", Some(272_000), false)]
+            );
+        }
     }
 }
