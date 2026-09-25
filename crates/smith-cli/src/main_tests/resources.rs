@@ -9,6 +9,88 @@
     }
 
     #[test]
+    fn anthropic_effort_resources_keep_the_ladder_and_disable_thinking_off() {
+        let home = tempfile::tempdir().expect("home");
+        let project = tempfile::tempdir().expect("project");
+        std::fs::create_dir_all(project.path().join(".smith")).expect("config directory");
+        std::fs::write(
+            project.path().join(".smith/config.toml"),
+            r#"
+    default_profile = "fable"
+
+    [profiles.fable]
+    provider = "dddai"
+    model = "claude-fable-5-1"
+
+    [providers.dddai]
+    kind = "anthropic-messages"
+    base_url = "https://api.dddai.dev/v1"
+    credential = "env:DDDAI_API_KEY"
+
+    [models."dddai/claude-fable-5-1"]
+    context_tokens = 1000000
+    max_input_tokens = 1000000
+    max_output_tokens = 32768
+    "#,
+        )
+        .expect("config");
+        let resolution = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+            .expect("resolution");
+        let inventory = smith_config::inventory::local_inventory(&resolution, AVAILABLE_ADAPTER_KINDS)
+            .expect("local inventory");
+        let reasoning = smith_runtime::reasoning::ReasoningRuntimePolicy {
+            support: agent_runtime_core::provider::ReasoningSupport::Controllable,
+            switch: smith_runtime::reasoning::ReasoningSwitch::MandatoryOn,
+            efforts: ["low", "medium", "high", "xhigh", "max"]
+                .map(str::to_owned)
+                .to_vec(),
+            default_enabled: Some(true),
+            default_effort: Some("high".to_owned()),
+            selected_enabled: None,
+            selected_effort: None,
+            dialect: Some(smith_config::model::ReasoningDialect::AnthropicEffort),
+            capability_source: "configured model metadata".to_owned(),
+            selection_source: "provider/model default".to_owned(),
+        };
+        let resources = runtime_resources(
+            inventory,
+            Vec::new(),
+            "session",
+            project.path(),
+            &resolution.config.agent,
+            &reasoning,
+            &[],
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(
+            resources
+                .efforts
+                .iter()
+                .map(|entry| entry.label.as_str())
+                .collect::<Vec<_>>(),
+            ["provider default", "low", "medium", "high", "xhigh", "max"]
+        );
+        assert!(
+            resources
+                .thinking
+                .iter()
+                .find(|entry| entry.id == "on")
+                .is_some_and(|entry| entry.disabled_reason.is_none())
+        );
+        assert!(
+            resources
+                .thinking
+                .iter()
+                .find(|entry| entry.id == "off")
+                .and_then(|entry| entry.disabled_reason.as_deref())
+                .is_some_and(|reason| reason.contains("mandatory"))
+        );
+    }
+
+    #[test]
     fn model_resources_show_named_context_windows_and_the_active_choice() {
         let home = tempfile::tempdir().expect("home");
         let project = tempfile::tempdir().expect("project");

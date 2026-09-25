@@ -710,16 +710,19 @@ pub enum ReasoningDialect {
     ZaiThinking,
     /// Gemini's native `generation_config.thinking_level` field.
     GeminiThinking,
+    /// Anthropic Messages' native adaptive-thinking effort selection.
+    AnthropicEffort,
 }
 
 impl ReasoningDialect {
     /// Every dialect, in documentation order. Parsing and error messages
     /// derive from this list so a new dialect cannot miss either.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::OpenaiEffort,
         Self::Openrouter,
         Self::ZaiThinking,
         Self::GeminiThinking,
+        Self::AnthropicEffort,
     ];
 
     /// Stable configuration/status spelling.
@@ -729,6 +732,7 @@ impl ReasoningDialect {
             Self::Openrouter => "openrouter",
             Self::ZaiThinking => "zai-thinking",
             Self::GeminiThinking => "gemini-thinking",
+            Self::AnthropicEffort => "anthropic-effort",
         }
     }
 }
@@ -1238,6 +1242,45 @@ mod tests {
                 .expose(),
             secret
         );
+    }
+
+    #[test]
+    fn explicit_anthropic_effort_metadata_parses_and_roundtrips() {
+        let file = ConfigFile::parse(
+            r#"
+            [models."dddai/claude-fable-5-1".reasoning]
+            mandatory = true
+            efforts = ["low", "medium", "high", "xhigh", "max"]
+            default_enabled = true
+            default_effort = "high"
+            dialect = "anthropic-effort"
+            "#,
+        )
+        .expect("the explicit Anthropic capability contract");
+        let reasoning = file
+            .models
+            .get("dddai/claude-fable-5-1")
+            .and_then(|model| model.reasoning.as_ref())
+            .expect("the model reasoning metadata");
+        assert_eq!(reasoning.mandatory, Some(true));
+        assert_eq!(
+            reasoning
+                .efforts
+                .as_ref()
+                .map(|efforts| efforts.iter().map(String::as_str).collect::<Vec<_>>()),
+            Some(vec!["low", "medium", "high", "xhigh", "max"])
+        );
+        assert_eq!(reasoning.default_enabled, Some(true));
+        assert_eq!(reasoning.default_effort.as_deref(), Some("high"));
+        assert_eq!(reasoning.dialect, Some(ReasoningDialect::AnthropicEffort));
+
+        let serialized = toml::to_string(&file).expect("serializable capability contract");
+        assert!(
+            serialized.contains("dialect = \"anthropic-effort\""),
+            "{serialized}"
+        );
+        let reparsed = ConfigFile::parse(&serialized).expect("the serialized contract");
+        assert_eq!(reparsed, file);
     }
 
     #[test]

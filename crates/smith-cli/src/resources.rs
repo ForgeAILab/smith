@@ -392,8 +392,14 @@ pub(super) fn runtime_resources(
     thinking.push(match reasoning.switch {
         smith_runtime::reasoning::ReasoningSwitch::Optional
         | smith_runtime::reasoning::ReasoningSwitch::MandatoryOn
-            if reasoning.dialect != Some(smith_config::model::ReasoningDialect::OpenaiEffort)
-                || reasoning.selected_effort.is_some()
+            if !matches!(
+                reasoning.dialect,
+                Some(
+                    smith_config::model::ReasoningDialect::OpenaiEffort
+                        | smith_config::model::ReasoningDialect::GeminiThinking
+                        | smith_config::model::ReasoningDialect::AnthropicEffort,
+                )
+            ) || reasoning.selected_effort.is_some()
                 || reasoning.default_effort.is_some() =>
         {
             on

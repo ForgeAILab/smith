@@ -683,6 +683,36 @@ Models.dev snapshot used by `/model` and setup; no `[models]` entry is needed
 for catalog-backed Gemini models. The provider sends native Gemini
 `thinking_level` values when the selected catalog model advertises them.
 
+An Anthropic Messages-compatible route must declare native adaptive-effort
+support explicitly on the exact provider/model binding. For example, this is
+the complete dddai Fable 5.1 declaration (keep the credential in an environment
+or another supported secret store):
+
+```toml
+[providers.dddai]
+kind = "anthropic-messages"
+base_url = "https://api.dddai.dev/v1"
+credential = "env:DDDAI_API_KEY"
+
+[models."dddai/claude-fable-5-1"]
+context_tokens = 1000000
+max_input_tokens = 1000000
+max_output_tokens = 32768
+
+[models."dddai/claude-fable-5-1".reasoning]
+mandatory = true
+efforts = ["low", "medium", "high", "xhigh", "max"]
+default_enabled = true
+default_effort = "high"
+dialect = "anthropic-effort"
+```
+
+This trusted metadata enables the local `/effort` ladder while keeping
+`/think off` unavailable. It does not infer controls from a `claude-*` or
+`fable-*` model name, probe the route, or guarantee that the upstream route is
+healthy; a 503 remains an ordinary provider failure under the existing retry
+policy.
+
 ChatGPT is a fixed experimental direct provider. `/connect chatgpt` writes only
 the trusted declaration below and stores the renewable bundle in the
 `chatgpt` entry of the fixed plaintext `~/.smith/auth.json` file:
@@ -796,15 +826,17 @@ Reasoning presence is separate from reasoning control. On an unknown
 OpenAI-compatible endpoint a catalog `reasoning = true` value means only that
 reasoning is present and fixed; it does not create a toggle or effort
 selector, and rich `[models."provider/model".reasoning]` metadata must name
-the exact wire dialect (`openai-effort`, `openrouter`, or `zai-thinking`),
-switch behavior, and ordered effort values. Four exact endpoints normalize
-controls themselves and need no per-model metadata: the OpenAI endpoint
-speaks `reasoning_effort`, the xAI Responses endpoint grants the same
-OpenAI-effort dialect for catalog-backed Grok reasoning models, the
-OpenRouter endpoint speaks the unified `reasoning` object with an on/off
-switch, and the Z.AI Coding Plan endpoint speaks its documented thinking
-toggle; the native Gemini endpoint speaks catalog-advertised
-`thinking_level` values. On those endpoints the frozen Models.dev snapshot
+the exact wire dialect (`openai-effort`, `openrouter`, `zai-thinking`,
+`gemini-thinking`, or `anthropic-effort`), switch behavior, and ordered effort
+values. The OpenAI endpoint speaks `reasoning_effort`, the xAI Responses
+endpoint grants the same OpenAI-effort dialect for catalog-backed Grok
+reasoning models, the OpenRouter endpoint speaks the unified `reasoning`
+object with an on/off switch, the Z.AI Coding Plan endpoint speaks its
+documented thinking toggle, and the native Gemini endpoint speaks
+catalog-advertised `thinking_level` values. Anthropic adaptive effort is
+available only from trusted exact model metadata; Smith does not infer it from
+an endpoint or model name. On those endpoint-bound integrations the frozen
+Models.dev snapshot
 supplies each model's advertised control shape — its exact effort ladder
 (for example `none…xhigh` on newer OpenAI families, `low…high` on Grok and
 older OpenAI ones) or a bare toggle. On the OpenAI and xAI endpoints, `off`
@@ -817,8 +849,11 @@ everything; token-budget options are not yet consumed.
 advertised `effort`. Omission sends no reasoning option and preserves provider
 behavior. Native Gemini reasoning uses the catalog's `thinking_level` values
 and is mandatory when the model advertises a ladder; `/think off` is rejected
-for that model. The exact Z.AI Coding Plan binding exposes its documented thinking
-toggle but no general effort ladder. `/think [on|off|default]` and
+for that model. Anthropic adaptive reasoning uses the trusted
+`anthropic-effort` ladder and is mandatory when its metadata says so, so
+`/think off` is rejected for that binding as well. The exact Z.AI Coding Plan
+binding exposes its documented thinking toggle but no general effort ladder.
+`/think [on|off|default]` and
 `/effort [LEVEL|default]` apply session overrides at an idle boundary; omitted
 arguments open local bounded selectors and make no provider request. Invalid
 or mandatory/fixed choices fail before credential lookup. Higher effort can

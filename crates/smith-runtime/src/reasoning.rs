@@ -291,11 +291,13 @@ impl ReasoningRuntimePolicy {
                     _ => self.selected_effort.clone(),
                 }
             }
-            ReasoningDialect::GeminiThinking => self.selected_effort.clone().or_else(|| {
-                (self.selected_enabled == Some(true))
-                    .then(|| self.default_effort.clone())
-                    .flatten()
-            }),
+            ReasoningDialect::GeminiThinking | ReasoningDialect::AnthropicEffort => {
+                self.selected_effort.clone().or_else(|| {
+                    (self.selected_enabled == Some(true))
+                        .then(|| self.default_effort.clone())
+                        .flatten()
+                })
+            }
         }?;
         Some(ReasoningConfig {
             effort: Some(effort),
@@ -545,15 +547,19 @@ pub fn resolve_reasoning_policy(
     if selected_enabled == Some(true)
         && matches!(
             dialect,
-            Some(ReasoningDialect::OpenaiEffort | ReasoningDialect::GeminiThinking)
+            Some(
+                ReasoningDialect::OpenaiEffort
+                    | ReasoningDialect::GeminiThinking
+                    | ReasoningDialect::AnthropicEffort,
+            )
         )
         && selected_effort.is_none()
         && default_effort.is_none()
     {
-        let binding = if dialect == Some(ReasoningDialect::GeminiThinking) {
-            "Gemini-thinking"
-        } else {
-            "OpenAI-effort"
+        let binding = match dialect {
+            Some(ReasoningDialect::GeminiThinking) => "Gemini-thinking",
+            Some(ReasoningDialect::AnthropicEffort) => "Anthropic-effort",
+            _ => "OpenAI-effort",
         };
         return Err(format!(
             "`reasoning.enabled = true` needs an explicit supported effort for this {binding} binding; choose one of {}",
@@ -779,7 +785,7 @@ fn adapt_request(
                 )?;
             }
         }
-        ReasoningDialect::GeminiThinking => {}
+        ReasoningDialect::GeminiThinking | ReasoningDialect::AnthropicEffort => {}
     }
     Ok(())
 }
@@ -869,6 +875,21 @@ max_output_tokens = 4096
             Some("high".to_owned())
         );
         assert!(request.vendor_extensions.is_null());
+    }
+
+    #[test]
+    fn anthropic_effort_stays_neutral_for_the_native_adapter() {
+        let mut request = request("low");
+        request.vendor_extensions = json!({"existing": {"owner": "adapter"}});
+        adapt_request(&mut request, ReasoningDialect::AnthropicEffort).expect("adapted");
+        assert_eq!(
+            request.reasoning.and_then(|reasoning| reasoning.effort),
+            Some("low".to_owned())
+        );
+        assert_eq!(
+            request.vendor_extensions,
+            json!({"existing": {"owner": "adapter"}})
+        );
     }
 
     #[test]
@@ -1113,6 +1134,108 @@ max_output_tokens = 4096
         )
         .expect_err("native Gemini thinking is mandatory-on");
         assert!(error.contains("mandatory-on"), "{error}");
+    }
+
+    #[test]
+    fn anthropic_effort_metadata_resolves_mandatory_ladder_and_provenance() {
+        let mut config = resolved_config();
+        config.model = Sourced::new("claude-fable-5-1".to_owned(), Source::built_in("model"));
+        let metadata_source = Source::built_in("models.dddai/claude-fable-5-1.reasoning");
+        config.model_reasoning = ResolvedModelReasoning {
+            toggle: None,
+            mandatory: Some(Sourced::new(true, metadata_source.clone())),
+            efforts: Some(Sourced::new(
+                ["low", "medium", "high", "xhigh", "max"]
+                    .map(str::to_owned)
+                    .to_vec(),
+                metadata_source.clone(),
+            )),
+            default_enabled: Some(Sourced::new(true, metadata_source.clone())),
+            default_effort: Some(Sourced::new("high".to_owned(), metadata_source.clone())),
+            dialect: Some(Sourced::new(
+                ReasoningDialect::AnthropicEffort,
+                metadata_source,
+            )),
+        };
+        config.reasoning.effort = Some(Sourced::new(
+            "low".to_owned(),
+            Source::flag("reasoning.effort"),
+        ));
+
+        let policy =
+            resolve_reasoning_policy(&config, &model_profile(ReasoningSupport::Fixed), None, None)
+                .expect("explicit Anthropic controls are trusted");
+        assert_eq!(policy.support, ReasoningSupport::Controllable);
+        assert_eq!(policy.switch, ReasoningSwitch::MandatoryOn);
+        assert_eq!(policy.efforts, ["low", "medium", "high", "xhigh", "max"]);
+        assert_eq!(policy.default_enabled, Some(true));
+        assert_eq!(policy.default_effort.as_deref(), Some("high"));
+        assert_eq!(policy.dialect, Some(ReasoningDialect::AnthropicEffort));
+        assert!(
+            policy
+                .capability_source
+                .contains("models.dddai/claude-fable-5-1")
+        );
+        assert_eq!(
+            policy
+                .request_config()
+                .and_then(|reasoning| reasoning.effort),
+            Some("low".to_owned())
+        );
+
+        config.reasoning.effort = None;
+        config.reasoning.enabled = Some(Sourced::new(true, Source::session("reasoning.enabled")));
+        let defaulted =
+            resolve_reasoning_policy(&config, &model_profile(ReasoningSupport::Fixed), None, None)
+                .expect("enabled Anthropic reasoning has a trusted default effort");
+        assert_eq!(
+            defaulted
+                .request_config()
+                .and_then(|reasoning| reasoning.effort),
+            Some("high".to_owned())
+        );
+
+        config.model_reasoning.default_effort = None;
+        let error =
+            resolve_reasoning_policy(&config, &model_profile(ReasoningSupport::Fixed), None, None)
+                .expect_err("enabled Anthropic reasoning needs a selected/default effort");
+        assert!(error.contains("Anthropic-effort"), "{error}");
+
+        config.reasoning.effort = None;
+        config.reasoning.enabled = Some(Sourced::new(false, Source::session("reasoning.enabled")));
+        let error =
+            resolve_reasoning_policy(&config, &model_profile(ReasoningSupport::Fixed), None, None)
+                .expect_err("mandatory adaptive thinking cannot be disabled");
+        assert!(error.contains("mandatory-on"), "{error}");
+
+        config.reasoning.enabled = None;
+        config.reasoning.effort = Some(Sourced::new(
+            "ultra".to_owned(),
+            Source::flag("reasoning.effort"),
+        ));
+        let error =
+            resolve_reasoning_policy(&config, &model_profile(ReasoningSupport::Fixed), None, None)
+                .expect_err("an unadvertised Anthropic effort is refused locally");
+        assert!(error.contains("`ultra`"), "{error}");
+        assert!(
+            error.contains("supported values: low, medium, high, xhigh, max"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn anthropic_named_models_do_not_infer_an_effort_dialect() {
+        let mut config = resolved_config();
+        config.model = Sourced::new("fable-5-1".to_owned(), Source::built_in("model"));
+        config.reasoning.effort = Some(Sourced::new(
+            "low".to_owned(),
+            Source::flag("reasoning.effort"),
+        ));
+        let error =
+            resolve_reasoning_policy(&config, &model_profile(ReasoningSupport::Fixed), None, None)
+                .expect_err("model names do not establish a trusted dialect");
+        assert!(error.contains("not adjustable"), "{error}");
+        assert!(error.contains("presence only"), "{error}");
     }
 
     #[test]
