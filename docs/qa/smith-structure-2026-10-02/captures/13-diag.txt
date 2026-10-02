@@ -1,0 +1,30 @@
+  user input: ~12
+compaction: enabled on overflow · 74.3k recovery target
+provider input (session): 6
+cache read (session): ?
+cache: state unknown · CH ? · expected ? · observed ? · missed ? · confidence ? · misses 0 · re-bill
+ed 0 · extra cost ? · guarantee ? · maintenance calls 0
+reasoning: provider default · effort provider default · provider/model default
+reasoning controls: unsupported · switch unavailable · efforts none · resolved model catalog (presen
+ce only)
+cache maintenance: requested off · effective off · authority denied · lease none · calls 0/1 · sched
+uled none · decision suppressed / provider evidence unavailable · narrowed idle compaction disabled
+because no protected semantic-summary route is installed · idle attempted false · idle decision none
+ · idle outcome none · idle reason none · idle latency ? · idle route ?/?/? · idle usage in/cached/w
+rite/out/reasoning 0/0/0/0/0 · synthetic attempts 0
+resume capsule: schema 1 · watermark 19 · persisted 2026-10-02 05:58:20 -04:00 · summary none
+project: /private/tmp/claude-501/-Volumes-Data-codes-ai-tui/1cdf697e-3f28-4022-b214-28d0230089c0/scr
+atchpad/proj
+Git: clean
+goal: none
+connections: local (remove only the configured authentication source · fake)
+children: 0
+usage: 1 turn(s) · input 6 · output 3
+cost: unknown · no price reference for local/example-model
+change attribution: Smith turn 1 · automatic undo unavailable
+
+  Worked for 1s
+
+› Ask Smith to do anything
+
+  dev · local/example-model

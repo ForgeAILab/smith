@@ -1,0 +1,11 @@
+{
+  "change_id": "show-idle-compaction-summary",
+  "change_ref": "show-idle-compaction-summary-2026-09-23",
+  "created_at": "2026-09-23T00:00:00-04:00",
+  "updated_at": "2026-09-23T00:00:00-04:00",
+  "completed_at": null,
+  "status": "draft",
+  "approved_at": null,
+  "implementation_started_at": null,
+  "depends_on": []
+}

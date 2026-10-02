@@ -1,0 +1,30 @@
+that agent's log, Enter continues it, and Esc returns to the root timeline.
+Ctrl+R searches composer history; Enter restores a match and Esc cancels.
+Ctrl+C twice within 1s exits; the first press stashes and clears the draft.
+Start a message with // to send a literal leading slash.
+
+› explain what src/main.rs does
+
+• This session is running Smith's deterministic fake provider; configure a real provider to talk to
+a model.
+
+• shell · $ ls -la
+
+• shell(command, cwd, timeout_ms · details unavailable) · running 1s
+
+⠴ Working… · 1s
+? approval required  host-shell:sha256:9afef90e0be9da464853ecd03dfcc7ccb837b2493921bef797f6f89db0772
+  shell  Run unsandboxed host shell in .
+  action  ls -laHost access: same-user files, inherited environment and credentials, child processes
+  grants  host.fs.read, host.fs.write, net.http, data.egress, process.spawn
+  ⚠ authority warning: process execution, data egress, outbound network access
+{
+  "command": "ls -la",
+  "cwd": "/private/tmp/claude-501/-Volumes-Data-codes-ai-tui/1cdf697e-3f28-4022-b214-28d0230089c0/sc
+  "timeout_ms": 600000
+}
+  y allow once   a allow this target for the session   n deny
+
+› Ask Smith to do anything
+
+  y allow once · a allow this target · n deny

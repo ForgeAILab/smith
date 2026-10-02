@@ -1,0 +1,30 @@
+that agent's log, Enter continues it, and Esc returns to the root timeline.
+Ctrl+R searches composer history; Enter restores a match and Esc cancels.
+Ctrl+C twice within 1s exits; the first press stashes and clears the draft.
+Start a message with // to send a literal leading slash.
+
+› explain what src/main.rs does
+
+• This session is running Smith's deterministic fake provider; configure a real provider to talk to
+a model.
+
+• shell · $ ls -la
+
+• shell(command, cwd, timeout_ms · details unavailable) · ok
+
+• changes · Smith turn 1 · contains ambiguous changes only; use /diff
+
+/shell
+total 8
+drwxr-xr-x@  6 mai1015  wheel  192 Oct  2 05:58 .
+drwx------@  6 mai1015  wheel  192 Oct  2 05:58 ..
+drwxr-xr-x@ 12 mai1015  wheel  384 Oct  2 05:58 .git
+drwxr-xr-x@  3 mai1015  wheel   96 Oct  2 05:58 .smith
+-rw-r--r--@  1 mai1015  wheel    7 Oct  2 05:58 README.md
+drwxr-xr-x@  3 mai1015  wheel   96 Oct  2 05:58 src
+
+  Worked for 1s
+
+› Ask Smith to do anything
+
+  dev · local/example-model

@@ -1,0 +1,30 @@
+│  provider:             local · model: example-model                                              │
+│  permission:           Ask                                                                       │
+│  reasoning:            provider default · effort provider default · provider/model default       │
+│  reasoning controls:   unsupported · switch unavailable · efforts none · resolved model catalog  │
+│                        (presence only)                                                           │
+│  prompt cache:         usage not reported                                                        │
+│  cache maintenance:    off                                                                       │
+│  resume checkpoint:    saved 2026-10-02 05:58:20 -04:00                                          │
+│  project:              /private/tmp/claude-501/-Volumes-Data-codes-ai-tui/1cdf697e-3f28-4022-b21 │
+│                        4-28d0230089c0/scratchpad/proj                                            │
+│  Git:                  clean                                                                     │
+│  goal:                 none                                                                      │
+│  children:             0                                                                         │
+│  usage:                1 turn(s) · input 6 · output 3                                            │
+│  cost:                 unknown · no price reference for local/example-model                      │
+│ /diagnostics shows detailed cache and recovery information                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+  Worked for 1s
+  Choose model · type to filter · 1/10
+› example-model · current  local/example-model · ctx 128k [project config] · input 124k [project con
+  Claude Code sonnet  cli/claude-code/sonnet · ctx 200k · input 180k · output 32k [built-in] · agent
+  Claude Code opus  cli/claude-code/opus · ctx 200k · input 180k · output 32k [built-in] · agent run
+  Claude Code haiku  cli/claude-code/haiku · ctx 200k · input 180k · output 32k [built-in] · agent r
+  Claude Code fable  cli/claude-code/fable · ctx 200k · input 180k · output 32k [built-in] · agent r
+
+› Ask Smith to do anything
+
+  dev · local/example-model
+  type to filter · ↑↓ choose · enter confirm · esc cancel

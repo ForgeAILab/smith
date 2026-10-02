@@ -1,0 +1,30 @@
+
+/status
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│  >_ Smith                                                                                        │
+│                                                                                                  │
+│  session:              session-ba10f547-b50e-4499-a9f2-5a9f42254bbf                              │
+│  profile:              dev                                                                       │
+│  provider:             local · model: example-model                                              │
+│  permission:           Ask                                                                       │
+│  reasoning:            provider default · effort provider default · provider/model default       │
+│  reasoning controls:   unsupported · switch unavailable · efforts none · resolved model catalog  │
+│                        (presence only)                                                           │
+│  prompt cache:         usage not reported                                                        │
+│  cache maintenance:    off                                                                       │
+│  resume checkpoint:    saved 2026-10-02 05:58:20 -04:00                                          │
+│  project:              /private/tmp/claude-501/-Volumes-Data-codes-ai-tui/1cdf697e-3f28-4022-b21 │
+│                        4-28d0230089c0/scratchpad/proj                                            │
+│  Git:                  clean                                                                     │
+│  goal:                 none                                                                      │
+│  children:             0                                                                         │
+│  usage:                1 turn(s) · input 6 · output 3                                            │
+│  cost:                 unknown · no price reference for local/example-model                      │
+│ /diagnostics shows detailed cache and recovery information                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+  Worked for 1s
+
+› Ask Smith to do anything
+
+  dev · local/example-model
