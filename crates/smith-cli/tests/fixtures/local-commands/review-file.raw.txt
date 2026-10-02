@@ -1,0 +1,16 @@
+title: review
+state: Confirmation
+body:
+scope: diff · tracked.txt
+provider-backed: yes
+workspace authority: read-only
+The reviewer can read, list, and search but cannot edit or run shell commands.
+
+diff --git a/tracked.txt b/tracked.txt
+index 90be1f3..294186e 100644
+--- a/tracked.txt
++++ b/tracked.txt
+@@ -1 +1 @@
+-before
++after
+

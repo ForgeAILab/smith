@@ -1,0 +1,4 @@
+title: goal
+state: Error
+body:
+No goal budget to change; use `/goal <objective>` first.

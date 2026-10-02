@@ -1,0 +1,512 @@
+/help
+Getting started
+Type a task and press Enter.
+/model  Choose a model
+/connect  Add a connection
+/help  Explore all commands
+
+Primary
+/help  list available commands
+/status [--verbose]  show session, usage, a
+nd workspace status
+/goal [OBJECTIVE|edit …|budget N|pause|resum
+e|clear]  inspect or control a persistent m
+ulti-turn goal
+/context [NAME|default]  show context usage
+ or select a named window
+/details  toggle bounded live tool detail
+/timeline  show local turn, child, and reco
+very history
+/new  start a fresh session
+/resume [ID]  resume a saved session
+/connect [PROVIDER]  connect or reconnect a
+ provider
+/disconnect [PROVIDER]  disconnect a provid
+er
+/model [PROVIDER/MODEL]  switch model
+/think [on|off|default]  set thinking for t
+he next turn
+/effort [LEVEL|default]  set reasoning effo
+rt for the next turn
+/account [N]  show provider accounts and th
+eir usage
+/agent [ID|resume ID]  list, inspect, or re
+sume an existing agent
+/mcp [trust NAME]  show MCP servers, or tru
+st one so it may run
+/skills [trust NAME]  show indexed skills,
+or trust one this project ships
+/diff [SCOPE]  inspect workspace changes
+/review [SCOPE]  run a read-only change rev
+iew
+/undo  undo the last attributable turn
+/redo  reapply the newest exact undone turn
+/revert [FILE]  selectively revert a file o
+r hunk
+
+Advanced
+/diagnostics  show detailed cache and recov
+ery diagnostics
+/profile [NAME]  switch configured profile
+/provider [NAME]  switch provider
+/quit  exit Smith
+
+Composer
+? or /help shows this local guide without co
+ntacting the model.
+Tab cycles the configured profile order only
+ while empty and idle.
+While work is serving, Enter steers an ordin
+ary prompt and Tab queues it.
+Alt+Up restores the newest explicit queued t
+urn for editing.
+Esc interrupts; uncommitted steers are resen
+t only after cancellation discards them.
+Ctrl+B moves a running foreground shell comm
+and to the background without killing it.
+@ completes exact files and read-only agents
+; @@ sends a literal @.
+! runs a prepared local shell action; !! sen
+ds a literal !.
+PageUp/PageDown/Home/End or the mouse wheel
+scrolls the transcript.
+Up/Down browse accepted and Ctrl+C-stashed i
+nput without losing your draft.
+Down past the newest draft walks the delegat
+ed agents; the transcript shows
+that agent's log, Enter continues it, and Es
+c returns to the root timeline.
+Ctrl+R searches composer history; Enter rest
+ores a match and Esc cancels.
+Ctrl+C twice within 1s exits; the first pres
+s stashes and clears the draft.
+Start a message with // to send a literal le
+ading slash.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+› Ask Smith to do anything
+
+  build · example-model · <PROJECT> · ? ctx

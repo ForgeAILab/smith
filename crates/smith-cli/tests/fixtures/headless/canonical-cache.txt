@@ -1,0 +1,4 @@
+stdout:
+fixture answer
+stderr:
+smith: prompt cache: 0% of input read from cache · 0 cached tokens

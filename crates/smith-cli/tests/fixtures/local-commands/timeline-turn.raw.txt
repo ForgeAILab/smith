@@ -1,0 +1,4 @@
+title: timeline
+state: Error
+body:
+timeline unavailable: Serialization: journal `<HOME>/.smith/sessions/<PROJECT_ID>/<SESSION_ID>.jsonl` line 8 is not a readable record: invalid type: string "[redacted]", expected u64 at line 1 column 524

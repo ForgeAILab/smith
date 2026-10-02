@@ -1,0 +1,6 @@
+title: mcp
+state: Info
+body:
+docs · stdio · untrusted · needs approval — run `/mcp trust docs` · `<PROJECT>/.smith/config.toml` key `mcp.servers.docs`
+  env DOCS_TOKEN ← keychain:smith/docs
+off · stdio · disabled · `<PROJECT>/.smith/config.toml` key `mcp.servers.off`

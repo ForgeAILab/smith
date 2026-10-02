@@ -1,0 +1,4 @@
+title: mcp
+state: Error
+body:
+`missing` is not a declared MCP server; declared: docs, off

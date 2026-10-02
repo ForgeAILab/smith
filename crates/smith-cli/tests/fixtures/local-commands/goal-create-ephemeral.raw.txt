@@ -1,0 +1,4 @@
+title: goal
+state: Error
+body:
+Conflict: persistent goals require an eligible persisted root session

@@ -1,0 +1,7 @@
+stdout:
+stderr:
+smith: parent: idle
+smith: provider attempts: 2 committed · 0 discarded
+smith: activation epoch 1 · tool:edit, tool:read, tool:registry.search
+smith: resume checkpoint: saved <TIMESTAMP>
+smith: approval required for tool `edit` · resource `<PROJECT>/target.txt` · permissions fs.read, fs.write · fingerprint <APPROVAL_FINGERPRINT:1> · deadline <TIMESTAMP> · argument values protected

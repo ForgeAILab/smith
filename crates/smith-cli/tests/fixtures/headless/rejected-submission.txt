@@ -1,0 +1,5 @@
+stdout:
+stderr:
+smith: activation epoch 0 · tool:registry.search
+smith: resume checkpoint: saved <TIMESTAMP>
+smith: Conflict: session is shutting down and no longer accepts turns

@@ -1,0 +1,9 @@
+title: diff · untracked
+state: Info
+body:
+diff --git a/untracked.txt b/untracked.txt
+new file mode 100644
+--- /dev/null
++++ b/untracked.txt
++new file
+

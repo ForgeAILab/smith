@@ -1,0 +1,11 @@
+title: revert
+state: Confirmation
+body:
+origin: unknown
+
+diff --git a/untracked.txt b/untracked.txt
+deleted file mode 100644
+--- a/untracked.txt
++++ /dev/null
+-new file
+

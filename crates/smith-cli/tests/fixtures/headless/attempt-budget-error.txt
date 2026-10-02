@@ -1,0 +1,3 @@
+stdout:
+stderr:
+smith: upstream 503: service unavailable

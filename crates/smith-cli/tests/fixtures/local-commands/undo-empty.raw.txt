@@ -1,0 +1,4 @@
+title: error
+state: Error
+body:
+no Smith turn has attributable changes

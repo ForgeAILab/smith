@@ -1,0 +1,512 @@
+/skills
+built-in
+  smith.configuration · active · Outline of
+the Smith configuration and agent-profile re
+ference: config.toml discovery and layered p
+recedence, profiles with posture and inherit
+ance, providers, credentials, model limits,
+reasoning controls, policy defaults, SMITH_
+environment variables, and command-line flag
+s. Activate before editing any .smith/config
+.toml or explaining how to configure Smith,
+then activate the section it names.
+  smith.configuration.adaptive-cache-lifecyc
+le-and-idle-compaction · active · Smith conf
+iguration reference, section "Adaptive cache
+ lifecycle and idle compaction". Cache mecha
+nism policy is profile-scoped.
+  smith.configuration.command-line-selection
+ · active · Smith configuration reference, s
+ection "Command-line selection". An omitted
+--resume ID opens a local picker only in a
+n interactive terminal.
+  smith.configuration.complete-example · act
+ive · Smith configuration reference, section
+ "Complete example". Policy tables may be to
+p-level or profile-scoped as shown.
+  smith.configuration.discovery-and-preceden
+ce · active · Smith configuration reference,
+ section "Discovery and precedence". nearest
+ .smith/ directory.
+  smith.configuration.image-generation · act
+ive · Smith configuration reference, section
+ "Image generation". `https://api.openai.com
+/v1`.
+  smith.configuration.policy-keys-and-defaul
+ts · active · Smith configuration reference,
+ section "Policy keys and defaults". instruc
+tions may take together.
+  smith.configuration.project-instructions-a
+nd-context-identity · active · Smith configu
+ration reference, section "Project instructi
+ons and context identity". headless host exa
+mines exactly <project>/AGENTS.md.
+  smith.configuration.prompt-cache-miss-noti
+ces · active · Smith configuration reference
+, section "Prompt-cache miss notices". `cach
+e.miss_notices`.
+  smith.configuration.providers-credentials-
+and-models · active · Smith configuration re
+ference, section "Providers, credentials, an
+d models". [models] declaration.
+  smith.configuration.runtime-connections ·
+active · Smith configuration reference, sect
+ion "Runtime connections". actions.
+  smith.headless · active · Outline of the S
+mith headless protocol reference for smith -
+p: input modes, text, json, and stream-json
+output formats, event framing, exit behavior
+, and resuming sessions non-interactively. A
+ctivate before scripting or integrating smit
+h -p, then activate the section it names.
+  smith.headless.compatibility · active · Sm
+ith headless protocol reference, section "Co
+mpatibility". variants as unsupported rather
+ than guessing.
+  smith.headless.input-and-output-modes · ac
+tive · Smith headless protocol reference, se
+ction "Input and output modes". Prompt stdin
+ is read once, as bounded UTF-8, before the
+turn.
+  smith.headless.non-success-results · activ
+e · Smith headless protocol reference, secti
+on "Non-success results". included.
+  smith.headless.result-schema-v3 · active ·
+ Smith headless protocol reference, section
+"Result schema v3". exists.
+  smith.headless.smith-client-protocol-and-s
+tream-envelopes · active · Smith headless pr
+otocol reference, section "Smith client prot
+ocol and stream envelopes". revision is also
+ v1.
+  smith.persistence · active · Outline of th
+e Smith persistence and recovery reference:
+session snapshots, redacted JSONL journals,
+protected checkpoints, resume flow, and cras
+h recovery behavior. Activate before diagnos
+ing saved sessions, journals, checkpoints, o
+r resume questions, then activate the sectio
+n it names.
+  smith.persistence.artifacts-and-semantic-s
+ummaries · active · Smith persistence and re
+covery reference, section "Artifacts and sem
+antic summaries". Oversized tool output is p
+ersisted before model-facing truncation.
+  smith.persistence.completed-snapshots · ac
+tive · Smith persistence and recovery refere
+nce, section "Completed snapshots". versione
+d extension state.
+  smith.persistence.durable-children-and-leg
+acy-ephemeral-work · active · Smith persiste
+nce and recovery reference, section "Durable
+ children and legacy ephemeral work". child
+is durable.
+  smith.persistence.event-journal · active ·
+ Smith persistence and recovery reference, s
+ection "Event journal". line.
+  smith.persistence.layout · active · Smith
+persistence and recovery reference, section
+"Layout". persistence.sessions_dir may cha
+nge the user-owned sessions root.
+  smith.persistence.operational-recovery · a
+ctive · Smith persistence and recovery refer
+ence, section "Operational recovery". approv
+al/question is pending.
+  smith.persistence.pending-interactions · a
+ctive · Smith persistence and recovery refer
+ence, section "Pending interactions". questi
+onnaire once, with its original request/turn
+/call identity and deadline.
+  smith.persistence.persistent-goals · activ
+e · Smith persistence and recovery reference
+, section "Persistent goals". state.
+  smith.persistence.protected-checkpoints ·
+active · Smith persistence and recovery refe
+rence, section "Protected checkpoints". 256-
+bit per-user key.
+  smith.security · active · Outline of the S
+mith security threat model reference: trust
+boundaries, project trust, approvals, creden
+tial redaction, tool containment, and why te
+xt is never authority. Activate before reaso
+ning about Smith permissions, approvals, or
+trust behavior, then activate the section it
+ names.
+  smith.security.authorization-and-tool-exec
+ution · active · Smith security threat model
+ reference, section "Authorization and tool
+execution". All executable tools pass throug
+h Agent Runtime's central executor.
+  smith.security.credentials-and-secret-hand
+ling · active · Smith security threat model
+reference, section "Credentials and secret h
+andling". references.
+  smith.security.persistence-and-recovery-at
+tacks · active · Smith security threat model
+ reference, section "Persistence and recover
+y attacks". conversation content.
+  smith.security.provider-and-prompt-injecti
+on-risks · active · Smith security threat mo
+del reference, section "Provider and prompt-
+injection risks". user content sent to it.
+  smith.security.repository-and-configuratio
+n-attacks · active · Smith security threat m
+odel reference, section "Repository and conf
+iguration attacks". or treat a repository as
+ trusted because it was opened.
+  smith.security.residual-risks-and-deployme
+nt-responsibilities · active · Smith securit
+y threat model reference, section "Residual
+risks and deployment responsibilities". netw
+ork.
+  smith.security.trust-boundaries · active ·
+ Smith security threat model reference, sect
+ion "Trust boundaries".
+user
+  rust-review · active · Review Rust impleme
+ntation boundaries
+workspace
+  deploy · withheld · needs approval — run `
+/skills trust deploy` · Review Rust implemen
+tation boundaries
+not loaded
+  broken · it does not start with a --- fr
+ontmatter block declaring a description ·
+<HOME>/.smith/skills/broken/SKILL.md
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+› Ask Smith to do anything
+
+  build · example-model · <PROJECT> · ? ctx

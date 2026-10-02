@@ -1,0 +1,6 @@
+title: Choose account
+state: Picker
+body:
+This provider declares a single credential · add `credentials` to pool accounts
+0 · 1 · active · env:FIRST · 25% used · active true · disabled None
+1 · 2 · available · env:SECOND · 75% used · active false · disabled None

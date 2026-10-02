@@ -1,0 +1,3 @@
+stdout:
+stderr:
+smith: approval required for tool `edit` · resource `/repo/target.txt` · permissions fs.write · fingerprint 0123456789abcdef0123456789abcdef · argument values protected

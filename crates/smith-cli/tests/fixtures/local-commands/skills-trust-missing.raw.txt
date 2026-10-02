@@ -1,0 +1,4 @@
+title: skills
+state: Error
+body:
+this project declares no skills, so there is nothing to trust

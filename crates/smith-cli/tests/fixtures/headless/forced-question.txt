@@ -1,0 +1,7 @@
+stdout:
+stderr:
+smith: parent: idle
+smith: provider attempts: 2 committed · 0 discarded
+smith: activation epoch 0 · tool:registry.search
+smith: resume checkpoint: saved <TIMESTAMP>
+smith: interaction required for request `<INTERACTION_ID:1>` (1 question(s)); rerun in an interactive terminal

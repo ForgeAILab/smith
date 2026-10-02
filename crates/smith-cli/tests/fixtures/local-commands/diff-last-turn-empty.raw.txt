@@ -1,0 +1,4 @@
+title: diff · last Smith turn
+state: Error
+body:
+no Smith turn has attributable changes

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "type": "result",
+  "status": "ok",
+  "session_id": "session-fixture",
+  "turn_id": "turn-fixture",
+  "provider": "fixture-provider",
+  "model": "fixture-model",
+  "output": "fixture answer",
+  "usage": {
+    "current_turn": {
+      "input_uncached": 12,
+      "output": 2
+    },
+    "session": {
+      "input_uncached": 12,
+      "output": 2
+    },
+    "current_turn_provenance": "provider_reported",
+    "session_provenance": "provider_reported"
+  }
+}

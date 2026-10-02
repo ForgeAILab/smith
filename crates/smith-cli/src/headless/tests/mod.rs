@@ -73,5 +73,6 @@ fn terminal_stream_result(lines: &[serde_json::Value]) -> &serde_json::Value {
 }
 
 mod background;
+mod fixtures;
 mod flow;
 mod output;

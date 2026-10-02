@@ -1,0 +1,4 @@
+title: Choose provider
+state: Picker
+body:
+No provider is selectable · run smith setup add-provider

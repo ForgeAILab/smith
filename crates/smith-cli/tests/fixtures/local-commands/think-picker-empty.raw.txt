@@ -1,0 +1,4 @@
+title: Choose thinking state
+state: Picker
+body:
+Thinking is not adjustable for this provider/model

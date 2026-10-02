@@ -1,0 +1,4 @@
+title: error
+state: Error
+body:
+`missing.txt` has no current change to revert

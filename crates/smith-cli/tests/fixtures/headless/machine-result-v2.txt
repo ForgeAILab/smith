@@ -1,0 +1,5 @@
+stdout:
+fixture answer
+stderr:
+smith: provider attempts: 1 committed · 0 discarded
+smith: activation epoch 1 · tool:read

@@ -1,0 +1,3 @@
+stdout:
+stderr:
+smith: interaction required for request `interaction-fixture` (2 question(s)); rerun in an interactive terminal

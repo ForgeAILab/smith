@@ -1,0 +1,4 @@
+stdout:
+stderr:
+smith: resume checkpoint: saved <TIMESTAMP>
+smith: interaction required for request `<INTERACTION_ID:1>` (1 question(s)); rerun in an interactive terminal

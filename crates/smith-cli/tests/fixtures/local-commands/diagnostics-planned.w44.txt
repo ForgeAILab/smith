@@ -1,0 +1,512 @@
+/diagnostics
+session: <SESSION_ID>
+profile: dev · posture build · use main · re
+v <PROFILE_REVISION>… · source built-in defa
+ult agent_modes.build.posture
+provider: local
+model: example-model
+permission: Ask
+reasoning: provider default · effort provide
+r default · provider/model default
+reasoning controls: unsupported · switch una
+vailable · efforts none · resolved model cat
+alog (presence only)
+protected mid-turn recovery: available
+registry snapshot: registry-test · 6 entries
+scoped capability view: view-test · 4 visibl
+e
+latest capability retrieval: resolver-test ·
+ tool:read, tool:search
+activation epoch: 1 · tool:read
+context provenance: context-test · cache cac
+he-test
+context compaction: 1 run(s) · 250 tokens re
+claimed
+context window: ~98% input left (~2k used /
+123.9k budget)
+model window: 128k total · 4k reserved
+context plan: estimated · 3 segments
+  history: ~1.3k
+  system instruction: ~200
+  tool schema: ~500
+compaction: enabled on overflow · 74.3k reco
+very target
+provider input (session): ?
+cache read (session): ?
+cache: state unknown · CH ? · misses 0 · re-
+billed 0 · guarantee ? · maintenance calls 0
+reasoning: provider default · effort provide
+r default · provider/model default
+reasoning controls: unsupported · switch una
+vailable · efforts none · resolved model cat
+alog (presence only)
+cache maintenance: requested off · effective
+ off · authority denied · lease none · calls
+ 0/1 · scheduled none · decision none · narr
+owed idle compaction disabled because no pro
+tected semantic-summary route is installed ·
+ idle attempted false · idle decision none ·
+ idle outcome none · idle reason none · idle
+ latency ? · idle route ?/?/? · idle usage i
+n/cached/write/out/reasoning 0/0/0/0/0 · syn
+thetic attempts 0
+resume capsule: schema 1 · watermark 0 · per
+sisted not yet saved · summary none
+project: <PROJECT>
+Git: unavailable (not a Git worktree)
+goal: none
+connections: none
+children: 0
+usage: nothing spent yet
+cost: nothing spent yet
+change attribution: no attributable turn rec
+orded
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+› Ask Smith to do anything
+
+  build · example-model · <PROJECT> · ? ctx

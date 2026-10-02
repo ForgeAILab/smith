@@ -1,0 +1,4 @@
+title: error
+state: Error
+body:
+provider `missing` is not locally selectable; run `smith setup add-provider`

@@ -1,0 +1,4 @@
+title: error
+state: Error
+body:
+the active model has no selectable context windows

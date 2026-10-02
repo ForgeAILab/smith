@@ -1,0 +1,4 @@
+stdout:
+answer
+stderr:
+smith: cache synthetic usage: cache_idle_compaction (input 10 · output 3); cache_keepalive (cached 80 · output 2)

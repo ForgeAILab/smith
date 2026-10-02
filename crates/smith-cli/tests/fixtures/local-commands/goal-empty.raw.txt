@@ -1,0 +1,4 @@
+title: goal
+state: Empty
+body:
+No persistent goal. Create one with `/goal <objective>`.

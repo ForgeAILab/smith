@@ -1,0 +1,11 @@
+title: diff · tracked.txt
+state: Info
+body:
+diff --git a/tracked.txt b/tracked.txt
+index 90be1f3..294186e 100644
+--- a/tracked.txt
++++ b/tracked.txt
+@@ -1 +1 @@
+-before
++after
+

@@ -1,0 +1,4 @@
+title: error
+state: Error
+body:
+Git-backed change inspection is unavailable outside a Git worktree

@@ -1,0 +1,4 @@
+title: mcp
+state: Info
+body:
+no MCP servers are declared; add an `[mcp.servers.<name>]` table

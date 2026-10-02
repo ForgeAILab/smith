@@ -1,0 +1,4 @@
+title: error
+state: Error
+body:
+reasoning choice `on` is unavailable: use `on`, `off`, or `default`, subject to the active model

@@ -48,6 +48,7 @@ max_output_tokens = 4096
     }
     include!("host_routing.rs");
     include!("local_commands.rs");
+    include!("fixtures.rs");
     include!("submission.rs");
     include!("local_shell.rs");
     include!("resources.rs");

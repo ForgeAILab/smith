@@ -1,0 +1,7 @@
+stdout:
+
+stderr:
+smith: parent: idle
+smith: provider attempts: 1 committed · 0 discarded
+smith: activation epoch 1 · tool:registry.search, skill:smith.headless.input-and-output-modes
+smith: resume checkpoint: saved <TIMESTAMP>

@@ -1,0 +1,4 @@
+title: connect
+state: Error
+body:
+connection commands must run at the safe session-rebuild boundary

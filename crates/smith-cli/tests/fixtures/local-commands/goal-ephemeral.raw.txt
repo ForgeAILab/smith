@@ -1,0 +1,4 @@
+title: goal
+state: Error
+body:
+Persistent goals require a persisted root session; they are unavailable in ephemeral and child sessions.

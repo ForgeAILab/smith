@@ -1,0 +1,4 @@
+stdout:
+stderr:
+smith: goal: blocked · 120 tokens · budget 100 · 0 continuation turn(s)
+smith: turn ended with status Failed

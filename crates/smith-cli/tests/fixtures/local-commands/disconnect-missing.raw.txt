@@ -1,0 +1,4 @@
+title: error
+state: Error
+body:
+connection `missing` is not active; use `/disconnect` to choose

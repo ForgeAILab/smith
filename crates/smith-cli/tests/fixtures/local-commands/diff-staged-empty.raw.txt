@@ -1,0 +1,4 @@
+title: diff · staged
+state: Empty
+body:
+No changes in this scope.

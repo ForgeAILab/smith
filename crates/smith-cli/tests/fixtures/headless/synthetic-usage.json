@@ -1,0 +1,1 @@
+{"total":{"input_uncached":10,"input_cached":80,"output":5},"by_purpose":{"cache_idle_compaction":{"input_uncached":10,"output":3},"cache_keepalive":{"input_cached":80,"output":2}}}

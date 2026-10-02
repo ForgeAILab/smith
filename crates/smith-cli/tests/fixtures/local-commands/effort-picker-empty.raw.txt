@@ -1,0 +1,4 @@
+title: Choose reasoning effort
+state: Picker
+body:
+Effort is not adjustable for this provider/model

@@ -1,0 +1,4 @@
+title: error
+state: Error
+body:
+model `missing` is not locally selectable; run `smith setup add-model`

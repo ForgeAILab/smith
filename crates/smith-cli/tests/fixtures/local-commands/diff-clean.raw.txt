@@ -1,0 +1,4 @@
+title: diff · all uncommitted
+state: Empty
+body:
+No changes in this scope.

@@ -1,0 +1,10 @@
+title: diff · last Smith turn
+state: Info
+body:
+Smith turn 1
+
+--- current <PROJECT>/tracked.txt
++++ restore <PROJECT>/tracked.txt
+-after
++before
+

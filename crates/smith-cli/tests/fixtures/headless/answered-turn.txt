@@ -1,0 +1,7 @@
+stdout:
+fixture answer
+stderr:
+smith: parent: idle
+smith: provider attempts: 1 committed · 0 discarded
+smith: activation epoch 0 · tool:registry.search
+smith: resume checkpoint: saved <TIMESTAMP>

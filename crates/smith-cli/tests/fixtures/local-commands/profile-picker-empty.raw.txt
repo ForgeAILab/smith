@@ -1,0 +1,4 @@
+title: Choose profile
+state: Picker
+body:
+No profile is selectable · run smith setup

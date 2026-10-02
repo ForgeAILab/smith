@@ -1,0 +1,4 @@
+title: goal
+state: Error
+body:
+Conflict: an unfinished persistent goal already exists

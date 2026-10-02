@@ -1,0 +1,10 @@
+title: redo
+state: Confirmation
+body:
+Smith turn 1 redo
+
+--- current <PROJECT>/tracked.txt
++++ reapply <PROJECT>/tracked.txt
+-before
++after
+

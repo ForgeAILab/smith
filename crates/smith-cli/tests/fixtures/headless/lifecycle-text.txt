@@ -1,0 +1,5 @@
+smith: provider attempts: 2 committed · 1 discarded
+smith: activation epoch 3 · tool:read, tool:write_todos
+smith: todo plan revision 4 · in_progress=1 · pending=2
+smith: artifact artifact-fixture · 262144 bytes · text/plain
+smith: recovery process_exit · 1 child(ren) interrupted · 1 monitor(s) interrupted · not restarted

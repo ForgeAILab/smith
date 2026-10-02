@@ -1,0 +1,4 @@
+title: context
+state: Error
+body:
+context-window selection must run at the safe session boundary

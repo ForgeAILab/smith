@@ -1,0 +1,4 @@
+title: goal
+state: Error
+body:
+No goal to edit; use `/goal <objective>`.

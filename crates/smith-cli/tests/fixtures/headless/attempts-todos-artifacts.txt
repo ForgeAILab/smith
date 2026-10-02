@@ -1,0 +1,9 @@
+stdout:
+final committed answer
+stderr:
+smith: parent: idle
+smith: provider attempts: 3 committed · 1 discarded
+smith: activation epoch 1 · tool:registry.search, tool:shell, tool:write_todos
+smith: todo plan revision 2 · cancelled=1 · completed=1 · in_progress=0 · pending=0
+smith: resume checkpoint: saved <TIMESTAMP>
+smith: artifact <ARTIFACT_ID:1> · 273791 bytes · application/vnd.agent-runtime.tool-outcome+json

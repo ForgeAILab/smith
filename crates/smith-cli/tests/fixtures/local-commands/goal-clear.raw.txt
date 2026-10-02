@@ -1,0 +1,4 @@
+title: goal
+state: Info
+body:
+Goal cleared.

@@ -1,0 +1,4 @@
+stdout:
+answer
+stderr:
+smith: goal: complete · 120 tokens · budget 100 · 0 continuation turn(s)

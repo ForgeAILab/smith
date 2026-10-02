@@ -1,0 +1,4 @@
+title: error
+state: Error
+body:
+profile `missing` is not locally selectable; use `/profile` to choose

@@ -1,0 +1,4 @@
+title: goal
+state: Error
+body:
+No active goal to pause.

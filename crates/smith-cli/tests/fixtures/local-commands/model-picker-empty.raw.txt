@@ -1,0 +1,4 @@
+title: Choose model
+state: Picker
+body:
+No local model is selectable · run smith setup add-model

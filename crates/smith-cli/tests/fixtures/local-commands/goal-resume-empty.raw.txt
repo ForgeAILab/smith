@@ -1,0 +1,4 @@
+title: goal
+state: Error
+body:
+No stopped goal to resume.
