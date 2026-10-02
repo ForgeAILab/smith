@@ -1289,8 +1289,10 @@ MAY carry `max_input_tokens`. When a window omits
 model's resolved output ceiling. One configuration layer MUST NOT declare
 both windows and a flat `context_tokens` or `max_input_tokens` for the same
 binding. An explicit flat limit SHALL override lower-layer windows and pin
-the binding to one window. Smith SHALL ship reviewed direct-ChatGPT metadata
-for every GPT-6 model advertised by the installed Codex catalog.
+the binding to one window. A default window name from a layer the flat
+limit outranks SHALL be dropped, not reported as a selection. Smith SHALL
+ship reviewed direct-ChatGPT metadata for every GPT-6 model advertised by the
+installed Codex catalog.
 
 #### Scenario: Window limits resolve
 
@@ -1323,6 +1325,16 @@ for every GPT-6 model advertised by the installed Codex catalog.
 - **WHEN** Smith resolves the model
 - **THEN** the flat limits apply unchanged
 - **AND** selecting `872k` fails with an error that names the flat key
+
+#### Scenario: Flat limit outranks a built-in default window
+
+- **GIVEN** the user config declares `[models."chatgpt/gpt-6.1-sol"]` with
+  flat `context_tokens = 872000` and `max_input_tokens = 828400`
+- **AND** no profile, flag, or session override selects a window
+- **WHEN** Smith starts a session with that model, as the selected profile or
+  as a child-enabled profile
+- **THEN** the session starts with the flat limits
+- **AND** the trusted catalog's default `272k` window is not selected
 
 #### Scenario: Ambiguous limit declaration is rejected
 

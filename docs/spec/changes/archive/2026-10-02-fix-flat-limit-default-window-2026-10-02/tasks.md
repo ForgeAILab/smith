@@ -1,7 +1,7 @@
 ---
 created_at: 2026-10-02T22:33:07Z
-updated_at: 2026-10-02T23:10:00Z
-completed_at:
+updated_at: 2026-10-02T23:23:28Z
+completed_at: 2026-10-02T23:23:28Z
 ---
 
 # Tasks: Let a flat model limit outrank a built-in default window

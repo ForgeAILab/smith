@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-02T22:33:07Z
-updated_at: 2026-10-02T23:10:00Z
+updated_at: 2026-10-02T23:23:28Z
 ---
 
 # Proposal: Let a flat model limit outrank a built-in default window
