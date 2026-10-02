@@ -390,6 +390,7 @@ pub(super) async fn run_tui(
     let mut spinner = tokio::time::interval(SPINNER_TICK);
     let mut frame = tokio::time::interval(FRAME);
     let (local_tx, mut local_rx) = tokio::sync::mpsc::unbounded_channel();
+    let local_shell_approvals = LocalShellApprovals::default();
     // One forwarding task per live child funnels every child's own stream into
     // this loop, so a child's events are folded by the same single-threaded
     // reducer the root's are and can never interleave mid-fold.
@@ -457,6 +458,7 @@ pub(super) async fn run_tui(
                                     session.clone(),
                                     command,
                                     host.runtime().policy().turn_time_limit_ms.unwrap_or(600_000),
+                                    local_shell_approvals.clone(),
                                     local_tx.clone(),
                                 );
                             }
@@ -681,8 +683,10 @@ pub(super) async fn run_tui(
             prompt = next_approval(&mut approvals) => {
                 match prompt {
                     Some(prompt) => {
-                        app.present_approval(prompt);
-                        dirty = true;
+                        if let Some(prompt) = local_shell_approvals.resolve(prompt) {
+                            app.present_approval(prompt);
+                            dirty = true;
+                        }
                     }
                     None => approvals = None,
                 }

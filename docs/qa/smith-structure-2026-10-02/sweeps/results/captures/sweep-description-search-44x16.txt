@@ -1,0 +1,16 @@
+ed agents; the transcript shows
+that agent's log, Enter continues it, and Es
+c returns to the root timeline.
+Ctrl+R searches composer history; Enter rest
+ores a match and Esc cancels.
+Ctrl+C twice within 1s exits; the first pres
+s stashes and clears the draft.
+Start a message with // to send a literal le
+ading slash.
+› /model [PROVIDER/MODEL]  switch model
+  /profile [NAME]  switch configured profile
+  /provider [NAME]  switch provider
+
+› /switch
+
+  build · local/example-model

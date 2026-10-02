@@ -1,5 +1,107 @@
 // resources behavior tests.
 
+    fn session_list_fixture() -> Vec<SessionListing> {
+        vec![
+            SessionListing {
+                id: SessionId::new("session-short"),
+                path: PathBuf::from("short.json"),
+                schema_version: SNAPSHOT_SCHEMA_VERSION,
+                updated: Some(Timestamp(1_790_935_135_329)),
+                turn_count: Some(2),
+                provider: Some("local".to_owned()),
+                model: Some("example-model".to_owned()),
+                user_preview: Some("explain main.rs".to_owned()),
+            },
+            SessionListing {
+                id: SessionId::new("session-longer-identity"),
+                path: PathBuf::from("newer.json"),
+                schema_version: SNAPSHOT_SCHEMA_VERSION + 1,
+                updated: None,
+                turn_count: None,
+                provider: None,
+                model: None,
+                user_preview: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn session_list_piped_rows_preserve_the_exact_plugin_contract() {
+        let sessions = session_list_fixture();
+        let listing = format_session_list(&sessions, false, |_| panic!("no local time in TSV"));
+        assert_eq!(
+            listing,
+            "session-short\t1790935135329ms\t2\tlocal/example-model\texplain main.rs\n\
+             session-longer-identity\tunknown-version\t?\t?/?\tno user preview\n"
+        );
+
+        let mut sessions = sessions;
+        sessions[0].user_preview = Some("é".repeat(81));
+        let listing = format_session_list(&sessions[..1], false, |_| unreachable!());
+        assert_eq!(
+            listing,
+            format!(
+                "session-short\t1790935135329ms\t2\tlocal/example-model\t{}…\n",
+                "é".repeat(80)
+            )
+        );
+        assert!(format_session_list(&[], false, |_| unreachable!()).is_empty());
+    }
+
+    #[test]
+    fn session_list_terminal_rows_have_headers_aligned_columns_and_local_time() {
+        let listing = format_session_list(&session_list_fixture(), true, |updated| {
+            assert_eq!(updated.as_millis(), 1_790_935_135_329);
+            "2026-10-02 05:58:55 -04:00".to_owned()
+        });
+        let lines = listing.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 3, "{listing}");
+        let headers = [
+            "SESSION ID",
+            "LAST UPDATED",
+            "TURNS",
+            "MODEL",
+            "OPENING PROMPT",
+        ];
+        let first = [
+            "session-short",
+            "2026-10-02 05:58:55 -04:00",
+            "2",
+            "local/example-model",
+            "explain main.rs",
+        ];
+        let second = [
+            "session-longer-identity",
+            "unknown update",
+            "?",
+            "?/?",
+            "no user preview",
+        ];
+        for index in 0..headers.len() {
+            let start = lines[0].find(headers[index]).expect("column heading");
+            assert!(lines[1][start..].starts_with(first[index]), "{listing}");
+            assert!(lines[2][start..].starts_with(second[index]), "{listing}");
+        }
+        assert!(!listing.contains("1790935135329ms"), "{listing}");
+        assert!(!listing.contains("unknown-version"), "{listing}");
+        assert!(!listing.contains('\t'), "{listing}");
+        let empty = format_session_list(&[], true, |_| unreachable!());
+        assert_eq!(
+            empty,
+            "SESSION ID  LAST UPDATED  TURNS  MODEL  OPENING PROMPT\n"
+        );
+    }
+
+    #[test]
+    fn session_list_terminal_columns_use_display_width_for_unicode_models() {
+        let mut sessions = session_list_fixture();
+        sessions[0].model = Some("模型".to_owned());
+        let listing = format_session_list(&sessions, true, |_| "date".to_owned());
+        assert!(listing.contains("MODEL       OPENING PROMPT"), "{listing}");
+        assert!(listing.contains("local/模型  explain main.rs"), "{listing}");
+        assert!(listing.contains("?/?         no user preview"), "{listing}");
+    }
+
     #[test]
     fn a_home_relative_path_is_abbreviated() {
         let home = "/Users/example";

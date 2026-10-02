@@ -1,0 +1,16 @@
+ores a match and Esc cancels.
+Ctrl+C twice within 1s exits; the first pres
+s stashes and clears the draft.
+Start a message with // to send a literal le
+ading slash.
+  Choose model · type to filter · 1/12
+› example-model · current  local/example-mod
+  small-model  local/small-model · ctx 32768
+  alternative-model  other/alternative-model
+  Claude Code sonnet  cli/claude-code/sonnet
+  Claude Code opus  cli/claude-code/opus · c
+
+› Ask Smith to do anything
+
+  build · local/example-model
+  enter choose · esc cancel

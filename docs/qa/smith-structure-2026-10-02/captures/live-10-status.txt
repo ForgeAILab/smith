@@ -1,0 +1,32 @@
+
+• changes · Smith turn 1 · contains ambiguous changes only; use /diff
+
+/status
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│  >_ Smith                                                                                        │
+│                                                                                                  │
+│  session:              session-4374b156-9fd1-435f-ac6b-7af3acb46dae                              │
+│  profile:              code                                                                      │
+│  provider:             zai · model: glm-5.3                                                      │
+│  permission:           Ask                                                                       │
+│  reasoning:            provider default · effort provider default · provider/model default       │
+│  reasoning controls:   controllable · switch optional · efforts none · Z.AI Coding Plan thinking │
+│                         switch (catalog-advertised reasoning model)                              │
+│  prompt cache:         86% of input read from cache · 4k cached tokens (last turn)               │
+│  cache maintenance:    off                                                                       │
+│  resume checkpoint:    saved 2026-10-02 18:05:47 -04:00                                          │
+│  project:              /private/tmp/claude-501/-Volumes-Data-codes-ai-tui/72d533f1-3f9f-486e-87f │
+│                        f-716b2abd4954/scratchpad/live-proj                                       │
+│  Git:                  3 changed path(s)                                                         │
+│  goal:                 none                                                                      │
+│  children:             0                                                                         │
+│  usage:                6 turn(s) · input 4.1k · cached 7.5k · output 307                         │
+│  cost:                 $0.000 exact · zai/glm-5.3                                                │
+│ /diagnostics shows detailed cache and recovery information                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+  Worked for 20s
+
+› Ask Smith to do anything
+
+  code · zai/glm-5.3

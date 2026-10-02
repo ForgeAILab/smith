@@ -897,10 +897,53 @@ pub(super) async fn list_sessions(selection: &Selection) -> Result<()> {
     let sessions = smith_runtime::host::list(&prepared.resolution.config, &prepared.project)
         .await
         .map_err(|error| anyhow::anyhow!("{error}"))?;
+    print!(
+        "{}",
+        format_session_list(&sessions, std::io::stdout().is_terminal(), |updated| {
+            smith_tui::time_display::local_timestamp(updated.as_millis())
+        })
+    );
+    Ok(())
+}
+
+/// Formats terminal columns or the plugin's unchanged tab-separated rows.
+/// The caller supplies local timestamp rendering so this function needs no
+/// terminal or time-zone lookup of its own.
+pub(super) fn format_session_list(
+    sessions: &[SessionListing],
+    terminal: bool,
+    format_updated: impl Fn(Timestamp) -> String,
+) -> String {
+    let mut rows = Vec::with_capacity(sessions.len() + usize::from(terminal));
+    if terminal {
+        rows.push(
+            [
+                "SESSION ID",
+                "LAST UPDATED",
+                "TURNS",
+                "MODEL",
+                "OPENING PROMPT",
+            ]
+            .map(str::to_owned),
+        );
+    }
     for session in sessions {
         let updated = session.updated.map_or_else(
-            || "unknown-version".to_owned(),
-            |updated| updated.to_string(),
+            || {
+                if terminal {
+                    "unknown update"
+                } else {
+                    "unknown-version"
+                }
+                .to_owned()
+            },
+            |updated| {
+                if terminal {
+                    format_updated(updated)
+                } else {
+                    updated.to_string()
+                }
+            },
         );
         let turns = session
             .turn_count
@@ -908,13 +951,37 @@ pub(super) async fn list_sessions(selection: &Selection) -> Result<()> {
         let provider = session.provider.as_deref().unwrap_or("?");
         let model = session.model.as_deref().unwrap_or("?");
         let preview = session.user_preview.as_deref().unwrap_or("no user preview");
-        println!(
-            "{}\t{updated}\t{turns}\t{provider}/{model}\t{}",
-            session.id.as_str(),
-            bounded_text(preview, 80)
-        );
+        rows.push([
+            session.id.as_str().to_owned(),
+            updated,
+            turns,
+            format!("{provider}/{model}"),
+            bounded_text(preview, 80),
+        ]);
     }
-    Ok(())
+    let display_width = |value: &str| ratatui::text::Line::from(value).width();
+    let mut widths = [0; 5];
+    if terminal {
+        for row in &rows {
+            for (width, value) in widths.iter_mut().zip(row) {
+                *width = (*width).max(display_width(value));
+            }
+        }
+    }
+    let mut output = String::new();
+    for row in rows {
+        for (index, value) in row.iter().enumerate() {
+            if index > 0 {
+                output.push_str(if terminal { "  " } else { "\t" });
+            }
+            output.push_str(value);
+            if terminal && index < row.len() - 1 {
+                output.push_str(&" ".repeat(widths[index].saturating_sub(display_width(value))));
+            }
+        }
+        output.push('\n');
+    }
+    output
 }
 
 /// Shortens a home-relative path to `~/…` for the header.

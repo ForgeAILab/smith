@@ -1,0 +1,32 @@
+provider input (session): 11.6k
+cache read (session): 7.5k
+cache: state unknown · CH ? · expected ? · observed ? · missed ? · confidence ? · misses 0 · re-bill
+ed 0 · extra cost ? · guarantee ? · maintenance calls 0
+reasoning: provider default · effort provider default · provider/model default
+reasoning controls: controllable · switch optional · efforts none · Z.AI Coding Plan thinking switch
+ (catalog-advertised reasoning model)
+cache maintenance: requested off · effective off · authority denied · lease none · calls 0/1 · sched
+uled none · decision suppressed / provider evidence unavailable · narrowed idle compaction disabled
+because no protected semantic-summary route is installed · idle attempted false · idle decision none
+ · idle outcome none · idle reason none · idle latency ? · idle route ?/?/? · idle usage in/cached/w
+rite/out/reasoning 0/0/0/0/0 · synthetic attempts 0
+resume capsule: schema 1 · watermark 81 · persisted 2026-10-02 18:06:20 -04:00 · summary none
+project: /private/tmp/claude-501/-Volumes-Data-codes-ai-tui/72d533f1-3f9f-486e-87ff-716b2abd4954/scr
+atchpad/live-proj
+Git: 3 changed path(s)
+goal: none
+connections: chatgpt (remove only the configured authentication source · chatgpt-responses), dddai (
+remove only the configured authentication source · anthropic-messages), google (remove only the conf
+igured authentication source · gemini-interactions), openrouter (remove only the configured authenti
+cation source · openai-compatible), xai (remove only the configured authentication source · xai-resp
+onses), zai (remove only the configured authentication source · openai-compatible)
+children: 0
+usage: 6 turn(s) · input 4.1k · cached 7.5k · output 307
+cost: $0.000 exact · zai/glm-5.3
+change attribution: Smith turn 2 · automatic undo unavailable
+
+  Worked for 216ms
+
+› Ask Smith to do anything
+
+  code · zai/glm-5.3

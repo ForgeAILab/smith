@@ -1,5 +1,7 @@
 //! Transcript, Markdown, tool, status, and local-result rendering.
 
+use std::time::Duration;
+
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -113,7 +115,7 @@ pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<
         if !lines.is_empty() {
             lines.push(Line::default());
         }
-        let label = match app.status.activity {
+        let working_label = match app.status.activity {
             Activity::Working => "Working",
             Activity::Interrupting => "Interrupting",
             Activity::Idle | Activity::ParkedAwaitingChild | Activity::Ended => {
@@ -121,21 +123,28 @@ pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<
             }
         };
         let details = app.work_detail_lines();
+        let retry = app.provider_retry();
+        let label = retry
+            .map(|retry| format!("Retrying {}/{}", retry.next_attempt, retry.max_attempts))
+            .unwrap_or_else(|| working_label.to_owned());
         // The provider round-trip stage answers "is anything happening?"
         // during an otherwise silent wait: `↑ 45s` is a stall the user can
         // see, where a bare `Working…` looks identical to progress. The
         // transfer phases read as direction; only thinking keeps its word.
-        let phase = app
-            .provider_phase()
-            .map(|(phase, elapsed)| {
-                let marker = match phase {
-                    ProviderPhase::Sending => glyph::SENDING,
-                    ProviderPhase::Thinking => "thinking",
-                    ProviderPhase::Responding => glyph::RECEIVING,
-                };
-                format!(" · {marker} {}", render_elapsed(elapsed))
-            })
-            .unwrap_or_default();
+        let phase = match retry.and_then(|retry| retry.backoff_remaining) {
+            Some(remaining) => format!(" · backoff {}", render_retry_backoff(remaining),),
+            None => app
+                .provider_phase()
+                .map(|(phase, elapsed)| {
+                    let marker = match phase {
+                        ProviderPhase::Sending => glyph::SENDING,
+                        ProviderPhase::Thinking => "thinking",
+                        ProviderPhase::Responding => glyph::RECEIVING,
+                    };
+                    format!(" · {marker} {}", render_elapsed(elapsed))
+                })
+                .unwrap_or_default(),
+        };
         // Delegated work is part of "is anything happening?": a silent
         // parent waiting on children would otherwise look stalled.
         let agents = match app.live_child_count() {
@@ -172,6 +181,15 @@ pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<
     }
 
     lines
+}
+
+fn render_retry_backoff(remaining: Duration) -> String {
+    let millis = remaining.as_millis();
+    if millis < 1_000 {
+        "<1s".to_owned()
+    } else {
+        format!("{}s", millis.saturating_add(999) / 1_000)
+    }
 }
 
 fn getting_started_lines(theme: Theme) -> Vec<Line<'static>> {

@@ -61,10 +61,19 @@ fn compose(
         Span::raw(prepared.display().title.clone()),
     ]));
     if let Some(detail) = &prepared.display().detail {
-        head.push(Line::from(vec![
-            Span::styled("  action  ", theme.style(Tone::Dim)),
-            Span::raw(detail.clone()),
-        ]));
+        for (index, line) in detail.split('\n').enumerate() {
+            head.push(Line::from(vec![
+                Span::styled(
+                    if index == 0 {
+                        "  action  "
+                    } else {
+                        "          "
+                    },
+                    theme.style(Tone::Dim),
+                ),
+                Span::raw(line.to_owned()),
+            ]));
+        }
     }
     if let Some(review) = review {
         head.push(Line::from(vec![

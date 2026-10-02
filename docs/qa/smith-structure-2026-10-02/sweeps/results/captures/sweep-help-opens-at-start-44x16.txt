@@ -1,0 +1,16 @@
+/help
+Getting started
+Type a task and press Enter.
+/model  Choose a model
+/connect  Add a connection
+/help  Explore all commands
+
+Primary
+/help  list available commands
+/status [--verbose]  show session, usage, a
+nd workspace status
+/goal [OBJECTIVE|edit …|budget N|pause|resum
+
+› Ask Smith to do anything
+
+  ▼ following paused · End/Ctrl+L newest

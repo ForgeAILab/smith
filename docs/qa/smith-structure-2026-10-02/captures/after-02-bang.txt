@@ -1,0 +1,30 @@
+│  project:              /private/tmp/claude-501/-Volumes-Data-codes-ai-tui/1cdf697e-3f28-4022-b21 │
+│                        4-28d0230089c0/scratchpad/proj                                            │
+│  Git:                  clean                                                                     │
+│  goal:                 none                                                                      │
+│  children:             0                                                                         │
+│  usage:                nothing spent yet                                                         │
+│  cost:                 nothing spent yet                                                         │
+│ /diagnostics shows detailed cache and recovery information                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+• shell · $ ls -la
+
+• shell(command, cwd, timeout_ms · details unavailable) · ok
+
+• changes · Smith turn 1 · contains ambiguous changes only; use /diff
+
+/shell
+total 8
+drwxr-xr-x@  6 mai1015  wheel  192 Oct  2 05:58 .
+drwx------@ 17 mai1015  wheel  544 Oct  2 07:11 ..
+drwxr-xr-x@ 12 mai1015  wheel  384 Oct  2 07:11 .git
+drwxr-xr-x@  3 mai1015  wheel   96 Oct  2 05:58 .smith
+-rw-r--r--@  1 mai1015  wheel    7 Oct  2 05:58 README.md
+drwxr-xr-x@  3 mai1015  wheel   96 Oct  2 05:58 src
+
+  Worked for 19ms
+
+› Ask Smith to do anything
+
+  dev · local/example-model

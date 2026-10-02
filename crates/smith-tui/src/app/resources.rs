@@ -39,14 +39,10 @@ impl App {
         match outcome {
             PickerOutcome::Pending => None,
             PickerOutcome::Cancelled => {
-                if let Some(Overlay::ResourcePicker {
-                    target,
-                    restore_on_escape,
-                    ..
-                }) = self.overlay.take()
+                if let Some(Overlay::ResourcePicker { target, .. }) = self.overlay.take()
                     && target != ResourceTarget::Reference
                 {
-                    self.composer.replace(restore_on_escape);
+                    self.composer.clear();
                 }
                 None
             }
@@ -844,6 +840,7 @@ impl App {
         self.overlay = Some(Overlay::UndoConfirm {
             content: content.into(),
         });
+        self.prompt_input_guard.start();
     }
 
     /// Shows an exact redo preview with no default action.
@@ -851,6 +848,7 @@ impl App {
         self.overlay = Some(Overlay::RedoConfirm {
             content: content.into(),
         });
+        self.prompt_input_guard.start();
     }
 
     /// Shows an exact selective-revert preview with no default action.
@@ -865,6 +863,7 @@ impl App {
             fingerprint: fingerprint.into(),
             content: content.into(),
         });
+        self.prompt_input_guard.start();
     }
 
     /// Shows one MCP server's resolved invocation and content identity, with no
@@ -875,6 +874,7 @@ impl App {
             server: server.into(),
             content: content.into(),
         });
+        self.prompt_input_guard.start();
     }
 
     /// Shows one project skill's location and content identity, with no default
@@ -885,6 +885,7 @@ impl App {
             skill: skill.into(),
             content: content.into(),
         });
+        self.prompt_input_guard.start();
     }
 
     /// Shows review scope and provider spend before dispatch.

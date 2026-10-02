@@ -38,6 +38,7 @@ async fn answer(
     let decision = tokio::spawn(async move { policy.decide(&request).await });
     let prompt = requests.recv().await.expect("an offer reached the surface");
     app.present_rotation(prompt);
+    elapse_prompt_guard(app);
     app.on_key(key(press));
     decision.await.expect("the policy answered")
 }
@@ -59,6 +60,7 @@ async fn the_modal_states_the_cache_cost_before_the_user_agrees() {
     // No credential value ever reaches the surface.
     assert!(!content.contains("sk-"));
 
+    elapse_prompt_guard(&mut app);
     app.on_key(key(KeyCode::Char('n')));
     pending.await.expect("the policy answered");
 }
@@ -145,6 +147,7 @@ async fn a_number_naming_no_offered_account_is_ignored() {
     app.present_rotation(prompt);
 
     // Position 8 was never offered: a mistyped digit must not spend the turn.
+    elapse_prompt_guard(&mut app);
     app.on_key(key(KeyCode::Char('9')));
     assert!(
         matches!(app.overlay, Some(Overlay::RotationConfirm { .. })),

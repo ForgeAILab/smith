@@ -1,0 +1,16 @@
+iew
+/undo  undo the last attributable turn
+/redo  reapply the newest exact undone turn
+/revert [FILE]  selectively revert a file o
+r hunk
+
+Advanced
+/diagnostics  show detailed cache and recov
+ery diagnostics
+/profile [NAME]  switch configured profile
+/provider [NAME]  switch provider
+/quit  exit Smith
+
+› Ask Smith to do anything
+
+  ▼ following paused · End/Ctrl+L newest

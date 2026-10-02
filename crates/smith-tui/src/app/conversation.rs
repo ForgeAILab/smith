@@ -194,16 +194,11 @@ impl ConversationMut<'_> {
                 self.transcript.close_open();
             }
             RuntimeEvent::Error { error } => self.transcript.push_error(error.to_string()),
-            // A retryable attempt failure is visible while the retry loop is
-            // still working: without this line, a provider that errors for
-            // the whole attempt budget shows nothing until the limit notice.
-            RuntimeEvent::ProviderAttemptFinished {
-                error: Some(error),
-                retryable: true,
-                ..
-            } => self
-                .transcript
-                .push_notice("provider", format!("attempt failed, retrying: {error}")),
+            // Retry progress belongs to the root reducer, where the live
+            // turn clock and bounded retry state are available. Child
+            // conversations retain speculative output but do not claim a
+            // root retry schedule.
+            RuntimeEvent::ProviderAttemptFinished { .. } => {}
             RuntimeEvent::Downgrade { capability, detail } => self
                 .transcript
                 .push_notice("downgrade", format!("{capability}: {detail}")),

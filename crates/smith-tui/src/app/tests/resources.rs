@@ -205,7 +205,7 @@
     }
 
     #[test]
-    fn a_selector_without_a_value_opens_a_local_picker_and_escape_restores_the_draft() {
+    fn a_selector_without_a_value_opens_a_local_picker_and_escape_clears_the_command() {
         let mut app = app();
         app.on_key(ctrl('p'));
         type_text(&mut app, "resume");
@@ -219,7 +219,7 @@
             })
         ));
         assert_eq!(app.on_key(key(KeyCode::Esc)), None);
-        assert_eq!(app.composer.text(), "/resume");
+        assert!(app.composer.is_empty());
         assert!(app.overlay.is_none());
     }
 

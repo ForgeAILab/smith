@@ -322,6 +322,7 @@
             arguments: None,
         }));
         app.present_approval(prompt("shell").await);
+        elapse_prompt_guard(&mut app);
         app.on_key(key(KeyCode::Char('n')));
 
         match &app.transcript.blocks()[0] {

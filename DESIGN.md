@@ -74,7 +74,8 @@ window; long descriptions yield before the command name and selection.
 Local resource choices opened by `/model`, `/provider`, `/profile`, `/resume`,
 or `@` reuse that placement and show at most five matching rows; moving the
 selection scrolls the bounded window instead of expanding or covering the
-transcript. Any compact picker temporarily replaces the todo pane, but only a
+transcript. Cancelling a picker that a command opened leaves the composer
+empty. Any compact picker temporarily replaces the todo pane, but only a
 resource picker adds a footer control row. Slash completion relies on the
 established keyboard contract and keeps the one-row identity footer. Closing a
 picker restores the unchanged todo projection. Modal overlays are reserved for
@@ -124,6 +125,8 @@ window and the output ceiling from its automatic request-budget rule; it does
 not present separate input/output token fields. The review names every
 non-secret value and its provenance, the exact user-config destination, and
 the pending local preflight. API-key text is rendered only as masking glyphs.
+Every listed entry starts its flow; an entry that cannot proceed says why.
+Labels and review text are derived from the values that will be written.
 `Shift+Tab` goes back with the previous non-secret provider name, endpoint,
 and model available for editing. Returning to a field invalidates any pending
 collision approval so changed values pass through review again. Secret input
@@ -400,11 +403,14 @@ no-default confirmation names exact checkpoint continuation and does not
 consume another task slot.
 
 A first non-whitespace `!` performs one direct local shell action. It uses the
-same schema preparation, broad shell authority, approval, scheduler, deadline,
+same schema preparation, broad shell authority, scheduler, deadline,
 cancellation, checkpoint, bounded output, and artifact-offload path as a
-model-requested `shell` call, then renders the committed result locally. It
-does not send a provider request. `!!` sends a normal prompt beginning with one
-literal `!`.
+model-requested `shell` call, then renders the committed result locally.
+Submitting it is the authorization for exactly that prepared command, once:
+Smith does not ask the user to approve a command they just typed, and the
+submission grants nothing to any later call, including an identical one
+requested by the model. It does not send a provider request. `!!` sends a
+normal prompt beginning with one literal `!`.
 
 During work, the latest public todo projection shares a bounded pane anchored
 immediately above the composer with pending input. It remains there through
@@ -550,7 +556,10 @@ binding, explicit trusted configuration, or an exact endpoint that normalizes
 controls itself — the OpenAI `reasoning_effort` ladder, the xAI Responses
 OpenAI-effort ladder for catalog-backed Grok models, the OpenRouter unified
 reasoning API, and the Z.AI Coding Plan thinking switch, which apply to every
-catalog-advertised reasoning model they serve. On those endpoints the frozen
+catalog-advertised reasoning model they serve. A trusted exact model binding
+may also declare the native Anthropic Messages `anthropic-effort` dialect;
+mandatory adaptive thinking keeps `off` unavailable while the advertised
+effort ladder remains selectable. On those endpoints the frozen
 Models.dev snapshot refines the default ladder with each model's advertised
 control shape; a snapshot annotation is advertised metadata, not an
 entitlement claim, and it never creates controls on an endpoint whose wire
@@ -627,7 +636,13 @@ preparation fingerprint
 deadline
 ```
 
-`y`, `a`, and `n` answer exactly that fingerprint. Edited arguments are never
+`y`, `a`, and `n` answer exactly that fingerprint. A decision key counts only
+after the prompt has been visible for 500 ms with no key arriving in that
+window; each arriving key restarts it, so text the user was already typing can
+never answer a prompt, and the draft is kept. The same guard covers rotation,
+trust, and recovery confirmations. Multi-line action text keeps its line
+breaks. Every confirmation names its own action in its body and its controls.
+Edited arguments are never
 approved in place; they must be prepared and authorized again as a new action.
 Parallel actions retain a deterministic order and queue count, and each gets
 one explicit decision or terminal cancellation. A restored action is labelled
@@ -664,9 +679,26 @@ someone reading.
   `(request, attempt)`, never the committed transcript directly. The active
   attempt renders with a textual `draft` marker as well as dim styling.
 - An explicit attempt-commit event appends that attempt to the assistant block.
-  An explicit discard removes its raw text and may append one bounded
-  `retrying after failed attempt` diagnostic. Usage from the discarded attempt
+  An explicit discard removes its raw text. Usage from the discarded attempt
   remains available to status and diagnostics.
+- `ProviderAttemptFinished` owns the retry decision shown by the root
+  conversation. When its optional `index`, `max_attempts`, and
+  `retry_delay_ms` metadata says a next attempt has been admitted, the
+  transcript appends one informational notice led by the action:
+  `provider · retrying 2/3 in 200ms: <bounded provider cause>`. The notice
+  never uses the terminal error marker. The initial attempt remains
+  `Working…`; while the admitted delay is pending, its live row reads
+  `Retrying 2/3… · <turn elapsed> · backoff <positive rounded-up wait>`.
+  When the matching `ProviderAttemptStarted` arrives, the retry identity is
+  retained and the backoff segment is replaced by the ordinary provider-phase
+  elapsed segment. A `retry_delay_ms` of `0` is an admitted immediate retry;
+  absent metadata never invents an attempt total, delay, or retry admission.
+- If the finish metadata identifies the final configured attempt and carries no
+  retry delay, the root renders one attributed terminal provider cause as
+  `provider · failed after 3/3 attempts: <bounded provider cause>`. A
+  non-retryable failure keeps the existing runtime error path and is not
+  duplicated. Successful completion, cancellation, a new turn, shutdown, or
+  any terminal turn event clears the bounded retry presentation state.
 - Within a speculative or committed block, text is re-wrapped only from the
   last hard newline, so earlier lines never reflow.
 - Render is coalesced at **30 fps max**, driven by a redraw flag rather than

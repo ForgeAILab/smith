@@ -323,6 +323,7 @@ mod tests {
     include!("pending_input.rs");
     include!("input.rs");
     include!("prompts.rs");
+    include!("interaction_defects.rs");
     include!("resources.rs");
     include!("child_lifecycle.rs");
     include!("rotation.rs");

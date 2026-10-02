@@ -1,0 +1,16 @@
+│  project:              /private/tmp/smit │
+│                        h-sweep-62_bcrcj/ │
+│                        startup/44x16/pro │
+│                        ject              │
+│  Git:                  clean             │
+│  goal:                 none              │
+│  children:             0                 │
+│  usage:                nothing spent yet │
+│  cost:                 nothing spent yet │
+│ /diagnostics shows detailed cache and re │
+│ covery information                       │
+╰──────────────────────────────────────────╯
+
+› Ask Smith to do anything
+
+  build · local/example-model

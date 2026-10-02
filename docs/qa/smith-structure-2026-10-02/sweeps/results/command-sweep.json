@@ -1,0 +1,132 @@
+[
+  {
+    "check": "/status",
+    "pass": true,
+    "detail": "expected 'session'"
+  },
+  {
+    "check": "/diagnostics",
+    "pass": true,
+    "detail": "expected 'cache maintenance'"
+  },
+  {
+    "check": "/context",
+    "pass": true,
+    "detail": "expected 'system'"
+  },
+  {
+    "check": "/goal",
+    "pass": true,
+    "detail": "expected 'goal'"
+  },
+  {
+    "check": "/details",
+    "pass": true,
+    "detail": "expected 'detail'"
+  },
+  {
+    "check": "/timeline",
+    "pass": true,
+    "detail": "expected 'No turns'"
+  },
+  {
+    "check": "/agent",
+    "pass": true,
+    "detail": "expected 'agent'"
+  },
+  {
+    "check": "/mcp",
+    "pass": true,
+    "detail": "expected 'MCP'"
+  },
+  {
+    "check": "/skills",
+    "pass": true,
+    "detail": "expected 'smith.security'"
+  },
+  {
+    "check": "/diff",
+    "pass": true,
+    "detail": "expected 'changes'"
+  },
+  {
+    "check": "/review",
+    "pass": true,
+    "detail": "expected 'review'"
+  },
+  {
+    "check": "/undo",
+    "pass": true,
+    "detail": "expected 'no Smith turn has attributable changes'"
+  },
+  {
+    "check": "/redo",
+    "pass": true,
+    "detail": "expected 'redo'"
+  },
+  {
+    "check": "/revert",
+    "pass": true,
+    "detail": "expected 'revert'"
+  },
+  {
+    "check": "/account",
+    "pass": true,
+    "detail": "expected 'credential'"
+  },
+  {
+    "check": "/think",
+    "pass": true,
+    "detail": "expected 'thinking'"
+  },
+  {
+    "check": "/effort",
+    "pass": true,
+    "detail": "expected 'effort'"
+  },
+  {
+    "check": "/model",
+    "pass": true,
+    "detail": "expected 'Choose model'"
+  },
+  {
+    "check": "/provider",
+    "pass": true,
+    "detail": "expected 'Choose provider'"
+  },
+  {
+    "check": "/profile",
+    "pass": true,
+    "detail": "expected 'Choose profile'"
+  },
+  {
+    "check": "/connect",
+    "pass": true,
+    "detail": "expected 'Connect provider'"
+  },
+  {
+    "check": "/disconnect",
+    "pass": true,
+    "detail": "expected 'Disconnect provider'"
+  },
+  {
+    "check": "/resume",
+    "pass": true,
+    "detail": "expected 'Resume session'"
+  },
+  {
+    "check": "first prompt",
+    "pass": true,
+    "detail": "expected 'Worked for'"
+  },
+  {
+    "check": "/model local/small-model",
+    "pass": true,
+    "detail": "expected 'local/small-model'"
+  },
+  {
+    "check": "/profile plan",
+    "pass": true,
+    "detail": "expected 'plan'"
+  }
+]

@@ -151,7 +151,7 @@ fn draw_surface(
             draw_recovery_confirm(frame, area, "undo last Smith turn", content, theme);
         }
         Some(Overlay::RedoConfirm { content }) => {
-            draw_recovery_confirm(frame, area, "redo last exact Smith turn", content, theme);
+            draw_redo_confirm(frame, area, content, theme);
         }
         Some(Overlay::RevertConfirm { content, .. }) => {
             draw_recovery_confirm(frame, area, "revert selected change", content, theme);
@@ -159,11 +159,11 @@ fn draw_surface(
         Some(Overlay::ReviewConfirm { content, .. }) => {
             draw_review_confirm(frame, area, content, theme);
         }
-        Some(Overlay::McpTrustConfirm { content, .. }) => {
-            draw_recovery_confirm(frame, area, "run this MCP server", content, theme);
+        Some(Overlay::McpTrustConfirm { server, content }) => {
+            draw_mcp_trust_confirm(frame, area, server, content, theme);
         }
-        Some(Overlay::SkillTrustConfirm { content, .. }) => {
-            draw_recovery_confirm(frame, area, "activate this project skill", content, theme);
+        Some(Overlay::SkillTrustConfirm { skill, content }) => {
+            draw_skill_trust_confirm(frame, area, skill, content, theme);
         }
         Some(Overlay::RotationConfirm { content, .. }) => {
             draw_rotation_confirm(frame, area, content, theme);

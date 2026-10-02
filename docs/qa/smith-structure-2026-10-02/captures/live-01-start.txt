@@ -1,0 +1,32 @@
+smith: starting the Smith session: provider `chatgpt` cannot select a context window for model `gpt-
+6.1-sol`: window `272k` is pinned by flat model limit `models."chatgpt/gpt-6.1-sol".max_input_tokens
+`; remove that limit to select a named window
+EXIT=1
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

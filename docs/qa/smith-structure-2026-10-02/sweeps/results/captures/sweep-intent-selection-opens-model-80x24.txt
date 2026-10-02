@@ -1,0 +1,24 @@
+Esc interrupts; uncommitted steers are resent only after cancellation discards t
+hem.
+Ctrl+B moves a running foreground shell command to the background without killin
+g it.
+@ completes exact files and read-only agents; @@ sends a literal @.
+! runs a prepared local shell action; !! sends a literal !.
+PageUp/PageDown/Home/End or the mouse wheel scrolls the transcript.
+Up/Down browse accepted and Ctrl+C-stashed input without losing your draft.
+Down past the newest draft walks the delegated agents; the transcript shows
+that agent's log, Enter continues it, and Esc returns to the root timeline.
+Ctrl+R searches composer history; Enter restores a match and Esc cancels.
+Ctrl+C twice within 1s exits; the first press stashes and clears the draft.
+Start a message with // to send a literal leading slash.
+  Choose model · type to filter · 1/12
+› example-model · current  local/example-model · ctx 128k [user config] · input
+  small-model  local/small-model · ctx 32768 [user config] · input 28672 [user c
+  alternative-model  other/alternative-model · ctx 64k [user config] · input 60k
+  Claude Code sonnet  cli/claude-code/sonnet · ctx 200k · input 180k · output 32
+  Claude Code opus  cli/claude-code/opus · ctx 200k · input 180k · output 32k [b
+
+› Ask Smith to do anything
+
+  build · local/example-model
+  type to filter · ↑↓ choose · enter confirm · esc cancel

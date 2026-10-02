@@ -108,6 +108,7 @@
     async fn approval_is_never_granted_by_enter() {
         let mut app = app();
         app.present_approval(prompt("shell").await);
+        elapse_prompt_guard(&mut app);
 
         // Enter, Tab, and an ordinary character must all leave the modal open.
         for code in [KeyCode::Enter, KeyCode::Tab, KeyCode::Char('x')] {
@@ -138,6 +139,7 @@
         }
         assert_eq!(app.pending_approval_count(), 2);
 
+        elapse_prompt_guard(&mut app);
         app.on_key(key(KeyCode::Char('n')));
         match &app.overlay {
             Some(Overlay::Approval { prompt, .. }) => assert_eq!(prompt.tool(), "patch"),
@@ -145,6 +147,7 @@
         }
         assert_eq!(app.pending_approval_count(), 1);
 
+        elapse_prompt_guard(&mut app);
         app.on_key(key(KeyCode::Char('y')));
         assert!(app.overlay.is_none());
         assert_eq!(app.pending_approval_count(), 0);
@@ -189,6 +192,7 @@
         approval_first.present_approval(approval);
         approval_first
             .present_questionnaire(questionnaire_form("queued-question", Deadline::never()));
+        elapse_prompt_guard(&mut approval_first);
         approval_first.on_key(key(KeyCode::Char('n')));
         assert!(matches!(
             approval_first.overlay,
@@ -219,6 +223,7 @@
                 QuestionnaireResolution::Declined
             )) if request_id == "first-question"
         ));
+        elapse_prompt_guard(&mut question_first);
         question_first.on_key(key(KeyCode::Char('n')));
         assert!(matches!(
             decision.await.expect("approval decision"),
@@ -377,6 +382,7 @@
         app.apply(&event(RuntimeEvent::TurnStarted));
 
         assert!(matches!(app.overlay, Some(Overlay::Approval { .. })));
+        elapse_prompt_guard(&mut app);
         app.on_key(key(KeyCode::Char('y')));
         assert_eq!(
             decision.await.expect("approval decision"),
@@ -453,6 +459,7 @@
         undo.confirm_undo("--- current\n+++ restore\n-old\n+new\n");
         assert_eq!(undo.on_key(key(KeyCode::Enter)), None);
         assert!(matches!(undo.overlay, Some(Overlay::UndoConfirm { .. })));
+        elapse_prompt_guard(&mut undo);
         assert_eq!(undo.on_key(key(KeyCode::Esc)), Some(Action::CancelUndo));
 
         let mut review = app();
@@ -465,6 +472,7 @@
 
         let mut revert = app();
         revert.confirm_revert("file.txt", "fingerprint", "reverse patch");
+        elapse_prompt_guard(&mut revert);
         assert_eq!(
             revert.on_key(key(KeyCode::Char('n'))),
             Some(Action::CancelRevert {

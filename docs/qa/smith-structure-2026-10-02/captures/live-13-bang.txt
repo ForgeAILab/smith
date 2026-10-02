@@ -1,0 +1,32 @@
+Esc interrupts; uncommitted steers are resent only after cancellation discards them.
+Ctrl+B moves a running foreground shell command to the background without killing it.
+@ completes exact files and read-only agents; @@ sends a literal @.
+! runs a prepared local shell action; !! sends a literal !.
+PageUp/PageDown/Home/End or the mouse wheel scrolls the transcript.
+Up/Down browse accepted and Ctrl+C-stashed input without losing your draft.
+Down past the newest draft walks the delegated agents; the transcript shows
+that agent's log, Enter continues it, and Esc returns to the root timeline.
+Ctrl+R searches composer history; Enter restores a match and Esc cancels.
+Ctrl+C twice within 1s exits; the first press stashes and clears the draft.
+Start a message with // to send a literal leading slash.
+
+• shell · $ ls -la
+
+• shell(command, cwd, timeout_ms · details unavailable) · ok
+
+• changes · Smith turn 2 · contains ambiguous changes only; use /diff
+
+/shell
+total 16
+drwxr-xr-x@ 6 mai1015  wheel  192 Oct  2 18:03 .
+drwx------@ 5 mai1015  wheel  160 Oct  2 18:04 ..
+drwxr-xr-x@ 9 mai1015  wheel  288 Oct  2 18:05 .git
+drwxr-xr-x@ 3 mai1015  wheel   96 Oct  2 18:03 .smith
+-rw-r--r--@ 1 mai1015  wheel   17 Oct  2 18:02 notes.txt
+-rw-r--r--@ 1 mai1015  wheel    7 Oct  2 18:02 README.md
+
+  Worked for 216ms
+
+› Ask Smith to do anything
+
+  code · zai/glm-5.3

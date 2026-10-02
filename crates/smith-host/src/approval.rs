@@ -22,7 +22,9 @@
 
 use std::sync::Mutex;
 
-use agent_runtime_core::approval::{ApprovalDecision, ApprovalPolicy, ApprovalRequest};
+use agent_runtime_core::approval::{
+    ApprovalDecision, ApprovalOrigin, ApprovalPolicy, ApprovalRequest,
+};
 use agent_runtime_core::clock::Deadline;
 use agent_runtime_core::ids::SessionId;
 use agent_runtime_core::security::{PermissionSet, SecurityResource};
@@ -252,6 +254,11 @@ impl ApprovalPrompt {
     /// The exact immutable action the runtime prepared.
     pub fn prepared(&self) -> &PreparedToolCall {
         self.request.prepared()
+    }
+
+    /// The session and turn that own this exact prepared action.
+    pub fn origin(&self) -> &ApprovalOrigin {
+        self.request.origin()
     }
 
     /// The absolute deadline the runtime is enforcing around this prompt.

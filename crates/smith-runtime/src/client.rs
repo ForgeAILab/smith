@@ -452,6 +452,14 @@ pub enum SmithEventKind {
     },
     ProviderAttemptFinished {
         attempt: AttemptId,
+        /// Zero-based position of the finished attempt, when supplied by the
+        /// current Agent Runtime. Older event payloads omit this metadata.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<u32>,
+        /// Configured total number of attempts, including the first, when
+        /// supplied by the current Agent Runtime.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_attempts: Option<u32>,
         finish: FinishReason,
         retryable: bool,
         /// The attempt's own account of an error finish. Older Agent Runtime
@@ -459,6 +467,10 @@ pub enum SmithEventKind {
         /// reported", never as "the attempt succeeded".
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<ProviderError>,
+        /// Effective wait before an admitted next attempt. `Some(0)` denotes
+        /// an immediate admitted retry; `None` denotes no admitted retry.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_delay_ms: Option<u64>,
     },
     LimitReached {
         limit: LimitKind,
@@ -696,20 +708,29 @@ mod tests {
             Timestamp(11),
             RuntimeEvent::ProviderAttemptFinished {
                 attempt: AttemptId::new("attempt"),
+                index: Some(0),
+                max_attempts: Some(3),
                 finish: agent_runtime_core::provider::FinishReason::Error,
                 retryable: true,
-                index: None,
-                max_attempts: None,
-                retry_delay_ms: None,
                 error: Some(agent_runtime_core::provider::ProviderError::new(
                     agent_runtime_core::provider::ProviderErrorKind::Server,
                     "upstream 503",
                 )),
+                retry_delay_ms: Some(200),
             },
         );
         let projected = SmithEvent::project(&canonical).unwrap();
+        let serialized = serde_json::to_value(&projected).unwrap();
+        assert_eq!(SMITH_CLIENT_PROTOCOL_VERSION, 1);
+        assert_eq!(serialized["schema_version"], canonical.schema_version);
+        assert_eq!(serialized["payload"]["index"], 0);
+        assert_eq!(serialized["payload"]["max_attempts"], 3);
+        assert_eq!(serialized["payload"]["retry_delay_ms"], 200);
         match projected.payload {
             SmithEventKind::ProviderAttemptFinished {
+                index: Some(0),
+                max_attempts: Some(3),
+                retry_delay_ms: Some(200),
                 error: Some(error),
                 retryable: true,
                 ..
@@ -731,7 +752,13 @@ mod tests {
         let kind: SmithEventKind = serde_json::from_value(value).unwrap();
         assert!(matches!(
             kind,
-            SmithEventKind::ProviderAttemptFinished { error: None, .. }
+            SmithEventKind::ProviderAttemptFinished {
+                error: None,
+                index: None,
+                max_attempts: None,
+                retry_delay_ms: None,
+                ..
+            }
         ));
     }
 

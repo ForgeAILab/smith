@@ -1,0 +1,32 @@
+/status
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│  >_ Smith                                                                                        │
+│                                                                                                  │
+│  session:              session-c5b4d73f-0093-45be-a964-daac12e86e33                              │
+│  profile:              build                                                                     │
+│  provider:             local · model: example-model                                              │
+│  permission:           Ask                                                                       │
+│  reasoning:            provider default · effort provider default · provider/model default       │
+│  reasoning controls:   unsupported · switch unavailable · efforts none · resolved model catalog  │
+│                        (presence only)                                                           │
+│  prompt cache:         usage not reported                                                        │
+│  cache maintenance:    off                                                                       │
+│  resume checkpoint:    not yet saved                                                             │
+│  project:              /private/tmp/smith-sweep-62_bcrcj/commands/project                        │
+│  Git:                  clean                                                                     │
+│  goal:                 none                                                                      │
+│  children:             0                                                                         │
+│  usage:                nothing spent yet                                                         │
+│  cost:                 nothing spent yet                                                         │
+│ /diagnostics shows detailed cache and recovery information                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+› Ask Smith to do anything
+
+  build · local/example-model · /private/tmp/smith-sweep-62_bcrcj/commands/project:main · ? ctx

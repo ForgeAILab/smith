@@ -116,6 +116,7 @@ fn no_running_tasks_never_needs_a_background_exit_decision() {
 
 #[test]
 fn the_default_policy_is_error_and_names_the_task_by_id_and_command() {
+    assert_eq!(background_exit_policy(None, None), BackgroundExit::Error);
     let running = [sample_running_task("task:7", "cargo test --workspace")];
     let decision = decide_background_exit(BackgroundExit::default(), &running);
     let BackgroundExitDecision::Error(message) = decision else {
@@ -269,6 +270,82 @@ max_output_tokens = 4096
 "#;
 
 #[tokio::test]
+async fn configured_background_exit_waits_for_terminal_state_and_flag_stop_wins() {
+    let home = tempfile::tempdir().expect("a home");
+    let project = tempfile::tempdir().expect("a project");
+    let config_dir = project.path().join(".smith");
+    std::fs::create_dir_all(&config_dir).expect("a config directory");
+    std::fs::write(
+        config_dir.join("config.toml"),
+        format!("{BACKGROUND_EXIT_CONFIG}\n[background]\nexit_policy = \"wait\"\n"),
+    )
+    .expect("a configured wait policy");
+
+    for (args, expected) in [
+        (&[][..], BackgroundExit::Wait),
+        (&["--background-exit", "stop"][..], BackgroundExit::Stop),
+    ] {
+        let crate::cli::Command::Run(run) =
+            crate::cli::parse(args.iter().map(std::ffi::OsString::from))
+                .expect("parsed policy selection")
+        else {
+            panic!("a run command");
+        };
+        let config = resolve(
+            &ResolveRequest::new(project.path())
+                .with_home_dir(home.path())
+                .with_cli(run.selection.overrides()),
+        )
+        .expect("resolved configuration")
+        .config;
+        let policy = background_exit_policy(
+            run.selection.background_exit,
+            Some(config.background.exit_policy.value),
+        );
+        assert_eq!(policy, expected);
+
+        let registry = BackgroundTaskRegistry::new();
+        let session_id = unique_background_test_session(expected.as_str());
+        let release = project.path().join("release-background");
+        let (task_id, _) = registry
+            .spawn_background_task(
+                &session_id,
+                "while [ ! -f release-background ]; do sleep 0.01; done; exit 7".into(),
+                project.path().to_path_buf(),
+                None,
+            )
+            .await
+            .expect("a gated task");
+        let pending = apply_background_exit_policy(&registry, &session_id, policy);
+        tokio::pin!(pending);
+        if expected == BackgroundExit::Wait {
+            // The gate keeps the task running until this exact policy call
+            // has polled it, avoiding assumptions about CI scheduling speed.
+            assert!(futures_util::poll!(pending.as_mut()).is_pending());
+            assert_eq!(registry.running_tasks(&session_id).len(), 1);
+            std::fs::write(&release, "release").expect("release the background task");
+        }
+        let (error, output) = tokio::time::timeout(HEADLESS_TEST_WATCHDOG, pending)
+            .await
+            .expect("the policy reaches a terminal state");
+        assert!(error.is_none(), "{error:?}");
+        let output = output.expect("the policy acted on the gated task");
+        assert_eq!(output.policy, expected.as_str());
+        assert_eq!(output.tasks.len(), 1);
+        assert_eq!(output.tasks[0].task_id, task_id);
+        assert!(registry.running_tasks(&session_id).is_empty());
+        if expected == BackgroundExit::Wait {
+            assert_eq!(output.tasks[0].status, "exited");
+            assert_eq!(output.tasks[0].exit_code, Some(7));
+            std::fs::remove_file(release).expect("reset the gate for the stop case");
+        } else {
+            assert_eq!(output.tasks[0].status, "stopped");
+            assert_eq!(output.tasks[0].exit_code, None);
+        }
+    }
+}
+
+#[tokio::test]
 async fn default_error_policy_fails_a_headless_run_with_a_running_background_task() {
     let home = tempfile::tempdir().expect("a home");
     let project = tempfile::tempdir().expect("a project");
@@ -334,15 +411,20 @@ async fn default_error_policy_fails_a_headless_run_with_a_running_background_tas
 }
 
 #[tokio::test]
-async fn wait_policy_lets_a_headless_run_finish_after_its_background_task_exits() {
+async fn configured_wait_policy_lets_a_headless_run_finish_after_its_background_task_exits() {
     let home = tempfile::tempdir().expect("a home");
     let project = tempfile::tempdir().expect("a project");
     let config_dir = project.path().join(".smith");
     std::fs::create_dir_all(&config_dir).expect("a config directory");
-    std::fs::write(config_dir.join("config.toml"), BACKGROUND_EXIT_CONFIG).expect("a config");
+    std::fs::write(
+        config_dir.join("config.toml"),
+        format!("{BACKGROUND_EXIT_CONFIG}\n[background]\nexit_policy = \"wait\"\n"),
+    )
+    .expect("a configured wait policy");
     let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
         .expect("resolved config")
         .config;
+    let policy = background_exit_policy(None, Some(config.background.exit_policy.value));
     let runtime = RuntimeRequest {
         workspace: Some(Arc::new(
             ProjectWorkspace::new(project.path()).expect("a workspace"),
@@ -358,32 +440,73 @@ async fn wait_policy_lets_a_headless_run_finish_after_its_background_task_exits(
     let (task_id, _spool) = registry
         .spawn_background_task(
             host.session().id(),
-            // Long enough to still be running when the policy check
-            // happens (after host startup and the turn itself), short
-            // enough that `wait` polling it to completion stays fast.
-            "sleep 3".into(),
-            std::env::temp_dir(),
+            "while [ ! -f release-background ]; do sleep 0.01; done".into(),
+            project.path().to_path_buf(),
             None,
         )
         .await
         .expect("a spawned background task");
-    let mut stdout = Vec::new();
+    struct TurnCompletedOutput {
+        bytes: Vec<u8>,
+        completed: Option<tokio::sync::oneshot::Sender<()>>,
+    }
+
+    impl std::io::Write for TurnCompletedOutput {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.bytes.extend_from_slice(bytes);
+            let marker = b"\"event\":\"turn_completed\"";
+            if self.bytes.windows(marker.len()).any(|part| part == marker)
+                && let Some(completed) = self.completed.take()
+            {
+                let _ = completed.send(());
+            }
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let (completed, completion) = tokio::sync::oneshot::channel();
+    let mut stdout = TurnCompletedOutput {
+        bytes: Vec::new(),
+        completed: Some(completed),
+    };
     let mut stderr = Vec::new();
 
-    let outcome = run_with_io(
-        &host,
-        "hello".into(),
-        OutputFormat::Json,
-        HeadlessBrokers::default(),
-        BackgroundExit::Wait,
-        &mut stdout,
-        &mut stderr,
-    )
+    // Both branches are polled on this test's current-thread runtime. Once
+    // the completed-turn event is written, the runner reaches its wait poll
+    // before the gate-release branch can run.
+    let (outcome, ()) = tokio::time::timeout(HEADLESS_TEST_WATCHDOG, async {
+        tokio::join!(
+            run_with_io(
+                &host,
+                "hello".into(),
+                OutputFormat::StreamJson,
+                HeadlessBrokers::default(),
+                policy,
+                &mut stdout,
+                &mut stderr,
+            ),
+            async {
+                completion.await.expect("the turn completed");
+                assert_eq!(registry.running_tasks(host.session().id()).len(), 1);
+                std::fs::write(project.path().join("release-background"), "release")
+                    .expect("release the background task");
+            },
+        )
+    })
     .await
-    .expect("a structured result");
+    .expect("the headless wait completes");
+    let outcome = outcome.expect("a structured result");
 
     assert_eq!(outcome.exit_code, 0);
-    let result: serde_json::Value = serde_json::from_slice(&stdout).expect("a result envelope");
+    assert!(stderr.is_empty());
+    let lines = String::from_utf8(stdout.bytes).expect("UTF-8 stream");
+    let result: serde_json::Value =
+        serde_json::from_str(lines.lines().last().expect("a result line"))
+            .expect("a result envelope");
     assert_eq!(result["status"], "ok");
     assert_eq!(result["background_exit"]["policy"], "wait");
     assert_eq!(result["background_exit"]["tasks"][0]["task_id"], task_id);

@@ -738,6 +738,27 @@ pub enum ProviderPhase {
     Responding,
 }
 
+/// Root-only presentation of an admitted provider retry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderRetryProgress {
+    /// One-based attempt number the runtime admitted next.
+    pub next_attempt: u32,
+    /// Configured total number of attempts, including the first.
+    pub max_attempts: u32,
+    /// Remaining backoff while the next attempt has not started. A zero
+    /// duration is retained until the authoritative start event arrives.
+    pub backoff_remaining: Option<Duration>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct ProviderRetryState {
+    pub(super) next_attempt: u32,
+    pub(super) max_attempts: u32,
+    pub(super) delay: Duration,
+    pub(super) received_at: Instant,
+    pub(super) started: bool,
+}
+
 /// One provider attempt's speculative presentation identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct AttemptOutputKey {
@@ -808,6 +829,8 @@ pub struct App {
     pub composer: Composer,
     /// The current overlay, if any.
     pub overlay: Option<Overlay>,
+    /// Quiet-window input guard for the visible consequential prompt.
+    pub(super) prompt_input_guard: super::prompts::PromptInputGuard,
     /// Runtime prompts waiting behind the one visible overlay, in exact
     /// cross-type arrival order.
     pub(super) pending_prompts: VecDeque<PendingPrompt>,
@@ -928,6 +951,8 @@ pub struct App {
     pub(super) pending_lost_range: Option<(u64, u64)>,
     /// The live provider round-trip stage and when it started.
     pub(super) provider_phase: Option<(ProviderPhase, Instant)>,
+    /// Bounded root-only presentation state for an admitted provider retry.
+    pub(super) provider_retry: Option<ProviderRetryState>,
     /// The root conversation's held-back provider output. Its transcript is
     /// [`Self::transcript`]; the two are borrowed together as a
     /// [`ConversationMut`] whenever an event is folded into either.
@@ -949,6 +974,7 @@ impl App {
             cache_miss_notices: false,
             composer: Composer::new(),
             overlay: None,
+            prompt_input_guard: super::prompts::PromptInputGuard::default(),
             pending_prompts: VecDeque::new(),
             questionnaire_resolutions: VecDeque::new(),
             children: BTreeMap::new(),
@@ -988,6 +1014,7 @@ impl App {
             pending_recovered_events: 0,
             pending_lost_range: None,
             provider_phase: None,
+            provider_retry: None,
             speculative: SpeculativeState::default(),
             active_turn: None,
             pending_input: PendingInputState::default(),
@@ -1230,6 +1257,18 @@ impl App {
     pub fn provider_phase(&self) -> Option<(ProviderPhase, Duration)> {
         self.provider_phase
             .map(|(phase, since)| (phase, since.elapsed()))
+    }
+
+    /// The admitted root retry identity and any remaining backoff.
+    pub fn provider_retry(&self) -> Option<ProviderRetryProgress> {
+        self.provider_retry
+            .as_ref()
+            .map(|retry| ProviderRetryProgress {
+                next_attempt: retry.next_attempt,
+                max_attempts: retry.max_attempts,
+                backoff_remaining: (!retry.started)
+                    .then(|| retry.delay.saturating_sub(retry.received_at.elapsed())),
+            })
     }
 
     /// Visible text from the newest live provider attempt.

@@ -19,14 +19,15 @@ use smith_config::credential::{
 };
 use smith_config::inventory::SelectionInventory;
 use smith_config::model::{
-    AgentPosture, ConfigFile, ConfigSecret, ContextSection, KIND_GEMINI_INTERACTIONS,
-    KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES, ModelSection, PersistenceSection,
-    ProfileSection, ProfileUse, ProviderResponseSection, ProviderSection, ReasoningOnlyBehavior,
+    AgentPosture, ConfigFile, ConfigSecret, ContextSection, KIND_ANTHROPIC_MESSAGES,
+    KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES, ModelSection,
+    PersistenceSection, ProfileSection, ProfileUse, ProviderResponseSection, ProviderSection,
+    ReasoningOnlyBehavior,
 };
 use smith_config::resolve::{ConfigReadiness, ResolveRequest, inspect};
 use smith_config::setup::{
-    GLM_5_2, GLM_ENDPOINT, GLM_PROFILE, GLM_PROVIDER, GOOGLE_PROFILE, GOOGLE_PROVIDER,
-    XAI_ENDPOINT, XAI_PROFILE, XAI_PROVIDER, provider_descriptors,
+    CHATGPT_PROVIDER, CHATGPT_TERRA, GLM_5_2, GLM_ENDPOINT, GLM_PROFILE, GLM_PROVIDER,
+    GOOGLE_PROFILE, GOOGLE_PROVIDER, XAI_ENDPOINT, XAI_PROFILE, XAI_PROVIDER, provider_descriptors,
 };
 use smith_config::user_config::{prepare_checkpoint_key_source_removal, prepare_user_config_edit};
 use smith_host::ProjectWorkspace;
@@ -38,7 +39,7 @@ use smith_runtime::model_catalog::{CatalogLoader, runtime_catalog_source};
 use smith_tui::picker::ResourceEntry;
 use smith_tui::setup::{
     ResolveModelLimits, ResolvedModelLimits, SetupApp, SetupCredential, SetupEffect, SetupMode,
-    SetupModelLimits, SetupSubmission, draw_setup,
+    SetupModelLimits, SetupProviderKind, SetupQuickStart, SetupSubmission, draw_setup,
 };
 use smith_tui::theme::Theme;
 use zeroize::Zeroizing;
@@ -61,6 +62,7 @@ struct SetupContext {
     project: PathBuf,
     inventory: SelectionInventory,
     catalog: Arc<smith_config::catalog::CatalogSnapshot>,
+    unconfigured: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -396,7 +398,7 @@ pub(crate) async fn run_surface(
         );
     }
 
-    let mut app = SetupApp::new(mode, providers, models)
+    let mut app = SetupApp::new(mode, providers, models, glm_quick_start())
         .with_provider_actions(provider_actions)
         .with_catalog_model_limits(catalog_model_limits)
         .with_destination(context.user_dir.join("config.toml").display().to_string());
@@ -424,6 +426,31 @@ pub(crate) async fn run_surface(
                 SetupEffect::Cancel => {
                     terminal.restore().context("restoring the terminal")?;
                     return Ok(SetupOutcome::Cancelled);
+                }
+                SetupEffect::ConnectChatGpt => {
+                    // Only one event reader and terminal guard may own the
+                    // handoff. OAuth enters its own existing login surface.
+                    drop(events);
+                    terminal
+                        .restore()
+                        .context("restoring the terminal for ChatGPT sign-in")?;
+                    let completed = crate::connection::connect_chatgpt_from_setup(
+                        context.selection.clone(),
+                        context.user_dir.clone(),
+                        context.inventory.models.iter().any(|model| {
+                            model.provider == CHATGPT_PROVIDER && model.model == CHATGPT_TERRA.model
+                        }),
+                        context.unconfigured,
+                        no_color,
+                        no_motion,
+                    )
+                    .await
+                    .context("ChatGPT setup could not complete")?;
+                    return Ok(if completed {
+                        SetupOutcome::Completed
+                    } else {
+                        SetupOutcome::Cancelled
+                    });
                 }
                 SetupEffect::ResolveModelLimits { request } => {
                     // One bounded, non-inference read; the surface stays busy
@@ -515,9 +542,35 @@ fn provider_action_entries() -> Vec<ResourceEntry> {
             } else {
                 descriptor.id
             };
-            ResourceEntry::new(id, descriptor.label, descriptor.description)
+            let detail = if id == "glm" {
+                format!(
+                    "Z.AI Coding Plan endpoint with trusted {} limits",
+                    GLM_5_2.label
+                )
+            } else {
+                descriptor.description.to_owned()
+            };
+            ResourceEntry::new(id, descriptor.label, detail)
         })
         .collect()
+}
+
+fn glm_quick_start() -> SetupQuickStart {
+    SetupQuickStart {
+        provider: GLM_PROVIDER.into(),
+        endpoint: GLM_ENDPOINT.into(),
+        model: GLM_5_2.model.into(),
+        model_label: GLM_5_2.label.into(),
+        limits: SetupModelLimits {
+            context_tokens: GLM_5_2.context_tokens,
+            max_input_tokens: GLM_5_2.max_input_tokens,
+            max_output_tokens: GLM_5_2.max_output_tokens,
+        },
+        request_output_tokens: GLM_5_2.request_output_tokens,
+        output_reserve: GLM_5_2.output_reserve,
+        profile: GLM_PROFILE.into(),
+        catalog_revision: GLM_5_2.revision,
+    }
 }
 
 async fn setup_context(mut selection: Selection, mode: &SetupMode) -> Result<SetupContext> {
@@ -591,6 +644,7 @@ async fn setup_context(mut selection: Selection, mode: &SetupMode) -> Result<Set
         project,
         inventory,
         catalog,
+        unconfigured: resolution.is_none(),
     })
 }
 
@@ -680,16 +734,22 @@ async fn resolve_model_limits(
     context: &SetupContext,
     request: &ResolveModelLimits,
 ) -> Option<ResolvedModelLimits> {
-    let (endpoint, bearer) = match request.endpoint.as_deref() {
-        Some(endpoint) => (
-            Some(endpoint.to_owned()),
-            request
-                .bearer
-                .as_ref()
-                .map(|secret| secret.expose().to_owned())
-                .or_else(|| read_environment_bearer(request.environment_variable.as_deref())),
-        ),
-        None => configured_probe_target(context, request.provider.as_deref()?).await,
+    let (endpoint, bearer) = if !request.use_endpoint_listing {
+        // Native Messages authentication/listing differs from the reviewed
+        // OpenAI listing. Reuse catalog resolution and the manual fallback.
+        (None, None)
+    } else {
+        match request.endpoint.as_deref() {
+            Some(endpoint) => (
+                Some(endpoint.to_owned()),
+                request
+                    .bearer
+                    .as_ref()
+                    .map(|secret| secret.expose().to_owned())
+                    .or_else(|| read_environment_bearer(request.environment_variable.as_deref())),
+            ),
+            None => configured_probe_target(context, request.provider.as_deref()?).await,
+        }
     };
     if let Some(endpoint) = endpoint {
         let probe = smith_runtime::probe::openai_compatible_model_limits(
@@ -1114,6 +1174,7 @@ fn setup_plan(submission: SetupSubmission) -> Result<SetupPlan> {
             })
         }
         SetupSubmission::AddProvider {
+            kind,
             provider,
             endpoint,
             credential,
@@ -1131,13 +1192,21 @@ fn setup_plan(submission: SetupSubmission) -> Result<SetupPlan> {
                 providers: BTreeMap::from([(
                     provider.clone(),
                     ProviderSection {
-                        kind: Some(KIND_OPENAI_COMPATIBLE.into()),
+                        kind: Some(
+                            match kind {
+                                SetupProviderKind::OpenAiCompatible => KIND_OPENAI_COMPATIBLE,
+                                SetupProviderKind::AnthropicMessages => KIND_ANTHROPIC_MESSAGES,
+                            }
+                            .into(),
+                        ),
                         base_url: Some(endpoint),
                         credential: reference.as_ref().map(ToString::to_string),
                         api_key,
-                        response: reasoning_only_text.then_some(ProviderResponseSection {
-                            reasoning_only: Some(ReasoningOnlyBehavior::Text),
-                        }),
+                        response: (kind == SetupProviderKind::OpenAiCompatible
+                            && reasoning_only_text)
+                            .then_some(ProviderResponseSection {
+                                reasoning_only: Some(ReasoningOnlyBehavior::Text),
+                            }),
                         ..ProviderSection::default()
                     },
                 )]),
@@ -1268,7 +1337,8 @@ fn model_section(limits: SetupModelLimits) -> ModelSection {
     }
 }
 
-fn select_default(
+/// Adds the default coding, planning, and review profiles for a reviewed pair.
+pub(super) fn select_default(
     patch: &mut ConfigFile,
     profile: &str,
     provider: &str,
@@ -1367,7 +1437,186 @@ mod tests {
     use std::sync::Mutex;
 
     use agent_runtime_core::store::Secret;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use smith_config::credential::{CredentialEnrollmentBackend, KeychainError};
+
+    fn setup_key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn every_offered_setup_action_has_a_handler() {
+        let actions = provider_action_entries();
+        assert!(!actions.is_empty());
+        assert_eq!(
+            actions.len(),
+            provider_descriptors(AVAILABLE_ADAPTER_KINDS).len()
+        );
+        for mode in [SetupMode::FirstRun, SetupMode::Menu] {
+            for (index, entry) in actions.iter().enumerate() {
+                let mut app =
+                    SetupApp::new(mode.clone(), Vec::new(), Vec::new(), glm_quick_start())
+                        .with_provider_actions(provider_action_entries());
+                for _ in 0..index {
+                    app.on_key(setup_key(KeyCode::Down));
+                }
+                let effect = app.on_key(setup_key(KeyCode::Enter));
+                assert!(
+                    !app.is_choosing_action(),
+                    "offered setup action `{}` has no handler in {mode:?}",
+                    entry.id
+                );
+                if entry.id == CHATGPT_PROVIDER {
+                    assert!(matches!(effect, SetupEffect::ConnectChatGpt));
+                } else {
+                    assert!(matches!(effect, SetupEffect::None));
+                    assert!(!app.is_busy(), "{} did not reach an input step", entry.id);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn quick_start_display_matches_the_written_model_and_trusted_revision() {
+        let data = glm_quick_start();
+        let entry = provider_action_entries()
+            .into_iter()
+            .find(|entry| entry.id == "glm")
+            .expect("GLM action");
+        assert!(entry.detail.contains(&data.model_label));
+        let mut app = SetupApp::new(SetupMode::FirstRun, Vec::new(), Vec::new(), data.clone());
+        app.on_key(setup_key(KeyCode::Enter));
+        app.on_key(setup_key(KeyCode::Down));
+        app.on_key(setup_key(KeyCode::Enter));
+        let review = app.review_lines().join("\n");
+        let SetupEffect::Submit { submission, .. } = app.on_key(setup_key(KeyCode::Enter)) else {
+            panic!("review submits the GLM quick start");
+        };
+        let plan = setup_plan(submission).expect("GLM plan");
+        let profile = &plan.patch.profiles[&data.profile];
+        assert_eq!(profile.provider.as_deref(), Some(data.provider.as_str()));
+        assert_eq!(profile.model.as_deref(), Some(data.model.as_str()));
+        let model = &plan.patch.models[&format!("{}/{}", data.provider, data.model)];
+        assert_eq!(model.context_tokens, Some(data.limits.context_tokens));
+        assert_eq!(model.max_input_tokens, Some(data.limits.max_input_tokens));
+        assert_eq!(model.max_output_tokens, Some(data.limits.max_output_tokens));
+        let trusted = smith_config::setup::trusted_model(&data.provider, &data.model)
+            .expect("written binding's trusted metadata");
+        assert_eq!(data.catalog_revision, trusted.revision);
+        assert_eq!(
+            data.catalog_revision,
+            smith_config::setup::TRUSTED_MODEL_CATALOG_REVISION
+        );
+        assert!(
+            review.contains(&format!("model: {}", data.model)),
+            "{review}"
+        );
+        assert!(
+            review.contains(&format!("trusted catalog v{}", trusted.revision)),
+            "{review}"
+        );
+    }
+
+    #[tokio::test]
+    async fn anthropic_setup_publishes_a_native_provider_and_rolls_back_on_failure() {
+        let root = tempfile::tempdir().expect("home");
+        let project = tempfile::tempdir().expect("project");
+        let user_dir = root.path().join(".smith");
+        let context = setup_context_for(user_dir.clone(), project.path().to_owned());
+        let actions = provider_action_entries();
+        let index = actions
+            .iter()
+            .position(|entry| entry.id == KIND_ANTHROPIC_MESSAGES)
+            .expect("Anthropic action");
+        let mut app = SetupApp::new(
+            SetupMode::FirstRun,
+            Vec::new(),
+            Vec::new(),
+            glm_quick_start(),
+        )
+        .with_provider_actions(actions);
+        for _ in 0..index {
+            app.on_key(setup_key(KeyCode::Down));
+        }
+        app.on_key(setup_key(KeyCode::Enter));
+        for _ in 0..3 {
+            app.on_key(setup_key(KeyCode::Down));
+        }
+        app.on_key(setup_key(KeyCode::Enter));
+        app.on_paste("ANTHROPIC_API_KEY");
+        app.on_key(setup_key(KeyCode::Enter));
+        app.on_paste("claude-test-only");
+        let SetupEffect::ResolveModelLimits { request } = app.on_key(setup_key(KeyCode::Enter))
+        else {
+            panic!("native provider reaches shared limit resolution");
+        };
+        assert!(!request.use_endpoint_listing);
+        assert!(resolve_model_limits(&context, &request).await.is_none());
+        app.apply_resolved_limits(None);
+        app.on_paste("64000");
+        app.on_key(setup_key(KeyCode::Enter));
+        app.on_key(setup_key(KeyCode::Enter));
+        let SetupEffect::Submit {
+            submission,
+            allow_collisions,
+        } = app.on_key(setup_key(KeyCode::Enter))
+        else {
+            panic!("Anthropic review submits");
+        };
+        let enroller = CredentialEnroller::with_backend(Arc::new(FakeEnrollmentBackend::default()));
+        assert!(matches!(
+            apply_submission_with(
+                &context,
+                submission.clone(),
+                allow_collisions,
+                &enroller,
+                || async { Err(("synthetic failure".into(), false)) }
+            )
+            .await,
+            ApplyOutcome::Failed { .. }
+        ));
+        assert!(!user_dir.join("config.toml").exists());
+        assert!(matches!(
+            apply_submission_with(
+                &context,
+                submission,
+                allow_collisions,
+                &enroller,
+                || async { Ok(()) }
+            )
+            .await,
+            ApplyOutcome::Completed
+        ));
+        let written = ConfigFile::parse(
+            &std::fs::read_to_string(user_dir.join("config.toml")).expect("published config"),
+        )
+        .expect("valid TOML");
+        let provider = &written.providers["anthropic"];
+        assert_eq!(provider.kind.as_deref(), Some(KIND_ANTHROPIC_MESSAGES));
+        assert_eq!(
+            provider.base_url.as_deref(),
+            Some(smith_config::model::ANTHROPIC_DEFAULT_ENDPOINT)
+        );
+        assert_eq!(
+            provider.credential.as_deref(),
+            Some("env:ANTHROPIC_API_KEY")
+        );
+        assert!(provider.response.is_none());
+        assert!(written.default_profile.is_some());
+        assert_eq!(
+            written.models["anthropic/claude-test-only"].context_tokens,
+            Some(64_000)
+        );
+        let request = ResolveRequest::new(project.path()).with_home_dir(root.path());
+        let ConfigReadiness::Ready(resolution) = inspect(&request) else {
+            panic!("the published native provider must be locally runnable");
+        };
+        assert_eq!(
+            resolution.config.provider.kind.value,
+            KIND_ANTHROPIC_MESSAGES
+        );
+        assert_eq!(resolution.config.model.value, "claude-test-only");
+    }
 
     #[derive(Debug, Default)]
     struct FakeEnrollmentBackend {
@@ -1440,6 +1689,7 @@ mod tests {
             })
             .expect("the embedded catalog carries a limited model");
         let request = ResolveModelLimits {
+            use_endpoint_listing: true,
             // Port 9 refuses connections immediately, so the test stays
             // offline and the probe fails fast.
             endpoint: Some("http://127.0.0.1:9/v1".to_owned()),
@@ -1474,6 +1724,7 @@ mod tests {
             tempfile::tempdir().expect("project").path().to_path_buf(),
         );
         let request = ResolveModelLimits {
+            use_endpoint_listing: true,
             endpoint: Some("http://127.0.0.1:9/v1".to_owned()),
             bearer: None,
             environment_variable: None,
@@ -1490,6 +1741,7 @@ mod tests {
             tempfile::tempdir().expect("project").path().to_path_buf(),
         );
         let request = ResolveModelLimits {
+            use_endpoint_listing: true,
             endpoint: Some("http://127.0.0.1:9/v1".to_owned()),
             bearer: None,
             environment_variable: None,
@@ -1543,6 +1795,7 @@ mod tests {
                 serde_json::from_str(smith_runtime::model_catalog::EMBEDDED_MODELS_DEV_SEED)
                     .expect("embedded catalog"),
             ),
+            unconfigured: true,
         }
     }
 
@@ -1950,6 +2203,7 @@ credential = "keychain:smith/zai"
 
         for submission in [
             SetupSubmission::AddProvider {
+                kind: SetupProviderKind::OpenAiCompatible,
                 provider: "router".into(),
                 endpoint: "https://router.example/v1".into(),
                 credential: SetupCredential::ExistingKeychain,
@@ -1965,6 +2219,7 @@ credential = "keychain:smith/zai"
                 make_default: false,
             },
             SetupSubmission::AddProvider {
+                kind: SetupProviderKind::OpenAiCompatible,
                 provider: "other".into(),
                 endpoint: "https://other.example/v1".into(),
                 credential: SetupCredential::ExistingKeychain,

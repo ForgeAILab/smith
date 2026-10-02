@@ -80,6 +80,14 @@ pub(crate) struct HeadlessBrokers<'a> {
     pub(crate) cache_miss_notices: bool,
 }
 
+/// Applies the flag override before the resolved configuration and default.
+pub(crate) fn background_exit_policy(
+    flag: Option<BackgroundExit>,
+    configured: Option<BackgroundExit>,
+) -> BackgroundExit {
+    flag.or(configured).unwrap_or_default()
+}
+
 /// Runs one turn, preserving canonical event order for stream JSON.
 pub(crate) async fn run(
     host: &HostSession,

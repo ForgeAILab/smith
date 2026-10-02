@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use agent_runtime_core::clock::Timestamp;
 use agent_runtime_core::ids::TurnId;
+use agent_runtime_core::provider::FinishReason;
 use smith_runtime::client::{
     ChildPhase, ChildRecoveryState, PlanSensitivity, SmithEvent as EventEnvelope,
     SmithEventKind as RuntimeEvent, TurnFinish,
@@ -32,6 +33,65 @@ impl App {
                 }
             }
             None => self.provider_phase = None,
+        }
+    }
+
+    fn apply_provider_attempt_finished(
+        &mut self,
+        index: Option<u32>,
+        max_attempts: Option<u32>,
+        finish: &FinishReason,
+        retryable: bool,
+        error: &Option<agent_runtime_core::provider::ProviderError>,
+        retry_delay_ms: Option<u64>,
+    ) {
+        self.set_provider_phase(None);
+
+        let cause = error
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "provider attempt failed".to_owned());
+        let exact_position = index
+            .zip(max_attempts)
+            .filter(|(_, max_attempts)| *max_attempts > 0);
+
+        if retryable
+            && let Some((index, max_attempts)) = exact_position
+            && let Some(delay) = retry_delay_ms
+            && index.saturating_add(1) < max_attempts
+        {
+            let next_attempt = index.saturating_add(2);
+            self.provider_retry = Some(ProviderRetryState {
+                next_attempt,
+                max_attempts,
+                delay: Duration::from_millis(delay),
+                received_at: Instant::now(),
+                started: false,
+            });
+            self.transcript.push_notice(
+                "provider",
+                format!("retrying {next_attempt}/{max_attempts} in {delay}ms: {cause}"),
+            );
+            return;
+        }
+
+        self.provider_retry = None;
+        if retryable
+            && let Some((index, max_attempts)) = exact_position
+            && retry_delay_ms.is_none()
+        {
+            let attempt = index.saturating_add(1);
+            self.transcript.push_error(format!(
+                "provider · failed after {attempt}/{max_attempts} attempts: {cause}"
+            ));
+            return;
+        }
+
+        // Legacy events have no authoritative schedule. Keep the old bounded
+        // diagnostic for compatibility, but never synthesize x/x or a delay.
+        if retryable && exact_position.is_none() && !matches!(finish, FinishReason::Cancelled) {
+            self.transcript
+                .push_notice("provider", format!("attempt failed, retrying: {cause}"));
         }
     }
 
@@ -279,9 +339,11 @@ impl App {
                 self.active_turn = None;
                 self.pending_input = PendingInputState::default();
                 self.provider_phase = None;
+                self.provider_retry = None;
             }
             RuntimeEvent::TurnStarted | RuntimeEvent::InternalTurnStarted { .. } => {
                 self.provider_phase = None;
+                self.provider_retry = None;
                 self.status.activity = Activity::Working;
                 self.turn_summary = None;
                 self.plan = None;
@@ -379,8 +441,13 @@ impl App {
                     },
                 );
             }
-            RuntimeEvent::ProviderAttemptStarted { .. } => {
+            RuntimeEvent::ProviderAttemptStarted { index, .. } => {
                 self.set_provider_phase(Some(ProviderPhase::Sending));
+                if let Some(retry) = &mut self.provider_retry
+                    && retry.next_attempt == index.saturating_add(1)
+                {
+                    retry.started = true;
+                }
             }
             RuntimeEvent::TextDelta { .. } => {
                 self.set_provider_phase(Some(ProviderPhase::Responding));
@@ -388,9 +455,22 @@ impl App {
             RuntimeEvent::ReasoningDelta { .. } => {
                 self.set_provider_phase(Some(ProviderPhase::Thinking));
             }
-            RuntimeEvent::ProviderAttemptFinished { .. } => {
-                self.set_provider_phase(None);
-            }
+            RuntimeEvent::ProviderAttemptFinished {
+                index,
+                max_attempts,
+                finish,
+                retryable,
+                error,
+                retry_delay_ms,
+                ..
+            } => self.apply_provider_attempt_finished(
+                *index,
+                *max_attempts,
+                finish,
+                *retryable,
+                error,
+                *retry_delay_ms,
+            ),
             // A harness turn has no provider round trip of its own, so the
             // phase line reports what the installed agent is doing instead of
             // sitting on "sending" for the whole turn.
@@ -506,6 +586,7 @@ impl App {
             RuntimeEvent::CacheObservation { .. } | RuntimeEvent::CacheStateChanged { .. } => {}
             RuntimeEvent::TurnCompleted { finish, .. } => {
                 self.provider_phase = None;
+                self.provider_retry = None;
                 self.reconcile_pending_terminal(envelope.turn.as_ref(), finish);
                 self.cancel_pending_prompts();
                 let elapsed = self.turn_started_at.take().map(|started| started.elapsed());
@@ -865,6 +946,7 @@ impl App {
             }
             RuntimeEvent::SessionShutdown => {
                 self.provider_phase = None;
+                self.provider_retry = None;
                 // The session is over; a still-ticking child clock would lie.
                 for clock in self.child_clocks.values_mut() {
                     clock.settle();

@@ -405,6 +405,27 @@ async fn connect_chatgpt(selection: Selection, no_color: bool, no_motion: bool) 
         .iter()
         .any(|model| model.provider == CHATGPT_PROVIDER && model.model == CHATGPT_TERRA.model);
     let user_dir = before.resolution.layout.user_dir.clone();
+    connect_chatgpt_from_setup(
+        selection,
+        user_dir,
+        model_configured,
+        false,
+        no_color,
+        no_motion,
+    )
+    .await
+}
+
+/// Runs the existing ChatGPT connection ceremony from a reviewed setup context.
+/// An empty install also receives a default profile in the same transaction.
+pub(super) async fn connect_chatgpt_from_setup(
+    selection: Selection,
+    user_dir: std::path::PathBuf,
+    model_configured: bool,
+    make_default: bool,
+    no_color: bool,
+    no_motion: bool,
+) -> Result<bool> {
     let mode = match existing_login_references(&user_dir, CHATGPT_PROVIDER, KIND_CHATGPT_RESPONSES)
     {
         Some(existing) => {
@@ -457,6 +478,21 @@ async fn connect_chatgpt(selection: Selection, no_color: bool, no_motion: bool) 
                 ..ModelSection::default()
             },
         );
+    }
+    if make_default {
+        setup::select_default(
+            &mut patch,
+            CHATGPT_PROVIDER,
+            CHATGPT_PROVIDER,
+            CHATGPT_TERRA.model,
+            0,
+        );
+        if let Some(profile) = patch.profiles.get_mut(CHATGPT_PROVIDER) {
+            // Trusted ChatGPT metadata supplies both budgets, as it does for
+            // /connect; the first-run profile must not override them with zero.
+            profile.max_output_tokens = None;
+            profile.context = None;
+        }
     }
     let (committed, enroller, receipt) =
         publish_login(&user_dir, "ChatGPT", &reference, secret, &patch).await?;

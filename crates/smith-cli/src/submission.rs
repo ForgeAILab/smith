@@ -2,24 +2,118 @@
 
 use super::*;
 
+#[derive(Clone, Default)]
+pub(super) struct LocalShellApprovals {
+    pending: Arc<std::sync::Mutex<Option<LocalShellAuthorization>>>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct LocalShellAuthorization {
+    session: SessionId,
+    turn: agent_runtime_core::ids::TurnId,
+}
+
+struct LocalShellApprovalGuard {
+    approvals: LocalShellApprovals,
+    authorization: LocalShellAuthorization,
+}
+
+impl LocalShellApprovals {
+    /// Consumes the submission's authorization, or returns a prompt to present.
+    pub(super) fn resolve(&self, prompt: ApprovalPrompt) -> Option<ApprovalPrompt> {
+        let mut pending = self.pending.lock().expect("local shell approval poisoned");
+        let matches = pending.as_ref().is_some_and(|authorization| {
+            prompt.tool() == "shell"
+                && prompt.origin().session() == &authorization.session
+                && prompt.origin().turn() == Some(&authorization.turn)
+        });
+        if !matches {
+            return Some(prompt);
+        }
+        // A local-action turn contains exactly one call. Its runtime identity
+        // binds the immutable prepared arguments without reconstructing cwd or
+        // timeout normalization here, or granting authority to a model turn.
+        pending.take();
+        drop(pending);
+        prompt.allow(smith_host::approval::PromptScope::Once);
+        None
+    }
+}
+
+impl Drop for LocalShellApprovalGuard {
+    fn drop(&mut self) {
+        let mut pending = self
+            .approvals
+            .pending
+            .lock()
+            .expect("local shell approval poisoned");
+        if pending.as_ref() == Some(&self.authorization) {
+            pending.take();
+        }
+    }
+}
+
 pub(super) fn start_local_shell(
     session: smith_runtime::SessionHandle,
     command: String,
     timeout_ms: u64,
+    approvals: LocalShellApprovals,
     outcomes: tokio::sync::mpsc::UnboundedSender<LocalOutcome>,
 ) {
     tokio::spawn(async move {
-        let outcome = session
-            .run_local_tool(
-                "shell",
-                serde_json::json!({
-                    "command": command,
-                    "cwd": ".",
-                    "timeout_ms": timeout_ms,
-                }),
-                timeout_ms,
-            )
-            .await;
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        let mut local = std::pin::pin!(session.run_local_tool(
+            "shell",
+            serde_json::json!({
+                "command": command,
+                "cwd": ".",
+                "timeout_ms": timeout_ms,
+            }),
+            timeout_ms,
+        ));
+        // The pinned runtime reserves idle admission before its first await.
+        // A rejection completes without arming anything; Pending proves this
+        // future owns the local action, even if a model turn queues behind it.
+        let (first, authorization) = poll_fn(|context| {
+            // A prompt can be published during this poll. Keep its receiver
+            // from resolving it before the owning identity has been bound.
+            let mut pending = approvals
+                .pending
+                .lock()
+                .expect("local shell approval poisoned");
+            let first = local.as_mut().poll(context);
+            // There is no public local-call handle. Empty steering cannot
+            // enqueue input, and a local turn rejects it as NonSteerable
+            // with the exact owning identity. Fail closed on any other
+            // response instead of guessing an ID or matching command text.
+            let authorization = if first.is_pending()
+                && let Err(rejection) = session.steer_current_turn(None, UserInput::text(""))
+                && let SteerRejectionReason::NonSteerable { active_turn } = rejection.reason
+            {
+                let authorization = LocalShellAuthorization {
+                    session: session.id().clone(),
+                    turn: active_turn,
+                };
+                *pending = Some(authorization.clone());
+                Some(LocalShellApprovalGuard {
+                    approvals: approvals.clone(),
+                    authorization,
+                })
+            } else {
+                None
+            };
+            Poll::Ready((first, authorization))
+        })
+        .await;
+        let outcome = match first {
+            Poll::Ready(outcome) => outcome,
+            Poll::Pending => local.await,
+        };
+        // Discard an unconsumed token before publishing completion.
+        // The guard also covers task cancellation and unwinding.
+        drop(authorization);
         let result = match outcome {
             Ok(block) => LocalOutcome::Shell {
                 content: tool_result_text(&block),

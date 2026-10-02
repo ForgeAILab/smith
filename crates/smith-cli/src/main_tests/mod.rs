@@ -49,6 +49,7 @@ max_output_tokens = 4096
     include!("host_routing.rs");
     include!("local_commands.rs");
     include!("submission.rs");
+    include!("local_shell.rs");
     include!("resources.rs");
     include!("rendering.rs");
     include!("mcp.rs");

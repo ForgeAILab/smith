@@ -41,6 +41,124 @@
     }
 
     #[test]
+    fn retry_backoff_and_active_retry_rows_keep_exact_progress_without_color() {
+        for (width, height) in [(44, 18), (74, 24)] {
+            let theme = Theme::new().without_color().without_motion();
+            let mut app = App::new("gpt-5.3", "~/work/api");
+            app.apply(&event(RuntimeEvent::TurnStarted));
+            app.apply(&event(RuntimeEvent::ProviderAttemptFinished {
+                attempt: AttemptId::new("attempt-1"),
+                index: Some(0),
+                max_attempts: Some(3),
+                finish: agent_runtime_core::provider::FinishReason::Error,
+                retryable: true,
+                error: Some(agent_runtime_core::provider::ProviderError::new(
+                    agent_runtime_core::provider::ProviderErrorKind::Server,
+                    "upstream 503",
+                )),
+                retry_delay_ms: Some(200),
+            }));
+
+            let backoff = render(&app, width, height, theme);
+            assert!(backoff.contains("Retrying 2/3…"), "{width}x{height}: {backoff}");
+            assert!(backoff.contains("backoff <1s"), "{width}x{height}: {backoff}");
+            assert!(
+                backoff.contains("retrying 2/3 in 200ms"),
+                "{width}x{height}: {backoff}"
+            );
+
+            app.apply(&event(RuntimeEvent::ProviderAttemptStarted {
+                request: RequestId::new("request-2"),
+                attempt: AttemptId::new("attempt-2"),
+                index: 1,
+                model: "gpt-5.3".to_owned(),
+            }));
+            let active = render(&app, width, height, theme);
+            assert!(active.contains("Retrying 2/3…"), "{width}x{height}: {active}");
+            assert!(active.contains("↑"), "{width}x{height}: {active}");
+            assert!(!active.contains("backoff"), "{width}x{height}: {active}");
+        }
+    }
+
+    #[test]
+    fn retry_success_clears_progress_and_exhaustion_never_claims_another_retry() {
+        let mut succeeded = App::new("gpt-5.3", "~/work/api");
+        succeeded.apply(&event(RuntimeEvent::TurnStarted));
+        succeeded.apply(&event(RuntimeEvent::ProviderAttemptFinished {
+            attempt: AttemptId::new("attempt-1"),
+            index: Some(0),
+            max_attempts: Some(3),
+            finish: agent_runtime_core::provider::FinishReason::Error,
+            retryable: true,
+            error: Some(agent_runtime_core::provider::ProviderError::new(
+                agent_runtime_core::provider::ProviderErrorKind::Server,
+                "upstream 503",
+            )),
+            retry_delay_ms: Some(0),
+        }));
+        succeeded.apply(&event(RuntimeEvent::ProviderAttemptFinished {
+            attempt: AttemptId::new("attempt-2"),
+            index: Some(1),
+            max_attempts: Some(3),
+            finish: agent_runtime_core::provider::FinishReason::Stop,
+            retryable: false,
+            error: None,
+            retry_delay_ms: None,
+        }));
+        succeeded.apply(&event(RuntimeEvent::TurnCompleted {
+            finish: TurnFinish::Completed,
+            visible_output: true,
+        }));
+        let success_screen = render(&succeeded, 74, 18, Theme::new().without_motion());
+        assert!(!success_screen.contains("Retrying"), "{success_screen}");
+        assert!(!success_screen.contains("backoff"), "{success_screen}");
+
+        let mut exhausted = App::new("gpt-5.3", "~/work/api");
+        exhausted.apply(&event(RuntimeEvent::TurnStarted));
+        exhausted.apply(&event(RuntimeEvent::ProviderAttemptFinished {
+            attempt: AttemptId::new("attempt-3"),
+            index: Some(2),
+            max_attempts: Some(3),
+            finish: agent_runtime_core::provider::FinishReason::Error,
+            retryable: true,
+            error: Some(agent_runtime_core::provider::ProviderError::new(
+                agent_runtime_core::provider::ProviderErrorKind::Server,
+                "upstream 503",
+            )),
+            retry_delay_ms: None,
+        }));
+        let exhausted_screen = render(&exhausted, 74, 18, Theme::new().without_motion());
+        assert!(
+            exhausted_screen.contains("failed after 3/3 attempts: Server: upstream 503"),
+            "{exhausted_screen}"
+        );
+        assert!(!exhausted_screen.contains("retrying"), "{exhausted_screen}");
+    }
+
+    #[test]
+    fn legacy_retry_render_stays_generic_at_narrow_width() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        app.apply(&event(RuntimeEvent::ProviderAttemptFinished {
+            attempt: AttemptId::new("legacy-attempt"),
+            index: None,
+            max_attempts: None,
+            finish: agent_runtime_core::provider::FinishReason::Error,
+            retryable: true,
+            error: Some(agent_runtime_core::provider::ProviderError::new(
+                agent_runtime_core::provider::ProviderErrorKind::Server,
+                "legacy outage",
+            )),
+            retry_delay_ms: None,
+        }));
+        let screen = render(&app, 44, 18, Theme::new().without_motion());
+        assert!(screen.contains("attempt failed"), "{screen}");
+        assert!(screen.contains("legacy outage"), "{screen}");
+        assert!(!screen.contains("/3"), "{screen}");
+        assert!(!screen.contains("backoff"), "{screen}");
+    }
+
+    #[test]
     fn tool_only_reasoning_only_and_fallback_states_render_at_all_widths() {
         for (width, height) in [(44, 18), (74, 24), (120, 32)] {
             let theme = Theme::new().without_color().without_motion();

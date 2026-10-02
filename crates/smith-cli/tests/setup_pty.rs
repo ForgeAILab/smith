@@ -318,6 +318,63 @@ expect {
     );
 }
 
+fn setup_entry_advances_and_cancels(query: &str, next_step: &str) {
+    for args in ["--no-color --no-motion", "setup --no-color --no-motion"] {
+        let fixture = Fixture::new();
+        let interaction = format!(
+            r#"
+expect {{
+    -exact "Smith setup" {{}}
+    timeout {{ exit 124 }}
+    eof {{ exit 125 }}
+}}
+send -- "{query}"
+after 150
+send -- "\r"
+expect {{
+    -exact "{next_step}" {{}}
+    timeout {{ exit 124 }}
+    eof {{ exit 125 }}
+}}
+send -- "\033"
+expect {{
+    -exact "TERMINAL_RESTORED" {{}}
+    timeout {{ exit 124 }}
+    eof {{ exit 125 }}
+}}
+"#
+        );
+        let Some(output) = fixture.run_expect(args, &interaction) else {
+            return;
+        };
+        let screen = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{query} via {args}\nscreen: {screen}\nstderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(screen.contains(next_step), "{screen}");
+        assert!(screen.contains("TERMINAL_RESTORED"), "{screen}");
+        assert!(!screen.contains("TERMINAL_DAMAGED"), "{screen}");
+        assert!(
+            !fixture.home.path().join(".smith").exists(),
+            "cancelled {query} setup wrote user state"
+        );
+    }
+}
+
+#[test]
+fn anthropic_setup_entry_reaches_authentication_and_cancels_without_writes() {
+    setup_entry_advances_and_cancels("anthropic", "Authentication");
+}
+
+#[test]
+fn chatgpt_setup_entry_reaches_oauth_picker_and_cancels_without_writes() {
+    // Cancelling the method picker happens before constructing an OAuth
+    // client, opening a browser, or making a network request.
+    setup_entry_advances_and_cancels("chatgpt", "Browser login");
+}
+
 #[test]
 fn fresh_glm_setup_commits_then_enters_the_normal_tui() {
     let fixture = Fixture::new();

@@ -105,12 +105,28 @@ impl App {
             return None;
         }
 
+        let ignore_prompt_key = matches!(
+            self.overlay,
+            Some(
+                Overlay::Approval { .. }
+                    | Overlay::RotationConfirm { .. }
+                    | Overlay::UndoConfirm { .. }
+                    | Overlay::RedoConfirm { .. }
+                    | Overlay::RevertConfirm { .. }
+                    | Overlay::McpTrustConfirm { .. }
+                    | Overlay::SkillTrustConfirm { .. }
+            )
+        ) && self.prompt_input_guard.ignore_key();
+
         // Ctrl+C is checked before overlays: two consecutive presses must
         // always be able to leave, even while a prompt owns input.
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return self.on_ctrl_c();
         }
         self.last_ctrl_c = None;
+        if ignore_prompt_key {
+            return None;
+        }
 
         match &self.overlay {
             Some(Overlay::Approval { .. }) => return self.on_approval_key(key),
@@ -628,7 +644,10 @@ impl App {
                     _ => (None, None),
                 };
                 self.overlay = match (approval, questionnaire) {
-                    (Some((prompt, review)), None) => Some(Overlay::Approval { prompt, review }),
+                    (Some((prompt, review)), None) => {
+                        self.prompt_input_guard.start();
+                        Some(Overlay::Approval { prompt, review })
+                    }
                     (None, Some(state)) => Some(Overlay::Questionnaire { state }),
                     _ => None,
                 };

@@ -298,6 +298,133 @@ fn unconfigured_headless_and_non_tty_setup_refuse_without_writing_user_state() {
 }
 
 #[test]
+fn help_at_every_command_level_prints_usage_without_startup() {
+    let fixture = Fixture::unconfigured();
+    for path in [
+        &[][..],
+        &["setup"][..],
+        &["setup", "add-provider"][..],
+        &["setup", "add-model"][..],
+        &["setup", "credential"][..],
+        &["setup", "checkpoint-key"][..],
+        &["config"][..],
+        &["config", "explain"][..],
+        &["config", "explain", "model"][..],
+        &["sessions"][..],
+        &["sessions", "list"][..],
+    ] {
+        for help in ["help", "-h", "--help"] {
+            let args = path.iter().copied().chain([help]).collect::<Vec<_>>();
+            let output = fixture.run(&args);
+            assert_eq!(output.status.code(), Some(0), "{args:?}: {output:?}");
+            assert!(output.stderr.is_empty(), "{args:?}: {output:?}");
+            let text = String::from_utf8(output.stdout).expect("UTF-8 help");
+            assert!(text.contains("USAGE:"), "{args:?}: {text}");
+            if !path.is_empty() {
+                let command_path = if path == ["config", "explain", "model"] {
+                    &path[..2]
+                } else {
+                    path
+                };
+                assert!(
+                    text.contains(&format!("smith {}", command_path.join(" "))),
+                    "{args:?}: {text}"
+                );
+            }
+            if path.first() == Some(&"setup") {
+                assert!(text.contains("SETUP OPTIONS:"), "{text}");
+                assert!(text.contains("--no-color"), "{text}");
+                assert!(text.contains("--no-motion"), "{text}");
+            }
+            assert!(!text.contains('\u{1b}'), "help entered the terminal");
+        }
+    }
+    assert!(
+        !fixture.home.path().join(".smith").exists(),
+        "help created user state"
+    );
+}
+
+#[test]
+fn parse_errors_name_the_argument_and_print_one_help_hint() {
+    let fixture = Fixture::unconfigured();
+    for (args, argument) in [
+        (vec!["--bogus"], "--bogus"),
+        (vec!["sesions", "list"], "sesions"),
+        (vec!["setup", "--bogus"], "--bogus"),
+        (vec!["setup", "misspelled"], "misspelled"),
+        (vec!["config", "misspelled"], "misspelled"),
+        (vec!["sessions", "misspelled"], "misspelled"),
+        (vec!["config", "explain", "model", "--bogus"], "--bogus"),
+        (vec!["sessions", "list", "--bogus"], "--bogus"),
+    ] {
+        let output = fixture.run(&args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{args:?}: {output:?}");
+        let diagnostic = String::from_utf8(output.stderr).expect("UTF-8 diagnostic");
+        assert_eq!(diagnostic.matches(argument).count(), 1, "{diagnostic}");
+        assert_eq!(
+            diagnostic.matches("smith --help").count(),
+            1,
+            "{diagnostic}"
+        );
+        assert_eq!(diagnostic.lines().count(), 2, "{diagnostic}");
+    }
+}
+
+#[test]
+fn configured_interactive_launch_without_a_terminal_refuses_before_provider_or_session_work() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a provider listener");
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking listener");
+    let address = listener.local_addr().expect("a provider address");
+    let config = CONFIG.replace(
+        "kind = \"fake\"",
+        &format!(
+            "kind = \"openai-compatible\"\nbase_url = \"http://{address}/v1\"\n\
+             credential = \"env:ACME_API_KEY\""
+        ),
+    );
+    let fixture = Fixture::with_config(&config);
+    let mut child = fixture
+        .command()
+        .env("ACME_API_KEY", "fixture-key")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("smith spawned");
+    let write = child.stdin.take().expect("piped stdin").write_all(b"hi\n");
+    if let Err(error) = write {
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe, "{error}");
+    }
+    let output = child.wait_with_output().expect("smith completed");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    let diagnostic = String::from_utf8(output.stderr).expect("UTF-8 diagnostic");
+    for text in [
+        "interactive surface",
+        "terminal",
+        "smith -p -",
+        "standard input",
+        "smith -p <PROMPT>",
+    ] {
+        assert!(diagnostic.contains(text), "{diagnostic}");
+    }
+    assert!(!diagnostic.contains('\u{1b}'), "{diagnostic}");
+    assert!(!diagnostic.contains("alternate screen"), "{diagnostic}");
+    assert!(
+        !fixture.home.path().join(".smith").exists(),
+        "refusal created user state"
+    );
+    assert_eq!(
+        listener.accept().expect_err("no provider request").kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}
+
+#[test]
 fn bare_resume_refuses_headless_and_piped_use_with_a_session_list_hint() {
     let fixture = Fixture::new();
     for args in [

@@ -1,8 +1,9 @@
 //! Approval and questionnaire ownership, ordering, and expiry.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 
-use agent_runtime_core::clock::SystemClock;
+use agent_runtime_core::clock::{Clock, SystemClock, Timestamp};
 use smith_host::approval::{ApprovalPrompt, PromptScope};
 
 use crate::diff::EditReview;
@@ -10,6 +11,42 @@ use crate::questionnaire::{QuestionnaireForm, QuestionnaireResolution, Questionn
 use crate::transcript::ToolStatus;
 
 use super::state::*;
+
+/// Input must settle after a consequential prompt takes focus.
+#[derive(Debug)]
+pub(super) struct PromptInputGuard {
+    pub(super) clock: Arc<dyn Clock>,
+    pub(super) quiet_until: Option<Timestamp>,
+}
+
+impl Default for PromptInputGuard {
+    fn default() -> Self {
+        Self {
+            clock: Arc::new(SystemClock),
+            quiet_until: None,
+        }
+    }
+}
+
+impl PromptInputGuard {
+    pub(super) fn start(&mut self) {
+        self.quiet_until = Some(self.clock.now().plus_millis(500));
+    }
+
+    pub(super) fn ignore_key(&mut self) -> bool {
+        let Some(quiet_until) = self.quiet_until else {
+            return false;
+        };
+        let now = self.clock.now();
+        if now < quiet_until {
+            self.quiet_until = Some(now.plus_millis(500));
+            true
+        } else {
+            self.quiet_until = None;
+            false
+        }
+    }
+}
 
 impl App {
     /// Shows a rotation offer as a modal the user answers.
@@ -24,6 +61,7 @@ impl App {
             prompt: Box::new(prompt),
             content,
         });
+        self.prompt_input_guard.start();
     }
 
     /// Presents an approval request.
@@ -97,6 +135,9 @@ impl App {
     }
 
     pub(super) fn show_prompt(&mut self, prompt: PendingPrompt) {
+        if matches!(prompt, PendingPrompt::Approval(..)) {
+            self.prompt_input_guard.start();
+        }
         self.overlay = Some(match prompt {
             PendingPrompt::Approval(prompt, review) => Overlay::Approval { prompt, review },
             PendingPrompt::Questionnaire(state) => Overlay::Questionnaire { state },

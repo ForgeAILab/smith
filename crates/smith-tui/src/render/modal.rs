@@ -546,6 +546,105 @@ pub(super) fn draw_recovery_confirm(
     draw_modal(frame, area, title, lines, theme, Tone::Warning);
 }
 
+pub(super) fn draw_redo_confirm(frame: &mut Frame<'_>, area: Rect, content: &str, theme: Theme) {
+    let mut lines = vec![Line::from(Span::styled(
+        "No action is selected by default. Review the complete forward patch.",
+        theme.style(Tone::Warning),
+    ))];
+    lines.extend(
+        content
+            .lines()
+            .take(MAX_BODY_LINES.saturating_sub(2))
+            .map(|line| Line::from(line.to_owned())),
+    );
+    lines.push(Line::from(vec![
+        Span::styled("y", theme.style(Tone::Danger)),
+        Span::styled(" apply redo   ", theme.style(Tone::Dim)),
+        Span::styled("n/esc", theme.style(Tone::Success)),
+        Span::styled(" cancel", theme.style(Tone::Dim)),
+    ]));
+    draw_modal(
+        frame,
+        area,
+        "redo last exact Smith turn",
+        lines,
+        theme,
+        Tone::Warning,
+    );
+}
+
+pub(super) fn draw_mcp_trust_confirm(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    server: &str,
+    content: &str,
+    theme: Theme,
+) {
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!("Trust MCP server {server}? No action is selected by default."),
+            theme.style(Tone::Warning),
+        )),
+        Line::from("Trust permits Smith to launch this server and connect its declared tools."),
+    ];
+    lines.extend(
+        content
+            .lines()
+            .take(MAX_BODY_LINES.saturating_sub(3))
+            .map(|line| Line::from(line.to_owned())),
+    );
+    lines.push(Line::from(vec![
+        Span::styled("y", theme.style(Tone::Warning)),
+        Span::styled(" trust and connect   ", theme.style(Tone::Dim)),
+        Span::styled("n/esc", theme.style(Tone::Success)),
+        Span::styled(" leave untrusted", theme.style(Tone::Dim)),
+    ]));
+    draw_modal(
+        frame,
+        area,
+        "trust this MCP server",
+        lines,
+        theme,
+        Tone::Warning,
+    );
+}
+
+pub(super) fn draw_skill_trust_confirm(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    skill: &str,
+    content: &str,
+    theme: Theme,
+) {
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!("Trust project skill {skill}? No action is selected by default."),
+            theme.style(Tone::Warning),
+        )),
+        Line::from("Trust permits Smith to activate this skill's project instructions."),
+    ];
+    lines.extend(
+        content
+            .lines()
+            .take(MAX_BODY_LINES.saturating_sub(3))
+            .map(|line| Line::from(line.to_owned())),
+    );
+    lines.push(Line::from(vec![
+        Span::styled("y", theme.style(Tone::Warning)),
+        Span::styled(" trust and activate   ", theme.style(Tone::Dim)),
+        Span::styled("n/esc", theme.style(Tone::Success)),
+        Span::styled(" leave withheld", theme.style(Tone::Dim)),
+    ]));
+    draw_modal(
+        frame,
+        area,
+        "trust this project skill",
+        lines,
+        theme,
+        Tone::Warning,
+    );
+}
+
 pub(super) fn draw_review_confirm(frame: &mut Frame<'_>, area: Rect, content: &str, theme: Theme) {
     let mut lines = content
         .lines()

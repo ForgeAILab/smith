@@ -156,16 +156,13 @@ async fn execute(command: Command) -> Result<u8> {
 }
 
 async fn run_command(mut args: RunArgs) -> Result<u8> {
-    match inspect_selection(&args.selection)? {
-        ConfigReadiness::Ready(_) => {}
+    let configured_background_exit = match inspect_selection(&args.selection)? {
+        ConfigReadiness::Ready(resolution) => Some(resolution.config.background.exit_policy.value),
         ConfigReadiness::Invalid(error) => {
             return Err(anyhow::anyhow!("{error}")).context("resolving Smith configuration");
         }
         ConfigReadiness::Unconfigured(_) => {
-            let interactive = args.prompt.is_none()
-                && std::io::stdin().is_terminal()
-                && std::io::stdout().is_terminal()
-                && std::io::stderr().is_terminal();
+            let interactive = args.prompt.is_none() && is_interactive_terminal();
             if !interactive {
                 anyhow::bail!(
                     "Smith has no configured provider/model. Run `smith setup` in an interactive \
@@ -178,8 +175,9 @@ async fn run_command(mut args: RunArgs) -> Result<u8> {
                 setup::SetupOutcome::Cancelled => return Ok(0),
                 setup::SetupOutcome::Completed => {}
             }
+            None
         }
-    }
+    };
 
     if args.resume_requested && args.resume.is_none() {
         if args.prompt.is_some() {
@@ -188,10 +186,7 @@ async fn run_command(mut args: RunArgs) -> Result<u8> {
                  pass `--resume <SESSION_ID>` for a headless run"
             );
         }
-        if !std::io::stdin().is_terminal()
-            || !std::io::stdout().is_terminal()
-            || !std::io::stderr().is_terminal()
-        {
+        if !is_interactive_terminal() {
             anyhow::bail!(
                 "bare `--resume` needs an interactive terminal; use `smith sessions list` or \
                  pass `--resume <SESSION_ID>`"
@@ -202,6 +197,13 @@ async fn run_command(mut args: RunArgs) -> Result<u8> {
                 Some(session) => Some(session),
                 None => return Ok(0),
             };
+    }
+
+    if args.prompt.is_none() && !is_interactive_terminal() {
+        anyhow::bail!(
+            "the interactive surface needs a terminal on stdin, stdout, and stderr; \
+             use `smith -p -` to read the prompt from standard input, or `smith -p <PROMPT>`"
+        );
     }
 
     let prompt = match args.prompt.take() {
@@ -241,13 +243,22 @@ async fn run_command(mut args: RunArgs) -> Result<u8> {
                     cache_price,
                     cache_miss_notices: started.cache_miss_notices,
                 },
-                args.selection.background_exit.unwrap_or_default(),
+                headless::background_exit_policy(
+                    args.selection.background_exit,
+                    configured_background_exit,
+                ),
             )
             .await
             .map(|outcome| outcome.exit_code)
         }
         None => run_interactive_command(args).await,
     }
+}
+
+fn is_interactive_terminal() -> bool {
+    std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal()
+        && std::io::stderr().is_terminal()
 }
 
 include!("main_tests/mod.rs");

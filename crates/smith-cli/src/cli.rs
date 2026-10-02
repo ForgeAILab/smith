@@ -233,6 +233,9 @@ pub(crate) fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command,
 
 fn parse_setup(mut args: VecDeque<OsString>) -> Result<Command, ParseError> {
     args.pop_front();
+    if args.front().is_some_and(|arg| is_help(arg.to_str())) {
+        return Ok(Command::Help);
+    }
     let action = match args.front().and_then(|value| value.to_str()) {
         Some("add-provider") => {
             args.pop_front();
@@ -266,6 +269,7 @@ fn parse_setup(mut args: VecDeque<OsString>) -> Result<Command, ParseError> {
     while let Some(raw) = args.pop_front() {
         let (flag, inline) = flag(raw)?;
         match flag.as_str() {
+            "help" | "--help" | "-h" => return Ok(Command::Help),
             "--project" => {
                 let value = value(&flag, inline, &mut args)?;
                 set_once(&mut project, PathBuf::from(value), &flag)?;
@@ -291,9 +295,7 @@ fn parse_setup(mut args: VecDeque<OsString>) -> Result<Command, ParseError> {
                 no_motion = true;
             }
             _ => {
-                return Err(ParseError::new(format!(
-                    "unknown setup option `{flag}`; run `smith --help`"
-                )));
+                return Err(ParseError::new(format!("unknown setup option `{flag}`")));
             }
         }
     }
@@ -321,42 +323,56 @@ fn parse_setup(mut args: VecDeque<OsString>) -> Result<Command, ParseError> {
 
 fn parse_config(mut args: VecDeque<OsString>) -> Result<Command, ParseError> {
     args.pop_front();
+    if args.front().is_some_and(|arg| is_help(arg.to_str())) {
+        return Ok(Command::Help);
+    }
     let action = required_text(args.pop_front(), "an action after `config`")?;
     if action != "explain" {
         return Err(ParseError::new(format!(
             "unknown config action `{action}`; expected `smith config explain <key>`"
         )));
     }
+    if args.front().is_some_and(|arg| is_help(arg.to_str())) {
+        return Ok(Command::Help);
+    }
     let key = required_text(args.pop_front(), "a dotted key after `config explain`")?;
-    let selection = parse_selection_only(args)?;
-    Ok(Command::ConfigExplain { key, selection })
+    match parse_selection_only(args)? {
+        Some(selection) => Ok(Command::ConfigExplain { key, selection }),
+        None => Ok(Command::Help),
+    }
 }
 
 fn parse_sessions(mut args: VecDeque<OsString>) -> Result<Command, ParseError> {
     args.pop_front();
+    if args.front().is_some_and(|arg| is_help(arg.to_str())) {
+        return Ok(Command::Help);
+    }
     let action = required_text(args.pop_front(), "an action after `sessions`")?;
     if action != "list" {
         return Err(ParseError::new(format!(
             "unknown sessions action `{action}`; expected `smith sessions list`"
         )));
     }
-    Ok(Command::SessionsList {
-        selection: parse_selection_only(args)?,
-    })
+    match parse_selection_only(args)? {
+        Some(selection) => Ok(Command::SessionsList { selection }),
+        None => Ok(Command::Help),
+    }
 }
 
-fn parse_selection_only(mut args: VecDeque<OsString>) -> Result<Selection, ParseError> {
+fn is_help(arg: Option<&str>) -> bool {
+    matches!(arg, Some("help" | "--help" | "-h"))
+}
+
+fn parse_selection_only(mut args: VecDeque<OsString>) -> Result<Option<Selection>, ParseError> {
     let mut selection = Selection::default();
     while let Some(raw) = args.pop_front() {
         let (flag, inline) = flag(raw)?;
-        if flag == "--help" || flag == "-h" {
-            return Err(ParseError::new(
-                "`--help` applies to `smith`; run `smith --help`",
-            ));
+        if is_help(Some(&flag)) {
+            return Ok(None);
         }
         parse_selection_flag(&flag, inline, &mut args, &mut selection)?;
     }
-    Ok(selection)
+    Ok(Some(selection))
 }
 
 fn parse_run(mut args: VecDeque<OsString>) -> Result<Command, ParseError> {
@@ -365,7 +381,7 @@ fn parse_run(mut args: VecDeque<OsString>) -> Result<Command, ParseError> {
     while let Some(raw) = args.pop_front() {
         let (flag, inline) = flag(raw)?;
         match flag.as_str() {
-            "--help" | "-h" => return Ok(Command::Help),
+            "help" | "--help" | "-h" => return Ok(Command::Help),
             "--version" | "-V" => return Ok(Command::Version),
             "-p" | "--prompt" => {
                 let value = value(&flag, inline, &mut args)?;
@@ -496,12 +512,8 @@ fn parse_selection_flag(
             selection.allow_synthetic_cache_spend = true;
             Ok(())
         }
-        _ if flag.starts_with('-') => Err(ParseError::new(format!(
-            "unknown option `{flag}`; run `smith --help`"
-        ))),
-        _ => Err(ParseError::new(format!(
-            "unexpected argument `{flag}`; pass a prompt as `smith -p <prompt>`"
-        ))),
+        _ if flag.starts_with('-') => Err(ParseError::new(format!("unknown option `{flag}`"))),
+        _ => Err(ParseError::new(format!("unexpected argument `{flag}`"))),
     }
 }
 
@@ -610,6 +622,7 @@ Smith — a terminal coding agent
 USAGE:
   smith [OPTIONS]
   smith -p <PROMPT|-> [OPTIONS]
+  smith help
   smith config explain <KEY> [SELECTION OPTIONS]
   smith sessions list [SELECTION OPTIONS]
   smith setup [--project <PATH>]
@@ -640,6 +653,19 @@ RUN OPTIONS:
   -h, --help                    Print help
   -V, --version                 Print version
 
+SELECTION OPTIONS:
+  config explain and sessions list accept --project, --profile, --agent,
+  --provider, --model, --effort, --context-window, --approval, --yolo,
+  --background-exit, and --allow-synthetic-cache-spend as described above.
+  -h, --help                    Print help at either command level
+
+SETUP OPTIONS:
+      --project <PATH>          Project used for post-setup preflight
+      --provider <NAME>         Provider for add-model or credential
+      --no-color                Disable terminal colors
+      --no-motion               Disable terminal animation
+  -h, --help                    Print help for setup or any setup action
+
 INTERACTIVE COMPOSER:
   Tab                           Cycle profile_order while empty and idle
   @FILE                         Prepare an exact file attachment read
@@ -668,6 +694,51 @@ mod tests {
     }
 
     #[test]
+    fn help_is_accepted_at_every_command_level() {
+        for path in [
+            &[][..],
+            &["setup"][..],
+            &["setup", "add-provider"][..],
+            &["setup", "add-model"][..],
+            &["setup", "credential"][..],
+            &["setup", "checkpoint-key"][..],
+            &["config"][..],
+            &["config", "explain"][..],
+            &["config", "explain", "model"][..],
+            &["sessions"][..],
+            &["sessions", "list"][..],
+        ] {
+            for help in ["help", "-h", "--help"] {
+                let args = path.iter().copied().chain([help]).map(OsString::from);
+                assert_eq!(parse(args).expect("help"), Command::Help, "{path:?} {help}");
+            }
+        }
+        for args in [
+            vec!["setup", "credential", "--provider", "local", "--help"],
+            vec!["config", "explain", "model", "--provider", "local", "-h"],
+            vec!["sessions", "list", "--project", "/repo", "--help"],
+        ] {
+            assert_eq!(command(&args), Command::Help, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn help_spellings_remain_values_when_consumed_by_an_option() {
+        for prompt in ["help", "-h", "--help"] {
+            let Command::Run(run) = command(&["-p", prompt]) else {
+                panic!("expected a literal prompt");
+            };
+            assert_eq!(run.prompt, Some(Prompt::Argument(prompt.to_owned())));
+        }
+        let Command::SessionsList { selection } =
+            command(&["sessions", "list", "--project", "--help"])
+        else {
+            panic!("expected a literal project path");
+        };
+        assert_eq!(selection.project, Some(PathBuf::from("--help")));
+    }
+
+    #[test]
     fn prompt_stdin_and_machine_output_are_parsed() {
         let Command::Run(run) = command(&[
             "--project",
@@ -691,8 +762,8 @@ mod tests {
         let Command::Run(run) = command(&[]) else {
             panic!("expected a run");
         };
-        // Absence is meaningful: the headless runner applies the
-        // `BackgroundExit` default itself rather than this layer guessing it.
+        // Absence lets the resolved configuration supply the headless policy;
+        // the configuration resolver owns the default.
         assert_eq!(run.selection.background_exit, None);
 
         for (flag, expected) in [
@@ -1007,8 +1078,8 @@ mod tests {
     }
 
     #[test]
-    fn positional_prompts_are_rejected_with_the_supported_form() {
+    fn positional_prompts_are_rejected_with_the_argument_named() {
         let error = parse(["hello"].map(OsString::from)).expect_err("a positional prompt");
-        assert!(error.to_string().contains("smith -p <prompt>"));
+        assert_eq!(error.to_string(), "unexpected argument `hello`");
     }
 }
