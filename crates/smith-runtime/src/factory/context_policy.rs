@@ -99,26 +99,48 @@ pub(super) fn resolve_context_window_selection(
         windows.retain(|_, window| pin.layer.precedence() < window.source.layer.precedence());
     }
 
-    let default_name = config
-        .context_window
+    let default_window = config
+        .model_limits
+        .default_context_window
         .as_ref()
-        .map(|window| window.value.clone())
+        .map(|window| (window.value.clone(), window.source.clone()))
         .or_else(|| {
-            config
-                .model_limits
-                .default_context_window
-                .as_ref()
-                .map(|window| window.value.clone())
+            trusted.and_then(|record| {
+                record.default_context_window.map(|name| {
+                    (
+                        name.to_owned(),
+                        Source::built_in(format!(
+                            "trusted catalog {}@{} models.\"{}/{}\".default_context_window",
+                            record.catalog, record.revision, record.provider, record.model
+                        )),
+                    )
+                })
+            })
         })
-        .or_else(|| trusted.and_then(|record| record.default_context_window.map(str::to_owned)))
         .or_else(|| {
             endpoint_windows
                 .and_then(|options| options.iter().find(|window| window.default))
-                .map(|window| window.name.to_owned())
+                .map(|window| {
+                    (
+                        window.name.to_owned(),
+                        Source::built_in(format!(
+                            "OpenAI endpoint model catalog models.\"{provider}/{model}\".default_context_window"
+                        )),
+                    )
+                })
+        })
+        .filter(|(_, source)| {
+            pinned_by.is_none_or(|pin| pin.layer.precedence() < source.layer.precedence())
         });
 
+    let selected_name = config
+        .context_window
+        .as_ref()
+        .map(|window| window.value.clone())
+        .or_else(|| default_window.map(|(name, _)| name));
+
     let available = windows.keys().cloned().collect::<Vec<_>>();
-    let active = match default_name {
+    let active = match selected_name {
         Some(name) => match windows.get(&name) {
             Some(window) => Some(window.clone()),
             None => {

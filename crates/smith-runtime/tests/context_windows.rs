@@ -31,6 +31,25 @@ context_tokens = 32768
 context_tokens = 131072
 "#;
 
+const CHATGPT_CONFIG: &str = r#"
+default_profile = "sol"
+
+[profiles.sol]
+provider = "chatgpt"
+model = "gpt-6.1-sol"
+use = ["main", "child"]
+
+[providers.chatgpt]
+kind = "fake"
+"#;
+
+const CHATGPT_FLAT_LIMITS: &str = r#"
+[models."chatgpt/gpt-6.1-sol"]
+context_tokens = 872000
+max_input_tokens = 828400
+max_output_tokens = 128000
+"#;
+
 struct Fixture {
     home: tempfile::TempDir,
     project: tempfile::TempDir,
@@ -71,6 +90,59 @@ async fn profile_selects_its_named_window_and_derives_the_input_limit() {
         preflight.model_profile.limits,
         ModelLimits::new(32_768, 28_672, 4_096)
     );
+}
+
+#[tokio::test]
+async fn flat_model_limits_override_the_trusted_default_window() {
+    let fixture = Fixture::new(&format!("{CHATGPT_CONFIG}{CHATGPT_FLAT_LIMITS}"));
+    let request = fixture.request();
+
+    assert!(request.config.context_window.is_none());
+    let preflight = factory::preflight(&request)
+        .await
+        .expect("flat model limits override the trusted default window");
+
+    assert_eq!(
+        preflight.model_profile.limits,
+        ModelLimits::new(872_000, 828_400, 128_000)
+    );
+}
+
+#[tokio::test]
+async fn an_explicit_trusted_window_still_fails_when_pinned_by_flat_model_limits() {
+    let config = format!("{CHATGPT_CONFIG}{CHATGPT_FLAT_LIMITS}").replace(
+        "model = \"gpt-6.1-sol\"",
+        "model = \"gpt-6.1-sol\"\ncontext_window = \"872k\"",
+    );
+    let fixture = Fixture::new(&config);
+    let request = fixture.request();
+
+    let error = factory::preflight(&request)
+        .await
+        .expect_err("explicit named windows cannot override flat model limits");
+
+    assert!(
+        matches!(error, FactoryError::ContextWindow { .. }),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains(
+            "window `872k` is pinned by flat model limit `models.\"chatgpt/gpt-6.1-sol\".max_input_tokens`; remove that limit to select a named window"
+        ),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn the_trusted_default_window_is_selected_without_flat_model_limits() {
+    let fixture = Fixture::new(CHATGPT_CONFIG);
+    let request = fixture.request();
+
+    let preflight = factory::preflight(&request)
+        .await
+        .expect("the trusted default window remains active without flat model limits");
+
+    assert_eq!(preflight.model_profile.limits.context_tokens, 272_000);
 }
 
 #[derive(Debug)]
