@@ -13,7 +13,7 @@ use crate::model::{
 };
 
 /// Revision of the trusted model data shipped with this Smith build.
-pub const TRUSTED_MODEL_CATALOG_REVISION: u32 = 4;
+pub const TRUSTED_MODEL_CATALOG_REVISION: u32 = 5;
 
 /// Stable name recorded for Smith's built-in setup model data.
 pub const TRUSTED_MODEL_CATALOG_NAME: &str = "smith-trusted-models";
@@ -284,6 +284,22 @@ pub const CHATGPT_GPT_6_SOL: TrustedModelRecord = TrustedModelRecord {
     default_context_window: Some("272k"),
 };
 
+/// Trusted metadata for the ChatGPT GPT-6.1 Sol binding.
+pub const CHATGPT_GPT_6_1_SOL: TrustedModelRecord = TrustedModelRecord {
+    provider: CHATGPT_PROVIDER,
+    model: "gpt-6.1-sol",
+    label: "GPT-6.1 Sol (experimental ChatGPT)",
+    catalog: TRUSTED_MODEL_CATALOG_NAME,
+    revision: TRUSTED_MODEL_CATALOG_REVISION,
+    context_tokens: 272_000,
+    max_input_tokens: 255_616,
+    max_output_tokens: 16_384,
+    request_output_tokens: 16_384,
+    output_reserve: 16_384,
+    context_windows: Some(CHATGPT_CONTEXT_WINDOWS),
+    default_context_window: Some("272k"),
+};
+
 /// Trusted metadata for the ChatGPT GPT-6 Luna binding.
 pub const CHATGPT_GPT_6_LUNA: TrustedModelRecord = TrustedModelRecord {
     provider: CHATGPT_PROVIDER,
@@ -303,6 +319,7 @@ pub const CHATGPT_GPT_6_LUNA: TrustedModelRecord = TrustedModelRecord {
 const GLM_MODELS: &[TrustedModelRecord] = &[GLM_5_2, GLM_4_7];
 const CHATGPT_MODELS: &[TrustedModelRecord] = &[
     CHATGPT_ASTRA,
+    CHATGPT_GPT_6_1_SOL,
     CHATGPT_GPT_6_SOL,
     CHATGPT_GPT_6_LUNA,
     CHATGPT_SOL,
@@ -543,6 +560,7 @@ mod tests {
             descriptor.models,
             &[
                 CHATGPT_ASTRA,
+                CHATGPT_GPT_6_1_SOL,
                 CHATGPT_GPT_6_SOL,
                 CHATGPT_GPT_6_LUNA,
                 CHATGPT_SOL,
@@ -599,6 +617,10 @@ mod tests {
         assert_eq!(
             trusted_model(CHATGPT_PROVIDER, CHATGPT_GPT_6_SOL.model),
             Some(&CHATGPT_GPT_6_SOL)
+        );
+        assert_eq!(
+            trusted_model(CHATGPT_PROVIDER, CHATGPT_GPT_6_1_SOL.model),
+            Some(&CHATGPT_GPT_6_1_SOL)
         );
         assert_eq!(
             trusted_model(CHATGPT_PROVIDER, CHATGPT_GPT_6_LUNA.model),

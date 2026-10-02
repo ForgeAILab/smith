@@ -46,7 +46,13 @@ pub const CLI_AGENTS: &[CliAgentCatalogEntry] = &[
     CliAgentCatalogEntry {
         kind: "codex",
         program: "codex",
-        models: &["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol"],
+        models: &[
+            "gpt-6-astra",
+            "gpt-6.1-sol",
+            "gpt-6-sol",
+            "gpt-6-luna",
+            "gpt-5.6-sol",
+        ],
         description: "Codex",
     },
 ];
@@ -139,6 +145,7 @@ mod tests {
             );
         }
         assert!(cli_model_ids().contains(&"cli/codex/gpt-6-astra".to_owned()));
+        assert!(cli_model_ids().contains(&"cli/codex/gpt-6.1-sol".to_owned()));
         assert!(cli_model_ids().contains(&"cli/codex/gpt-6-sol".to_owned()));
         assert!(cli_model_ids().contains(&"cli/codex/gpt-6-luna".to_owned()));
         assert!(cli_model_ids().contains(&"cli/claude-code/opus".to_owned()));

@@ -1271,7 +1271,7 @@ mod tests {
         }
 
         let openai = snapshot.provider("openai").expect("OpenAI catalog");
-        for model in ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"] {
+        for model in ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"] {
             assert!(
                 openai.models.contains_key(model),
                 "embedded OpenAI catalog should contain {model}"

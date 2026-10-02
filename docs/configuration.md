@@ -406,7 +406,7 @@ structure rejects unknown fields.
 
 Smith exposes installed coding-agent CLIs in the model picker without a
 `[models]` declaration. The current Codex choices include
-`cli/codex/gpt-6-astra`, `cli/codex/gpt-6-sol`, and
+`cli/codex/gpt-6-astra`, `cli/codex/gpt-6.1-sol`, `cli/codex/gpt-6-sol`, and
 `cli/codex/gpt-6-luna`. Claude Code is intentionally exposed through its
 rolling aliases—`cli/claude-code/opus`, `sonnet`, `fable`, and `haiku`—so an
 updated Claude executable resolves the alias to the current Claude release
@@ -748,8 +748,8 @@ not a supported public OpenAI Platform contract. No Codex installation or auth
 cache is used.
 
 The GPT-5.6 family (`gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`) and
-the GPT-6 family (`gpt-6-astra`, `gpt-6-sol`, and `gpt-6-luna`) on ChatGPT
-offer the default `272k` window and an `872k` option. Usage beyond 272k counts
+the GPT-6 family (`gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-sol`, and `gpt-6-luna`)
+on ChatGPT offer the default `272k` window and an `872k` option. Usage beyond 272k counts
 about twice as much, so the extended window can cost more. On the exact OpenAI
 Platform endpoint, those model IDs offer `1m` (1,050,000 tokens) by default
 and `272k`; input beyond 272k is billed at the premium tier.

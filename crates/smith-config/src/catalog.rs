@@ -95,6 +95,7 @@ pub fn endpoint_context_windows(
                 | "gpt-5.6-terra"
                 | "gpt-5.6-luna"
                 | "gpt-6-astra"
+                | "gpt-6.1-sol"
                 | "gpt-6-sol"
                 | "gpt-6-luna"
         )
@@ -597,7 +598,7 @@ mod tests {
 
     #[test]
     fn current_gpt_6_models_share_the_reviewed_openai_windows() {
-        for model in ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"] {
+        for model in ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"] {
             let windows =
                 endpoint_context_windows(KIND_OPENAI_COMPATIBLE, Some(OPENAI_ENDPOINT), model)
                     .unwrap_or_else(|| panic!("{model} should expose reviewed windows"));
