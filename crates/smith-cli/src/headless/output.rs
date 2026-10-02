@@ -525,7 +525,7 @@ pub(super) fn account_output(
 ) -> Option<AccountOutput> {
     let pool = credential_pool?;
     let required = rotation.and_then(HeadlessRotation::required);
-    let now_ms = smith_tui::accounts::now_ms();
+    let now_ms = smith_client::time_display::now_ms();
     pool.read(|pool| {
         let active = pool.active()?;
         Some(AccountOutput {
@@ -707,7 +707,7 @@ pub(super) fn write_text_projection(
         lines.push(format!("todo plan revision {} · {counts}", plan.revision));
     }
     if let Some(cache) = &result.cache {
-        if let Some(line) = smith_tui::cache::render_cache_read_usage(
+        if let Some(line) = smith_client::cache::render_cache_read_usage(
             cache.cache_read_percent,
             cache.observed_read_tokens,
         ) {
@@ -770,7 +770,7 @@ pub(super) fn render_usage_delta(delta: &UsageDelta) -> String {
     }
     delta
         .iter()
-        .map(|(kind, value)| format!("{} {value}", smith_tui::status::counter_label(kind)))
+        .map(|(kind, value)| format!("{} {value}", smith_client::status::counter_label(kind)))
         .collect::<Vec<_>>()
         .join(" · ")
 }
@@ -815,7 +815,7 @@ pub(super) fn approval_diagnostic(required: &ApprovalOutput) -> String {
     if let Some(deadline) = required.deadline_at_ms {
         diagnostic.push_str(&format!(
             " · deadline {}",
-            smith_tui::time_display::local_timestamp(deadline)
+            smith_client::time_display::local_timestamp(deadline)
         ));
     }
     if !required.authority_warnings.is_empty() {

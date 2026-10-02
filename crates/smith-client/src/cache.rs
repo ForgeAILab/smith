@@ -17,6 +17,8 @@ use smith_runtime::client::{
     SmithEvent as EventEnvelope, SmithEventKind as RuntimeEvent,
 };
 
+use crate::format::{compact_tokens, format_usd};
+
 /// The fixed cache-miss notice threshold, in tokens.
 pub const MISS_NOTICE_TOKENS: u64 = 20_000;
 /// The fixed cache-miss notice threshold, in micro-USD.
@@ -88,6 +90,16 @@ pub struct CachePrice {
     pub cache_read: Option<u64>,
     /// Cache-write rate.
     pub cache_write: Option<u64>,
+}
+
+impl From<&smith_config::catalog::CatalogModelCost> for CachePrice {
+    fn from(cost: &smith_config::catalog::CatalogModelCost) -> Self {
+        Self {
+            input: cost.input,
+            cache_read: cost.cache_read,
+            cache_write: cost.cache_write,
+        }
+    }
 }
 
 /// A completed root-turn cache projection.
@@ -1073,37 +1085,6 @@ fn extra_cost(entry: &AttemptProjection, price: CachePrice) -> Option<u128> {
         .saturating_mul(read_rate)
         .checked_div(1_000_000)?;
     Some(paid_cost.saturating_sub(cache_cost))
-}
-
-fn compact_tokens(value: u64) -> String {
-    match value {
-        0..1_000 => value.to_string(),
-        1_000..1_000_000 => {
-            let tenths = value / 100;
-            if tenths.is_multiple_of(10) {
-                format!("{}k", tenths / 10)
-            } else {
-                format!("{}.{}k", tenths / 10, tenths % 10)
-            }
-        }
-        _ => {
-            let tenths = value / 100_000;
-            if tenths.is_multiple_of(10) {
-                format!("{}M", tenths / 10)
-            } else {
-                format!("{}.{}M", tenths / 10, tenths % 10)
-            }
-        }
-    }
-}
-
-fn format_usd(micro_usd: u128) -> String {
-    let dollars = micro_usd / 1_000_000;
-    let thousandths = (micro_usd / 1_000) % 1_000;
-    if micro_usd > 0 && dollars == 0 && thousandths == 0 {
-        return format!("$0.{:06}", micro_usd % 1_000_000);
-    }
-    format!("${dollars}.{thousandths:03}")
 }
 
 #[cfg(test)]

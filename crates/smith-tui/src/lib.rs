@@ -23,7 +23,6 @@
 
 pub mod accounts;
 pub mod app;
-pub mod cache;
 pub mod commands;
 pub mod composer;
 pub mod diff;
@@ -36,9 +35,10 @@ pub mod setup;
 pub mod status;
 pub mod terminal_title;
 pub mod theme;
-pub mod time_display;
 pub mod transcript;
-pub mod usage_log;
+
+// Shared session projections; terminal rendering remains in this crate.
+pub use smith_client::{cache, time_display, usage_log};
 
 pub use app::{
     Action, App, MouseOutcome, Overlay, PaletteCommand, PendingInputPreview, PreparedSubmission,

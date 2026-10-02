@@ -49,6 +49,9 @@ use crossterm::event::{Event as TermEvent, EventStream, KeyCode, KeyEventKind, K
 use futures_util::StreamExt;
 use ignore::WalkBuilder;
 use ratatui::layout::Rect;
+#[cfg(test)]
+use smith_client::status::ContextPlanUpdate;
+use smith_client::status::{Status, TokenCount, render_elapsed};
 use smith_config::credential::CredentialResolver;
 use smith_config::inventory::{
     InventoryLimit, ModelLimitOrigin, SelectionInventory, local_inventory_with_catalog,
@@ -84,9 +87,6 @@ use smith_tui::app::{
     SubmissionTarget,
 };
 use smith_tui::commands::{CommandAction, GoalAction};
-#[cfg(test)]
-use smith_tui::status::ContextPlanUpdate;
-use smith_tui::status::{Status, TokenCount, render_elapsed};
 use smith_tui::theme::{Theme, glyph};
 use smith_tui::{
     PickerOutcome, ResourceEntry, ResourcePicker, RuntimeResources, draw_resource_picker,
@@ -224,13 +224,8 @@ async fn run_command(mut args: RunArgs) -> Result<u8> {
             .await?;
             logging::init(started.host.session().id()).await;
             let cache_price =
-                tui_driver::resolve_price(started.host.runtime().policy(), &started.catalog).map(
-                    |price| smith_tui::cache::CachePrice {
-                        input: price.table.input,
-                        cache_read: price.table.cache_read,
-                        cache_write: price.table.cache_write,
-                    },
-                );
+                tui_driver::resolve_price(started.host.runtime().policy(), &started.catalog)
+                    .map(|price| smith_client::cache::CachePrice::from(&price.table));
             headless::run(
                 &started.host,
                 prompt,

@@ -30,6 +30,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 smith-config = { workspace = true }
+smith-client = { workspace = true }
 smith-host = { workspace = true }
 smith-runtime = { workspace = true }
 smith-tools = { workspace = true }

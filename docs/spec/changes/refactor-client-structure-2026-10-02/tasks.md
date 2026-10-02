@@ -27,19 +27,27 @@ completed_at:
   (c) run compare mode at the branch tip, so sections 2 and 3 are checked
   against the fresh recording. Re-recording at the tip instead would bake a
   rebase mistake into the baseline.
-- [ ] 1.3 Confirm the two in-flight TUI changes are committed before stage 4.
+  Done 2026-10-02 before any section 2 work: recorder committed (`ea1f896`),
+  branch rebased onto main `99ad421`, re-recorded with only the recorder
+  applied (`a8d95a3`); all 12 changed fixtures are explained by
+  `show-provider-retry-progress` (headless attempt fields) and
+  `fix-interaction-defects` 3.3 (redo and trust confirmation copy). Compare
+  mode at the new base: 22 of 22 recorder tests pass.
+- [x] 1.3 Confirm the two in-flight TUI changes are committed before stage 4.
+  Committed on main as `51bf7c6` (retry progress and interaction defects);
+  `show-idle-compaction-summary` has no code.
 
 ## 2. Client-neutral accounting
 
-- [ ] 2.1 Create the crate with no ratatui or crossterm in its dependency
+- [x] 2.1 Create the crate with no ratatui or crossterm in its dependency
   closure; add a test that asserts this.
-- [ ] 2.2 Move the cache projection, usage, pricing, cost, and usage log out
+- [x] 2.2 Move the cache projection, usage, pricing, cost, and usage log out
   of `smith-tui`; keep module-internal names.
-- [ ] 2.3 Replace the mirrored price table with a conversion from the
+- [x] 2.3 Replace the mirrored price table with a conversion from the
   `smith-config` catalog type.
-- [ ] 2.4 Point headless, exit reporting, and local commands at the new
+- [x] 2.4 Point headless, exit reporting, and local commands at the new
   crate; no headless module imports from `smith_tui`.
-- [ ] 2.5 Merge the duplicated token and currency formatters.
+- [x] 2.5 Merge the duplicated token and currency formatters.
 
 ## 3. Command registry
 

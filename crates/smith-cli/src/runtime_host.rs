@@ -346,11 +346,11 @@ pub(super) async fn start_host(
 /// `local_command::render_status_cost`); the two surfaces share the
 /// `SessionCost` computation but not this presentation choice.
 fn render_exit_cost_line(
-    usage: &smith_tui::status::SessionUsage,
-    price: Option<&smith_tui::status::PriceReference>,
+    usage: &smith_client::status::SessionUsage,
+    price: Option<&smith_client::status::PriceReference>,
 ) -> Option<String> {
     let price = price?;
-    let cost = smith_tui::status::SessionCost::compute(usage, price);
+    let cost = smith_client::status::SessionCost::compute(usage, price);
     Some(format!(
         "{} {} · {}/{}",
         cost.render(),
@@ -372,15 +372,15 @@ fn render_exit_cost_line(
 /// the active model. Per `usage-accounting`'s "A model the catalog does not
 /// price", that case prints the token lines and no cost line at all: never a
 /// price substituted from another model, provider, or a hard-coded default.
-/// Cost never reaches [`smith_tui::usage_log::SessionUsageRecord`] below —
+/// Cost never reaches [`smith_client::usage_log::SessionUsageRecord`] below —
 /// it is presentation only, printed and discarded, and carries no field
 /// there for a price to leak into.
 fn report_session_usage(
     host: &HostSession,
     session: &str,
-    usage: &smith_tui::status::SessionUsage,
-    price: Option<&smith_tui::status::PriceReference>,
-    cache: Option<&smith_tui::cache::CacheTurnSummary>,
+    usage: &smith_client::status::SessionUsage,
+    price: Option<&smith_client::status::PriceReference>,
+    cache: Option<&smith_client::cache::CacheTurnSummary>,
 ) {
     if let Some(line) = usage.render() {
         println!("{line}");
@@ -388,7 +388,7 @@ fn report_session_usage(
             println!("{cost_line}");
         }
     }
-    if let Some(line) = cache.and_then(smith_tui::cache::CacheTurnSummary::render_usage) {
+    if let Some(line) = cache.and_then(smith_client::cache::CacheTurnSummary::render_usage) {
         println!("{line}");
     }
     if let Some(controller) = host.cache_lifecycle()
@@ -410,7 +410,7 @@ fn report_session_usage(
         return;
     }
     let policy = host.runtime().policy();
-    let record = smith_tui::usage_log::SessionUsageRecord::new(
+    let record = smith_client::usage_log::SessionUsageRecord::new(
         session,
         Some(policy.provider_name.clone()),
         policy.model.as_str(),
@@ -420,8 +420,8 @@ fn report_session_usage(
     // Beside this project's session state, so the log inherits whatever
     // directory the user already trusts with their transcripts.
     if let Some(paths) = host.paths() {
-        let _ = smith_tui::usage_log::append(
-            &smith_tui::usage_log::default_path(paths.directory()),
+        let _ = smith_client::usage_log::append(
+            &smith_client::usage_log::default_path(paths.directory()),
             &record,
         );
     }
@@ -673,7 +673,7 @@ pub(super) fn read_prompt(reader: impl Read) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use smith_tui::status::{PriceReference, PriceTable, SessionUsage};
+    use smith_client::status::{PriceReference, PriceTable, SessionUsage};
 
     use super::*;
 

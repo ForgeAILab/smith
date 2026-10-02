@@ -15,6 +15,9 @@ use agent_runtime_core::usage::{UsageDelta, UsageRecord};
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use serde::Serialize;
+use smith_client::cache::{
+    CacheLifecycleSummary, CachePrice, CacheProjection, CacheTurnSummary, CacheVisibilityState,
+};
 use smith_config::model::BackgroundExit;
 use smith_host::{
     ApprovalRequired, HeadlessApproval, HeadlessInteraction, HeadlessRotation, InteractionRequired,
@@ -29,9 +32,6 @@ use smith_runtime::host::HostSession;
 use smith_runtime::journal::{EphemeralInterruptionReason, EphemeralWorkInterruption};
 use smith_runtime::rotation::SharedPool;
 use smith_runtime::{ChildDurability, ChildState};
-use smith_tui::cache::{
-    CacheLifecycleSummary, CachePrice, CacheProjection, CacheTurnSummary, CacheVisibilityState,
-};
 
 use crate::cli::OutputFormat;
 

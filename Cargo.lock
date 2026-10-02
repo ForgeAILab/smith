@@ -3339,6 +3339,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "smith-client",
  "smith-config",
  "smith-host",
  "smith-runtime",
@@ -3353,6 +3354,22 @@ dependencies = [
  "url",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "smith-client"
+version = "0.2.16"
+dependencies = [
+ "agent-runtime-core",
+ "agent-runtime-registry",
+ "chrono",
+ "serde",
+ "serde_json",
+ "smith-config",
+ "smith-runtime",
+ "tempfile",
+ "time",
+ "tokio",
 ]
 
 [[package]]
@@ -3466,17 +3483,16 @@ dependencies = [
  "agent-runtime-core",
  "agent-runtime-registry",
  "agent-runtime-testkit",
- "chrono",
  "crossterm",
  "futures-util",
  "ratatui",
  "serde",
  "serde_json",
+ "smith-client",
  "smith-host",
  "smith-runtime",
  "smith-tools",
  "tempfile",
- "time",
  "tokio",
  "unicode-width",
 ]

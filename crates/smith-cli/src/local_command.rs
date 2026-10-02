@@ -1,7 +1,7 @@
 //! Typed local commands and status/context rendering.
 
 use super::*;
-use smith_tui::status::{PriceReference, SessionCost, SessionUsage};
+use smith_client::status::{PriceReference, SessionCost, SessionUsage};
 
 pub(super) fn tool_call_for_display(
     event: &RuntimeEvent,
@@ -1010,7 +1010,7 @@ pub(super) fn render_cache_controller_summary(
     if let Some(at) = controller.scheduled_for {
         return format!(
             "cache maintenance: scheduled for {}",
-            smith_tui::time_display::local_timestamp(at.0)
+            smith_client::time_display::local_timestamp(at.0)
         );
     }
     "cache maintenance: idle".to_owned()
@@ -1024,7 +1024,7 @@ pub(super) fn render_resume_summary(
         |at| {
             format!(
                 "resume checkpoint: saved {}",
-                smith_tui::time_display::local_timestamp(at.0)
+                smith_client::time_display::local_timestamp(at.0)
             )
         },
     )
@@ -1038,7 +1038,7 @@ pub(super) fn render_cache_controller_status(
     let effective = format!("{:?}", controller.effective_maintenance).to_ascii_lowercase();
     let scheduled = controller.scheduled_for.map_or_else(
         || "none".to_owned(),
-        |at| smith_tui::time_display::local_timestamp(at.0),
+        |at| smith_client::time_display::local_timestamp(at.0),
     );
     let decision = controller.decision.as_ref().map_or_else(
         || "none".to_owned(),
@@ -1071,7 +1071,7 @@ pub(super) fn render_cache_controller_status(
     };
     let guarantee = lease.guaranteed_until.map_or_else(
         || "?".to_owned(),
-        |at| smith_tui::time_display::local_timestamp(at.0),
+        |at| smith_client::time_display::local_timestamp(at.0),
     );
     let reads = lease
         .observed_read_tokens
@@ -1200,7 +1200,7 @@ pub(super) fn render_resume_capsule_status(
         capsule.last_persisted_watermark,
         capsule.last_persisted_at.map_or_else(
             || "not yet saved".to_owned(),
-            |at| smith_tui::time_display::local_timestamp(at.0)
+            |at| smith_client::time_display::local_timestamp(at.0)
         ),
     )
 }

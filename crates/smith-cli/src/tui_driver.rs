@@ -18,9 +18,9 @@ pub(super) enum InteractiveExit {
     /// reference `/status` read from during the session rather than a fresh
     /// catalog lookup of its own.
     Quit(
-        Box<smith_tui::status::SessionUsage>,
-        Option<smith_tui::status::PriceReference>,
-        Option<Box<smith_tui::cache::CacheTurnSummary>>,
+        Box<smith_client::status::SessionUsage>,
+        Option<smith_client::status::PriceReference>,
+        Option<Box<smith_client::cache::CacheTurnSummary>>,
     ),
     Reconfigure(PaletteCommand),
 }
@@ -270,7 +270,7 @@ pub(super) async fn run_interactive(
 /// Seeds the status projection from durable Runtime records without losing
 /// their typed provenance. In particular, synthetic cache attempts count
 /// toward session spend but never become an ordinary user turn.
-fn restore_usage_records(status: &mut smith_tui::status::Status, records: &[UsageRecord]) {
+fn restore_usage_records(status: &mut smith_client::status::Status, records: &[UsageRecord]) {
     for record in records {
         status.record_usage_record(record);
     }
@@ -290,7 +290,7 @@ fn restore_usage_records(status: &mut smith_tui::status::Status, records: &[Usag
 pub(super) fn resolve_price(
     policy: &RuntimePolicy,
     catalog: &smith_config::catalog::CatalogSnapshot,
-) -> Option<smith_tui::status::PriceReference> {
+) -> Option<smith_client::status::PriceReference> {
     let cost = smith_config::catalog::catalog_provider_for(
         &policy.provider_kind,
         policy.endpoint.as_deref(),
@@ -298,16 +298,11 @@ pub(super) fn resolve_price(
     .and_then(|provider| catalog.provider(provider))
     .and_then(|provider| provider.models.get(policy.model.as_str()))
     .and_then(|model| model.cost.as_ref())?;
-    Some(smith_tui::status::PriceReference {
-        provider: policy.provider_name.clone(),
-        model: policy.model.as_str().to_owned(),
-        table: smith_tui::status::PriceTable {
-            input: cost.input,
-            output: cost.output,
-            cache_read: cost.cache_read,
-            cache_write: cost.cache_write,
-        },
-    })
+    Some(smith_client::status::PriceReference::from_catalog(
+        policy.provider_name.clone(),
+        policy.model.as_str(),
+        cost,
+    ))
 }
 
 /// Forwards one live child's own event stream into the client's single event
@@ -1155,7 +1150,7 @@ mod tests {
 
     #[test]
     fn restored_synthetic_usage_stays_out_of_ordinary_turn_totals() {
-        let mut status = smith_tui::status::Status::new("model", "project");
+        let mut status = smith_client::status::Status::new("model", "project");
         let ordinary = UsageRecord {
             source: UsageSource::ProviderAttempt,
             provenance: Provenance {

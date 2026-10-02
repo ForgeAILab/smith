@@ -177,7 +177,7 @@ pub(crate) mod fixture_support {
             // Human timestamps contain a local offset even with an injected clock.
             for millis in [1_750_000_000_000, 1_750_000_600_000] {
                 text = text.replace(
-                    &smith_tui::time_display::local_timestamp(millis),
+                    &smith_client::time_display::local_timestamp(millis),
                     "<TIMESTAMP>",
                 );
             }

@@ -587,7 +587,7 @@ fn canonical_cache_fixture_matches_tui_final_stream_and_text_surfaces() {
         ),
     ];
 
-    let mut tui_status = smith_tui::status::Status::new("fixture-model", "/fixture");
+    let mut tui_status = smith_client::status::Status::new("fixture-model", "/fixture");
     for envelope in &events {
         tui_status.record_cache_event(envelope);
     }

@@ -4,7 +4,22 @@
 //! winter session must not move by an hour when viewed during daylight time.
 //! Chrono's local zone lookup also works in Smith's multithreaded Tokio host.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use chrono::{DateTime, Local, Utc};
+
+/// Wall-clock now, in Unix milliseconds.
+///
+/// Only ever used to render a *relative* delay ("in 42m") from an absolute
+/// reset the provider reported. A clock that has jumped makes the label wrong,
+/// not the policy: eligibility is decided in the runtime against its own
+/// clock, never from this.
+pub fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| since.as_millis() as u64)
+        .unwrap_or_default()
+}
 
 /// Resolve a Unix-millisecond instant in the operating system's local zone.
 /// The explicit offset in every rendered timestamp makes its meaning clear.

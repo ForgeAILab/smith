@@ -1,6 +1,6 @@
 // local commands behavior tests.
 
-    use smith_tui::status::{PriceReference, PriceTable, SessionUsage};
+    use smith_client::status::{PriceReference, PriceTable, SessionUsage};
 
     #[test]
     fn status_cost_reports_unknown_without_assuming_a_price() {

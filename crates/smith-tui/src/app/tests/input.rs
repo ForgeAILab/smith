@@ -431,7 +431,7 @@
             confidence: EstimationConfidence::Estimated,
         }));
 
-        let plan = app.status.context_plan.expect("context plan");
+        let plan = app.status.context_plan.as_ref().expect("context plan");
         assert_eq!(plan.fingerprint, fingerprint("context").as_str());
         assert_eq!(plan.cache_fingerprint, fingerprint("cache").as_str());
         assert_eq!(plan.input_tokens, 2_000);

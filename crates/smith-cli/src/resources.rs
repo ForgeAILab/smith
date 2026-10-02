@@ -540,7 +540,7 @@ pub(super) fn account_entries(credential_pool: Option<&SharedPool>) -> Vec<Resou
     let Some(pool) = credential_pool else {
         return Vec::new();
     };
-    let now_ms = smith_tui::accounts::now_ms();
+    let now_ms = smith_client::time_display::now_ms();
     let (members, active) = pool.read(|pool| (pool.view(now_ms), pool.active_position()));
     smith_tui::accounts::account_entries(&members, active, now_ms)
 }
@@ -637,12 +637,12 @@ pub(super) fn session_resource_entries(
 }
 
 pub(super) fn format_session_updated(timestamp: Timestamp) -> String {
-    let offset = smith_tui::time_display::local_offset_at(timestamp.as_millis())
+    let offset = smith_client::time_display::local_offset_at(timestamp.as_millis())
         .unwrap_or(time::UtcOffset::UTC);
     let now = time::OffsetDateTime::now_utc();
     let now_millis = u64::try_from(now.unix_timestamp_nanos() / 1_000_000).unwrap_or(0);
     let now_offset =
-        smith_tui::time_display::local_offset_at(now_millis).unwrap_or(time::UtcOffset::UTC);
+        smith_client::time_display::local_offset_at(now_millis).unwrap_or(time::UtcOffset::UTC);
     format_session_updated_at(timestamp, offset, now.to_offset(now_offset))
 }
 
@@ -900,7 +900,7 @@ pub(super) async fn list_sessions(selection: &Selection) -> Result<()> {
     print!(
         "{}",
         format_session_list(&sessions, std::io::stdout().is_terminal(), |updated| {
-            smith_tui::time_display::local_timestamp(updated.as_millis())
+            smith_client::time_display::local_timestamp(updated.as_millis())
         })
     );
     Ok(())

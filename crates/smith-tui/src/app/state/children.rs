@@ -415,7 +415,7 @@ impl App {
     /// Folds one child's own provider-usage record into the delegated
     /// totals, counting the reporting child as a contributor exactly once.
     ///
-    /// Mirrors [`Status::record_usage`](crate::status::Status::record_usage)'s
+    /// Mirrors [`Status::record_usage`](smith_client::status::Status::record_usage)'s
     /// own rule that an input-free record is not usable evidence: an
     /// output-only record says nothing about context consumption, so — like
     /// the root path — it contributes no counters and does not mark the

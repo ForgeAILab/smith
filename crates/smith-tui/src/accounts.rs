@@ -15,23 +15,10 @@
 //!   counters are Smith's disjoint measurement of one session. Mixing them
 //!   would invite adding a percentage to a token count.
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use crate::picker::ResourceEntry;
 use smith_host::rotation::{RotationMember, RotationRequest, RotationTrigger};
 
-/// Wall-clock now, in Unix milliseconds.
-///
-/// Only ever used to render a *relative* delay ("in 42m") from an absolute
-/// reset the provider reported. A clock that has jumped makes the label wrong,
-/// not the policy: eligibility is decided in the runtime against its own
-/// clock, never from this.
-pub fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|since| since.as_millis() as u64)
-        .unwrap_or_default()
-}
+pub use smith_client::time_display::now_ms;
 
 /// One minute in milliseconds.
 const MINUTE_MS: u64 = 60 * 1_000;
