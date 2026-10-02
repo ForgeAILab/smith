@@ -1311,8 +1311,8 @@ for every GPT-6 model advertised by the installed Codex catalog.
 
 - **GIVEN** no `[models]` block for the model
 - **WHEN** Smith resolves `chatgpt/gpt-5.6-sol`, `chatgpt/gpt-5.6-terra`,
-  `chatgpt/gpt-5.6-luna`, `chatgpt/gpt-6-astra`, `chatgpt/gpt-6-sol`, or
-  `chatgpt/gpt-6-luna`
+  `chatgpt/gpt-5.6-luna`, `chatgpt/gpt-6-astra`, `chatgpt/gpt-6.1-sol`,
+  `chatgpt/gpt-6-sol`, or `chatgpt/gpt-6-luna`
 - **THEN** the model resolves with the `272k` window as default
 - **AND** `872k` is selectable
 
@@ -1367,16 +1367,16 @@ report each value's provenance through `smith config explain`.
 ### Requirement: Embedded provider catalog fallback
 
 Smith SHALL bundle a normalized Models.dev snapshot recent enough to include
-the coding models supported at release time, including GPT-6 Sol, GPT-6 Luna,
-and Claude Opus 5.5. A valid last-good user cache MAY supersede that snapshot.
+the coding models supported at release time, including GPT-6.1 Sol, GPT-6 Sol,
+GPT-6 Luna, and Claude Opus 5.5. A valid last-good user cache MAY supersede that snapshot.
 
 #### Scenario: Offline startup sees the release catalog
 
-- **GIVEN** Smith 0.2.14 starts without a user catalog cache and cannot refresh
+- **GIVEN** Smith 0.2.15 starts without a user catalog cache and cannot refresh
   Models.dev
 - **WHEN** it loads the embedded catalog
-- **THEN** GPT-6 Sol, GPT-6 Luna, and Claude Opus 5.5 metadata is available to
-  compatible endpoint-bound providers and exact model setup review
+- **THEN** GPT-6.1 Sol, GPT-6 Sol, GPT-6 Luna, and Claude Opus 5.5 metadata is
+  available to compatible endpoint-bound providers and exact model setup review
 
 ### Requirement: Explicit native Anthropic reasoning metadata
 
