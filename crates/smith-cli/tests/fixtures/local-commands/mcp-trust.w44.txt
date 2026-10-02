@@ -242,10 +242,11 @@
 
 
 
-
-  ┌ run this MCP server ─────────────────┐
-  │No action is selected by default.     │
-  │Review the complete reverse patch.    │
+  ┌ trust this MCP server ───────────────┐
+  │Trust MCP server docs? No action is   │
+  │selected by default.                  │
+  │Trust permits Smith to launch this    │
+  │server and connect its declared tools.│
   │MCP server `docs` (stdio)             │
   │declared at                           │
   │`<PROJECT>/.smith/config.toml` key    │
@@ -262,10 +263,9 @@
   │Trusting this runs the command above  │
   │whenever this project is opened, until│
   │its content changes.                  │
-  │y apply undo   n/esc cancel           │
+  │y trust and connect   n/esc leave     │
+  │untrusted                             │
   └──────────────────────────────────────┘
-
-
 
 
 

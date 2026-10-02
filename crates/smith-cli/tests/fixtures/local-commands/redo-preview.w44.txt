@@ -250,14 +250,14 @@
 
   ┌ redo last exact Smith turn ──────────┐
   │No action is selected by default.     │
-  │Review the complete reverse patch.    │
+  │Review the complete forward patch.    │
   │Smith turn 1 redo                     │
   │                                      │
   │--- current <PROJECT>/tracked.txt     │
   │+++ reapply <PROJECT>/tracked.txt     │
   │-before                               │
   │+after                                │
-  │y apply undo   n/esc cancel           │
+  │y apply redo   n/esc cancel           │
   └──────────────────────────────────────┘
 
 

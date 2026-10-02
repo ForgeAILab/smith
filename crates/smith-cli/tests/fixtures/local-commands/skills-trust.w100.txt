@@ -247,8 +247,9 @@
 
 
 
-              ┌ activate this project skill ─────────────────────────────────────────┐
-              │No action is selected by default. Review the complete reverse patch.  │
+              ┌ trust this project skill ────────────────────────────────────────────┐
+              │Trust project skill deploy? No action is selected by default.         │
+              │Trust permits Smith to activate this skill's project instructions.    │
               │skill `deploy`                                                        │
               │  .smith/skills/deploy/SKILL.md                                       │
               │  content                                                             │
@@ -258,9 +259,8 @@
               │Activating it writes this file's instructions into the model's        │
               │context. It grants no tool, permission, approval, or credential, and  │
               │the decision covers exactly this content.                             │
-              │y apply undo   n/esc cancel                                           │
+              │y trust and activate   n/esc leave withheld                           │
               └──────────────────────────────────────────────────────────────────────┘
-
 
 
 
