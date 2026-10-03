@@ -46,6 +46,15 @@ completed_at:
   unknown.
 - [ ] 4.5 First-run setup: one frame, wrapped descriptions.
 
+- [ ] 4.6 Settle two presentation rules `refactor-client-structure` kept
+  for byte identity: (a) the inline-code colon exception in the single
+  free-text renderer (`smith-tui` `render/transcript.rs`): decide whether
+  `DiagnosticsRow::Field` values render verbatim and free lines get
+  unconditional inline Markdown, then re-record `skills-populated` and the
+  diagnostics fixtures; (b) child-state wording, which differs by surface
+  for one state (`Running` local, `running` headless, `working`
+  submission) and in durability capitalization.
+
 ## 5. Composer (after the in-flight TUI changes are committed)
 
 - [ ] 5.1 Rules above and below; `>` prompt; bash-mode prompt for `!`.
