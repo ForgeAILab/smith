@@ -37,6 +37,10 @@ Evidence: [audit](../../../qa/smith-structure-2026-10-02/report.md)
 - Composer: movement between lines of a draft, standard line-editing keys, a
   bash-mode prompt for `!`, and a shortcuts panel on `?`.
 - First-run setup uses one frame and wraps descriptions.
+- A user `!command` is saved with its bounded result so a resumed session
+  shows it (decided 2026-10-03).
+- `/diagnostics` values render exactly as stored, and a child's state reads
+  the same on every surface (decided 2026-10-03).
 
 ## Impact
 
@@ -48,5 +52,7 @@ Evidence: [audit](../../../qa/smith-structure-2026-10-02/report.md)
   shortcut). Tasks in section 4 depend on `refactor-client-structure`
   (typed reports). Tasks in section 5 depend on the two in-flight TUI
   changes being committed.
-- No change to provider requests, approval policy, persistence, machine
-  output, or the journal.
+- Persistence: one Smith-owned sidecar per session,
+  `<session-id>.shell.jsonl`, for user shell shortcuts (decided 2026-10-03).
+- No change to provider requests, approval policy, model-visible history,
+  machine output, or the event journal.

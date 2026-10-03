@@ -23,6 +23,23 @@ call, and MUST NOT print argument names in place of protected values.
   its result nested beneath
 - **AND** no change notice appears when no file changed
 
+#### Scenario: A user shell shortcut survives resume
+
+- **GIVEN** the user ran `!ls` and it finished, then quit Smith
+- **WHEN** the user resumes the session
+- **THEN** the transcript shows the same `! ls` row with its nested result,
+  after the message that preceded it
+- **AND** the record came from a per-session file beside the snapshot that
+  holds the redacted command and its bounded result, not from the event
+  journal or model-visible history
+
+#### Scenario: A saved shortcut whose place is gone
+
+- **GIVEN** a saved shortcut names a history position the restored history
+  does not reach
+- **WHEN** the session resumes
+- **THEN** that shortcut is not shown, rather than shown in another place
+
 #### Scenario: Protected arguments
 
 - **GIVEN** a tool call whose arguments are not reviewed for display
@@ -146,6 +163,33 @@ open at its beginning.
 - **WHEN** the user invokes `/diagnostics`
 - **THEN** each fact is on its own line under a group heading
 - **AND** an unreported value reads as unknown in words
+
+#### Scenario: Diagnostics values are shown as stored
+
+- **GIVEN** a diagnostics value contains Markdown characters such as
+  backticks
+- **WHEN** `/diagnostics` renders
+- **THEN** the value is shown exactly as stored, without Markdown styling
+
+### Requirement: A child's state reads the same everywhere
+
+Every surface that names a child agent's state or durability SHALL use one
+lowercase word set: `running`, `idle`, `interrupted`, `stopped`, `failed`,
+`expired`, and `durable` or `ephemeral`. Qualifiers SHALL be words, not debug
+structures. Machine-readable headless output MUST NOT change.
+
+#### Scenario: A running child
+
+- **GIVEN** a child agent has an active turn
+- **WHEN** it appears in the transcript, the delegated-work panel, `/agents`,
+  or the child inspector
+- **THEN** its state reads `running` on each of them
+
+#### Scenario: An interrupted child
+
+- **GIVEN** a child was interrupted with an exact checkpoint
+- **WHEN** `/agents` lists it
+- **THEN** its state reads `interrupted (resumable)`
 
 ### Requirement: The composer supports line editing
 

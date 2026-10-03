@@ -202,7 +202,10 @@ denial. A non-success row ends with the word `failed` or `denied`; color is
 never the only signal. The tool name is bold, while its reviewed argument is
 dim. A call's completion updates its row rather than printing another
 invocation. A user shell shortcut echoes once as `! command`, with its result
-nested in the same way.
+nested in the same way. A finished shortcut is saved beside the session, with
+its command and bounded result redacted, so a resumed session shows the same
+row in the same place. It never enters the event journal or the history the
+model sees.
 
 Results show at most four lines under `⎿`, then
 `… +N lines (ctrl+o to expand)` with the remaining-line count. A tool with no
@@ -560,9 +563,14 @@ retain their existing behavior.
 
 `/help` leads with a short "start here", then commands in the menu's order and
 format, then keys in a two-column table. Key descriptions use plain words,
-such as `Enter while working: send now`. `/diagnostics` groups Context, Cache,
-Recovery, and Session facts under headings, one fact per line; unreported
-values read `unknown`, never `?/?/?`.
+such as `Enter while working: send now`. `/diagnostics` groups its facts
+under the headings Session, Context, Cache, and Recovery, one fact per line;
+unreported values read `unknown`, never `?/?/?`. Values are shown exactly as
+stored, without Markdown styling.
+
+A child agent's state uses one lowercase word set on every surface:
+`running`, `idle`, `interrupted (resumable)`, `stopped (reason)`, `failed`,
+`expired`, with durability `durable` or `ephemeral`.
 
 ```text
 ● /status

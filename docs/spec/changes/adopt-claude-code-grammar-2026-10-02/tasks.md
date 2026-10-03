@@ -12,9 +12,9 @@ completed_at:
   the old grammar: `?` unknown values, older tool examples and
   `details unavailable` fallbacks, `•` notices and spawn rows, the
   dot-separated retry row, and the conflicting todo-retirement rules.
-- [ ] 1.2 Obtain approval of this proposal and of the `DESIGN.md` rewrite.
+- [x] 1.2 Obtain approval of this proposal and of the `DESIGN.md` rewrite.
   Proposal approved 2026-10-03 ("can we use codex to start the ui ux
-  polish"); the `DESIGN.md` rewrite awaits review.
+  polish"); `DESIGN.md` rewrite approved 2026-10-03 ("approved design").
 - [x] 1.3 Confirm the glyph set reports width 1 and add a test that rejects
   emoji-capable code points in the glyph table.
 
@@ -28,11 +28,26 @@ completed_at:
 - [x] 2.5 `Ctrl+O` expands and folds; `/details` shares the toggle.
 - [x] 2.6 Live-versus-replay parity for every changed row. History and
   journal replay match live rendering at 44, 80, and 100 columns, folded,
-  expanded, and monochrome. User `!` shortcut echoes and spawn enrichment are
-  process-local and were never saved, so a resumed session does not show
-  them; `DESIGN.md` now says so.
-- [ ] 2.7 Decide whether user `!` shortcut echoes should be saved so a resumed
-  session shows them (a durability change, outside this proposal).
+  expanded, and monochrome. Spawn enrichment is process-local and is not
+  replayed. User `!` shortcut echoes are saved by 2.7.
+- [x] 2.7 Decide whether user `!` shortcut echoes should be saved so a resumed
+  session shows them. Decided 2026-10-03: yes ("yes need echo").
+- [ ] 2.7a Save each finished shortcut to a Smith-owned sidecar beside the
+  snapshot, `<session-id>.shell.jsonl` (named by `SessionPaths::shell`),
+  appended one JSON line per shortcut and created owner-only. A line holds
+  the history length when the shortcut was dispatched (its anchor), the call
+  id when one exists, the command, whether it failed, and the same bounded
+  result text the live row keeps; command and result pass through the host's
+  display redactor first. Nothing is written to the event journal, the
+  snapshot, or model-visible history. A shortcut still running at exit is
+  not saved.
+- [ ] 2.7b On resume, place each saved shortcut after the history message
+  its anchor names, as the same `! command` row with its nested result. An
+  anchor beyond the restored history is dropped, never moved. A truncated
+  final line is ignored. A fork does not copy the sidecar.
+- [ ] 2.7c Extend the 2.6 parity test: a resumed shortcut renders the same
+  as the live one at 44, 80, and 100 columns, folded, expanded, and
+  monochrome.
 
 ## 3. Progress, turn end, Markdown, approvals
 
@@ -75,19 +90,40 @@ completed_at:
   scheduler makes `due - 1ms` reach the expiry. Pass the finish instant in
   instead of reading the clock twice.
 - [ ] 4.4 `/diagnostics`: grouped, one fact per line, `unknown` for
-  unknown.
+  unknown. Headings, in order: Session, Context, Cache, Recovery. Rows use
+  the same aligned label column as `/status`; labels are short because the
+  heading carries the group. A value that packs several ` · ` facts becomes
+  one row per fact. Each fact appears once (today reasoning repeats). The
+  diagnostics builder reads the underlying status fields itself; the shared
+  one-line helpers stay as they are for `/status` and `/context`. Plain
+  output (`render_plain`) prints the headings too.
+- [ ] 4.4a The footer reads `unknown ctx`, not `? ctx`, as `DESIGN.md`
+  already says.
 - [x] 4.5 First-run setup: one frame, wrapped descriptions.
 
 - [x] 4.5a Setup descriptions sit two columns in from their names.
 - [ ] 4.5b Long setup review and collision-preview bodies still clip.
-- [ ] 4.6 Settle two presentation rules `refactor-client-structure` kept
+- [x] 4.6 Settle two presentation rules `refactor-client-structure` kept
   for byte identity: (a) the inline-code colon exception in the single
   free-text renderer (`smith-tui` `render/transcript.rs`): decide whether
   `DiagnosticsRow::Field` values render verbatim and free lines get
   unconditional inline Markdown, then re-record `skills-populated` and the
   diagnostics fixtures; (b) child-state wording, which differs by surface
   for one state (`Running` local, `running` headless, `working`
-  submission) and in durability capitalization.
+  submission) and in durability capitalization. Decided 2026-10-03 ("yes
+  show it as stored"): (a) field values render exactly as stored and free
+  lines always get inline Markdown; (b) one lowercase word set on every
+  surface, with a running child reading `running`.
+- [ ] 4.6a Field values render verbatim; free lines get unconditional inline
+  Markdown; remove the colon exception (`inline_text`). Re-record
+  `skills-populated` and the diagnostics fixtures.
+- [ ] 4.6b Child state and durability read the same on every surface:
+  `running`, `idle`, `interrupted (resumable)` or
+  `interrupted (not resumable)`, `stopped (<reason in words>)`, `failed`,
+  `expired`; `durable` or `ephemeral`. The TUI's child rows say `running`
+  where they said `working`. Headless machine output is unchanged.
+- [ ] 4.6c Deferred: the agent inspector still shows `ReadOnlyView` and
+  `resumable false` in their debug form.
 
 ## 5. Composer (after the in-flight TUI changes are committed)
 
