@@ -22,7 +22,7 @@ pub const GLM_PROVIDER: &str = "zai";
 /// Default profile created by the GLM quick start.
 pub const GLM_PROFILE: &str = "glm";
 /// Z.AI Coding Plan OpenAI-compatible endpoint.
-pub const GLM_ENDPOINT: &str = "https://api.z.ai/api/coding/paas/v4";
+pub use crate::catalog::ZAI_CODING_PLAN_ENDPOINT as GLM_ENDPOINT;
 /// Provider name used by the built-in OpenRouter connection descriptor.
 pub const OPENROUTER_PROVIDER: &str = "openrouter";
 /// Fixed OpenRouter OpenAI-compatible API endpoint.
@@ -125,11 +125,95 @@ pub struct TrustedContextWindow {
     pub max_input_tokens: Option<u32>,
 }
 
+/// The guided flow every provider descriptor must supply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderSetupFlow {
+    /// Enter a key for a reviewed built-in provider.
+    QuickKey(QuickKeySetup),
+    /// Collect a provider and model through the shared endpoint wizard.
+    CustomEndpoint,
+    /// Hand off to the existing browser sign-in ceremony.
+    OAuth {
+        /// Progress wording during the sign-in handoff.
+        busy_note: &'static str,
+    },
+}
+
+/// Reviewed key-based setup plans supported by the host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuickKeySetup {
+    /// Trusted GLM model and limits.
+    Glm,
+    /// xAI catalog model.
+    Xai,
+    /// Native Google catalog model.
+    Google,
+}
+
+/// Review wording that accompanies provider setup data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderSetupReview {
+    /// Action name shown in the review.
+    pub action: &'static str,
+    /// Adapter label shown beside the provider identity.
+    pub adapter: &'static str,
+    /// Fixed endpoint explanation, or the endpoint value itself when absent.
+    pub endpoint: Option<&'static str>,
+    /// Additional reasoning explanation, when applicable.
+    pub reasoning: Option<&'static str>,
+}
+
+/// Connection ceremonies supported by the host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderConnectFlow {
+    /// Use the descriptor's guided setup flow.
+    Setup,
+    /// Renewable ChatGPT login.
+    ChatGptOAuth,
+    /// Browser login or API-key enrollment for xAI.
+    XaiLogin,
+}
+
+/// Picker text and ordering for a built-in connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderConnectionDescriptor {
+    /// Stable position after configured providers.
+    pub order: u8,
+    /// Human-facing connection label.
+    pub label: &'static str,
+    /// Short connection explanation.
+    pub description: &'static str,
+    /// Host ceremony to dispatch.
+    pub flow: ProviderConnectFlow,
+    /// Frozen catalog used by the direct connection wizard.
+    pub catalog_provider: Option<&'static str>,
+}
+
+/// Help shown by the shared provider-name field.
+pub const SETUP_PROVIDER_NAME_HELP: &str = "A stable local name, for example openrouter";
+/// Help shown by the shared endpoint field, using its reviewed example endpoint.
+pub fn setup_endpoint_help() -> String {
+    format!("OpenAI-compatible base, for example {OPENROUTER_ENDPOINT}")
+}
+/// Error shown for an invalid environment-variable name.
+pub const SETUP_ENVIRONMENT_VARIABLE_ERROR: &str =
+    "Use an environment variable such as ZAI_API_KEY (letters, digits, underscore).";
+
 /// One provider path shown by setup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderSetupDescriptor {
     /// Stable setup choice identifier.
     pub id: &'static str,
+    /// Entry identifier offered by guided setup.
+    pub setup_id: &'static str,
+    /// Required guided flow; a descriptor cannot offer an inert entry.
+    pub flow: ProviderSetupFlow,
+    /// Whether the descriptor is also offered by `/connect`.
+    pub connectable: bool,
+    /// Connection presentation and ceremony, when connectable.
+    pub connection: Option<ProviderConnectionDescriptor>,
+    /// Provider-specific review wording.
+    pub review: ProviderSetupReview,
     /// Human-facing name.
     pub label: &'static str,
     /// Short explanation shown beside the choice.
@@ -330,6 +414,16 @@ const CHATGPT_MODELS: &[TrustedModelRecord] = &[
 const DESCRIPTORS: &[ProviderSetupDescriptor] = &[
     ProviderSetupDescriptor {
         id: "glm",
+        setup_id: "glm",
+        flow: ProviderSetupFlow::QuickKey(QuickKeySetup::Glm),
+        connectable: false,
+        connection: None,
+        review: ProviderSetupReview {
+            action: "Quick start with GLM",
+            adapter: KIND_OPENAI_COMPATIBLE,
+            endpoint: None,
+            reasoning: None,
+        },
         label: "Quick start with GLM",
         description: "Z.AI Coding Plan endpoint with trusted GLM-5.2 limits",
         provider: Some(GLM_PROVIDER),
@@ -342,6 +436,22 @@ const DESCRIPTORS: &[ProviderSetupDescriptor] = &[
     },
     ProviderSetupDescriptor {
         id: "openrouter",
+        setup_id: "openrouter",
+        flow: ProviderSetupFlow::CustomEndpoint,
+        connectable: true,
+        connection: Some(ProviderConnectionDescriptor {
+            order: 0,
+            label: "OpenRouter",
+            description: "API key · fixed OpenRouter endpoint · adds a reviewed model",
+            flow: ProviderConnectFlow::Setup,
+            catalog_provider: Some(crate::catalog::OPENROUTER_CATALOG_PROVIDER),
+        }),
+        review: ProviderSetupReview {
+            action: "Add OpenAI-compatible provider",
+            adapter: KIND_OPENAI_COMPATIBLE,
+            endpoint: None,
+            reasoning: None,
+        },
         label: "Connect OpenRouter",
         description: "OpenRouter API key with a fixed endpoint and reviewed model limits",
         provider: Some(OPENROUTER_PROVIDER),
@@ -354,6 +464,22 @@ const DESCRIPTORS: &[ProviderSetupDescriptor] = &[
     },
     ProviderSetupDescriptor {
         id: "openai-compatible",
+        setup_id: "add-provider",
+        flow: ProviderSetupFlow::CustomEndpoint,
+        connectable: true,
+        connection: Some(ProviderConnectionDescriptor {
+            order: 4,
+            label: "OpenAI-compatible endpoint",
+            description: "API key · any OpenAI-compatible base URL · adds a first reviewed model",
+            flow: ProviderConnectFlow::Setup,
+            catalog_provider: None,
+        }),
+        review: ProviderSetupReview {
+            action: "Add OpenAI-compatible provider",
+            adapter: KIND_OPENAI_COMPATIBLE,
+            endpoint: None,
+            reasoning: None,
+        },
         label: "Custom OpenAI-compatible provider",
         description: "Enter an endpoint, model ID, and enforceable model limits",
         provider: None,
@@ -366,9 +492,19 @@ const DESCRIPTORS: &[ProviderSetupDescriptor] = &[
     },
     ProviderSetupDescriptor {
         id: "anthropic-messages",
+        setup_id: "anthropic-messages",
+        flow: ProviderSetupFlow::CustomEndpoint,
+        connectable: false,
+        connection: None,
+        review: ProviderSetupReview {
+            action: "Add Anthropic Messages provider",
+            adapter: KIND_ANTHROPIC_MESSAGES,
+            endpoint: None,
+            reasoning: None,
+        },
         label: "Anthropic Messages API",
         description: "Native Claude endpoint with images and thinking; enter a model ID and limits",
-        provider: None,
+        provider: Some("anthropic"),
         profile: None,
         adapter: KIND_ANTHROPIC_MESSAGES,
         endpoint: Some(ANTHROPIC_DEFAULT_ENDPOINT),
@@ -378,6 +514,24 @@ const DESCRIPTORS: &[ProviderSetupDescriptor] = &[
     },
     ProviderSetupDescriptor {
         id: "chatgpt",
+        setup_id: "chatgpt",
+        flow: ProviderSetupFlow::OAuth {
+            busy_note: "Opening ChatGPT sign-in…",
+        },
+        connectable: true,
+        connection: Some(ProviderConnectionDescriptor {
+            order: 1,
+            label: "ChatGPT (experimental)",
+            description: "Smith OAuth · direct ChatGPT Responses · unsupported public API boundary",
+            flow: ProviderConnectFlow::ChatGptOAuth,
+            catalog_provider: None,
+        }),
+        review: ProviderSetupReview {
+            action: "Connect ChatGPT (experimental)",
+            adapter: KIND_CHATGPT_RESPONSES,
+            endpoint: None,
+            reasoning: None,
+        },
         label: "Connect ChatGPT (experimental)",
         description: "Smith OAuth and direct Responses calls; unsupported public API boundary",
         provider: Some(CHATGPT_PROVIDER),
@@ -390,6 +544,22 @@ const DESCRIPTORS: &[ProviderSetupDescriptor] = &[
     },
     ProviderSetupDescriptor {
         id: "xai",
+        setup_id: "xai",
+        flow: ProviderSetupFlow::QuickKey(QuickKeySetup::Xai),
+        connectable: true,
+        connection: Some(ProviderConnectionDescriptor {
+            order: 2,
+            label: "xAI Grok",
+            description: "browser login or API key · fixed xAI Responses endpoint · catalog-backed model",
+            flow: ProviderConnectFlow::XaiLogin,
+            catalog_provider: None,
+        }),
+        review: ProviderSetupReview {
+            action: "Connect xAI Grok",
+            adapter: KIND_OPENAI_RESPONSES,
+            endpoint: Some("fixed xAI Responses endpoint"),
+            reasoning: None,
+        },
         label: "Connect xAI Grok",
         description: "Browser login with `/connect xai`, or an API key; catalog-backed Grok limits",
         provider: Some(XAI_PROVIDER),
@@ -406,6 +576,22 @@ const DESCRIPTORS: &[ProviderSetupDescriptor] = &[
     },
     ProviderSetupDescriptor {
         id: "google",
+        setup_id: "google",
+        flow: ProviderSetupFlow::QuickKey(QuickKeySetup::Google),
+        connectable: true,
+        connection: Some(ProviderConnectionDescriptor {
+            order: 3,
+            label: "Google Gemini",
+            description: "AI Studio API key · fixed native Gemini endpoint · catalog-backed model",
+            flow: ProviderConnectFlow::Setup,
+            catalog_provider: Some(crate::catalog::GOOGLE_CATALOG_PROVIDER),
+        }),
+        review: ProviderSetupReview {
+            action: "Connect Google Gemini",
+            adapter: "native gemini-interactions",
+            endpoint: Some("fixed Google Gemini Interactions endpoint"),
+            reasoning: Some("native Gemini thinking levels from the selected catalog model"),
+        },
         label: "Connect Google Gemini",
         description: "AI Studio API key with a fixed native Gemini Interactions endpoint",
         provider: Some(GOOGLE_PROVIDER),
@@ -430,6 +616,23 @@ pub fn provider_descriptors(available_adapter_kinds: &[&str]) -> Vec<ProviderSet
         .collect()
 }
 
+/// Connectable built-ins in the existing picker order.
+pub fn connectable_provider_descriptors(
+    available_adapter_kinds: &[&str],
+) -> Vec<ProviderSetupDescriptor> {
+    let mut descriptors = provider_descriptors(available_adapter_kinds)
+        .into_iter()
+        .filter(|descriptor| descriptor.connectable)
+        .collect::<Vec<_>>();
+    descriptors.sort_by_key(|descriptor| {
+        descriptor
+            .connection
+            .expect("a connectable descriptor has a ceremony")
+            .order
+    });
+    descriptors
+}
+
 /// Finds trusted model metadata for one provider-qualified identity.
 pub fn trusted_model(provider: &str, model: &str) -> Option<&'static TrustedModelRecord> {
     DESCRIPTORS
@@ -448,6 +651,38 @@ pub fn trusted_models() -> impl Iterator<Item = &'static TrustedModelRecord> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connectable_descriptors_have_a_ceremony_and_stable_order() {
+        let mut setup_ids = BTreeSet::new();
+        for descriptor in DESCRIPTORS {
+            assert!(
+                setup_ids.insert(descriptor.setup_id),
+                "setup IDs must be unique"
+            );
+            assert_eq!(descriptor.connectable, descriptor.connection.is_some());
+        }
+        let descriptors = connectable_provider_descriptors(&[
+            KIND_OPENAI_COMPATIBLE,
+            KIND_CHATGPT_RESPONSES,
+            KIND_OPENAI_RESPONSES,
+            KIND_GEMINI_INTERACTIONS,
+        ]);
+        assert_eq!(
+            descriptors
+                .iter()
+                .map(|descriptor| descriptor.id)
+                .collect::<Vec<_>>(),
+            [
+                "openrouter",
+                "chatgpt",
+                "xai",
+                "google",
+                "openai-compatible"
+            ]
+        );
+        assert_eq!(GLM_ENDPOINT, crate::catalog::ZAI_CODING_PLAN_ENDPOINT);
+    }
 
     #[test]
     fn descriptors_are_filtered_without_adapter_substitution() {

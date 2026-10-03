@@ -26,12 +26,11 @@ pub enum SetupMode {
     Menu,
     /// Direct `smith setup add-provider`.
     AddProvider,
-    /// Built-in OpenRouter connection with fixed provider and endpoint.
-    OpenRouter,
-    /// Built-in xAI connection with a fixed Responses endpoint.
-    Xai,
-    /// Built-in Google Gemini connection with a fixed native endpoint.
-    Google,
+    /// Direct connection using a flow supplied by the CLI.
+    Provider {
+        /// Reviewed setup flow.
+        flow: SetupFlow,
+    },
     /// Direct `smith setup add-model`.
     AddModel {
         /// Preselected provider, or a picker when absent.
@@ -85,6 +84,107 @@ pub enum SetupProviderKind {
     OpenAiCompatible,
     /// Native Anthropic Messages endpoint.
     AnthropicMessages,
+}
+
+/// One offered setup action, with its required executable flow.
+///
+/// ```compile_fail
+/// use smith_tui::setup::SetupEntry;
+/// let entry = SetupEntry {
+///     id: "provider".into(),
+///     label: "Provider".into(),
+///     detail: "Connect a provider".into(),
+/// }; // A flow is required.
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetupEntry {
+    /// Stable picker identity.
+    pub id: String,
+    /// Human-facing picker label.
+    pub label: String,
+    /// Short picker explanation.
+    pub detail: String,
+    /// Required flow dispatched on confirmation.
+    pub flow: SetupFlow,
+}
+
+/// Reviewed built-in key plans understood by the CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetupQuickKey {
+    /// Trusted quick-start model.
+    Glm,
+    /// Responses catalog model.
+    Xai,
+    /// Native interactions catalog model.
+    Google,
+}
+
+/// Provider-specific review text supplied by the configuration owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetupKeyReview {
+    /// Complete action review line.
+    pub action: String,
+    /// Complete provider and adapter review line.
+    pub provider: String,
+    /// Complete endpoint review line.
+    pub endpoint: String,
+    /// Complete default-profile review line.
+    pub profile: String,
+    /// Additional reasoning review line, when applicable.
+    pub reasoning: Option<String>,
+}
+
+/// Shared prompt wording supplied by the CLI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetupPrompts {
+    /// Help for a collected provider name.
+    pub provider_name_help: String,
+    /// Help for a collected endpoint.
+    pub endpoint_help: String,
+    /// Error for an invalid environment-variable name.
+    pub environment_variable_error: String,
+}
+
+/// Plain setup data crossing from the CLI into the pure reducer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SetupFlow {
+    /// Enter a credential for a reviewed built-in plan.
+    QuickKey {
+        /// Plan returned to the CLI on submission.
+        kind: SetupQuickKey,
+        /// Fixed provider identity.
+        provider: String,
+        /// Fixed API base URL.
+        endpoint: String,
+        /// Provider-specific review wording.
+        review: SetupKeyReview,
+        /// Whether the direct connection selects a frozen catalog model.
+        catalog_models: bool,
+    },
+    /// Collect a provider/model using the shared wizard.
+    CustomEndpoint {
+        /// Provider wire protocol.
+        kind: SetupProviderKind,
+        /// Fixed identity, or collect one when absent.
+        provider: Option<String>,
+        /// Fixed endpoint, or collect one when absent.
+        endpoint: Option<String>,
+        /// Complete action review line.
+        review_action: String,
+        /// Adapter name shown in the review.
+        adapter: String,
+        /// Whether the direct connection selects a frozen catalog model.
+        catalog_models: bool,
+    },
+    /// Restore the terminal and hand off to browser sign-in.
+    OAuth {
+        /// Progress wording supplied by the host.
+        busy_note: String,
+    },
+    /// Attach a model to a configured provider.
+    AddModel,
+    /// Select a configured provider/model pair as default.
+    ChangeDefault,
 }
 
 /// Authentication choice crossing from the pure reducer to CLI effects.
@@ -346,7 +446,12 @@ pub struct SetupApp {
     step: Step,
     history: Vec<Step>,
     picker: Option<ResourcePicker>,
-    provider_actions: Vec<ResourceEntry>,
+    provider_actions: Vec<SetupEntry>,
+    key_review: Option<SetupKeyReview>,
+    review_action: String,
+    adapter: String,
+    prompts: SetupPrompts,
+    catalog_models: bool,
     provider_entries: Vec<ResourceEntry>,
     model_entries: Vec<ResourceEntry>,
     catalog_model_limits: BTreeMap<String, SetupModelLimits>,
@@ -403,29 +508,20 @@ impl SetupApp {
         provider_entries: Vec<ResourceEntry>,
         model_entries: Vec<ResourceEntry>,
         quick_start: SetupQuickStart,
+        provider_actions: Vec<SetupEntry>,
+        prompts: SetupPrompts,
     ) -> Self {
         let mut app = Self {
             mode: mode.clone(),
             step: Step::Action,
             history: Vec::new(),
             picker: None,
-            provider_actions: vec![
-                ResourceEntry::new(
-                    "glm",
-                    "Quick start with GLM",
-                    format!("Z.AI · {}", quick_start.model_label),
-                ),
-                ResourceEntry::new(
-                    "add-provider",
-                    "Add provider",
-                    "custom OpenAI-compatible endpoint",
-                ),
-                ResourceEntry::new(
-                    "google",
-                    "Connect Google Gemini",
-                    "AI Studio API key · native Gemini Interactions",
-                ),
-            ],
+            provider_actions,
+            key_review: None,
+            review_action: String::new(),
+            adapter: String::new(),
+            prompts,
+            catalog_models: false,
             provider_entries,
             model_entries,
             catalog_model_limits: BTreeMap::new(),
@@ -454,26 +550,18 @@ impl SetupApp {
         match mode {
             SetupMode::FirstRun | SetupMode::Menu => app.enter(Step::Action, false),
             SetupMode::AddProvider => {
-                app.action = Some(SetupAction::AddProvider);
-                app.enter(Step::ProviderName, false);
+                let flow = app
+                    .provider_actions
+                    .iter()
+                    .find_map(|entry| {
+                        matches!(entry.flow, SetupFlow::CustomEndpoint { provider: None, .. })
+                            .then(|| entry.flow.clone())
+                    })
+                    .expect("the CLI supplies the custom endpoint flow for add-provider");
+                app.start_flow(flow, false);
             }
-            SetupMode::OpenRouter => {
-                app.action = Some(SetupAction::AddProvider);
-                app.provider = "openrouter".into();
-                app.endpoint = "https://openrouter.ai/api/v1".into();
-                app.enter(Step::CredentialMethod, false);
-            }
-            SetupMode::Xai => {
-                app.action = Some(SetupAction::QuickXai);
-                app.provider = "xai".into();
-                app.endpoint = "https://api.x.ai/v1".into();
-                app.enter(Step::CredentialMethod, false);
-            }
-            SetupMode::Google => {
-                app.action = Some(SetupAction::QuickGoogle);
-                app.provider = "google".into();
-                app.endpoint = "https://generativelanguage.googleapis.com/v1beta".into();
-                app.enter(Step::CredentialMethod, false);
+            SetupMode::Provider { flow } => {
+                app.start_flow(flow, false);
             }
             SetupMode::AddModel {
                 provider: Some(provider),
@@ -502,10 +590,9 @@ impl SetupApp {
         self
     }
 
-    /// Replaces provider actions with descriptors supported by this runtime
-    /// build. Unknown IDs report a missing guided flow when confirmed.
+    /// Replaces offered actions with entries carrying executable flows.
     #[must_use]
-    pub fn with_provider_actions(mut self, actions: Vec<ResourceEntry>) -> Self {
+    pub fn with_provider_actions(mut self, actions: Vec<SetupEntry>) -> Self {
         self.provider_actions = actions;
         self.configure_picker();
         self
@@ -592,11 +679,16 @@ impl SetupApp {
     pub fn review_lines(&self) -> Vec<String> {
         let mut lines = match self.action {
             Some(SetupAction::QuickGlm) => vec![
-                "action: Quick start with GLM".into(),
-                format!(
-                    "provider: {} (openai-compatible)",
-                    self.quick_start.provider
-                ),
+                self.key_review
+                    .as_ref()
+                    .expect("a quick key flow supplies review text")
+                    .action
+                    .clone(),
+                self.key_review
+                    .as_ref()
+                    .expect("a quick key flow supplies review text")
+                    .provider
+                    .clone(),
                 format!("endpoint: {}", self.quick_start.endpoint),
                 format!(
                     "credential: {}",
@@ -618,52 +710,34 @@ impl SetupApp {
                     .into(),
                 format!("default profile: {}", self.quick_start.profile),
             ],
-            Some(SetupAction::QuickXai) => vec![
-                "action: Connect xAI Grok".into(),
-                "provider: xai (openai-responses)".into(),
-                "endpoint: fixed xAI Responses endpoint".into(),
-                format!("credential: {}", self.credential_reference("xai")),
-                format!("model: xai/{}", self.model),
-                format!(
-                    "limits: context {} · max input {} · max output {} (Models.dev frozen catalog)",
-                    self.context_tokens.unwrap_or_default(),
-                    self.max_input_tokens.unwrap_or_default(),
-                    self.max_output_tokens.unwrap_or_default()
-                ),
-                "request/output reserve: derived from the selected catalog model".into(),
-                "default profile: grok".into(),
-            ],
-            Some(SetupAction::QuickGoogle) => vec![
-                "action: Connect Google Gemini".into(),
-                "provider: google (native gemini-interactions)".into(),
-                "endpoint: fixed Google Gemini Interactions endpoint".into(),
-                format!("credential: {}", self.credential_reference("google")),
-                format!("model: google/{}", self.model),
-                format!(
-                    "limits: context {} · max input {} · max output {} (Models.dev frozen catalog)",
-                    self.context_tokens.unwrap_or_default(),
-                    self.max_input_tokens.unwrap_or_default(),
-                    self.max_output_tokens.unwrap_or_default()
-                ),
-                "request/output reserve: derived from the selected catalog model".into(),
-                "reasoning: native Gemini thinking levels from the selected catalog model".into(),
-                "default profile: gemini".into(),
-            ],
-            Some(SetupAction::AddProvider) => vec![
-                match self.provider_kind {
-                    SetupProviderKind::OpenAiCompatible => "action: Add OpenAI-compatible provider",
-                    SetupProviderKind::AnthropicMessages => {
-                        "action: Add Anthropic Messages provider"
-                    }
+            Some(SetupAction::QuickXai | SetupAction::QuickGoogle) => {
+                let review = self
+                    .key_review
+                    .as_ref()
+                    .expect("a quick key flow supplies review text");
+                let mut lines = vec![
+                    review.action.clone(),
+                    review.provider.clone(),
+                    review.endpoint.clone(),
+                    format!("credential: {}", self.credential_reference(&self.provider)),
+                    format!("model: {}/{}", self.provider, self.model),
+                    format!(
+                        "limits: context {} · max input {} · max output {} (Models.dev frozen catalog)",
+                        self.context_tokens.unwrap_or_default(),
+                        self.max_input_tokens.unwrap_or_default(),
+                        self.max_output_tokens.unwrap_or_default()
+                    ),
+                    "request/output reserve: derived from the selected catalog model".into(),
+                ];
+                if let Some(reasoning) = &review.reasoning {
+                    lines.push(reasoning.clone());
                 }
-                .into(),
-                format!(
-                    "kind: {}",
-                    match self.provider_kind {
-                        SetupProviderKind::OpenAiCompatible => "openai-compatible",
-                        SetupProviderKind::AnthropicMessages => "anthropic-messages",
-                    }
-                ),
+                lines.push(review.profile.clone());
+                lines
+            }
+            Some(SetupAction::AddProvider) => vec![
+                self.review_action.clone(),
+                format!("kind: {}", self.adapter),
                 format!("provider: {}", self.provider),
                 format!("endpoint: {}", self.endpoint),
                 format!("credential: {}", self.credential_reference(&self.provider)),
@@ -849,19 +923,11 @@ impl SetupApp {
     fn configure_picker(&mut self) {
         self.picker = match self.step {
             Step::Action => {
-                let mut entries = self.provider_actions.clone();
-                if matches!(self.mode, SetupMode::Menu) {
-                    entries.push(ResourceEntry::new(
-                        "add-model",
-                        "Add model",
-                        "attach explicit limits to an existing provider",
-                    ));
-                    entries.push(ResourceEntry::new(
-                        "change-default",
-                        "Change default",
-                        "choose a configured provider/model pair",
-                    ));
-                }
+                let entries = self
+                    .provider_actions
+                    .iter()
+                    .map(|entry| ResourceEntry::new(&entry.id, &entry.label, &entry.detail))
+                    .collect();
                 Some(ResourcePicker::new(
                     "Smith setup",
                     entries,
@@ -936,72 +1002,87 @@ impl SetupApp {
         };
     }
 
-    fn select_picker(&mut self, id: String) -> SetupEffect {
-        match self.step {
-            Step::Action => match id.as_str() {
-                "glm" => {
-                    self.action = Some(SetupAction::QuickGlm);
-                    self.provider = self.quick_start.provider.clone();
-                    self.endpoint = self.quick_start.endpoint.clone();
+    fn start_flow(&mut self, flow: SetupFlow, remember: bool) -> SetupEffect {
+        match flow {
+            SetupFlow::QuickKey {
+                kind,
+                provider,
+                endpoint,
+                review,
+                catalog_models,
+            } => {
+                self.action = Some(match kind {
+                    SetupQuickKey::Glm => SetupAction::QuickGlm,
+                    SetupQuickKey::Xai => SetupAction::QuickXai,
+                    SetupQuickKey::Google => SetupAction::QuickGoogle,
+                });
+                self.provider = provider;
+                self.endpoint = endpoint;
+                self.key_review = Some(review);
+                self.catalog_models = catalog_models;
+                if kind == SetupQuickKey::Glm {
                     self.model = self.quick_start.model.clone();
                     self.context_tokens = Some(self.quick_start.limits.context_tokens);
                     self.max_input_tokens = Some(self.quick_start.limits.max_input_tokens);
                     self.max_output_tokens = Some(self.quick_start.limits.max_output_tokens);
                     self.reasoning_only_text = true;
                     self.make_default = true;
-                    self.enter(Step::CredentialMethod, true);
                 }
-                "add-provider" => {
-                    self.action = Some(SetupAction::AddProvider);
-                    self.provider_kind = SetupProviderKind::OpenAiCompatible;
-                    self.enter(Step::ProviderName, true);
+                self.enter(Step::CredentialMethod, remember);
+            }
+            SetupFlow::CustomEndpoint {
+                kind,
+                provider,
+                endpoint,
+                review_action,
+                adapter,
+                catalog_models,
+            } => {
+                self.action = Some(SetupAction::AddProvider);
+                self.provider_kind = kind;
+                self.review_action = review_action;
+                self.adapter = adapter;
+                self.catalog_models = catalog_models;
+                if let Some(provider) = provider {
+                    self.provider = provider;
+                    self.endpoint = endpoint.unwrap_or_default();
+                    if kind == SetupProviderKind::AnthropicMessages {
+                        self.reasoning_only_text = false;
+                    }
+                    self.enter(Step::CredentialMethod, remember);
+                } else {
+                    self.enter(Step::ProviderName, remember);
                 }
-                "anthropic-messages" => {
-                    self.action = Some(SetupAction::AddProvider);
-                    self.provider_kind = SetupProviderKind::AnthropicMessages;
-                    self.provider = "anthropic".into();
-                    self.endpoint = "https://api.anthropic.com/v1".into();
-                    self.reasoning_only_text = false;
-                    self.enter(Step::CredentialMethod, true);
-                }
-                "chatgpt" => {
-                    self.enter(Step::Busy, true);
-                    self.busy_note = Some("Opening ChatGPT sign-in…".into());
-                    return SetupEffect::ConnectChatGpt;
-                }
-                "openrouter" => {
-                    self.action = Some(SetupAction::AddProvider);
-                    self.provider_kind = SetupProviderKind::OpenAiCompatible;
-                    self.provider = "openrouter".into();
-                    self.endpoint = "https://openrouter.ai/api/v1".into();
-                    self.enter(Step::CredentialMethod, true);
-                }
-                "xai" => {
-                    self.action = Some(SetupAction::QuickXai);
-                    self.provider = "xai".into();
-                    self.endpoint = "https://api.x.ai/v1".into();
-                    self.enter(Step::CredentialMethod, true);
-                }
-                "google" => {
-                    self.action = Some(SetupAction::QuickGoogle);
-                    self.provider = "google".into();
-                    self.endpoint = "https://generativelanguage.googleapis.com/v1beta".into();
-                    self.enter(Step::CredentialMethod, true);
-                }
-                "add-model" => {
-                    self.action = Some(SetupAction::AddModel);
-                    self.enter(Step::ProviderChoice, true);
-                }
-                "change-default" => {
-                    self.action = Some(SetupAction::ChangeDefault);
-                    self.enter(Step::ModelChoice, true);
-                }
-                _ => {
-                    self.error = Some(format!(
-                        "No guided setup handler for `{id}` in this Smith build. Choose another entry or update Smith."
-                    ));
-                }
-            },
+            }
+            SetupFlow::OAuth { busy_note } => {
+                self.enter(Step::Busy, remember);
+                self.busy_note = Some(busy_note);
+                return SetupEffect::ConnectChatGpt;
+            }
+            SetupFlow::AddModel => {
+                self.action = Some(SetupAction::AddModel);
+                self.enter(Step::ProviderChoice, remember);
+            }
+            SetupFlow::ChangeDefault => {
+                self.action = Some(SetupAction::ChangeDefault);
+                self.enter(Step::ModelChoice, remember);
+            }
+        }
+        SetupEffect::None
+    }
+
+    fn select_picker(&mut self, id: String) -> SetupEffect {
+        match self.step {
+            Step::Action => {
+                let flow = self
+                    .provider_actions
+                    .iter()
+                    .find(|entry| entry.id == id)
+                    .expect("the picker only confirms offered setup entries")
+                    .flow
+                    .clone();
+                return self.start_flow(flow, true);
+            }
             Step::ProviderChoice => {
                 self.provider = id;
                 self.enter(Step::ModelName, true);
@@ -1030,7 +1111,7 @@ impl SetupApp {
                 _ => {}
             },
             Step::ModelChoice => {
-                if matches!(self.mode, SetupMode::OpenRouter | SetupMode::Google) {
+                if self.catalog_models {
                     let Some(limits) = self.catalog_model_limits.get(&id).copied() else {
                         self.error =
                             Some("the selected catalog model has no enforceable limits".to_owned());
@@ -1071,7 +1152,7 @@ impl SetupApp {
     }
 
     fn after_credential_step(&self) -> Step {
-        if matches!(self.mode, SetupMode::OpenRouter | SetupMode::Google) {
+        if self.catalog_models {
             return Step::ModelChoice;
         }
         if matches!(
@@ -1117,10 +1198,7 @@ impl SetupApp {
                     self.enter(self.after_credential_step(), true);
                 }
                 Some(CredentialMethod::Environment) if !valid_variable(&value) => {
-                    self.error = Some(
-                        "Use an environment variable such as ZAI_API_KEY (letters, digits, underscore)."
-                            .into(),
-                    );
+                    self.error = Some(self.prompts.environment_variable_error.clone());
                 }
                 Some(CredentialMethod::Environment) => {
                     self.environment_variable = value;
@@ -1298,12 +1376,12 @@ impl SetupApp {
         match self.step {
             Step::ProviderName => (
                 "Provider name",
-                "A stable local name, for example openrouter".to_owned(),
+                self.prompts.provider_name_help.clone(),
                 false,
             ),
             Step::Endpoint => (
                 "API base URL",
-                "OpenAI-compatible base, for example https://openrouter.ai/api/v1".to_owned(),
+                self.prompts.endpoint_help.clone(),
                 false,
             ),
             Step::CredentialValue
@@ -1523,26 +1601,134 @@ mod tests {
         providers: Vec<ResourceEntry>,
         models: Vec<ResourceEntry>,
     ) -> SetupApp {
+        let quick_start = SetupQuickStart {
+            provider: "zai".into(),
+            endpoint: "https://api.z.ai/api/coding/paas/v4".into(),
+            model: "glm-5.2".into(),
+            model_label: "GLM-5.2".into(),
+            limits: SetupModelLimits {
+                context_tokens: 1_000_000,
+                max_input_tokens: 1_000_000,
+                max_output_tokens: 131_072,
+            },
+            request_output_tokens: 32_768,
+            output_reserve: 32_768,
+            profile: "glm".into(),
+            catalog_revision: 5,
+        };
+        let entries = setup_entries(&quick_start);
         SetupApp::new(
             mode,
             providers,
             models,
-            SetupQuickStart {
-                provider: "zai".into(),
-                endpoint: "https://api.z.ai/api/coding/paas/v4".into(),
-                model: "glm-5.2".into(),
-                model_label: "GLM-5.2".into(),
-                limits: SetupModelLimits {
-                    context_tokens: 1_000_000,
-                    max_input_tokens: 1_000_000,
-                    max_output_tokens: 131_072,
-                },
-                request_output_tokens: 32_768,
-                output_reserve: 32_768,
-                profile: "glm".into(),
-                catalog_revision: 5,
-            },
+            quick_start,
+            entries,
+            setup_prompts(),
         )
+    }
+
+    fn setup_prompts() -> SetupPrompts {
+        SetupPrompts {
+            provider_name_help: "A stable local name, for example openrouter".into(),
+            endpoint_help: "OpenAI-compatible base, for example https://openrouter.ai/api/v1"
+                .into(),
+            environment_variable_error:
+                "Use an environment variable such as ZAI_API_KEY (letters, digits, underscore)."
+                    .into(),
+        }
+    }
+
+    fn setup_entries(quick_start: &SetupQuickStart) -> Vec<SetupEntry> {
+        vec![
+            SetupEntry {
+                id: "glm".into(),
+                label: "Quick start with GLM".into(),
+                detail: format!("Z.AI · {}", quick_start.model_label),
+                flow: SetupFlow::QuickKey {
+                    kind: SetupQuickKey::Glm,
+                    provider: quick_start.provider.clone(),
+                    endpoint: quick_start.endpoint.clone(),
+                    review: SetupKeyReview {
+                        action: "action: Quick start with GLM".into(),
+                        provider: format!("provider: {} (openai-compatible)", quick_start.provider),
+                        endpoint: format!("endpoint: {}", quick_start.endpoint),
+                        profile: format!("default profile: {}", quick_start.profile),
+                        reasoning: None,
+                    },
+                    catalog_models: false,
+                },
+            },
+            custom_entry("add-provider", "Add provider", None, None, SetupProviderKind::OpenAiCompatible, false),
+            SetupEntry {
+                id: "google".into(),
+                label: "Connect Google Gemini".into(),
+                detail: "AI Studio API key · native Gemini Interactions".into(),
+                flow: SetupFlow::QuickKey {
+                    kind: SetupQuickKey::Google,
+                    provider: "google".into(),
+                    endpoint: "https://generativelanguage.googleapis.com/v1beta".into(),
+                    review: SetupKeyReview {
+                        action: "action: Connect Google Gemini".into(),
+                        provider: "provider: google (native gemini-interactions)".into(),
+                        endpoint: "endpoint: fixed Google Gemini Interactions endpoint".into(),
+                        profile: "default profile: gemini".into(),
+                        reasoning: Some("reasoning: native Gemini thinking levels from the selected catalog model".into()),
+                    },
+                    catalog_models: false,
+                },
+            },
+            custom_entry("anthropic-messages", "Anthropic Messages API", Some("anthropic"), Some("https://api.anthropic.com/v1"), SetupProviderKind::AnthropicMessages, false),
+            custom_entry("openrouter", "Connect OpenRouter", Some("openrouter"), Some("https://openrouter.ai/api/v1"), SetupProviderKind::OpenAiCompatible, false),
+        ]
+    }
+
+    fn custom_entry(
+        id: &str,
+        label: &str,
+        provider: Option<&str>,
+        endpoint: Option<&str>,
+        kind: SetupProviderKind,
+        catalog_models: bool,
+    ) -> SetupEntry {
+        let (review_action, adapter) = match kind {
+            SetupProviderKind::OpenAiCompatible => (
+                "action: Add OpenAI-compatible provider",
+                "openai-compatible",
+            ),
+            SetupProviderKind::AnthropicMessages => (
+                "action: Add Anthropic Messages provider",
+                "anthropic-messages",
+            ),
+        };
+        SetupEntry {
+            id: id.into(),
+            label: label.into(),
+            detail: String::new(),
+            flow: SetupFlow::CustomEndpoint {
+                kind,
+                provider: provider.map(str::to_owned),
+                endpoint: endpoint.map(str::to_owned),
+                review_action: review_action.into(),
+                adapter: adapter.into(),
+                catalog_models,
+            },
+        }
+    }
+
+    fn direct_provider_mode(id: &str) -> SetupMode {
+        let app = setup_app(SetupMode::FirstRun, Vec::new(), Vec::new());
+        let mut flow = app
+            .provider_actions
+            .into_iter()
+            .find(|entry| entry.id == id)
+            .expect("test entry")
+            .flow;
+        match &mut flow {
+            SetupFlow::QuickKey { catalog_models, .. }
+            | SetupFlow::CustomEndpoint { catalog_models, .. } => *catalog_models = true,
+            _ => panic!("the direct test mode needs a catalog model"),
+        }
+        SetupMode::Provider { flow }
     }
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -1628,7 +1814,15 @@ mod tests {
         data.limits.context_tokens = 123_456;
         data.request_output_tokens = 4_000;
         data.output_reserve = 5_000;
-        let mut app = SetupApp::new(SetupMode::FirstRun, Vec::new(), Vec::new(), data);
+        let entries = setup_entries(&data);
+        let mut app = SetupApp::new(
+            SetupMode::FirstRun,
+            Vec::new(),
+            Vec::new(),
+            data,
+            entries,
+            setup_prompts(),
+        );
         let menu = render_setup(&app, 110, 34);
         assert!(menu.contains("Z.AI · GLM Reviewed"), "{menu}");
         choose(&mut app, "glm");
@@ -1710,7 +1904,14 @@ mod tests {
     fn chatgpt_confirmation_requests_the_existing_connection_handoff() {
         let mut app =
             setup_app(SetupMode::FirstRun, Vec::new(), Vec::new()).with_provider_actions(vec![
-                ResourceEntry::new("chatgpt", "Connect ChatGPT", "OAuth"),
+                SetupEntry {
+                    id: "chatgpt".into(),
+                    label: "Connect ChatGPT".into(),
+                    detail: "OAuth".into(),
+                    flow: SetupFlow::OAuth {
+                        busy_note: "Opening ChatGPT sign-in…".into(),
+                    },
+                },
             ]);
         assert!(matches!(
             app.on_key(key(KeyCode::Enter)),
@@ -1722,16 +1923,19 @@ mod tests {
     }
 
     #[test]
-    fn unknown_action_confirmation_reports_the_missing_handler_on_screen() {
+    fn an_arbitrary_entry_id_dispatches_its_required_flow() {
         let mut app =
             setup_app(SetupMode::FirstRun, Vec::new(), Vec::new()).with_provider_actions(vec![
-                ResourceEntry::new("future-provider", "Future provider", ""),
+                SetupEntry {
+                    id: "future-provider".into(),
+                    label: "Future provider".into(),
+                    detail: String::new(),
+                    flow: SetupFlow::AddModel,
+                },
             ]);
         assert!(matches!(app.on_key(key(KeyCode::Enter)), SetupEffect::None));
-        assert!(app.is_choosing_action());
-        let screen = render_setup(&app, 110, 34);
-        assert!(screen.contains("No guided setup handler"), "{screen}");
-        assert!(screen.contains("future-provider"), "{screen}");
+        assert!(!app.is_choosing_action());
+        assert_eq!(app.step, Step::ProviderChoice);
         assert!(matches!(app.on_key(key(KeyCode::Esc)), SetupEffect::Cancel));
     }
 
@@ -1744,7 +1948,7 @@ mod tests {
             max_output_tokens: 8_000,
         };
         let mut app = setup_app(
-            SetupMode::OpenRouter,
+            direct_provider_mode("openrouter"),
             Vec::new(),
             vec![ResourceEntry::new(
                 model,
@@ -1782,7 +1986,7 @@ mod tests {
             max_output_tokens: 65_536,
         };
         let mut app = setup_app(
-            SetupMode::Google,
+            direct_provider_mode("google"),
             Vec::new(),
             vec![ResourceEntry::new(
                 model,

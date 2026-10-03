@@ -37,6 +37,39 @@ pub(super) struct StartedHost {
     pub(super) cache_miss_notices: bool,
 }
 
+/// Common workspace, credential, and catalog basis for every preflight.
+/// Callers add only their surface-specific host services before composition.
+pub(super) fn preflight_request(
+    resolution: &Resolution,
+    project: &std::path::Path,
+    surface: HostSurface,
+    catalog: Option<Arc<smith_config::catalog::CatalogSnapshot>>,
+) -> Result<RuntimeRequest> {
+    let workspace = ProjectWorkspace::new(project).map_err(|error| anyhow::anyhow!("{error}"))?;
+    let mut request = RuntimeRequest {
+        workspace: Some(Arc::new(workspace)),
+        credentials: Some(CredentialResolver::new(&resolution.layout.user_dir)),
+        model_catalog: catalog.clone(),
+        ..RuntimeRequest::new(resolution.config.clone(), surface)
+    };
+    if let Some(catalog) = catalog
+        && let Some(source) = runtime_catalog_source(
+            &catalog,
+            &request.config.provider.name.value,
+            &request.config.provider.kind.value,
+            request
+                .config
+                .provider
+                .base_url
+                .as_ref()
+                .map(|value| value.value.as_str()),
+        )
+    {
+        request.catalog_sources.push(source);
+    }
+    Ok(request)
+}
+
 pub(super) async fn start_host(
     selection: &Selection,
     resume: Option<&str>,
@@ -87,15 +120,8 @@ pub(super) async fn start_host(
             profile.posture.source, profile.name, profile.name,
         );
     }
-    let workspace = ProjectWorkspace::new(&project)
-        .map_err(|error| anyhow::anyhow!("{error}"))
+    let mut runtime = preflight_request(&resolution, &project, surface, Some(catalog.clone()))
         .context("rooting the project workspace")?;
-    let mut runtime = RuntimeRequest {
-        workspace: Some(Arc::new(workspace)),
-        credentials: Some(CredentialResolver::new(&resolution.layout.user_dir)),
-        model_catalog: Some(catalog.clone()),
-        ..RuntimeRequest::new(resolution.config.clone(), surface)
-    };
     // Folded on here rather than inside the factory so that a direct embedder
     // still gets exactly the sources it supplied: discovery is a property of
     // the Smith *host*, which is the only layer that knows a user state root, a
@@ -110,19 +136,6 @@ pub(super) async fn start_host(
     let skill_context = Arc::new(skill_context);
     let persistence_redactor = DefaultRedactor::new();
     runtime.persistence_redactor = Some(persistence_redactor.clone());
-    if let Some(source) = runtime_catalog_source(
-        &catalog,
-        &resolution.config.provider.name.value,
-        &resolution.config.provider.kind.value,
-        resolution
-            .config
-            .provider
-            .base_url
-            .as_ref()
-            .map(|value| value.value.as_str()),
-    ) {
-        runtime.catalog_sources.push(source);
-    }
     for profile in agents
         .profiles
         .values()

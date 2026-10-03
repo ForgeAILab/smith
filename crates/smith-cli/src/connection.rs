@@ -3,7 +3,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
 
 use agent_runtime_core::store::Secret;
 use anyhow::{Context, Result};
@@ -14,14 +13,14 @@ use smith_config::model::{
     ProviderSection, ReasoningDialect,
 };
 use smith_config::setup::{
-    CHATGPT_CREDENTIAL, CHATGPT_ENDPOINT, CHATGPT_PROVIDER, CHATGPT_TERRA, GOOGLE_PROVIDER,
+    CHATGPT_CREDENTIAL, CHATGPT_ENDPOINT, CHATGPT_PROVIDER, CHATGPT_TERRA, ProviderConnectFlow,
     XAI_CREDENTIAL, XAI_DEFAULT_MODEL, XAI_ENDPOINT, XAI_PROVIDER,
+    connectable_provider_descriptors,
 };
 use smith_config::user_config::{
     CommittedConfigEdit, prepare_provider_credential_removal, prepare_user_config_edit,
 };
-use smith_host::ProjectWorkspace;
-use smith_runtime::factory::{self, HostSurface, RuntimeRequest};
+use smith_runtime::factory::{self, HostSurface};
 use smith_tui::ResourceEntry;
 use smith_tui::setup::SetupMode;
 
@@ -174,11 +173,19 @@ pub(super) async fn connect(
     no_color: bool,
     no_motion: bool,
 ) -> Result<bool> {
-    if provider == CHATGPT_PROVIDER {
-        return connect_chatgpt(selection, no_color, no_motion).await;
-    }
-    if provider == XAI_PROVIDER {
-        return connect_xai(selection, no_color, no_motion).await;
+    let descriptor = connectable_provider_descriptors(AVAILABLE_ADAPTER_KINDS)
+        .into_iter()
+        .find(|descriptor| descriptor.id == provider);
+    if let Some(connection) = descriptor.and_then(|descriptor| descriptor.connection) {
+        match connection.flow {
+            ProviderConnectFlow::ChatGptOAuth => {
+                return connect_chatgpt(selection, no_color, no_motion).await;
+            }
+            ProviderConnectFlow::XaiLogin => {
+                return connect_xai(selection, no_color, no_motion).await;
+            }
+            ProviderConnectFlow::Setup => {}
+        }
     }
     let prepared = prepare(&selection)?;
     let inventory = local_inventory(&prepared.resolution, AVAILABLE_ADAPTER_KINDS)
@@ -192,15 +199,17 @@ pub(super) async fn connect(
         SetupMode::Credential {
             provider: provider.to_owned(),
         }
-    } else if provider == "openrouter" {
-        SetupMode::OpenRouter
-    } else if provider == GOOGLE_PROVIDER {
-        SetupMode::Google
-    } else if provider == "openai-compatible" {
-        // Not a provider name: the generic entry for endpoints with no
-        // built-in ceremony, so it opens the same reviewed add-provider flow
-        // as `smith setup add-provider` instead of a credential swap.
-        SetupMode::AddProvider
+    } else if let Some(descriptor) = descriptor {
+        // The generic descriptor collects its provider name; fixed built-ins
+        // start at authentication and may select from the frozen catalog.
+        SetupMode::Provider {
+            flow: setup::provider_setup_flow(
+                descriptor,
+                descriptor
+                    .connection
+                    .is_some_and(|connection| connection.catalog_provider.is_some()),
+            ),
+        }
     } else {
         anyhow::bail!(
             "provider `{provider}` is not configured; connect a custom OpenAI-compatible endpoint \
@@ -506,16 +515,13 @@ pub(super) async fn connect_chatgpt_from_setup(
         smith_runtime::host::validate_host_policy(&prepared.resolution.config, &prepared.project)
             .map_err(anyhow::Error::new)
             .context("validating Smith host policy for ChatGPT")?;
-        let workspace = ProjectWorkspace::new(&prepared.project)
-            .map_err(|error| anyhow::anyhow!(error))
-            .context("rooting the project workspace for ChatGPT preflight")?;
-        let request = RuntimeRequest {
-            workspace: Some(Arc::new(workspace)),
-            credentials: Some(smith_config::credential::CredentialResolver::new(
-                &prepared.resolution.layout.user_dir,
-            )),
-            ..RuntimeRequest::new(prepared.resolution.config, HostSurface::Terminal)
-        };
+        let request = crate::runtime_host::preflight_request(
+            &prepared.resolution,
+            &prepared.project,
+            HostSurface::Terminal,
+            None,
+        )
+        .context("rooting the project workspace for ChatGPT preflight")?;
         factory::preflight(&request)
             .await
             .map(|_| ())

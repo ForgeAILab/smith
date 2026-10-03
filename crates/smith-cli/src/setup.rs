@@ -27,19 +27,19 @@ use smith_config::model::{
 use smith_config::resolve::{ConfigReadiness, ResolveRequest, inspect};
 use smith_config::setup::{
     CHATGPT_PROVIDER, CHATGPT_TERRA, GLM_5_2, GLM_ENDPOINT, GLM_PROFILE, GLM_PROVIDER,
-    GOOGLE_PROFILE, GOOGLE_PROVIDER, XAI_ENDPOINT, XAI_PROFILE, XAI_PROVIDER, provider_descriptors,
+    GOOGLE_PROFILE, GOOGLE_PROVIDER, ProviderSetupDescriptor, ProviderSetupFlow, QuickKeySetup,
+    SETUP_ENVIRONMENT_VARIABLE_ERROR, SETUP_PROVIDER_NAME_HELP, XAI_ENDPOINT, XAI_PROFILE,
+    XAI_PROVIDER, connectable_provider_descriptors, provider_descriptors, setup_endpoint_help,
 };
 use smith_config::user_config::{prepare_checkpoint_key_source_removal, prepare_user_config_edit};
-use smith_host::ProjectWorkspace;
 use smith_runtime::checkpoint::{CheckpointKeyProvider, ConfiguredCheckpointKeyProvider};
-use smith_runtime::factory::{
-    self, AVAILABLE_ADAPTER_KINDS, FactoryError, HostSurface, RuntimeRequest,
-};
-use smith_runtime::model_catalog::{CatalogLoader, runtime_catalog_source};
+use smith_runtime::factory::{self, AVAILABLE_ADAPTER_KINDS, FactoryError, HostSurface};
+use smith_runtime::model_catalog::CatalogLoader;
 use smith_tui::picker::ResourceEntry;
 use smith_tui::setup::{
-    ResolveModelLimits, ResolvedModelLimits, SetupApp, SetupCredential, SetupEffect, SetupMode,
-    SetupModelLimits, SetupProviderKind, SetupQuickStart, SetupSubmission, draw_setup,
+    ResolveModelLimits, ResolvedModelLimits, SetupApp, SetupCredential, SetupEffect, SetupEntry,
+    SetupFlow, SetupKeyReview, SetupMode, SetupModelLimits, SetupPrompts, SetupProviderKind,
+    SetupQuickKey, SetupQuickStart, SetupSubmission, draw_setup,
 };
 use smith_tui::theme::Theme;
 use zeroize::Zeroizing;
@@ -362,20 +362,34 @@ pub(crate) async fn run_surface(
 ) -> Result<SetupOutcome> {
     let context = setup_context(selection, &mode).await?;
     let providers = provider_entries(&context.inventory);
-    let (models, catalog_model_limits) = match &mode {
-        SetupMode::OpenRouter => catalog_model_entries(
-            &context,
-            smith_config::catalog::OPENROUTER_CATALOG_PROVIDER,
-            "OpenRouter",
-        )?,
-        SetupMode::Google => catalog_model_entries(
-            &context,
-            smith_config::catalog::GOOGLE_CATALOG_PROVIDER,
-            "Google Gemini",
-        )?,
-        _ => (model_entries(&context.inventory), BTreeMap::new()),
+    let catalog_connection = match &mode {
+        SetupMode::Provider {
+            flow: SetupFlow::QuickKey { provider, .. },
+        } => connectable_provider_descriptors(AVAILABLE_ADAPTER_KINDS)
+            .into_iter()
+            .find(|descriptor| descriptor.provider == Some(provider.as_str())),
+        SetupMode::Provider {
+            flow:
+                SetupFlow::CustomEndpoint {
+                    provider: Some(provider),
+                    ..
+                },
+        } => connectable_provider_descriptors(AVAILABLE_ADAPTER_KINDS)
+            .into_iter()
+            .find(|descriptor| descriptor.provider == Some(provider.as_str())),
+        _ => None,
+    }
+    .and_then(|descriptor| descriptor.connection)
+    .and_then(|connection| {
+        connection
+            .catalog_provider
+            .map(|catalog| (catalog, connection.label))
+    });
+    let (models, catalog_model_limits) = match catalog_connection {
+        Some((catalog, label)) => catalog_model_entries(&context, catalog, label)?,
+        None => (model_entries(&context.inventory), BTreeMap::new()),
     };
-    let provider_actions = provider_action_entries();
+    let provider_actions = setup_action_entries(&mode);
     if matches!(mode, SetupMode::AddProvider)
         && !provider_actions
             .iter()
@@ -398,10 +412,16 @@ pub(crate) async fn run_surface(
         );
     }
 
-    let mut app = SetupApp::new(mode, providers, models, glm_quick_start())
-        .with_provider_actions(provider_actions)
-        .with_catalog_model_limits(catalog_model_limits)
-        .with_destination(context.user_dir.join("config.toml").display().to_string());
+    let mut app = SetupApp::new(
+        mode,
+        providers,
+        models,
+        glm_quick_start(),
+        provider_actions,
+        setup_prompts(),
+    )
+    .with_catalog_model_limits(catalog_model_limits)
+    .with_destination(context.user_dir.join("config.toml").display().to_string());
     let mut terminal = terminal::enter().context("entering guided setup")?;
     let mut theme = Theme::from_env();
     if no_color {
@@ -533,43 +553,134 @@ fn catalog_model_entries(
     Ok((entries, limits_by_model))
 }
 
-fn provider_action_entries() -> Vec<ResourceEntry> {
+fn setup_prompts() -> SetupPrompts {
+    SetupPrompts {
+        provider_name_help: SETUP_PROVIDER_NAME_HELP.to_owned(),
+        endpoint_help: setup_endpoint_help(),
+        environment_variable_error: SETUP_ENVIRONMENT_VARIABLE_ERROR.to_owned(),
+    }
+}
+
+fn provider_action_entries() -> Vec<SetupEntry> {
     provider_descriptors(AVAILABLE_ADAPTER_KINDS)
         .into_iter()
-        .map(|descriptor| {
-            let id = if descriptor.id == "openai-compatible" {
-                "add-provider"
-            } else {
-                descriptor.id
-            };
-            let detail = if id == "glm" {
-                format!(
-                    "Z.AI Coding Plan endpoint with trusted {} limits",
-                    GLM_5_2.label
-                )
-            } else {
-                descriptor.description.to_owned()
-            };
-            ResourceEntry::new(id, descriptor.label, detail)
+        .map(|descriptor| SetupEntry {
+            id: descriptor.setup_id.to_owned(),
+            label: descriptor.label.to_owned(),
+            detail: descriptor.description.to_owned(),
+            flow: provider_setup_flow(descriptor, false),
         })
         .collect()
 }
 
-fn glm_quick_start() -> SetupQuickStart {
-    SetupQuickStart {
-        provider: GLM_PROVIDER.into(),
-        endpoint: GLM_ENDPOINT.into(),
-        model: GLM_5_2.model.into(),
-        model_label: GLM_5_2.label.into(),
-        limits: SetupModelLimits {
-            context_tokens: GLM_5_2.context_tokens,
-            max_input_tokens: GLM_5_2.max_input_tokens,
-            max_output_tokens: GLM_5_2.max_output_tokens,
+fn setup_action_entries(mode: &SetupMode) -> Vec<SetupEntry> {
+    let mut entries = provider_action_entries();
+    if matches!(mode, SetupMode::Menu) {
+        entries.push(SetupEntry {
+            id: "add-model".into(),
+            label: "Add model".into(),
+            detail: "attach explicit limits to an existing provider".into(),
+            flow: SetupFlow::AddModel,
+        });
+        entries.push(SetupEntry {
+            id: "change-default".into(),
+            label: "Change default".into(),
+            detail: "choose a configured provider/model pair".into(),
+            flow: SetupFlow::ChangeDefault,
+        });
+    }
+    entries
+}
+
+pub(super) fn provider_setup_flow(
+    descriptor: ProviderSetupDescriptor,
+    catalog_models: bool,
+) -> SetupFlow {
+    match descriptor.flow {
+        ProviderSetupFlow::QuickKey(kind) => {
+            let provider = descriptor
+                .provider
+                .expect("a quick key plan has a fixed provider");
+            let endpoint = descriptor
+                .endpoint
+                .expect("a quick key plan has a fixed endpoint");
+            SetupFlow::QuickKey {
+                kind: match kind {
+                    QuickKeySetup::Glm => SetupQuickKey::Glm,
+                    QuickKeySetup::Xai => SetupQuickKey::Xai,
+                    QuickKeySetup::Google => SetupQuickKey::Google,
+                },
+                provider: provider.to_owned(),
+                endpoint: endpoint.to_owned(),
+                review: SetupKeyReview {
+                    action: format!("action: {}", descriptor.review.action),
+                    provider: format!("provider: {provider} ({})", descriptor.review.adapter),
+                    endpoint: format!(
+                        "endpoint: {}",
+                        descriptor.review.endpoint.unwrap_or(endpoint)
+                    ),
+                    profile: format!(
+                        "default profile: {}",
+                        descriptor.profile.expect("a quick key plan has a profile")
+                    ),
+                    reasoning: descriptor
+                        .review
+                        .reasoning
+                        .map(|reasoning| format!("reasoning: {reasoning}")),
+                },
+                catalog_models,
+            }
+        }
+        ProviderSetupFlow::CustomEndpoint => SetupFlow::CustomEndpoint {
+            kind: if descriptor.adapter == KIND_ANTHROPIC_MESSAGES {
+                SetupProviderKind::AnthropicMessages
+            } else {
+                SetupProviderKind::OpenAiCompatible
+            },
+            provider: descriptor.provider.map(str::to_owned),
+            endpoint: descriptor.endpoint.map(str::to_owned),
+            review_action: format!("action: {}", descriptor.review.action),
+            adapter: descriptor.adapter.to_owned(),
+            catalog_models,
         },
-        request_output_tokens: GLM_5_2.request_output_tokens,
-        output_reserve: GLM_5_2.output_reserve,
-        profile: GLM_PROFILE.into(),
-        catalog_revision: GLM_5_2.revision,
+        ProviderSetupFlow::OAuth { busy_note } => SetupFlow::OAuth {
+            busy_note: busy_note.to_owned(),
+        },
+    }
+}
+
+fn glm_quick_start() -> SetupQuickStart {
+    let descriptor = provider_descriptors(AVAILABLE_ADAPTER_KINDS)
+        .into_iter()
+        .find(|descriptor| descriptor.flow == ProviderSetupFlow::QuickKey(QuickKeySetup::Glm))
+        .expect("this build supplies the trusted quick-start descriptor");
+    let model = descriptor
+        .models
+        .first()
+        .expect("the quick start has a trusted model");
+    SetupQuickStart {
+        provider: descriptor
+            .provider
+            .expect("the quick start has a provider")
+            .into(),
+        endpoint: descriptor
+            .endpoint
+            .expect("the quick start has an endpoint")
+            .into(),
+        model: model.model.into(),
+        model_label: model.label.into(),
+        limits: SetupModelLimits {
+            context_tokens: model.context_tokens,
+            max_input_tokens: model.max_input_tokens,
+            max_output_tokens: model.max_output_tokens,
+        },
+        request_output_tokens: model.request_output_tokens,
+        output_reserve: model.output_reserve,
+        profile: descriptor
+            .profile
+            .expect("the quick start has a profile")
+            .into(),
+        catalog_revision: model.revision,
     }
 }
 
@@ -1009,29 +1120,13 @@ async fn preflight(context: &SetupContext) -> Result<(), (String, bool)> {
     {
         return Err((error.to_string(), false));
     }
-    let workspace =
-        ProjectWorkspace::new(&context.project).map_err(|error| (error.to_string(), false))?;
-    let mut runtime = RuntimeRequest {
-        workspace: Some(Arc::new(workspace)),
-        credentials: Some(smith_config::credential::CredentialResolver::new(
-            &resolution.layout.user_dir,
-        )),
-        model_catalog: Some(context.catalog.clone()),
-        ..RuntimeRequest::new(resolution.config, HostSurface::Terminal)
-    };
-    if let Some(source) = runtime_catalog_source(
-        &context.catalog,
-        &runtime.config.provider.name.value,
-        &runtime.config.provider.kind.value,
-        runtime
-            .config
-            .provider
-            .base_url
-            .as_ref()
-            .map(|value| value.value.as_str()),
-    ) {
-        runtime.catalog_sources.push(source);
-    }
+    let runtime = crate::runtime_host::preflight_request(
+        &resolution,
+        &context.project,
+        HostSurface::Terminal,
+        Some(context.catalog.clone()),
+    )
+    .map_err(|error| (error.to_string(), false))?;
     factory::preflight(&runtime)
         .await
         .map(|_| ())
@@ -1452,11 +1547,25 @@ mod tests {
             actions.len(),
             provider_descriptors(AVAILABLE_ADAPTER_KINDS).len()
         );
+        for (descriptor, entry) in provider_descriptors(AVAILABLE_ADAPTER_KINDS)
+            .iter()
+            .zip(&actions)
+        {
+            assert_eq!(entry.id, descriptor.setup_id);
+            assert_eq!(entry.label, descriptor.label);
+            assert_eq!(entry.detail, descriptor.description);
+            assert_eq!(entry.flow, provider_setup_flow(*descriptor, false));
+        }
         for mode in [SetupMode::FirstRun, SetupMode::Menu] {
-            for (index, entry) in actions.iter().enumerate() {
-                let mut app =
-                    SetupApp::new(mode.clone(), Vec::new(), Vec::new(), glm_quick_start())
-                        .with_provider_actions(provider_action_entries());
+            for (index, entry) in setup_action_entries(&mode).iter().enumerate() {
+                let mut app = SetupApp::new(
+                    mode.clone(),
+                    Vec::new(),
+                    Vec::new(),
+                    glm_quick_start(),
+                    setup_action_entries(&mode),
+                    setup_prompts(),
+                );
                 for _ in 0..index {
                     app.on_key(setup_key(KeyCode::Down));
                 }
@@ -1466,7 +1575,7 @@ mod tests {
                     "offered setup action `{}` has no handler in {mode:?}",
                     entry.id
                 );
-                if entry.id == CHATGPT_PROVIDER {
+                if matches!(entry.flow, SetupFlow::OAuth { .. }) {
                     assert!(matches!(effect, SetupEffect::ConnectChatGpt));
                 } else {
                     assert!(matches!(effect, SetupEffect::None));
@@ -1484,7 +1593,14 @@ mod tests {
             .find(|entry| entry.id == "glm")
             .expect("GLM action");
         assert!(entry.detail.contains(&data.model_label));
-        let mut app = SetupApp::new(SetupMode::FirstRun, Vec::new(), Vec::new(), data.clone());
+        let mut app = SetupApp::new(
+            SetupMode::FirstRun,
+            Vec::new(),
+            Vec::new(),
+            data.clone(),
+            provider_action_entries(),
+            setup_prompts(),
+        );
         app.on_key(setup_key(KeyCode::Enter));
         app.on_key(setup_key(KeyCode::Down));
         app.on_key(setup_key(KeyCode::Enter));
@@ -1533,8 +1649,9 @@ mod tests {
             Vec::new(),
             Vec::new(),
             glm_quick_start(),
-        )
-        .with_provider_actions(actions);
+            actions,
+            setup_prompts(),
+        );
         for _ in 0..index {
             app.on_key(setup_key(KeyCode::Down));
         }

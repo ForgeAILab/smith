@@ -82,13 +82,13 @@ completed_at:
 
 ## 5. Provider descriptors
 
-- [ ] 5.1 Extend `smith-config` descriptors with the setup flow and the
+- [x] 5.1 Extend `smith-config` descriptors with the setup flow and the
   connectable flag; remove the duplicate endpoint constant.
-- [ ] 5.2 Build `SetupEntry` values in the CLI and pass them to the setup
+- [x] 5.2 Build `SetupEntry` values in the CLI and pass them to the setup
   surface; remove endpoint, limit, and name literals from `smith-tui`.
-- [ ] 5.3 Derive the CLI's connectable-provider list and dispatch from the
+- [x] 5.3 Derive the CLI's connectable-provider list and dispatch from the
   descriptors.
-- [ ] 5.4 Use one preflight-request constructor for setup, connect, and
+- [x] 5.4 Use one preflight-request constructor for setup, connect, and
   session start.
 
 ## 6. CLI module hygiene

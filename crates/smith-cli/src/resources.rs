@@ -132,43 +132,18 @@ pub(super) fn runtime_resources(
             .active(provider.active)
         })
         .collect::<Vec<_>>();
-    if !connections.iter().any(|entry| entry.id == "openrouter") {
-        connections.push(ResourceEntry::new(
-            "openrouter",
-            "OpenRouter",
-            "API key · fixed OpenRouter endpoint · adds a reviewed model",
-        ));
-    }
-    if !connections.iter().any(|entry| entry.id == "chatgpt") {
-        connections.push(ResourceEntry::new(
-            "chatgpt",
-            "ChatGPT (experimental)",
-            "Smith OAuth · direct ChatGPT Responses · unsupported public API boundary",
-        ));
-    }
-    if !connections.iter().any(|entry| entry.id == "xai") {
-        connections.push(ResourceEntry::new(
-            "xai",
-            "xAI Grok",
-            "browser login or API key · fixed xAI Responses endpoint · catalog-backed model",
-        ));
-    }
-    if !connections.iter().any(|entry| entry.id == "google") {
-        connections.push(ResourceEntry::new(
-            "google",
-            "Google Gemini",
-            "AI Studio API key · fixed native Gemini endpoint · catalog-backed model",
-        ));
-    }
-    if !connections
-        .iter()
-        .any(|entry| entry.id == "openai-compatible")
+    for descriptor in smith_config::setup::connectable_provider_descriptors(AVAILABLE_ADAPTER_KINDS)
     {
-        connections.push(ResourceEntry::new(
-            "openai-compatible",
-            "OpenAI-compatible endpoint",
-            "API key · any OpenAI-compatible base URL · adds a first reviewed model",
-        ));
+        if !connections.iter().any(|entry| entry.id == descriptor.id) {
+            let connection = descriptor
+                .connection
+                .expect("a connectable descriptor has a ceremony");
+            connections.push(ResourceEntry::new(
+                descriptor.id,
+                connection.label,
+                connection.description,
+            ));
+        }
     }
     let providers = inventory
         .providers
