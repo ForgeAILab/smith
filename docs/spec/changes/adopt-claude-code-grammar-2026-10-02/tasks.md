@@ -99,7 +99,7 @@ completed_at:
   narrow.
 - [x] 5.5 Shortcuts panel on `?` in the anchored pane.
 
-- [ ] 5.5a Key table content, shared by /help and the shortcuts panel:
+- [x] 5.5a Key table content, shared by /help and the shortcuts panel:
   capitalize every description; `?` shows shortcuts, not help; Home/End
   describe the draft-first behaviour; list Up/Down line movement, `\` then
   Enter, Ctrl+A/E/W/U/K, and Alt+B/F.

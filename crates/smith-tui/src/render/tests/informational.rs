@@ -322,16 +322,38 @@ fn informational_help_uses_registry_order_and_an_aligned_plain_word_key_table() 
             })
             .collect::<Vec<_>>()
             .join(" ");
-        assert_eq!(description, "queue for after this turn");
+        assert_eq!(description, "Queue for after this turn");
         assert!(!text.join("\n").contains("steers"));
-        assert!(!text.join("\n").contains("Ctrl+A"));
+        assert!(text.join("\n").contains("Ctrl+A / Ctrl+E"));
     }
+    assert!(report.keys.iter().all(|row| {
+        row.description
+            .chars()
+            .next()
+            .is_some_and(char::is_uppercase)
+    }));
     for (key, action) in [
-        ("Enter while working", "send now"),
-        ("Tab while working", "queue for after this turn"),
-        ("Tab when idle", "next profile (empty draft)"),
-        ("Ctrl+O", "expand or fold detail"),
-        ("Esc", "interrupt or close"),
+        ("Enter while working", "Send now"),
+        ("Tab while working", "Queue for after this turn"),
+        ("Tab when idle", "Next profile (empty draft)"),
+        ("Ctrl+O", "Expand or fold detail"),
+        ("Esc", "Interrupt or close"),
+        ("? on an empty draft", "Show shortcuts"),
+        ("Shift+Enter or Alt+Enter", "Insert a newline"),
+        ("\\ then Enter", "Replace the backslash with a newline"),
+        (
+            "Up / Down",
+            "Move between draft lines; browse history and delegated agents from the first or last line",
+        ),
+        (
+            "Home / End",
+            "Go to draft start or end; when empty, go to oldest or newest output",
+        ),
+        ("Ctrl+A / Ctrl+E", "Go to line start or end"),
+        ("Alt+B / Alt+F", "Move one word left or right"),
+        ("Ctrl+W", "Delete the word to the left"),
+        ("Ctrl+U", "Delete to line start"),
+        ("Ctrl+K", "Delete to line end"),
     ] {
         assert!(
             report
