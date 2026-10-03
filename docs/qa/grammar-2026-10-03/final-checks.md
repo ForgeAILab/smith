@@ -42,3 +42,24 @@ scratch Git project:
 - After quitting and `--resume <id>`, the transcript showed the same turn
   and the same `! ls -la` row in its original place
   ([capture](live-resumed-shortcut-100x32.txt)).
+
+## Cache, 0.3.0 against this build
+
+`cache_ab.py` repeats the 0.3.0 method: three headless turns on a project
+with a ~50 KB file (read in turn 1, two follow-ups via `--resume`), the
+owner's real configuration, the same prompts on each build. The new build is
+the release build of `b1b8a91`; results are in [`cache-ab.json`](cache-ab.json).
+
+| Model | Build | Turn 1 cached | Turn 2 cached | Turn 3 cached | Turn 2 / 3 uncached |
+|---|---|---|---|---|---|
+| zai/glm-5.3 | 0.3.0 | 4,032 | 1,728 | 2,880 | 1,200 / 106 |
+| zai/glm-5.3 | this | 5,824 | 1,792 | 2,880 | 1,149 / 119 |
+| google/gemini-3.8-flash | 0.3.0 | 0 | 0 | 0 | 1,967 / 2,051 |
+| google/gemini-3.8-flash | this | 0 | 0 | 0 | 1,939 / 2,100 |
+| xai/grok-4.3 | 0.3.0 | 1,024 | 2,496 | 2,752 | 302 / 315 |
+| xai/grok-4.3 | this | 384 | 2,432 | 2,688 | 305 / 235 |
+
+Follow-up turns carry the same uncached input on both builds, so the request
+prefix did not grow. Turn 1 differs with how the model chose to read the file,
+as in the 0.3.0 run. Gemini reports no cache reads on either build. No miss
+or re-billed tokens were reported on any turn.

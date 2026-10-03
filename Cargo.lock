@@ -3323,7 +3323,7 @@ checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 
 [[package]]
 name = "smith-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "agent-runtime",
  "agent-runtime-core",
@@ -3358,7 +3358,7 @@ dependencies = [
 
 [[package]]
 name = "smith-client"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "agent-runtime-core",
  "agent-runtime-registry",
@@ -3374,7 +3374,7 @@ dependencies = [
 
 [[package]]
 name = "smith-config"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "agent-runtime-core",
  "async-trait",
@@ -3397,7 +3397,7 @@ dependencies = [
 
 [[package]]
 name = "smith-host"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "agent-runtime-core",
  "agent-runtime-registry",
@@ -3416,7 +3416,7 @@ dependencies = [
 
 [[package]]
 name = "smith-runtime"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "agent-runtime",
  "agent-runtime-ability",
@@ -3454,7 +3454,7 @@ dependencies = [
 
 [[package]]
 name = "smith-tools"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "agent-runtime",
  "agent-runtime-core",
@@ -3477,7 +3477,7 @@ dependencies = [
 
 [[package]]
 name = "smith-tui"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "agent-runtime",
  "agent-runtime-core",
