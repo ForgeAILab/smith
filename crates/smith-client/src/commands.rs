@@ -3,6 +3,8 @@
 //! Slash completion, `Ctrl+P`, `/help`, and parsing consume the same table.
 //! Each parsed value carries its entry and encodes the executor in its type.
 
+use crate::help_report::{HelpCommand, HelpReport};
+
 /// A command routed to the executor that can handle it.
 ///
 /// The local host accepts only [`HostCommand`], so a UI or session command
@@ -715,54 +717,67 @@ fn parse_goal(argument: &str) -> Result<Command, String> {
     Ok(Command::Host(HostCommand::Goal(action)))
 }
 
-/// Finished `/help` output, derived from the registry.
-pub fn help() -> String {
-    let mut output = String::from(
-        "Getting started\n\
-         Type a task and press Enter.\n\
-         /model — Choose a model\n\
-         /connect — Add a connection\n\
-         /help — Explore all commands\n\n\
-         Primary\n",
-    );
-    for command in COMMANDS.iter().filter(|command| !command.advanced) {
-        push_help_line(&mut output, command);
+/// The typed `/help` guide, derived from the registry.
+pub fn help() -> HelpReport {
+    HelpReport {
+        introduction: "Type a task and press Enter.".to_owned(),
+        getting_started: [
+            ("model", "Choose a model"),
+            ("connect", "Add a connection"),
+            ("help", "Explore all commands"),
+        ]
+        .into_iter()
+        .map(|(name, description)| {
+            let command = COMMANDS
+                .iter()
+                .find(|command| command.name == name)
+                .expect("getting-started command exists in the registry");
+            HelpCommand {
+                name: command.name.to_owned(),
+                argument_hint: String::new(),
+                description: description.to_owned(),
+            }
+        })
+        .collect(),
+        primary: COMMANDS
+            .iter()
+            .filter(|command| !command.advanced)
+            .map(help_command)
+            .collect(),
+        advanced: COMMANDS
+            .iter()
+            .filter(|command| command.advanced)
+            .map(help_command)
+            .collect(),
+        composer: [
+            "? or /help shows this local guide without contacting the model.",
+            "Tab cycles the configured profile order only while empty and idle.",
+            "While work is serving, Enter steers an ordinary prompt and Tab queues it.",
+            "Alt+Up restores the newest explicit queued turn for editing.",
+            "Esc interrupts; uncommitted steers are resent only after cancellation discards them.",
+            "Ctrl+B moves a running foreground shell command to the background without killing it.",
+            "@ completes exact files and read-only agents; @@ sends a literal @.",
+            "! runs a prepared local shell action; !! sends a literal !.",
+            "PageUp/PageDown/Home/End or the mouse wheel scrolls the transcript.",
+            "Up/Down browse accepted and Ctrl+C-stashed input without losing your draft.",
+            "Down past the newest draft walks the delegated agents; the transcript shows",
+            "that agent's log, Enter continues it, and Esc returns to the root timeline.",
+            "Ctrl+R searches composer history; Enter restores a match and Esc cancels.",
+            "Ctrl+C twice within 1s exits; the first press stashes and clears the draft.",
+            "Start a message with // to send a literal leading slash.",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect(),
     }
-    output.push_str("\nAdvanced\n");
-    for command in COMMANDS.iter().filter(|command| command.advanced) {
-        push_help_line(&mut output, command);
-    }
-    output.push_str(
-        "\nComposer\n\
-         ? or /help shows this local guide without contacting the model.\n\
-         Tab cycles the configured profile order only while empty and idle.\n\
-         While work is serving, Enter steers an ordinary prompt and Tab queues it.\n\
-         Alt+Up restores the newest explicit queued turn for editing.\n\
-         Esc interrupts; uncommitted steers are resent only after cancellation discards them.\n\
-         Ctrl+B moves a running foreground shell command to the background without killing it.\n\
-         @ completes exact files and read-only agents; @@ sends a literal @.\n\
-         ! runs a prepared local shell action; !! sends a literal !.\n\
-         PageUp/PageDown/Home/End or the mouse wheel scrolls the transcript.\n\
-         Up/Down browse accepted and Ctrl+C-stashed input without losing your draft.\n\
-         Down past the newest draft walks the delegated agents; the transcript shows\n\
-         that agent's log, Enter continues it, and Esc returns to the root timeline.\n\
-         Ctrl+R searches composer history; Enter restores a match and Esc cancels.\n\
-         Ctrl+C twice within 1s exits; the first press stashes and clears the draft.\n\
-         Start a message with // to send a literal leading slash.",
-    );
-    output
 }
 
-fn push_help_line(output: &mut String, command: &CommandSpec) {
-    output.push('/');
-    output.push_str(command.name);
-    if !command.argument_hint.is_empty() {
-        output.push(' ');
-        output.push_str(command.argument_hint);
+fn help_command(command: &CommandSpec) -> HelpCommand {
+    HelpCommand {
+        name: command.name.to_owned(),
+        argument_hint: command.argument_hint.to_owned(),
+        description: command.description.to_owned(),
     }
-    output.push_str(" — ");
-    output.push_str(command.description);
-    output.push('\n');
 }
 
 #[cfg(test)]
@@ -797,7 +812,7 @@ mod tests {
 
     #[test]
     fn help_and_completion_share_the_complete_registry() {
-        let help = help();
+        let help = crate::help_report::render_plain(&help());
         assert!(help.starts_with("Getting started\n"));
         assert!(help.contains("/model — Choose a model"));
         for command in COMMANDS {

@@ -8,6 +8,7 @@ pub mod cache;
 pub mod commands;
 pub mod context_report;
 mod format;
+pub mod help_report;
 pub mod local_result;
 pub mod status;
 pub mod status_report;

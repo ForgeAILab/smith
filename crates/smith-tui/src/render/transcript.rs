@@ -14,6 +14,7 @@ use crate::status::{Activity, render_elapsed};
 use crate::theme::{Theme, Tone, glyph};
 use crate::transcript::{Block, LocalResult, LocalResultState, ToolStatus};
 use smith_client::context_report::{ContextCategoryKind, ContextCompaction, ContextReport};
+use smith_client::help_report::{HelpCommand, HelpReport};
 use smith_client::status_report::{StatusGoal, StatusReport};
 use smith_tools::ToolCallDisplay;
 
@@ -363,6 +364,13 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16) -> Vec<Line<'static>>
                     theme.style(Tone::Command),
                 )));
                 lines.extend(render_context_report(report, width, theme));
+            }
+            Block::Local(LocalResult::Help(report)) => {
+                lines.push(Line::from(Span::styled(
+                    "/help",
+                    theme.style(Tone::Command),
+                )));
+                lines.extend(render_help_report(report, width, theme));
             }
             Block::Local(LocalResult::Text {
                 title,
@@ -858,6 +866,102 @@ pub(super) fn render_local_content(
     lines
 }
 
+pub(super) fn render_help_report(
+    report: &HelpReport,
+    width: u16,
+    theme: Theme,
+) -> Vec<Line<'static>> {
+    let available = usize::from(width).max(1);
+    let mut lines = wrap_context_line(
+        Line::from(Span::styled(
+            HelpReport::GETTING_STARTED_HEADING,
+            theme.style(Tone::Heading),
+        )),
+        available,
+    );
+    lines.extend(wrap_context_line(
+        Line::from(Span::styled(
+            report.introduction.clone(),
+            theme.style(Tone::Dim),
+        )),
+        available,
+    ));
+    lines.extend(
+        report
+            .getting_started
+            .iter()
+            .flat_map(|command| render_help_command(command, available, theme)),
+    );
+    for (heading, commands) in [
+        (HelpReport::PRIMARY_HEADING, &report.primary),
+        (HelpReport::ADVANCED_HEADING, &report.advanced),
+    ] {
+        lines.push(Line::default());
+        lines.extend(wrap_context_line(
+            Line::from(Span::styled(heading, theme.style(Tone::Heading))),
+            available,
+        ));
+        lines.extend(
+            commands
+                .iter()
+                .flat_map(|command| render_help_command(command, available, theme)),
+        );
+    }
+    lines.push(Line::default());
+    lines.extend(wrap_context_line(
+        Line::from(Span::styled(
+            HelpReport::COMPOSER_HEADING,
+            theme.style(Tone::Dim),
+        )),
+        available,
+    ));
+    lines.extend(report.composer.iter().flat_map(|guidance| {
+        wrap_context_line(
+            Line::from(Span::styled(guidance.clone(), theme.style(Tone::Dim))),
+            available,
+        )
+    }));
+    lines
+}
+
+fn render_help_command(
+    command: &HelpCommand,
+    available: usize,
+    theme: Theme,
+) -> Vec<Line<'static>> {
+    let invocation = command.invocation();
+    let command_end = invocation.len();
+    let description_start = command_end + " — ".len();
+    let raw = format!("{invocation} — {}", command.description);
+    let mut start = 0;
+    wrap_text(&raw, available)
+        .into_iter()
+        .map(|wrapped| {
+            let end = start + wrapped.len();
+            // Preserve wrapping before replacing the plain separator with two
+            // spaces. Only a row containing the entire separator has a code
+            // span; its boundaries come from the fields, never parsed text.
+            let line = if start <= command_end && end >= description_start {
+                Line::from(vec![
+                    Span::styled(
+                        wrapped[..command_end - start].to_owned(),
+                        theme.style(Tone::Code),
+                    ),
+                    Span::styled("  ", theme.style(Tone::Dim)),
+                    Span::styled(
+                        wrapped[description_start - start..].to_owned(),
+                        theme.style(Tone::Dim),
+                    ),
+                ])
+            } else {
+                Line::from(Span::styled(wrapped, theme.style(Tone::Dim)))
+            };
+            start = end;
+            line
+        })
+        .collect()
+}
+
 pub(super) fn render_context_report(
     report: &ContextReport,
     width: u16,
@@ -1060,20 +1164,6 @@ pub(super) fn styled_local_line(title: &str, raw: &str, theme: Theme) -> Line<'s
     if raw.is_empty() {
         return Line::default();
     }
-    if title == "help" {
-        if matches!(raw, "Getting started" | "Primary" | "Advanced") {
-            return Line::from(Span::styled(raw.to_owned(), theme.style(Tone::Heading)));
-        }
-        if let Some((command, description)) = raw.split_once(" — ") {
-            return Line::from(vec![
-                Span::styled(command.to_owned(), theme.style(Tone::Code)),
-                Span::styled("  ", theme.style(Tone::Dim)),
-                Span::styled(description.to_owned(), theme.style(Tone::Dim)),
-            ]);
-        }
-        return Line::from(Span::styled(raw.to_owned(), theme.style(Tone::Dim)));
-    }
-
     if title.starts_with("diff") {
         let tone = if raw.starts_with("@@") {
             Tone::Code

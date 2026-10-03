@@ -708,6 +708,7 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                 let content = match result {
                     LocalResult::Status(report) => smith_client::status_report::render_plain(report),
                     LocalResult::Context(report) => smith_client::context_report::render_plain(report),
+                    LocalResult::Help(report) => smith_client::help_report::render_plain(report),
                     LocalResult::Text { body, .. } => body.clone(),
                 };
                 raw.push_str(&format!(
@@ -720,6 +721,9 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                     )),
                     LocalResult::Context(report) => LocalResult::Context(Box::new(
                         fixture_context_view(report, normalizer),
+                    )),
+                    LocalResult::Help(report) => LocalResult::Help(Box::new(
+                        fixture_help_view(report, normalizer),
                     )),
                     LocalResult::Text { title, body, state } => LocalResult::Text {
                         title: normalizer.normalize(title),
@@ -912,6 +916,32 @@ fn fixture_context_view(
             *summary = normalizer.normalize(summary);
             *recovery_target = normalizer.normalize(recovery_target);
         }
+    }
+    report
+}
+
+fn fixture_help_view(
+    report: &smith_client::help_report::HelpReport,
+    normalizer: &mut fixture_support::Normalizer,
+) -> smith_client::help_report::HelpReport {
+    let mut report = report.clone();
+    report.introduction = normalizer.normalize(&report.introduction);
+    for command in report
+        .getting_started
+        .iter_mut()
+        .chain(&mut report.primary)
+        .chain(&mut report.advanced)
+    {
+        for value in [
+            &mut command.name,
+            &mut command.argument_hint,
+            &mut command.description,
+        ] {
+            *value = normalizer.normalize(value);
+        }
+    }
+    for guidance in &mut report.composer {
+        *guidance = normalizer.normalize(guidance);
     }
     report
 }

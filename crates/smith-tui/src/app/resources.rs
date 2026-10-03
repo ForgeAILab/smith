@@ -462,7 +462,7 @@ impl App {
     pub(super) fn show_command_help(&mut self) -> Option<Action> {
         self.overlay = None;
         self.accept_composer_input();
-        self.show_local_result("help", commands::help());
+        self.show_local_report(LocalResult::Help(Box::new(commands::help())));
         self.scroll_to_block = self.transcript.len().checked_sub(1);
         None
     }

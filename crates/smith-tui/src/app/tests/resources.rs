@@ -77,8 +77,8 @@
             .blocks()
             .iter()
             .find_map(|block| match block {
-                Block::Local(LocalResult::Text { title, body, .. }) if title == "help" => {
-                    Some(body.clone())
+                Block::Local(LocalResult::Help(report)) => {
+                    Some(smith_client::help_report::render_plain(report))
                 }
                 _ => None,
             })
@@ -146,7 +146,9 @@
             .blocks()
             .iter()
             .find_map(|block| match block {
-                Block::Local(LocalResult::Text { title, body, .. }) if title == "help" => Some(body),
+                Block::Local(LocalResult::Help(report)) => {
+                    Some(smith_client::help_report::render_plain(report))
+                }
                 _ => None,
             })
             .expect("question mark should render local help");

@@ -4,6 +4,7 @@
 //! Terminal drawing belongs to `smith-tui`.
 
 use crate::context_report::ContextReport;
+use crate::help_report::HelpReport;
 use crate::status_report::StatusReport;
 
 /// Semantic state of a local command result.
@@ -24,6 +25,8 @@ pub enum LocalResult {
     Status(Box<StatusReport>),
     /// The session's context occupancy snapshot.
     Context(Box<ContextReport>),
+    /// The command guide derived from the registry.
+    Help(Box<HelpReport>),
     /// Transitional output for commands that have not migrated to reports.
     Text {
         /// Command or result title.
@@ -41,6 +44,7 @@ impl LocalResult {
         match self {
             Self::Status(_) => "status",
             Self::Context(_) => "context",
+            Self::Help(_) => "help",
             Self::Text { title, .. } => title,
         }
     }
@@ -48,7 +52,7 @@ impl LocalResult {
     /// The result's semantic state.
     pub fn state(&self) -> LocalResultState {
         match self {
-            Self::Status(_) | Self::Context(_) => LocalResultState::Info,
+            Self::Status(_) | Self::Context(_) | Self::Help(_) => LocalResultState::Info,
             Self::Text { state, .. } => *state,
         }
     }
