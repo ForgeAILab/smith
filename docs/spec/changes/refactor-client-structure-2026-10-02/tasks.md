@@ -72,7 +72,7 @@ completed_at:
 - [ ] 4.2 Convert `/status`, then `/context`, `/help`, `/timeline`, `/goal`,
   `/agent`, `/mcp`, `/skills`, `/diff`, `/review`, the undo, redo, and revert
   previews, and `/diagnostics`; one commit each, fixtures unchanged.
-  Converted so far: `/status`.
+  Converted so far: `/status`, `/context`.
 - [ ] 4.3 Render headless goal, child, and restore text from the same
   reports; remove the duplicate formatters.
 - [ ] 4.4 Delete renderer branches that inspect titles, headings, glyphs, or
@@ -105,3 +105,8 @@ completed_at:
   runtime conformance.
 - [ ] 7.3 PTY command sweep and startup sweep.
 - [ ] 7.4 Update `docs/architecture.md` with the client-side ownership rules.
+- [ ] 7.5 Stabilize the `attempts-todos-artifacts` headless fixture: under a
+  loaded full-workspace run its resume capsule recorded plan revision 1 /
+  failed 0 instead of revision 2 / failed 1 (shutdown snapshot races the final
+  plan update). Found 2026-10-02 verifying section 5, which does not touch
+  headless; the focused fixture run passed in the same session.

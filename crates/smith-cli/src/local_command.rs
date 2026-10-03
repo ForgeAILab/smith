@@ -4,6 +4,7 @@ use super::*;
 use smith_client::local_result::LocalResult;
 use smith_client::status::{PriceReference, SessionCost, SessionUsage};
 
+pub(super) mod context;
 mod status;
 
 pub(super) fn tool_call_for_display(
@@ -82,10 +83,10 @@ pub(super) async fn handle_local_command(
             }
         },
         HostCommand::Context => {
-            app.show_local_result(
-                "context",
-                render_context_view(&app.status, host.runtime().policy()),
-            );
+            app.show_local_report(LocalResult::Context(Box::new(context::report(
+                &app.status,
+                host.runtime().policy(),
+            ))));
         }
         HostCommand::Timeline => {
             let events = match host.client_timeline_events().await {
@@ -841,11 +842,15 @@ pub(super) fn render_context_status(status: &Status, policy: &RuntimePolicy) -> 
 /// Renders the canonical cache state and derived miss diagnostics shared by
 /// `/status` and the detailed context view. Unknown values remain `?`.
 pub(super) fn render_cache_status(status: &Status) -> String {
+    format!("cache: {}", cache_status_value(status))
+}
+
+fn cache_status_value(status: &Status) -> String {
     let usage = status.session_usage();
     let Some(summary) = status.cache_summary() else {
         return append_cache_lifecycle(
             format!(
-                "cache: state unknown · CH ? · misses {} · re-billed {}",
+                "state unknown · CH ? · misses {} · re-billed {}",
                 usage.cache_miss_count, usage.cache_rebilled_tokens,
             ),
             status,
@@ -871,7 +876,7 @@ pub(super) fn render_cache_status(status: &Status) -> String {
     };
     append_cache_lifecycle(
         format!(
-            "cache: state {} · CH {} · expected {} · observed {} · missed {} · confidence {} · misses {} · re-billed {} · extra cost {}",
+            "state {} · CH {} · expected {} · observed {} · missed {} · confidence {} · misses {} · re-billed {} · extra cost {}",
             summary.state.as_str(),
             summary.render_ch(),
             expected,
@@ -1222,321 +1227,6 @@ fn reasoning_status_values(policy: &RuntimePolicy) -> (String, String) {
             policy.reasoning.capability_source,
         ),
     )
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct ContextDisplayCategory {
-    pub(super) label: String,
-    pub(super) glyph: &'static str,
-    pub(super) tokens: u32,
-    pub(super) rank: u8,
-}
-
-pub(super) fn render_context_view(status: &Status, policy: &RuntimePolicy) -> String {
-    let limits = policy.model_profile.limits;
-    let declared_reserve = policy
-        .context_policy
-        .output_reserve
-        .saturating_add(policy.context_policy.reasoning_reserve);
-    let input_budget = limits.input_budget(declared_reserve);
-    let exact = |tokens: u32| TokenCount::reported(u64::from(tokens)).render();
-    let with_confidence = |tokens: u32, confidence: EstimationConfidence| match confidence {
-        EstimationConfidence::Exact => TokenCount::reported(u64::from(tokens)).render(),
-        EstimationConfidence::Estimated => TokenCount::estimated(u64::from(tokens)).render(),
-    };
-
-    let mut lines = vec!["Context usage".to_owned()];
-    if !policy.context_windows.is_empty() {
-        lines.push(format!(
-            "available context windows: {}",
-            policy
-                .context_windows
-                .iter()
-                .map(|name| {
-                    if policy.context_window.as_deref() == Some(name.as_str()) {
-                        format!("{name} (active)")
-                    } else {
-                        name.clone()
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-    if let Some(plan) = &status.context_plan {
-        let percent_prefix = if plan.confidence == EstimationConfidence::Estimated {
-            "~"
-        } else {
-            ""
-        };
-        lines.push(format!(
-            "{} · {} / {} input tokens · {percent_prefix}{}% left",
-            policy.model,
-            plan.render_input(),
-            exact(plan.input_budget_tokens),
-            plan.percent_left(),
-        ));
-        lines.push(String::new());
-
-        let mut categories = context_display_categories(&plan.totals);
-        let categorized = categories.iter().fold(0u32, |total, category| {
-            total.saturating_add(category.tokens)
-        });
-        if plan.input_tokens > categorized {
-            categories.push(ContextDisplayCategory {
-                label: "other context".to_owned(),
-                glyph: glyph::CONTEXT_OTHER,
-                tokens: plan.input_tokens - categorized,
-                rank: u8::MAX,
-            });
-        }
-        let free_tokens = plan.remaining_tokens();
-        let mut grid = categories
-            .iter()
-            .map(|category| (category.glyph, category.tokens))
-            .collect::<Vec<_>>();
-        grid.push((glyph::CONTEXT_FREE, free_tokens));
-        grid.push((glyph::CONTEXT_RESERVE, plan.reserved_tokens));
-        lines.extend(render_context_grid(&grid));
-        lines.push(String::new());
-        lines.push(match plan.confidence {
-            EstimationConfidence::Exact => "Exact usage by category".to_owned(),
-            EstimationConfidence::Estimated => "Estimated usage by category".to_owned(),
-        });
-        for category in &categories {
-            lines.push(format!(
-                "{} {}: {} ({})",
-                category.glyph,
-                category.label,
-                with_confidence(category.tokens, plan.confidence),
-                render_percent(category.tokens, plan.input_budget_tokens),
-            ));
-        }
-        lines.push(format!(
-            "{} free input: {} ({})",
-            glyph::CONTEXT_FREE,
-            with_confidence(free_tokens, plan.confidence),
-            render_percent(free_tokens, plan.input_budget_tokens),
-        ));
-        lines.push(format!(
-            "{} output/reasoning reserve: {} ({})",
-            glyph::CONTEXT_RESERVE,
-            exact(plan.reserved_tokens),
-            render_percent(
-                plan.reserved_tokens,
-                plan.input_budget_tokens
-                    .saturating_add(plan.reserved_tokens),
-            ),
-        ));
-        lines.push(format!(
-            "model window: {} total · {} input budget",
-            exact(limits.context_tokens),
-            exact(plan.input_budget_tokens),
-        ));
-        lines.push(format!(
-            "counting: {} · {} segments",
-            plan.confidence_label(),
-            plan.segment_count,
-        ));
-        let compaction_target = exact(policy.compaction_policy.low_watermark);
-        if let Some(summary_tokens) = plan.totals.get("summary").filter(|tokens| **tokens > 0) {
-            lines.push(format!(
-                "compaction: applied · {} summary · {} recovery target",
-                with_confidence(*summary_tokens, plan.confidence),
-                compaction_target,
-            ));
-        } else {
-            lines.push(format!(
-                "compaction: enabled on overflow · {compaction_target} recovery target"
-            ));
-        }
-    } else {
-        lines.push(format!(
-            "{} · usage unavailable until the first turn",
-            policy.model
-        ));
-        lines.push(String::new());
-        lines.extend(render_context_grid(&[
-            (glyph::CONTEXT_FREE, input_budget),
-            (glyph::CONTEXT_RESERVE, declared_reserve),
-        ]));
-        lines.push(String::new());
-        lines.push("Available capacity".to_owned());
-        lines.push(format!(
-            "{} system instructions: ? (not counted yet)",
-            glyph::CONTEXT_SYSTEM,
-        ));
-        lines.push(format!(
-            "{} tool schemas: ? (not counted yet)",
-            glyph::CONTEXT_TOOL,
-        ));
-        lines.push(format!(
-            "{} free input: {}",
-            glyph::CONTEXT_FREE,
-            exact(input_budget),
-        ));
-        lines.push(format!(
-            "{} output/reasoning reserve: {}",
-            glyph::CONTEXT_RESERVE,
-            exact(declared_reserve),
-        ));
-        lines.push(format!(
-            "model window: {} total · {} input budget",
-            exact(limits.context_tokens),
-            exact(input_budget),
-        ));
-        lines.push("counting: waiting for first context plan".to_owned());
-        lines.push(format!(
-            "compaction: enabled on overflow · {} recovery target",
-            exact(policy.compaction_policy.low_watermark),
-        ));
-    }
-    lines.push(if policy.artifact_offloading {
-        format!(
-            "tool context: offload above {} serialized bytes · artifact pages up to {} bytes",
-            policy.tool_output_context.inline_bytes, policy.tool_output_context.artifact_page_bytes,
-        )
-    } else {
-        "tool context: artifact storage unavailable; ordinary output limits still apply".to_owned()
-    });
-    lines.push(
-        "Input occupancy above is the last planned request, not cumulative session usage."
-            .to_owned(),
-    );
-    lines.push(format!(
-        "provider input (session): {}",
-        status.context.render()
-    ));
-    lines.push(format!("cache read (session): {}", status.render_cache()));
-    lines.push(render_cache_status(status));
-    lines.push(render_reasoning_status(policy));
-    lines.join("\n")
-}
-
-pub(super) fn context_display_categories(
-    totals: &std::collections::BTreeMap<String, u32>,
-) -> Vec<ContextDisplayCategory> {
-    const INSTRUCTION_KINDS: [&str; 3] = [
-        "system_instruction",
-        "developer_instruction",
-        "ability_instruction",
-    ];
-
-    let instruction_tokens = INSTRUCTION_KINDS.iter().fold(0u32, |sum, kind| {
-        sum.saturating_add(totals.get(*kind).copied().unwrap_or_default())
-    });
-    let mut categories = vec![
-        ContextDisplayCategory {
-            label: "system instructions".to_owned(),
-            glyph: glyph::CONTEXT_SYSTEM,
-            tokens: instruction_tokens,
-            rank: 0,
-        },
-        ContextDisplayCategory {
-            label: "tool schemas".to_owned(),
-            glyph: glyph::CONTEXT_TOOL,
-            tokens: totals.get("tool_schema").copied().unwrap_or_default(),
-            rank: 1,
-        },
-    ];
-    categories.extend(
-        totals
-            .iter()
-            .filter(|(kind, tokens)| {
-                **tokens > 0
-                    && !INSTRUCTION_KINDS.contains(&kind.as_str())
-                    && kind.as_str() != "tool_schema"
-            })
-            .map(|(kind, tokens)| context_display_category(kind, *tokens)),
-    );
-    categories.sort_by(|left, right| {
-        left.rank
-            .cmp(&right.rank)
-            .then_with(|| left.label.cmp(&right.label))
-    });
-    categories
-}
-
-pub(super) fn context_display_category(kind: &str, tokens: u32) -> ContextDisplayCategory {
-    let (label, glyph, rank) = match kind {
-        "system_instruction" => ("system instructions".to_owned(), glyph::CONTEXT_SYSTEM, 0),
-        "developer_instruction" => (
-            "developer instructions".to_owned(),
-            glyph::CONTEXT_SYSTEM,
-            1,
-        ),
-        "ability_instruction" => ("ability instructions".to_owned(), glyph::CONTEXT_SYSTEM, 2),
-        "tool_schema" => ("tool schemas".to_owned(), glyph::CONTEXT_TOOL, 3),
-        "memory" => ("memory".to_owned(), glyph::CONTEXT_HISTORY, 4),
-        "history" => ("history".to_owned(), glyph::CONTEXT_HISTORY, 5),
-        "tool_result" => ("tool results".to_owned(), glyph::CONTEXT_TOOL, 6),
-        "retrieval" => ("retrieved context".to_owned(), glyph::CONTEXT_HISTORY, 7),
-        "continuation" => ("continuation".to_owned(), glyph::CONTEXT_OTHER, 8),
-        "summary" => ("summary".to_owned(), glyph::CONTEXT_SUMMARY, 9),
-        "user_input" => ("user input".to_owned(), glyph::CONTEXT_INPUT, 10),
-        other => (other.replace('_', " "), glyph::CONTEXT_OTHER, u8::MAX - 1),
-    };
-    ContextDisplayCategory {
-        label,
-        glyph,
-        tokens,
-        rank,
-    }
-}
-
-pub(super) fn render_percent(tokens: u32, total: u32) -> String {
-    if total == 0 {
-        return "0.0%".to_owned();
-    }
-    let tenths = u64::from(tokens)
-        .saturating_mul(1_000)
-        .checked_div(u64::from(total))
-        .unwrap_or(0);
-    format!("{}.{:01}%", tenths / 10, tenths % 10)
-}
-
-pub(super) fn render_context_grid(entries: &[(&'static str, u32)]) -> Vec<String> {
-    const CELLS: usize = 50;
-    const COLUMNS: usize = 10;
-
-    let entries = entries
-        .iter()
-        .copied()
-        .filter(|(_, tokens)| *tokens > 0)
-        .collect::<Vec<_>>();
-    if entries.is_empty() {
-        return vec![format!("{} ", glyph::CONTEXT_FREE).repeat(COLUMNS); CELLS / COLUMNS];
-    }
-
-    let weight = entries.iter().fold(0u64, |total, (_, tokens)| {
-        total.saturating_add(u64::from(*tokens))
-    });
-    let remaining = CELLS.saturating_sub(entries.len());
-    let mut allocations = vec![1usize; entries.len()];
-    let mut remainders = Vec::with_capacity(entries.len());
-    let mut distributed = 0usize;
-    for (index, (_, tokens)) in entries.iter().enumerate() {
-        let numerator = (remaining as u64).saturating_mul(u64::from(*tokens));
-        let share = numerator.checked_div(weight).unwrap_or(0) as usize;
-        allocations[index] = allocations[index].saturating_add(share);
-        distributed = distributed.saturating_add(share);
-        remainders.push((index, numerator.checked_rem(weight).unwrap_or(0)));
-    }
-    remainders.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
-    for (index, _) in remainders
-        .into_iter()
-        .take(remaining.saturating_sub(distributed))
-    {
-        allocations[index] = allocations[index].saturating_add(1);
-    }
-
-    let cells = entries
-        .iter()
-        .zip(allocations)
-        .flat_map(|((glyph, _), count)| std::iter::repeat_n(*glyph, count))
-        .take(CELLS)
-        .collect::<Vec<_>>();
-    cells.chunks(COLUMNS).map(|row| row.join(" ")).collect()
 }
 
 pub(super) enum LocalOutcome {

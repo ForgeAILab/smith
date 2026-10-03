@@ -505,41 +505,78 @@
     #[test]
     fn focused_context_view_keeps_the_grid_and_legend_inline() {
         let mut app = App::new("glm-4.7", "~/work/api");
-        app.show_local_result(
-            "context",
-            "Context usage\n\
-             glm-4.7 · ~2k / 123.9k input tokens · ~98% left\n\n\
-             ■ ■ ◆ ● · · · · □ □\n\
-             · · · · · · · · □ □\n\
-             · · · · · · · · □ □\n\
-             · · · · · · · · □ □\n\
-             · · · · · · · · □ □\n\n\
-             Estimated usage by category\n\
-             ■ system instructions: ~20 (0.1%)\n\
-             ◆ tool schemas: ~500 (0.4%)\n\
-             ● history: ~1.5k (1.2%)\n\
-             · free input: ~121.9k (98.4%)\n\
-             □ output/reasoning reserve: 4k (3.1%)\n\
-             counting: estimated · 4 segments\n\
-             compaction: enabled on overflow · 74.3k recovery target",
-        );
+        use smith_client::context_report::{
+            ContextCapacity, ContextCategory, ContextCategoryKind, ContextCompaction, ContextReport,
+            ContextUsage,
+        };
+        app.show_local_report(LocalResult::Context(Box::new(ContextReport {
+            available_windows: Vec::new(),
+            summary: "glm-4.7 · ~2k / 123.9k input tokens · ~98% left".to_owned(),
+            usage: ContextUsage::Estimated,
+            categories: vec![
+                ContextCategory {
+                    kind: ContextCategoryKind::System,
+                    label: "system instructions".to_owned(),
+                    tokens: 200,
+                    value: "~200 (0.1%)".to_owned(),
+                },
+                ContextCategory {
+                    kind: ContextCategoryKind::Tool,
+                    label: "tool schemas".to_owned(),
+                    tokens: 500,
+                    value: "~500 (0.4%)".to_owned(),
+                },
+                ContextCategory {
+                    kind: ContextCategoryKind::History,
+                    label: "history".to_owned(),
+                    tokens: 1_300,
+                    value: "~1.3k (1.0%)".to_owned(),
+                },
+            ],
+            free_input: ContextCapacity {
+                tokens: 121_904,
+                value: "~121.9k (98.3%)".to_owned(),
+            },
+            reserve: ContextCapacity {
+                tokens: 4_096,
+                value: "4k (3.2%)".to_owned(),
+            },
+            model_window: "128k total · 123.9k input budget".to_owned(),
+            counting: "estimated · 3 segments".to_owned(),
+            compaction: ContextCompaction::Enabled {
+                recovery_target: "74.3k".to_owned(),
+            },
+            tool_context: "offload above 8192 serialized bytes · artifact pages up to 2048 bytes"
+                .to_owned(),
+            provider_input: "?".to_owned(),
+            cache_read: "?".to_owned(),
+            cache: "state unknown · CH ? · misses 0 · re-billed 0 · guarantee ? · maintenance calls 0"
+                .to_owned(),
+            reasoning: "provider default · effort provider default · provider/model default".to_owned(),
+            reasoning_controls: "unsupported · switch unavailable · efforts none · resolved model catalog (presence only)"
+                .to_owned(),
+        })));
 
-        for (width, height) in [(44, 28), (74, 24), (120, 24)] {
-            let screen = render(&app, width, height, Theme::new().without_color());
-            assert!(screen.contains("/context"), "{width}×{height}:\n{screen}");
+        assert!(app.overlay.is_none(), "context output must stay inline");
+        for width in [44, 74, 120] {
+            let lines = transcript_lines(&app, Theme::new().without_color(), width);
+            let screen = lines
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(screen.contains("/context"), "{width} columns:\n{screen}");
             assert!(
                 screen.contains("Estimated usage by category"),
-                "{width}×{height}:\n{screen}"
+                "{width} columns:\n{screen}"
             );
             assert!(
-                screen.lines().any(|line| line.contains("■ ■ ◆ ● ·")),
-                "{width}×{height}:\n{screen}"
+                screen.lines().any(|line| line.contains("■ ◆ ● ● ·")),
+                "{width} columns:\n{screen}"
             );
             assert!(
-                screen
-                    .lines()
-                    .all(|line| line.width() <= usize::from(width)),
-                "{width}×{height} overflowed:\n{screen}"
+                lines.iter().all(|line| line.width() <= usize::from(width)),
+                "{width} columns overflowed:\n{screen}"
             );
         }
     }

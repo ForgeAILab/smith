@@ -13,6 +13,7 @@ use crate::app::{App, ProviderPhase};
 use crate::status::{Activity, render_elapsed};
 use crate::theme::{Theme, Tone, glyph};
 use crate::transcript::{Block, LocalResult, LocalResultState, ToolStatus};
+use smith_client::context_report::{ContextCategoryKind, ContextCompaction, ContextReport};
 use smith_client::status_report::{StatusGoal, StatusReport};
 use smith_tools::ToolCallDisplay;
 
@@ -356,6 +357,13 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16) -> Vec<Line<'static>>
                 )));
                 lines.extend(render_status_card(report, width, theme));
             }
+            Block::Local(LocalResult::Context(report)) => {
+                lines.push(Line::from(Span::styled(
+                    "/context",
+                    theme.style(Tone::Command),
+                )));
+                lines.extend(render_context_report(report, width, theme));
+            }
             Block::Local(LocalResult::Text {
                 title,
                 body: content,
@@ -366,9 +374,6 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16) -> Vec<Line<'static>>
                     theme.style(Tone::Command),
                 )));
                 match state {
-                    LocalResultState::Info if title == "context" => {
-                        lines.extend(render_context_content(content, width, theme));
-                    }
                     LocalResultState::Info => {
                         lines.extend(render_local_content(title, content, width, theme));
                     }
@@ -853,99 +858,202 @@ pub(super) fn render_local_content(
     lines
 }
 
-pub(super) fn render_context_content(
-    content: &str,
+pub(super) fn render_context_report(
+    report: &ContextReport,
     width: u16,
     theme: Theme,
 ) -> Vec<Line<'static>> {
     let available = usize::from(width).max(1);
-    let mut lines = Vec::new();
-    for raw in content.lines() {
-        for wrapped in wrap_text(raw, available) {
-            lines.push(styled_context_line(&wrapped, theme));
-        }
-    }
-    lines
-}
-
-pub(super) fn styled_context_line(raw: &str, theme: Theme) -> Line<'static> {
-    if raw.is_empty() {
-        return Line::default();
-    }
-    if raw == "Context usage" {
-        return Line::from(Span::styled(raw.to_owned(), theme.style(Tone::Heading)));
-    }
-    if matches!(
-        raw,
-        "Exact usage by category" | "Estimated usage by category" | "Available capacity"
-    ) {
-        return Line::from(Span::styled(
-            raw.to_owned(),
-            theme.style(Tone::Dim).add_modifier(Modifier::ITALIC),
+    let mut body = vec![Line::from(Span::styled(
+        ContextReport::HEADING,
+        theme.style(Tone::Heading),
+    ))];
+    if !report.available_windows.is_empty() {
+        body.push(context_field(
+            "available context windows",
+            report.available_windows_value(),
+            Tone::Default,
+            theme,
         ));
     }
-
-    let glyph_tone = |character| match character {
-        '■' => Some(Tone::Accent),
-        '◆' => Some(Tone::Warning),
-        '●' => Some(Tone::Command),
-        '▲' => Some(Tone::Success),
-        '✦' => Some(Tone::Accent),
-        '+' => Some(Tone::Default),
-        '·' | '□' => Some(Tone::Dim),
-        _ => None,
-    };
-    if raw.chars().any(|character| glyph_tone(character).is_some())
-        && raw
-            .chars()
-            .all(|character| character.is_whitespace() || glyph_tone(character).is_some())
-    {
-        return Line::from(
-            raw.chars()
-                .map(|character| {
-                    Span::styled(
-                        character.to_string(),
-                        glyph_tone(character)
-                            .map_or_else(|| theme.style(Tone::Default), |tone| theme.style(tone)),
-                    )
-                })
-                .collect::<Vec<_>>(),
-        );
-    }
-
-    if let Some(first) = raw.chars().next()
-        && let Some(tone) = glyph_tone(first)
-        && let Some(rest) = raw[first.len_utf8()..].strip_prefix(' ')
-    {
-        if let Some((label, value)) = rest.split_once(':') {
-            return Line::from(vec![
-                Span::styled(first.to_string(), theme.style(tone)),
-                Span::raw(" "),
-                Span::styled(format!("{label}:"), theme.style(Tone::Default)),
-                Span::styled(value.to_owned(), theme.style(Tone::Dim)),
-            ]);
+    body.push(Line::from(Span::styled(
+        report.summary.clone(),
+        theme.style(Tone::Dim),
+    )));
+    body.push(Line::default());
+    for row in report.grid() {
+        let mut spans = Vec::new();
+        for (index, kind) in row.into_iter().enumerate() {
+            if index > 0 {
+                spans.push(Span::styled(" ", theme.style(Tone::Default)));
+            }
+            let (glyph, tone) = context_category_style(kind);
+            spans.push(Span::styled(glyph, theme.style(tone)));
         }
-        return Line::from(vec![
-            Span::styled(first.to_string(), theme.style(tone)),
-            Span::styled(format!(" {rest}"), theme.style(Tone::Default)),
-        ]);
+        if report.grid_is_empty() {
+            spans.push(Span::styled(" ", theme.style(Tone::Default)));
+        }
+        body.push(Line::from(spans));
     }
-
-    if let Some((label, value)) = raw.split_once(':') {
-        let value_tone = if label == "counting" && value.trim_start() != "exact tokenizer" {
-            Tone::Warning
-        } else if label == "compaction" && value.trim_start().starts_with("applied") {
-            Tone::Success
-        } else {
-            Tone::Default
-        };
-        return Line::from(vec![
-            Span::styled(format!("{label}:"), theme.style(Tone::Dim)),
-            Span::styled(value.to_owned(), theme.style(value_tone)),
-        ]);
+    body.push(Line::default());
+    body.push(Line::from(Span::styled(
+        report.usage.category_heading(),
+        theme.style(Tone::Dim).add_modifier(Modifier::ITALIC),
+    )));
+    for category in &report.categories {
+        body.push(context_category_line(
+            category.kind,
+            &category.label,
+            &category.value,
+            theme,
+        ));
     }
+    body.push(context_category_line(
+        ContextCategoryKind::Free,
+        "free input",
+        &report.free_input.value,
+        theme,
+    ));
+    body.push(context_category_line(
+        ContextCategoryKind::Reserve,
+        "output/reasoning reserve",
+        &report.reserve.value,
+        theme,
+    ));
+    body.extend([
+        context_field(
+            "model window",
+            report.model_window.clone(),
+            Tone::Default,
+            theme,
+        ),
+        context_field("counting", report.counting.clone(), Tone::Warning, theme),
+        context_field(
+            "compaction",
+            report.compaction.render_value(),
+            match report.compaction {
+                ContextCompaction::Applied { .. } => Tone::Success,
+                ContextCompaction::Enabled { .. } => Tone::Default,
+            },
+            theme,
+        ),
+        context_field(
+            "tool context",
+            report.tool_context.clone(),
+            Tone::Default,
+            theme,
+        ),
+        Line::from(Span::styled(
+            ContextReport::OCCUPANCY_HINT,
+            theme.style(Tone::Dim),
+        )),
+        context_field(
+            "provider input (session)",
+            report.provider_input.clone(),
+            Tone::Default,
+            theme,
+        ),
+        context_field(
+            "cache read (session)",
+            report.cache_read.clone(),
+            Tone::Default,
+            theme,
+        ),
+        context_field("cache", report.cache.clone(), Tone::Default, theme),
+        context_field("reasoning", report.reasoning.clone(), Tone::Default, theme),
+        context_field(
+            "reasoning controls",
+            report.reasoning_controls.clone(),
+            Tone::Default,
+            theme,
+        ),
+    ]);
+    body.into_iter()
+        .flat_map(|line| wrap_context_line(line, available))
+        .collect()
+}
 
-    Line::from(Span::styled(raw.to_owned(), theme.style(Tone::Dim)))
+fn context_category_style(kind: ContextCategoryKind) -> (&'static str, Tone) {
+    match kind {
+        ContextCategoryKind::System => (glyph::CONTEXT_SYSTEM, Tone::Accent),
+        ContextCategoryKind::Tool => (glyph::CONTEXT_TOOL, Tone::Warning),
+        ContextCategoryKind::History => (glyph::CONTEXT_HISTORY, Tone::Command),
+        ContextCategoryKind::Summary => (glyph::CONTEXT_SUMMARY, Tone::Success),
+        ContextCategoryKind::Input => (glyph::CONTEXT_INPUT, Tone::Accent),
+        ContextCategoryKind::Other => (glyph::CONTEXT_OTHER, Tone::Default),
+        ContextCategoryKind::Free => (glyph::CONTEXT_FREE, Tone::Dim),
+        ContextCategoryKind::Reserve => (glyph::CONTEXT_RESERVE, Tone::Dim),
+    }
+}
+
+fn context_category_line(
+    kind: ContextCategoryKind,
+    label: &str,
+    value: &str,
+    theme: Theme,
+) -> Line<'static> {
+    let (glyph, tone) = context_category_style(kind);
+    Line::from(vec![
+        Span::styled(glyph, theme.style(tone)),
+        Span::raw(" "),
+        Span::styled(format!("{label}:"), theme.style(Tone::Default)),
+        Span::styled(format!(" {value}"), theme.style(Tone::Dim)),
+    ])
+}
+
+fn context_field(label: &str, value: String, tone: Tone, theme: Theme) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("{label}:"), theme.style(Tone::Dim)),
+        Span::styled(format!(" {value}"), theme.style(tone)),
+    ])
+}
+
+/// Keeps the existing character wrapping, carrying styles from typed fields.
+/// Byte ranges only split spans; no text selects a presentation branch.
+fn wrap_context_line(line: Line<'static>, available: usize) -> Vec<Line<'static>> {
+    let raw = line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    if raw.is_empty() {
+        return vec![Line::default()];
+    }
+    let mut rows = Vec::new();
+    let mut line_start = 0;
+    for raw_line in raw.split_inclusive('\n') {
+        let content = raw_line
+            .strip_suffix('\n')
+            .map(|text| text.strip_suffix('\r').unwrap_or(text))
+            .unwrap_or(raw_line);
+        let mut start = line_start;
+        for wrapped in wrap_text(content, available) {
+            let end = start + wrapped.len();
+            let mut offset = 0;
+            let spans = line
+                .spans
+                .iter()
+                .filter_map(|span| {
+                    let span_start = offset;
+                    offset += span.content.len();
+                    let from = start.max(span_start);
+                    let to = end.min(offset);
+                    if from < to {
+                        Some(Span::styled(
+                            span.content[from - span_start..to - span_start].to_owned(),
+                            span.style,
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            rows.push(Line::from(spans));
+            start = end;
+        }
+        line_start += raw_line.len();
+    }
+    rows
 }
 
 pub(super) fn styled_local_line(title: &str, raw: &str, theme: Theme) -> Line<'static> {

@@ -88,7 +88,7 @@ use smith_runtime::{ChildDurability, ChildState, ChildStatus, SpawnOutcome};
 use smith_tui::app::{
     Action, App, LEGACY_AGENT_PROFILE_PREFIX, MouseOutcome, PreparedSubmission, SubmissionTarget,
 };
-use smith_tui::theme::{Theme, glyph};
+use smith_tui::theme::Theme;
 use smith_tui::{
     PickerOutcome, ResourceEntry, ResourcePicker, RuntimeResources, draw_resource_picker,
 };

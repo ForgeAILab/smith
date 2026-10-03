@@ -3,6 +3,7 @@
 //! Commands migrate one at a time from [`LocalResult::Text`] to reports.
 //! Terminal drawing belongs to `smith-tui`.
 
+use crate::context_report::ContextReport;
 use crate::status_report::StatusReport;
 
 /// Semantic state of a local command result.
@@ -21,6 +22,8 @@ pub enum LocalResultState {
 pub enum LocalResult {
     /// The session's status snapshot.
     Status(Box<StatusReport>),
+    /// The session's context occupancy snapshot.
+    Context(Box<ContextReport>),
     /// Transitional output for commands that have not migrated to reports.
     Text {
         /// Command or result title.
@@ -37,6 +40,7 @@ impl LocalResult {
     pub fn title(&self) -> &str {
         match self {
             Self::Status(_) => "status",
+            Self::Context(_) => "context",
             Self::Text { title, .. } => title,
         }
     }
@@ -44,7 +48,7 @@ impl LocalResult {
     /// The result's semantic state.
     pub fn state(&self) -> LocalResultState {
         match self {
-            Self::Status(_) => LocalResultState::Info,
+            Self::Status(_) | Self::Context(_) => LocalResultState::Info,
             Self::Text { state, .. } => *state,
         }
     }

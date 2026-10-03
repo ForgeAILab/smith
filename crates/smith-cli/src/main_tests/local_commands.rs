@@ -1,5 +1,10 @@
 // local commands behavior tests.
 
+    use crate::local_command::context::{
+        display_categories as context_display_categories, display_category as context_display_category,
+        report as context_report,
+    };
+    use smith_client::context_report::{ContextCategoryKind, render_plain as render_context_plain};
     use smith_client::status::{PriceReference, PriceTable, SessionUsage};
 
     #[test]
@@ -92,16 +97,16 @@
         let tool = context_display_category("tool_result", 4_200);
         let user = context_display_category("user_input", 58);
         assert_eq!(tool.label, "tool results");
-        assert_eq!(tool.glyph, glyph::CONTEXT_TOOL);
+        assert_eq!(tool.kind, ContextCategoryKind::Tool);
         assert_eq!(tool.tokens, 4_200);
         assert_eq!(user.label, "user input");
-        assert_eq!(user.glyph, glyph::CONTEXT_INPUT);
+        assert_eq!(user.kind, ContextCategoryKind::Input);
         assert_eq!(user.tokens, 58);
         assert!(tool.rank < user.rank);
 
         let unknown = context_display_category("future_context_kind", 1);
         assert_eq!(unknown.label, "future context kind");
-        assert_eq!(unknown.glyph, glyph::CONTEXT_OTHER);
+        assert_eq!(unknown.kind, ContextCategoryKind::Other);
     }
 
     #[test]
@@ -213,7 +218,8 @@
             before_plan.contains("compaction: enabled on overflow · 74.3k recovery target"),
             "{before_plan}"
         );
-        let before_context = render_context_view(&app.status, host.runtime().policy());
+        let before_context =
+            render_context_plain(&context_report(&app.status, host.runtime().policy()));
         assert!(
             before_context.contains("available context windows: 128k (active), 256k"),
             "{before_context}"
@@ -281,7 +287,7 @@
             planned.contains("compaction: enabled on overflow · 74.3k recovery target"),
             "{planned}"
         );
-        let context = render_context_view(&app.status, host.runtime().policy());
+        let context = render_context_plain(&context_report(&app.status, host.runtime().policy()));
         assert!(
             context.contains("example-model · ~2k / 123.9k input tokens · ~98% left"),
             "{context}"
@@ -425,17 +431,20 @@
             status_content.contains("cost: nothing spent yet"),
             "{status_content}"
         );
-        let context_content = app
+        let context_report = app
             .transcript
             .blocks()
             .iter()
             .find_map(|block| match block {
-                Block::Local(LocalResult::Text { title, body, .. }) if title == "context" => {
-                    Some(body.as_str())
-                }
+                Block::Local(LocalResult::Context(report)) => Some(report),
                 _ => None,
             })
             .expect("context output");
+        assert_eq!(
+            context_report.usage,
+            smith_client::context_report::ContextUsage::Estimated,
+        );
+        let context_content = render_context_plain(context_report);
         assert!(
             context_content.contains("Estimated usage by category"),
             "{context_content}"

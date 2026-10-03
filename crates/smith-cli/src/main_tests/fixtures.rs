@@ -707,6 +707,7 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                 let state = result.state();
                 let content = match result {
                     LocalResult::Status(report) => smith_client::status_report::render_plain(report),
+                    LocalResult::Context(report) => smith_client::context_report::render_plain(report),
                     LocalResult::Text { body, .. } => body.clone(),
                 };
                 raw.push_str(&format!(
@@ -716,6 +717,9 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                 let normalized = match result {
                     LocalResult::Status(report) => LocalResult::Status(Box::new(
                         fixture_status_view(report, normalizer),
+                    )),
+                    LocalResult::Context(report) => LocalResult::Context(Box::new(
+                        fixture_context_view(report, normalizer),
                     )),
                     LocalResult::Text { title, body, state } => LocalResult::Text {
                         title: normalizer.normalize(title),
@@ -865,6 +869,48 @@ fn fixture_status_view(
             ] {
                 *value = normalizer.normalize(value);
             }
+        }
+    }
+    report
+}
+
+fn fixture_context_view(
+    report: &smith_client::context_report::ContextReport,
+    normalizer: &mut fixture_support::Normalizer,
+) -> smith_client::context_report::ContextReport {
+    let mut report = report.clone();
+    for value in [
+        &mut report.summary,
+        &mut report.free_input.value,
+        &mut report.reserve.value,
+        &mut report.model_window,
+        &mut report.counting,
+        &mut report.tool_context,
+        &mut report.provider_input,
+        &mut report.cache_read,
+        &mut report.cache,
+        &mut report.reasoning,
+        &mut report.reasoning_controls,
+    ] {
+        *value = normalizer.normalize(value);
+    }
+    for window in &mut report.available_windows {
+        window.name = normalizer.normalize(&window.name);
+    }
+    for category in &mut report.categories {
+        category.label = normalizer.normalize(&category.label);
+        category.value = normalizer.normalize(&category.value);
+    }
+    match &mut report.compaction {
+        smith_client::context_report::ContextCompaction::Enabled { recovery_target } => {
+            *recovery_target = normalizer.normalize(recovery_target);
+        }
+        smith_client::context_report::ContextCompaction::Applied {
+            summary,
+            recovery_target,
+        } => {
+            *summary = normalizer.normalize(summary);
+            *recovery_target = normalizer.normalize(recovery_target);
         }
     }
     report
