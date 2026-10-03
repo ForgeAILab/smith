@@ -1,6 +1,7 @@
 ---
 created_at: 2026-10-03T03:19:53Z
-updated_at: 2026-10-03T18:00:00Z
+updated_at: 2026-10-03T09:10:00Z
+completed_at: 2026-10-03T09:10:00Z
 ---
 
 # Tasks: Add an advisor tool
@@ -73,5 +74,7 @@ updated_at: 2026-10-03T18:00:00Z
   caps).
 - [x] 5.5 Docs and spec deltas updated; `scripts/ci.sh` passes (2,055
   tests).
-- [ ] 5.6 Live: `advisor = "sol"` with no `use` change, and
-  `advisor = "chatgpt/gpt-6.1-sol"`, against the owner's configuration.
+- [x] 5.6 Live: `advisor = "sol"` with no `use` change, and
+  `advisor = "chatgpt/gpt-6.1-sol"`, against the owner's configuration,
+  with glm-5.3, gemini-3.8-flash, and grok-4.3
+  ([walkthrough](../../../qa/advisor-2026-10-03/live-walkthrough.md)).

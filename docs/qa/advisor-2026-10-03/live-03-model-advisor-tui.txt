@@ -1,0 +1,39 @@
+
+• `test_add` fails.
+
+  Details:
+  - In calc.py, add(a, b) computes a - b instead of a + b.
+  - In test_calc.py, test_add() asserts add(2, 3) == 5. However, calling add(2, 3) evaluates to -1 (2 - 3),
+causing the assertion assert -1 == 5 to fail.
+  - test_mul() passes because mul(2, 3) correctly returns 6.
+
+/status
+╭────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│  >_ Smith                                                                                                  │
+│                                                                                                            │
+│  session:              session-b1b5002a-401f-427a-b3c8-94bdba50f3ab                                        │
+│  profile:              gemini                                                                              │
+│  provider:             google · model: gemini-3.8-flash                                                    │
+│  permission:           Ask                                                                                 │
+│  reasoning:            on · effort provider default · provider/model default                               │
+│  reasoning controls:   controllable · switch mandatory-on · efforts low, medium, high · Models.dev adverti │
+│                        sed Google Gemini thinking levels                                                   │
+│  prompt cache:         0 cached input tokens (last turn)                                                   │
+│  cache maintenance:    off                                                                                 │
+│  resume checkpoint:    saved 2026-10-03 04:55:42 -04:00                                                    │
+│  project:              <scratch>/live-03/model-advisor                                                     │
+│  Git:                  1 changed path(s)                                                                   │
+│  goal:                 none                                                                                │
+│  children:             0                                                                                   │
+│  usage:                total · input 6.9k · output 240 · reasoning 358                                     │
+│   root: 3 turn(s) · input 6.6k · output 169 · reasoning 358                                                │
+│   advisor: input 292 · output 71                                                                           │
+│  cost:                 ~$0.005 estimated · google/gemini-3.8-flash · advisor price unknown                 │
+│ /diagnostics shows detailed cache and recovery information                                                 │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+  Worked for 10s
+
+› Ask Smith to do anything
+
+  gemini · google/gemini-3.8-flash
