@@ -31,6 +31,21 @@ pub(crate) const MAX_LOCAL_RESULT_BYTES: usize = 512 * 1024;
 const MAX_LOCAL_RESULT_LINES: usize = 4_096;
 const MAX_LOCAL_RESULT_TITLE_CHARS: usize = 96;
 
+/// Display-ready shortcut restored by the host at a history boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoredShellShortcut {
+    /// Number of history messages preceding the shortcut.
+    pub anchor: usize,
+    /// Runtime call identity, when one was assigned.
+    pub call: Option<String>,
+    /// Redacted command echoed to the user.
+    pub command: String,
+    /// Whether the shortcut failed.
+    pub is_error: bool,
+    /// Redacted, bounded result retained by the live transcript.
+    pub result: Option<String>,
+}
+
 /// The current state or terminal outcome of a tool call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolStatus {
@@ -433,6 +448,18 @@ impl Transcript {
         })
     }
 
+    /// The command displayed by a particular user shell echo.
+    pub fn shell_shortcut_command(&self, echo: u64) -> Option<&str> {
+        self.blocks.iter().find_map(|block| match block {
+            Block::Tool {
+                shell_echo: Some(id),
+                user_command,
+                ..
+            } if *id == echo => user_command.as_deref(),
+            _ => None,
+        })
+    }
+
     /// Joins a specific user echo and runtime call by the host's identity.
     pub fn bind_shell_shortcut(&mut self, echo: u64, call_id: &str) {
         let Some(index) = self.blocks.iter().position(|block| {
@@ -473,14 +500,15 @@ impl Transcript {
         }
     }
 
-    /// Settles the echo even when admission failed before a call existed.
+    /// Settles the echo even when admission failed before a call existed,
+    /// returning the exact bounded result retained by the row.
     pub fn finish_shell_shortcut(
         &mut self,
         echo: u64,
         call_id: Option<&str>,
         is_error: bool,
         output: &str,
-    ) {
+    ) -> Option<String> {
         if let Some(call_id) = call_id {
             self.bind_shell_shortcut(echo, call_id);
         }
@@ -504,9 +532,11 @@ impl Transcript {
             } else {
                 ToolStatus::Ok
             };
-            *result_preview = preview;
+            *result_preview = preview.clone();
             *started_at = None;
+            return preview;
         }
+        None
     }
 
     /// Records a tool an installed agent ran inside a harness turn.
@@ -741,9 +771,31 @@ impl Transcript {
     /// Used when resuming a session: history is the source of truth, and any
     /// live-only blocks (notices, in-flight tools) are intentionally dropped.
     pub fn replace_from_history(&mut self, history: &[Message]) {
+        self.replace_from_history_with_shell_shortcuts(history, &[]);
+    }
+
+    /// Rebuilds history with finished shortcuts at their original boundaries.
+    /// Anchors beyond the restored history are discarded, never repositioned.
+    pub fn replace_from_history_with_shell_shortcuts(
+        &mut self,
+        history: &[Message],
+        saved: &[RestoredShellShortcut],
+    ) {
         self.append_revision = self.append_revision.wrapping_add(1);
         self.blocks.clear();
-        for message in history {
+        let mut shortcuts = saved
+            .iter()
+            .filter(|shortcut| shortcut.anchor <= history.len())
+            .collect::<Vec<_>>();
+        shortcuts.sort_by_key(|shortcut| shortcut.anchor);
+        let mut shortcuts = shortcuts.into_iter().peekable();
+        for (anchor, message) in history.iter().enumerate() {
+            while shortcuts
+                .peek()
+                .is_some_and(|shortcut| shortcut.anchor == anchor)
+            {
+                self.push_saved_shell_shortcut(shortcuts.next().expect("anchored shortcut"));
+            }
             match message.role {
                 Role::User => self.push_user(user_display_text(message)),
                 Role::System => {}
@@ -819,6 +871,31 @@ impl Transcript {
                 }
             }
         }
+        for shortcut in shortcuts {
+            self.push_saved_shell_shortcut(shortcut);
+        }
+    }
+
+    fn push_saved_shell_shortcut(&mut self, shortcut: &RestoredShellShortcut) {
+        let echo = self.next_shell_echo;
+        self.next_shell_echo = self.next_shell_echo.wrapping_add(1);
+        self.close_open();
+        self.push_block(Block::Tool {
+            call_id: shortcut.call.clone().unwrap_or_default(),
+            name: "shell".to_owned(),
+            display: None,
+            protected_summary: String::new(),
+            user_command: Some(shortcut.command.clone()),
+            shell_echo: Some(echo),
+            status: if shortcut.is_error {
+                ToolStatus::Failed.with_result_preview(shortcut.result.as_deref().unwrap_or(""))
+            } else {
+                ToolStatus::Ok
+            },
+            result_preview: shortcut.result.clone(),
+            started_at: None,
+            enrichment: Vec::new(),
+        });
     }
 }
 
@@ -1473,6 +1550,121 @@ mod tests {
     }
 
     #[test]
+    fn saved_shell_shortcuts_interleave_at_history_anchors() {
+        let history = [
+            Message::system("hidden system message"),
+            Message::user("question"),
+            Message::assistant(vec![ContentPart::text("answer")]),
+        ];
+        let saved = [
+            (3, "at end"),
+            (2, "in middle"),
+            (0, "before everything"),
+            (2, "second in middle"),
+            (4, "beyond history"),
+        ]
+        .map(|(anchor, command)| RestoredShellShortcut {
+            anchor,
+            call: Some(command.to_owned()),
+            command: command.to_owned(),
+            is_error: false,
+            result: Some(format!("output for {command}")),
+        });
+        let mut transcript = Transcript::new();
+        let stale = transcript.push_shell_shortcut("unfinished");
+        transcript.replace_from_history_with_shell_shortcuts(&history, &saved);
+        let order = transcript
+            .blocks()
+            .iter()
+            .map(|block| match block {
+                Block::Tool {
+                    user_command: Some(command),
+                    shell_echo: Some(echo),
+                    started_at,
+                    status,
+                    ..
+                } => {
+                    assert_ne!(*echo, stale);
+                    assert!(started_at.is_none());
+                    assert_eq!(*status, ToolStatus::Ok);
+                    command.as_str()
+                }
+                Block::User { text } | Block::Assistant { text, .. } => text.as_str(),
+                other => panic!("unexpected restored block: {other:?}"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            order,
+            [
+                "before everything",
+                "question",
+                "in middle",
+                "second in middle",
+                "answer",
+                "at end",
+            ]
+        );
+        let echoes = transcript
+            .blocks()
+            .iter()
+            .filter_map(|block| match block {
+                Block::Tool { shell_echo, .. } => *shell_echo,
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let next = transcript.push_shell_shortcut("next");
+        assert!(!echoes.contains(&next));
+    }
+
+    #[test]
+    fn saved_shell_shortcuts_beyond_empty_history_are_dropped() {
+        let saved = [0, 1].map(|anchor| RestoredShellShortcut {
+            anchor,
+            call: None,
+            command: format!("anchor {anchor}"),
+            is_error: true,
+            result: Some("admission rejected".to_owned()),
+        });
+        let mut transcript = Transcript::new();
+        transcript.replace_from_history_with_shell_shortcuts(&[], &saved);
+        assert_eq!(transcript.len(), 1);
+        assert!(matches!(
+            &transcript.blocks()[0],
+            Block::Tool {
+                user_command: Some(command),
+                status: ToolStatus::Failed,
+                call_id,
+                started_at: None,
+                ..
+            } if command == "anchor 0" && call_id.is_empty()
+        ));
+    }
+
+    #[test]
+    fn saved_shell_shortcuts_keep_the_exact_live_result_bound() {
+        for output in [
+            "".to_owned(),
+            "one\ttwo\nunsafe\u{202e}control".to_owned(),
+            "line\n".repeat(MAX_LOCAL_RESULT_LINES + 10),
+            "x".repeat(MAX_LOCAL_RESULT_BYTES + 10),
+        ] {
+            let mut live = Transcript::new();
+            let echo = live.push_shell_shortcut("git status --short");
+            let result = live.finish_shell_shortcut(echo, Some("shell-call"), false, &output);
+            let saved = RestoredShellShortcut {
+                anchor: 0,
+                call: Some("shell-call".to_owned()),
+                command: "git status --short".to_owned(),
+                is_error: false,
+                result,
+            };
+            let mut replay = Transcript::new();
+            replay.replace_from_history_with_shell_shortcuts(&[], &[saved]);
+            assert_eq!(live.blocks(), replay.blocks());
+        }
+    }
+
+    #[test]
     fn approval_denial_is_classified_only_from_a_canonical_error_prefix() {
         for (is_error, preview, expected) in [
             (
@@ -1534,8 +1726,20 @@ mod tests {
             }
             let mut shortcut = Transcript::new();
             let echo = shortcut.push_shell_shortcut("git status --short");
-            shortcut.finish_shell_shortcut(echo, Some("c1"), is_error, preview);
+            let result = shortcut.finish_shell_shortcut(echo, Some("c1"), is_error, preview);
             assert_eq!(shortcut.tool_status("c1"), Some(expected));
+            let mut replayed_shortcut = Transcript::new();
+            replayed_shortcut.replace_from_history_with_shell_shortcuts(
+                &[],
+                &[RestoredShellShortcut {
+                    anchor: 0,
+                    call: Some("c1".to_owned()),
+                    command: "git status --short".to_owned(),
+                    is_error,
+                    result,
+                }],
+            );
+            assert_eq!(shortcut.blocks(), replayed_shortcut.blocks());
         }
     }
 
@@ -1708,7 +1912,7 @@ mod detail_tests {
     fn a_rejected_shortcut_does_not_take_the_next_admitted_calls_identity() {
         let mut transcript = Transcript::new();
         let rejected = transcript.push_shell_shortcut("rejected command");
-        transcript.finish_shell_shortcut(rejected, None, true, "admission rejected");
+        let _ = transcript.finish_shell_shortcut(rejected, None, true, "admission rejected");
         let accepted = transcript.push_shell_shortcut("accepted command");
         transcript.bind_shell_shortcut(accepted, "accepted-call");
         transcript.push_tool_call("accepted-call", "shell", None, &[]);
@@ -1727,7 +1931,7 @@ mod detail_tests {
         let rejected = transcript.push_shell_shortcut("rejected");
         let accepted = transcript.push_shell_shortcut("accepted");
         transcript.bind_shell_shortcut(accepted, "accepted-call");
-        transcript.finish_shell_shortcut(rejected, None, true, "requires an idle session");
+        let _ = transcript.finish_shell_shortcut(rejected, None, true, "requires an idle session");
         assert!(
             matches!(&transcript.blocks()[0], Block::Tool { status: ToolStatus::Failed, result_preview: Some(output), .. } if output == "requires an idle session")
         );
@@ -1737,7 +1941,8 @@ mod detail_tests {
         transcript.replace_from_history(&[]);
         let next = transcript.push_shell_shortcut("next");
         assert_ne!(next, accepted);
-        transcript.finish_shell_shortcut(accepted, Some("accepted-call"), false, "late output");
+        let _ =
+            transcript.finish_shell_shortcut(accepted, Some("accepted-call"), false, "late output");
         assert!(matches!(
             &transcript.blocks()[0],
             Block::Tool {

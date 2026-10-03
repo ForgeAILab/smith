@@ -365,9 +365,62 @@ fn informational_help_uses_registry_order_and_an_aligned_plain_word_key_table() 
 }
 
 #[test]
+fn informational_diagnostics_usage_wraps_at_words_with_a_hanging_indent() {
+    use smith_client::diagnostics_report::{DiagnosticsReport, DiagnosticsRow, DiagnosticsSection};
+
+    let usage = "input 0 · cached 0 · writes 0 · output 0 · reasoning 0";
+    let mut app = App::new("model", "~/project");
+    app.transcript
+        .push_local(LocalResult::Diagnostics(Box::new(DiagnosticsReport {
+            sections: vec![DiagnosticsSection {
+                heading: "Cache".to_owned(),
+                rows: vec![
+                    DiagnosticsRow::Field {
+                        label: "synthetic attempts".to_owned(),
+                        value: "1".to_owned(),
+                    },
+                    DiagnosticsRow::Field {
+                        label: "  usage".to_owned(),
+                        value: usage.to_owned(),
+                    },
+                ],
+            }],
+        })));
+    for width in [44, 100] {
+        let lines = transcript_lines(&app, Theme::new().without_color(), width);
+        let start = lines
+            .iter()
+            .position(|line| line.to_string().starts_with("    usage"))
+            .unwrap();
+        let column = informational_value_column(&lines[start]);
+        let mut words = Vec::new();
+        for (index, row) in lines[start..].iter().enumerate() {
+            let text = row.to_string();
+            if index > 0 {
+                assert!(text.starts_with(&" ".repeat(column)), "{text}");
+            }
+            words.extend(
+                text.chars()
+                    .skip(column)
+                    .collect::<String>()
+                    .split_whitespace()
+                    .map(str::to_owned),
+            );
+        }
+        assert_eq!(words, usage.split_whitespace().collect::<Vec<_>>());
+        assert!(lines.iter().all(|line| line.width() <= usize::from(width)));
+        if width == 44 {
+            assert!(lines.len() > start + 1, "the usage should wrap");
+        }
+    }
+}
+
+#[test]
 fn informational_long_results_open_at_the_top_and_next_blocks_resume_following() {
+    use smith_client::diagnostics_report::{DiagnosticsReport, DiagnosticsRow, DiagnosticsSection};
+
     for (width, height) in [(44, 16), (100, 32)] {
-        for command in ["help", "status", "context"] {
+        for command in ["help", "status", "context", "diagnostics"] {
             let theme = Theme::new().without_color();
             let mut app = App::new("model", "~/project");
             app.transcript
@@ -382,11 +435,41 @@ fn informational_long_results_open_at_the_top_and_next_blocks_resume_following()
                     report.reasoning_controls = INFORMATIONAL_CONTROLS.repeat(12);
                     LocalResult::Status(Box::new(report))
                 }
-                _ => {
+                "context" => {
                     let mut report = informational_context_report();
                     report.reasoning_controls = INFORMATIONAL_CONTROLS.repeat(12);
                     LocalResult::Context(Box::new(report))
                 }
+                _ => LocalResult::Diagnostics(Box::new(DiagnosticsReport {
+                    sections: vec![
+                        DiagnosticsSection {
+                            heading: "Session".to_owned(),
+                            rows: vec![
+                                DiagnosticsRow::Field {
+                                    label: "reasoning controls".to_owned(),
+                                    value: INFORMATIONAL_CONTROLS.repeat(12),
+                                },
+                                DiagnosticsRow::Field {
+                                    label: "provider controls".to_owned(),
+                                    value: INFORMATIONAL_CONTROLS.repeat(12),
+                                },
+                            ],
+                        },
+                        DiagnosticsSection {
+                            heading: "Runtime".to_owned(),
+                            rows: vec![
+                                DiagnosticsRow::Field {
+                                    label: "tool controls".to_owned(),
+                                    value: INFORMATIONAL_CONTROLS.repeat(12),
+                                },
+                                DiagnosticsRow::Field {
+                                    label: "cache controls".to_owned(),
+                                    value: INFORMATIONAL_CONTROLS.repeat(12),
+                                },
+                            ],
+                        },
+                    ],
+                })),
             };
             app.show_local_report(result);
             let heading = format!("● /{command}");

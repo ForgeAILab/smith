@@ -1,19 +1,21 @@
 //! The local `/diagnostics` snapshot and its plain-text rendering.
 //!
-//! Sections retain the existing row order without adding visible headings.
+//! Named sections group aligned fields and free text in display order.
 //! The host supplies rows as fields or free text; clients do not parse prose
 //! to recover their structure.
 
 /// Detailed session information captured when `/diagnostics` is invoked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiagnosticsReport {
-    /// The existing groups of diagnostic rows, in display order.
+    /// The named groups of diagnostic rows, in display order.
     pub sections: Vec<DiagnosticsSection>,
 }
 
-/// An unheaded group of rows in the existing diagnostics output.
+/// A headed group of diagnostic rows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiagnosticsSection {
+    /// Visible group heading.
+    pub heading: String,
     /// Label/value fields and free-text lines, in display order.
     pub rows: Vec<DiagnosticsRow>,
 }
@@ -38,11 +40,15 @@ pub fn render_plain(report: &DiagnosticsReport) -> String {
     report
         .sections
         .iter()
-        .flat_map(|section| &section.rows)
-        .map(|row| match row {
-            DiagnosticsRow::Field { label, value } => format!("{label}: {value}"),
-            DiagnosticsRow::Line(line) => line.clone(),
+        .map(|section| {
+            std::iter::once(section.heading.clone())
+                .chain(section.rows.iter().map(|row| match row {
+                    DiagnosticsRow::Field { label, value } => format!("{label}: {value}"),
+                    DiagnosticsRow::Line(line) => line.clone(),
+                }))
+                .collect::<Vec<_>>()
+                .join("\n")
         })
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n\n")
 }

@@ -280,7 +280,7 @@
             child_log(&app, child.as_str()),
             [
                 "started · read-only · up to 3 turns",
-                "turn · working",
+                "turn · running",
                 "ok search",
                 "completed: Two call sites.",
             ],
@@ -466,7 +466,7 @@
     fn arrow_keys_walk_the_agents_panel_and_escape_returns_to_the_root() {
         let mut app = app();
         app.restore_child("child-done", "completed", Some("No findings.".to_owned()));
-        app.restore_child("child-live", "working", Some("ran Read".to_owned()));
+        app.restore_child("child-live", "running", Some("ran Read".to_owned()));
 
         // Live work sorts first in the panel, so it selects first too.
         app.on_key(key(KeyCode::Down));
@@ -494,7 +494,7 @@
     #[test]
     fn composer_history_keeps_the_arrows_until_it_runs_out() {
         let mut app = app();
-        app.restore_child("child-live", "working", None);
+        app.restore_child("child-live", "running", None);
         app.composer.replace("earlier message");
         app.composer.record_current();
         app.composer.clear();
@@ -538,7 +538,7 @@
     #[test]
     fn a_working_child_refuses_a_follow_up_where_the_user_can_see_it() {
         let mut app = agent_first_app();
-        app.restore_child("child-1", "working", Some("ran Read".to_owned()));
+        app.restore_child("child-1", "running", Some("ran Read".to_owned()));
         app.on_key(key(KeyCode::Down));
 
         type_text(&mut app, "also check the parser");
@@ -594,8 +594,8 @@
             last_result: None,
         };
         let mut app = app();
-        app.restore_child("child-a", "working", None);
-        app.restore_child("child-b", "working", None);
+        app.restore_child("child-a", "running", None);
+        app.restore_child("child-b", "running", None);
         app.inspect_child("child-a");
         app.set_inspected_detail("child-a", Some(card.clone()));
         assert_eq!(app.inspected_detail(), Some(&card));
@@ -666,12 +666,15 @@
 
         assert_eq!(live.children, replay.children);
         assert_eq!(live.transcript.blocks(), replay.transcript.blocks());
-        assert_eq!(live.children[child.as_str()].state, "interrupted");
+        assert_eq!(
+            live.children[child.as_str()].state,
+            "interrupted (not resumable)"
+        );
         assert!(
             live.children[child.as_str()]
                 .detail
                 .as_deref()
-                .is_some_and(|detail| detail.contains("no compatible checkpoint"))
+                .is_some_and(|detail| detail.contains("durable · session"))
         );
     }
 

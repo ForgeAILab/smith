@@ -1,7 +1,7 @@
 //! Local `/agent` results and their plain-text rendering.
 //!
 //! Lists, inspector cards, and exact-resume outcomes carry data. Terminal
-//! drawing belongs to `smith-tui`; lifecycle labels retain their current text.
+//! drawing belongs to `smith-tui`; lifecycle labels are shared across clients.
 
 use std::borrow::Cow;
 
@@ -9,21 +9,6 @@ use serde::Serialize;
 use smith_runtime::{
     ChildDurability as RuntimeChildDurability, ChildState as RuntimeChildState, ChildStatus,
 };
-
-/// Existing CLI presentations of child state and durability.
-///
-/// These deliberately retain different labels until a separate wording change:
-/// local commands use debug-style values (including state payloads), headless
-/// uses lowercase values, and submission calls a running child `working`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChildLabelSurface {
-    /// `/agent` reports and `/timeline` coordinator snapshots.
-    LocalCommand,
-    /// Headless machine lifecycle output.
-    Headless,
-    /// Restored child summaries supplied by the CLI host to the TUI.
-    Submission,
-}
 
 /// Client-owned lifecycle data, independent of its display label.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,7 +24,7 @@ pub enum ChildState {
     },
     /// The child was stopped.
     Stopped {
-        /// Existing debug-formatted stopping reason.
+        /// Readable stopping reason.
         reason: String,
     },
     /// The child failed.
@@ -56,9 +41,7 @@ impl From<&RuntimeChildState> for ChildState {
             RuntimeChildState::Interrupted { resumable } => Self::Interrupted {
                 resumable: *resumable,
             },
-            RuntimeChildState::Stopped { reason } => Self::Stopped {
-                reason: format!("{reason:?}"),
-            },
+            RuntimeChildState::Stopped { reason } => Self::stopped(reason),
             RuntimeChildState::Failed => Self::Failed,
             RuntimeChildState::Expired => Self::Expired,
         }
@@ -66,26 +49,41 @@ impl From<&RuntimeChildState> for ChildState {
 }
 
 impl ChildState {
-    /// Today's exact lifecycle label for a CLI surface.
-    pub fn label(&self, surface: ChildLabelSurface) -> Cow<'static, str> {
-        match (surface, self) {
-            (ChildLabelSurface::LocalCommand, Self::Running) => "Running".into(),
-            (ChildLabelSurface::LocalCommand, Self::Idle) => "Idle".into(),
-            (ChildLabelSurface::LocalCommand, Self::Interrupted { resumable }) => {
-                format!("Interrupted {{ resumable: {resumable} }}").into()
-            }
-            (ChildLabelSurface::LocalCommand, Self::Stopped { reason }) => {
-                format!("Stopped {{ reason: {reason} }}").into()
-            }
-            (ChildLabelSurface::LocalCommand, Self::Failed) => "Failed".into(),
-            (ChildLabelSurface::LocalCommand, Self::Expired) => "Expired".into(),
-            (ChildLabelSurface::Submission, Self::Running) => "working".into(),
-            (ChildLabelSurface::Headless, Self::Running) => "running".into(),
-            (_, Self::Idle) => "idle".into(),
-            (_, Self::Interrupted { .. }) => "interrupted".into(),
-            (_, Self::Stopped { .. }) => "stopped".into(),
-            (_, Self::Failed) => "failed".into(),
-            (_, Self::Expired) => "expired".into(),
+    /// Captures a typed runtime stopping reason as readable words.
+    pub fn stopped(reason: &agent_runtime_core::cancel::CancelReason) -> Self {
+        use agent_runtime_core::cancel::CancelReason;
+        Self::Stopped {
+            reason: match reason {
+                CancelReason::UserRequested => "by request".to_owned(),
+                CancelReason::Timeout => "deadline elapsed".to_owned(),
+                CancelReason::LimitReached => "limit reached".to_owned(),
+                CancelReason::Shutdown => "session ended".to_owned(),
+                CancelReason::Host(reason) => reason.clone(),
+            },
+        }
+    }
+
+    /// Shared lifecycle label for human-readable child surfaces.
+    pub fn label(&self) -> Cow<'static, str> {
+        match self {
+            Self::Running => "running".into(),
+            Self::Idle => "idle".into(),
+            Self::Interrupted { resumable: true } => "interrupted (resumable)".into(),
+            Self::Interrupted { resumable: false } => "interrupted (not resumable)".into(),
+            Self::Stopped { reason } => format!("stopped ({reason})").into(),
+            Self::Failed => "failed".into(),
+            Self::Expired => "expired".into(),
+        }
+    }
+
+    fn machine_label(&self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Idle => "idle",
+            Self::Interrupted { .. } => "interrupted",
+            Self::Stopped { .. } => "stopped",
+            Self::Failed => "failed",
+            Self::Expired => "expired",
         }
     }
 }
@@ -109,13 +107,11 @@ impl From<&RuntimeChildDurability> for ChildDurability {
 }
 
 impl ChildDurability {
-    /// Today's exact durability label for a CLI surface.
-    pub fn label(self, surface: ChildLabelSurface) -> &'static str {
-        match (surface, self) {
-            (ChildLabelSurface::LocalCommand, Self::Ephemeral) => "Ephemeral",
-            (ChildLabelSurface::LocalCommand, Self::Durable) => "Durable",
-            (_, Self::Ephemeral) => "ephemeral",
-            (_, Self::Durable) => "durable",
+    /// Shared durability label for child surfaces.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Ephemeral => "ephemeral",
+            Self::Durable => "durable",
         }
     }
 }
@@ -165,9 +161,9 @@ impl AgentReport {
 pub struct AgentSummary {
     /// Stable child identity.
     pub child: String,
-    /// Child persistence, rendered for the chosen surface.
+    /// Child persistence, rendered with shared labels.
     pub durability: ChildDurability,
-    /// Child lifecycle, rendered for the chosen surface.
+    /// Child lifecycle, rendered with shared labels.
     pub state: ChildState,
     /// Whether exact recovery is available.
     pub resumable: bool,
@@ -238,16 +234,8 @@ impl AgentSnapshot {
         HeadlessAgentOutput {
             child_id: self.summary.child,
             child_session_id: self.session,
-            durability: self
-                .summary
-                .durability
-                .label(ChildLabelSurface::Headless)
-                .to_owned(),
-            state: self
-                .summary
-                .state
-                .label(ChildLabelSurface::Headless)
-                .into_owned(),
+            durability: self.summary.durability.label().to_owned(),
+            state: self.summary.state.machine_label().to_owned(),
             resumable: self.summary.resumable,
             turns_used: self.summary.turns_used,
             max_turns: self.summary.max_turns,
@@ -351,8 +339,8 @@ pub fn render_plain(report: &AgentReport) -> String {
                 format!(
                     "{} · {} · {} · resumable {} · {} turns · {} tokens",
                     child.child,
-                    child.durability.label(ChildLabelSurface::LocalCommand),
-                    child.state.label(ChildLabelSurface::LocalCommand),
+                    child.durability.label(),
+                    child.state.label(),
                     child.resumable,
                     child.turns_value(),
                     child.tokens_used,
@@ -363,11 +351,8 @@ pub fn render_plain(report: &AgentReport) -> String {
         AgentReport::Inspector(child) => format!(
             "session {} · {} · {} · {} · {} tokens · {}\nresumable {}{}\ncontinue: type a follow-up below · exact recovery: /agent resume {}\nresult: {}",
             child.session,
-            child
-                .summary
-                .durability
-                .label(ChildLabelSurface::LocalCommand),
-            child.summary.state.label(ChildLabelSurface::LocalCommand),
+            child.summary.durability.label(),
+            child.summary.state.label(),
             child.summary.turns_value(),
             child.summary.tokens_used,
             child.workspace,
@@ -381,5 +366,110 @@ pub fn render_plain(report: &AgentReport) -> String {
             child.last_result.as_deref().unwrap_or("not available"),
         ),
         AgentReport::Resume(resume) => resume.render_value(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_runtime_core::cancel::CancelReason;
+
+    #[test]
+    fn child_labels_are_readable_and_preserve_host_reason_text() {
+        for (state, label) in [
+            (RuntimeChildState::Running, "running"),
+            (RuntimeChildState::Idle, "idle"),
+            (
+                RuntimeChildState::Interrupted { resumable: true },
+                "interrupted (resumable)",
+            ),
+            (
+                RuntimeChildState::Interrupted { resumable: false },
+                "interrupted (not resumable)",
+            ),
+            (
+                RuntimeChildState::Stopped {
+                    reason: CancelReason::UserRequested,
+                },
+                "stopped (by request)",
+            ),
+            (
+                RuntimeChildState::Stopped {
+                    reason: CancelReason::Timeout,
+                },
+                "stopped (deadline elapsed)",
+            ),
+            (
+                RuntimeChildState::Stopped {
+                    reason: CancelReason::LimitReached,
+                },
+                "stopped (limit reached)",
+            ),
+            (
+                RuntimeChildState::Stopped {
+                    reason: CancelReason::Shutdown,
+                },
+                "stopped (session ended)",
+            ),
+            (
+                RuntimeChildState::Stopped {
+                    reason: CancelReason::Host("Keep CASE and IDs".to_owned()),
+                },
+                "stopped (Keep CASE and IDs)",
+            ),
+            (RuntimeChildState::Failed, "failed"),
+            (RuntimeChildState::Expired, "expired"),
+        ] {
+            assert_eq!(ChildState::from(&state).label(), label);
+        }
+        assert_eq!(ChildDurability::Durable.label(), "durable");
+        assert_eq!(ChildDurability::Ephemeral.label(), "ephemeral");
+    }
+
+    #[test]
+    fn child_machine_output_keeps_unqualified_state_and_existing_fields() {
+        for (state, machine, resumable) in [
+            (ChildState::Running, "running", false),
+            (ChildState::Idle, "idle", false),
+            (
+                ChildState::Interrupted { resumable: true },
+                "interrupted",
+                true,
+            ),
+            (
+                ChildState::Interrupted { resumable: false },
+                "interrupted",
+                false,
+            ),
+            (
+                ChildState::stopped(&CancelReason::LimitReached),
+                "stopped",
+                false,
+            ),
+            (ChildState::Failed, "failed", false),
+            (ChildState::Expired, "expired", false),
+        ] {
+            let snapshot = AgentSnapshot {
+                summary: AgentSummary {
+                    child: "child".to_owned(),
+                    durability: ChildDurability::Durable,
+                    state,
+                    resumable,
+                    turns_used: 1,
+                    max_turns: None,
+                    tokens_used: 2,
+                },
+                session: "session".to_owned(),
+                workspace: "ReadOnlyView".to_owned(),
+                incompatibility: None,
+                last_result: None,
+            };
+            assert_eq!(
+                serde_json::to_string(&snapshot.into_headless_output()).expect("machine output"),
+                format!(
+                    r#"{{"child_id":"child","child_session_id":"session","durability":"durable","state":"{machine}","resumable":{resumable},"turns_used":1,"tokens_used":2}}"#
+                ),
+            );
+        }
     }
 }

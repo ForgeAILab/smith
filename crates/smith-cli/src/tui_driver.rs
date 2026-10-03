@@ -1,6 +1,6 @@
 //! Interactive terminal event loop and TUI action routing.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
 use agent_runtime_core::cancel::CancelReason;
@@ -90,6 +90,63 @@ pub(super) struct InteractiveRequests {
     pub(super) interactions: Option<InteractionRequests>,
     pub(super) rotations: Option<RotationRequests>,
     pub(super) accounts: ActiveAccounts,
+}
+
+#[derive(Default)]
+pub(super) struct ShellShortcuts {
+    anchors: BTreeMap<u64, usize>,
+}
+
+impl ShellShortcuts {
+    pub(super) fn dispatched(&mut self, host: &HostSession, echo: u64) {
+        let anchor = host.session().with_history(|history| history.len());
+        self.anchors.insert(echo, anchor);
+    }
+
+    pub(super) fn finish(
+        &mut self,
+        host: &HostSession,
+        app: &mut App,
+        echo: u64,
+        call: Option<&str>,
+        content: &str,
+        is_error: bool,
+    ) {
+        let result = app
+            .transcript
+            .finish_shell_shortcut(echo, call, is_error, content);
+        if let Some(anchor) = self.anchors.remove(&echo)
+            && let Some(command) = app.transcript.shell_shortcut_command(echo)
+        {
+            host.record_shell_shortcut(anchor, call, command, is_error, result.as_deref());
+        }
+    }
+}
+
+pub(super) fn restore_transcript(
+    host: &HostSession,
+    app: &mut App,
+    history: &[agent_runtime_core::content::Message],
+) {
+    let shortcuts = host
+        .saved_shell_shortcuts()
+        .into_iter()
+        .map(|shortcut| smith_tui::transcript::RestoredShellShortcut {
+            anchor: shortcut.anchor,
+            call: shortcut.call,
+            command: shortcut.command,
+            is_error: shortcut.is_error,
+            result: shortcut.result,
+        })
+        .collect::<Vec<_>>();
+    app.transcript
+        .replace_from_history_with_shell_shortcuts(history, &shortcuts);
+    for (call, display) in host.tool_call_displays() {
+        app.set_tool_display(call.as_str(), display);
+    }
+    for (call, text) in host.tool_result_texts() {
+        app.set_tool_result_preview(call.as_str(), text);
+    }
 }
 
 pub(super) async fn run_interactive(
@@ -186,13 +243,7 @@ pub(super) async fn run_interactive(
         policy.harness.as_ref(),
     ));
     app.status.account = account_status(credential_pool.as_ref());
-    app.transcript.replace_from_history(&snapshot.history);
-    for (call, display) in host.tool_call_displays() {
-        app.set_tool_display(call.as_str(), display);
-    }
-    for (call, text) in host.tool_result_texts() {
-        app.set_tool_result_preview(call.as_str(), text);
-    }
+    restore_transcript(host, &mut app, &snapshot.history);
     if let Some(coordinator) = host
         .runtime()
         .delegation()
@@ -435,6 +486,7 @@ pub(super) async fn run_tui(
     let mut frame = tokio::time::interval(FRAME);
     let (local_tx, mut local_rx) = tokio::sync::mpsc::unbounded_channel();
     let local_shell_approvals = LocalShellApprovals::default();
+    let mut shell_shortcuts = ShellShortcuts::default();
     // One forwarding task per live child funnels every child's own stream into
     // this loop, so a child's events are folded by the same single-threaded
     // reducer the root's are and can never interleave mid-fold.
@@ -499,6 +551,7 @@ pub(super) async fn run_tui(
                             }
                             Some(Action::RunShell { command }) => {
                                 let echo = app.transcript.latest_shell_echo().expect("submitted shell echo");
+                                shell_shortcuts.dispatched(host, echo);
                                 let identity = start_local_shell(
                                     echo,
                                     session.clone(),
@@ -903,7 +956,7 @@ pub(super) async fn run_tui(
                         }
                         LocalOutcome::Error(text) => app.transcript.push_error(text),
                         LocalOutcome::Shell { echo, call, content, is_error } => {
-                            app.transcript.finish_shell_shortcut(echo, call.as_ref().map(|call| call.as_str()), is_error, &content);
+                            shell_shortcuts.finish(host, &mut app, echo, call.as_ref().map(|call| call.as_str()), &content, is_error);
                         }
                     }
                     dirty = true;

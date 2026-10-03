@@ -52,7 +52,7 @@ mod tests {
             profile: "dev".to_owned(),
             provider: "local".to_owned(),
             model: "gpt-5.3".to_owned(),
-            permission: "Ask".to_owned(),
+            permission: "ask".to_owned(),
             reasoning: "provider default".to_owned(),
             reasoning_controls: "unsupported".to_owned(),
             prompt_cache: "usage not reported".to_owned(),

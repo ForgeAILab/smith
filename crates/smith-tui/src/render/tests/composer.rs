@@ -577,7 +577,7 @@
                 "{width}x{height}: {armed}"
             );
             assert!(!armed_footer.contains("glm-5.2"), "{armed_footer}");
-            assert!(!armed_footer.contains("? ctx"), "{armed_footer}");
+            assert!(!armed_footer.contains("unknown ctx"), "{armed_footer}");
 
             assert!(app.expire_ctrl_c_exit_hint_at(
                 std::time::Instant::now() + std::time::Duration::from_secs(1)

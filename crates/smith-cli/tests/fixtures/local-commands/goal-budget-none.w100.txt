@@ -509,4 +509,4 @@ id: goal-host-call-1 · generation 4
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 > Ask Smith to do anything
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-  ? for shortcuts                                          example-model · build · <PROJECT> · ? ctx
+  ? for shortcuts                                    example-model · build · <PROJECT> · unknown ctx

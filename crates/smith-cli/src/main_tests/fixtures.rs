@@ -1078,6 +1078,7 @@ fn fixture_diagnostics_view(
 
     let mut report = report.clone();
     for section in &mut report.sections {
+        section.heading = normalizer.normalize(&section.heading);
         for row in &mut section.rows {
             match row {
                 DiagnosticsRow::Field { label, value } => {

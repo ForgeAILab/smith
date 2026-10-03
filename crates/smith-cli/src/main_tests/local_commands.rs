@@ -6,9 +6,9 @@ use crate::local_command::context::{
     display_categories as context_display_categories, display_category as context_display_category,
     report as context_report,
 };
-use crate::local_command::diagnostics::{context_section, harness_section};
+use crate::local_command::diagnostics::{cache_controller_rows, context_section, harness_section};
 use smith_client::context_report::{ContextCategoryKind, render_plain as render_context_plain};
-use smith_client::diagnostics_report::{DiagnosticsReport, DiagnosticsSection};
+use smith_client::diagnostics_report::{DiagnosticsReport, DiagnosticsRow, DiagnosticsSection};
 use smith_client::status::{PriceReference, PriceTable, SessionUsage};
 
 fn diagnostics_section_plain(section: DiagnosticsSection) -> String {
@@ -83,23 +83,76 @@ fn cache_controller_status_projects_idle_compaction_metadata_and_usage() {
     controller.idle_compaction_usage.input_uncached = 120;
     controller.idle_compaction_usage.input_cached = 800;
     controller.idle_compaction_usage.output = 20;
+    controller.synthetic_attempts.push(
+        smith_runtime::cache_controller::SyntheticCacheAttemptProjection {
+            operation: None,
+            attempt: None,
+            purpose: agent_runtime_core::provider::ProviderAttemptPurpose::IdleCompaction,
+            provider: "summary-provider".to_owned(),
+            model: "summary-model".to_owned(),
+            cache_identity: None,
+            usage: controller.idle_compaction_usage.clone(),
+            counter_provenance: Default::default(),
+            cost_micro_usd: None,
+            cost_provenance: Default::default(),
+            latency_ms: 17,
+            status: "completed".to_owned(),
+        },
+    );
 
-    let rendered = render_cache_controller_status(&controller);
-    assert!(rendered.contains("idle attempted true"), "{rendered}");
-    assert!(rendered.contains("idle outcome completed"), "{rendered}");
+    let section = DiagnosticsSection {
+        heading: "Cache".to_owned(),
+        rows: cache_controller_rows(&controller),
+    };
+    for row in &section.rows {
+        if let DiagnosticsRow::Field { label, .. } = row {
+            assert!(
+                ratatui::text::Line::from(label.as_str()).width() <= 18,
+                "{label}"
+            );
+        }
+    }
+    let rendered = diagnostics_section_plain(section);
+    let (_, maintenance) = rendered.split_once("\nmaintenance: ").unwrap();
+    let (maintenance, _) = maintenance.split_once("\nidle compaction: ").unwrap();
     assert!(
-        rendered.contains("idle reason artifact_projection_unavailable"),
+        maintenance
+            .lines()
+            .skip(1)
+            .all(|line| line.starts_with("  "))
+    );
+    let (_, idle) = rendered
+        .split_once("\nidle compaction: attempted yes\n")
+        .expect("idle facts follow their parent row");
+    let (idle, synthetic) = idle.split_once("\nsynthetic attempts: 1\n").unwrap();
+    assert!(idle.lines().all(|line| line.starts_with("  ")));
+    assert!(synthetic.lines().all(|line| line.starts_with("  ")));
+    assert!(idle.contains("  decision: none"), "{rendered}");
+    assert!(idle.contains("  outcome: completed"), "{rendered}");
+    assert!(
+        idle.contains("  reason: artifact_projection_unavailable"),
         "{rendered}"
     );
-    assert!(rendered.contains("idle latency 17ms"), "{rendered}");
+    assert!(idle.contains("  latency: 17ms"), "{rendered}");
     assert!(
-        rendered.contains("idle route summary-provider/summary-model/summary-r1"),
+        idle.contains("  route: summary-provider/summary-model/summary-r1"),
         "{rendered}"
     );
     assert!(
-        rendered.contains("idle usage in/cached/write/out/reasoning 120/800/0/20/0"),
+        idle.contains("  usage: input 120 · cached 800 · writes 0 · output 20 · reasoning 0"),
         "{rendered}"
     );
+    for fact in [
+        "  purpose: idle compaction",
+        "  route: summary-provider/summary-model",
+        "  identity: none",
+        "  usage: input 120 · cached 800 · writes 0 · output 20 · reasoning 0",
+        "  cost: unknown (unknown)",
+        "  latency: 17ms",
+        "  status: completed",
+    ] {
+        assert!(synthetic.lines().any(|line| line == fact), "{rendered}");
+    }
 }
 
 #[test]
@@ -163,23 +216,27 @@ fn harness_status_names_registry_view_activation_and_context_provenance() {
 
     let rendered = diagnostics_section_plain(harness_section(&status));
     assert!(
-        rendered.contains("registry snapshot: registry-fingerprint · 6 entries"),
+        rendered.contains("registry snapshot: registry-fingerprint\n  entries: 6"),
         "{rendered}"
     );
     assert!(
-        rendered.contains("scoped capability view: view-fingerprint · 4 visible"),
+        rendered.contains("capability view: view-fingerprint\n  visible: 4"),
         "{rendered}"
     );
     assert!(
-        rendered.contains("activation epoch: 1 · tool:read"),
+        rendered.contains("retrieval: resolver-1\n  candidates: tool:read, tool:search"),
         "{rendered}"
     );
     assert!(
-        rendered.contains("context provenance: context-fingerprint · cache cache-fingerprint"),
+        rendered.contains("activation epoch: 1\n  active: tool:read"),
         "{rendered}"
     );
     assert!(
-        rendered.contains("context compaction: 1 run(s) · 250 tokens reclaimed"),
+        rendered.contains("context provenance: context-fingerprint\n  cache: cache-fingerprint"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("compaction runs: 1\ntokens reclaimed: 250"),
         "{rendered}"
     );
 }
@@ -226,7 +283,7 @@ async fn informational_commands_append_inline_without_provider_history() {
         "{before_plan}"
     );
     assert!(
-        before_plan.contains("compaction: enabled on overflow · 74.3k recovery target"),
+        before_plan.contains("compaction: enabled on overflow\nrecovery target: 74.3k"),
         "{before_plan}"
     );
     let before_context =
@@ -292,10 +349,10 @@ async fn informational_commands_append_inline_without_provider_history() {
     let planned = diagnostics_section_plain(context_section(&app.status, host.runtime().policy()));
     assert!(planned.contains("~98% input left"), "{planned}");
     assert!(planned.contains("~2k used / 123.9k budget"), "{planned}");
-    assert!(planned.contains("provider input (session): ?"), "{planned}");
+    assert!(planned.contains("provider input: unknown"), "{planned}");
     assert!(planned.contains("tool schema: ~500"), "{planned}");
     assert!(
-        planned.contains("compaction: enabled on overflow · 74.3k recovery target"),
+        planned.contains("compaction: enabled on overflow\nrecovery target: 74.3k"),
         "{planned}"
     );
     let context = render_context_plain(&context_report(&app.status, host.runtime().policy()));
@@ -313,6 +370,47 @@ async fn informational_commands_append_inline_without_provider_history() {
         context.contains("counting: estimated · 2 segments"),
         "{context}"
     );
+
+    let diagnostics = crate::local_command::diagnostics::report(&app, &host, project.path());
+    for section in &diagnostics.sections {
+        for row in &section.rows {
+            if let DiagnosticsRow::Field { label, .. } = row {
+                assert!(
+                    ratatui::text::Line::from(label.as_str()).width() <= 18,
+                    "{} label exceeds 18 columns: {label:?}",
+                    section.heading
+                );
+            }
+        }
+    }
+    assert_eq!(
+        diagnostics
+            .sections
+            .iter()
+            .map(|section| section.heading.as_str())
+            .collect::<Vec<_>>(),
+        ["Session", "Context", "Cache", "Recovery"]
+    );
+    let plain = smith_client::diagnostics_report::render_plain(&diagnostics);
+    assert_eq!(
+        plain
+            .lines()
+            .filter(|line| line.starts_with("reasoning:"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        plain
+            .lines()
+            .filter(|line| line.starts_with("reasoning controls:"))
+            .count(),
+        1
+    );
+    assert!(plain.contains("idle compaction: attempted no"), "{plain}");
+    assert!(plain.contains("  route: unknown"), "{plain}");
+    assert!(plain.contains("session read: unknown"), "{plain}");
+    assert!(plain.contains("cache hit: unknown"), "{plain}");
+    assert!(!plain.contains('?'), "{plain}");
 
     let (_, skills) = crate::skills::SkillContext::compose(
         smith_runtime::skills::SmithSkillSources::new(),
@@ -425,14 +523,20 @@ async fn informational_commands_append_inline_without_provider_history() {
         diagnostics_content.contains("~98% input left"),
         "{diagnostics_content}"
     );
-    assert!(
-        diagnostics_content.contains("profile: dev · posture build · use main · rev"),
-        "{diagnostics_content}"
-    );
-    assert!(
-        diagnostics_content.contains("source"),
-        "{diagnostics_content}"
-    );
+    for fact in ["profile: dev", "posture: build", "profile uses: main"] {
+        assert!(
+            diagnostics_content.lines().any(|line| line == fact),
+            "{diagnostics_content}"
+        );
+    }
+    for label in ["profile revision: ", "profile source: "] {
+        assert!(
+            diagnostics_content
+                .lines()
+                .any(|line| line.starts_with(label) && line.len() > label.len()),
+            "{diagnostics_content}"
+        );
+    }
     // No usage has been recorded yet, so `/status` reports "nothing
     // spent yet" rather than either a zero dollar figure or "unknown" —
     // there is nothing to price, which is a different fact from a
@@ -487,7 +591,7 @@ async fn informational_commands_append_inline_without_provider_history() {
     let compacted =
         diagnostics_section_plain(context_section(&app.status, host.runtime().policy()));
     assert!(
-        compacted.contains("compaction: applied · ~600 summary · 74.3k recovery target"),
+        compacted.contains("compaction: applied\nrecovery target: 74.3k"),
         "{compacted}"
     );
     host.shutdown().await.expect("shutdown");
@@ -504,7 +608,7 @@ fn disabled_maintenance_is_not_rendered_as_an_authority_failure() {
     assert_eq!(rendered, "cache maintenance: off");
     assert!(!rendered.contains("denied"));
     assert!(!rendered.contains("lease"));
-    assert!(!rendered.contains("idle attempted"));
+    assert!(!rendered.contains("idle compaction"));
 }
 
 #[test]

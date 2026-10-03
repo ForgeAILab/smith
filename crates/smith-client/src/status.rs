@@ -1179,9 +1179,10 @@ impl Status {
 
     /// Footer context derived from the latest enforced plan.
     pub fn render_context_footer(&self) -> String {
-        self.context_plan
-            .as_ref()
-            .map_or_else(|| "? ctx".to_owned(), ContextPlanStatus::render_footer)
+        self.context_plan.as_ref().map_or_else(
+            || "unknown ctx".to_owned(),
+            ContextPlanStatus::render_footer,
+        )
     }
 }
 
@@ -1546,7 +1547,7 @@ mod tests {
 
         status.switch_model(Some("anthropic".into()), "claude-opus-5");
         assert!(status.context_plan.is_none());
-        assert_eq!(status.render_context_footer(), "? ctx");
+        assert_eq!(status.render_context_footer(), "unknown ctx");
     }
 
     #[test]

@@ -1,4 +1,4 @@
 title: agents
 state: Info
 body:
-child-1 · Durable · Idle · resumable false · 1/1 turns · 0 tokens
+child-1 · durable · idle · resumable false · 1/1 turns · 0 tokens

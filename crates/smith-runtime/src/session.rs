@@ -232,6 +232,14 @@ impl SessionPaths {
             .join(format!("{}.changes.jsonl", session.as_str())))
     }
 
+    /// The display-only user shell shortcut sidecar for `session`.
+    pub fn shell(&self, session: &SessionId) -> Result<PathBuf, RuntimeError> {
+        safe_component(session.as_str(), "session id")?;
+        Ok(self
+            .directory
+            .join(format!("{}.shell.jsonl", session.as_str())))
+    }
+
     /// Owner-only store for session-attributed artifacts in this project.
     ///
     /// Artifacts are not workspace files. The store keeps owner metadata
@@ -649,6 +657,9 @@ mod tests {
         assert!(snapshot.ends_with("sessions/demo/s-1.snapshot.json"));
         let journal = paths.journal(&SessionId::new("s-1")).expect("a path");
         assert!(journal.ends_with("sessions/demo/s-1.jsonl"));
+        let shell = paths.shell(&SessionId::new("s-1")).expect("a path");
+        assert!(shell.ends_with("sessions/demo/s-1.shell.jsonl"));
+        assert_eq!(shell.parent(), snapshot.parent());
         let tasks = paths.tasks_dir(&SessionId::new("s-1")).expect("a path");
         assert!(tasks.ends_with("sessions/demo/s-1.tasks"));
     }
@@ -661,6 +672,7 @@ mod tests {
             .expect_err("an error");
         assert_eq!(err.kind, ErrorKind::Config);
         assert!(paths.journal(&SessionId::new("../../escape")).is_err());
+        assert!(paths.shell(&SessionId::new("../../escape")).is_err());
         assert!(paths.tasks_dir(&SessionId::new("../../escape")).is_err());
     }
 

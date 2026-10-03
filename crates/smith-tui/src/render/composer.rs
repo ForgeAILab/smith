@@ -829,7 +829,7 @@ fn agent_row(
     // While a child works its detail IS the activity; once it settles, the
     // lifecycle label carries the outcome and the detail explains it.
     let mut activity = match (summary.state.as_str(), &summary.detail) {
-        ("running" | "working" | "resuming", Some(detail)) => detail.clone(),
+        ("running" | "resuming", Some(detail)) => detail.clone(),
         (state, Some(detail)) => format!("{state} {} {detail}", glyph::SEPARATOR),
         (state, None) => state.to_owned(),
     };

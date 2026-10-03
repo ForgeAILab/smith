@@ -1,6 +1,6 @@
 ● child-1 · completed
 
-  session <CHILD_SESSION_ID:1> · Durable · Idle · 1/1 · 0 tokens · ReadOnlyView
+  session <CHILD_SESSION_ID:1> · durable · idle · 1/1 · 0 tokens · ReadOnlyView
   resumable false
   continue: type a follow-up below · exact recovery: /agent resume child-1
   result: child done

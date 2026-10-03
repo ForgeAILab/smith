@@ -508,5 +508,5 @@
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 > Ask Smith to do anything
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-                                                           example-model · build · <PROJECT> · ? ctx
+                                                     example-model · build · <PROJECT> · unknown ctx
   type to filter · ↑↓ choose · enter confirm · esc cancel

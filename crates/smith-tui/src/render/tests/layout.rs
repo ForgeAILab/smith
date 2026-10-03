@@ -178,7 +178,7 @@
                 screen.contains("? for shortcuts"),
                 "{width}×{height}:\n{screen}"
             );
-            assert_eq!(screen.contains("? ctx"), width != 44, "{screen}");
+            assert_eq!(screen.contains("unknown ctx"), width != 44, "{screen}");
             assert!(
                 !screen.contains("Tab agents"),
                 "{width}×{height}:\n{screen}"
@@ -202,7 +202,7 @@
         }
 
         let normal = render(&app, 74, 24, theme);
-        insta_like(&normal, &["zai/glm-5.2 · build · api:main · ? ctx"]);
+        insta_like(&normal, &["zai/glm-5.2 · build · api:main · unknown ctx"]);
 
         app.apply(&event(RuntimeEvent::TurnStarted));
         let reduced_motion = render(&app, 74, 24, theme);

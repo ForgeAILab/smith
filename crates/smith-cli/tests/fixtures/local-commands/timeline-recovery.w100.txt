@@ -509,4 +509,4 @@ recovery recovery-6 · revert previewed · untracked.txt
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 > Ask Smith to do anything
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-  ? for shortcuts                                          example-model · build · <PROJECT> · ? ctx
+  ? for shortcuts                                    example-model · build · <PROJECT> · unknown ctx

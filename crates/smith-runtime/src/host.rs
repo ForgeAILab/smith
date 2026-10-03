@@ -8,6 +8,8 @@
 //! cannot drift in their persistence behavior.
 
 use std::collections::{BTreeSet, VecDeque};
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
@@ -38,6 +40,7 @@ use agent_runtime_core::observer::EventObserver;
 use agent_runtime_core::store::{SessionSnapshot, SessionStateSensitivity, SessionStore};
 use agent_runtime_core::usage::{CounterKind, UsageDelta, UsageSource};
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use smith_config::model::ApprovalMode;
 use smith_config::resolve::{Layer, ResolvedConfig, Source};
 use smith_tools::{ToolCallDisplay, project_tool_call_display};
@@ -191,6 +194,25 @@ pub struct HostSession {
     resume_capsule: Option<Arc<ResumeCapsuleSlot>>,
 }
 
+/// A finished user shell shortcut retained only for transcript display.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedShellShortcut {
+    /// Version of this sidecar record's shape.
+    pub schema_version: u32,
+    /// Canonical history length when the shortcut was dispatched.
+    pub anchor: usize,
+    /// Runtime call identity, absent when admission was rejected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub call: Option<String>,
+    /// Credential-redacted command echoed by the transcript.
+    pub command: String,
+    /// Whether the shortcut failed.
+    pub is_error: bool,
+    /// Credential-redacted bounded text retained by the live row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
+}
+
 /// Redaction-safe identity of an exact pending interaction restored from a
 /// protected checkpoint.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -242,6 +264,89 @@ impl HostSession {
     /// The on-disk paths when persistence is enabled.
     pub fn paths(&self) -> Option<&SessionPaths> {
         self.paths.as_ref()
+    }
+
+    /// Appends a finished shortcut without changing canonical session state.
+    /// The caller supplies the exact bounded result retained by its live row.
+    pub fn record_shell_shortcut(
+        &self,
+        anchor: usize,
+        call: Option<&str>,
+        command: &str,
+        is_error: bool,
+        result: Option<&str>,
+    ) {
+        let Some(paths) = &self.paths else {
+            return;
+        };
+        let path = match paths.shell(self.session.id()) {
+            Ok(path) => path,
+            Err(error) => {
+                tracing::warn!(%error, "shell shortcut path unavailable");
+                return;
+            }
+        };
+        let redact = |text: &str| match self
+            .display_redactor
+            .redacted_clone(&serde_json::Value::String(text.to_owned()))
+        {
+            serde_json::Value::String(redacted) => Some(redacted),
+            _ => {
+                tracing::warn!("shell shortcut redaction returned a non-string; record skipped");
+                None
+            }
+        };
+        let Some(command) = redact(command) else {
+            return;
+        };
+        let result = match result {
+            Some(text) => {
+                let Some(redacted) = redact(text) else {
+                    return;
+                };
+                Some(redacted)
+            }
+            None => None,
+        };
+        let record = SavedShellShortcut {
+            schema_version: 1,
+            anchor,
+            call: call.map(str::to_owned),
+            command,
+            is_error,
+            result,
+        };
+        if let Err(error) = append_shell_shortcut(&path, &record) {
+            tracing::warn!(%error, "shell shortcut could not be saved");
+        }
+    }
+
+    /// Reads complete, supported shortcut records in their sidecar file order.
+    pub fn saved_shell_shortcuts(&self) -> Vec<SavedShellShortcut> {
+        let Some(paths) = &self.paths else {
+            return Vec::new();
+        };
+        let path = match paths.shell(self.session.id()) {
+            Ok(path) => path,
+            Err(error) => {
+                tracing::warn!(%error, "shell shortcut path unavailable");
+                return Vec::new();
+            }
+        };
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+            Err(error) => {
+                tracing::warn!(%error, "shell shortcuts could not be read");
+                return Vec::new();
+            }
+        };
+        bytes
+            .split_inclusive(|byte| *byte == b'\n')
+            .filter(|line| line.last() == Some(&b'\n'))
+            .filter_map(|line| serde_json::from_slice::<SavedShellShortcut>(line).ok())
+            .filter(|record| record.schema_version == 1)
+            .collect()
     }
 
     /// In-session exact/ambiguous mutation attribution.
@@ -632,6 +737,24 @@ impl HostSession {
         session?;
         journal
     }
+}
+
+fn append_shell_shortcut(path: &Path, record: &SavedShellShortcut) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut line = serde_json::to_vec(record).map_err(std::io::Error::other)?;
+    line.push(b'\n');
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(&line)?;
+    file.sync_data()
 }
 
 fn tool_call_display_from_history(
@@ -2076,6 +2199,212 @@ mod tests {
         CacheEndpointIdentity, CacheIdentity, CacheIdentityFragment, ModelId,
     };
     use serde_json::json;
+
+    struct ShellShortcutFixture {
+        home: tempfile::TempDir,
+        _project: tempfile::TempDir,
+        host: HostSession,
+    }
+
+    #[derive(Debug)]
+    struct ShellShortcutKeys;
+
+    impl CheckpointKeyProvider for ShellShortcutKeys {
+        fn load_or_create(
+            &self,
+        ) -> Result<crate::checkpoint::CheckpointKey, crate::checkpoint::CheckpointProtectionError>
+        {
+            Ok(crate::checkpoint::CheckpointKey::new([0x52; 32]))
+        }
+    }
+
+    impl ShellShortcutFixture {
+        async fn new(persistent: bool) -> Self {
+            let home = tempfile::tempdir().expect("home");
+            let project = tempfile::tempdir().expect("project");
+            let config_dir = home.path().join(".smith");
+            std::fs::create_dir_all(&config_dir).expect("config directory");
+            std::fs::write(
+                config_dir.join("config.toml"),
+                r#"
+default_profile = "dev"
+[profiles.dev]
+provider = "local"
+model = "example-model"
+[providers.local]
+kind = "fake"
+[models."local/example-model"]
+context_tokens = 128000
+max_input_tokens = 124000
+max_output_tokens = 4096
+"#,
+            )
+            .expect("config");
+            let mut config = smith_config::resolve::resolve(
+                &smith_config::resolve::ResolveRequest::new(project.path())
+                    .with_home_dir(home.path()),
+            )
+            .expect("resolution")
+            .config;
+            config.persistence.enabled.value = persistent;
+            let runtime = RuntimeRequest {
+                workspace: Some(Arc::new(
+                    smith_host::ProjectWorkspace::new(project.path()).expect("workspace"),
+                )),
+                approval: Some(Arc::new(agent_runtime_core::approval::DenyAll)),
+                persistence_redactor: Some(
+                    DefaultRedactor::new().with_secret("TOP_SECRET_COMMAND"),
+                ),
+                ..RuntimeRequest::new(config, crate::factory::HostSurface::Terminal)
+            };
+            let host = start(
+                HostSessionRequest::new(runtime, project.path())
+                    .checkpoint_keys(Arc::new(ShellShortcutKeys)),
+            )
+            .await
+            .expect("host");
+            Self {
+                home,
+                _project: project,
+                host,
+            }
+        }
+
+        fn path(&self) -> PathBuf {
+            self.host
+                .paths()
+                .expect("persistent paths")
+                .shell(self.host.session().id())
+                .expect("shell sidecar")
+        }
+    }
+
+    #[tokio::test]
+    async fn shell_shortcuts_round_trip_in_file_order() {
+        let fixture = ShellShortcutFixture::new(true).await;
+        let host = &fixture.host;
+        let history = host.session().history();
+        host.record_shell_shortcut(2, Some("call-1"), "ls", false, Some("one\ntwo"));
+        host.record_shell_shortcut(0, None, "rejected", true, None);
+        assert_eq!(
+            host.saved_shell_shortcuts(),
+            [
+                SavedShellShortcut {
+                    schema_version: 1,
+                    anchor: 2,
+                    call: Some("call-1".to_owned()),
+                    command: "ls".to_owned(),
+                    is_error: false,
+                    result: Some("one\ntwo".to_owned()),
+                },
+                SavedShellShortcut {
+                    schema_version: 1,
+                    anchor: 0,
+                    call: None,
+                    command: "rejected".to_owned(),
+                    is_error: true,
+                    result: None,
+                },
+            ]
+        );
+        let text = std::fs::read_to_string(fixture.path()).expect("sidecar");
+        let lines = text.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 2);
+        assert!(text.ends_with('\n'));
+        let second: serde_json::Value = serde_json::from_str(lines[1]).expect("record");
+        assert!(second.get("call").is_none());
+        assert!(second.get("result").is_none());
+        assert_eq!(host.session().history(), history);
+        host.shutdown().await.expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn shell_shortcuts_ignore_truncated_invalid_and_future_records() {
+        let fixture = ShellShortcutFixture::new(true).await;
+        let host = &fixture.host;
+        host.record_shell_shortcut(0, None, "first", false, Some("first result"));
+        let mut future = host.saved_shell_shortcuts()[0].clone();
+        future.schema_version = 2;
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(fixture.path())
+            .expect("sidecar");
+        file.write_all(b"invalid json\n").expect("invalid record");
+        append_shell_shortcut(&fixture.path(), &future).expect("future record");
+        host.record_shell_shortcut(1, Some("call-2"), "second", true, Some("failed"));
+        let expected = host.saved_shell_shortcuts();
+        assert_eq!(expected.len(), 2);
+        let final_line = serde_json::to_vec(&expected[0]).expect("complete JSON without newline");
+        file.write_all(&final_line).expect("unterminated record");
+        assert_eq!(host.saved_shell_shortcuts(), expected);
+        file.write_all(b"\n{\"schema_version\":1,\"anchor\":")
+            .expect("truncated record");
+        let mut with_completed_line = expected.clone();
+        with_completed_line.push(expected[0].clone());
+        assert_eq!(host.saved_shell_shortcuts(), with_completed_line);
+        host.shutdown().await.expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn shell_shortcuts_redact_command_and_result() {
+        let fixture = ShellShortcutFixture::new(true).await;
+        fixture.host.record_shell_shortcut(
+            0,
+            Some("call-1"),
+            "printf TOP_SECRET_COMMAND",
+            false,
+            Some("result TOP_SECRET_COMMAND"),
+        );
+        let records = fixture.host.saved_shell_shortcuts();
+        assert_eq!(records[0].command, "printf [redacted]");
+        assert_eq!(records[0].result.as_deref(), Some("result [redacted]"));
+        let text = std::fs::read_to_string(fixture.path()).expect("sidecar");
+        assert!(!text.contains("TOP_SECRET_COMMAND"));
+        fixture.host.shutdown().await.expect("shutdown");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shell_shortcuts_are_created_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fixture = ShellShortcutFixture::new(true).await;
+        fixture
+            .host
+            .record_shell_shortcut(0, None, "ls", false, None);
+        assert_eq!(
+            std::fs::metadata(fixture.path())
+                .expect("sidecar metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        fixture.host.shutdown().await.expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn shell_shortcuts_do_not_persist_without_session_paths() {
+        let fixture = ShellShortcutFixture::new(false).await;
+        assert!(fixture.host.paths().is_none());
+        fixture
+            .host
+            .record_shell_shortcut(0, None, "ls", false, Some("files"));
+        assert!(fixture.host.saved_shell_shortcuts().is_empty());
+        assert!(!fixture.home.path().join(".smith/sessions").exists());
+        fixture.host.shutdown().await.expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn shell_shortcuts_write_failure_is_nonfatal() {
+        let fixture = ShellShortcutFixture::new(true).await;
+        std::fs::create_dir(fixture.path()).expect("unwritable sidecar");
+        fixture
+            .host
+            .record_shell_shortcut(0, None, "ls", false, Some("files"));
+        assert!(fixture.host.saved_shell_shortcuts().is_empty());
+        fixture.host.shutdown().await.expect("shutdown");
+    }
 
     fn journal_event(seq: u64, payload: RuntimeEvent) -> JournalLine {
         JournalLine::new(JournalRecord::Event {

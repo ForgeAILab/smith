@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use agent_runtime_core::clock::Timestamp;
 use agent_runtime_core::ids::TurnId;
 use agent_runtime_core::provider::FinishReason;
+use smith_client::agent_report::ChildState;
 use smith_runtime::client::{
     ChildPhase, ChildRecoveryState, PlanSensitivity, SmithEvent as EventEnvelope,
     SmithEventKind as RuntimeEvent, TurnFinish,
@@ -823,7 +824,8 @@ impl App {
                 } => {
                     let state = match state {
                         ChildRecoveryState::Idle => "idle",
-                        ChildRecoveryState::Interrupted => "interrupted",
+                        ChildRecoveryState::Interrupted if *resumable => "interrupted (resumable)",
+                        ChildRecoveryState::Interrupted => "interrupted (not resumable)",
                         ChildRecoveryState::Blocked => "blocked",
                         ChildRecoveryState::Expired => "expired",
                         ChildRecoveryState::Terminal => "terminal",
@@ -855,12 +857,12 @@ impl App {
                 }
                 ChildPhase::TurnStarted => {
                     if let Some(summary) = self.children.get_mut(&child.to_string()) {
-                        summary.state = "working".to_owned();
+                        summary.state = "running".to_owned();
                     }
                     self.run_child_clock(child.as_str());
                     // A turn boundary, drawn as the root timeline draws its
                     // own: quiet punctuation, not a sourced notice row.
-                    self.push_child_notice(child.as_str(), "turn", "working");
+                    self.push_child_notice(child.as_str(), "turn", "running");
                 }
                 ChildPhase::ResumeStarted { child_session } => {
                     let profile = self.carried_child_profile(child.as_str());
@@ -887,28 +889,30 @@ impl App {
                     child_session,
                     resumable,
                 } => {
-                    let detail = format!(
-                        "durable · session {child_session}{}",
-                        if *resumable {
-                            " · exact resume available"
-                        } else {
-                            " · no compatible checkpoint"
-                        }
-                    );
+                    let state = ChildState::Interrupted {
+                        resumable: *resumable,
+                    }
+                    .label()
+                    .into_owned();
+                    let detail = format!("durable · session {child_session}");
                     let profile = self.carried_child_profile(child.as_str());
                     self.children.insert(
                         child.to_string(),
                         ChildSummary {
-                            state: "interrupted".to_owned(),
+                            state: state.clone(),
                             detail: Some(detail.clone()),
                             profile,
                         },
                     );
                     self.settle_child_clock(child.as_str());
                     self.settle_child_tool_calls(child.as_str());
-                    self.push_child_notice(child.as_str(), "interrupted", detail.clone());
+                    self.push_child_notice(
+                        child.as_str(),
+                        "interrupted",
+                        format!("{state} · {detail}"),
+                    );
                     self.transcript
-                        .push_notice("sub-agent", format!("{child} interrupted · {detail}"));
+                        .push_notice("sub-agent", format!("{child} {state} · {detail}"));
                 }
                 // The completed/stopped notice that follows says everything a
                 // bare "finished a turn" would.
@@ -975,21 +979,21 @@ impl App {
                 self.arm_child_dismissal(child.as_str());
             }
             RuntimeEvent::ChildStopped { child, reason } => {
-                let detail = describe_cancel_reason(reason);
+                let state = ChildState::stopped(reason).label().into_owned();
                 let profile = self.carried_child_profile(child.as_str());
                 self.children.insert(
                     child.to_string(),
                     ChildSummary {
-                        state: "stopped".to_owned(),
-                        detail: Some(detail.clone()),
+                        state: state.clone(),
+                        detail: None,
                         profile,
                     },
                 );
                 self.settle_child_clock(child.as_str());
                 self.settle_child_tool_calls(child.as_str());
-                self.push_child_notice(child.as_str(), "stopped", detail.clone());
+                self.push_child_notice(child.as_str(), "stopped", state.clone());
                 self.transcript
-                    .push_notice("sub-agent", format!("{child} stopped · {detail}"));
+                    .push_notice("sub-agent", format!("{child} {state}"));
             }
             RuntimeEvent::ChildFailed { child, error } => {
                 let profile = self.carried_child_profile(child.as_str());
@@ -1044,7 +1048,7 @@ impl App {
         let pending_child = self
             .children
             .values()
-            .any(|child| matches!(child.state.as_str(), "running" | "working" | "resuming"));
+            .any(|child| matches!(child.state.as_str(), "running" | "resuming"));
         self.status.activity = if pending_child {
             Activity::ParkedAwaitingChild
         } else {

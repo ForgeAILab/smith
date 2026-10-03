@@ -3,7 +3,7 @@
   profile             dev
   provider            local
   model               example-model
-  permission          Ask
+  permission          ask
   reasoning           provider default ·
                       effort provider
                       default ·

@@ -3,7 +3,7 @@
   profile             dev
   provider            local
   model               example-model
-  permission          Ask
+  permission          ask
   reasoning           provider default · effort provider default · provider/model default
   reasoning controls  unsupported · switch unavailable · efforts none · resolved model catalog
                       (presence only)
@@ -509,4 +509,4 @@
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 > Ask Smith to do anything
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-  ? for shortcuts                                          example-model · build · <PROJECT> · ? ctx
+  ? for shortcuts                                    example-model · build · <PROJECT> · unknown ctx

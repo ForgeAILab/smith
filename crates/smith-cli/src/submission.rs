@@ -11,7 +11,7 @@ use agent_runtime_core::provider::ModelId;
 use agent_runtime_core::steer::SteerRejectionReason;
 use agent_runtime_core::workspace::Workspace;
 use anyhow::Result;
-use smith_client::agent_report::{AgentReport, AgentResumeReport, AgentSummary, ChildLabelSurface};
+use smith_client::agent_report::{AgentReport, AgentResumeReport, AgentSummary};
 use smith_client::review_report::{ReviewReport, ReviewStartReport};
 use smith_config::resolve::ResolvedAgent;
 use smith_host::{ApprovalPrompt, GitChanges, ProjectWorkspace};
@@ -452,11 +452,8 @@ pub(crate) fn turns_label(used: u32, max: u32) -> String {
 
 pub(super) fn child_summary_projection(status: &ChildStatus) -> (String, String) {
     let summary = AgentSummary::from(status);
-    let state = summary
-        .state
-        .label(ChildLabelSurface::Submission)
-        .into_owned();
-    let durability = summary.durability.label(ChildLabelSurface::Submission);
+    let state = summary.state.label().into_owned();
+    let durability = summary.durability.label();
     let mut detail = format!(
         "{durability} · session {} · {} turns · {} tokens",
         status.session,

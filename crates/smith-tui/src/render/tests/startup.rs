@@ -33,11 +33,14 @@ fn startup_guide_uses_command_registry_names_and_descriptions() {
         let lines = transcript_lines(&app, theme, 100);
         let commands = lines.iter().skip(3).collect::<Vec<_>>();
         assert_eq!(commands.len(), 3);
-        for (line, name) in commands.into_iter().zip(["model", "connect", "help"]) {
-            let command = smith_client::commands::COMMANDS
-                .iter()
-                .find(|command| command.name == name)
-                .unwrap();
+        let help = smith_client::commands::help();
+        for ((line, command), suggestion) in commands
+            .into_iter()
+            .zip(smith_client::commands::getting_started_commands())
+            .zip(&help.getting_started)
+        {
+            assert_eq!(suggestion.name, command.name);
+            assert_eq!(suggestion.description, command.description);
             let invocation = format!("/{}", command.name);
             assert_eq!(
                 line.to_string(),

@@ -136,7 +136,7 @@ fn hint_row_states_and_identity_drop_order_at_44_80_and_100_columns() {
             assert!(footer.starts_with("  ? for shortcuts"), "{footer}");
             assert!(footer.contains("model · dev · ask"), "{footer}");
             assert!(
-                footer.ends_with(if width == 44 { "ask" } else { "? ctx" }),
+                footer.ends_with(if width == 44 { "ask" } else { "unknown ctx" }),
                 "{footer}"
             );
             assert_eq!(

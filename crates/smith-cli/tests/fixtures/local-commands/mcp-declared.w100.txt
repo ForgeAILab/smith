@@ -509,4 +509,4 @@ off · stdio · disabled · <PROJECT>/.smith/config.toml key mcp.servers.off
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 > Ask Smith to do anything
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-  ? for shortcuts                                          example-model · build · <PROJECT> · ? ctx
+  ? for shortcuts                                    example-model · build · <PROJECT> · unknown ctx

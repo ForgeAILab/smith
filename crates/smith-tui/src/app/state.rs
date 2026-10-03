@@ -553,10 +553,7 @@ impl ChildSummary {
     /// Both the panel's row order and the inspector's keyboard order read
     /// this, so a live child can never sort one way and select another.
     pub fn is_live(&self) -> bool {
-        matches!(
-            self.state.as_str(),
-            "running" | "working" | "resuming" | "needs input"
-        )
+        matches!(self.state.as_str(), "running" | "resuming" | "needs input")
     }
 
     /// Whether this child's lifecycle label describes work that finished
@@ -1366,18 +1363,6 @@ pub(super) fn describe_workspace(
         WorkspacePolicy::ExplicitDirectory { path } => format!("workspace {path}"),
         WorkspacePolicy::IsolatedWorktree => "isolated worktree".to_owned(),
         WorkspacePolicy::ReadOnlyView => "read-only".to_owned(),
-    }
-}
-
-/// Finished copy for why a child stopped.
-pub(super) fn describe_cancel_reason(reason: &agent_runtime_core::cancel::CancelReason) -> String {
-    use agent_runtime_core::cancel::CancelReason;
-    match reason {
-        CancelReason::UserRequested => "stopped by request".to_owned(),
-        CancelReason::Timeout => "deadline elapsed".to_owned(),
-        CancelReason::LimitReached => "limit reached".to_owned(),
-        CancelReason::Shutdown => "session ended".to_owned(),
-        CancelReason::Host(reason) => reason.clone(),
     }
 }
 

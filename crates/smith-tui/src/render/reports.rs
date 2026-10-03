@@ -27,7 +27,7 @@ pub(super) fn field(
     width: u16,
 ) -> Vec<Line<'static>> {
     let value_width = usize::from(width).saturating_sub(label_width + 4).max(1);
-    let labels = word_rows(label, label_width);
+    let labels = label_rows(label, label_width);
     let values = text_rows(value, value_width, value_style);
     (0..labels.len().max(values.len()))
         .map(|index| {
@@ -64,6 +64,32 @@ fn text_rows(content: &str, width: usize, style: Style) -> Vec<Line<'static>> {
             )
         })
         .collect()
+}
+
+fn label_rows(mut line: Line<'static>, width: usize) -> Vec<Line<'static>> {
+    if line.width() <= width {
+        return word_rows(line, width);
+    }
+    let mut indentation = String::new();
+    for span in &mut line.spans {
+        let content = span.content.as_ref();
+        let trimmed = content.trim_start_matches(char::is_whitespace);
+        indentation.push_str(&content[..content.len() - trimmed.len()]);
+        let has_text = !trimmed.is_empty();
+        span.content = trimmed.to_owned().into();
+        if has_text {
+            break;
+        }
+    }
+    let indent_width = indentation.width().min(width.saturating_sub(1));
+    let mut rows = word_rows(line, width.saturating_sub(indent_width).max(1));
+    if indent_width > 0 {
+        // A nested label keeps its indentation on every continuation row.
+        for row in &mut rows {
+            row.spans.insert(0, Span::raw(" ".repeat(indent_width)));
+        }
+    }
+    rows
 }
 
 fn word_rows(mut line: Line<'static>, width: usize) -> Vec<Line<'static>> {
@@ -109,4 +135,45 @@ pub(super) fn left_shorten(path: &str, width: usize) -> String {
         glyph::ELIDED,
         suffix.into_iter().rev().collect::<String>()
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::style::Modifier;
+
+    #[test]
+    fn wrapped_field_labels_keep_their_leading_indentation() {
+        let style = Style::default().add_modifier(Modifier::DIM);
+        let rows = field(
+            Line::from(vec![
+                Span::raw(" "),
+                Span::styled(" system instruction", style),
+            ]),
+            "value",
+            Style::default(),
+            18,
+            44,
+        );
+        let labels = rows
+            .iter()
+            .map(|row| {
+                row.to_string()
+                    .chars()
+                    .take(22)
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(labels, ["    system", "    instruction"]);
+        assert!(rows.iter().all(|row| row.width() <= 44));
+        for (row, word) in rows.iter().zip(["system", "instruction"]) {
+            assert!(
+                row.spans
+                    .iter()
+                    .any(|span| span.content == word && span.style == style)
+            );
+        }
+    }
 }

@@ -212,7 +212,7 @@
                 "agent",
                 "src/lib.rs",
                 "file · 42 bytes",
-                "zai/glm-5.2 · build · /Volumes/Data/codes/ai/agent-runtime:main · ? ctx",
+                "zai/glm-5.2 · build · /Volumes/Data/codes/ai/agent-runtime:main · unknown ctx",
                 "type to filter · ↑↓ choose · enter confirm · esc cancel",
             ],
         );

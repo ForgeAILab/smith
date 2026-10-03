@@ -717,28 +717,27 @@ fn parse_goal(argument: &str) -> Result<Command, String> {
     Ok(Command::Host(HostCommand::Goal(action)))
 }
 
+/// The shared startup suggestions, in order, with registry descriptions.
+pub fn getting_started_commands() -> impl Iterator<Item = &'static CommandSpec> {
+    ["model", "connect", "help"].into_iter().map(|name| {
+        COMMANDS
+            .iter()
+            .find(|command| command.name == name)
+            .expect("getting-started command exists in the registry")
+    })
+}
+
 /// The typed `/help` guide, derived from the registry.
 pub fn help() -> HelpReport {
     HelpReport {
         introduction: "Type a task and press Enter.".to_owned(),
-        getting_started: [
-            ("model", "Choose a model"),
-            ("connect", "Add a connection"),
-            ("help", "Explore all commands"),
-        ]
-        .into_iter()
-        .map(|(name, description)| {
-            let command = COMMANDS
-                .iter()
-                .find(|command| command.name == name)
-                .expect("getting-started command exists in the registry");
-            HelpCommand {
+        getting_started: getting_started_commands()
+            .map(|command| HelpCommand {
                 name: command.name.to_owned(),
                 argument_hint: String::new(),
-                description: description.to_owned(),
-            }
-        })
-        .collect(),
+                description: command.description.to_owned(),
+            })
+            .collect(),
         primary: COMMANDS
             .iter()
             .filter(|command| !command.advanced)
@@ -860,9 +859,26 @@ mod tests {
 
     #[test]
     fn help_and_completion_share_the_complete_registry() {
-        let help = crate::help_report::render_plain(&help());
+        let report = help();
+        assert_eq!(
+            report
+                .getting_started
+                .iter()
+                .map(|command| command.name.as_str())
+                .collect::<Vec<_>>(),
+            ["model", "connect", "help"]
+        );
+        for command in &report.getting_started {
+            let registered = COMMANDS
+                .iter()
+                .find(|registered| registered.name == command.name)
+                .unwrap();
+            assert_eq!(command.description, registered.description);
+            assert!(command.argument_hint.is_empty());
+        }
+        let help = crate::help_report::render_plain(&report);
         assert!(help.starts_with("Getting started\n"));
-        assert!(help.contains("/model — Choose a model"));
+        assert!(help.contains("/model — Switch model"));
         for command in COMMANDS {
             assert!(help.contains(&format!("/{}", command.name)), "{help}");
         }

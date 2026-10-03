@@ -804,7 +804,10 @@ impl App {
         self.follow_newest();
         let open_at_top = matches!(
             result,
-            LocalResult::Help(_) | LocalResult::Status(_) | LocalResult::Context(_)
+            LocalResult::Help(_)
+                | LocalResult::Status(_)
+                | LocalResult::Context(_)
+                | LocalResult::Diagnostics(_)
         );
         self.transcript.push_local(result);
         if open_at_top {

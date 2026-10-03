@@ -16,7 +16,7 @@ pub(super) fn child_state_tone(state: &str) -> Tone {
         "failed" => Tone::Danger,
         "needs input" => Tone::Warning,
         "completed" | "idle" => Tone::Success,
-        "running" | "working" | "resuming" => Tone::Default,
+        "running" | "resuming" => Tone::Default,
         _ => Tone::Dim,
     }
 }

@@ -10,7 +10,7 @@ use smith_runtime::host::HostSession;
 use smith_tui::App;
 
 use super::{
-    cache_controller_summary_value, reasoning_status_values, render_status_cost,
+    cache_controller_summary_value, diagnostic_label, reasoning_status_values, render_status_cost,
     resume_summary_value,
 };
 
@@ -54,7 +54,7 @@ pub(super) fn report(app: &App, host: &HostSession, project: &Path) -> StatusRep
         profile: policy.agent_profile.clone(),
         provider: policy.provider_name.clone(),
         model: policy.model.to_string(),
-        permission: format!("{:?}", policy.approval_mode),
+        permission: diagnostic_label(policy.approval_mode),
         reasoning,
         reasoning_controls,
         prompt_cache: app

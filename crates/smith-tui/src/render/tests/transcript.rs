@@ -514,7 +514,7 @@
     fn an_unknown_context_renders_as_a_question_mark_not_zero() {
         let app = App::new("gpt-5.3", "~/work/api");
         let screen = render(&app, 74, 16, Theme::new());
-        assert!(screen.contains("? ctx"), "{screen}");
+        assert!(screen.contains("unknown ctx"), "{screen}");
         assert!(!screen.contains("0 ctx"), "{screen}");
     }
 
@@ -960,73 +960,96 @@
         let report = DiagnosticsReport {
             sections: vec![
                 DiagnosticsSection {
+                    heading: "Session".to_owned(),
                     rows: vec![
                         DiagnosticsRow::Field {
                             label: "profile".to_owned(),
-                            value: "dev · posture build · use main · rev <PROFILE_REVISION>… · source built-in default `agent_modes.build.posture`".to_owned(),
+                            value: "dev".to_owned(),
                         },
                         DiagnosticsRow::Field {
-                            label: "latest capability retrieval".to_owned(),
-                            value: "resolver-test · tool:read, tool:search".to_owned(),
+                            label: "goal".to_owned(),
+                            value: "Fix `tool:read` and `write`\nFollow **these steps**".to_owned(),
+                        },
+                    ],
+                },
+                DiagnosticsSection {
+                    heading: "Context".to_owned(),
+                    rows: vec![
+                        DiagnosticsRow::Field {
+                            label: "context".to_owned(),
+                            value: "one complete sentence with words that wrap cleanly".to_owned(),
                         },
                         DiagnosticsRow::Field {
                             label: "  tool schema".to_owned(),
                             value: "~500".to_owned(),
                         },
-                    ],
-                },
-                DiagnosticsSection {
-                    rows: vec![
-                        DiagnosticsRow::Field {
-                            label: "goal".to_owned(),
-                            value: "Fix `tool:read` and `write`\nFollow **these steps**\n".to_owned(),
-                        },
-                        DiagnosticsRow::Line(String::new()),
                         DiagnosticsRow::Line("**literal: text** and `inline code`".to_owned()),
                         DiagnosticsRow::Line("Free **text** with `inline code`".to_owned()),
-                        DiagnosticsRow::Line(String::new()),
                     ],
                 },
             ],
         };
         let mut app = App::new("example-model", "~/work/api");
         app.show_local_report(LocalResult::Diagnostics(Box::new(report)));
-        for (width, expected) in [
-            (44, vec![
-                "/diagnostics",
-                "profile: dev · posture build · use main · re",
-                "v <PROFILE_REVISION>… · source built-in defa",
-                "ult agent_modes.build.posture",
-                "latest capability retrieval: resolver-test ·",
-                " tool:read, tool:search",
-                "  tool schema: ~500",
-                "goal: Fix `tool:read` and `write`",
-                "Follow these steps",
-                "",
-                "",
-                "**literal: text** and `inline code`",
-                "Free text with inline code",
-            ]),
-            (100, vec![
-                "/diagnostics",
-                "profile: dev · posture build · use main · rev <PROFILE_REVISION>… · source built-in default `agent_m",
-                "odes.build.posture`",
-                "latest capability retrieval: resolver-test · tool:read, tool:search",
-                "  tool schema: ~500",
-                "goal: Fix `tool:read` and `write`",
-                "Follow these steps",
-                "",
-                "",
-                "**literal: text** and `inline code`",
-                "Free text with inline code",
-            ]),
-        ] {
-            let theme = Theme::new().without_color();
+        for width in [44, 80, 100] {
+            let theme = Theme::new();
             let typed = transcript_lines(&app, theme, width);
-            assert_eq!(
-                typed.iter().map(ToString::to_string).collect::<Vec<_>>(),
-                expected,
-                "{width} columns",
+            let text = typed.iter().map(ToString::to_string).collect::<Vec<_>>();
+            assert_eq!(text[0], "● /diagnostics");
+            assert_eq!(text[1], "  Session");
+            assert_eq!(text[2], "  profile        dev");
+            assert_eq!(text[3], "  goal           Fix `tool:read` and `write`");
+            assert_eq!(text[4], "                 Follow **these steps**");
+            assert_eq!(text[5], "");
+            assert_eq!(text[6], "  Context");
+            assert!(
+                text.iter().any(|line| line == "    tool schema  ~500"),
+                "{text:?}"
+            );
+            assert!(
+                text.iter()
+                    .any(|line| line == "  literal: text and inline code"),
+                "{text:?}"
+            );
+            assert!(
+                text.iter()
+                    .any(|line| line == "  Free text with inline code"),
+                "{text:?}"
+            );
+            if width == 44 {
+                assert_eq!(text[7], "  context        one complete sentence with");
+                assert_eq!(text[8], "                 words that wrap cleanly");
+            } else {
+                assert_eq!(
+                    text[7],
+                    "  context        one complete sentence with words that wrap cleanly"
+                );
+            }
+            assert!(
+                typed.iter().all(|line| line.width() <= usize::from(width)),
+                "{text:?}"
+            );
+            assert!(
+                typed[1]
+                    .spans
+                    .iter()
+                    .any(|span| span.style == theme.style(Tone::Heading))
+            );
+            assert!(
+                typed[3]
+                    .spans
+                    .iter()
+                    .skip(3)
+                    .all(|span| span.style == theme.style(Tone::Default))
+            );
+            let free = typed
+                .iter()
+                .find(|line| line.to_string().contains("literal: text"))
+                .unwrap();
+            assert!(
+                free.spans
+                    .iter()
+                    .any(|span| span.style.add_modifier.contains(Modifier::BOLD))
             );
         }
     }
@@ -1048,26 +1071,40 @@
             lines.iter().map(ToString::to_string).collect::<Vec<_>>(),
             [
                 "/shell",
-                "session: `literal`",
+                "session: literal",
                 "free text with code",
                 "@@ not a patch heading",
                 "+not an addition",
             ],
         );
         assert!(
-            lines[1].spans.iter().all(|span| span.style == theme.style(Tone::Default))
+            lines[1]
+                .spans
+                .iter()
+                .any(|span| span.style == theme.style(Tone::Code))
         );
         assert!(
-            lines[4].spans.iter().all(|span| span.style == theme.style(Tone::Default))
+            lines[4]
+                .spans
+                .iter()
+                .all(|span| span.style == theme.style(Tone::Default))
         );
 
         for (output, is_error, marker, expected, state) in [
-            ("failure: `literal`", true, "■", "failure: `literal`", LocalResultState::Error),
+            (
+                "failure: `literal`",
+                true,
+                "■",
+                "failure: `literal`",
+                LocalResultState::Error,
+            ),
             (" \n", false, "●", "No output.", LocalResultState::Empty),
             (" \n", true, "●", "No output.", LocalResultState::Empty),
         ] {
             let mut app = App::new("example-model", "~/work/api");
-            app.show_local_report(LocalResult::Shell(Box::new(ShellReport::new(output, is_error))));
+            app.show_local_report(LocalResult::Shell(Box::new(ShellReport::new(
+                output, is_error,
+            ))));
             let Block::Local(result) = &app.transcript.blocks()[0] else {
                 panic!("expected a shell report");
             };
@@ -1412,7 +1449,10 @@
 
         let completed = render(&success, 100, 20, theme);
         assert!(completed.contains("Generate Image("), "{completed}");
-        assert!(!completed.contains("running") && !completed.contains(" · ok"), "{completed}");
+        assert!(
+            !completed.contains("running") && !completed.contains(" · ok"),
+            "{completed}"
+        );
         assert!(
             completed.contains("Saved ~/.smith/generated_images/session/image-success.png (1024x1024)"),
             "{completed}"
@@ -1437,10 +1477,7 @@
             name: "generate_image".to_owned(),
             is_error: true,
         }));
-        failure.set_tool_result_preview(
-            "image-failure",
-            "Image provider error: request timed out",
-        );
+        failure.set_tool_result_preview("image-failure", "Image provider error: request timed out");
 
         let failed = render(&failure, 100, 20, theme);
         assert!(failed.contains("Generate Image("), "{failed}");
@@ -2197,7 +2234,8 @@
                     &output
                 };
                 let user = "Inspect the retry path and explain how cancellation behaves after repeated provider failures.";
-                let answer = "The retry policy keeps cancellation responsive while it waits for the provider.";
+                let answer =
+                    "The retry policy keeps cancellation responsive while it waits for the provider.";
                 let history = [
                     Message::user(user),
                     Message::assistant(vec![
@@ -2241,8 +2279,7 @@
                 let mut resumed = App::new("m", "p");
                 resumed.transcript.replace_from_history(&history);
                 for app in [&mut live, &mut resumed] {
-                    if let Some(display) = smith_tools::project_tool_call_display(name, &arguments)
-                    {
+                    if let Some(display) = smith_tools::project_tool_call_display(name, &arguments) {
                         app.set_tool_display("call", display);
                     }
                     app.set_tool_result_preview("call", result);
@@ -2271,6 +2308,81 @@
                             assert!(!text.contains("details unavailable"), "{text}");
                         }
                     }
+                }
+            }
+        }
+
+        for (call, is_error, output) in [
+            (
+                Some("shortcut-call"),
+                false,
+                (1..=20)
+                    .map(|line| format!(" M crates/smith-cli/src/a_long_file_name_{line}.rs"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+            (Some("failed-call"), true, "command failed".to_owned()),
+            (
+                None,
+                true,
+                "shell action failed: requires an idle session".to_owned(),
+            ),
+            (
+                Some("denied-call"),
+                true,
+                "approval declined: the user declined".to_owned(),
+            ),
+            (Some("quiet-call"), false, String::new()),
+        ] {
+            let history = [
+                Message::user("Inspect the worktree"),
+                Message::assistant(vec![ContentPart::text("Later answer")]),
+            ];
+            let mut live = App::new("m", "p");
+            live.transcript.push_user("Inspect the worktree");
+            let echo = live.transcript.push_shell_shortcut("git status --short");
+            let result = live
+                .transcript
+                .finish_shell_shortcut(echo, call, is_error, &output);
+            live.transcript.push_text_delta("Later answer");
+            live.transcript.close_open();
+            let mut resumed = App::new("m", "p");
+            resumed
+                .transcript
+                .replace_from_history_with_shell_shortcuts(
+                    &history,
+                    &[crate::transcript::RestoredShellShortcut {
+                        anchor: 1,
+                        call: call.map(str::to_owned),
+                        command: "git status --short".to_owned(),
+                        is_error,
+                        result,
+                    }],
+                );
+            for expanded in [false, true] {
+                assert_eq!(live.work_details, expanded);
+                assert_eq!(resumed.work_details, expanded);
+                for width in [44, 80, 100] {
+                    for theme in [Theme::new(), Theme::new().without_color()] {
+                        let lines = transcript_lines(&live, theme, width);
+                        assert_eq!(
+                            lines,
+                            transcript_lines(&resumed, theme, width),
+                            "shortcut {call:?}, expanded={expanded}, width={width}"
+                        );
+                        let text = lines
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        assert_eq!(text.matches("! git status --short").count(), 1, "{text}");
+                        if call == Some("shortcut-call") {
+                            assert_eq!(text.contains("ctrl+o to expand"), !expanded, "{text}");
+                        }
+                    }
+                }
+                for app in [&mut live, &mut resumed] {
+                    app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
                 }
             }
         }
@@ -2327,7 +2439,7 @@
     fn shell_admission_errors_are_nested_under_the_exact_user_echo() {
         let mut app = App::new("m", "p");
         let echo = app.transcript.push_shell_shortcut("ls -la");
-        app.transcript.finish_shell_shortcut(
+        let _ = app.transcript.finish_shell_shortcut(
             echo,
             None,
             true,

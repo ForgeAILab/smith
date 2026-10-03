@@ -4,7 +4,7 @@ body:
 session: <SESSION_ID>
 profile: dev
 provider: local · model: example-model
-permission: Ask
+permission: ask
 reasoning: provider default · effort provider default · provider/model default
 reasoning controls: unsupported · switch unavailable · efforts none · resolved model catalog (presence only)
 prompt cache: usage not reported

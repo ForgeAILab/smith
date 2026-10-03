@@ -65,10 +65,10 @@ impl Fixture {
                 .then(|| policy.clone() as Arc<dyn agent_runtime_core::approval::ApprovalPolicy>),
             ..RuntimeRequest::new(config, HostSurface::Terminal)
         };
-        let host = smith_runtime::host::start(
+        let host = Box::pin(smith_runtime::host::start(
             HostSessionRequest::new(runtime, project.path())
                 .checkpoint_keys(Arc::new(TestCheckpointKeys)),
-        )
+        ))
         .await
         .expect("host");
         Self {
@@ -355,6 +355,110 @@ async fn deny_policy_still_refuses_the_shortcut() {
             .is_session_allowed(fixture.host.session().id(), "shell")
     );
     fixture.host.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
+async fn finished_shortcut_is_visible_after_resuming_the_host() {
+    let mut fixture = Box::pin(Fixture::new(ApprovalMode::Ask, true)).await;
+    let approvals = LocalShellApprovals::default();
+    Box::pin(fixture.model_asks(&approvals)).await;
+    let provider_requests = fixture.provider.requests().len();
+    let mut app = fixture.app();
+    crate::tui_driver::restore_transcript(
+        &fixture.host,
+        &mut app,
+        &fixture.host.snapshot().history,
+    );
+    app.composer.replace(format!("!{COMMAND}"));
+    let Some(Action::RunShell { command }) =
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+    else {
+        panic!("expected a shell action");
+    };
+    let echo = app.transcript.latest_shell_echo().expect("shell echo");
+    let anchor = fixture.host.session().with_history(|history| history.len());
+    assert!(anchor > 0);
+    let mut shortcuts = crate::tui_driver::ShellShortcuts::default();
+    shortcuts.dispatched(&fixture.host, echo);
+    assert!(fixture.host.saved_shell_shortcuts().is_empty());
+    let (outcomes, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    let _ = Box::pin(start_local_shell(
+        echo,
+        fixture.host.session().clone(),
+        command,
+        TIMEOUT_MS,
+        approvals.clone(),
+        outcomes,
+    ))
+    .await;
+    assert!(fixture.host.saved_shell_shortcuts().is_empty());
+    assert!(approvals.resolve(fixture.prompt().await).is_none());
+    let LocalOutcome::Shell {
+        echo,
+        call,
+        content,
+        is_error,
+    } = outcome(&mut receiver).await
+    else {
+        panic!("expected a shell result");
+    };
+    assert!(!is_error, "{content}");
+    shortcuts.finish(
+        &fixture.host,
+        &mut app,
+        echo,
+        call.as_ref().map(|call| call.as_str()),
+        &content,
+        is_error,
+    );
+    let saved = fixture.host.saved_shell_shortcuts();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].anchor, anchor);
+    assert_eq!(saved[0].command, COMMAND);
+    assert_eq!(
+        fixture.host.session().with_history(|history| history.len()),
+        anchor
+    );
+    assert_eq!(fixture.provider.requests().len(), provider_requests);
+    let session_id = fixture.host.session().id().clone();
+    Box::pin(fixture.host.shutdown()).await.expect("shutdown");
+
+    let config =
+        resolve(&ResolveRequest::new(fixture.project.path()).with_home_dir(fixture._home.path()))
+            .expect("resume resolution")
+            .config;
+    let runtime = RuntimeRequest {
+        provider: Some(fixture.provider.clone()),
+        workspace: Some(Arc::new(
+            ProjectWorkspace::new(fixture.project.path()).expect("workspace"),
+        )),
+        approval: Some(fixture.policy.clone()),
+        ..RuntimeRequest::new(config, HostSurface::Terminal)
+    };
+    let resumed = Box::pin(smith_runtime::host::start(
+        HostSessionRequest::new(runtime, fixture.project.path())
+            .resume(session_id)
+            .checkpoint_keys(Arc::new(TestCheckpointKeys)),
+    ))
+    .await
+    .expect("resumed host");
+    assert_eq!(resumed.saved_shell_shortcuts(), saved);
+    let mut resumed_app = fixture.app();
+    crate::tui_driver::restore_transcript(&resumed, &mut resumed_app, &resumed.snapshot().history);
+    assert_eq!(app.transcript.blocks(), resumed_app.transcript.blocks());
+    assert!(matches!(
+        resumed_app.transcript.blocks().last().expect("restored shortcut"),
+        Block::Tool {
+            user_command: Some(command),
+            result_preview: Some(result),
+            status: smith_tui::transcript::ToolStatus::Ok,
+            started_at: None,
+            ..
+        } if command == COMMAND && result.contains("shortcut")
+    ));
+    Box::pin(resumed.shutdown())
+        .await
+        .expect("resumed shutdown");
 }
 
 #[test]

@@ -12,10 +12,8 @@ use crate::app::App;
 use crate::status::{Activity, render_elapsed};
 use crate::theme::{Theme, Tone, glyph};
 use crate::transcript::{Block, LocalResult, ToolStatus};
-use smith_client::agent_report::{
-    AgentReport, AgentResumeReport, AgentSnapshot, ChildLabelSurface,
-};
-use smith_client::commands::COMMANDS;
+use smith_client::agent_report::{AgentReport, AgentResumeReport, AgentSnapshot};
+use smith_client::commands::getting_started_commands;
 use smith_client::context_report::{ContextCategoryKind, ContextCompaction, ContextReport};
 use smith_client::diagnostics_report::{DiagnosticsReport, DiagnosticsRow};
 use smith_client::diff_report::{DiffLine, DiffLineKind, DiffOutcome, DiffReport};
@@ -140,11 +138,7 @@ fn getting_started_lines(theme: Theme, width: u16) -> Vec<Line<'static>> {
         )),
         Line::default(),
     ];
-    for name in ["model", "connect", "help"] {
-        let command = COMMANDS
-            .iter()
-            .find(|command| command.name == name)
-            .expect("getting-started command exists in the registry");
+    for command in getting_started_commands() {
         let invocation = format!("/{}", command.name);
         let description = clip_words(command.description, usize::from(width).saturating_sub(12));
         lines.push(Line::from(vec![
@@ -352,10 +346,7 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16, expanded: bool) -> Ve
                 lines.extend(render_status_card(report, width, theme));
             }
             Block::Local(LocalResult::Diagnostics(report)) => {
-                lines.push(Line::from(Span::styled(
-                    "/diagnostics",
-                    theme.style(Tone::Command),
-                )));
+                lines.push(report_title("/diagnostics", theme));
                 lines.extend(render_diagnostics_report(report, width, theme));
             }
             Block::Local(LocalResult::Context(report)) => {
@@ -611,8 +602,6 @@ fn tool_invocation(
 
 pub(super) use crate::transcript::safe_tool_name;
 
-// Informational reports retain their legacy inline presentation, including
-// the free-text colon exception, until that surface's wording change.
 pub(super) fn render_inline_markdown(raw: &str, base: Style, theme: Theme) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     let mut rest = raw;
@@ -773,49 +762,53 @@ fn render_diagnostics_report(
     width: u16,
     theme: Theme,
 ) -> Vec<Line<'static>> {
-    let available = usize::from(width).max(1);
+    let label_width = reports::label_width(
+        report
+            .sections
+            .iter()
+            .flat_map(|section| &section.rows)
+            .filter_map(|row| match row {
+                DiagnosticsRow::Field { label, .. } => Some(label.as_str()),
+                DiagnosticsRow::Line(_) => None,
+            }),
+        width,
+    );
     let mut lines = Vec::new();
-    let mut rows = report
-        .sections
-        .iter()
-        .flat_map(|section| &section.rows)
-        .peekable();
-    while let Some(row) = rows.next() {
-        let (mut content, label_bytes) = match row {
-            DiagnosticsRow::Field { label, value } => {
-                let prefix = format!("{label}:");
-                (format!("{prefix} {value}"), prefix.len())
-            }
-            DiagnosticsRow::Line(line) => (line.clone(), 0),
-        };
-        // Retain line endings at row boundaries just as the plain renderer's
-        // newline join does, including trailing newlines in user text.
-        if rows.peek().is_some() {
-            content.push('\n');
+    for (index, section) in report.sections.iter().enumerate() {
+        if index > 0 {
+            lines.push(Line::default());
         }
-        let mut offset = 0;
-        for raw in content.lines() {
-            for wrapped in wrap_text(raw, available) {
-                let wrapped_bytes = wrapped.len();
-                let label_end = label_bytes.saturating_sub(offset).min(wrapped.len());
-                let line = if label_end > 0 {
-                    Line::from(vec![
-                        Span::styled(wrapped[..label_end].to_owned(), theme.style(Tone::Dim)),
-                        Span::styled(wrapped[label_end..].to_owned(), theme.style(Tone::Default)),
-                    ])
-                } else if matches!(row, DiagnosticsRow::Line(_)) {
-                    inline_text(&wrapped, theme)
-                } else {
-                    Line::from(render_inline_markdown(
-                        &wrapped,
-                        theme.style(Tone::Default),
+        lines.extend(reports::text(
+            &section.heading,
+            width,
+            theme.style(Tone::Heading),
+        ));
+        for row in &section.rows {
+            match row {
+                DiagnosticsRow::Field { label, value } => {
+                    lines.extend(report_field(
+                        label,
+                        value,
+                        Tone::Default,
+                        label_width,
+                        width,
                         theme,
-                    ))
-                };
-                offset += wrapped_bytes;
-                lines.push(line);
+                    ));
+                }
+                DiagnosticsRow::Line(content) => {
+                    lines.extend(
+                        reports::text(content, width, theme.style(Tone::Default))
+                            .into_iter()
+                            .map(|line| {
+                                Line::from(render_inline_markdown(
+                                    &line.to_string(),
+                                    theme.style(Tone::Default),
+                                    theme,
+                                ))
+                            }),
+                    );
+                }
             }
-            offset += 1;
         }
     }
     lines
@@ -1112,8 +1105,8 @@ fn render_agent_report(report: &AgentReport, width: u16, theme: Theme) -> Vec<Li
                 let content = format!(
                     "{} · {} · {} · resumable {} · {} turns · {} tokens",
                     child.child,
-                    child.durability.label(ChildLabelSurface::LocalCommand),
-                    child.state.label(ChildLabelSurface::LocalCommand),
+                    child.durability.label(),
+                    child.state.label(),
                     child.resumable,
                     child.turns_value(),
                     child.tokens_used,
@@ -1136,11 +1129,8 @@ fn render_agent_inspector(child: &AgentSnapshot, theme: Theme) -> Vec<Line<'stat
         format!(
             "session {} · {} · {} · {} · {} tokens · {}",
             child.session,
-            child
-                .summary
-                .durability
-                .label(ChildLabelSurface::LocalCommand),
-            child.summary.state.label(ChildLabelSurface::LocalCommand),
+            child.summary.durability.label(),
+            child.summary.state.label(),
             child.summary.turns_value(),
             child.summary.tokens_used,
             child.workspace,
@@ -1363,7 +1353,11 @@ fn render_skills_free_text(
             let mut spans =
                 render_inline_markdown(&wrapped[..prefix_end], theme.style(Tone::Default), theme);
             if prefix_end < free_end {
-                spans.extend(inline_text(&wrapped[prefix_end..free_end], theme).spans);
+                spans.extend(render_inline_markdown(
+                    &wrapped[prefix_end..free_end],
+                    theme.style(Tone::Default),
+                    theme,
+                ));
             }
             if free_end < wrapped.len() {
                 spans.push(Span::styled(
@@ -1379,14 +1373,20 @@ fn render_skills_free_text(
     lines
 }
 
-/// Retains character wrapping before the legacy free-text presentation rule.
+/// Wraps free text before applying inline Markdown.
 fn render_inline_text_lines(content: &str, width: u16, theme: Theme) -> Vec<Line<'static>> {
     content
         .lines()
         .flat_map(|raw| {
             wrap_text(raw, usize::from(width).max(1))
                 .into_iter()
-                .map(|wrapped| inline_text(&wrapped, theme))
+                .map(|wrapped| {
+                    Line::from(render_inline_markdown(
+                        &wrapped,
+                        theme.style(Tone::Default),
+                        theme,
+                    ))
+                })
                 .collect::<Vec<_>>()
         })
         .collect()
@@ -1813,23 +1813,6 @@ fn wrap_context_line(line: Line<'static>, available: usize) -> Vec<Line<'static>
         line_start += raw_line.len();
     }
     rows
-}
-
-/// Legacy free-text presentation kept for byte identity: colons leave inline
-/// Markdown literal. Revisit in the `adopt-claude-code-grammar` wording change.
-/// This never infers report structure and must not receive structural fields.
-fn inline_text(wrapped: &str, theme: Theme) -> Line<'static> {
-    if wrapped.is_empty() {
-        return Line::default();
-    }
-    if wrapped.contains(':') {
-        return Line::from(Span::styled(wrapped.to_owned(), theme.style(Tone::Default)));
-    }
-    Line::from(render_inline_markdown(
-        wrapped,
-        theme.style(Tone::Default),
-        theme,
-    ))
 }
 
 pub(super) fn render_prefixed_local_state(

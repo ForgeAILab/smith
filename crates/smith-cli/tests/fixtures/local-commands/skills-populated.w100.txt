@@ -15,7 +15,7 @@ xample". Policy tables may be top-level or profile-scoped as shown.
   smith.configuration.discovery-and-precedence · active · Smith configuration reference, section "Di
 scovery and precedence". nearest .smith/ directory.
   smith.configuration.image-generation · active · Smith configuration reference, section "Image gene
-ration". `https://api.openai.com/v1`.
+ration". https://api.openai.com/v1.
   smith.configuration.policy-keys-and-defaults · active · Smith configuration reference, section "Po
 licy keys and defaults". instructions may take together.
   smith.configuration.project-instructions-and-context-identity · active · Smith configuration refer
@@ -509,4 +509,4 @@ h/skills/broken/SKILL.md
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 > Ask Smith to do anything
 ────────────────────────────────────────────────────────────────────────────────────────────────────
-  ? for shortcuts                                          example-model · build · <PROJECT> · ? ctx
+  ? for shortcuts                                    example-model · build · <PROJECT> · unknown ctx
