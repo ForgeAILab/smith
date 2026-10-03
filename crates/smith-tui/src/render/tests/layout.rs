@@ -56,6 +56,12 @@
             .expect("link span");
         assert_eq!(link.style.fg, Some(Color::Cyan));
         assert!(link.style.add_modifier.contains(Modifier::UNDERLINED));
+        let target = prose
+            .spans
+            .iter()
+            .find(|span| span.content == " (https://example.com)")
+            .expect("visible link target");
+        assert!(target.style.add_modifier.contains(Modifier::DIM));
 
         assert!(
             lines.iter().all(|line| line

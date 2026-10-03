@@ -1,0 +1,44 @@
+> Without using tools, reply with: a heading, a nested bullet list, a numbered
+  list, a blockquote, a 3-column table, a python code block, a link to
+  https://example.com labelled Example, and **bold** with *italic* text. Keep it
+  short.
+
+● capabilities · activation epoch 1: tool:agent, tool:list,
+  tool:registry.search, tool:search, skill:smith.configuration.image-generation
+
+● Formatting Test
+
+  - Top-level bullet
+    - Nested bullet
+      - Deeper nested bullet
+
+  1. First item
+  2. Second item
+  3. Third item
+
+  │ This is a blockquote with bold text.
+
+  Column A │ Column B │ Column C
+  ─────────┼──────────┼─────────
+  one      │ two      │ three
+  four     │ five     │ six
+
+  ``` python
+    def greet(name: str) -> str:
+        return f"Hello, {name}!"
+  ```
+
+  See Example (https://example.com) — this is bold and italic.
+
+✻ Worked for 5s
+
+
+
+
+
+
+
+
+› Ask Smith to do anything
+
+  code · zai/glm-5.3

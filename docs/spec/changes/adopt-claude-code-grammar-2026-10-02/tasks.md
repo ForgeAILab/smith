@@ -40,8 +40,12 @@ completed_at:
   flow, and the interrupt key; keep retry and backoff wording.
 - [x] 3.2 Attach the turn summary to its turn; hide it when a later block is
   appended.
-- [ ] 3.3 One Markdown renderer for streamed and committed text; lists,
+- [x] 3.3 One Markdown renderer for streamed and committed text; lists,
   quotes, tables, fences with a language label, links with visible targets.
+- [ ] 3.3a Follow-ups from 3.3: keep table columns stable while a table is
+  still streaming (later wider cells reflow earlier rows today); emit OSC 8
+  links once terminal support can be detected; decide whether code blocks
+  drop the visible ``` fence lines and keep only the dim language label.
 - [ ] 3.4 Approval layout: action, place and deadline, warning, question,
   choices; detail behind `Ctrl+O`; diffs expandable.
 - [ ] 3.5 Keep transcript scrolling available while a prompt is open.

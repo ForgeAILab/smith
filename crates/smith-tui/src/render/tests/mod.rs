@@ -251,6 +251,7 @@ mod tests {
     }
     include!("layout.rs");
     include!("transcript.rs");
+    include!("markdown.rs");
     include!("composer.rs");
     include!("modal.rs");
     include!("interaction_defects.rs");

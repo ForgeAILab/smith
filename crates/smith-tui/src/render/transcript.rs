@@ -1,5 +1,7 @@
 //! Transcript, Markdown, tool, status, and local-result rendering.
 
+use std::borrow::Cow;
+
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -30,6 +32,7 @@ use smith_client::timeline_report::{TimelineEntry, TimelinePlan, TimelineReport}
 use smith_tools::{ToolCallDisplay, tool_display_label};
 
 use super::helpers::*;
+use super::markdown::render_assistant_lines;
 use super::wrap::{wrap_lines, wrapped_row_count};
 
 pub(super) fn draw_transcript(
@@ -98,18 +101,13 @@ pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<
     {
         return getting_started_lines(theme);
     }
-    let mut lines = block_lines(app.transcript.blocks(), theme, width, app.work_details);
-
-    if let Some(text) = app.speculative_text() {
-        if !lines.is_empty() {
-            lines.push(Line::default());
-        }
-        lines.extend(
-            render_speculative_lines(text, theme)
-                .into_iter()
-                .flat_map(|line| hanging_lines(line, width, 2)),
-        );
-    }
+    let mut lines = conversation_lines(
+        app.transcript.blocks(),
+        app.speculative_text(),
+        theme,
+        width,
+        app.work_details,
+    );
 
     if let Some(summary) = app.visible_turn_summary()
         && !matches!(
@@ -148,6 +146,38 @@ fn getting_started_lines(theme: Theme) -> Vec<Line<'static>> {
             Span::styled(description, theme.style(Tone::Dim)),
         ]));
     }
+    lines
+}
+
+fn conversation_lines(
+    blocks: &[Block],
+    speculative: Option<&str>,
+    theme: Theme,
+    width: u16,
+    expanded: bool,
+) -> Vec<Line<'static>> {
+    let Some(text) = speculative else {
+        return block_lines(blocks, theme, width, expanded);
+    };
+    // A commit can extend the current assistant block. Preview that same
+    // boundary without promoting an attempt into the canonical transcript.
+    let (preceding, text) = if let Some(Block::Assistant {
+        text: body,
+        open: true,
+    }) = blocks.last()
+    {
+        (
+            &blocks[..blocks.len() - 1],
+            Cow::Owned(format!("{body}{text}")),
+        )
+    } else {
+        (blocks, Cow::Borrowed(text))
+    };
+    let mut lines = block_lines(preceding, theme, width, expanded);
+    if !lines.is_empty() {
+        lines.push(Line::default());
+    }
+    lines.extend(render_assistant_lines(&text, theme, width));
     lines
 }
 
@@ -200,7 +230,7 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16, expanded: bool) -> Ve
                 }
             }
             Block::Assistant { text, .. } => {
-                lines.extend(render_assistant_lines(text, theme));
+                lines.extend(render_assistant_lines(text, theme, width));
             }
             Block::Reasoning { .. } => {}
             Block::Tool {
@@ -393,10 +423,7 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16, expanded: bool) -> Ve
                 lines.extend(render_message_report(report, width, theme));
             }
         }
-        if matches!(
-            block,
-            Block::User { .. } | Block::Assistant { .. } | Block::Notice { .. }
-        ) {
+        if matches!(block, Block::User { .. } | Block::Notice { .. }) {
             let rendered = lines
                 .drain(start..)
                 .flat_map(|line| hanging_lines(line, width, 2))
@@ -505,45 +532,18 @@ fn child_lines(app: &App, child: &str, theme: Theme, width: u16) -> Vec<Line<'st
         )));
         return lines;
     }
-    lines.extend(block_lines(blocks, theme, width, app.work_details));
     // A child answers by streaming, like any agent. Its uncommitted text draws
     // exactly where the root timeline draws its own — held out of the
     // transcript until the attempt commits, so a retry cannot leave prose
     // behind.
-    if let Some(text) = speculative {
-        if !lines.is_empty() {
-            lines.push(Line::default());
-        }
-        lines.extend(
-            render_speculative_lines(text, theme)
-                .into_iter()
-                .flat_map(|line| hanging_lines(line, width, 2)),
-        );
-    }
+    lines.extend(conversation_lines(
+        blocks,
+        speculative,
+        theme,
+        width,
+        app.work_details,
+    ));
     lines
-}
-
-// Streaming answer text renders exactly like committed prose — no "draft"
-// label. Only reasoning stays behind the dim working row; a later discard
-// simply removes these lines.
-pub(super) fn render_speculative_lines(text: &str, theme: Theme) -> Vec<Line<'static>> {
-    text.lines()
-        .enumerate()
-        .map(|(index, raw)| {
-            let spans = vec![
-                Span::styled(
-                    if index == 0 {
-                        format!("{} ", glyph::BULLET)
-                    } else {
-                        "  ".to_owned()
-                    },
-                    theme.style(Tone::Dim),
-                ),
-                Span::styled(raw.to_owned(), theme.style(Tone::Default)),
-            ];
-            Line::from(spans)
-        })
-        .collect()
 }
 
 /// Whether a successful tool call's row is already reported in full by a
@@ -612,78 +612,8 @@ fn tool_invocation(
 
 pub(super) use crate::transcript::safe_tool_name;
 
-pub(super) fn render_assistant_lines(text: &str, theme: Theme) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    let mut first = true;
-    let mut in_code_block = false;
-
-    for raw in text.lines() {
-        if raw.trim_start().starts_with("```") {
-            in_code_block = !in_code_block;
-            continue;
-        }
-
-        let mut spans = vec![Span::styled(
-            if first {
-                format!("{} ", glyph::BULLET)
-            } else {
-                "  ".to_owned()
-            },
-            theme.style(Tone::Dim),
-        )];
-        if in_code_block {
-            spans.push(Span::styled(raw.to_owned(), theme.style(Tone::Code)));
-        } else {
-            spans.extend(render_markdown_spans(raw, theme));
-        }
-        lines.push(Line::from(spans));
-        first = false;
-    }
-
-    if lines.is_empty() && !text.is_empty() {
-        lines.push(Line::from(Span::styled(
-            glyph::BULLET,
-            theme.style(Tone::Dim),
-        )));
-    }
-    lines
-}
-
-pub(super) fn render_markdown_spans(raw: &str, theme: Theme) -> Vec<Span<'static>> {
-    let trimmed = raw.trim_start();
-    let leading = &raw[..raw.len().saturating_sub(trimmed.len())];
-    let heading_marks = trimmed
-        .chars()
-        .take_while(|character| *character == '#')
-        .count();
-    let is_heading = (1..=6).contains(&heading_marks)
-        && trimmed
-            .as_bytes()
-            .get(heading_marks)
-            .is_some_and(u8::is_ascii_whitespace);
-    let (body, base) = if is_heading {
-        let body = trimmed[heading_marks..].trim_start();
-        let style = match heading_marks {
-            1 => theme
-                .style(Tone::Heading)
-                .add_modifier(Modifier::UNDERLINED),
-            2 => theme.style(Tone::Heading),
-            3 => theme.style(Tone::Heading).add_modifier(Modifier::ITALIC),
-            _ => theme.style(Tone::Default).add_modifier(Modifier::ITALIC),
-        };
-        (body, style)
-    } else {
-        (raw, theme.style(Tone::Default))
-    };
-
-    let mut spans = Vec::new();
-    if is_heading && !leading.is_empty() {
-        spans.push(Span::styled(leading.to_owned(), base));
-    }
-    spans.extend(render_inline_markdown(body, base, theme));
-    spans
-}
-
+// Informational reports retain their legacy inline presentation, including
+// the free-text colon exception, until that surface's wording change.
 pub(super) fn render_inline_markdown(raw: &str, base: Style, theme: Theme) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     let mut rest = raw;

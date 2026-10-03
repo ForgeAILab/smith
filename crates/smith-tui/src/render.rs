@@ -4,6 +4,7 @@ mod approval;
 mod composer;
 mod helpers;
 mod layout;
+mod markdown;
 mod modal;
 mod transcript;
 pub(crate) mod wrap;
