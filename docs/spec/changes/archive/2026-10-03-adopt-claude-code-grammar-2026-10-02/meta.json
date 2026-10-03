@@ -2,8 +2,8 @@
   "change_id": "adopt-claude-code-grammar",
   "change_ref": "adopt-claude-code-grammar-2026-10-02",
   "created_at": "2026-10-02T10:41:40Z",
-  "updated_at": "2026-10-03T19:51:05Z",
-  "completed_at": null,
-  "status": "implementing",
+  "updated_at": "2026-10-03T22:11:15Z",
+  "completed_at": "2026-10-03T22:11:15Z",
+  "status": "implemented",
   "implementation_started_at": "2026-10-03T09:07:43Z"
 }

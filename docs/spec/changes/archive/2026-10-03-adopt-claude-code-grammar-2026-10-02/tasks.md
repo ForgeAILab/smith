@@ -1,7 +1,7 @@
 ---
 created_at: 2026-10-02T10:43:19Z
-updated_at: 2026-10-02T10:43:19Z
-completed_at:
+updated_at: 2026-10-03T22:11:15Z
+completed_at: 2026-10-03T22:11:15Z
 ---
 
 ## 1. Contract
@@ -59,9 +59,6 @@ completed_at:
   quotes, tables, fences with a language label, links with visible targets.
 - [x] 3.3a Code blocks drop the visible ``` fence lines and keep a dim
   language label.
-- [ ] 3.3b Deferred, not blocking (owner 2026-10-03): keep table columns stable while a table is still streaming (later
-  wider cells reflow earlier rows today); emit OSC 8 links once terminal
-  support can be detected.
 - [x] 3.4 Approval layout: action, place and deadline, warning, question,
   choices; detail behind `Ctrl+O`; diffs expandable.
 - [x] 3.5 Keep transcript scrolling available while a prompt is open.
@@ -117,7 +114,6 @@ completed_at:
 - [x] 4.5 First-run setup: one frame, wrapped descriptions.
 
 - [x] 4.5a Setup descriptions sit two columns in from their names.
-- [ ] 4.5b Deferred, not blocking (owner 2026-10-03): long setup review and collision-preview bodies still clip.
 - [x] 4.6 Settle two presentation rules `refactor-client-structure` kept
   for byte identity: (a) the inline-code colon exception in the single
   free-text renderer (`smith-tui` `render/transcript.rs`): decide whether
@@ -137,9 +133,6 @@ completed_at:
   `interrupted (not resumable)`, `stopped (<reason in words>)`, `failed`,
   `expired`; `durable` or `ephemeral`. The TUI's child rows say `running`
   where they said `working`. Headless machine output is unchanged.
-- [ ] 4.6c Deferred: the agent inspector still shows `ReadOnlyView` and
-  `resumable false` in their debug form.
-
 ## 5. Composer (after the in-flight TUI changes are committed)
 
 - [x] 5.1 Rules above and below; `>` prompt; bash-mode prompt for `!`.
@@ -161,3 +154,15 @@ completed_at:
   surface, stored under `docs/qa/`.
 - [x] 6.2 `cargo fmt --all -- --check`, strict Clippy, workspace tests.
 - [x] 6.3 Command sweep and startup sweep.
+
+## Deferred to a follow-up change
+
+Shipped in v0.3.1 without these. The owner marked 3.3b and 4.5b not
+blocking on 2026-10-03; 4.6c was found during 4.6b and left out of its scope.
+
+- 3.3b Keep table columns stable while a table is still streaming (later
+  wider cells reflow earlier rows today); emit OSC 8 links once terminal
+  support can be detected.
+- 4.5b Long setup review and collision-preview bodies still clip.
+- 4.6c The agent inspector still shows `ReadOnlyView` and
+  `resumable false` in their debug form.
