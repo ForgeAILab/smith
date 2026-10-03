@@ -36,6 +36,15 @@ mod tests {
     use crate::questionnaire::{QuestionnaireChoice, QuestionnaireForm, QuestionnaireQuestion};
     use crate::transcript::{LocalResult, ToolStatus};
 
+    fn recovery_preview(text: &str) -> smith_client::recovery_report::RecoveryPreview {
+        smith_client::recovery_report::RecoveryPreview {
+            patch: vec![smith_client::diff_report::DiffLine {
+                kind: smith_client::diff_report::DiffLineKind::Context,
+                text: text.to_owned(),
+            }],
+        }
+    }
+
     fn status_report() -> StatusReport {
         StatusReport {
             session: "s1".to_owned(),

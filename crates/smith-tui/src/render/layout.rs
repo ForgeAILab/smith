@@ -147,14 +147,28 @@ fn draw_surface(
             | Overlay::ResourcePicker { .. }
             | Overlay::HistorySearch { .. },
         ) => {}
-        Some(Overlay::UndoConfirm { content }) => {
-            draw_recovery_confirm(frame, area, "undo last Smith turn", content, theme);
+        Some(Overlay::UndoConfirm { report }) => {
+            draw_recovery_confirm(
+                frame,
+                area,
+                "undo last Smith turn",
+                "apply undo",
+                render_recovery_patch(&report.patch),
+                theme,
+            );
         }
-        Some(Overlay::RedoConfirm { content }) => {
-            draw_redo_confirm(frame, area, content, theme);
+        Some(Overlay::RedoConfirm { report }) => {
+            draw_redo_confirm(frame, area, report, theme);
         }
-        Some(Overlay::RevertConfirm { content, .. }) => {
-            draw_recovery_confirm(frame, area, "revert selected change", content, theme);
+        Some(Overlay::RevertConfirm { report }) => {
+            draw_recovery_confirm(
+                frame,
+                area,
+                "revert selected change",
+                "apply revert",
+                render_revert_preview(report),
+                theme,
+            );
         }
         Some(Overlay::ReviewConfirm { report }) => {
             draw_review_confirm(frame, area, report, theme);

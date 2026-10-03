@@ -17,6 +17,7 @@ use agent_runtime_core::ids::{AttemptId, RequestId, TurnId};
 use agent_runtime_core::steer::SteerReceipt;
 use agent_runtime_core::usage::CounterKind;
 use smith_client::agent_report::AgentSnapshot;
+use smith_client::recovery_report::{RecoveryPreview, RevertPreview};
 use smith_client::review_report::ReviewPreview;
 use smith_host::approval::ApprovalPrompt;
 use smith_host::rotation::RotationPrompt;
@@ -400,22 +401,18 @@ pub enum Overlay {
     },
     /// Exact reverse patch awaiting a no-default confirmation.
     UndoConfirm {
-        /// Bounded reverse patch.
-        content: String,
+        /// Classified reverse patch, including the original turn notes.
+        report: Box<RecoveryPreview>,
     },
     /// Exact forward patch awaiting a no-default confirmation.
     RedoConfirm {
-        /// Bounded forward patch.
-        content: String,
+        /// Classified forward patch, including the original turn notes.
+        report: Box<RecoveryPreview>,
     },
     /// Selective revert awaiting a no-default confirmation.
     RevertConfirm {
-        /// File or `file#hunk` scope.
-        scope: String,
-        /// Stale-preview fingerprint.
-        fingerprint: String,
-        /// Exact reverse patch.
-        content: String,
+        /// Selected scope, stale-preview fingerprint, attribution, and patch.
+        report: Box<RevertPreview>,
     },
     /// A declared MCP server awaiting execution confirmation.
     ///

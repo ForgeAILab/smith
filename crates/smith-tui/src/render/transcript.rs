@@ -15,10 +15,11 @@ use crate::theme::{Theme, Tone, glyph};
 use crate::transcript::{Block, LocalResult, LocalResultState, ToolStatus};
 use smith_client::agent_report::{AgentReport, AgentResumeReport, AgentSnapshot};
 use smith_client::context_report::{ContextCategoryKind, ContextCompaction, ContextReport};
-use smith_client::diff_report::{DiffLineKind, DiffOutcome, DiffReport};
+use smith_client::diff_report::{DiffLine, DiffLineKind, DiffOutcome, DiffReport};
 use smith_client::goal_report::GoalReport;
 use smith_client::help_report::{HelpCommand, HelpReport};
 use smith_client::mcp_report::McpReport;
+use smith_client::recovery_report::{RecoveryAction, RecoveryReport, RevertPreview};
 use smith_client::review_report::{ReviewPreview, ReviewReport, ReviewStartReport};
 use smith_client::skills_report::SkillsReport;
 use smith_client::status_report::{StatusGoal, StatusReport};
@@ -416,6 +417,9 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16) -> Vec<Line<'static>>
             }
             Block::Local(LocalResult::Review(report)) => {
                 lines.extend(render_review_report(report, theme));
+            }
+            Block::Local(LocalResult::Recovery(report)) => {
+                lines.extend(render_recovery_report(report, width, theme));
             }
             Block::Local(LocalResult::Text {
                 title,
@@ -969,6 +973,71 @@ pub(super) fn render_review_preview(report: &ReviewPreview) -> Vec<Line<'static>
     lines
 }
 
+/// Recovery modals retain their unstyled source presentation. Patch roles and
+/// report kinds arrive as data; displayed prefixes never choose presentation.
+pub(super) fn render_recovery_patch(patch: &[DiffLine]) -> Vec<Line<'static>> {
+    patch
+        .iter()
+        .flat_map(|line| line.text.lines())
+        .map(|raw| Line::from(raw.to_owned()))
+        .collect()
+}
+
+pub(super) fn render_revert_preview(report: &RevertPreview) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        Line::from(format!("origin: {}", report.origin.label())),
+        Line::default(),
+    ];
+    lines.extend(render_recovery_patch(&report.patch));
+    lines
+}
+
+fn render_recovery_report(report: &RecoveryReport, width: u16, theme: Theme) -> Vec<Line<'static>> {
+    match report {
+        RecoveryReport::UndoConfirmation(preview) | RecoveryReport::RedoConfirmation(preview) => {
+            let mut lines = vec![Line::from(Span::styled(
+                format!("/{}", report.action().name()),
+                theme.style(Tone::Command),
+            ))];
+            lines.extend(render_recovery_patch(&preview.patch));
+            lines
+        }
+        RecoveryReport::RevertConfirmation(preview) => {
+            let mut lines = vec![Line::from(Span::styled(
+                "/revert",
+                theme.style(Tone::Command),
+            ))];
+            lines.extend(render_revert_preview(preview));
+            lines
+        }
+        RecoveryReport::PreviewError {
+            action: RecoveryAction::Redo,
+            message,
+        } => {
+            let mut lines = vec![Line::from(Span::styled(
+                "/redo",
+                theme.style(Tone::Command),
+            ))];
+            lines.extend(render_prefixed_local_state(
+                glyph::ERROR,
+                message,
+                width,
+                theme.style(Tone::Danger),
+            ));
+            lines
+        }
+        RecoveryReport::PreviewError { message, .. }
+        | RecoveryReport::ApplyError { message, .. } => render_review_error(message, theme),
+        RecoveryReport::RevertUsage => render_review_error(RecoveryReport::REVERT_USAGE, theme),
+        RecoveryReport::Applied(applied) => {
+            render_report_notice(report.action().name(), &applied.render_value(), theme)
+        }
+        RecoveryReport::Cancelled(action) => {
+            render_report_notice(action.name(), RecoveryReport::CANCELLED_MESSAGE, theme)
+        }
+    }
+}
+
 fn render_review_report(report: &ReviewReport, theme: Theme) -> Vec<Line<'static>> {
     match report {
         ReviewReport::Confirmation(preview) => {
@@ -996,6 +1065,10 @@ fn render_review_report(report: &ReviewReport, theme: Theme) -> Vec<Line<'static
 }
 
 fn render_review_notice(content: &str, theme: Theme) -> Vec<Line<'static>> {
+    render_report_notice("review", content, theme)
+}
+
+fn render_report_notice(source: &str, content: &str, theme: Theme) -> Vec<Line<'static>> {
     content
         .lines()
         .enumerate()
@@ -1003,7 +1076,7 @@ fn render_review_notice(content: &str, theme: Theme) -> Vec<Line<'static>> {
             if index == 0 {
                 Line::from(vec![
                     Span::styled(format!("{} ", glyph::NOTICE), theme.style(Tone::Dim)),
-                    Span::styled("review", theme.style(Tone::Heading)),
+                    Span::styled(source.to_owned(), theme.style(Tone::Heading)),
                     Span::styled(" · ", theme.style(Tone::Dim)),
                     Span::styled(raw.to_owned(), theme.style(Tone::Default)),
                 ])

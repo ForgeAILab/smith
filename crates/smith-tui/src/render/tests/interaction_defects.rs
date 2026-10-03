@@ -3,7 +3,7 @@
 #[test]
 fn redo_confirmation_body_and_hint_offer_applying_the_redo() {
     let mut app = App::new("gpt-5.3", "~/work/api");
-    app.confirm_redo("--- before\n+++ after\n-old\n+new");
+    app.confirm_redo(recovery_preview("--- before\n+++ after\n-old\n+new"));
     let screen = render(&app, 120, 30, Theme::new().without_color());
     assert!(screen.contains("redo last exact Smith turn"), "{screen}");
     assert!(screen.contains("complete"), "{screen}");

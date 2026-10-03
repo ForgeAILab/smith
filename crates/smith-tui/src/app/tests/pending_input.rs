@@ -486,7 +486,7 @@
         let mut app = app();
         assert!(app.can_attach_image());
         app.overlay = Some(Overlay::UndoConfirm {
-            content: "preview".into(),
+            report: Box::new(recovery_preview("preview")),
         });
         assert!(!app.can_attach_image());
     }

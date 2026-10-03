@@ -2,6 +2,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent};
 use smith_client::agent_report::{AgentReport, AgentResumeReport};
+use smith_client::recovery_report::{RecoveryPreview, RevertPreview};
 use smith_client::review_report::ReviewPreview;
 
 use crate::commands::{
@@ -830,32 +831,25 @@ impl App {
     }
 
     /// Shows an exact undo preview with no default action.
-    pub fn confirm_undo(&mut self, content: impl Into<String>) {
+    pub fn confirm_undo(&mut self, report: RecoveryPreview) {
         self.overlay = Some(Overlay::UndoConfirm {
-            content: content.into(),
+            report: Box::new(report),
         });
         self.prompt_input_guard.start();
     }
 
     /// Shows an exact redo preview with no default action.
-    pub fn confirm_redo(&mut self, content: impl Into<String>) {
+    pub fn confirm_redo(&mut self, report: RecoveryPreview) {
         self.overlay = Some(Overlay::RedoConfirm {
-            content: content.into(),
+            report: Box::new(report),
         });
         self.prompt_input_guard.start();
     }
 
     /// Shows an exact selective-revert preview with no default action.
-    pub fn confirm_revert(
-        &mut self,
-        scope: impl Into<String>,
-        fingerprint: impl Into<String>,
-        content: impl Into<String>,
-    ) {
+    pub fn confirm_revert(&mut self, report: RevertPreview) {
         self.overlay = Some(Overlay::RevertConfirm {
-            scope: scope.into(),
-            fingerprint: fingerprint.into(),
-            content: content.into(),
+            report: Box::new(report),
         });
         self.prompt_input_guard.start();
     }

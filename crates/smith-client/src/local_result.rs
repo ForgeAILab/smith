@@ -9,6 +9,7 @@ use crate::diff_report::{DiffOutcome, DiffReport};
 use crate::goal_report::GoalReport;
 use crate::help_report::HelpReport;
 use crate::mcp_report::McpReport;
+use crate::recovery_report::RecoveryReport;
 use crate::review_report::{ReviewReport, ReviewStartReport};
 use crate::skills_report::SkillsReport;
 use crate::status_report::StatusReport;
@@ -48,6 +49,8 @@ pub enum LocalResult {
     Diff(Box<DiffReport>),
     /// Read-only review scopes, inspection results, and dispatch outcomes.
     Review(Box<ReviewReport>),
+    /// Undo, redo, and selective-revert previews and local outcomes.
+    Recovery(Box<RecoveryReport>),
     /// Transitional output for commands that have not migrated to reports.
     Text {
         /// Command or result title.
@@ -73,6 +76,7 @@ impl LocalResult {
             Self::Skills(_) => "skills",
             Self::Diff(report) => &report.title,
             Self::Review(report) => report.title(),
+            Self::Recovery(report) => report.title(),
             Self::Text { title, .. } => title,
         }
     }
@@ -136,6 +140,16 @@ impl LocalResult {
                 | ReviewReport::Start(
                     ReviewStartReport::Started { .. } | ReviewStartReport::Queued { .. },
                 ) => LocalResultState::Info,
+            },
+            Self::Recovery(report) => match report.as_ref() {
+                RecoveryReport::PreviewError { .. }
+                | RecoveryReport::RevertUsage
+                | RecoveryReport::ApplyError { .. } => LocalResultState::Error,
+                RecoveryReport::UndoConfirmation(_)
+                | RecoveryReport::RedoConfirmation(_)
+                | RecoveryReport::RevertConfirmation(_)
+                | RecoveryReport::Applied(_)
+                | RecoveryReport::Cancelled(_) => LocalResultState::Info,
             },
             Self::Text { state, .. } => *state,
         }

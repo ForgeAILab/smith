@@ -16,6 +16,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as WidgetBlock, Borders, Clear, Paragraph};
+use smith_client::recovery_report::RecoveryPreview;
 use smith_client::review_report::ReviewPreview;
 
 use super::helpers::*;
@@ -520,24 +521,15 @@ pub(super) fn draw_recovery_confirm(
     frame: &mut Frame<'_>,
     area: Rect,
     title: &str,
-    content: &str,
+    action: &str,
+    content: Vec<Line<'static>>,
     theme: Theme,
 ) {
-    let action = if title.starts_with("revert") {
-        "apply revert"
-    } else {
-        "apply undo"
-    };
     let mut lines = vec![Line::from(Span::styled(
         "No action is selected by default. Review the complete reverse patch.",
         theme.style(Tone::Warning),
     ))];
-    lines.extend(
-        content
-            .lines()
-            .take(MAX_BODY_LINES.saturating_sub(2))
-            .map(|line| Line::from(line.to_owned())),
-    );
+    lines.extend(content.into_iter().take(MAX_BODY_LINES.saturating_sub(2)));
     lines.push(Line::from(vec![
         Span::styled("y", theme.style(Tone::Danger)),
         Span::styled(format!(" {action}   "), theme.style(Tone::Dim)),
@@ -547,16 +539,20 @@ pub(super) fn draw_recovery_confirm(
     draw_modal(frame, area, title, lines, theme, Tone::Warning);
 }
 
-pub(super) fn draw_redo_confirm(frame: &mut Frame<'_>, area: Rect, content: &str, theme: Theme) {
+pub(super) fn draw_redo_confirm(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    report: &RecoveryPreview,
+    theme: Theme,
+) {
     let mut lines = vec![Line::from(Span::styled(
         "No action is selected by default. Review the complete forward patch.",
         theme.style(Tone::Warning),
     ))];
     lines.extend(
-        content
-            .lines()
-            .take(MAX_BODY_LINES.saturating_sub(2))
-            .map(|line| Line::from(line.to_owned())),
+        render_recovery_patch(&report.patch)
+            .into_iter()
+            .take(MAX_BODY_LINES.saturating_sub(2)),
     );
     lines.push(Line::from(vec![
         Span::styled("y", theme.style(Tone::Danger)),

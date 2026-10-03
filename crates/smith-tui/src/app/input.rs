@@ -177,22 +177,20 @@ impl App {
                     _ => None,
                 };
             }
-            Some(Overlay::RevertConfirm {
-                scope, fingerprint, ..
-            }) => {
+            Some(Overlay::RevertConfirm { report }) => {
                 return match key.code {
                     KeyCode::Char('y') => {
                         let action = Action::ApplyRevert {
-                            scope: scope.clone(),
-                            fingerprint: fingerprint.clone(),
+                            scope: report.scope.clone(),
+                            fingerprint: report.fingerprint.clone(),
                         };
                         self.overlay = None;
                         Some(action)
                     }
                     KeyCode::Char('n') | KeyCode::Esc => {
                         let action = Action::CancelRevert {
-                            scope: scope.clone(),
-                            fingerprint: fingerprint.clone(),
+                            scope: report.scope.clone(),
+                            fingerprint: report.fingerprint.clone(),
                         };
                         self.overlay = None;
                         Some(action)

@@ -456,7 +456,7 @@
     #[test]
     fn recovery_and_review_confirmations_have_no_enter_default() {
         let mut undo = app();
-        undo.confirm_undo("--- current\n+++ restore\n-old\n+new\n");
+        undo.confirm_undo(recovery_preview("--- current\n+++ restore\n-old\n+new\n"));
         assert_eq!(undo.on_key(key(KeyCode::Enter)), None);
         assert!(matches!(undo.overlay, Some(Overlay::UndoConfirm { .. })));
         elapse_prompt_guard(&mut undo);
@@ -481,7 +481,7 @@
         );
 
         let mut revert = app();
-        revert.confirm_revert("file.txt", "fingerprint", "reverse patch");
+        revert.confirm_revert(revert_preview("file.txt", "fingerprint", "reverse patch"));
         elapse_prompt_guard(&mut revert);
         assert_eq!(
             revert.on_key(key(KeyCode::Char('n'))),

@@ -14,6 +14,7 @@ pub mod goal_report;
 pub mod help_report;
 pub mod local_result;
 pub mod mcp_report;
+pub mod recovery_report;
 pub mod review_report;
 pub mod skills_report;
 pub mod status;

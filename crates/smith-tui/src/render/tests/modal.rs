@@ -325,7 +325,7 @@
     #[test]
     fn recovery_and_review_modals_name_the_action_without_a_default() {
         let mut undo = App::new("gpt-5.3", "~/work/api");
-        undo.confirm_undo("--- current\n+++ restore\n-old\n+new");
+        undo.confirm_undo(recovery_preview("--- current\n+++ restore\n-old\n+new"));
         let undo_screen = render(&undo, 74, 20, Theme::new().without_color());
         assert!(undo_screen.contains("No action is selected by default"));
         assert!(undo_screen.contains("apply undo"));

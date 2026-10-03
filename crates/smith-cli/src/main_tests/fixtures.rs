@@ -725,6 +725,7 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                                         | smith_client::review_report::ReviewStartReport::Queued { .. }
                                 )
                         ) => "Notice".to_owned(),
+                    LocalResult::Recovery(report) if report.is_notice() => "Notice".to_owned(),
                     _ => format!("{:?}", result.state()),
                 };
                 let content = match result {
@@ -740,6 +741,7 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                     LocalResult::Skills(report) => smith_client::skills_report::render_plain(report),
                     LocalResult::Diff(report) => smith_client::diff_report::render_plain(report),
                     LocalResult::Review(report) => smith_client::review_report::render_plain(report),
+                    LocalResult::Recovery(report) => smith_client::recovery_report::render_plain(report),
                     LocalResult::Text { body, .. } => body.clone(),
                 };
                 raw.push_str(&format!(
@@ -777,6 +779,9 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                     LocalResult::Review(report) => LocalResult::Review(Box::new(
                         fixture_review_view(report, normalizer),
                     )),
+                    LocalResult::Recovery(report) => LocalResult::Recovery(Box::new(
+                        fixture_recovery_view(report, normalizer),
+                    )),
                     LocalResult::Text { title, body, state } => LocalResult::Text {
                         title: normalizer.normalize(title),
                         body: normalizer.normalize(body),
@@ -799,33 +804,57 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
     }
     use smith_tui::Overlay;
     let overlay = match &app.overlay {
-        Some(Overlay::UndoConfirm { content }) => Some((
-            "undo",
-            content,
-            Overlay::UndoConfirm {
-                content: normalizer.normalize(content),
-            },
-        )),
-        Some(Overlay::RedoConfirm { content }) => Some((
-            "redo",
-            content,
-            Overlay::RedoConfirm {
-                content: normalizer.normalize(content),
-            },
-        )),
-        Some(Overlay::RevertConfirm {
-            scope,
-            fingerprint,
-            content,
-        }) => Some((
-            "revert",
-            content,
-            Overlay::RevertConfirm {
-                scope: scope.clone(),
-                fingerprint: fingerprint.clone(),
-                content: normalizer.normalize(content),
-            },
-        )),
+        Some(Overlay::UndoConfirm { report }) => {
+            use smith_client::recovery_report::RecoveryReport;
+
+            let report = RecoveryReport::UndoConfirmation((**report).clone());
+            let content = smith_client::recovery_report::render_plain(&report);
+            raw.push_str(&format!(
+                "title: undo\nstate: Confirmation\nbody:\n{content}\n"
+            ));
+            let RecoveryReport::UndoConfirmation(preview) = fixture_recovery_view(&report, normalizer)
+            else {
+                panic!("expected an undo confirmation");
+            };
+            view.overlay = Some(Overlay::UndoConfirm {
+                report: Box::new(preview),
+            });
+            None
+        }
+        Some(Overlay::RedoConfirm { report }) => {
+            use smith_client::recovery_report::RecoveryReport;
+
+            let report = RecoveryReport::RedoConfirmation((**report).clone());
+            let content = smith_client::recovery_report::render_plain(&report);
+            raw.push_str(&format!(
+                "title: redo\nstate: Confirmation\nbody:\n{content}\n"
+            ));
+            let RecoveryReport::RedoConfirmation(preview) = fixture_recovery_view(&report, normalizer)
+            else {
+                panic!("expected a redo confirmation");
+            };
+            view.overlay = Some(Overlay::RedoConfirm {
+                report: Box::new(preview),
+            });
+            None
+        }
+        Some(Overlay::RevertConfirm { report }) => {
+            use smith_client::recovery_report::RecoveryReport;
+
+            let report = RecoveryReport::RevertConfirmation((**report).clone());
+            let content = smith_client::recovery_report::render_plain(&report);
+            raw.push_str(&format!(
+                "title: revert\nstate: Confirmation\nbody:\n{content}\n"
+            ));
+            let RecoveryReport::RevertConfirmation(preview) = fixture_recovery_view(&report, normalizer)
+            else {
+                panic!("expected a revert confirmation");
+            };
+            view.overlay = Some(Overlay::RevertConfirm {
+                report: Box::new(preview),
+            });
+            None
+        }
         Some(Overlay::ReviewConfirm { report }) => {
             use smith_client::review_report::ReviewReport;
 
@@ -1155,6 +1184,38 @@ fn fixture_diff_view(
                 line.text = normalizer.normalize(&line.text);
             }
         }
+    }
+    report
+}
+
+fn fixture_recovery_view(
+    report: &smith_client::recovery_report::RecoveryReport,
+    normalizer: &mut fixture_support::Normalizer,
+) -> smith_client::recovery_report::RecoveryReport {
+    use smith_client::recovery_report::{RecoveryApplied, RecoveryReport};
+
+    let mut report = report.clone();
+    match &mut report {
+        RecoveryReport::UndoConfirmation(preview) | RecoveryReport::RedoConfirmation(preview) => {
+            for line in &mut preview.patch {
+                line.text = normalizer.normalize(&line.text);
+            }
+        }
+        RecoveryReport::RevertConfirmation(preview) => {
+            preview.scope = normalizer.normalize(&preview.scope);
+            preview.fingerprint = normalizer.normalize(&preview.fingerprint);
+            for line in &mut preview.patch {
+                line.text = normalizer.normalize(&line.text);
+            }
+        }
+        RecoveryReport::PreviewError { message, .. }
+        | RecoveryReport::ApplyError { message, .. } => *message = normalizer.normalize(message),
+        RecoveryReport::Applied(RecoveryApplied::Revert { scope }) => {
+            *scope = normalizer.normalize(scope);
+        }
+        RecoveryReport::RevertUsage
+        | RecoveryReport::Applied(RecoveryApplied::Undo | RecoveryApplied::Redo)
+        | RecoveryReport::Cancelled(_) => {}
     }
     report
 }

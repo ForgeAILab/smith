@@ -3,6 +3,8 @@
 use std::collections::VecDeque;
 
 use agent_runtime_core::usage::UsageRecord;
+use smith_client::local_result::LocalResult;
+use smith_client::recovery_report::{RecoveryAction, RecoveryReport};
 use smith_tui::app::RunningTaskSummary;
 
 use super::*;
@@ -558,74 +560,32 @@ pub(super) async fn run_tui(
                                     smith_client::local_result::LocalResult::Skills(Box::new(report)),
                                 );
                             }
-                            Some(Action::ApplyUndo) => match host.changes().undo_latest() {
-                                // Accurate for a mixed turn too: the preview
-                                // the user just confirmed named the deltas
-                                // this does not touch.
-                                Ok(()) => app.transcript.push_notice(
-                                    "undo",
-                                    "restored the edits Smith made in the last turn",
-                                ),
-                                Err(error) => app.transcript.push_error(error.message),
-                            },
+                            Some(Action::ApplyUndo) => {
+                                app.transcript.push_local(LocalResult::Recovery(Box::new(
+                                    local_command::recovery::undo(host),
+                                )));
+                            }
                             Some(Action::CancelUndo) => {
                                 host.changes().record_undo_cancelled();
-                                app.transcript.push_notice("undo", "cancelled");
+                                app.transcript.push_local(LocalResult::Recovery(Box::new(
+                                    RecoveryReport::Cancelled(RecoveryAction::Undo),
+                                )));
                             }
-                            Some(Action::ApplyRedo) => match host.changes().redo_latest() {
-                                Ok(()) => app.transcript.push_notice(
-                                    "redo",
-                                    "newest exact undone Smith turn was reapplied",
-                                ),
-                                Err(error) => app.transcript.push_error(error.message),
-                            },
+                            Some(Action::ApplyRedo) => {
+                                app.transcript.push_local(LocalResult::Recovery(Box::new(
+                                    local_command::recovery::redo(host),
+                                )));
+                            }
                             Some(Action::CancelRedo) => {
                                 host.changes().record_redo_cancelled();
-                                app.transcript.push_notice("redo", "cancelled");
+                                app.transcript.push_local(LocalResult::Recovery(Box::new(
+                                    RecoveryReport::Cancelled(RecoveryAction::Redo),
+                                )));
                             }
                             Some(Action::ApplyRevert { scope, fingerprint }) => {
-                                let recovery_dir = host.paths().map(|paths| {
-                                    paths
-                                        .directory()
-                                        .join("recovery")
-                                        .join(host.session().id().as_str())
-                                });
-                                match GitChanges::discover(project).and_then(|git| {
-                                    git.apply_revert(
-                                        &scope,
-                                        &fingerprint,
-                                        recovery_dir.as_deref(),
-                                    )
-                                }) {
-                                    Ok(applied) => {
-                                        host.changes().record_revert_event(
-                                            &scope,
-                                            &fingerprint,
-                                            "applied",
-                                        );
-                                        host.changes().record_recovery(
-                                            applied.path,
-                                            applied.before,
-                                            applied.after,
-                                            "revert",
-                                            applied.recovery_path,
-                                        );
-                                        app.transcript.push_notice(
-                                            "revert",
-                                            format!(
-                                                "`{scope}` reverted · recoverable with /undo"
-                                            ),
-                                        );
-                                    }
-                                    Err(error) => {
-                                        host.changes().record_revert_event(
-                                            &scope,
-                                            &fingerprint,
-                                            "failed",
-                                        );
-                                        app.transcript.push_error(error.message);
-                                    }
-                                }
+                                app.transcript.push_local(LocalResult::Recovery(Box::new(
+                                    local_command::recovery::revert(host, project, scope, &fingerprint),
+                                )));
                             }
                             Some(Action::CancelRevert { scope, fingerprint }) => {
                                 host.changes().record_revert_event(
@@ -633,7 +593,9 @@ pub(super) async fn run_tui(
                                     &fingerprint,
                                     "cancelled",
                                 );
-                                app.transcript.push_notice("revert", "cancelled");
+                                app.transcript.push_local(LocalResult::Recovery(Box::new(
+                                    RecoveryReport::Cancelled(RecoveryAction::Revert),
+                                )));
                             }
                             Some(Action::StartReview { scope }) => {
                                 start_review(host, project, scope, local_tx.clone());

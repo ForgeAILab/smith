@@ -540,6 +540,126 @@
     }
 
     #[test]
+    fn typed_recovery_notices_and_errors_keep_the_previous_transcript_presentation() {
+        use smith_client::recovery_report::{RecoveryAction, RecoveryApplied, RecoveryReport};
+
+        for report in [
+            RecoveryReport::PreviewError {
+                action: RecoveryAction::Undo,
+                message: "no Smith turn has attributable changes".to_owned(),
+            },
+            RecoveryReport::PreviewError {
+                action: RecoveryAction::Redo,
+                message: "no exact redo candidate exists".to_owned(),
+            },
+            RecoveryReport::PreviewError {
+                action: RecoveryAction::Revert,
+                message: "Git-backed change inspection is unavailable outside a Git worktree"
+                    .to_owned(),
+            },
+            RecoveryReport::RevertUsage,
+            RecoveryReport::Applied(RecoveryApplied::Undo),
+            RecoveryReport::Applied(RecoveryApplied::Redo),
+            RecoveryReport::Applied(RecoveryApplied::Revert {
+                scope: "path#1".to_owned(),
+            }),
+            RecoveryReport::ApplyError {
+                action: RecoveryAction::Undo,
+                message: "undo refused\nmore detail".to_owned(),
+            },
+            RecoveryReport::ApplyError {
+                action: RecoveryAction::Redo,
+                message: "redo refused\nmore detail".to_owned(),
+            },
+            RecoveryReport::ApplyError {
+                action: RecoveryAction::Revert,
+                message: "revert refused\nmore detail".to_owned(),
+            },
+            RecoveryReport::Cancelled(RecoveryAction::Undo),
+            RecoveryReport::Cancelled(RecoveryAction::Redo),
+            RecoveryReport::Cancelled(RecoveryAction::Revert),
+        ] {
+            let content = smith_client::recovery_report::render_plain(&report);
+            let mut legacy = App::new("gpt-5.3", "~/work/api");
+            match &report {
+                RecoveryReport::PreviewError {
+                    action: RecoveryAction::Redo,
+                    ..
+                } => {
+                    legacy.show_local_error("redo", content);
+                }
+                RecoveryReport::Applied(_) | RecoveryReport::Cancelled(_) => {
+                    legacy
+                        .transcript
+                        .push_notice(report.action().name(), content);
+                }
+                _ => legacy.transcript.push_error(content),
+            }
+            let mut typed = App::new("gpt-5.3", "~/work/api");
+            typed
+                .transcript
+                .push_local(LocalResult::Recovery(Box::new(report)));
+            for width in [44, 100] {
+                for theme in [Theme::new(), Theme::new().without_color()] {
+                    assert_eq!(
+                        transcript_lines(&typed, theme, width),
+                        transcript_lines(&legacy, theme, width)
+                    );
+                    assert_eq!(
+                        render(&typed, width, 24, theme),
+                        render(&legacy, width, 24, theme)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn typed_recovery_previews_preserve_unstyled_source_and_ignore_display_prefixes() {
+        use smith_client::diff_report::{DiffLine, DiffLineKind};
+        use smith_client::recovery_report::{RevertOrigin, RevertPreview};
+
+        let patch = vec![
+            DiffLine {
+                kind: DiffLineKind::Addition,
+                text: "origin: unknown\r\n".to_owned(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Context,
+                text: "\n".to_owned(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Metadata,
+                text: "+source without a final newline".to_owned(),
+            },
+        ];
+        assert_eq!(
+            render_recovery_patch(&patch),
+            vec![
+                Line::from("origin: unknown"),
+                Line::default(),
+                Line::from("+source without a final newline"),
+            ]
+        );
+        let report = RevertPreview {
+            scope: "redo#1".to_owned(),
+            fingerprint: "exact-preview".to_owned(),
+            origin: RevertOrigin::Smith,
+            patch,
+        };
+        assert_eq!(
+            render_revert_preview(&report),
+            vec![
+                Line::from("origin: Smith"),
+                Line::default(),
+                Line::from("origin: unknown"),
+                Line::default(),
+                Line::from("+source without a final newline"),
+            ]
+        );
+    }
+
+    #[test]
     fn typed_review_notices_and_errors_keep_the_previous_transcript_presentation() {
         use smith_client::review_report::{ReviewReport, ReviewStartReport};
 

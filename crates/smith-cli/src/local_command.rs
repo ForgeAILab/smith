@@ -4,6 +4,7 @@ use super::*;
 use smith_client::agent_report::AgentReport;
 use smith_client::local_result::LocalResult;
 use smith_client::mcp_report::McpReport;
+use smith_client::recovery_report::RecoveryReport;
 use smith_client::review_report::ReviewReport;
 use smith_client::skills_report::SkillsReport;
 use smith_client::status::{PriceReference, SessionCost, SessionUsage};
@@ -13,6 +14,7 @@ pub(super) mod context;
 mod diff;
 mod goal;
 pub(super) mod mcp;
+pub(super) mod recovery;
 mod review;
 pub(super) mod skills;
 mod status;
@@ -237,39 +239,22 @@ pub(super) async fn handle_local_command(
                 .transcript
                 .push_local(LocalResult::Review(Box::new(report))),
         },
-        HostCommand::Undo => match host.changes().undo_preview() {
-            Ok(preview) => app.confirm_undo(preview),
-            Err(error) => app.transcript.push_error(error.message),
+        HostCommand::Undo => match recovery::undo_preview(host) {
+            RecoveryReport::UndoConfirmation(preview) => app.confirm_undo(preview),
+            report => app
+                .transcript
+                .push_local(LocalResult::Recovery(Box::new(report))),
         },
-        HostCommand::Redo => match host.changes().redo_preview() {
-            Ok(preview) => app.confirm_redo(preview),
-            Err(error) => app.show_local_error("redo", error.message),
+        HostCommand::Redo => match recovery::redo_preview(host) {
+            RecoveryReport::RedoConfirmation(preview) => app.confirm_redo(preview),
+            report => app.show_local_report(LocalResult::Recovery(Box::new(report))),
         },
-        HostCommand::Revert(Some(scope)) => {
-            match GitChanges::discover(project).and_then(|git| git.preview_revert(&scope)) {
-                Ok(mut preview) => {
-                    let path = scope.split('#').next().unwrap_or(scope.as_str());
-                    if let Ok(canonical) = project.join(path).canonicalize()
-                        && host.changes().latest_owns_path(&canonical)
-                    {
-                        preview.content =
-                            preview
-                                .content
-                                .replacen("origin: unknown", "origin: Smith", 1);
-                    }
-                    host.changes().record_revert_event(
-                        &preview.scope,
-                        &preview.fingerprint,
-                        "previewed",
-                    );
-                    app.confirm_revert(preview.scope, preview.fingerprint, preview.content);
-                }
-                Err(error) => app.transcript.push_error(error.message),
-            }
-        }
-        HostCommand::Revert(None) => app
-            .transcript
-            .push_error("usage: /revert FILE or /revert FILE#HUNK; use /diff to choose a scope"),
+        HostCommand::Revert(scope) => match recovery::revert_preview(host, project, scope) {
+            RecoveryReport::RevertConfirmation(preview) => app.confirm_revert(preview),
+            report => app
+                .transcript
+                .push_local(LocalResult::Recovery(Box::new(report))),
+        },
     }
 }
 

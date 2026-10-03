@@ -20,6 +20,8 @@ use serde_json::Value;
 use smith_client::agent_report::{AgentReport, AgentResumeReport};
 use smith_client::diff_report::{DiffLine, DiffLineKind, DiffOutcome, DiffReport};
 pub use smith_client::local_result::{LocalResult, LocalResultState};
+#[cfg(test)]
+use smith_client::recovery_report::RecoveryReport;
 use smith_client::review_report::{ReviewReport, ReviewStartReport};
 use smith_tools::{
     ToolCallDisplay, has_tool_call_display_schema, project_external_tool_call_display,
@@ -259,7 +261,7 @@ impl Transcript {
 
     /// Appends a typed local report, bounding patches and transitional text.
     pub fn push_local(&mut self, result: LocalResult) {
-        // Resume and review notices used to append through `push_notice`,
+        // Resume, review, and recovery notices used to append through `push_notice`,
         // which leaves the stream open until its next delta or turn boundary.
         if !matches!(
             &result,
@@ -280,7 +282,8 @@ impl Transcript {
                             ReviewStartReport::Started { .. } | ReviewStartReport::Queued { .. }
                         )
                 )
-        ) {
+        ) && !matches!(&result, LocalResult::Recovery(report) if report.is_notice())
+        {
             self.close_open();
         }
         let result = match result {
@@ -952,6 +955,39 @@ mod tests {
                 &transcript.blocks()[2],
                 Block::Assistant { text, .. } if text == " the failure"
             ));
+        }
+    }
+
+    #[test]
+    fn typed_recovery_notices_keep_the_existing_stream_boundary() {
+        use smith_client::recovery_report::{RecoveryAction, RecoveryApplied};
+
+        for report in [
+            RecoveryReport::Applied(RecoveryApplied::Undo),
+            RecoveryReport::Applied(RecoveryApplied::Redo),
+            RecoveryReport::Applied(RecoveryApplied::Revert {
+                scope: "path#1".to_owned(),
+            }),
+            RecoveryReport::Cancelled(RecoveryAction::Undo),
+            RecoveryReport::Cancelled(RecoveryAction::Redo),
+            RecoveryReport::Cancelled(RecoveryAction::Revert),
+        ] {
+            let mut transcript = Transcript::new();
+            transcript.push_text_delta("analyzing");
+            transcript.push_local(LocalResult::Recovery(Box::new(report)));
+            assert!(matches!(
+                transcript.blocks()[0],
+                Block::Assistant { open: true, .. }
+            ));
+            transcript.push_text_delta(" the failure");
+            assert_eq!(transcript.len(), 3);
+            assert!(matches!(
+                transcript.blocks()[0],
+                Block::Assistant { open: false, .. }
+            ));
+            assert!(
+                matches!(&transcript.blocks()[2], Block::Assistant { text, .. } if text == " the failure")
+            );
         }
     }
 

@@ -142,9 +142,9 @@ fn recovery_and_trust_confirmations_ignore_typing_until_the_quiet_boundary() {
             let clock = prompt_clock(&mut app);
             app.composer.replace("keep this draft");
             match dialog {
-                "undo" => app.confirm_undo("reverse patch"),
-                "redo" => app.confirm_redo("forward patch"),
-                "revert" => app.confirm_revert("file.txt", "exact-preview", "reverse patch"),
+                "undo" => app.confirm_undo(recovery_preview("reverse patch")),
+                "redo" => app.confirm_redo(recovery_preview("forward patch")),
+                "revert" => app.confirm_revert(revert_preview("file.txt", "exact-preview", "reverse patch")),
                 "mcp" => app.confirm_mcp_trust("docs", "command: docs-server"),
                 "skill" => app.confirm_skill_trust("deploy", "path: skills/deploy"),
                 _ => unreachable!(),

@@ -38,6 +38,28 @@ mod tests {
     use crate::transcript::{Block, LocalResult, ToolStatus};
     use ratatui::layout::Rect;
 
+    fn revert_preview(
+        scope: &str,
+        fingerprint: &str,
+        text: &str,
+    ) -> smith_client::recovery_report::RevertPreview {
+        smith_client::recovery_report::RevertPreview {
+            scope: scope.to_owned(),
+            fingerprint: fingerprint.to_owned(),
+            origin: smith_client::recovery_report::RevertOrigin::Unknown,
+            patch: recovery_preview(text).patch,
+        }
+    }
+
+    fn recovery_preview(text: &str) -> smith_client::recovery_report::RecoveryPreview {
+        smith_client::recovery_report::RecoveryPreview {
+            patch: vec![smith_client::diff_report::DiffLine {
+                kind: smith_client::diff_report::DiffLineKind::Context,
+                text: text.to_owned(),
+            }],
+        }
+    }
+
     fn fingerprint(seed: &str) -> agent_runtime_registry::Fingerprint {
         agent_runtime_registry::Fingerprint::of(seed)
     }
