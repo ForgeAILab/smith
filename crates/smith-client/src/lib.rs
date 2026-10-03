@@ -4,6 +4,7 @@
 //! counters, catalog pricing, and append-only usage log. These modules consume
 //! runtime events and plain values; terminal drawing belongs to `smith-tui`.
 
+pub mod agent_report;
 pub mod cache;
 pub mod commands;
 pub mod context_report;

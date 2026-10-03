@@ -13,6 +13,7 @@ use crate::app::{App, ProviderPhase};
 use crate::status::{Activity, render_elapsed};
 use crate::theme::{Theme, Tone, glyph};
 use crate::transcript::{Block, LocalResult, LocalResultState, ToolStatus};
+use smith_client::agent_report::{AgentReport, AgentResumeReport, AgentSnapshot};
 use smith_client::context_report::{ContextCategoryKind, ContextCompaction, ContextReport};
 use smith_client::goal_report::GoalReport;
 use smith_client::help_report::{HelpCommand, HelpReport};
@@ -388,6 +389,9 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16) -> Vec<Line<'static>>
                 )));
                 lines.extend(render_goal_report(report, width, theme));
             }
+            Block::Local(LocalResult::Agent(report)) => {
+                lines.extend(render_agent_report(report, width, theme));
+            }
             Block::Local(LocalResult::Text {
                 title,
                 body: content,
@@ -457,12 +461,7 @@ fn child_lines(app: &App, child: &str, theme: Theme, width: u16) -> Vec<Line<'st
         Line::default(),
     ];
     if let Some(detail) = app.inspected_detail() {
-        for raw in detail.lines() {
-            lines.push(Line::from(Span::styled(
-                format!("  {raw}"),
-                theme.style(Tone::Dim),
-            )));
-        }
+        lines.extend(render_agent_inspector(detail, theme));
         lines.push(Line::default());
     }
 
@@ -880,6 +879,129 @@ pub(super) fn render_local_content(
         }
     }
     lines
+}
+
+fn render_agent_report(report: &AgentReport, width: u16, theme: Theme) -> Vec<Line<'static>> {
+    if let AgentReport::Resume(resume) = report {
+        let content = resume.render_value();
+        return content
+            .lines()
+            .enumerate()
+            .map(|(index, raw)| match resume {
+                AgentResumeReport::RequiresIdle | AgentResumeReport::Started { .. } => {
+                    if index == 0 {
+                        Line::from(vec![
+                            Span::styled(format!("{} ", glyph::NOTICE), theme.style(Tone::Dim)),
+                            Span::styled(report.title().to_owned(), theme.style(Tone::Heading)),
+                            Span::styled(" · ", theme.style(Tone::Dim)),
+                            Span::styled(raw.to_owned(), theme.style(Tone::Default)),
+                        ])
+                    } else {
+                        Line::from(Span::styled(format!("  {raw}"), theme.style(Tone::Dim)))
+                    }
+                }
+                AgentResumeReport::Missing { .. }
+                | AgentResumeReport::Incompatible { .. }
+                | AgentResumeReport::Unavailable
+                | AgentResumeReport::Failed { .. } => Line::from(Span::styled(
+                    format!("{} {raw}", if index == 0 { glyph::ERROR } else { " " }),
+                    theme.style(Tone::Danger),
+                )),
+            })
+            .collect();
+    }
+
+    let mut lines = vec![Line::from(Span::styled(
+        format!("/{}", report.title()),
+        theme.style(Tone::Command),
+    ))];
+    match report {
+        AgentReport::Empty => lines.extend(render_prefixed_local_state(
+            glyph::BULLET,
+            AgentReport::EMPTY_MESSAGE,
+            width,
+            theme.style(Tone::Dim),
+        )),
+        AgentReport::Unavailable => lines.extend(render_prefixed_local_state(
+            glyph::ERROR,
+            AgentReport::UNAVAILABLE_MESSAGE,
+            width,
+            theme.style(Tone::Danger),
+        )),
+        AgentReport::Missing(child) => lines.extend(render_prefixed_local_state(
+            glyph::ERROR,
+            &format!("No child named `{child}`."),
+            width,
+            theme.style(Tone::Danger),
+        )),
+        AgentReport::Parent => lines.extend(wrap_context_line(
+            Line::from(Span::styled(
+                AgentReport::PARENT_MESSAGE,
+                theme.style(Tone::Default),
+            )),
+            usize::from(width).max(1),
+        )),
+        AgentReport::List(children) => {
+            for child in children {
+                let content = format!(
+                    "{} · {} · {} · resumable {} · {} turns · {} tokens",
+                    child.child,
+                    child.durability,
+                    child.state,
+                    child.resumable,
+                    child.turns,
+                    child.tokens_used,
+                );
+                lines.extend(wrap_context_line(
+                    Line::from(Span::styled(content, theme.style(Tone::Default))),
+                    usize::from(width).max(1),
+                ));
+            }
+        }
+        AgentReport::Inspector(child) => lines.extend(render_agent_inspector(child, theme)),
+        AgentReport::Resume(_) => {}
+    }
+    lines
+}
+
+/// Inspector fields keep the existing indentation and paragraph word wrapping.
+fn render_agent_inspector(child: &AgentSnapshot, theme: Theme) -> Vec<Line<'static>> {
+    [
+        format!(
+            "session {} · {} · {} · {} · {} tokens · {}",
+            child.session,
+            child.summary.durability,
+            child.summary.state,
+            child.summary.turns,
+            child.summary.tokens_used,
+            child.workspace,
+        ),
+        format!(
+            "resumable {}{}",
+            child.summary.resumable,
+            child
+                .incompatibility
+                .as_deref()
+                .map(|reason| format!(" · incompatible: {reason}"))
+                .unwrap_or_default(),
+        ),
+        format!(
+            "continue: type a follow-up below · exact recovery: /agent resume {}",
+            child.summary.child,
+        ),
+        format!(
+            "result: {}",
+            child.last_result.as_deref().unwrap_or("not available"),
+        ),
+    ]
+    .into_iter()
+    .flat_map(|content| {
+        content
+            .lines()
+            .map(|raw| Line::from(Span::styled(format!("  {raw}"), theme.style(Tone::Dim))))
+            .collect::<Vec<_>>()
+    })
+    .collect()
 }
 
 fn render_goal_report(report: &GoalReport, width: u16, theme: Theme) -> Vec<Line<'static>> {

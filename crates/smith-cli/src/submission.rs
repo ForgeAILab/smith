@@ -1,6 +1,7 @@
 //! Prepared-input materialization, dispatch, and agent/review actions.
 
 use super::*;
+use smith_client::agent_report::{AgentReport, AgentResumeReport};
 
 #[derive(Clone, Default)]
 pub(super) struct LocalShellApprovals {
@@ -553,21 +554,23 @@ pub(super) fn resume_agent(
         .and_then(|delegation| delegation.coordinator())
         .cloned()
     else {
-        let _ = outcomes.send(LocalOutcome::Error(
-            "child resume is unavailable because the coordinator is not wired".to_owned(),
-        ));
+        let _ = outcomes.send(LocalOutcome::Agent(Box::new(AgentReport::Resume(
+            AgentResumeReport::Unavailable,
+        ))));
         return;
     };
     tokio::spawn(async move {
         let child = agent_runtime_core::ids::ChildId::new(child_id);
-        let message = match coordinator.resume(&child).await {
-            Ok(()) => LocalOutcome::Notice {
-                source: "agents",
-                text: format!("{child} exact checkpoint resume started · no new child task"),
+        let report = match coordinator.resume(&child).await {
+            Ok(()) => AgentResumeReport::Started {
+                child: child.to_string(),
             },
-            Err(error) => LocalOutcome::Error(format!("{child} did not resume: {}", error.message)),
+            Err(error) => AgentResumeReport::Failed {
+                child: child.to_string(),
+                error: error.message,
+            },
         };
-        let _ = outcomes.send(message);
+        let _ = outcomes.send(LocalOutcome::Agent(Box::new(AgentReport::Resume(report))));
     });
 }
 

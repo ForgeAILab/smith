@@ -1,9 +1,11 @@
 //! Typed local commands and status/context rendering.
 
 use super::*;
+use smith_client::agent_report::AgentReport;
 use smith_client::local_result::LocalResult;
 use smith_client::status::{PriceReference, SessionCost, SessionUsage};
 
+pub(crate) mod agent;
 pub(super) mod context;
 mod goal;
 mod status;
@@ -17,32 +19,6 @@ pub(super) fn tool_call_for_display(
         | RuntimeEvent::ToolCallCompleted { call, .. } => Some(call.clone()),
         _ => None,
     }
-}
-
-/// The coordinator's authoritative card for one child, as the inspector's
-/// header shows it.
-///
-/// Kept beside the `/agent` handler because both the command and the host's
-/// poll-on-redraw refresh render the same card: an inspector opened by arrow
-/// key must not report less than one opened by name.
-pub(super) fn child_status_card(status: &smith_runtime::ChildStatus) -> String {
-    format!(
-        "session {} · {:?} · {:?} · {} · {} tokens · {:?}\nresumable {}{}\ncontinue: type a follow-up below · exact recovery: /agent resume {}\nresult: {}",
-        status.session,
-        status.durability,
-        status.state,
-        crate::submission::turns_label(status.turns_used, status.max_turns),
-        status.tokens_used,
-        status.workspace,
-        status.resumable(),
-        status
-            .incompatibility
-            .as_deref()
-            .map(|reason| format!(" · incompatible: {reason}"))
-            .unwrap_or_default(),
-        status.child,
-        status.last_result.as_deref().unwrap_or("not available"),
-    )
 }
 
 pub(super) async fn handle_local_command(
@@ -220,84 +196,21 @@ pub(super) async fn handle_local_command(
             )));
         }
         HostCommand::Agent(selected) => {
-            let Some(coordinator) = host
-                .runtime()
-                .delegation()
-                .and_then(|delegation| delegation.coordinator())
-            else {
-                app.show_local_error(
-                    "agents",
-                    "Child delegation is unavailable for this session.",
-                );
-                return;
-            };
-            let children = coordinator.list();
-            let selected = match selected {
-                AgentAction::Parent => {
-                    app.leave_child_inspection();
-                    app.show_local_result(
-                        "agent",
-                        "Returned to the root timeline; the root composer remained focused.",
-                    );
-                    return;
+            let report = agent::report(host, app.inspected_child.as_deref(), selected);
+            match report {
+                AgentReport::Inspector(snapshot) => {
+                    // The inspector owns the card; leave no duplicate behind
+                    // in the root timeline when the user returns with Esc.
+                    let child = snapshot.summary.child.clone();
+                    app.inspect_child(child.clone());
+                    app.set_inspected_detail(&child, Some(snapshot));
                 }
-                AgentAction::Next | AgentAction::Previous if children.is_empty() => None,
-                direction @ (AgentAction::Next | AgentAction::Previous) => {
-                    let current = app
-                        .inspected_child
-                        .as_deref()
-                        .and_then(|current| {
-                            children
-                                .iter()
-                                .position(|status| status.child.as_str() == current)
-                        })
-                        .unwrap_or(0);
-                    let index = if direction == AgentAction::Next {
-                        (current + 1) % children.len()
-                    } else {
-                        current.checked_sub(1).unwrap_or(children.len() - 1)
-                    };
-                    Some(children[index].child.as_str().to_owned())
+                report => {
+                    if matches!(report, AgentReport::Parent) {
+                        app.leave_child_inspection();
+                    }
+                    app.show_local_report(LocalResult::Agent(Box::new(report)));
                 }
-                AgentAction::Inspect(selected) => Some(selected),
-                AgentAction::List => None,
-            };
-            if let Some(selected) = selected {
-                let Some(status) = children
-                    .iter()
-                    .find(|status| status.child.as_str() == selected)
-                else {
-                    app.show_local_error("agents", format!("No child named `{selected}`."));
-                    return;
-                };
-                // Inspection swaps the transcript region for the child's own
-                // view, which carries this card and the child's log. Printing
-                // the same detail into the root timeline would write it where
-                // the user cannot see it and leave a duplicate behind on Esc.
-                let detail = child_status_card(status);
-                app.inspect_child(selected.clone());
-                app.set_inspected_detail(&selected, Some(detail));
-            } else if children.is_empty() {
-                app.show_local_empty("agents", "No child agents in this session.");
-            } else {
-                app.show_local_result(
-                    "agents",
-                    children
-                        .iter()
-                        .map(|status| {
-                            format!(
-                                "{} · {:?} · {:?} · resumable {} · {} turns · {} tokens",
-                                status.child,
-                                status.durability,
-                                status.state,
-                                status.resumable(),
-                                crate::submission::turns_label(status.turns_used, status.max_turns),
-                                status.tokens_used,
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                );
             }
         }
         HostCommand::Diff(scope) => match scope {
@@ -951,6 +864,7 @@ fn reasoning_status_values(policy: &RuntimePolicy) -> (String, String) {
 }
 
 pub(super) enum LocalOutcome {
+    Agent(Box<AgentReport>),
     Notice {
         /// The transcript block label — "agents" for child lifecycle,
         /// "review" for reviewer starts.

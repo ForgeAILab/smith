@@ -1,6 +1,7 @@
 //! Palette, runtime-resource selection, and local-result transitions.
 
 use crossterm::event::{KeyCode, KeyEvent};
+use smith_client::agent_report::{AgentReport, AgentResumeReport};
 
 use crate::commands::{
     self, Command, ConfirmCommand, GoalAction, HostCommand, ParsedCommand, SelectionCommand,
@@ -753,16 +754,17 @@ impl App {
             Command::Confirm(ConfirmCommand::AgentResume(child_id)) => {
                 if self.is_busy() {
                     self.overlay = None;
-                    self.transcript.push_notice(
-                        "agent",
-                        "exact child resume requires an idle root turn; draft preserved",
-                    );
+                    self.transcript
+                        .push_local(LocalResult::Agent(Box::new(AgentReport::Resume(
+                            AgentResumeReport::RequiresIdle,
+                        ))));
                     return None;
                 }
                 let Some(summary) = self.children.get(&child_id) else {
-                    self.transcript.push_error(format!(
-                        "No child named `{child_id}`; use `/agent` to list retained children."
-                    ));
+                    self.transcript
+                        .push_local(LocalResult::Agent(Box::new(AgentReport::Resume(
+                            AgentResumeReport::Missing { child: child_id },
+                        ))));
                     return None;
                 };
                 let resumable = summary.state == "interrupted"
@@ -770,9 +772,10 @@ impl App {
                         detail.contains("resumable") || detail.contains("exact resume available")
                     });
                 if !resumable {
-                    self.transcript.push_error(format!(
-                        "`{child_id}` has no compatible interrupted checkpoint; inspect it with `/agent {child_id}`"
-                    ));
+                    self.transcript
+                        .push_local(LocalResult::Agent(Box::new(AgentReport::Resume(
+                            AgentResumeReport::Incompatible { child: child_id },
+                        ))));
                     return None;
                 }
                 self.accept_composer_input();

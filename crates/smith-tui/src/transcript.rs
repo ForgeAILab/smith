@@ -17,6 +17,7 @@ use std::time::Instant;
 
 use agent_runtime_core::content::{ContentPart, Message, Role};
 use serde_json::Value;
+use smith_client::agent_report::{AgentReport, AgentResumeReport};
 pub use smith_client::local_result::{LocalResult, LocalResultState};
 use smith_tools::{
     ToolCallDisplay, has_tool_call_display_schema, project_external_tool_call_display,
@@ -256,7 +257,20 @@ impl Transcript {
 
     /// Appends a typed local report, bounding transitional text as before.
     pub fn push_local(&mut self, result: LocalResult) {
-        self.close_open();
+        // Resume notices used to append through `push_notice`, which leaves
+        // the current stream open until its next delta or turn boundary.
+        if !matches!(
+            &result,
+            LocalResult::Agent(report)
+                if matches!(
+                    report.as_ref(),
+                    AgentReport::Resume(
+                        AgentResumeReport::RequiresIdle | AgentResumeReport::Started { .. }
+                    )
+                )
+        ) {
+            self.close_open();
+        }
         let result = match result {
             LocalResult::Text { title, body, state } => {
                 let title = title
@@ -843,6 +857,34 @@ mod tests {
         match &transcript.blocks()[2] {
             Block::Assistant { text, .. } => assert_eq!(text, " the failure"),
             other => panic!("expected an assistant block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn typed_agent_resume_notices_keep_the_existing_stream_boundary() {
+        for resume in [
+            AgentResumeReport::RequiresIdle,
+            AgentResumeReport::Started {
+                child: "child-1".to_owned(),
+            },
+        ] {
+            let mut transcript = Transcript::new();
+            transcript.push_text_delta("analyzing");
+            transcript.push_local(LocalResult::Agent(Box::new(AgentReport::Resume(resume))));
+            assert!(matches!(
+                transcript.blocks()[0],
+                Block::Assistant { open: true, .. }
+            ));
+            transcript.push_text_delta(" the failure");
+            assert_eq!(transcript.len(), 3);
+            assert!(matches!(
+                transcript.blocks()[0],
+                Block::Assistant { open: false, .. }
+            ));
+            assert!(matches!(
+                &transcript.blocks()[2],
+                Block::Assistant { text, .. } if text == " the failure"
+            ));
         }
     }
 

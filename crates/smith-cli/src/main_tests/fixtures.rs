@@ -694,17 +694,30 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
     view.children = app.children.clone();
     if let Some(child) = &app.inspected_child {
         let detail = app.inspected_detail().expect("child status card");
+        let content = smith_client::agent_report::render_plain(
+            &smith_client::agent_report::AgentReport::Inspector(detail.clone()),
+        );
         raw.push_str(&format!(
-            "title: agent {child}\nstate: Inspector\nbody:\n{detail}\n"
+            "title: agent {child}\nstate: Inspector\nbody:\n{content}\n"
         ));
         view.inspect_child(child.clone());
-        view.set_inspected_detail(child, Some(normalizer.normalize(detail)));
+        view.set_inspected_detail(child, Some(fixture_agent_snapshot_view(detail, normalizer)));
     }
     for block in app.transcript.blocks() {
         match block {
             Block::Local(result) => {
                 let title = result.title();
-                let state = result.state();
+                let state = match result {
+                    LocalResult::Agent(report)
+                        if matches!(
+                            report.as_ref(),
+                            smith_client::agent_report::AgentReport::Resume(
+                                smith_client::agent_report::AgentResumeReport::RequiresIdle
+                                    | smith_client::agent_report::AgentResumeReport::Started { .. }
+                            )
+                        ) => "Notice".to_owned(),
+                    _ => format!("{:?}", result.state()),
+                };
                 let content = match result {
                     LocalResult::Status(report) => smith_client::status_report::render_plain(report),
                     LocalResult::Context(report) => smith_client::context_report::render_plain(report),
@@ -713,10 +726,11 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                         smith_client::timeline_report::render_plain(report)
                     }
                     LocalResult::Goal(report) => smith_client::goal_report::render_plain(report),
+                    LocalResult::Agent(report) => smith_client::agent_report::render_plain(report),
                     LocalResult::Text { body, .. } => body.clone(),
                 };
                 raw.push_str(&format!(
-                    "title: {title}\nstate: {state:?}\nbody:\n{content}\n"
+                    "title: {title}\nstate: {state}\nbody:\n{content}\n"
                 ));
                 // Draw a normalized typed report, never a prose round-trip.
                 let normalized = match result {
@@ -734,6 +748,9 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                     )),
                     LocalResult::Goal(report) => LocalResult::Goal(Box::new(
                         fixture_goal_view(report, normalizer),
+                    )),
+                    LocalResult::Agent(report) => LocalResult::Agent(Box::new(
+                        fixture_agent_view(report, normalizer),
                     )),
                     LocalResult::Text { title, body, state } => LocalResult::Text {
                         title: normalizer.normalize(title),
@@ -952,6 +969,70 @@ fn fixture_help_view(
     }
     for guidance in &mut report.composer {
         *guidance = normalizer.normalize(guidance);
+    }
+    report
+}
+
+fn fixture_agent_summary_view(
+    summary: &mut smith_client::agent_report::AgentSummary,
+    normalizer: &mut fixture_support::Normalizer,
+) {
+    for value in [
+        &mut summary.child,
+        &mut summary.durability,
+        &mut summary.state,
+        &mut summary.turns,
+    ] {
+        *value = normalizer.normalize(value);
+    }
+}
+
+fn fixture_agent_snapshot_view(
+    snapshot: &smith_client::agent_report::AgentSnapshot,
+    normalizer: &mut fixture_support::Normalizer,
+) -> smith_client::agent_report::AgentSnapshot {
+    let mut snapshot = snapshot.clone();
+    fixture_agent_summary_view(&mut snapshot.summary, normalizer);
+    for value in [&mut snapshot.session, &mut snapshot.workspace] {
+        *value = normalizer.normalize(value);
+    }
+    for value in [&mut snapshot.incompatibility, &mut snapshot.last_result]
+        .into_iter()
+        .flatten()
+    {
+        *value = normalizer.normalize(value);
+    }
+    snapshot
+}
+
+fn fixture_agent_view(
+    report: &smith_client::agent_report::AgentReport,
+    normalizer: &mut fixture_support::Normalizer,
+) -> smith_client::agent_report::AgentReport {
+    use smith_client::agent_report::{AgentReport, AgentResumeReport};
+
+    let mut report = report.clone();
+    match &mut report {
+        AgentReport::Empty | AgentReport::Unavailable | AgentReport::Parent => {}
+        AgentReport::Missing(child) => *child = normalizer.normalize(child),
+        AgentReport::List(children) => {
+            for child in children {
+                fixture_agent_summary_view(child, normalizer);
+            }
+        }
+        AgentReport::Inspector(snapshot) => {
+            *snapshot = fixture_agent_snapshot_view(snapshot, normalizer);
+        }
+        AgentReport::Resume(resume) => match resume {
+            AgentResumeReport::RequiresIdle | AgentResumeReport::Unavailable => {}
+            AgentResumeReport::Missing { child }
+            | AgentResumeReport::Incompatible { child }
+            | AgentResumeReport::Started { child } => *child = normalizer.normalize(child),
+            AgentResumeReport::Failed { child, error } => {
+                *child = normalizer.normalize(child);
+                *error = normalizer.normalize(error);
+            }
+        },
     }
     report
 }

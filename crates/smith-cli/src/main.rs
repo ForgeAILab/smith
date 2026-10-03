@@ -52,9 +52,9 @@ use crossterm::event::{Event as TermEvent, EventStream, KeyCode, KeyEventKind, K
 use futures_util::StreamExt;
 use ignore::WalkBuilder;
 use ratatui::layout::Rect;
-use smith_client::commands::{
-    AgentAction, DiffScope, HostCommand, SelectionCommand, SessionControl,
-};
+#[cfg(test)]
+use smith_client::commands::AgentAction;
+use smith_client::commands::{DiffScope, HostCommand, SelectionCommand, SessionControl};
 #[cfg(test)]
 use smith_client::status::ContextPlanUpdate;
 use smith_client::status::{Status, TokenCount, render_elapsed};

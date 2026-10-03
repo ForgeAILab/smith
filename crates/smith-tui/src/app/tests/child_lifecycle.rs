@@ -578,12 +578,28 @@
 
     #[test]
     fn a_stale_inspector_card_never_lands_on_another_child() {
+        use smith_client::agent_report::{AgentSnapshot, AgentSummary};
+
+        let card = AgentSnapshot {
+            summary: AgentSummary {
+                child: "child-a".to_owned(),
+                durability: "Durable".to_owned(),
+                state: "Running".to_owned(),
+                resumable: false,
+                turns: "0/1".to_owned(),
+                tokens_used: 0,
+            },
+            session: "child-session-a".to_owned(),
+            workspace: "ReadOnlyView".to_owned(),
+            incompatibility: None,
+            last_result: None,
+        };
         let mut app = app();
         app.restore_child("child-a", "working", None);
         app.restore_child("child-b", "working", None);
         app.inspect_child("child-a");
-        app.set_inspected_detail("child-a", Some("session child-session-a".to_owned()));
-        assert_eq!(app.inspected_detail(), Some("session child-session-a"));
+        app.set_inspected_detail("child-a", Some(card.clone()));
+        assert_eq!(app.inspected_detail(), Some(&card));
 
         app.inspect_child("child-b");
         assert_eq!(
@@ -591,7 +607,7 @@
             None,
             "one child's accounting must not appear under another's name"
         );
-        app.set_inspected_detail("child-a", Some("session child-session-a".to_owned()));
+        app.set_inspected_detail("child-a", Some(card));
         assert_eq!(app.inspected_detail(), None);
     }
 

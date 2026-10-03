@@ -16,6 +16,7 @@ use agent_runtime_core::content::{ContentPart, UserInput};
 use agent_runtime_core::ids::{AttemptId, RequestId, TurnId};
 use agent_runtime_core::steer::SteerReceipt;
 use agent_runtime_core::usage::CounterKind;
+use smith_client::agent_report::AgentSnapshot;
 use smith_host::approval::ApprovalPrompt;
 use smith_host::rotation::RotationPrompt;
 use smith_runtime::client::{PlanItemProjection, PlanSensitivity, SmithEvent as EventEnvelope};
@@ -838,7 +839,7 @@ pub struct App {
     /// session, turn, token, and workspace figures arrive from the host on the
     /// same poll-on-redraw cadence as background tasks. Absent until that poll
     /// answers, which is honest: the client never invents child accounting.
-    pub(super) inspected_detail: Option<String>,
+    pub(super) inspected_detail: Option<AgentSnapshot>,
     /// Coordinator-reported turn and token counts, keyed by child id, kept
     /// current on the same poll-on-redraw as [`Self::inspected_detail`] —
     /// but for every visible child, not only the inspected one.

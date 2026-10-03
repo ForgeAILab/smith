@@ -209,15 +209,15 @@ impl App {
     }
 
     /// The host's latest coordinator card for the inspected child.
-    pub fn inspected_detail(&self) -> Option<&str> {
-        self.inspected_detail.as_deref()
+    pub fn inspected_detail(&self) -> Option<&AgentSnapshot> {
+        self.inspected_detail.as_ref()
     }
 
     /// Records the host's latest coordinator card for the inspected child.
     ///
     /// Ignored unless it names the child currently on screen: a poll that
     /// answered after the user moved on describes a view that is gone.
-    pub fn set_inspected_detail(&mut self, child: &str, detail: Option<String>) {
+    pub fn set_inspected_detail(&mut self, child: &str, detail: Option<AgentSnapshot>) {
         if self.inspected_child.as_deref() == Some(child) {
             self.inspected_detail = detail;
         }

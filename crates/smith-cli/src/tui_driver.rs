@@ -887,6 +887,9 @@ pub(super) async fn run_tui(
             outcome = local_rx.recv() => {
                 if let Some(outcome) = outcome {
                     match outcome {
+                        LocalOutcome::Agent(report) => {
+                            app.transcript.push_local(smith_client::local_result::LocalResult::Agent(report));
+                        }
                         LocalOutcome::Notice { source, text } => {
                             app.transcript.push_notice(source, text);
                         }
@@ -1010,7 +1013,7 @@ pub(super) async fn run_tui(
                         let card = statuses
                             .iter()
                             .find(|status| status.child.as_str() == inspected)
-                            .map(crate::local_command::child_status_card);
+                            .map(crate::local_command::agent::snapshot);
                         app.set_inspected_detail(&inspected, card);
                     }
                     app.set_child_counts(

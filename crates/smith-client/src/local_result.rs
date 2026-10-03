@@ -3,6 +3,7 @@
 //! Commands migrate one at a time from [`LocalResult::Text`] to reports.
 //! Terminal drawing belongs to `smith-tui`.
 
+use crate::agent_report::{AgentReport, AgentResumeReport};
 use crate::context_report::ContextReport;
 use crate::goal_report::GoalReport;
 use crate::help_report::HelpReport;
@@ -33,6 +34,8 @@ pub enum LocalResult {
     Timeline(Box<TimelineReport>),
     /// The result of showing or changing the session's persistent goal.
     Goal(Box<GoalReport>),
+    /// Child lists, inspection snapshots, and exact-resume outcomes.
+    Agent(Box<AgentReport>),
     /// Transitional output for commands that have not migrated to reports.
     Text {
         /// Command or result title.
@@ -53,6 +56,7 @@ impl LocalResult {
             Self::Help(_) => "help",
             Self::Timeline(_) => "timeline",
             Self::Goal(_) => "goal",
+            Self::Agent(report) => report.title(),
             Self::Text { title, .. } => title,
         }
     }
@@ -70,6 +74,22 @@ impl LocalResult {
                 GoalReport::Empty => LocalResultState::Empty,
                 GoalReport::Unavailable(_) => LocalResultState::Error,
                 GoalReport::Cleared | GoalReport::Snapshot(_) => LocalResultState::Info,
+            },
+            Self::Agent(report) => match report.as_ref() {
+                AgentReport::Empty => LocalResultState::Empty,
+                AgentReport::Unavailable | AgentReport::Missing(_) => LocalResultState::Error,
+                AgentReport::Resume(resume) => match resume {
+                    AgentResumeReport::RequiresIdle | AgentResumeReport::Started { .. } => {
+                        LocalResultState::Info
+                    }
+                    AgentResumeReport::Missing { .. }
+                    | AgentResumeReport::Incompatible { .. }
+                    | AgentResumeReport::Unavailable
+                    | AgentResumeReport::Failed { .. } => LocalResultState::Error,
+                },
+                AgentReport::Parent | AgentReport::List(_) | AgentReport::Inspector(_) => {
+                    LocalResultState::Info
+                }
             },
             Self::Text { state, .. } => *state,
         }
