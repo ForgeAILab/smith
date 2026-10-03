@@ -41,3 +41,21 @@ Completions cannot represent one or more message content parts`, because the
 history holds a Gemini turn. 0.3.1 fails the same way headless (a Gemini turn,
 then `--resume` with `--provider zai`). It is a provider-history limit in the
 runtime adapters, not part of this change.
+
+## Cache, 0.3.1 against this build
+
+`../grammar-2026-10-03/cache_ab.py`, same method as the 0.3.1 run, release
+build of `1e1056d` ([results](cache-ab.json)):
+
+| Model | Build | Turn 1 cached | Turn 2 cached | Turn 3 cached | Turn 2 / 3 uncached |
+|---|---|---|---|---|---|
+| zai/glm-5.3 | 0.3.1 | 11,648 | 1,728 | 4,672 | 2,990 / 104 |
+| zai/glm-5.3 | this | 5,824 | 1,792 | 2,880 | 1,140 / 107 |
+| google/gemini-3.8-flash | 0.3.1 | 0 | 0 | 0 | 1,992 / 2,073 |
+| google/gemini-3.8-flash | this | 0 | 0 | 0 | 1,990 / 2,134 |
+| xai/grok-4.3 | 0.3.1 | 384 | 2,432 | 2,688 | 288 / 235 |
+| xai/grok-4.3 | this | 2,048 | 2,432 | 2,688 | 309 / 229 |
+
+The 0.3.1 glm-5.3 run read the file more often in turn 1 (5,044 uncached
+against 1,264), which carries into its later turns. Grok and Gemini match
+turn for turn after turn 1. No miss or re-billed tokens on any turn.
