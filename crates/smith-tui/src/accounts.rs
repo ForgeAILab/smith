@@ -97,12 +97,11 @@ pub fn account_entries(
     members
         .iter()
         .map(|member| {
-            let mut entry = ResourceEntry::new(
-                member.position.to_string(),
-                member.label.clone(),
-                member_detail(member, now_ms),
-            )
-            .description(usage_label(member.used_percent));
+            // The name carries the credential source; usage belongs on the
+            // row, and a cooldown is already the disabled reason below.
+            let mut entry =
+                ResourceEntry::new(member.position.to_string(), member.label.clone(), "")
+                    .description(usage_label(member.used_percent));
             entry.active = member.position == active;
             if let Some(until) = member.cooling_until_ms {
                 entry.disabled_reason = Some(format!(
@@ -250,6 +249,7 @@ mod tests {
     #[test]
     fn the_picker_lists_every_member_marking_the_active_and_the_spent() {
         let mut spent = member(1, "keychain:smith/work");
+        spent.used_percent = Some(100.0);
         spent.cooling_until_ms = Some(NOW + HOUR_MS);
         let mut active = member(0, "keychain:smith/personal");
         active.used_percent = Some(40.0);
@@ -259,13 +259,16 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].id, "0");
         assert_eq!(entries[0].label, "keychain:smith/personal");
-        assert_eq!(entries[0].detail, "40% used");
+        assert_eq!(entries[0].description, "40% used");
+        assert!(entries[0].detail.is_empty());
         assert!(entries[0].active);
         assert!(entries[0].disabled_reason.is_none());
 
         // Listed, not hidden: the user needs to know it exists and when it
         // comes back.
         assert_eq!(entries[1].id, "1");
+        assert_eq!(entries[1].description, "100% used");
+        assert!(entries[1].detail.is_empty());
         assert!(!entries[1].active);
         assert_eq!(
             entries[1].disabled_reason.as_deref(),

@@ -27,6 +27,29 @@ fn startup_guide_is_readable_without_becoming_transcript_history() {
 }
 
 #[test]
+fn startup_guide_uses_command_registry_names_and_descriptions() {
+    let app = App::new("example-model", "~/project");
+    for theme in [Theme::new(), Theme::new().without_color()] {
+        let lines = transcript_lines(&app, theme, 100);
+        let commands = lines.iter().skip(3).collect::<Vec<_>>();
+        assert_eq!(commands.len(), 3);
+        for (line, name) in commands.into_iter().zip(["model", "connect", "help"]) {
+            let command = smith_client::commands::COMMANDS
+                .iter()
+                .find(|command| command.name == name)
+                .unwrap();
+            let invocation = format!("/{}", command.name);
+            assert_eq!(
+                line.to_string(),
+                format!("  {invocation:<10}{}", command.description)
+            );
+            assert!(line.spans[1].style.add_modifier.contains(Modifier::DIM));
+        }
+    }
+    assert!(app.transcript.is_empty());
+}
+
+#[test]
 fn startup_guide_yields_to_conversation_and_active_work() {
     let theme = Theme::new().without_color();
     let mut conversation = App::new("example-model", "~/project");

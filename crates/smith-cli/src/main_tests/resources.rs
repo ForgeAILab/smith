@@ -2,6 +2,51 @@ use super::*;
 
 // resources behavior tests.
 
+#[test]
+fn profile_picker_detail_contains_only_placement_model_and_provenance() {
+    let home = tempfile::tempdir().expect("home");
+    let project = tempfile::tempdir().expect("project");
+    std::fs::create_dir_all(project.path().join(".smith")).expect("config directory");
+    std::fs::write(
+        project.path().join(".smith/config.toml"),
+        LOCAL_COMMAND_CONFIG.replace(
+            "[profiles.dev]",
+            "[profiles.dev]\ndescription = \"coding workflow\"\nposture = \"build\"\nuse = [\"main\", \"child\"]",
+        ),
+    )
+    .expect("config");
+    let resolution = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+        .expect("resolution");
+    let inventory = smith_config::inventory::local_inventory(&resolution, AVAILABLE_ADAPTER_KINDS)
+        .expect("local inventory");
+    let resources = runtime_resources(
+        inventory,
+        Vec::new(),
+        "session",
+        project.path(),
+        &resolution.config.agent,
+        &smith_runtime::reasoning::ReasoningRuntimePolicy::default(),
+        &[],
+        None,
+        None,
+        None,
+    );
+    let profile = resources
+        .profiles
+        .iter()
+        .find(|entry| entry.id == "dev")
+        .unwrap();
+    assert_eq!(profile.description, "build · coding workflow");
+    assert!(
+        profile
+            .detail
+            .starts_with("use main+child · local/example-model · rev ")
+    );
+    assert!(profile.detail.contains(" · source "));
+    assert!(!profile.detail.contains("coding workflow"));
+    assert!(!profile.detail.split(" · ").any(|part| part == "build"));
+}
+
 fn session_list_fixture() -> Vec<SessionListing> {
     vec![
         SessionListing {

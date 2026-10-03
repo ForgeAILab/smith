@@ -245,7 +245,7 @@ command_registry! {
     /// Inspect or control a persistent multi-turn goal.
     Host Goal(GoalAction) => CommandSpec {
         name: "goal",
-        argument_hint: "[OBJECTIVE | edit … | budget N | pause | resume | clear]",
+        argument_hint: "[OBJECTIVE|edit …|budget N|pause|resume|clear]",
         description: "Inspect or control a multi-turn goal",
         requires_idle: false,
         advanced: false,
@@ -875,6 +875,20 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["review", "revert"]
         );
+    }
+
+    #[test]
+    fn goal_argument_hint_uses_compact_alternatives_in_completion_and_help() {
+        let goal = matches("/goal")[0];
+        let expected = "[OBJECTIVE|edit …|budget N|pause|resume|clear]";
+        assert_eq!(goal.argument_hint, expected);
+        let guide = help();
+        let help_goal = guide
+            .primary
+            .iter()
+            .find(|command| command.name == "goal")
+            .unwrap();
+        assert_eq!(help_goal.argument_hint, expected);
     }
 
     #[test]

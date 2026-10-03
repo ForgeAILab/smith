@@ -29,7 +29,7 @@ pub struct ResourceEntry {
     pub label: String,
     /// Short context shown on every row.
     pub description: String,
-    /// Full context shown only beneath the selected row.
+    /// Additional context shown only beneath the selected row.
     pub detail: String,
     /// Marks the currently active resource.
     pub active: bool,
@@ -59,15 +59,23 @@ impl ResourceEntry {
     }
 
     fn selected_detail(&self) -> String {
-        let detail = if self.detail == self.description {
-            ""
-        } else {
-            &self.detail
-        };
+        // Resource facts use the same separator in both columns. Compare
+        // whole facts so a short description never removes part of a value.
+        let detail = self
+            .detail
+            .split(" · ")
+            .filter(|part| {
+                !self
+                    .description
+                    .split(" · ")
+                    .any(|description| description == *part)
+            })
+            .collect::<Vec<_>>()
+            .join(" · ");
         match (&self.disabled_reason, detail.is_empty()) {
             (Some(reason), true) => reason.clone(),
             (Some(reason), false) => format!("{reason} · {detail}"),
-            (None, _) => detail.to_owned(),
+            (None, _) => detail,
         }
     }
 
@@ -524,6 +532,51 @@ mod tests {
                 PickerOutcome::Selected("local/model".to_owned())
             );
         }
+    }
+
+    #[test]
+    fn selected_detail_omits_facts_already_in_the_description() {
+        for (entry, expected, repeated) in [
+            (
+                ResourceEntry::new("0", "1", "env:FIRST · 25% used").description("25% used"),
+                "env:FIRST",
+                vec!["25% used"],
+            ),
+            (
+                ResourceEntry::new(
+                    "dev",
+                    "dev",
+                    "build · use main · zai/glm-5.3 · coding · rev r1",
+                )
+                .description("build · coding"),
+                "use main · zai/glm-5.3 · rev r1",
+                vec!["build", "coding"],
+            ),
+        ] {
+            assert_eq!(entry.selected_detail(), expected);
+            let picker = ResourcePicker::new("Choose resource", vec![entry], "no resources");
+            for width in [44, 100] {
+                for theme in [Theme::new(), Theme::new().without_color()] {
+                    let lines = picker_entry_lines(&picker, 2, width, theme);
+                    assert_eq!(lines.len(), 2);
+                    let text = lines
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    for fact in &repeated {
+                        assert_eq!(text.matches(*fact).count(), 1, "{text}");
+                    }
+                    assert!(lines.iter().all(|line| line.width() <= usize::from(width)));
+                }
+            }
+        }
+        let same = ResourceEntry::new("one", "one", "short · description");
+        assert!(same.selected_detail().is_empty());
+        assert_eq!(
+            same.disabled("missing credential").selected_detail(),
+            "missing credential"
+        );
     }
 
     #[test]

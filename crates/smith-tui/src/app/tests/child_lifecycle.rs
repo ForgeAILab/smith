@@ -780,7 +780,10 @@
             result: "done".to_owned(),
         }));
 
-        let due = Instant::now() + COMPLETED_CHILD_LINGER;
+        let due = *app
+            .child_dismiss_at
+            .get(child.as_str())
+            .expect("a completed child has a linger deadline");
         assert!(
             !app.expire_child_rows_at(due - Duration::from_millis(1)),
             "the outcome stays up long enough to read"

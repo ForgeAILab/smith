@@ -8,7 +8,7 @@
   Primary
   /help         List commands and keys
   /goal         Inspect or control a multi-turn goal
-                [OBJECTIVE | edit … | budget N | pause | resume | clear]
+                [OBJECTIVE|edit …|budget N|pause|resume|clear]
   /context      Show context usage or choose a window
                 [NAME|default]
   /status       Show session, usage, and workspace status

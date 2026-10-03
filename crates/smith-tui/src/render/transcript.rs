@@ -15,6 +15,7 @@ use crate::transcript::{Block, LocalResult, ToolStatus};
 use smith_client::agent_report::{
     AgentReport, AgentResumeReport, AgentSnapshot, ChildLabelSurface,
 };
+use smith_client::commands::COMMANDS;
 use smith_client::context_report::{ContextCategoryKind, ContextCompaction, ContextReport};
 use smith_client::diagnostics_report::{DiagnosticsReport, DiagnosticsRow};
 use smith_client::diff_report::{DiffLine, DiffLineKind, DiffOutcome, DiffReport};
@@ -31,6 +32,7 @@ use smith_client::timeline_report::{TimelineEntry, TimelinePlan, TimelineReport}
 use smith_tools::{ToolCallDisplay, tool_display_label};
 
 use super::helpers::*;
+use super::lists::clip_words;
 use super::markdown::render_assistant_lines;
 use super::reports;
 use super::wrap::{wrap_lines, wrapped_row_count};
@@ -101,7 +103,7 @@ pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<
         && app.speculative_text().is_none()
         && app.visible_turn_summary().is_none()
     {
-        return getting_started_lines(theme);
+        return getting_started_lines(theme, width);
     }
     let mut lines = conversation_lines(
         app.transcript.blocks(),
@@ -129,7 +131,7 @@ pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<
     lines
 }
 
-fn getting_started_lines(theme: Theme) -> Vec<Line<'static>> {
+fn getting_started_lines(theme: Theme, width: u16) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(Span::styled("  Get started", theme.style(Tone::Heading))),
         Line::from(Span::styled(
@@ -138,13 +140,15 @@ fn getting_started_lines(theme: Theme) -> Vec<Line<'static>> {
         )),
         Line::default(),
     ];
-    for (command, description) in [
-        ("/model", "Choose a model"),
-        ("/connect", "Add a connection"),
-        ("/help", "Explore commands"),
-    ] {
+    for name in ["model", "connect", "help"] {
+        let command = COMMANDS
+            .iter()
+            .find(|command| command.name == name)
+            .expect("getting-started command exists in the registry");
+        let invocation = format!("/{}", command.name);
+        let description = clip_words(command.description, usize::from(width).saturating_sub(12));
         lines.push(Line::from(vec![
-            Span::styled(format!("  {command:<10}"), theme.style(Tone::Code)),
+            Span::styled(format!("  {invocation:<10}"), theme.style(Tone::Code)),
             Span::styled(description, theme.style(Tone::Dim)),
         ]));
     }

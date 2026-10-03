@@ -9,7 +9,7 @@ Type a task and press Enter.
 
 Primary
 /help — List commands and keys
-/goal [OBJECTIVE | edit … | budget N | pause | resume | clear] — Inspect or control a multi-turn goal
+/goal [OBJECTIVE|edit …|budget N|pause|resume|clear] — Inspect or control a multi-turn goal
 /context [NAME|default] — Show context usage or choose a window
 /status [--verbose] — Show session, usage, and workspace status
 /model [PROVIDER/MODEL] — Switch model

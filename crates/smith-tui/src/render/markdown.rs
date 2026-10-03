@@ -25,14 +25,6 @@ pub(super) fn render_assistant_lines(text: &str, theme: Theme, width: u16) -> Ve
         if let Some(open) = &fence {
             let code = fence_body(raw, open);
             if closing_fence(code.trim_start(), open) {
-                renderer.push(
-                    vec![Span::styled(
-                        open.marker.to_string().repeat(open.length),
-                        theme.style(Tone::Dim),
-                    )],
-                    &open.prefix,
-                    &open.prefix,
-                );
                 fence = None;
             } else {
                 let prefix = format!("{}  ", open.prefix);
@@ -106,16 +98,13 @@ pub(super) fn render_assistant_lines(text: &str, theme: Theme, width: u16) -> Ve
         }
 
         if let Some((marker, length, label)) = fence_start(body) {
-            let label = if label.is_empty() {
-                marker.to_string().repeat(length)
-            } else {
-                format!("{} {label}", marker.to_string().repeat(length))
-            };
-            renderer.push(
-                vec![Span::styled(label, theme.style(Tone::Dim))],
-                &prefix,
-                &continuation,
-            );
+            if !label.is_empty() {
+                renderer.push(
+                    vec![Span::styled(label.to_owned(), theme.style(Tone::Dim))],
+                    &prefix,
+                    &continuation,
+                );
+            }
             fence = Some(Fence {
                 marker,
                 length,

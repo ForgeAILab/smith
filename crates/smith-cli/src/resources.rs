@@ -83,10 +83,7 @@ pub(super) fn runtime_resources(
             } else {
                 format!(" · source {}", bounded_text(&source, 48))
             };
-            let detail = format!(
-                "{} · use {placements} · {pair} · {description} · rev {revision}{legacy}",
-                profile.posture.as_str(),
-            );
+            let detail = format!("use {placements} · {pair} · rev {revision}{legacy}");
             let id = if profile.legacy {
                 format!("{LEGACY_AGENT_PROFILE_PREFIX}{}", profile.name)
             } else {

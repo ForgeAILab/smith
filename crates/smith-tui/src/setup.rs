@@ -1679,17 +1679,20 @@ fn setup_entry_lines(
             theme.style(if selected { Tone::Accent } else { Tone::Dim }),
         );
     }
-    lines.extend(setup_text_lines(
-        &entry.description,
-        width,
-        Tone::Dim,
-        theme,
-    ));
+    lines.extend(setup_description_lines(&entry.description, width, theme));
     if selected && entry.detail != entry.description && !entry.detail.is_empty() {
-        lines.extend(setup_text_lines(&entry.detail, width, Tone::Dim, theme));
+        lines.extend(setup_description_lines(&entry.detail, width, theme));
     }
     if let Some(reason) = &entry.disabled_reason {
-        lines.extend(setup_text_lines(reason, width, Tone::Dim, theme));
+        lines.extend(setup_description_lines(reason, width, theme));
+    }
+    lines
+}
+
+fn setup_description_lines(text: &str, width: u16, theme: Theme) -> Vec<Line<'static>> {
+    let mut lines = setup_text_lines(text, width.saturating_sub(2), Tone::Dim, theme);
+    for line in &mut lines {
+        line.spans.insert(0, Span::raw("  "));
     }
     lines
 }
@@ -2013,7 +2016,7 @@ mod tests {
                 .expect("the name occupies its own line");
             let description_rows = rows[name + 1..]
                 .iter()
-                .take_while(|row| row.starts_with("  "))
+                .take_while(|row| row.starts_with("    "))
                 .filter(|row| !row.trim().is_empty())
                 .collect::<Vec<_>>();
             assert!(description_rows.len() > 1, "{rendered}");
@@ -2027,7 +2030,13 @@ mod tests {
                 "description was split or truncated:\n{rendered}"
             );
             for row in &description_rows {
-                assert!(row.starts_with("  "), "{rendered}");
+                assert_eq!(
+                    row.chars()
+                        .take_while(|character| *character == ' ')
+                        .count(),
+                    4,
+                    "descriptions start two columns after the name:\n{rendered}"
+                );
                 for word in row.split_whitespace() {
                     assert!(
                         description.split_whitespace().any(|whole| whole == word),
@@ -2041,7 +2050,7 @@ mod tests {
             for row in 0..description_rows.len() {
                 let y = inner.y + u16::try_from(name + 1 + row).expect("description row");
                 assert!(
-                    buffer[(inner.x + 2, y)]
+                    buffer[(inner.x + 4, y)]
                         .modifier
                         .contains(ratatui::style::Modifier::DIM)
                 );
@@ -2084,7 +2093,7 @@ mod tests {
                     .expect("the selected entry remains visible");
                 let description_rows = rows[name + 1..]
                     .iter()
-                    .take_while(|row| row.starts_with("  ") && !row.trim().starts_with("Choice "))
+                    .take_while(|row| row.starts_with("    "))
                     .filter(|row| !row.trim().is_empty())
                     .collect::<Vec<_>>();
                 assert_eq!(
@@ -2141,7 +2150,8 @@ mod tests {
                 .expect("selection marker");
             let y = inner.y + u16::try_from(name).expect("name row");
             assert!(plain[(inner.x, y)].modifier.contains(Modifier::BOLD));
-            assert!(plain[(inner.x + 2, y + 1)].modifier.contains(Modifier::DIM));
+            assert!(rows[name + 1].starts_with("    "));
+            assert!(plain[(inner.x + 4, y + 1)].modifier.contains(Modifier::DIM));
             assert!(rows.last().expect("footer").contains("Esc cancel"));
         }
     }

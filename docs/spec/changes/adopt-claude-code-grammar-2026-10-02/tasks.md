@@ -42,10 +42,11 @@ completed_at:
   appended.
 - [x] 3.3 One Markdown renderer for streamed and committed text; lists,
   quotes, tables, fences with a language label, links with visible targets.
-- [ ] 3.3a Follow-ups from 3.3: keep table columns stable while a table is
-  still streaming (later wider cells reflow earlier rows today); emit OSC 8
-  links once terminal support can be detected; decide whether code blocks
-  drop the visible ``` fence lines and keep only the dim language label.
+- [x] 3.3a Code blocks drop the visible ``` fence lines and keep a dim
+  language label.
+- [ ] 3.3b Keep table columns stable while a table is still streaming (later
+  wider cells reflow earlier rows today); emit OSC 8 links once terminal
+  support can be detected.
 - [x] 3.4 Approval layout: action, place and deadline, warning, question,
   choices; detail behind `Ctrl+O`; diffs expandable.
 - [x] 3.5 Keep transcript scrolling available while a prompt is open.
@@ -61,14 +62,14 @@ completed_at:
   selected row only; one order everywhere.
 - [x] 4.2 Picker rows: name, short description, state at the right edge;
   detail line for the selected row.
-- [ ] 4.2a Picker and menu polish from the live check: the selected-row
+- [x] 4.2a Picker and menu polish from the live check: the selected-row
   detail line repeats text already in the row (account usage, profile
   description); `/goal`'s argument hint spaces its `|` separators unlike every
   other command; the startup guide hardcodes three command suggestions
   instead of reading the command table.
 - [x] 4.3 `/help`, `/status`, `/context`: aligned columns, word wrap,
   open at the top.
-- [ ] 4.3a Flaky test seen once under full-suite load:
+- [x] 4.3a Flaky test seen once under full-suite load:
   `a_cleanly_finished_row_retires_itself_but_the_child_stays_known` takes
   `Instant::now()` after the app records the child's finish time, so a slow
   scheduler makes `due - 1ms` reach the expiry. Pass the finish instant in
@@ -77,9 +78,8 @@ completed_at:
   unknown.
 - [x] 4.5 First-run setup: one frame, wrapped descriptions.
 
-- [ ] 4.5a Setup polish: indent each description under its name (today both
-  start at the same column, so without colour names and descriptions look
-  alike); long review and collision-preview bodies still clip.
+- [x] 4.5a Setup descriptions sit two columns in from their names.
+- [ ] 4.5b Long setup review and collision-preview bodies still clip.
 - [ ] 4.6 Settle two presentation rules `refactor-client-structure` kept
   for byte identity: (a) the inline-code colon exception in the single
   free-text renderer (`smith-tui` `render/transcript.rs`): decide whether

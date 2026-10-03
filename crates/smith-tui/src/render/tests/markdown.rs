@@ -117,6 +117,58 @@ fn markdown_rows(text: &str, width: u16, theme: Theme) -> Vec<Line<'static>> {
 }
 
 #[test]
+fn assistant_markdown_fences_show_only_dim_labels_and_indented_code() {
+    let cases: &[(&str, &[&str])] = &[
+        (
+            "``` python\n  **literal**\n```\nDone.",
+            &["● python", "      **literal**", "  Done."],
+        ),
+        (
+            "``` python\n  **literal**\n# still code",
+            &["● python", "      **literal**", "    # still code"],
+        ),
+        (
+            "```\n  **literal**\n```\nDone.",
+            &["●     **literal**", "  Done."],
+        ),
+        (
+            "```\n  **literal**\n# still code",
+            &["●     **literal**", "    # still code"],
+        ),
+        (
+            "~~~python\n**literal**\n~~~",
+            &["● python", "    **literal**"],
+        ),
+        ("~~~\n**literal**\n~~~", &["●   **literal**"]),
+        ("```\n```", &[]),
+    ];
+    for width in [44, 100] {
+        for theme in [Theme::new(), Theme::new().without_color()] {
+            for (source, expected) in cases {
+                let rows = markdown_rows(source, width, theme);
+                assert_eq!(
+                    rows.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                    *expected,
+                    "{source:?} at {width}"
+                );
+                for span in rows.iter().flat_map(|row| &row.spans) {
+                    if span.content == "python" {
+                        assert!(span.style.add_modifier.contains(Modifier::DIM));
+                    }
+                    if span.content.contains("**literal**") {
+                        assert!(!span
+                            .style
+                            .add_modifier
+                            .intersects(Modifier::BOLD | Modifier::ITALIC));
+                    }
+                }
+                assert!(rows.iter().all(|row| row.width() <= usize::from(width)));
+            }
+        }
+    }
+}
+
+#[test]
 fn assistant_markdown_constructs_have_visible_structure_without_color() {
     let cases: &[(&str, &[&str])] = &[
         ("# Heading\n## Subheading", &["● Heading", "  Subheading"]),
@@ -139,26 +191,19 @@ fn assistant_markdown_constructs_have_visible_structure_without_color() {
         ),
         (
             "```rust\nfn retry() {\n    work();\n}\n```",
-            &[
-                "● ``` rust",
-                "    fn retry() {",
-                "        work();",
-                "    }",
-                "  ```",
-            ],
+            &["● rust", "    fn retry() {", "        work();", "    }"],
         ),
         (
             "```rust\n**literal**\n[docs](url)",
-            &["● ``` rust", "    **literal**", "    [docs](url)"],
+            &["● rust", "    **literal**", "    [docs](url)"],
         ),
         (
             "```text\n> literal\n- item\n# heading\n```",
             &[
-                "● ``` text",
+                "● text",
                 "    > literal",
                 "    - item",
                 "    # heading",
-                "  ```",
             ],
         ),
         (
@@ -171,7 +216,7 @@ fn assistant_markdown_constructs_have_visible_structure_without_color() {
         ("***a* b**", &["● a b"]),
         ("2 * 3 * 4", &["● 2 * 3 * 4"]),
         ("**x", &["● **x"]),
-        ("~~~~text\n~~~\n~~~~", &["● ~~~~ text", "    ~~~", "  ~~~~"]),
+        ("~~~~text\n~~~\n~~~~", &["● text", "    ~~~"]),
         (
             "- one\n  + two\n    * three\n- four",
             &["● - one", "    - two", "      - three", "  - four"],
@@ -186,11 +231,11 @@ fn assistant_markdown_constructs_have_visible_structure_without_color() {
         ),
         (
             "> ```rust\n>     work();\n> ```",
-            &["● │ ``` rust", "  │       work();", "  │ ```"],
+            &["● │ rust", "  │       work();"],
         ),
         (
             "- ```rust\n      work();\n  ```",
-            &["● - ``` rust", "          work();", "    ```"],
+            &["● - rust", "          work();"],
         ),
         (
             "[docs](https://example.com)",
