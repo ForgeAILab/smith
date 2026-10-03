@@ -77,8 +77,14 @@ completed_at:
   reports; remove the duplicate formatters.
 - [ ] 4.4 Delete renderer branches that inspect titles, headings, glyphs, or
   label text; delete the `Text` variant.
-- [ ] 4.5 Provide one label function for child state and durability; use it
+- [x] 4.5 Provide one label function for child state and durability; use it
   in headless output, local commands, and submission.
+  `ChildState` and `ChildDurability` in `smith-client/src/agent_report.rs`
+  label per surface; existing wording is kept, so the discrepancies stay
+  visible for `adopt-claude-code-grammar`: a running child reads `Running`
+  (local), `running` (headless), `working` (submission); local commands
+  capitalize durability and carry interrupt/stop detail. The TUI's
+  `contains("resumable")` check remains for `refactor-tui-state`.
 
 ## 5. Provider descriptors
 

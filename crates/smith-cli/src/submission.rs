@@ -1,7 +1,7 @@
 //! Prepared-input materialization, dispatch, and agent/review actions.
 
 use super::*;
-use smith_client::agent_report::{AgentReport, AgentResumeReport};
+use smith_client::agent_report::{AgentReport, AgentResumeReport, AgentSummary, ChildLabelSurface};
 use smith_client::review_report::{ReviewReport, ReviewStartReport};
 
 #[derive(Clone, Default)]
@@ -408,26 +408,20 @@ pub(crate) fn turns_label(used: u32, max: u32) -> String {
     }
 }
 
-pub(super) fn child_summary_projection(status: &ChildStatus) -> (&'static str, String) {
-    let state = match &status.state {
-        ChildState::Running => "working",
-        ChildState::Idle => "idle",
-        ChildState::Interrupted { .. } => "interrupted",
-        ChildState::Stopped { .. } => "stopped",
-        ChildState::Failed => "failed",
-        ChildState::Expired => "expired",
-    };
-    let durability = match status.durability {
-        ChildDurability::Ephemeral => "ephemeral",
-        ChildDurability::Durable => "durable",
-    };
+pub(super) fn child_summary_projection(status: &ChildStatus) -> (String, String) {
+    let summary = AgentSummary::from(status);
+    let state = summary
+        .state
+        .label(ChildLabelSurface::Submission)
+        .into_owned();
+    let durability = summary.durability.label(ChildLabelSurface::Submission);
     let mut detail = format!(
         "{durability} · session {} · {} turns · {} tokens",
         status.session,
         turns_label(status.turns_used, status.max_turns),
         status.tokens_used
     );
-    if status.resumable() {
+    if summary.resumable {
         detail.push_str(" · resumable");
     }
     if let Some(reason) = &status.incompatibility {

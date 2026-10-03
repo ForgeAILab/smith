@@ -3,8 +3,122 @@
 //! Lists, inspector cards, and exact-resume outcomes carry data. Terminal
 //! drawing belongs to `smith-tui`; lifecycle labels retain their current text.
 
+use std::borrow::Cow;
+
 use serde::Serialize;
-use smith_runtime::ChildStatus;
+use smith_runtime::{
+    ChildDurability as RuntimeChildDurability, ChildState as RuntimeChildState, ChildStatus,
+};
+
+/// Existing CLI presentations of child state and durability.
+///
+/// These deliberately retain different labels until a separate wording change:
+/// local commands use debug-style values (including state payloads), headless
+/// uses lowercase values, and submission calls a running child `working`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildLabelSurface {
+    /// `/agent` reports and `/timeline` coordinator snapshots.
+    LocalCommand,
+    /// Headless machine lifecycle output.
+    Headless,
+    /// Restored child summaries supplied by the CLI host to the TUI.
+    Submission,
+}
+
+/// Client-owned lifecycle data, independent of its display label.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChildState {
+    /// The child has an active turn.
+    Running,
+    /// The child has no active turn.
+    Idle,
+    /// The child's turn was interrupted.
+    Interrupted {
+        /// Whether the runtime retained an exact checkpoint.
+        resumable: bool,
+    },
+    /// The child was stopped.
+    Stopped {
+        /// Existing debug-formatted stopping reason.
+        reason: String,
+    },
+    /// The child failed.
+    Failed,
+    /// The child's retained session expired.
+    Expired,
+}
+
+impl From<&RuntimeChildState> for ChildState {
+    fn from(state: &RuntimeChildState) -> Self {
+        match state {
+            RuntimeChildState::Running => Self::Running,
+            RuntimeChildState::Idle => Self::Idle,
+            RuntimeChildState::Interrupted { resumable } => Self::Interrupted {
+                resumable: *resumable,
+            },
+            RuntimeChildState::Stopped { reason } => Self::Stopped {
+                reason: format!("{reason:?}"),
+            },
+            RuntimeChildState::Failed => Self::Failed,
+            RuntimeChildState::Expired => Self::Expired,
+        }
+    }
+}
+
+impl ChildState {
+    /// Today's exact lifecycle label for a CLI surface.
+    pub fn label(&self, surface: ChildLabelSurface) -> Cow<'static, str> {
+        match (surface, self) {
+            (ChildLabelSurface::LocalCommand, Self::Running) => "Running".into(),
+            (ChildLabelSurface::LocalCommand, Self::Idle) => "Idle".into(),
+            (ChildLabelSurface::LocalCommand, Self::Interrupted { resumable }) => {
+                format!("Interrupted {{ resumable: {resumable} }}").into()
+            }
+            (ChildLabelSurface::LocalCommand, Self::Stopped { reason }) => {
+                format!("Stopped {{ reason: {reason} }}").into()
+            }
+            (ChildLabelSurface::LocalCommand, Self::Failed) => "Failed".into(),
+            (ChildLabelSurface::LocalCommand, Self::Expired) => "Expired".into(),
+            (ChildLabelSurface::Submission, Self::Running) => "working".into(),
+            (ChildLabelSurface::Headless, Self::Running) => "running".into(),
+            (_, Self::Idle) => "idle".into(),
+            (_, Self::Interrupted { .. }) => "interrupted".into(),
+            (_, Self::Stopped { .. }) => "stopped".into(),
+            (_, Self::Failed) => "failed".into(),
+            (_, Self::Expired) => "expired".into(),
+        }
+    }
+}
+
+/// Client-owned child persistence, independent of its display label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildDurability {
+    /// The child belongs only to the current process.
+    Ephemeral,
+    /// The child's session is persisted.
+    Durable,
+}
+
+impl From<&RuntimeChildDurability> for ChildDurability {
+    fn from(durability: &RuntimeChildDurability) -> Self {
+        match durability {
+            RuntimeChildDurability::Ephemeral => Self::Ephemeral,
+            RuntimeChildDurability::Durable => Self::Durable,
+        }
+    }
+}
+
+impl ChildDurability {
+    /// Today's exact durability label for a CLI surface.
+    pub fn label(self, surface: ChildLabelSurface) -> &'static str {
+        match (surface, self) {
+            (ChildLabelSurface::LocalCommand, Self::Ephemeral) => "Ephemeral",
+            (ChildLabelSurface::LocalCommand, Self::Durable) => "Durable",
+            (_, Self::Ephemeral) => "ephemeral",
+            (_, Self::Durable) => "durable",
+        }
+    }
+}
 
 /// The result of listing, inspecting, navigating, or resuming a child.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,10 +165,10 @@ impl AgentReport {
 pub struct AgentSummary {
     /// Stable child identity.
     pub child: String,
-    /// Existing durability label for the chosen surface.
-    pub durability: String,
-    /// Existing lifecycle label for the chosen surface.
-    pub state: String,
+    /// Child persistence, rendered for the chosen surface.
+    pub durability: ChildDurability,
+    /// Child lifecycle, rendered for the chosen surface.
+    pub state: ChildState,
     /// Whether exact recovery is available.
     pub resumable: bool,
     /// Coordinator-reported turn usage.
@@ -69,8 +183,8 @@ impl From<&ChildStatus> for AgentSummary {
     fn from(status: &ChildStatus) -> Self {
         Self {
             child: status.child.to_string(),
-            durability: format!("{:?}", status.durability),
-            state: format!("{:?}", status.state),
+            durability: ChildDurability::from(&status.durability),
+            state: ChildState::from(&status.state),
             resumable: status.resumable(),
             turns_used: status.turns_used,
             max_turns: (status.max_turns != u32::MAX).then_some(status.max_turns),
@@ -124,8 +238,16 @@ impl AgentSnapshot {
         HeadlessAgentOutput {
             child_id: self.summary.child,
             child_session_id: self.session,
-            durability: self.summary.durability,
-            state: self.summary.state,
+            durability: self
+                .summary
+                .durability
+                .label(ChildLabelSurface::Headless)
+                .to_owned(),
+            state: self
+                .summary
+                .state
+                .label(ChildLabelSurface::Headless)
+                .into_owned(),
             resumable: self.summary.resumable,
             turns_used: self.summary.turns_used,
             max_turns: self.summary.max_turns,
@@ -142,9 +264,9 @@ pub struct HeadlessAgentOutput {
     pub child_id: String,
     /// Child session identity.
     pub child_session_id: String,
-    /// Surface-supplied durability label.
+    /// Headless durability label.
     pub durability: String,
-    /// Surface-supplied lifecycle label.
+    /// Headless lifecycle label.
     pub state: String,
     /// Whether exact recovery is available.
     pub resumable: bool,
@@ -229,8 +351,8 @@ pub fn render_plain(report: &AgentReport) -> String {
                 format!(
                     "{} · {} · {} · resumable {} · {} turns · {} tokens",
                     child.child,
-                    child.durability,
-                    child.state,
+                    child.durability.label(ChildLabelSurface::LocalCommand),
+                    child.state.label(ChildLabelSurface::LocalCommand),
                     child.resumable,
                     child.turns_value(),
                     child.tokens_used,
@@ -241,8 +363,11 @@ pub fn render_plain(report: &AgentReport) -> String {
         AgentReport::Inspector(child) => format!(
             "session {} · {} · {} · {} · {} tokens · {}\nresumable {}{}\ncontinue: type a follow-up below · exact recovery: /agent resume {}\nresult: {}",
             child.session,
-            child.summary.durability,
-            child.summary.state,
+            child
+                .summary
+                .durability
+                .label(ChildLabelSurface::LocalCommand),
+            child.summary.state.label(ChildLabelSurface::LocalCommand),
             child.summary.turns_value(),
             child.summary.tokens_used,
             child.workspace,

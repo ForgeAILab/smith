@@ -578,13 +578,13 @@
 
     #[test]
     fn a_stale_inspector_card_never_lands_on_another_child() {
-        use smith_client::agent_report::{AgentSnapshot, AgentSummary};
+        use smith_client::agent_report::{AgentSnapshot, AgentSummary, ChildDurability, ChildState};
 
         let card = AgentSnapshot {
             summary: AgentSummary {
                 child: "child-a".to_owned(),
-                durability: "Durable".to_owned(),
-                state: "Running".to_owned(),
+                durability: ChildDurability::Durable,
+                state: ChildState::Running,
                 resumable: false,
                 turns_used: 0,
                 max_turns: Some(1),

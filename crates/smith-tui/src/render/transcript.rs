@@ -13,7 +13,9 @@ use crate::app::{App, ProviderPhase};
 use crate::status::{Activity, render_elapsed};
 use crate::theme::{Theme, Tone, glyph};
 use crate::transcript::{Block, LocalResult, LocalResultState, ToolStatus};
-use smith_client::agent_report::{AgentReport, AgentResumeReport, AgentSnapshot};
+use smith_client::agent_report::{
+    AgentReport, AgentResumeReport, AgentSnapshot, ChildLabelSurface,
+};
 use smith_client::context_report::{ContextCategoryKind, ContextCompaction, ContextReport};
 use smith_client::diagnostics_report::{DiagnosticsReport, DiagnosticsRow};
 use smith_client::diff_report::{DiffLine, DiffLineKind, DiffOutcome, DiffReport};
@@ -1229,8 +1231,8 @@ fn render_agent_report(report: &AgentReport, width: u16, theme: Theme) -> Vec<Li
                 let content = format!(
                     "{} · {} · {} · resumable {} · {} turns · {} tokens",
                     child.child,
-                    child.durability,
-                    child.state,
+                    child.durability.label(ChildLabelSurface::LocalCommand),
+                    child.state.label(ChildLabelSurface::LocalCommand),
                     child.resumable,
                     child.turns_value(),
                     child.tokens_used,
@@ -1253,8 +1255,11 @@ fn render_agent_inspector(child: &AgentSnapshot, theme: Theme) -> Vec<Line<'stat
         format!(
             "session {} · {} · {} · {} · {} tokens · {}",
             child.session,
-            child.summary.durability,
-            child.summary.state,
+            child
+                .summary
+                .durability
+                .label(ChildLabelSurface::LocalCommand),
+            child.summary.state.label(ChildLabelSurface::LocalCommand),
             child.summary.turns_value(),
             child.summary.tokens_used,
             child.workspace,

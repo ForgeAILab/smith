@@ -22,6 +22,7 @@ use smith_config::model::BackgroundExit;
 use smith_host::{
     ApprovalRequired, HeadlessApproval, HeadlessInteraction, HeadlessRotation, InteractionRequired,
 };
+use smith_runtime::ChildState;
 use smith_runtime::background_tasks::{BackgroundTaskInfo, BackgroundTaskRegistry, TaskStatus};
 use smith_runtime::cache_controller::CacheControllerSnapshot;
 use smith_runtime::client::{
@@ -31,7 +32,6 @@ use smith_runtime::client::{
 use smith_runtime::host::HostSession;
 use smith_runtime::journal::{EphemeralInterruptionReason, EphemeralWorkInterruption};
 use smith_runtime::rotation::SharedPool;
-use smith_runtime::{ChildDurability, ChildState};
 
 use crate::cli::OutputFormat;
 

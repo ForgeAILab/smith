@@ -87,7 +87,7 @@ use smith_runtime::pool::CredentialPool;
 use smith_runtime::pool_state::ActiveAccounts;
 use smith_runtime::rotation::SharedPool;
 use smith_runtime::session::{SNAPSHOT_SCHEMA_VERSION, SessionListing};
-use smith_runtime::{ChildDurability, ChildState, ChildStatus, SpawnOutcome};
+use smith_runtime::{ChildStatus, SpawnOutcome};
 use smith_tui::app::{
     Action, App, LEGACY_AGENT_PROFILE_PREFIX, MouseOutcome, PreparedSubmission, SubmissionTarget,
 };

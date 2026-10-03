@@ -476,25 +476,7 @@ pub(super) fn child_session_outputs(host: &HostSession) -> Vec<ChildSessionOutpu
             coordinator
                 .list()
                 .into_iter()
-                .map(|status| {
-                    let mut report = AgentSnapshot::from(&status);
-                    // Retain today's headless labels until task 4.5 unifies them.
-                    report.summary.durability = match status.durability {
-                        ChildDurability::Ephemeral => "ephemeral",
-                        ChildDurability::Durable => "durable",
-                    }
-                    .to_owned();
-                    report.summary.state = match &status.state {
-                        ChildState::Running => "running",
-                        ChildState::Idle => "idle",
-                        ChildState::Interrupted { .. } => "interrupted",
-                        ChildState::Stopped { .. } => "stopped",
-                        ChildState::Failed => "failed",
-                        ChildState::Expired => "expired",
-                    }
-                    .to_owned();
-                    report.into_headless_output()
-                })
+                .map(|status| AgentSnapshot::from(&status).into_headless_output())
                 .collect()
         })
         .unwrap_or_default()

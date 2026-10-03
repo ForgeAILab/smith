@@ -1065,12 +1065,9 @@ fn fixture_agent_summary_view(
     summary: &mut smith_client::agent_report::AgentSummary,
     normalizer: &mut fixture_support::Normalizer,
 ) {
-    for value in [
-        &mut summary.child,
-        &mut summary.durability,
-        &mut summary.state,
-    ] {
-        *value = normalizer.normalize(value);
+    summary.child = normalizer.normalize(&summary.child);
+    if let smith_client::agent_report::ChildState::Stopped { reason } = &mut summary.state {
+        *reason = normalizer.normalize(reason);
     }
 }
 

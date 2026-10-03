@@ -160,7 +160,7 @@ pub(super) async fn run_interactive(
     {
         for child in coordinator.list() {
             let (state, detail) = child_summary_projection(&child);
-            app.restore_child(child.child.as_str(), state, Some(detail));
+            app.restore_child(child.child.as_str(), &state, Some(detail));
         }
     }
     if let Some(turn) = host.session().interrupted_on_resume() {
