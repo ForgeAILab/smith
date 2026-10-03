@@ -75,8 +75,14 @@ completed_at:
   All converted, one commit each; fixture compare unchanged at every step.
 - [x] 4.3 Render headless goal, child, and restore text from the same
   reports; remove the duplicate formatters.
-- [ ] 4.4 Delete renderer branches that inspect titles, headings, glyphs, or
+- [x] 4.4 Delete renderer branches that inspect titles, headings, glyphs, or
   label text; delete the `Text` variant.
+  Shell shortcuts and the remaining free-text results are `ShellReport` and
+  `MessageReport`. Kept for byte identity: the inline-code colon exception,
+  now in one function (`inline_text`) applied only to free-text fields
+  (skill descriptions, `DiagnosticsRow::Line`, shell output, messages); it is
+  presentation of free text, not structure recovery. `adopt-claude-code-grammar`
+  4.6 decides it and re-records the affected fixtures.
 - [x] 4.5 Provide one label function for child state and durability; use it
   in headless output, local commands, and submission.
   `ChildState` and `ChildDurability` in `smith-client/src/agent_report.rs`

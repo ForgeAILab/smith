@@ -85,7 +85,12 @@ fn help_opens_at_its_new_result_after_wrapped_conversation() {
             assert!(app.following);
             assert!(newest.contains("Start a message with //"), "{newest}");
 
-            app.show_local_result("status", "Fresh local result");
+            app.show_local_report(LocalResult::Message(Box::new(
+                smith_client::message_report::MessageReport::Notice {
+                    title: "status".to_owned(),
+                    message: "Fresh local result".to_owned(),
+                },
+            )));
             let subsequent = render_synced(&mut app, width, height, theme);
             assert!(subsequent.contains("Fresh local result"), "{subsequent}");
             assert!(app.following);

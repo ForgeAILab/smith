@@ -11,7 +11,7 @@ use crate::commands::{
 };
 use crate::picker::{PickerOutcome, ResourceEntry, ResourcePicker};
 use crate::status::Activity;
-use crate::transcript::{LocalResult, LocalResultState};
+use crate::transcript::LocalResult;
 
 /// Marks a model id as an installed CLI agent rather than a provider model.
 ///
@@ -803,31 +803,10 @@ impl App {
         }
     }
 
-    /// Appends bounded informational command output to the transcript.
-    pub fn show_local_result(&mut self, title: impl Into<String>, content: impl Into<String>) {
-        self.follow_newest();
-        self.transcript
-            .push_local_result(title, content, LocalResultState::Info);
-    }
-
     /// Appends a typed command report to the transcript.
     pub fn show_local_report(&mut self, result: LocalResult) {
         self.follow_newest();
         self.transcript.push_local(result);
-    }
-
-    /// Appends an explicit empty informational result to the transcript.
-    pub fn show_local_empty(&mut self, title: impl Into<String>, content: impl Into<String>) {
-        self.follow_newest();
-        self.transcript
-            .push_local_result(title, content, LocalResultState::Empty);
-    }
-
-    /// Appends a titled local command failure to the transcript.
-    pub fn show_local_error(&mut self, title: impl Into<String>, content: impl Into<String>) {
-        self.follow_newest();
-        self.transcript
-            .push_local_result(title, content, LocalResultState::Error);
     }
 
     /// Shows an exact undo preview with no default action.

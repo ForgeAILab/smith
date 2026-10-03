@@ -12,7 +12,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::{App, ProviderPhase};
 use crate::status::{Activity, render_elapsed};
 use crate::theme::{Theme, Tone, glyph};
-use crate::transcript::{Block, LocalResult, LocalResultState, ToolStatus};
+use crate::transcript::{Block, LocalResult, ToolStatus};
 use smith_client::agent_report::{
     AgentReport, AgentResumeReport, AgentSnapshot, ChildLabelSurface,
 };
@@ -22,8 +22,10 @@ use smith_client::diff_report::{DiffLine, DiffLineKind, DiffOutcome, DiffReport}
 use smith_client::goal_report::GoalReport;
 use smith_client::help_report::{HelpCommand, HelpReport};
 use smith_client::mcp_report::McpReport;
+use smith_client::message_report::MessageReport;
 use smith_client::recovery_report::{RecoveryAction, RecoveryReport, RevertPreview};
 use smith_client::review_report::{ReviewPreview, ReviewReport, ReviewStartReport};
+use smith_client::shell_report::{ShellOutput, ShellReport};
 use smith_client::skills_report::SkillsReport;
 use smith_client::status_report::{StatusGoal, StatusReport};
 use smith_client::timeline_report::{TimelineEntry, TimelinePlan, TimelineReport};
@@ -431,36 +433,19 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16) -> Vec<Line<'static>>
             Block::Local(LocalResult::Recovery(report)) => {
                 lines.extend(render_recovery_report(report, width, theme));
             }
-            Block::Local(LocalResult::Text {
-                title,
-                body: content,
-                state,
-            }) => {
+            Block::Local(LocalResult::Shell(report)) => {
                 lines.push(Line::from(Span::styled(
-                    format!("/{title}"),
+                    "/shell",
                     theme.style(Tone::Command),
                 )));
-                match state {
-                    LocalResultState::Info => {
-                        lines.extend(render_local_content(content, width, theme));
-                    }
-                    LocalResultState::Empty => {
-                        lines.extend(render_prefixed_local_state(
-                            glyph::BULLET,
-                            content,
-                            width,
-                            theme.style(Tone::Dim),
-                        ));
-                    }
-                    LocalResultState::Error => {
-                        lines.extend(render_prefixed_local_state(
-                            glyph::ERROR,
-                            content,
-                            width,
-                            theme.style(Tone::Danger),
-                        ));
-                    }
-                }
+                lines.extend(render_shell_report(report, width, theme));
+            }
+            Block::Local(LocalResult::Message(report)) => {
+                lines.push(Line::from(Span::styled(
+                    format!("/{}", report.title()),
+                    theme.style(Tone::Command),
+                )));
+                lines.extend(render_message_report(report, width, theme));
             }
         }
     }
@@ -939,10 +924,8 @@ fn render_diagnostics_report(
                         Span::styled(wrapped[..label_end].to_owned(), theme.style(Tone::Dim)),
                         Span::styled(wrapped[label_end..].to_owned(), theme.style(Tone::Default)),
                     ])
-                } else if wrapped.contains(':') {
-                    // Preserve the previous literal inline-Markdown treatment
-                    // of colons in values. They never identify a field or label.
-                    Line::from(Span::styled(wrapped, theme.style(Tone::Default)))
+                } else if matches!(row, DiagnosticsRow::Line(_)) {
+                    inline_text(&wrapped, theme)
                 } else {
                     Line::from(render_inline_markdown(
                         &wrapped,
@@ -959,15 +942,31 @@ fn render_diagnostics_report(
     lines
 }
 
-pub(super) fn render_local_content(content: &str, width: u16, theme: Theme) -> Vec<Line<'static>> {
-    let available = usize::from(width).max(1);
-    let mut lines = Vec::new();
-    for raw in content.lines() {
-        for wrapped in wrap_text(raw, available) {
-            lines.push(styled_local_line(&wrapped, theme));
+fn render_shell_report(report: &ShellReport, width: u16, theme: Theme) -> Vec<Line<'static>> {
+    match &report.output {
+        ShellOutput::Empty => render_prefixed_local_state(
+            glyph::BULLET,
+            ShellReport::EMPTY_MESSAGE,
+            width,
+            theme.style(Tone::Dim),
+        ),
+        ShellOutput::Output(output) if report.is_error => {
+            render_prefixed_local_state(glyph::ERROR, output, width, theme.style(Tone::Danger))
+        }
+        ShellOutput::Output(output) => render_inline_text_lines(output, width, theme),
+    }
+}
+
+fn render_message_report(report: &MessageReport, width: u16, theme: Theme) -> Vec<Line<'static>> {
+    match report {
+        MessageReport::Notice { message, .. } => render_inline_text_lines(message, width, theme),
+        MessageReport::Empty { message, .. } => {
+            render_prefixed_local_state(glyph::BULLET, message, width, theme.style(Tone::Dim))
+        }
+        MessageReport::Error { message, .. } => {
+            render_prefixed_local_state(glyph::ERROR, message, width, theme.style(Tone::Danger))
         }
     }
-    lines
 }
 
 fn render_diff_report(report: &DiffReport, width: u16, theme: Theme) -> Vec<Line<'static>> {
@@ -1391,7 +1390,7 @@ fn render_mcp_text(content: &str, width: u16, theme: Theme) -> Vec<Line<'static>
 fn render_skills_report(report: &SkillsReport, width: u16, theme: Theme) -> Vec<Line<'static>> {
     let (groups, problems) = match report {
         SkillsReport::Empty => {
-            return render_skills_text(SkillsReport::EMPTY_MESSAGE, width, theme);
+            return render_inline_text_lines(SkillsReport::EMPTY_MESSAGE, width, theme);
         }
         SkillsReport::Error(error) => {
             return render_prefixed_local_state(
@@ -1402,38 +1401,54 @@ fn render_skills_report(report: &SkillsReport, width: u16, theme: Theme) -> Vec<
             );
         }
         SkillsReport::Trusted { skill, digest } => {
-            return render_skills_text(&SkillsReport::trusted_value(skill, digest), width, theme);
+            return render_inline_text_lines(
+                &SkillsReport::trusted_value(skill, digest),
+                width,
+                theme,
+            );
         }
         SkillsReport::Indexed { groups, problems } => (groups, problems),
     };
     let mut lines = Vec::new();
     for group in groups {
-        lines.extend(render_skills_text(group.layer.as_str(), width, theme));
+        lines.extend(wrap_context_line(
+            Line::from(Span::styled(
+                group.layer.as_str(),
+                theme.style(Tone::Default),
+            )),
+            usize::from(width).max(1),
+        ));
         for entry in &group.entries {
-            lines.extend(render_skills_text(
+            lines.extend(render_skills_free_text(
                 &format!(
-                    "  {} · {} · {}",
+                    "  {} · {} · ",
                     entry.name,
                     entry.state.render_value(&entry.name),
-                    entry.description,
                 ),
+                &entry.description,
+                "",
                 width,
                 theme,
             ));
         }
     }
     if groups.is_empty() {
-        lines.extend(render_skills_text(
+        lines.extend(render_inline_text_lines(
             SkillsReport::EMPTY_MESSAGE,
             width,
             theme,
         ));
     }
     if !problems.is_empty() {
-        lines.extend(render_skills_text("not loaded", width, theme));
+        lines.extend(wrap_context_line(
+            Line::from(Span::styled("not loaded", theme.style(Tone::Default))),
+            usize::from(width).max(1),
+        ));
         for problem in problems {
-            lines.extend(render_skills_text(
-                &format!("  {} · {} · {}", problem.name, problem.reason, problem.path,),
+            lines.extend(render_skills_free_text(
+                &format!("  {} · ", problem.name),
+                &problem.reason,
+                &format!(" · {}", problem.path),
                 width,
                 theme,
             ));
@@ -1442,27 +1457,54 @@ fn render_skills_report(report: &SkillsReport, width: u16, theme: Theme) -> Vec<
     lines
 }
 
-/// Retains wrapping before inline Markdown for the typed skill fields.
-fn render_skills_text(content: &str, width: u16, theme: Theme) -> Vec<Line<'static>> {
+/// Wraps the complete row before styling only its free-text field.
+fn render_skills_free_text(
+    prefix: &str,
+    text: &str,
+    suffix: &str,
+    width: u16,
+    theme: Theme,
+) -> Vec<Line<'static>> {
+    let content = format!("{prefix}{text}{suffix}");
+    let text_end = prefix.len() + text.len();
+    let mut offset = 0;
+    let mut lines = Vec::new();
+    for raw_line in content.split_inclusive('\n') {
+        let raw = raw_line
+            .strip_suffix('\n')
+            .map(|line| line.strip_suffix('\r').unwrap_or(line))
+            .unwrap_or(raw_line);
+        let mut row_offset = offset;
+        for wrapped in wrap_text(raw, usize::from(width).max(1)) {
+            let prefix_end = prefix.len().saturating_sub(row_offset).min(wrapped.len());
+            let free_end = text_end.saturating_sub(row_offset).min(wrapped.len());
+            let mut spans =
+                render_inline_markdown(&wrapped[..prefix_end], theme.style(Tone::Default), theme);
+            if prefix_end < free_end {
+                spans.extend(inline_text(&wrapped[prefix_end..free_end], theme).spans);
+            }
+            if free_end < wrapped.len() {
+                spans.push(Span::styled(
+                    wrapped[free_end..].to_owned(),
+                    theme.style(Tone::Default),
+                ));
+            }
+            row_offset += wrapped.len();
+            lines.push(Line::from(spans));
+        }
+        offset += raw_line.len();
+    }
+    lines
+}
+
+/// Retains character wrapping before the legacy free-text presentation rule.
+fn render_inline_text_lines(content: &str, width: u16, theme: Theme) -> Vec<Line<'static>> {
     content
         .lines()
         .flat_map(|raw| {
             wrap_text(raw, usize::from(width).max(1))
                 .into_iter()
-                .map(|wrapped| {
-                    // The previous generic text path left rows containing a
-                    // colon literal. Keep those bytes without interpreting
-                    // the value as a label or recovering report structure.
-                    if wrapped.contains(':') {
-                        Line::from(Span::styled(wrapped, theme.style(Tone::Default)))
-                    } else {
-                        Line::from(render_inline_markdown(
-                            &wrapped,
-                            theme.style(Tone::Default),
-                            theme,
-                        ))
-                    }
-                })
+                .map(|wrapped| inline_text(&wrapped, theme))
                 .collect::<Vec<_>>()
         })
         .collect()
@@ -1901,18 +1943,18 @@ fn wrap_context_line(line: Line<'static>, available: usize) -> Vec<Line<'static>
     rows
 }
 
-pub(super) fn styled_local_line(raw: &str, theme: Theme) -> Line<'static> {
-    if raw.is_empty() {
+/// Legacy free-text presentation kept for byte identity: colons leave inline
+/// Markdown literal. Revisit in the `adopt-claude-code-grammar` wording change.
+/// This never infers report structure and must not receive structural fields.
+fn inline_text(wrapped: &str, theme: Theme) -> Line<'static> {
+    if wrapped.is_empty() {
         return Line::default();
     }
-    if let Some((label, value)) = raw.split_once(':') {
-        return Line::from(vec![
-            Span::styled(format!("{label}:"), theme.style(Tone::Dim)),
-            Span::styled(value.to_owned(), theme.style(Tone::Default)),
-        ]);
+    if wrapped.contains(':') {
+        return Line::from(Span::styled(wrapped.to_owned(), theme.style(Tone::Default)));
     }
     Line::from(render_inline_markdown(
-        raw,
+        wrapped,
         theme.style(Tone::Default),
         theme,
     ))

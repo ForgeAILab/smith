@@ -586,7 +586,12 @@
                     action: RecoveryAction::Redo,
                     ..
                 } => {
-                    legacy.show_local_error("redo", content);
+                    legacy.show_local_report(LocalResult::Message(Box::new(
+                        smith_client::message_report::MessageReport::Error {
+                            title: "redo".to_owned(),
+                            message: content,
+                        },
+                    )));
                 }
                 RecoveryReport::Applied(_) | RecoveryReport::Cancelled(_) => {
                     legacy
@@ -828,26 +833,104 @@
                 },
             ],
         };
-        let plain = smith_client::diagnostics_report::render_plain(&report);
         let mut app = App::new("example-model", "~/work/api");
         app.show_local_report(LocalResult::Diagnostics(Box::new(report)));
-        for width in [44, 100] {
+        for (width, expected) in [
+            (44, vec![
+                "/diagnostics",
+                "profile: dev · posture build · use main · re",
+                "v <PROFILE_REVISION>… · source built-in defa",
+                "ult agent_modes.build.posture",
+                "latest capability retrieval: resolver-test ·",
+                " tool:read, tool:search",
+                "  tool schema: ~500",
+                "goal: Fix `tool:read` and `write`",
+                "Follow these steps",
+                "",
+                "",
+                "**literal: text** and `inline code`",
+                "Free text with inline code",
+            ]),
+            (100, vec![
+                "/diagnostics",
+                "profile: dev · posture build · use main · rev <PROFILE_REVISION>… · source built-in default `agent_m",
+                "odes.build.posture`",
+                "latest capability retrieval: resolver-test · tool:read, tool:search",
+                "  tool schema: ~500",
+                "goal: Fix `tool:read` and `write`",
+                "Follow these steps",
+                "",
+                "",
+                "**literal: text** and `inline code`",
+                "Free text with inline code",
+            ]),
+        ] {
             let theme = Theme::new().without_color();
             let typed = transcript_lines(&app, theme, width);
-            let mut legacy = vec![Line::from("/diagnostics")];
-            legacy.extend(render_local_content(&plain, width, theme));
             assert_eq!(
                 typed.iter().map(ToString::to_string).collect::<Vec<_>>(),
-                legacy.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                expected,
                 "{width} columns",
             );
         }
     }
 
     #[test]
-    fn text_results_do_not_select_the_status_card_by_title() {
+    fn shell_reports_keep_free_text_presentation_and_explicit_outcomes() {
+        use crate::transcript::Block;
+        use smith_client::local_result::LocalResultState;
+        use smith_client::shell_report::ShellReport;
+
+        let mut app = App::new("example-model", "~/work/api");
+        app.show_local_report(LocalResult::Shell(Box::new(ShellReport::new(
+            "session: `literal`\n**free text** with `code`\n@@ not a patch heading\n+not an addition",
+            false,
+        ))));
+        let theme = Theme::new();
+        let lines = transcript_lines(&app, theme, 100);
+        assert_eq!(
+            lines.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            [
+                "/shell",
+                "session: `literal`",
+                "free text with code",
+                "@@ not a patch heading",
+                "+not an addition",
+            ],
+        );
+        assert!(
+            lines[1].spans.iter().all(|span| span.style == theme.style(Tone::Default))
+        );
+        assert!(
+            lines[4].spans.iter().all(|span| span.style == theme.style(Tone::Default))
+        );
+
+        for (output, is_error, marker, expected, state) in [
+            ("failure: `literal`", true, "■", "failure: `literal`", LocalResultState::Error),
+            (" \n", false, "•", "No output.", LocalResultState::Empty),
+            (" \n", true, "•", "No output.", LocalResultState::Empty),
+        ] {
+            let mut app = App::new("example-model", "~/work/api");
+            app.show_local_report(LocalResult::Shell(Box::new(ShellReport::new(output, is_error))));
+            let Block::Local(result) = &app.transcript.blocks()[0] else {
+                panic!("expected a shell report");
+            };
+            assert_eq!(result.state(), state);
+            let lines = transcript_lines(&app, theme, 100);
+            assert_eq!(lines[0].to_string(), "/shell");
+            assert_eq!(lines[1].to_string(), format!("{marker} {expected}"));
+        }
+    }
+
+    #[test]
+    fn message_reports_do_not_select_the_status_card_by_title() {
         let mut app = App::new("gpt-5.3", "~/work/api");
-        app.show_local_result("status", "session: text stays text");
+        app.show_local_report(LocalResult::Message(Box::new(
+            smith_client::message_report::MessageReport::Notice {
+                title: "status".to_owned(),
+                message: "session: text stays text".to_owned(),
+            },
+        )));
         let screen = render(&app, 74, 24, Theme::new().without_color());
         assert!(screen.contains("session: text stays text"), "{screen}");
         assert!(!screen.contains('╭'), "{screen}");
@@ -934,15 +1017,23 @@
 
     #[test]
     fn empty_error_and_oversized_local_results_name_their_state() {
+        use smith_client::message_report::MessageReport;
+
         let mut empty = App::new("gpt-5.3", "~/work/api");
-        empty.show_local_empty("agents", "");
+        empty.show_local_report(LocalResult::Message(Box::new(MessageReport::Empty {
+            title: "agents".to_owned(),
+            message: String::new(),
+        })));
         let empty_screen = render(&empty, 74, 12, Theme::new().without_color());
         assert!(empty_screen.contains("/agents"), "{empty_screen}");
         assert!(empty_screen.contains("• No output."), "{empty_screen}");
         assert!(empty_screen.contains("No output."), "{empty_screen}");
 
         let mut error = App::new("gpt-5.3", "~/work/api");
-        error.show_local_error("diff", "Git inspection is unavailable.");
+        error.show_local_report(LocalResult::Message(Box::new(MessageReport::Error {
+            title: "diff".to_owned(),
+            message: "Git inspection is unavailable.".to_owned(),
+        })));
         let error_screen = render(&error, 74, 12, Theme::new().without_color());
         assert!(error_screen.contains("/diff"), "{error_screen}");
         assert!(
@@ -955,7 +1046,10 @@
         );
 
         let mut oversized = App::new("gpt-5.3", "~/work/api");
-        oversized.show_local_result("diff", "x".repeat(MAX_LOCAL_RESULT_BYTES + 1));
+        oversized.show_local_report(LocalResult::Message(Box::new(MessageReport::Notice {
+            title: "diff".to_owned(),
+            message: "x".repeat(MAX_LOCAL_RESULT_BYTES + 1),
+        })));
         let oversized_screen = render(&oversized, 74, 12, Theme::new().without_color());
         assert!(
             oversized_screen.contains("[local result truncated at the display limit]"),

@@ -743,7 +743,8 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                     LocalResult::Diff(report) => smith_client::diff_report::render_plain(report),
                     LocalResult::Review(report) => smith_client::review_report::render_plain(report),
                     LocalResult::Recovery(report) => smith_client::recovery_report::render_plain(report),
-                    LocalResult::Text { body, .. } => body.clone(),
+                    LocalResult::Shell(report) => smith_client::shell_report::render_plain(report),
+                    LocalResult::Message(report) => smith_client::message_report::render_plain(report),
                 };
                 raw.push_str(&format!(
                     "title: {title}\nstate: {state}\nbody:\n{content}\n"
@@ -786,11 +787,12 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                     LocalResult::Recovery(report) => LocalResult::Recovery(Box::new(
                         fixture_recovery_view(report, normalizer),
                     )),
-                    LocalResult::Text { title, body, state } => LocalResult::Text {
-                        title: normalizer.normalize(title),
-                        body: normalizer.normalize(body),
-                        state: *state,
-                    },
+                    LocalResult::Shell(report) => LocalResult::Shell(Box::new(
+                        fixture_shell_view(report, normalizer),
+                    )),
+                    LocalResult::Message(report) => LocalResult::Message(Box::new(
+                        fixture_message_view(report, normalizer),
+                    )),
                 };
                 view.transcript.push_local(normalized);
             }
@@ -925,6 +927,34 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
     }
     assert!(!raw.is_empty(), "command produced no captured local result");
     (normalizer.normalize(&raw), view)
+}
+
+fn fixture_shell_view(
+    report: &smith_client::shell_report::ShellReport,
+    normalizer: &mut fixture_support::Normalizer,
+) -> smith_client::shell_report::ShellReport {
+    let mut report = report.clone();
+    if let smith_client::shell_report::ShellOutput::Output(output) = &mut report.output {
+        *output = normalizer.normalize(output);
+    }
+    report
+}
+
+fn fixture_message_view(
+    report: &smith_client::message_report::MessageReport,
+    normalizer: &mut fixture_support::Normalizer,
+) -> smith_client::message_report::MessageReport {
+    use smith_client::message_report::MessageReport;
+
+    let mut report = report.clone();
+    let (title, message) = match &mut report {
+        MessageReport::Notice { title, message }
+        | MessageReport::Empty { title, message }
+        | MessageReport::Error { title, message } => (title, message),
+    };
+    *title = normalizer.normalize(title);
+    *message = normalizer.normalize(message);
+    report
 }
 
 fn fixture_status_view(

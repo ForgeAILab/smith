@@ -604,12 +604,20 @@
 
     #[test]
     fn local_results_append_without_stealing_the_composer() {
+        use smith_client::message_report::MessageReport;
+
         let mut app = app();
         type_text(&mut app, "keep drafting");
         app.scroll_up(4);
 
-        app.show_local_result("status", "model: example");
-        app.show_local_empty("agents", "No child agents in this session.");
+        app.show_local_report(LocalResult::Message(Box::new(MessageReport::Notice {
+            title: "status".to_owned(),
+            message: "model: example".to_owned(),
+        })));
+        app.show_local_report(LocalResult::Message(Box::new(MessageReport::Empty {
+            title: "agents".to_owned(),
+            message: "No child agents in this session.".to_owned(),
+        })));
 
         assert_eq!(app.composer.text(), "keep drafting");
         assert!(app.overlay.is_none());

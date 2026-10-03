@@ -6,6 +6,7 @@ use agent_runtime_core::usage::UsageRecord;
 use smith_client::agent_report::AgentSnapshot;
 use smith_client::local_result::LocalResult;
 use smith_client::recovery_report::{RecoveryAction, RecoveryReport, RestoreReport};
+use smith_client::shell_report::ShellReport;
 use smith_tui::app::RunningTaskSummary;
 
 use super::*;
@@ -862,11 +863,9 @@ pub(super) async fn run_tui(
                         }
                         LocalOutcome::Error(text) => app.transcript.push_error(text),
                         LocalOutcome::Shell { content, is_error } => {
-                            if is_error {
-                                app.show_local_error("shell", content);
-                            } else {
-                                app.show_local_result("shell", content);
-                            }
+                            app.show_local_report(LocalResult::Shell(Box::new(
+                                ShellReport::new(content, is_error),
+                            )));
                         }
                     }
                     dirty = true;

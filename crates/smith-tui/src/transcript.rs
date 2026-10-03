@@ -20,9 +20,11 @@ use serde_json::Value;
 use smith_client::agent_report::{AgentReport, AgentResumeReport};
 use smith_client::diff_report::{DiffLine, DiffLineKind, DiffOutcome, DiffReport};
 pub use smith_client::local_result::{LocalResult, LocalResultState};
+use smith_client::message_report::MessageReport;
 #[cfg(test)]
 use smith_client::recovery_report::RecoveryReport;
 use smith_client::review_report::{ReviewReport, ReviewStartReport};
+use smith_client::shell_report::ShellOutput;
 use smith_tools::{
     ToolCallDisplay, has_tool_call_display_schema, project_external_tool_call_display,
     project_tool_call_display,
@@ -244,22 +246,7 @@ impl Transcript {
         });
     }
 
-    /// Appends bounded local command output without representing it as model
-    /// conversation history.
-    pub fn push_local_result(
-        &mut self,
-        title: impl Into<String>,
-        content: impl Into<String>,
-        state: LocalResultState,
-    ) {
-        self.push_local(LocalResult::Text {
-            title: title.into(),
-            body: content.into(),
-            state,
-        });
-    }
-
-    /// Appends a typed local report, bounding patches and transitional text.
+    /// Appends a typed local report, bounding patches and free-text messages.
     pub fn push_local(&mut self, result: LocalResult) {
         // Resume, review, and recovery notices used to append through `push_notice`,
         // which leaves the stream open until its next delta or turn boundary.
@@ -288,18 +275,14 @@ impl Transcript {
         }
         let result = match result {
             LocalResult::Diff(report) => LocalResult::Diff(Box::new(bound_diff_report(*report))),
-            LocalResult::Text { title, body, state } => {
-                let title = title
-                    .replace(['\r', '\n'], " ")
-                    .chars()
-                    .take(MAX_LOCAL_RESULT_TITLE_CHARS)
-                    .collect();
-                let (body, state) = if body.trim().is_empty() {
-                    ("No output.".to_owned(), LocalResultState::Empty)
-                } else {
-                    (bound_local_result(body), state)
-                };
-                LocalResult::Text { title, body, state }
+            LocalResult::Shell(mut report) => {
+                if let ShellOutput::Output(output) = &mut report.output {
+                    *output = bound_local_result(std::mem::take(output));
+                }
+                LocalResult::Shell(report)
+            }
+            LocalResult::Message(report) => {
+                LocalResult::Message(Box::new(bound_message_report(*report)))
             }
             report => report,
         };
@@ -743,6 +726,27 @@ fn bound_local_result(content: String) -> String {
     bounded
 }
 
+fn bound_message_report(mut report: MessageReport) -> MessageReport {
+    let (title, message) = match &mut report {
+        MessageReport::Notice { title, message }
+        | MessageReport::Empty { title, message }
+        | MessageReport::Error { title, message } => (title, message),
+    };
+    *title = title
+        .replace(['\r', '\n'], " ")
+        .chars()
+        .take(MAX_LOCAL_RESULT_TITLE_CHARS)
+        .collect();
+    if message.trim().is_empty() {
+        return MessageReport::Empty {
+            title: std::mem::take(title),
+            message: "No output.".to_owned(),
+        };
+    }
+    *message = bound_local_result(std::mem::take(message));
+    report
+}
+
 /// Applies the existing local-output limits without reconstructing patch roles.
 fn bound_diff_report(mut report: DiffReport) -> DiffReport {
     report.title = report
@@ -1026,21 +1030,54 @@ mod tests {
     fn local_results_are_bounded_and_never_merge_with_model_output() {
         let mut transcript = Transcript::new();
         transcript.push_text_delta("answer");
-        transcript.push_local_result(
-            "diff\ninjected",
-            "x".repeat(MAX_LOCAL_RESULT_BYTES + 16),
-            LocalResultState::Info,
-        );
+        transcript.push_local(LocalResult::Message(Box::new(MessageReport::Notice {
+            title: "diff\ninjected".to_owned(),
+            message: "x".repeat(MAX_LOCAL_RESULT_BYTES + 16),
+        })));
         transcript.push_text_delta("next");
 
         assert_eq!(transcript.len(), 3);
         match &transcript.blocks()[1] {
-            Block::Local(LocalResult::Text { title, body, .. }) => {
+            Block::Local(LocalResult::Message(report)) => {
+                let MessageReport::Notice { title, message } = report.as_ref() else {
+                    panic!("expected an informational message");
+                };
                 assert_eq!(title, "diff injected");
-                assert!(body.ends_with("[local result truncated at the display limit]"));
+                assert!(message.ends_with("[local result truncated at the display limit]"));
             }
             other => panic!("expected a local result, got {other:?}"),
         }
+        assert!(matches!(
+            transcript.blocks()[2],
+            Block::Assistant { open: true, .. }
+        ));
+    }
+
+    #[test]
+    fn shell_reports_are_bounded_without_merging_into_model_output() {
+        use smith_client::shell_report::ShellReport;
+
+        let mut transcript = Transcript::new();
+        transcript.push_text_delta("answer");
+        transcript.push_local(LocalResult::Shell(Box::new(ShellReport::new(
+            "x".repeat(MAX_LOCAL_RESULT_BYTES + 16),
+            false,
+        ))));
+        transcript.push_text_delta("next");
+
+        assert_eq!(transcript.len(), 3);
+        let Block::Local(LocalResult::Shell(report)) = &transcript.blocks()[1] else {
+            panic!("expected a shell report");
+        };
+        let ShellOutput::Output(output) = &report.output else {
+            panic!("expected command output");
+        };
+        assert!(!report.is_error);
+        assert!(output.ends_with("[local result truncated at the display limit]"));
+        assert!(matches!(
+            transcript.blocks()[0],
+            Block::Assistant { open: false, .. }
+        ));
         assert!(matches!(
             transcript.blocks()[2],
             Block::Assistant { open: true, .. }
@@ -1271,7 +1308,10 @@ mod tests {
 
         let mut transcript = Transcript::new();
         transcript.push_notice("stale", "dropped on replay");
-        transcript.push_local_result("status", "model: old", LocalResultState::Info);
+        transcript.push_local(LocalResult::Message(Box::new(MessageReport::Notice {
+            title: "status".to_owned(),
+            message: "model: old".to_owned(),
+        })));
         transcript.replace_from_history(&history);
 
         assert_eq!(transcript.len(), 3);

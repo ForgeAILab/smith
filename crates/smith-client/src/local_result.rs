@@ -1,6 +1,5 @@
 //! Typed local command results, independent of their presentation.
 //!
-//! Commands migrate one at a time from [`LocalResult::Text`] to reports.
 //! Terminal drawing belongs to `smith-tui`.
 
 use crate::agent_report::{AgentReport, AgentResumeReport};
@@ -10,8 +9,10 @@ use crate::diff_report::{DiffOutcome, DiffReport};
 use crate::goal_report::GoalReport;
 use crate::help_report::HelpReport;
 use crate::mcp_report::McpReport;
+use crate::message_report::MessageReport;
 use crate::recovery_report::RecoveryReport;
 use crate::review_report::{ReviewReport, ReviewStartReport};
+use crate::shell_report::{ShellOutput, ShellReport};
 use crate::skills_report::SkillsReport;
 use crate::status_report::StatusReport;
 use crate::timeline_report::TimelineReport;
@@ -54,15 +55,10 @@ pub enum LocalResult {
     Review(Box<ReviewReport>),
     /// Undo, redo, and selective-revert previews and local outcomes.
     Recovery(Box<RecoveryReport>),
-    /// Transitional output for commands that have not migrated to reports.
-    Text {
-        /// Command or result title.
-        title: String,
-        /// Display content.
-        body: String,
-        /// Text-visible result state.
-        state: LocalResultState,
-    },
+    /// Output from a local shell shortcut.
+    Shell(Box<ShellReport>),
+    /// A free-text notice, empty result, or local command failure.
+    Message(Box<MessageReport>),
 }
 
 impl LocalResult {
@@ -81,7 +77,8 @@ impl LocalResult {
             Self::Diff(report) => &report.title,
             Self::Review(report) => report.title(),
             Self::Recovery(report) => report.title(),
-            Self::Text { title, .. } => title,
+            Self::Shell(_) => "shell",
+            Self::Message(report) => report.title(),
         }
     }
 
@@ -157,7 +154,16 @@ impl LocalResult {
                 | RecoveryReport::Applied(_)
                 | RecoveryReport::Cancelled(_) => LocalResultState::Info,
             },
-            Self::Text { state, .. } => *state,
+            Self::Shell(report) => match &report.output {
+                ShellOutput::Empty => LocalResultState::Empty,
+                ShellOutput::Output(_) if report.is_error => LocalResultState::Error,
+                ShellOutput::Output(_) => LocalResultState::Info,
+            },
+            Self::Message(report) => match report.as_ref() {
+                MessageReport::Notice { .. } => LocalResultState::Info,
+                MessageReport::Empty { .. } => LocalResultState::Empty,
+                MessageReport::Error { .. } => LocalResultState::Error,
+            },
         }
     }
 }
