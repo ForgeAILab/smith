@@ -1,0 +1,32 @@
+> Run git status --short with the shell tool, then reply in one sentence. Do not edit files.
+
+● Bash(git status --short)
+  ⎿  (no output)
+
+● git status --short returned no output, so the working tree is clean with no modified, staged, or
+  untracked files.
+
+! ls -la
+  ⎿  total 8
+     drwxr-xr-x@  4 mai1015  wheel  128 Oct  3 17:08 .
+     drwx------@ 21 mai1015  wheel  672 Oct  3 17:08 ..
+     drwxr-xr-x@ 12 mai1015  wheel  384 Oct  3 17:09 .git
+     … +1 lines (ctrl+o to expand)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts                                                           zai/glm-5.3 · code · ask

@@ -94,7 +94,10 @@ pub(crate) fn report(app: &App, host: &HostSession, project: &Path) -> Diagnosti
             },
         ),
         field("capability source", &reasoning.capability_source),
-        field("project", project.display().to_string()),
+        DiagnosticsRow::Path {
+            label: "project".to_owned(),
+            value: project.display().to_string(),
+        },
         field(
             "Git",
             GitChanges::discover(project)

@@ -1,0 +1,16 @@
+● /diagnostics
+  Session
+  session             session-e4e84cf6-0eee…
+  profile             build
+  posture             build
+  profile uses        main+child
+  profile revision    06f1cd2e768e…
+  profile source      `/private/tmp/smith-f…
+                      key `profiles.…
+  provider            local
+  model               example-model
+  permission          ask
+────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────
+  ▼ following paused · End/Ctrl+L newest

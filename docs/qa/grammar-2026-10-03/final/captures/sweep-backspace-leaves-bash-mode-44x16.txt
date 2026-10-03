@@ -1,0 +1,16 @@
+● /status
+  session             session-e4e84cf6-0eee…
+  profile             build
+  provider            local
+  model               example-model
+  permission          ask
+  reasoning           provider default ·
+                      effort provider
+                      default ·
+                      provider/model default
+  reasoning controls  unsupported · switch
+                      unavailable · efforts
+────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────
+  ▼ following paused · End/Ctrl+L newest

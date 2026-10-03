@@ -416,6 +416,40 @@ fn informational_diagnostics_usage_wraps_at_words_with_a_hanging_indent() {
 }
 
 #[test]
+fn informational_diagnostics_paths_shorten_from_the_left_on_one_row() {
+    use smith_client::diagnostics_report::{DiagnosticsReport, DiagnosticsRow, DiagnosticsSection};
+
+    let path = "/private/tmp/claude-501/-Volumes-Data-codes-ai-tui/f77870a1-b4e2-491f-8fe4-e811c2bf7241/tui-grammar";
+    for label in ["project", "workspace"] {
+        let mut app = App::new("model", "~/project");
+        app.show_local_report(LocalResult::Diagnostics(Box::new(DiagnosticsReport {
+            sections: vec![DiagnosticsSection {
+                heading: "Session".to_owned(),
+                rows: vec![
+                    DiagnosticsRow::Path {
+                        label: label.to_owned(),
+                        value: path.to_owned(),
+                    },
+                    DiagnosticsRow::Field {
+                        label: "reasoning controls".to_owned(),
+                        value: "supported".to_owned(),
+                    },
+                ],
+            }],
+        })));
+        let lines = transcript_lines(&app, Theme::new().without_color(), 44);
+        let text = informational_text(&lines);
+        assert_eq!(text.len(), 4, "the path must stay on one row: {text:?}");
+        assert_eq!(text[0], "● /diagnostics");
+        let column = informational_value_column(&lines[2]);
+        let value = text[2].chars().skip(column).collect::<String>();
+        assert!(value.starts_with('…'), "{value}");
+        assert!(value.ends_with("/tui-grammar"), "{value}");
+        assert!(lines.iter().all(|line| line.width() <= 44), "{text:?}");
+    }
+}
+
+#[test]
 fn informational_long_results_open_at_the_top_and_next_blocks_resume_following() {
     use smith_client::diagnostics_report::{DiagnosticsReport, DiagnosticsRow, DiagnosticsSection};
 

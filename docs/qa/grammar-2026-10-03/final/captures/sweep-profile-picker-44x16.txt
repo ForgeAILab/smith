@@ -1,0 +1,16 @@
+  capsule schema      1
+  capsule watermark   0
+  capsule persisted   not yet saved
+  capsule summary     none
+  change attribution  no attributable turn
+                      recorded
+  Choose profile · type to filter        1/3
+❯ build   build · Make and test…   ✓ current
+          use main+child ·…
+  plan    plan · Plan before changing files
+  review  review · Read-only change review
+────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────
+           local/example-model · build · ask
+  enter choose · esc cancel

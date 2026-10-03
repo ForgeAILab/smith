@@ -1,0 +1,32 @@
+● /diagnostics
+  Session
+  session             session-7452bff0-d8b5-4e41-bddd-e6ec70ababfc
+  profile             build
+  posture             build
+  profile uses        main+child
+  profile revision    cb861c131593…
+  profile source      `/private/tmp/smith-final-69evlhdb/100x32/home/.smith/config.toml` key
+                      `profiles…
+  provider            local
+  model               example-model
+  permission          ask
+  reasoning           provider default
+  reasoning effort    provider default
+  reasoning source    provider/model default
+  reasoning controls  unsupported
+  reasoning switch    unavailable
+  reasoning efforts   none
+  capability source   resolved model catalog (presence only)
+  project             /private/tmp/smith-final-69evlhdb/100x32/project
+  Git                 clean
+  goal                none
+  connections         local (remove only the configured authentication source · fake), other (remove
+                      only the configured authentication source · fake)
+  children            0
+  usage               nothing spent yet
+  cost                nothing spent yet
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ▼ following paused · End/Ctrl+L newest                           local/example-model · build · ask

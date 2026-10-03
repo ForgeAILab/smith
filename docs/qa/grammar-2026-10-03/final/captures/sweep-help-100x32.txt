@@ -1,0 +1,32 @@
+● /help
+  Start here
+  Type a task and press Enter.
+  /model        Switch model
+  /connect      Connect or reconnect a provider
+  /help         List commands and keys
+
+  Primary
+  /help         List commands and keys
+  /goal         Inspect or control a multi-turn goal
+                [OBJECTIVE|edit …|budget N|pause|resume|clear]
+  /context      Show context usage or choose a window
+                [NAME|default]
+  /status       Show session, usage, and workspace status
+                [--verbose]
+  /model        Switch model
+                [PROVIDER/MODEL]
+  /details      Toggle bounded live tool detail
+  /timeline     Show local turn, child, and recovery history
+  /new          Start a fresh session
+  /resume       Resume a saved session
+                [ID]
+  /connect      Connect or reconnect a provider
+                [PROVIDER]
+  /disconnect   Disconnect a provider
+                [PROVIDER]
+  /think        Set thinking for the next turn
+                [on|off|default]
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ▼ following paused · End/Ctrl+L newest                           local/example-model · build · ask

@@ -1,0 +1,24 @@
+● /diagnostics
+  Session
+  session             session-4bd1966b-f4f2-4983-ba0c-664a89716d42
+  profile             build
+  posture             build
+  profile uses        main+child
+  profile revision    560edad0d59f…
+  profile source      `/private/tmp/smith-final-69evlhdb/80x24-nocolor/home/.sm…
+                      key `p…
+  provider            local
+  model               example-model
+  permission          ask
+  reasoning           provider default
+  reasoning effort    provider default
+  reasoning source    provider/model default
+  reasoning controls  unsupported
+  reasoning switch    unavailable
+  reasoning efforts   none
+  capability source   resolved model catalog (presence only)
+  project             /private/tmp/smith-final-69evlhdb/80x24-nocolor/project
+────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────
+  ▼ following paused · End/Ctrl+L newest       local/example-model · build · ask

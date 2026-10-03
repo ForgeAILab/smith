@@ -1,8 +1,8 @@
 //! The local `/diagnostics` snapshot and its plain-text rendering.
 //!
 //! Named sections group aligned fields and free text in display order.
-//! The host supplies rows as fields or free text; clients do not parse prose
-//! to recover their structure.
+//! The host supplies rows as fields, paths, or free text; clients do not
+//! parse prose to recover their structure.
 
 /// Detailed session information captured when `/diagnostics` is invoked.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +30,13 @@ pub enum DiagnosticsRow {
         /// Display value, without the label or its separating space.
         value: String,
     },
+    /// A labeled path, shortened from the left by column-based renderers.
+    Path {
+        /// Field label, without its separating colon.
+        label: String,
+        /// Full path value, without the label or its separating space.
+        value: String,
+    },
     /// Free text, including any existing indentation or line breaks.
     Line(String),
 }
@@ -43,7 +50,8 @@ pub fn render_plain(report: &DiagnosticsReport) -> String {
         .map(|section| {
             std::iter::once(section.heading.clone())
                 .chain(section.rows.iter().map(|row| match row {
-                    DiagnosticsRow::Field { label, value } => format!("{label}: {value}"),
+                    DiagnosticsRow::Field { label, value }
+                    | DiagnosticsRow::Path { label, value } => format!("{label}: {value}"),
                     DiagnosticsRow::Line(line) => line.clone(),
                 }))
                 .collect::<Vec<_>>()

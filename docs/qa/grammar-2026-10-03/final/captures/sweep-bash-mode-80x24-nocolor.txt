@@ -1,0 +1,24 @@
+● /status
+  session             session-4bd1966b-f4f2-4983-ba0c-664a89716d42
+  profile             build
+  provider            local
+  model               example-model
+  permission          ask
+  reasoning           provider default · effort provider default ·
+                      provider/model default
+  reasoning controls  unsupported · switch unavailable · efforts none · resolved
+                      model catalog (presence only)
+  prompt cache        usage not reported
+  cache maintenance   off
+  resume checkpoint   not yet saved
+  project             /private/tmp/smith-final-69evlhdb/80x24-nocolor/project
+  Git                 clean
+  goal                none
+  children            0
+  usage               nothing spent yet
+  cost                nothing spent yet
+  /diagnostics shows detailed cache and recovery information
+────────────────────────────────────────────────────────────────────────────────
+!
+────────────────────────────────────────────────────────────────────────────────
+  bash mode                                    local/example-model · build · ask

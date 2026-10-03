@@ -1,0 +1,16 @@
+● /context
+  Context usage
+  example-model · usage unavailable until
+  the first turn
+
+  · · · · · · · · · ·
+  · · · · · · · · · ·
+  · · · · · · · · · ·
+  · · · · · · · · · ·
+  · · · · · · · □ □ □
+
+  Available capacity
+────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────
+  ▼ following paused · End/Ctrl+L newest

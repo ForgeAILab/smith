@@ -1,0 +1,16 @@
+● /status
+  session             session-e4e84cf6-0eee…
+  profile             build
+  Shortcuts
+  Enter               Send a task
+  Enter while         Send now
+  working
+  Tab while working   Queue for after this
+                      turn
+  Tab when idle       Next profile (empty
+                      draft)
+  +53 rows · /help for all · any key closes
+────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────
+  any key closes · esc just closes

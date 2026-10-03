@@ -1,0 +1,24 @@
+  Get started
+  Type a task below and press Enter.
+
+  /model    Switch model
+  /connect  Connect or reconnect a provider
+  /help     List commands and keys
+
+
+
+
+
+
+
+
+
+❯ /help     List commands and keys
+  /goal     Inspect or control a multi-turn goal
+  /context  Show context usage or choose a window
+  /status   Show session, usage, and workspace status
+  /model    Switch model
+────────────────────────────────────────────────────────────────────────────────
+> /
+────────────────────────────────────────────────────────────────────────────────
+                                               local/example-model · build · ask

@@ -1,0 +1,32 @@
+  usage               nothing spent yet
+  cost                nothing spent yet
+  /diagnostics shows detailed cache and recovery information
+  Shortcuts
+  Enter                     Send a task
+  Enter while working       Send now
+  Tab while working         Queue for after this turn
+  Tab when idle             Next profile (empty draft)
+  Shift+Tab when idle       Previous profile (empty draft)
+  Ctrl+O                    Expand or fold detail
+  Esc                       Interrupt or close
+  Shift+Enter or Alt+Enter  Insert a newline
+  \ then Enter              Replace the backslash with a newline
+  Up / Down                 Move between draft lines; browse history and delegated agents from the
+                            first or last line
+  Home / End                Go to draft start or end; when empty, go to oldest or newest output
+  Ctrl+A / Ctrl+E           Go to line start or end
+  Alt+B / Alt+F             Move one word left or right
+  Ctrl+W                    Delete the word to the left
+  Ctrl+U                    Delete to line start
+  Ctrl+K                    Delete to line end
+  Alt+Up                    Edit the newest queued task
+  Ctrl+B                    Move a running shell command to the background
+  Ctrl+P                    Open the command palette
+  ? on an empty draft       Show shortcuts
+  PageUp / PageDown         Scroll the transcript
+  Mouse wheel               Scroll the transcript
+  +7 rows · /help for all · any key closes
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  any key closes · esc just closes                                 local/example-model · build · ask

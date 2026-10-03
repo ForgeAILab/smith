@@ -1,0 +1,24 @@
+● /context
+  Context usage
+  example-model · usage unavailable until the first turn
+
+  · · · · · · · · · ·
+  · · · · · · · · · ·
+  · · · · · · · · · ·
+  · · · · · · · · · ·
+  · · · · · · · □ □ □
+
+  Available capacity
+  ■ system instructions       ? (not counted yet)
+  ◆ tool schemas              ? (not counted yet)
+  · free input                123.9k
+  □ output/reasoning reserve  4k
+  model window                128k total · 123.9k input budget
+  counting                    waiting for first context plan
+  compaction                  enabled on overflow · 74.3k recovery target
+  tool context                offload above 8192 serialized bytes · artifact
+                              pages up to 2048 bytes
+────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────
+  ▼ following paused · End/Ctrl+L newest       local/example-model · build · ask

@@ -1081,7 +1081,7 @@ fn fixture_diagnostics_view(
         section.heading = normalizer.normalize(&section.heading);
         for row in &mut section.rows {
             match row {
-                DiagnosticsRow::Field { label, value } => {
+                DiagnosticsRow::Field { label, value } | DiagnosticsRow::Path { label, value } => {
                     *label = normalizer.normalize(label);
                     *value = normalizer.normalize(value);
                 }

@@ -1,0 +1,16 @@
+  capsule persisted   not yet saved
+  capsule summary     none
+  change attribution  no attributable turn
+                      recorded
+  Choose model · type to filter         1/12
+❯ example-model      local ·…      ✓ current
+                     limits from user…
+  small-model        local · 32768 context
+  alternative-model  other · 64k context
+  sonnet             Claude Code CLI · 200k…
+  opus               Claude Code CLI · 200k…
+────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────
+           local/example-model · build · ask
+  enter choose · esc cancel

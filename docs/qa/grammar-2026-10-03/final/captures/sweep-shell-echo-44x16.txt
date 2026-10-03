@@ -1,0 +1,16 @@
+  deterministic fake provider; configure a
+  real provider to talk to a model.
+
+! printf
+  'one\ntwo\nthree\nfour\nfive\nsix\n'
+  ⎿  one
+     two
+     three
+     four
+     … +2 lines (ctrl+o to expand)
+
+✻ Worked for 21ms
+────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────
+  ? for shortcuts        local/example-model

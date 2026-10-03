@@ -1,0 +1,16 @@
+  Get started
+  Type a task below and press Enter.
+
+  /model    Switch model
+  /connect  Connect or reconnect a provider
+  /help     List commands and keys
+
+
+
+
+
+
+────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────
+  ? for shortcuts        local/example-model

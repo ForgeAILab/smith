@@ -32,7 +32,7 @@ completed_at:
   replayed. User `!` shortcut echoes are saved by 2.7.
 - [x] 2.7 Decide whether user `!` shortcut echoes should be saved so a resumed
   session shows them. Decided 2026-10-03: yes ("yes need echo").
-- [ ] 2.7a Save each finished shortcut to a Smith-owned sidecar beside the
+- [x] 2.7a Save each finished shortcut to a Smith-owned sidecar beside the
   snapshot, `<session-id>.shell.jsonl` (named by `SessionPaths::shell`),
   appended one JSON line per shortcut and created owner-only. A line holds
   the history length when the shortcut was dispatched (its anchor), the call
@@ -41,11 +41,11 @@ completed_at:
   display redactor first. Nothing is written to the event journal, the
   snapshot, or model-visible history. A shortcut still running at exit is
   not saved.
-- [ ] 2.7b On resume, place each saved shortcut after the history message
+- [x] 2.7b On resume, place each saved shortcut after the history message
   its anchor names, as the same `! command` row with its nested result. An
   anchor beyond the restored history is dropped, never moved. A truncated
   final line is ignored. A fork does not copy the sidecar.
-- [ ] 2.7c Extend the 2.6 parity test: a resumed shortcut renders the same
+- [x] 2.7c Extend the 2.6 parity test: a resumed shortcut renders the same
   as the live one at 44, 80, and 100 columns, folded, expanded, and
   monochrome.
 
@@ -59,7 +59,7 @@ completed_at:
   quotes, tables, fences with a language label, links with visible targets.
 - [x] 3.3a Code blocks drop the visible ``` fence lines and keep a dim
   language label.
-- [ ] 3.3b Keep table columns stable while a table is still streaming (later
+- [ ] 3.3b Deferred, not blocking (owner 2026-10-03): keep table columns stable while a table is still streaming (later
   wider cells reflow earlier rows today); emit OSC 8 links once terminal
   support can be detected.
 - [x] 3.4 Approval layout: action, place and deadline, warning, question,
@@ -89,7 +89,7 @@ completed_at:
   `Instant::now()` after the app records the child's finish time, so a slow
   scheduler makes `due - 1ms` reach the expiry. Pass the finish instant in
   instead of reading the clock twice.
-- [ ] 4.4 `/diagnostics`: grouped, one fact per line, `unknown` for
+- [x] 4.4 `/diagnostics`: grouped, one fact per line, `unknown` for
   unknown. Headings, in order: Session, Context, Cache, Recovery. Rows use
   the same aligned label column as `/status`; labels are short because the
   heading carries the group. A value that packs several ` · ` facts becomes
@@ -97,12 +97,27 @@ completed_at:
   diagnostics builder reads the underlying status fields itself; the shared
   one-line helpers stay as they are for `/status` and `/context`. Plain
   output (`render_plain`) prints the headings too.
-- [ ] 4.4a The footer reads `unknown ctx`, not `? ctx`, as `DESIGN.md`
+- [x] 4.4a The footer reads `unknown ctx`, not `? ctx`, as `DESIGN.md`
   already says.
+- [x] 4.4b Found in the final PTY check: `/diagnostics` opens at its end;
+  like `/help`, `/status`, and `/context` it must open at its top.
+- [x] 4.4c Found in the 44-column fixtures: labels longer than the label
+  column wrap and lose their indent; detail facts (maintenance, idle
+  compaction, capability view) read ambiguously side by side; a usage
+  breakdown is cut mid-word. No label exceeds 18 columns, detail facts nest
+  under their parent row as the context plan segments do, and breakdowns
+  wrap at words.
+- [x] 4.4d Found in the live check: `/diagnostics` cuts a long project
+  path from the right; like `/status` it shortens paths from the left with
+  `…`. The report marks path values in its data; the renderer does not infer
+  them from labels.
+- [x] 4.2b Found in the final PTY check: `/help`'s "Start here" hardcodes
+  "Choose a model", "Add a connection", and "Explore all commands"; it reads
+  the command table as the startup guide does.
 - [x] 4.5 First-run setup: one frame, wrapped descriptions.
 
 - [x] 4.5a Setup descriptions sit two columns in from their names.
-- [ ] 4.5b Long setup review and collision-preview bodies still clip.
+- [ ] 4.5b Deferred, not blocking (owner 2026-10-03): long setup review and collision-preview bodies still clip.
 - [x] 4.6 Settle two presentation rules `refactor-client-structure` kept
   for byte identity: (a) the inline-code colon exception in the single
   free-text renderer (`smith-tui` `render/transcript.rs`): decide whether
@@ -114,10 +129,10 @@ completed_at:
   show it as stored"): (a) field values render exactly as stored and free
   lines always get inline Markdown; (b) one lowercase word set on every
   surface, with a running child reading `running`.
-- [ ] 4.6a Field values render verbatim; free lines get unconditional inline
+- [x] 4.6a Field values render verbatim; free lines get unconditional inline
   Markdown; remove the colon exception (`inline_text`). Re-record
   `skills-populated` and the diagnostics fixtures.
-- [ ] 4.6b Child state and durability read the same on every surface:
+- [x] 4.6b Child state and durability read the same on every surface:
   `running`, `idle`, `interrupted (resumable)` or
   `interrupted (not resumable)`, `stopped (<reason in words>)`, `failed`,
   `expired`; `durable` or `ephemeral`. The TUI's child rows say `running`
@@ -142,7 +157,7 @@ completed_at:
 
 ## 6. Verification
 
-- [ ] 6.1 PTY captures at 100×32, 80×24, 44×16, and no-colour for every
+- [x] 6.1 PTY captures at 100×32, 80×24, 44×16, and no-colour for every
   surface, stored under `docs/qa/`.
-- [ ] 6.2 `cargo fmt --all -- --check`, strict Clippy, workspace tests.
-- [ ] 6.3 Command sweep and startup sweep.
+- [x] 6.2 `cargo fmt --all -- --check`, strict Clippy, workspace tests.
+- [x] 6.3 Command sweep and startup sweep.

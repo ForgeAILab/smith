@@ -1,0 +1,266 @@
+[
+  {
+    "check": "startup 100x32",
+    "pass": true
+  },
+  {
+    "check": "command menu 100x32",
+    "pass": true
+  },
+  {
+    "check": "highlighted status executes 100x32",
+    "pass": true
+  },
+  {
+    "check": "shortcuts panel 100x32",
+    "pass": true
+  },
+  {
+    "check": "bash mode 100x32",
+    "pass": true
+  },
+  {
+    "check": "backspace leaves bash mode 100x32",
+    "pass": true
+  },
+  {
+    "check": "/help 100x32",
+    "pass": true
+  },
+  {
+    "check": "/status 100x32",
+    "pass": true
+  },
+  {
+    "check": "/context 100x32",
+    "pass": true
+  },
+  {
+    "check": "/diagnostics 100x32",
+    "pass": true,
+    "detail": "headings, no ? values"
+  },
+  {
+    "check": "/model picker 100x32",
+    "pass": true
+  },
+  {
+    "check": "/profile picker 100x32",
+    "pass": true
+  },
+  {
+    "check": "first turn 100x32",
+    "pass": true
+  },
+  {
+    "check": "shell echo 100x32",
+    "pass": true,
+    "detail": "one echo row, folded result"
+  },
+  {
+    "check": "resumed shell echo 100x32",
+    "pass": true,
+    "detail": "echo restored once, after the turn that preceded it"
+  },
+  {
+    "check": "startup 80x24",
+    "pass": true
+  },
+  {
+    "check": "command menu 80x24",
+    "pass": true
+  },
+  {
+    "check": "highlighted status executes 80x24",
+    "pass": true
+  },
+  {
+    "check": "shortcuts panel 80x24",
+    "pass": true
+  },
+  {
+    "check": "bash mode 80x24",
+    "pass": true
+  },
+  {
+    "check": "backspace leaves bash mode 80x24",
+    "pass": true
+  },
+  {
+    "check": "/help 80x24",
+    "pass": true
+  },
+  {
+    "check": "/status 80x24",
+    "pass": true
+  },
+  {
+    "check": "/context 80x24",
+    "pass": true
+  },
+  {
+    "check": "/diagnostics 80x24",
+    "pass": true,
+    "detail": "headings, no ? values"
+  },
+  {
+    "check": "/model picker 80x24",
+    "pass": true
+  },
+  {
+    "check": "/profile picker 80x24",
+    "pass": true
+  },
+  {
+    "check": "first turn 80x24",
+    "pass": true
+  },
+  {
+    "check": "shell echo 80x24",
+    "pass": true,
+    "detail": "one echo row, folded result"
+  },
+  {
+    "check": "resumed shell echo 80x24",
+    "pass": true,
+    "detail": "echo restored once, after the turn that preceded it"
+  },
+  {
+    "check": "startup 44x16",
+    "pass": true
+  },
+  {
+    "check": "command menu 44x16",
+    "pass": true
+  },
+  {
+    "check": "highlighted status executes 44x16",
+    "pass": true
+  },
+  {
+    "check": "shortcuts panel 44x16",
+    "pass": true
+  },
+  {
+    "check": "bash mode 44x16",
+    "pass": true
+  },
+  {
+    "check": "backspace leaves bash mode 44x16",
+    "pass": true
+  },
+  {
+    "check": "/help 44x16",
+    "pass": true
+  },
+  {
+    "check": "/status 44x16",
+    "pass": true
+  },
+  {
+    "check": "/context 44x16",
+    "pass": true
+  },
+  {
+    "check": "/diagnostics 44x16",
+    "pass": true,
+    "detail": "headings, no ? values"
+  },
+  {
+    "check": "/model picker 44x16",
+    "pass": true
+  },
+  {
+    "check": "/profile picker 44x16",
+    "pass": true
+  },
+  {
+    "check": "first turn 44x16",
+    "pass": true
+  },
+  {
+    "check": "shell echo 44x16",
+    "pass": true,
+    "detail": "one echo row, folded result"
+  },
+  {
+    "check": "resumed shell echo 44x16",
+    "pass": true,
+    "detail": "echo restored once, after the turn that preceded it"
+  },
+  {
+    "check": "startup 80x24-nocolor",
+    "pass": true
+  },
+  {
+    "check": "command menu 80x24-nocolor",
+    "pass": true
+  },
+  {
+    "check": "highlighted status executes 80x24-nocolor",
+    "pass": true
+  },
+  {
+    "check": "shortcuts panel 80x24-nocolor",
+    "pass": true
+  },
+  {
+    "check": "bash mode 80x24-nocolor",
+    "pass": true
+  },
+  {
+    "check": "backspace leaves bash mode 80x24-nocolor",
+    "pass": true
+  },
+  {
+    "check": "/help 80x24-nocolor",
+    "pass": true
+  },
+  {
+    "check": "/status 80x24-nocolor",
+    "pass": true
+  },
+  {
+    "check": "/context 80x24-nocolor",
+    "pass": true
+  },
+  {
+    "check": "/diagnostics 80x24-nocolor",
+    "pass": true,
+    "detail": "headings, no ? values"
+  },
+  {
+    "check": "/model picker 80x24-nocolor",
+    "pass": true
+  },
+  {
+    "check": "/profile picker 80x24-nocolor",
+    "pass": true
+  },
+  {
+    "check": "first turn 80x24-nocolor",
+    "pass": true
+  },
+  {
+    "check": "shell echo 80x24-nocolor",
+    "pass": true,
+    "detail": "one echo row, folded result"
+  },
+  {
+    "check": "resumed shell echo 80x24-nocolor",
+    "pass": true,
+    "detail": "echo restored once, after the turn that preceded it"
+  },
+  {
+    "check": "setup 100x32",
+    "pass": true
+  },
+  {
+    "check": "setup 80x24",
+    "pass": true
+  },
+  {
+    "check": "setup 44x16",
+    "pass": true
+  }
+]

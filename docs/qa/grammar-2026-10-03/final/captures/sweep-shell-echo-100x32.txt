@@ -1,0 +1,32 @@
+    outcome           none
+    reason            none
+    latency           unknown
+    route             unknown
+    usage             input 0 · cached 0 · writes 0 · output 0 · reasoning 0
+  synthetic attempts  0
+
+  Recovery
+  mid-turn recovery   unavailable
+  capsule schema      1
+  capsule watermark   0
+  capsule persisted   not yet saved
+  capsule summary     none
+  change attribution  no attributable turn recorded
+
+> reply with ok
+
+● This session is running Smith's deterministic fake provider; configure a real provider to talk to
+  a model.
+
+! printf 'one\ntwo\nthree\nfour\nfive\nsix\n'
+  ⎿  one
+     two
+     three
+     four
+     … +2 lines (ctrl+o to expand)
+
+✻ Worked for 22ms
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts                                                  local/example-model · build · ask

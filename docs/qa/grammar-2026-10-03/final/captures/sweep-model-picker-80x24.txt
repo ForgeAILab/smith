@@ -1,0 +1,24 @@
+    latency           unknown
+    route             unknown
+    usage             input 0 · cached 0 · writes 0 · output 0 · reasoning 0
+  synthetic attempts  0
+
+  Recovery
+  mid-turn recovery   unavailable
+  capsule schema      1
+  capsule watermark   0
+  capsule persisted   not yet saved
+  capsule summary     none
+  change attribution  no attributable turn recorded
+  Choose model · type to filter                                             1/12
+❯ example-model      local · 128k context                              ✓ current
+                     limits from user config · input 124k · output ceiling 4096…
+  small-model        local · 32768 context
+  alternative-model  other · 64k context
+  sonnet             Claude Code CLI · 200k context
+  opus               Claude Code CLI · 200k context
+────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────
+                                               local/example-model · build · ask
+  type to filter · ↑↓ choose · enter confirm · esc cancel

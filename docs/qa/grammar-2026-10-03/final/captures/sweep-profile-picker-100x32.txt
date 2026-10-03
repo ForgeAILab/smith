@@ -1,0 +1,32 @@
+    lease             none
+    calls             0/1
+    scheduled         none
+    decision          none
+    narrowing         idle compaction disabled because no protected semantic-summary route is
+                      installed
+  idle compaction     attempted no
+    decision          none
+    outcome           none
+    reason            none
+    latency           unknown
+    route             unknown
+    usage             input 0 · cached 0 · writes 0 · output 0 · reasoning 0
+  synthetic attempts  0
+
+  Recovery
+  mid-turn recovery   unavailable
+  capsule schema      1
+  capsule watermark   0
+  capsule persisted   not yet saved
+  capsule summary     none
+  change attribution  no attributable turn recorded
+  Choose profile · type to filter                                                                1/3
+❯ build   build · Make and test changes                                                    ✓ current
+          use main+child · local/example-model · rev cb861c131593… · source…
+  plan    plan · Plan before changing files
+  review  review · Read-only change review
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────
+           local/example-model · build · ask · /private/tmp/smith-final-69evlhdb/100x32/project:main
+  type to filter · ↑↓ choose · enter confirm · esc cancel

@@ -768,11 +768,14 @@ fn render_diagnostics_report(
             .iter()
             .flat_map(|section| &section.rows)
             .filter_map(|row| match row {
-                DiagnosticsRow::Field { label, .. } => Some(label.as_str()),
+                DiagnosticsRow::Field { label, .. } | DiagnosticsRow::Path { label, .. } => {
+                    Some(label.as_str())
+                }
                 DiagnosticsRow::Line(_) => None,
             }),
         width,
     );
+    let value_width = usize::from(width).saturating_sub(label_width + 4).max(1);
     let mut lines = Vec::new();
     for (index, section) in report.sections.iter().enumerate() {
         if index > 0 {
@@ -789,6 +792,16 @@ fn render_diagnostics_report(
                     lines.extend(report_field(
                         label,
                         value,
+                        Tone::Default,
+                        label_width,
+                        width,
+                        theme,
+                    ));
+                }
+                DiagnosticsRow::Path { label, value } => {
+                    lines.extend(report_field(
+                        label,
+                        &reports::left_shorten(value, value_width),
                         Tone::Default,
                         label_width,
                         width,
