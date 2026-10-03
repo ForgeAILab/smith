@@ -1260,6 +1260,117 @@
         );
     }
 
+    #[tokio::test]
+    async fn approval_waiting_is_rendered_in_the_tool_and_working_rows() {
+        let mut app = App::new("gpt-5.3", "/repo");
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        app.apply(&event(RuntimeEvent::ToolCallRequested {
+            call: ToolCallId::new("approval-evidence"),
+            name: "shell".to_owned(),
+            argument_keys: vec!["command".to_owned()],
+            argument_fingerprint: agent_runtime_registry::Fingerprint::of("arguments"),
+            arguments: Some(serde_json::json!({"command": "git status --short"})),
+        }));
+        app.present_approval(approval_evidence_prompt("git status --short", false).await);
+        app.work_details = true;
+        let lines = transcript_lines(&app, Theme::new().without_color(), 100);
+        let tool = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            tool.contains("● Bash(git status --short) waiting for approval"),
+            "{tool}"
+        );
+        assert!(!tool.contains("running"), "{tool}");
+        let work = working_line(&app, Theme::new().without_color(), 140).to_string();
+        assert!(work.contains("tool shell · waiting for approval"), "{work}");
+        assert!(!work.contains("running"), "{work}");
+    }
+
+    #[test]
+    fn denied_tool_result_renders_the_same_live_from_history_and_from_events() {
+        let arguments = serde_json::json!({"command": "git status --short"});
+        let reason = "approval declined: the user declined";
+        let requested = event(RuntimeEvent::ToolCallRequested {
+            call: ToolCallId::new("c1"),
+            name: "shell".to_owned(),
+            argument_keys: vec!["command".to_owned()],
+            argument_fingerprint: agent_runtime_registry::Fingerprint::of("arguments"),
+            arguments: None,
+        });
+        let completed = event(RuntimeEvent::ToolCallCompleted {
+            call: ToolCallId::new("c1"),
+            name: "shell".to_owned(),
+            is_error: true,
+        });
+        let history = vec![
+            Message::assistant(vec![ContentPart::ToolCall(ToolCall {
+                id: ToolCallId::new("c1"),
+                name: "shell".to_owned(),
+                arguments: arguments.clone(),
+            })]),
+            Message::tool_result(ToolResultBlock {
+                call_id: ToolCallId::new("c1"),
+                name: "shell".to_owned(),
+                content: vec![ContentPart::text(reason)],
+                is_error: true,
+            }),
+        ];
+        let mut live = App::new("m", "p");
+        live.apply(&requested);
+        // The user's decision reaches the row before the completion event.
+        live.transcript.complete_tool_call("c1", ToolStatus::Denied);
+        live.set_tool_result_preview("c1", reason);
+        live.apply(&completed);
+        let mut history_replay = App::new("m", "p");
+        history_replay.transcript.replace_from_history(&history);
+        assert_eq!(
+            history_replay.transcript.tool_status("c1"),
+            Some(ToolStatus::Denied)
+        );
+        let mut event_replay = App::new("m", "p");
+        event_replay.apply_recovered(&requested);
+        event_replay.apply_recovered(&completed);
+        for app in [&mut live, &mut history_replay, &mut event_replay] {
+            app.set_tool_display(
+                "c1",
+                smith_tools::project_tool_call_display("shell", &arguments).expect("shell display"),
+            );
+            app.set_tool_result_preview("c1", reason);
+            assert_eq!(app.transcript.tool_status("c1"), Some(ToolStatus::Denied));
+        }
+        for expanded in [false, true] {
+            live.work_details = expanded;
+            history_replay.work_details = expanded;
+            event_replay.work_details = expanded;
+            for width in [100, 80, 44] {
+                let screen = render(&live, width, 16, Theme::new().without_color());
+                assert!(
+                    screen.contains("● Bash(git status --short) denied"),
+                    "{screen}"
+                );
+                assert!(
+                    screen.contains("⎿  approval declined: the user declined"),
+                    "{screen}"
+                );
+                assert!(
+                    !screen.contains("failed") && !screen.contains("● approval"),
+                    "{screen}"
+                );
+                assert_eq!(
+                    screen,
+                    render(&history_replay, width, 16, Theme::new().without_color())
+                );
+                assert_eq!(
+                    screen,
+                    render(&event_replay, width, 16, Theme::new().without_color())
+                );
+            }
+        }
+    }
+
     #[test]
     fn generate_image_rows_show_progress_saved_path_and_provider_errors() {
         let theme = Theme::new().without_color().without_motion();
@@ -1909,6 +2020,7 @@
     #[test]
     fn running_failed_and_denied_tool_markers_keep_their_status() {
         for (status, color, word) in [
+            (ToolStatus::WaitingForApproval, None, "waiting for approval"),
             (ToolStatus::Running, None, "running"),
             (ToolStatus::Failed, Some(Color::Red), "failed"),
             (ToolStatus::Denied, Some(Color::Red), "denied"),
@@ -1925,7 +2037,7 @@
             }
             let lines = transcript_lines(&app, Theme::new(), 100);
             assert_eq!(lines[0].spans[0].style.fg, color);
-            if status == ToolStatus::Running {
+            if matches!(status, ToolStatus::Running | ToolStatus::WaitingForApproval) {
                 assert!(lines[0].spans[0].style.add_modifier.contains(Modifier::DIM));
             }
             let text = lines[0].to_string();

@@ -5,7 +5,7 @@ use agent_runtime_core::tool::PreparedToolCall;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph};
 
 use crate::app::{App, Overlay};
 use crate::diff::{Change, EditReview};
@@ -17,6 +17,7 @@ use super::modal::{
 use super::wrap::wrap_lines;
 
 const DIFF_PREVIEW_LINES: usize = 4;
+const HORIZONTAL_PADDING: u16 = 2;
 
 fn line(text: impl Into<String>, theme: Theme, tone: Tone) -> Line<'static> {
     Line::from(Span::styled(text.into(), theme.style(tone)))
@@ -197,7 +198,9 @@ fn compose(
             place.push_str(" · background");
         }
     }
-    place.push_str(&format!(" · deadline {}", deadline_text(prompt.deadline())));
+    if prompt.deadline().instant().is_some() {
+        place.push_str(&format!(" · deadline {}", deadline_text(prompt.deadline())));
+    }
     body.push(line(place, theme, Tone::Dim));
     if host_shell(prepared) {
         body.push(line(
@@ -277,7 +280,7 @@ fn approval_layout(area: Rect, app: &App, theme: Theme) -> ApprovalLayout {
     } else {
         modal_width(area)
     };
-    let inner = width.saturating_sub(2);
+    let inner = width.saturating_sub(2 + HORIZONTAL_PADDING * 2);
     let (title, body, mut controls) = compose(app, theme, DIFF_PREVIEW_LINES);
     let mut body = wrap_lines(&body, inner);
     let mut foot = wrap_lines(&controls, inner);
@@ -360,6 +363,7 @@ pub(super) fn draw_approval(frame: &mut Frame<'_>, area: Rect, app: &App, theme:
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
+        .padding(Padding::horizontal(HORIZONTAL_PADDING))
         .border_style(theme.style(Tone::Warning))
         .title(Span::styled(
             format!(" {title} "),

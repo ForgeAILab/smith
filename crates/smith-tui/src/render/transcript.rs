@@ -245,7 +245,9 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16, expanded: bool) -> Ve
                 ..
             } => {
                 let tone = match status {
-                    ToolStatus::Running | ToolStatus::Unreported => Tone::Dim,
+                    ToolStatus::WaitingForApproval
+                    | ToolStatus::Running
+                    | ToolStatus::Unreported => Tone::Dim,
                     ToolStatus::Ok => Tone::Success,
                     ToolStatus::Failed | ToolStatus::Denied => Tone::Danger,
                 };
@@ -281,7 +283,7 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16, expanded: bool) -> Ve
                     call.push(Span::styled(format!(" {status_text}"), theme.style(tone)));
                 }
                 lines.push(Line::from(call));
-                if !matches!(status, ToolStatus::Running) {
+                if !matches!(status, ToolStatus::Running | ToolStatus::WaitingForApproval) {
                     if let Some(preview) = result_preview {
                         let summary =
                             (status == &ToolStatus::Ok && !expanded && user_command.is_none())

@@ -16,6 +16,162 @@ fn elapse_prompt_guard(app: &mut App) {
 }
 
 #[tokio::test]
+async fn approval_rows_and_work_detail_wait_until_their_exact_call_is_allowed() {
+    for prompt_first in [false, true] {
+        let mut app = app();
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        app.work_details = true;
+        let (first, first_decision) = pending_prompt_with_id(
+            "c1",
+            "shell",
+            serde_json::json!({"command": "first"}),
+            Deadline::never(),
+        )
+        .await;
+        let (second, second_decision) = pending_prompt_with_id(
+            "c2",
+            "shell",
+            serde_json::json!({"command": "second"}),
+            Deadline::never(),
+        )
+        .await;
+        if !prompt_first {
+            app.apply(&event(tool_requested("c1", "shell")));
+            app.apply(&event(tool_requested("c2", "shell")));
+        }
+        app.present_approval(first);
+        app.present_approval(second);
+        if prompt_first {
+            app.apply(&event(tool_requested("c1", "shell")));
+            app.apply(&event(tool_requested("c2", "shell")));
+        }
+        for call in ["c1", "c2"] {
+            assert_eq!(
+                app.transcript.tool_status(call),
+                Some(ToolStatus::WaitingForApproval)
+            );
+        }
+        assert_eq!(
+            app.work_detail_lines(),
+            vec![
+                "tool shell · waiting for approval",
+                "tool shell · waiting for approval",
+            ]
+        );
+        for block in app.transcript.blocks() {
+            if let Block::Tool { started_at, .. } = block {
+                assert!(started_at.is_none(), "approval wait is not execution time");
+            }
+        }
+
+        app.on_key(key(KeyCode::Enter));
+        assert_eq!(
+            app.transcript.tool_status("c1"),
+            Some(ToolStatus::WaitingForApproval)
+        );
+        elapse_prompt_guard(&mut app);
+        app.on_key(key(KeyCode::Char('y')));
+        assert_eq!(
+            first_decision.await.expect("first decision"),
+            ApprovalDecision::Allow
+        );
+        assert_eq!(app.transcript.tool_status("c1"), Some(ToolStatus::Running));
+        assert_eq!(
+            app.transcript.tool_status("c2"),
+            Some(ToolStatus::WaitingForApproval)
+        );
+        assert!(app.work_detail_lines()[0].starts_with("tool shell · running "));
+        assert_eq!(
+            app.work_detail_lines()[1],
+            "tool shell · waiting for approval"
+        );
+        assert!(matches!(
+            app.transcript.blocks()[0],
+            Block::Tool {
+                started_at: Some(_),
+                ..
+            }
+        ));
+
+        elapse_prompt_guard(&mut app);
+        app.on_key(key(KeyCode::Char('y')));
+        assert_eq!(
+            second_decision.await.expect("second decision"),
+            ApprovalDecision::Allow
+        );
+        assert_eq!(app.transcript.tool_status("c2"), Some(ToolStatus::Running));
+    }
+}
+
+#[tokio::test]
+async fn denied_call_keeps_its_reason_after_completion_without_a_duplicate_notice() {
+    for code in [KeyCode::Char('n'), KeyCode::Esc] {
+        let mut app = app();
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        app.apply(&event(tool_requested("c1", "shell")));
+        app.apply(&event(tool_requested("c2", "shell")));
+        app.work_details = true;
+        let (prompt, decision) = pending_prompt_with(
+            "shell",
+            serde_json::json!({
+                "command": "git status --short",
+            }),
+        )
+        .await;
+        app.present_approval(prompt);
+        elapse_prompt_guard(&mut app);
+        app.on_key(key(code));
+        assert!(matches!(
+            decision.await.expect("denial"),
+            ApprovalDecision::Deny { .. }
+        ));
+        assert_eq!(app.transcript.tool_status("c1"), Some(ToolStatus::Denied));
+        assert_eq!(app.transcript.tool_status("c2"), Some(ToolStatus::Running));
+        assert!(matches!(&app.transcript.blocks()[0], Block::Tool {
+            result_preview: Some(reason), ..
+        } if reason == "approval declined: the user declined"));
+        assert!(!app.transcript.blocks().iter().any(|block| matches!(
+            block, Block::Notice { source, .. } if source == "approval"
+        )));
+
+        app.apply(&event(tool_completed("c1", "shell", true)));
+        assert_eq!(app.transcript.tool_status("c1"), Some(ToolStatus::Denied));
+        assert_eq!(app.work_detail_lines()[0], "tool shell · denied");
+        app.set_tool_result_preview("c1", "approval declined: the user declined");
+        assert_eq!(app.transcript.tool_status("c1"), Some(ToolStatus::Denied));
+        assert_eq!(app.work_detail_lines()[0], "tool shell · denied");
+        assert_eq!(app.transcript.len(), 2);
+    }
+}
+
+#[tokio::test]
+async fn denial_without_the_matching_tool_row_keeps_its_notice() {
+    let mut app = app();
+    app.apply(&event(tool_requested("unrelated", "shell")));
+    let (prompt, decision) = pending_prompt_with(
+        "shell",
+        serde_json::json!({
+            "command": "git status --short",
+        }),
+    )
+    .await;
+    app.present_approval(prompt);
+    elapse_prompt_guard(&mut app);
+    app.on_key(key(KeyCode::Char('n')));
+    assert!(matches!(
+        decision.await.expect("denial"),
+        ApprovalDecision::Deny { .. }
+    ));
+    assert_eq!(
+        app.transcript.tool_status("unrelated"),
+        Some(ToolStatus::Running)
+    );
+    assert!(app.transcript.blocks().iter().any(|block| matches!(
+        block, Block::Notice { source, text } if source == "approval" && text == "shell denied"
+    )));
+}
+
+#[tokio::test]
 async fn typing_through_an_approval_preserves_the_draft_and_requires_a_quiet_window() {
     let mut app = app();
     let clock = prompt_clock(&mut app);

@@ -525,19 +525,33 @@ impl App {
                 }
             }
             RuntimeEvent::ToolCallRequested { call, name, .. } => {
+                let status = if self.tool_waiting_for_approval(call.as_str()) {
+                    self.transcript
+                        .complete_tool_call(call.as_str(), ToolStatus::WaitingForApproval);
+                    ToolStatus::WaitingForApproval
+                } else {
+                    ToolStatus::Running
+                };
                 if let Some(work) = &mut self.work {
                     work.tools.insert(
                         call.as_str().to_owned(),
-                        (name.clone(), ToolStatus::Running, Some(Instant::now())),
+                        (
+                            name.clone(),
+                            status,
+                            (status == ToolStatus::Running).then(Instant::now),
+                        ),
                     );
                 }
             }
             RuntimeEvent::ToolCallCompleted { call, is_error, .. } => {
-                let status = if *is_error {
-                    ToolStatus::Failed
-                } else {
-                    ToolStatus::Ok
-                };
+                let status = self
+                    .transcript
+                    .tool_status(call.as_str())
+                    .unwrap_or(if *is_error {
+                        ToolStatus::Failed
+                    } else {
+                        ToolStatus::Ok
+                    });
                 if let Some(work) = &mut self.work
                     && let Some((_, work_status, _)) = work.tools.get_mut(call.as_str())
                 {

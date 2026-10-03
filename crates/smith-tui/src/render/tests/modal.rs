@@ -653,6 +653,19 @@
         command: &str,
         background: bool,
     ) -> smith_host::approval::ApprovalPrompt {
+        approval_evidence_prompt_with_deadline(
+            command,
+            background,
+            Deadline::after(&SystemClock, 600_000),
+        )
+        .await
+    }
+
+    async fn approval_evidence_prompt_with_deadline(
+        command: &str,
+        background: bool,
+        deadline: Deadline,
+    ) -> smith_host::approval::ApprovalPrompt {
         let (policy, mut requests) = smith_host::approval::InteractiveApproval::new(1);
         let command = command.to_owned();
         tokio::spawn(async move {
@@ -675,7 +688,7 @@
                         "cargo publish --dry-run\nHost access: same-user files and inherited credentials",
                     ),
                 ),
-                Deadline::after(&SystemClock, 600_000),
+                deadline,
                 ApprovalOrigin::new(SessionId::new("session-1"), RequestId::new("request-1")),
             );
             let _ = policy.decide(&request).await;
@@ -692,6 +705,65 @@
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ")
+    }
+
+    #[tokio::test]
+    async fn approval_padding_keeps_wrapped_body_and_controls_inside_the_safe_width() {
+        for (width, height) in [(100, 32), (80, 24), (44, 16)] {
+            let mut app = App::new("gpt-5.3", "/repo");
+            app.present_approval(
+                approval_evidence_prompt_with_deadline(
+                    "printf abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz一二三四",
+                    false,
+                    Deadline::never(),
+                )
+                .await,
+            );
+            for expanded in [false, true] {
+                app.work_details = expanded;
+                let screen = render(&app, width, height, Theme::new().without_color());
+                let mut body_rows = 0;
+                for row in screen.lines() {
+                    assert!(row.width() <= usize::from(width), "{screen}");
+                    if let Some((_, inside)) = row.split_once('│') {
+                        let (inside, _) = inside.rsplit_once('│').expect("right border");
+                        assert!(inside.starts_with("  "), "left padding: {row}");
+                        assert!(inside.ends_with("  "), "right padding: {row}");
+                        body_rows += 1;
+                    }
+                }
+                assert!(body_rows > 0, "{screen}");
+                assert!(screen.contains("│  printf"), "{screen}");
+                assert!(screen.contains("│  Do you want to proceed?"), "{screen}");
+                assert!(screen.contains("│    n  No (esc)"), "{screen}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn approval_place_omits_an_absent_deadline_and_retains_a_real_deadline() {
+        for deadline in [Deadline::never(), Deadline::after(&SystemClock, 600_000)] {
+            let absolute = deadline
+                .instant()
+                .map(|time| crate::time_display::local_timestamp(time.as_millis()));
+            let mut app = App::new("gpt-5.3", "/repo");
+            app.present_approval(
+                approval_evidence_prompt_with_deadline("git status --short", false, deadline).await,
+            );
+            for (width, height) in [(100, 32), (44, 16)] {
+                let screen = render(&app, width, height, Theme::new().without_color());
+                let words = approval_screen_words(&screen);
+                assert!(words.contains("in /repo · up to 10 min"), "{screen}");
+                assert!(!words.contains("deadline no deadline"), "{screen}");
+                if let Some(absolute) = &absolute {
+                    assert_eq!(words.matches("deadline").count(), 1, "{screen}");
+                    assert!(words.contains(&format!("deadline {absolute}")), "{screen}");
+                    assert!(words.contains("remaining"), "{screen}");
+                } else {
+                    assert!(!words.contains("deadline"), "{screen}");
+                }
+            }
+        }
     }
 
     #[tokio::test]

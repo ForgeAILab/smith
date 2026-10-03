@@ -286,16 +286,26 @@ mod tests {
         arguments: serde_json::Value,
         deadline: Deadline,
     ) -> (ApprovalPrompt, tokio::task::JoinHandle<ApprovalDecision>) {
+        pending_prompt_with_id("c1", tool, arguments, deadline).await
+    }
+
+    async fn pending_prompt_with_id(
+        call_id: &str,
+        tool: &str,
+        arguments: serde_json::Value,
+        deadline: Deadline,
+    ) -> (ApprovalPrompt, tokio::task::JoinHandle<ApprovalDecision>) {
         // The simplest way to obtain a real prompt is to drive the policy the
         // runtime would call.
         let (policy, mut requests) = InteractiveApproval::new(1);
         let tool = tool.to_owned();
+        let call_id = call_id.to_owned();
         let decision = tokio::spawn(async move {
             let effects = ToolEffects::read_only().with_write("/repo");
             let (permissions, resource) = effects.authorization_request(&tool, "/repo");
             let request = ApprovalRequest::new(
                 PreparedToolCall::new(
-                    ToolCallId::new("c1"),
+                    ToolCallId::new(call_id),
                     &tool,
                     arguments,
                     permissions,

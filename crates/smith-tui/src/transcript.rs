@@ -31,9 +31,11 @@ pub(crate) const MAX_LOCAL_RESULT_BYTES: usize = 512 * 1024;
 const MAX_LOCAL_RESULT_LINES: usize = 4_096;
 const MAX_LOCAL_RESULT_TITLE_CHARS: usize = 96;
 
-/// How a tool call ended.
+/// The current state or terminal outcome of a tool call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolStatus {
+    /// Prepared, and waiting for an approval decision.
+    WaitingForApproval,
     /// Requested, and still running.
     Running,
     /// Completed successfully.
@@ -56,11 +58,26 @@ impl ToolStatus {
     /// replaced by it.
     pub fn label(self) -> &'static str {
         match self {
+            Self::WaitingForApproval => "waiting for approval",
             Self::Running => "running",
             Self::Ok => "ok",
             Self::Failed => "failed",
             Self::Denied => "denied",
             Self::Unreported => "ran",
+        }
+    }
+
+    /// Recovers the approval outcome from the runtime's canonical error text.
+    /// Completion events carry only an error flag, so live enrichment and
+    /// history replay must use the same result evidence.
+    pub(crate) fn with_result_preview(self, preview: &str) -> Self {
+        if self == Self::Failed
+            && (preview.starts_with("approval declined:")
+                || preview.starts_with("approval denied:"))
+        {
+            Self::Denied
+        } else {
+            self
         }
     }
 }
@@ -483,7 +500,7 @@ impl Transcript {
             .find(|block| matches!(block, Block::Tool { shell_echo: Some(id), .. } if *id == echo))
         {
             *status = if is_error {
-                ToolStatus::Failed
+                ToolStatus::Failed.with_result_preview(output)
             } else {
                 ToolStatus::Ok
             };
@@ -534,7 +551,7 @@ impl Transcript {
     pub fn settle_running_tool_calls(&mut self, status: ToolStatus) {
         for block in self.blocks.iter_mut().rev() {
             if let Block::Tool {
-                status: slot @ ToolStatus::Running,
+                status: slot @ (ToolStatus::Running | ToolStatus::WaitingForApproval),
                 ..
             } = block
             {
@@ -636,37 +653,63 @@ impl Transcript {
             if let Block::Tool {
                 call_id: id,
                 result_preview: slot,
+                status,
                 ..
             } = block
                 && id == call_id
             {
+                *status = status.with_result_preview(&preview);
                 *slot = Some(preview);
                 return;
             }
         }
     }
 
-    /// Marks a tool call finished. Unknown ids are ignored rather than
-    /// fabricating a block for a call the transcript never saw.
-    pub fn complete_tool_call(&mut self, call_id: &str, status: ToolStatus) {
+    /// Updates a tool call's status, returning whether its row exists.
+    /// Unknown ids never fabricate a block for a call the transcript never saw.
+    pub fn complete_tool_call(&mut self, call_id: &str, status: ToolStatus) -> bool {
         for block in self.blocks.iter_mut().rev() {
             if let Block::Tool {
                 call_id: id,
                 status: slot,
+                started_at,
+                result_preview,
                 ..
             } = block
                 && id == call_id
             {
-                *slot = status;
-                return;
+                if status == ToolStatus::Running && *slot == ToolStatus::WaitingForApproval {
+                    *started_at = Some(Instant::now());
+                } else if status == ToolStatus::WaitingForApproval {
+                    *started_at = None;
+                }
+                // A canonical completion reports a denied call as an error.
+                // Do not erase the approval decision before enrichment arrives.
+                if !(*slot == ToolStatus::Denied && status == ToolStatus::Failed) {
+                    *slot = status.with_result_preview(result_preview.as_deref().unwrap_or(""));
+                }
+                return true;
             }
         }
+        false
+    }
+
+    /// The current presentation status for one stable call identity.
+    pub(crate) fn tool_status(&self, call_id: &str) -> Option<ToolStatus> {
+        self.blocks.iter().rev().find_map(|block| match block {
+            Block::Tool {
+                call_id: id,
+                status,
+                ..
+            } if id == call_id => Some(*status),
+            _ => None,
+        })
     }
 
     /// Marks the most recent still-running call of `name` finished.
     ///
-    /// The approval gate denies by tool name — it fires before the runtime
-    /// emits a completion — so the row cannot be matched by call id.
+    /// A name-only fallback for callers without a stable call identity.
+    /// Prepared approvals use [`Self::complete_tool_call`] with their call id.
     pub fn complete_tool_call_by_name(&mut self, name: &str, status: ToolStatus) {
         for block in self.blocks.iter_mut().rev() {
             if let Block::Tool {
@@ -675,7 +718,7 @@ impl Transcript {
                 ..
             } = block
                 && candidate == name
-                && *slot == ToolStatus::Running
+                && matches!(*slot, ToolStatus::Running | ToolStatus::WaitingForApproval)
             {
                 *slot = status;
                 return;
@@ -760,7 +803,13 @@ impl Transcript {
                     for part in &message.content {
                         if let ContentPart::ToolResult(result) = part {
                             let status = if result.is_error {
-                                ToolStatus::Failed
+                                ToolStatus::Failed.with_result_preview(
+                                    result
+                                        .content
+                                        .iter()
+                                        .find_map(ContentPart::as_text)
+                                        .unwrap_or(""),
+                                )
                             } else {
                                 ToolStatus::Ok
                             };
@@ -1420,6 +1469,73 @@ mod tests {
                 assert_eq!(protected_summary, "arguments hidden");
             }
             other => panic!("expected a tool block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn approval_denial_is_classified_only_from_a_canonical_error_prefix() {
+        for (is_error, preview, expected) in [
+            (
+                true,
+                "approval declined: the user declined",
+                ToolStatus::Denied,
+            ),
+            (
+                true,
+                "approval denied: too many edited action proposals",
+                ToolStatus::Denied,
+            ),
+            (
+                false,
+                "approval declined: printed by the command",
+                ToolStatus::Ok,
+            ),
+            (
+                true,
+                "command failed\napproval declined: printed by the command",
+                ToolStatus::Failed,
+            ),
+            (true, "approval timed out", ToolStatus::Failed),
+        ] {
+            let history = [
+                Message::assistant(vec![ContentPart::ToolCall(ToolCall {
+                    id: ToolCallId::new("c1"),
+                    name: "shell".to_owned(),
+                    arguments: json!({}),
+                })]),
+                Message::tool_result(ToolResultBlock {
+                    call_id: ToolCallId::new("c1"),
+                    name: "shell".to_owned(),
+                    content: vec![ContentPart::text(preview)],
+                    is_error,
+                }),
+            ];
+            let mut replay = Transcript::new();
+            replay.replace_from_history(&history);
+            assert_eq!(replay.tool_status("c1"), Some(expected));
+            for preview_first in [false, true] {
+                let mut live = Transcript::new();
+                live.push_tool_call("c1", "shell", None, &[]);
+                if preview_first {
+                    live.set_tool_result_preview("c1", preview);
+                }
+                live.complete_tool_call(
+                    "c1",
+                    if is_error {
+                        ToolStatus::Failed
+                    } else {
+                        ToolStatus::Ok
+                    },
+                );
+                if !preview_first {
+                    live.set_tool_result_preview("c1", preview);
+                }
+                assert_eq!(live.tool_status("c1"), Some(expected));
+            }
+            let mut shortcut = Transcript::new();
+            let echo = shortcut.push_shell_shortcut("git status --short");
+            shortcut.finish_shell_shortcut(echo, Some("c1"), is_error, preview);
+            assert_eq!(shortcut.tool_status("c1"), Some(expected));
         }
     }
 

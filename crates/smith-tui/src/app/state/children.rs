@@ -47,6 +47,7 @@ impl App {
             ToolCallDisplay::invocation,
         );
         let detail = match status {
+            ToolStatus::WaitingForApproval => format!("waiting for approval {label}"),
             ToolStatus::Running | ToolStatus::Unreported => label,
             ToolStatus::Ok => format!("ok {label}"),
             ToolStatus::Failed | ToolStatus::Denied => format!("failed {label}"),

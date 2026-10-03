@@ -49,7 +49,7 @@ completed_at:
 - [x] 3.4 Approval layout: action, place and deadline, warning, question,
   choices; detail behind `Ctrl+O`; diffs expandable.
 - [x] 3.5 Keep transcript scrolling available while a prompt is open.
-- [ ] 3.5a Approval polish from the live check
+- [x] 3.5a Approval polish from the live check
   (docs/qa/grammar-2026-10-03/approval-live.md): inner padding inside the
   box; `deadline no deadline` wording; the tool row reads `running` while it
   waits for approval; a denied call reads `failed` instead of `denied`, and a

@@ -22,3 +22,16 @@ Polish found: no inner padding between the border and the text; the deadline
 reads `deadline no deadline`; the tool row says `running 10s` while it waits
 for approval; a denied call reads `failed` rather than `denied`, and the
 separate `approval · shell denied` row repeats it.
+
+## After the 3.5a polish
+
+Same prompt and build after the fixes
+([capture](approval-denied-after-polish-100x32.txt)):
+
+- The box text is padded two spaces from the border.
+- No deadline: the place line reads `in <cwd> · up to 2 min`.
+- While the prompt is open the call row reads
+  `● Bash(git status --short) waiting for approval`.
+- After `n`: `● Bash(git status --short) denied` with
+  `⎿  approval declined: the user declined`, and no separate
+  `approval · shell denied` row.

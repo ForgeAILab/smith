@@ -1308,6 +1308,12 @@ impl App {
     /// Attaches host-supplied, credential-redacted result lines to a tool row.
     pub fn set_tool_result_preview(&mut self, call_id: &str, preview: impl AsRef<str>) {
         self.transcript.set_tool_result_preview(call_id, preview);
+        if let Some(status) = self.transcript.tool_status(call_id)
+            && let Some(work) = &mut self.work
+            && let Some((_, work_status, _)) = work.tools.get_mut(call_id)
+        {
+            *work_status = status;
+        }
     }
 
     /// Toggles bounded, redaction-safe transcript output and live work detail.

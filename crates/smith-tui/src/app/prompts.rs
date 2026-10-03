@@ -76,6 +76,10 @@ impl App {
             );
             return;
         }
+        self.set_tool_approval_status(
+            prompt.prepared().call_id().as_str(),
+            ToolStatus::WaitingForApproval,
+        );
         let review = EditReview::from_call(prompt.tool(), prompt.prepared().arguments());
         let approval = PendingPrompt::Approval(Box::new(prompt), review);
         if self.overlay.is_none() {
@@ -254,13 +258,42 @@ impl App {
         self.present_next_prompt();
     }
 
+    pub(super) fn tool_waiting_for_approval(&self, call_id: &str) -> bool {
+        let matches = |prompt: &ApprovalPrompt| prompt.prepared().call_id().as_str() == call_id;
+        let visible = match &self.overlay {
+            Some(Overlay::Approval { prompt, .. }) => matches(prompt),
+            Some(Overlay::ExitConfirm {
+                approval: Some((prompt, _)),
+                ..
+            }) => matches(prompt),
+            _ => false,
+        };
+        visible
+            || self.pending_prompts.iter().any(
+                |prompt| matches!(prompt, PendingPrompt::Approval(prompt, _) if matches(prompt)),
+            )
+    }
+
+    fn set_tool_approval_status(&mut self, call_id: &str, status: ToolStatus) -> bool {
+        let represented = self.transcript.complete_tool_call(call_id, status);
+        if let Some(work) = &mut self.work
+            && let Some((_, work_status, started_at)) = work.tools.get_mut(call_id)
+        {
+            *work_status = status;
+            *started_at = (status == ToolStatus::Running).then(std::time::Instant::now);
+        }
+        represented
+    }
+
     pub(super) fn answer_approval(&mut self, allow: Option<PromptScope>) {
         let Some(Overlay::Approval { prompt, .. }) = self.overlay.take() else {
             return;
         };
         let tool = prompt.tool().to_owned();
+        let call_id = prompt.prepared().call_id().as_str().to_owned();
         match allow {
             Some(scope) => {
+                self.set_tool_approval_status(&call_id, ToolStatus::Running);
                 prompt.allow(scope);
                 if scope == PromptScope::Session {
                     self.transcript.push_notice(
@@ -271,10 +304,13 @@ impl App {
             }
             None => {
                 prompt.deny("the user declined");
-                self.transcript
-                    .push_notice("approval", format!("{tool} denied"));
-                self.transcript
-                    .complete_tool_call_by_name(&tool, ToolStatus::Denied);
+                if self.set_tool_approval_status(&call_id, ToolStatus::Denied) {
+                    self.transcript
+                        .set_tool_result_preview(&call_id, "approval declined: the user declined");
+                } else {
+                    self.transcript
+                        .push_notice("approval", format!("{tool} denied"));
+                }
             }
         }
         self.present_next_prompt();
