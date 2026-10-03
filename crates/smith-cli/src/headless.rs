@@ -1,36 +1,13 @@
 //! Non-interactive execution and versioned stdout contracts.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::io::{self, Write};
+use std::io;
 use std::time::Duration;
 
-use agent_runtime_core::artifact::ArtifactRef;
-use agent_runtime_core::content::{Role, UserInput};
-use agent_runtime_core::goal::{GoalProjection, GoalStatus};
-use agent_runtime_core::ids::SessionId;
-use agent_runtime_core::interaction::InteractionOutcomeKind;
-use agent_runtime_core::provider::ProviderAttemptPurpose;
-use agent_runtime_core::security::SecurityResource;
-use agent_runtime_core::usage::{UsageDelta, UsageRecord};
-use anyhow::{Context, Result};
-use futures_util::StreamExt;
-use serde::Serialize;
-use smith_client::cache::{
-    CacheLifecycleSummary, CachePrice, CacheProjection, CacheTurnSummary, CacheVisibilityState,
-};
+use anyhow::Result;
+use smith_client::cache::CachePrice;
 use smith_config::model::BackgroundExit;
-use smith_host::{
-    ApprovalRequired, HeadlessApproval, HeadlessInteraction, HeadlessRotation, InteractionRequired,
-};
-use smith_runtime::ChildState;
-use smith_runtime::background_tasks::{BackgroundTaskInfo, BackgroundTaskRegistry, TaskStatus};
-use smith_runtime::cache_controller::CacheControllerSnapshot;
-use smith_runtime::client::{
-    EstimationConfidence, PlanItemProjection, PlanSensitivity, SmithEvent as EventEnvelope,
-    SmithEventKind as RuntimeEvent, TurnFinish,
-};
+use smith_host::{HeadlessApproval, HeadlessInteraction, HeadlessRotation};
 use smith_runtime::host::HostSession;
-use smith_runtime::journal::{EphemeralInterruptionReason, EphemeralWorkInterruption};
 use smith_runtime::rotation::SharedPool;
 
 use crate::cli::OutputFormat;
@@ -39,9 +16,7 @@ mod background;
 mod output;
 mod run_flow;
 
-use background::*;
-use output::*;
-use run_flow::*;
+use run_flow::run_with_io;
 
 /// Version of Smith's result/event wrappers, independent of runtime events.
 const OUTPUT_SCHEMA_VERSION: u32 = 3;
@@ -111,4 +86,5 @@ pub(crate) async fn run(
 }
 
 #[cfg(test)]
+#[allow(clippy::wildcard_imports)]
 mod tests;

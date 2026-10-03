@@ -2,10 +2,20 @@
 
 use std::path::Path;
 
+use smith_client::local_result::LocalResult;
 use smith_client::review_report::{ReviewPreview, ReviewReport};
 use smith_host::GitChanges;
 
 use super::diff::patch_lines;
+
+use super::CommandReport;
+
+pub(super) fn command(project: &Path, scope: Option<String>) -> CommandReport {
+    match report(project, scope) {
+        ReviewReport::Confirmation(preview) => CommandReport::ReviewConfirmation(preview),
+        report => CommandReport::Append(LocalResult::Review(Box::new(report))),
+    }
+}
 
 pub(super) fn report(project: &Path, scope: Option<String>) -> ReviewReport {
     let scope = scope.unwrap_or_else(|| "all".to_owned());

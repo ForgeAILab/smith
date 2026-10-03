@@ -105,10 +105,10 @@ completed_at:
 
 ## 6. CLI module hygiene
 
-- [ ] 6.1 Replace `use super::*` with explicit imports in production
+- [x] 6.1 Replace `use super::*` with explicit imports in production
   modules; enable `wildcard_imports` for the crate.
-- [ ] 6.2 Split `handle_local_command` into one report function per command.
-- [ ] 6.3 Convert `include!` test splicing to ordinary test modules.
+- [x] 6.2 Split `handle_local_command` into one report function per command.
+- [x] 6.3 Convert `include!` test splicing to ordinary test modules.
 
 ## 7. Verification
 

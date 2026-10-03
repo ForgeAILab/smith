@@ -1527,6 +1527,7 @@ fn safe_profile_name(provider: &str, model: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::wildcard_imports)]
 mod tests {
     use super::*;
     use std::sync::Mutex;

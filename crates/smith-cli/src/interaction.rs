@@ -151,6 +151,7 @@ fn form_from_request(
 }
 
 #[cfg(test)]
+#[allow(clippy::wildcard_imports)]
 mod tests {
     use std::sync::Arc;
 

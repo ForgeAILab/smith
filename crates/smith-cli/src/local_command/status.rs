@@ -3,13 +3,14 @@
 use std::path::Path;
 use std::time::Duration;
 
+use smith_client::status::render_elapsed;
 use smith_client::status_report::{StatusGoal, StatusGoalReport, StatusReport};
 use smith_host::GitChanges;
 use smith_runtime::host::HostSession;
 use smith_tui::App;
 
 use super::{
-    cache_controller_summary_value, reasoning_status_values, render_elapsed, render_status_cost,
+    cache_controller_summary_value, reasoning_status_values, render_status_cost,
     resume_summary_value,
 };
 

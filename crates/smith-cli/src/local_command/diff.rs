@@ -75,6 +75,7 @@ fn line_kind(text: &str) -> DiffLineKind {
 }
 
 #[cfg(test)]
+#[allow(clippy::wildcard_imports)]
 mod tests {
     use super::*;
 

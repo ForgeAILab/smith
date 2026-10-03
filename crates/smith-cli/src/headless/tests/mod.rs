@@ -1,12 +1,13 @@
 //! Shared fixtures for headless output, turn-flow, and background tests.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
-
-use smith_runtime::client::LimitKind;
+use std::time::Duration;
 
 use agent_runtime::provider::fake::{
     FakeProvider, ScriptedStream, tool_call_fragments, usage_event,
 };
+
 use agent_runtime_core::approval::{AllowAll, DenyAll};
 use agent_runtime_core::artifact::{
     ArtifactDigest, ArtifactId, ArtifactProvenance, ArtifactRead, ArtifactRef, ArtifactRetention,
@@ -14,19 +15,40 @@ use agent_runtime_core::artifact::{
 };
 use agent_runtime_core::cancel::CancelReason;
 use agent_runtime_core::clock::Timestamp;
-use agent_runtime_core::goal::{GoalTokenUsage, GoalUsageProvenance};
-use agent_runtime_core::ids::{AttemptId, EventId, GoalId, RequestId, TurnId};
+use agent_runtime_core::content::{Role, UserInput};
+use agent_runtime_core::goal::{GoalProjection, GoalStatus, GoalTokenUsage, GoalUsageProvenance};
+use agent_runtime_core::ids::{AttemptId, EventId, GoalId, RequestId, SessionId, TurnId};
+use agent_runtime_core::provider::ProviderAttemptPurpose;
 use agent_runtime_core::provider::{
     Capabilities, FinishReason, Provider, ProviderError, ProviderErrorKind, ProviderStreamEvent,
 };
-use agent_runtime_core::usage::{CounterKind, Provenance, UsageRecord, UsageSource};
-use smith_config::resolve::{ResolveRequest, resolve};
-use smith_host::{InteractionNotice, InteractiveInteraction, ProjectWorkspace};
-use smith_runtime::checkpoint::{CheckpointKey, CheckpointKeyProvider, CheckpointProtectionError};
-use smith_runtime::client::CacheState;
-use smith_runtime::factory::{HostSurface, RuntimeRequest};
-use smith_runtime::host::HostSessionRequest;
+use agent_runtime_core::security::SecurityResource;
+use agent_runtime_core::usage::{CounterKind, Provenance, UsageDelta, UsageRecord, UsageSource};
 
+use serde::Serialize;
+
+use smith_client::cache::CacheProjection;
+
+use smith_config::model::BackgroundExit;
+use smith_config::resolve::{ResolveRequest, resolve};
+
+use smith_host::{ApprovalRequired, HeadlessApproval, HeadlessInteraction, HeadlessRotation};
+use smith_host::{InteractionNotice, InteractiveInteraction, ProjectWorkspace};
+
+use smith_runtime::background_tasks::{BackgroundTaskInfo, BackgroundTaskRegistry, TaskStatus};
+use smith_runtime::checkpoint::{CheckpointKey, CheckpointKeyProvider, CheckpointProtectionError};
+use smith_runtime::client::{
+    CacheState, LimitKind, PlanItemProjection, PlanSensitivity, SmithEvent as EventEnvelope,
+    SmithEventKind as RuntimeEvent, TurnFinish,
+};
+use smith_runtime::factory::{HostSurface, RuntimeRequest};
+use smith_runtime::host::{HostSession, HostSessionRequest};
+use smith_runtime::journal::EphemeralWorkInterruption;
+use smith_runtime::rotation::SharedPool;
+
+use super::background::*;
+use super::output::*;
+use super::run_flow::*;
 use super::*;
 
 // These tests drive complete host/runtime turns while the Rust harness runs

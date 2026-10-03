@@ -1,5 +1,7 @@
 //! Captures indexed skill metadata and local skill trust outcomes.
 
+use smith_client::commands::SkillsAction;
+use smith_client::local_result::LocalResult;
 use smith_client::skills_report::{
     SkillEntry, SkillGroup, SkillLoadProblem, SkillState, SkillsReport,
 };
@@ -7,6 +9,28 @@ use smith_config::trust::TrustStatus;
 use smith_runtime::skills::{SkillIndexEntry, SmithSkillLayer};
 
 use crate::skills::SkillContext;
+
+use super::CommandReport;
+
+pub(super) fn command(
+    context: &SkillContext,
+    index: &[SkillIndexEntry],
+    action: SkillsAction,
+) -> CommandReport {
+    match action {
+        SkillsAction::List => {
+            CommandReport::Show(LocalResult::Skills(Box::new(report(context, index))))
+        }
+        // The path and the digest are what the decision binds, so the path
+        // and the digest are what the confirmation shows.
+        SkillsAction::Trust(skill) => match context.confirmation(&skill) {
+            Ok(content) => CommandReport::SkillTrust { skill, content },
+            Err(error) => {
+                CommandReport::Show(LocalResult::Skills(Box::new(SkillsReport::Error(error))))
+            }
+        },
+    }
+}
 
 pub(crate) fn report(context: &SkillContext, index: &[SkillIndexEntry]) -> SkillsReport {
     let groups = [

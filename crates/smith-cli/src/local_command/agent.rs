@@ -2,7 +2,22 @@
 
 use smith_client::agent_report::{AgentReport, AgentSnapshot, AgentSummary};
 use smith_client::commands::AgentAction;
+use smith_client::local_result::LocalResult;
 use smith_runtime::host::HostSession;
+
+use super::CommandReport;
+
+pub(super) fn command(
+    host: &HostSession,
+    inspected_child: Option<&str>,
+    action: AgentAction,
+) -> CommandReport {
+    match report(host, inspected_child, action) {
+        AgentReport::Inspector(snapshot) => CommandReport::Inspect(Box::new(snapshot)),
+        AgentReport::Parent => CommandReport::Parent,
+        report => CommandReport::Show(LocalResult::Agent(Box::new(report))),
+    }
+}
 
 pub(super) fn report(
     host: &HostSession,

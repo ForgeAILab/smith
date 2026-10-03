@@ -1,15 +1,44 @@
 //! Interactive terminal event loop and TUI action routing.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 
-use agent_runtime_core::usage::UsageRecord;
+use agent_runtime_core::cancel::CancelReason;
+use agent_runtime_core::ids::ChildId;
+use agent_runtime_core::usage::{CounterKind, UsageRecord};
+use anyhow::{Context, Result};
+use crossterm::event::{Event as TermEvent, EventStream, KeyCode, KeyEventKind, KeyModifiers};
+use futures_util::StreamExt;
 use smith_client::agent_report::AgentSnapshot;
+use smith_client::commands::{SelectionCommand, SessionControl};
 use smith_client::local_result::LocalResult;
 use smith_client::recovery_report::{RecoveryAction, RecoveryReport, RestoreReport};
 use smith_client::shell_report::ShellReport;
-use smith_tui::app::RunningTaskSummary;
+use smith_config::inventory::SelectionInventory;
+use smith_config::resolve::ResolvedAgent;
+use smith_host::{
+    ApprovalPrompt, ApprovalRequests, GitChanges, InteractionRequests, RotationPrompt,
+    RotationRequests,
+};
+use smith_runtime::client::{
+    ChildPhase, SmithEvent as EventEnvelope, SmithEventKind as RuntimeEvent,
+};
+use smith_runtime::factory::RuntimePolicy;
+use smith_runtime::host::HostSession;
+use smith_runtime::pool_state::ActiveAccounts;
+use smith_runtime::rotation::SharedPool;
+use smith_runtime::session::SessionListing;
+use smith_tui::app::{Action, App, MouseOutcome, RunningTaskSummary, SubmissionTarget};
+use smith_tui::theme::Theme;
 
-use super::*;
+use crate::local_command::{LocalOutcome, handle_local_command, tool_call_for_display};
+use crate::resources::{abbreviate_home, account_entries, account_status, runtime_resources};
+use crate::submission::{
+    LocalShellApprovals, attach_from_clipboard, child_summary_projection,
+    copy_selection_to_clipboard, dispatch_prepared_with_materialization, follow_up_agent,
+    resume_agent, start_agent, start_local_shell, start_review,
+};
+use crate::{FRAME, SPINNER_TICK, interaction, local_command, terminal};
 
 pub(super) enum InteractiveExit {
     /// A declared MCP server finished connecting, so the composed tool set is

@@ -1,13 +1,16 @@
 //! Typed local commands and status/context rendering.
 
-use super::*;
-use smith_client::agent_report::AgentReport;
+use agent_runtime_core::provider::ReasoningSupport;
+use smith_client::agent_report::{AgentReport, AgentSnapshot};
+use smith_client::commands::HostCommand;
 use smith_client::local_result::LocalResult;
-use smith_client::mcp_report::McpReport;
-use smith_client::recovery_report::RecoveryReport;
-use smith_client::review_report::ReviewReport;
-use smith_client::skills_report::SkillsReport;
-use smith_client::status::{PriceReference, SessionCost, SessionUsage};
+use smith_client::recovery_report::{RecoveryPreview, RevertPreview};
+use smith_client::review_report::{ReviewPreview, ReviewReport};
+use smith_client::status::{PriceReference, SessionCost, SessionUsage, Status};
+use smith_runtime::client::SmithEventKind as RuntimeEvent;
+use smith_runtime::factory::RuntimePolicy;
+use smith_runtime::host::HostSession;
+use smith_tui::app::App;
 
 pub(crate) mod agent;
 pub(super) mod context;
@@ -39,114 +42,78 @@ pub(super) async fn handle_local_command(
     skills: &crate::skills::SkillContext,
     command: HostCommand,
 ) {
-    match command {
-        HostCommand::Skills(action) => match action {
-            smith_client::commands::SkillsAction::List => {
-                app.show_local_report(LocalResult::Skills(Box::new(skills::report(
-                    skills,
-                    host.runtime().skill_index(),
-                ))));
-            }
-            // The path and the digest are what the decision binds, so the path
-            // and the digest are what the confirmation shows.
-            smith_client::commands::SkillsAction::Trust(skill) => match skills.confirmation(&skill)
-            {
-                Ok(content) => app.confirm_skill_trust(skill, content),
-                Err(error) => {
-                    app.show_local_report(LocalResult::Skills(Box::new(SkillsReport::Error(
-                        error,
-                    ))));
-                }
-            },
-        },
-        HostCommand::Mcp(action) => match (mcp, action) {
-            (None, _) => app.show_local_report(LocalResult::Mcp(Box::new(mcp::report(None)))),
-            (Some(context), smith_client::commands::McpAction::List) => {
-                app.show_local_report(LocalResult::Mcp(Box::new(mcp::report(Some(context)))));
-            }
-            // Showing the resolved invocation and its content identity is the
-            // whole point of the confirmation: the decision is about exactly
-            // this content, so exactly this content is what gets displayed.
-            (Some(context), smith_client::commands::McpAction::Trust(server)) => {
-                match context.confirmation(&server) {
-                    Ok(content) => app.confirm_mcp_trust(server, content),
-                    Err(error) => {
-                        app.show_local_report(LocalResult::Mcp(Box::new(McpReport::Error(error))));
-                    }
-                }
-            }
-        },
-        HostCommand::Context => {
-            app.show_local_report(LocalResult::Context(Box::new(context::report(
-                &app.status,
-                host.runtime().policy(),
-            ))));
+    let report = match command {
+        HostCommand::Skills(action) => {
+            skills::command(skills, host.runtime().skill_index(), action)
         }
-        HostCommand::Timeline => {
-            app.show_local_report(LocalResult::Timeline(Box::new(
-                timeline::report(host).await,
-            )));
-        }
-        HostCommand::Status => {
-            app.show_local_report(LocalResult::Status(Box::new(status::report(
-                app, host, project,
-            ))));
-        }
-        HostCommand::Diagnostics => {
-            app.show_local_report(LocalResult::Diagnostics(Box::new(diagnostics::report(
-                app, host, project,
-            ))));
-        }
-        HostCommand::Goal(action) => {
-            app.show_local_report(LocalResult::Goal(Box::new(
-                goal::report(host, action).await,
-            )));
-        }
+        HostCommand::Mcp(action) => mcp::command(mcp, action),
+        HostCommand::Context => CommandReport::Show(LocalResult::Context(Box::new(
+            context::report(&app.status, host.runtime().policy()),
+        ))),
+        HostCommand::Timeline => CommandReport::Show(LocalResult::Timeline(Box::new(
+            timeline::report(host).await,
+        ))),
+        HostCommand::Status => CommandReport::Show(LocalResult::Status(Box::new(status::report(
+            app, host, project,
+        )))),
+        HostCommand::Diagnostics => CommandReport::Show(LocalResult::Diagnostics(Box::new(
+            diagnostics::report(app, host, project),
+        ))),
+        HostCommand::Goal(action) => CommandReport::Show(LocalResult::Goal(Box::new(
+            goal::report(host, action).await,
+        ))),
         HostCommand::Agent(selected) => {
-            let report = agent::report(host, app.inspected_child.as_deref(), selected);
-            match report {
-                AgentReport::Inspector(snapshot) => {
-                    // The inspector owns the card; leave no duplicate behind
-                    // in the root timeline when the user returns with Esc.
-                    let child = snapshot.summary.child.clone();
-                    app.inspect_child(child.clone());
-                    app.set_inspected_detail(&child, Some(snapshot));
-                }
-                report => {
-                    if matches!(report, AgentReport::Parent) {
-                        app.leave_child_inspection();
-                    }
-                    app.show_local_report(LocalResult::Agent(Box::new(report)));
-                }
+            agent::command(host, app.inspected_child.as_deref(), selected)
+        }
+        HostCommand::Diff(scope) => CommandReport::Show(LocalResult::Diff(Box::new(diff::report(
+            host, project, scope,
+        )))),
+        HostCommand::Review(scope) => review::command(project, scope),
+        HostCommand::Undo => recovery::undo_command(host),
+        HostCommand::Redo => recovery::redo_command(host),
+        HostCommand::Revert(scope) => recovery::revert_command(host, project, scope),
+    };
+    report.present(app);
+}
+
+/// A command's report and the surface action that presents it.
+/// Kept in the CLI because focus and confirmation belong to this surface.
+pub(super) enum CommandReport {
+    Show(LocalResult),
+    Append(LocalResult),
+    Inspect(Box<AgentSnapshot>),
+    Parent,
+    SkillTrust { skill: String, content: String },
+    McpTrust { server: String, content: String },
+    ReviewConfirmation(ReviewPreview),
+    UndoConfirmation(RecoveryPreview),
+    RedoConfirmation(RecoveryPreview),
+    RevertConfirmation(RevertPreview),
+}
+
+impl CommandReport {
+    fn present(self, app: &mut App) {
+        match self {
+            Self::Show(report) => app.show_local_report(report),
+            Self::Append(report) => app.transcript.push_local(report),
+            Self::Inspect(snapshot) => {
+                // The inspector owns the card; leave no duplicate behind
+                // in the root timeline when the user returns with Esc.
+                let child = snapshot.summary.child.clone();
+                app.inspect_child(child.clone());
+                app.set_inspected_detail(&child, Some(*snapshot));
             }
+            Self::Parent => {
+                app.leave_child_inspection();
+                app.show_local_report(LocalResult::Agent(Box::new(AgentReport::Parent)));
+            }
+            Self::SkillTrust { skill, content } => app.confirm_skill_trust(skill, content),
+            Self::McpTrust { server, content } => app.confirm_mcp_trust(server, content),
+            Self::ReviewConfirmation(preview) => app.confirm_review(preview),
+            Self::UndoConfirmation(preview) => app.confirm_undo(preview),
+            Self::RedoConfirmation(preview) => app.confirm_redo(preview),
+            Self::RevertConfirmation(preview) => app.confirm_revert(preview),
         }
-        HostCommand::Diff(scope) => {
-            app.show_local_report(LocalResult::Diff(Box::new(diff::report(
-                host, project, scope,
-            ))));
-        }
-        HostCommand::Review(scope) => match review::report(project, scope) {
-            ReviewReport::Confirmation(preview) => app.confirm_review(preview),
-            report => app
-                .transcript
-                .push_local(LocalResult::Review(Box::new(report))),
-        },
-        HostCommand::Undo => match recovery::undo_preview(host) {
-            RecoveryReport::UndoConfirmation(preview) => app.confirm_undo(preview),
-            report => app
-                .transcript
-                .push_local(LocalResult::Recovery(Box::new(report))),
-        },
-        HostCommand::Redo => match recovery::redo_preview(host) {
-            RecoveryReport::RedoConfirmation(preview) => app.confirm_redo(preview),
-            report => app.show_local_report(LocalResult::Recovery(Box::new(report))),
-        },
-        HostCommand::Revert(scope) => match recovery::revert_preview(host, project, scope) {
-            RecoveryReport::RevertConfirmation(preview) => app.confirm_revert(preview),
-            report => app
-                .transcript
-                .push_local(LocalResult::Recovery(Box::new(report))),
-        },
     }
 }
 

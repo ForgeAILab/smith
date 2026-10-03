@@ -1,7 +1,9 @@
+use super::*;
+
 // -- `/mcp` -------------------------------------------------------------------
 
 /// A project that declares one server, plus a user root to resolve against.
-fn mcp_project(declaration: &str) -> (tempfile::TempDir, tempfile::TempDir) {
+pub(super) fn mcp_project(declaration: &str) -> (tempfile::TempDir, tempfile::TempDir) {
     let home = tempfile::tempdir().expect("a user root");
     let project = tempfile::tempdir().expect("a project root");
     std::fs::create_dir_all(home.path().join(".smith")).expect("a user `.smith`");
@@ -14,7 +16,7 @@ fn mcp_project(declaration: &str) -> (tempfile::TempDir, tempfile::TempDir) {
     (home, project)
 }
 
-fn mcp_context(
+pub(super) fn mcp_context(
     home: &std::path::Path,
     project: &std::path::Path,
 ) -> std::sync::Arc<crate::mcp::McpContext> {

@@ -4,7 +4,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use smith_client::diagnostics_report::{DiagnosticsReport, DiagnosticsRow, DiagnosticsSection};
-use smith_client::status::{Status, TokenCount};
+use smith_client::status::{Status, TokenCount, render_elapsed};
 use smith_host::GitChanges;
 use smith_runtime::client::EstimationConfidence;
 use smith_runtime::factory::RuntimePolicy;
@@ -12,8 +12,8 @@ use smith_runtime::host::HostSession;
 use smith_tui::App;
 
 use super::{
-    cache_controller_status_value, cache_status_value, reasoning_status_values, render_elapsed,
-    render_status_cost, resume_capsule_status_value,
+    cache_controller_status_value, cache_status_value, reasoning_status_values, render_status_cost,
+    resume_capsule_status_value,
 };
 use crate::resources::bounded_text;
 

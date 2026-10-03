@@ -1,6 +1,40 @@
 //! Resolved host construction and interactive restart ownership.
 
-use super::*;
+use std::io::Read;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+use agent_runtime_core::ids::SessionId;
+use anyhow::{Context, Result};
+use smith_client::commands::SelectionCommand;
+use smith_config::credential::CredentialResolver;
+use smith_config::inventory::{SelectionInventory, local_inventory_with_catalog};
+use smith_config::model::{ApprovalMode, ProfileUse};
+use smith_config::resolve::{Layer, Resolution, ResolvedAgent, resolve};
+use smith_host::{
+    ApprovalRequests, HeadlessApproval, HeadlessInteraction, HeadlessRotation, InteractionRequests,
+    InteractiveApproval, InteractiveInteraction, InteractiveRotation, ProjectWorkspace,
+    RotationRequests,
+};
+use smith_runtime::factory::{
+    AVAILABLE_ADAPTER_KINDS, ChildProfileRequest, FactoryError, HostSurface, RuntimeRequest,
+};
+use smith_runtime::host::{HostSession, HostSessionRequest};
+use smith_runtime::journal::DefaultRedactor;
+use smith_runtime::model_catalog::{CatalogLoader, runtime_catalog_source};
+use smith_runtime::pool::CredentialPool;
+use smith_runtime::pool_state::ActiveAccounts;
+use smith_runtime::rotation::SharedPool;
+use smith_runtime::session::SessionListing;
+
+use crate::cli::{RunArgs, Selection};
+use crate::config_command::{prepare, resolution_request};
+use crate::tui_driver::{
+    InteractiveExit, InteractiveRequests, InteractiveResources, PresentationOptions,
+    run_interactive,
+};
+use crate::{MAX_STDIN_PROMPT_BYTES, connection};
 
 /// How long an interactive start waits for declared servers before opening the
 /// prompt without them.
@@ -674,7 +708,11 @@ pub(super) fn read_prompt(reader: impl Read) -> Result<String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::wildcard_imports)]
 mod tests {
+    use std::collections::BTreeMap;
+
+    use agent_runtime_core::usage::CounterKind;
     use smith_client::status::{PriceReference, PriceTable, SessionUsage};
 
     use super::*;

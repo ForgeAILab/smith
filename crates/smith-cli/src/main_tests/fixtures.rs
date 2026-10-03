@@ -1,3 +1,8 @@
+use super::mcp::{mcp_context, mcp_project};
+use super::skills::{SKILL_BODY, write_skill_body};
+use super::*;
+use smith_client::status::{PriceReference, PriceTable};
+
 // Before-refactor recordings. The headless tests use the same comparison and normalization.
 pub(crate) mod fixture_support {
     use std::path::Path;
@@ -715,7 +720,10 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                                 smith_client::agent_report::AgentResumeReport::RequiresIdle
                                     | smith_client::agent_report::AgentResumeReport::Started { .. }
                             )
-                        ) => "Notice".to_owned(),
+                        ) =>
+                    {
+                        "Notice".to_owned()
+                    }
                     LocalResult::Review(report)
                         if matches!(
                             report.as_ref(),
@@ -724,14 +732,23 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                                     smith_client::review_report::ReviewStartReport::Started { .. }
                                         | smith_client::review_report::ReviewStartReport::Queued { .. }
                                 )
-                        ) => "Notice".to_owned(),
+                        ) =>
+                    {
+                        "Notice".to_owned()
+                    }
                     LocalResult::Recovery(report) if report.is_notice() => "Notice".to_owned(),
                     _ => format!("{:?}", result.state()),
                 };
                 let content = match result {
-                    LocalResult::Status(report) => smith_client::status_report::render_plain(report),
-                    LocalResult::Diagnostics(report) => smith_client::diagnostics_report::render_plain(report),
-                    LocalResult::Context(report) => smith_client::context_report::render_plain(report),
+                    LocalResult::Status(report) => {
+                        smith_client::status_report::render_plain(report)
+                    }
+                    LocalResult::Diagnostics(report) => {
+                        smith_client::diagnostics_report::render_plain(report)
+                    }
+                    LocalResult::Context(report) => {
+                        smith_client::context_report::render_plain(report)
+                    }
                     LocalResult::Help(report) => smith_client::help_report::render_plain(report),
                     LocalResult::Timeline(report) => {
                         smith_client::timeline_report::render_plain(report)
@@ -739,60 +756,68 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                     LocalResult::Goal(report) => smith_client::goal_report::render_plain(report),
                     LocalResult::Agent(report) => smith_client::agent_report::render_plain(report),
                     LocalResult::Mcp(report) => smith_client::mcp_report::render_plain(report),
-                    LocalResult::Skills(report) => smith_client::skills_report::render_plain(report),
+                    LocalResult::Skills(report) => {
+                        smith_client::skills_report::render_plain(report)
+                    }
                     LocalResult::Diff(report) => smith_client::diff_report::render_plain(report),
-                    LocalResult::Review(report) => smith_client::review_report::render_plain(report),
-                    LocalResult::Recovery(report) => smith_client::recovery_report::render_plain(report),
+                    LocalResult::Review(report) => {
+                        smith_client::review_report::render_plain(report)
+                    }
+                    LocalResult::Recovery(report) => {
+                        smith_client::recovery_report::render_plain(report)
+                    }
                     LocalResult::Shell(report) => smith_client::shell_report::render_plain(report),
-                    LocalResult::Message(report) => smith_client::message_report::render_plain(report),
+                    LocalResult::Message(report) => {
+                        smith_client::message_report::render_plain(report)
+                    }
                 };
                 raw.push_str(&format!(
                     "title: {title}\nstate: {state}\nbody:\n{content}\n"
                 ));
                 // Draw a normalized typed report, never a prose round-trip.
                 let normalized = match result {
-                    LocalResult::Status(report) => LocalResult::Status(Box::new(
-                        fixture_status_view(report, normalizer),
-                    )),
+                    LocalResult::Status(report) => {
+                        LocalResult::Status(Box::new(fixture_status_view(report, normalizer)))
+                    }
                     LocalResult::Diagnostics(report) => LocalResult::Diagnostics(Box::new(
                         fixture_diagnostics_view(report, normalizer),
                     )),
-                    LocalResult::Context(report) => LocalResult::Context(Box::new(
-                        fixture_context_view(report, normalizer),
-                    )),
-                    LocalResult::Help(report) => LocalResult::Help(Box::new(
-                        fixture_help_view(report, normalizer),
-                    )),
-                    LocalResult::Timeline(report) => LocalResult::Timeline(Box::new(
-                        fixture_timeline_view(report, normalizer),
-                    )),
-                    LocalResult::Goal(report) => LocalResult::Goal(Box::new(
-                        fixture_goal_view(report, normalizer),
-                    )),
-                    LocalResult::Agent(report) => LocalResult::Agent(Box::new(
-                        fixture_agent_view(report, normalizer),
-                    )),
-                    LocalResult::Mcp(report) => LocalResult::Mcp(Box::new(
-                        fixture_mcp_view(report, normalizer),
-                    )),
-                    LocalResult::Skills(report) => LocalResult::Skills(Box::new(
-                        fixture_skills_view(report, normalizer),
-                    )),
-                    LocalResult::Diff(report) => LocalResult::Diff(Box::new(
-                        fixture_diff_view(report, normalizer),
-                    )),
-                    LocalResult::Review(report) => LocalResult::Review(Box::new(
-                        fixture_review_view(report, normalizer),
-                    )),
-                    LocalResult::Recovery(report) => LocalResult::Recovery(Box::new(
-                        fixture_recovery_view(report, normalizer),
-                    )),
-                    LocalResult::Shell(report) => LocalResult::Shell(Box::new(
-                        fixture_shell_view(report, normalizer),
-                    )),
-                    LocalResult::Message(report) => LocalResult::Message(Box::new(
-                        fixture_message_view(report, normalizer),
-                    )),
+                    LocalResult::Context(report) => {
+                        LocalResult::Context(Box::new(fixture_context_view(report, normalizer)))
+                    }
+                    LocalResult::Help(report) => {
+                        LocalResult::Help(Box::new(fixture_help_view(report, normalizer)))
+                    }
+                    LocalResult::Timeline(report) => {
+                        LocalResult::Timeline(Box::new(fixture_timeline_view(report, normalizer)))
+                    }
+                    LocalResult::Goal(report) => {
+                        LocalResult::Goal(Box::new(fixture_goal_view(report, normalizer)))
+                    }
+                    LocalResult::Agent(report) => {
+                        LocalResult::Agent(Box::new(fixture_agent_view(report, normalizer)))
+                    }
+                    LocalResult::Mcp(report) => {
+                        LocalResult::Mcp(Box::new(fixture_mcp_view(report, normalizer)))
+                    }
+                    LocalResult::Skills(report) => {
+                        LocalResult::Skills(Box::new(fixture_skills_view(report, normalizer)))
+                    }
+                    LocalResult::Diff(report) => {
+                        LocalResult::Diff(Box::new(fixture_diff_view(report, normalizer)))
+                    }
+                    LocalResult::Review(report) => {
+                        LocalResult::Review(Box::new(fixture_review_view(report, normalizer)))
+                    }
+                    LocalResult::Recovery(report) => {
+                        LocalResult::Recovery(Box::new(fixture_recovery_view(report, normalizer)))
+                    }
+                    LocalResult::Shell(report) => {
+                        LocalResult::Shell(Box::new(fixture_shell_view(report, normalizer)))
+                    }
+                    LocalResult::Message(report) => {
+                        LocalResult::Message(Box::new(fixture_message_view(report, normalizer)))
+                    }
                 };
                 view.transcript.push_local(normalized);
             }
@@ -818,7 +843,8 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
             raw.push_str(&format!(
                 "title: undo\nstate: Confirmation\nbody:\n{content}\n"
             ));
-            let RecoveryReport::UndoConfirmation(preview) = fixture_recovery_view(&report, normalizer)
+            let RecoveryReport::UndoConfirmation(preview) =
+                fixture_recovery_view(&report, normalizer)
             else {
                 panic!("expected an undo confirmation");
             };
@@ -835,7 +861,8 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
             raw.push_str(&format!(
                 "title: redo\nstate: Confirmation\nbody:\n{content}\n"
             ));
-            let RecoveryReport::RedoConfirmation(preview) = fixture_recovery_view(&report, normalizer)
+            let RecoveryReport::RedoConfirmation(preview) =
+                fixture_recovery_view(&report, normalizer)
             else {
                 panic!("expected a redo confirmation");
             };
@@ -852,7 +879,8 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
             raw.push_str(&format!(
                 "title: revert\nstate: Confirmation\nbody:\n{content}\n"
             ));
-            let RecoveryReport::RevertConfirmation(preview) = fixture_recovery_view(&report, normalizer)
+            let RecoveryReport::RevertConfirmation(preview) =
+                fixture_recovery_view(&report, normalizer)
             else {
                 panic!("expected a revert confirmation");
             };

@@ -5,6 +5,8 @@
 //! [`smith_runtime::host`]. Presentation begins only after that preflight and
 //! the session restore have succeeded.
 
+#![warn(clippy::wildcard_imports)]
+
 mod browser;
 mod chatgpt;
 mod cli;
@@ -24,84 +26,18 @@ mod terminal;
 mod tui_driver;
 mod xai;
 
-#[cfg(test)]
-use std::collections::BTreeMap;
-use std::io::{IsTerminal, Read};
-use std::path::PathBuf;
+use std::io::IsTerminal;
 use std::process::ExitCode;
-use std::sync::Arc;
 use std::time::Duration;
 
-use agent_runtime_core::cancel::CancelReason;
-use agent_runtime_core::clock::Timestamp;
-use agent_runtime_core::content::{ContentPart, ToolResultBlock, UserInput};
-use agent_runtime_core::delegation::{
-    ChildLimits, ChildModelSelection, ChildSpec, ToolViewScope, WorkspacePolicy,
-};
-#[cfg(test)]
-use agent_runtime_core::goal::GoalCommand;
-use agent_runtime_core::ids::{ChildId, SessionId};
-use agent_runtime_core::provider::{ModelId, ReasoningSupport};
-use agent_runtime_core::steer::SteerRejectionReason;
-use agent_runtime_core::usage::CounterKind;
-use agent_runtime_core::workspace::Workspace;
 use anyhow::{Context, Result};
-use cli::{Command, Prompt, RunArgs, Selection};
-use crossterm::event::{Event as TermEvent, EventStream, KeyCode, KeyEventKind, KeyModifiers};
-use futures_util::StreamExt;
-use ignore::WalkBuilder;
-use ratatui::layout::Rect;
-#[cfg(test)]
-use smith_client::commands::{AgentAction, DiffScope};
-use smith_client::commands::{HostCommand, SelectionCommand, SessionControl};
-#[cfg(test)]
-use smith_client::status::ContextPlanUpdate;
-use smith_client::status::{Status, render_elapsed};
-use smith_config::credential::CredentialResolver;
-use smith_config::inventory::{
-    InventoryLimit, ModelLimitOrigin, SelectionInventory, local_inventory_with_catalog,
-};
-use smith_config::model::{ApprovalMode, ProfileUse};
-use smith_config::resolve::{
-    ConfigReadiness, Layer, Resolution, ResolveRequest, ResolvedAgent,
-    SyntheticCacheSpendAuthority, inspect, resolve,
-};
-use smith_host::{
-    ApprovalPrompt, ApprovalRequests, GitChanges, HeadlessApproval, HeadlessInteraction,
-    HeadlessRotation, InteractionRequests, InteractiveApproval, InteractiveInteraction,
-    InteractiveRotation, ProjectWorkspace, RotationPrompt, RotationRequests,
-};
-#[cfg(test)]
-use smith_runtime::client::EstimationConfidence;
-use smith_runtime::client::{
-    ChildPhase, SmithEvent as EventEnvelope, SmithEventKind as RuntimeEvent,
-};
-use smith_runtime::factory::{
-    AVAILABLE_ADAPTER_KINDS, ChildProfileRequest, FactoryError, HostSurface, RuntimePolicy,
-    RuntimeRequest,
-};
-use smith_runtime::host::{HostSession, HostSessionRequest};
-use smith_runtime::journal::DefaultRedactor;
-use smith_runtime::model_catalog::{CatalogLoader, runtime_catalog_source};
-use smith_runtime::pool::CredentialPool;
-use smith_runtime::pool_state::ActiveAccounts;
-use smith_runtime::rotation::SharedPool;
-use smith_runtime::session::{SNAPSHOT_SCHEMA_VERSION, SessionListing};
-use smith_runtime::{ChildStatus, SpawnOutcome};
-use smith_tui::app::{
-    Action, App, LEGACY_AGENT_PROFILE_PREFIX, MouseOutcome, PreparedSubmission, SubmissionTarget,
-};
-use smith_tui::theme::Theme;
-use smith_tui::{
-    PickerOutcome, ResourceEntry, ResourcePicker, RuntimeResources, draw_resource_picker,
-};
+use cli::{Command, Prompt, RunArgs};
+use smith_config::resolve::ConfigReadiness;
+use smith_runtime::factory::HostSurface;
 
-use config_command::*;
-use local_command::*;
-use resources::*;
-use runtime_host::*;
-use submission::*;
-use tui_driver::*;
+use config_command::{explain_config, inspect_selection};
+use resources::{choose_resume_session, list_sessions};
+use runtime_host::{read_prompt, run_interactive_command, start_host};
 
 /// The frame budget: `DESIGN.md` §6 caps redraws at 30 fps.
 const FRAME: Duration = Duration::from_millis(33);
@@ -260,4 +196,7 @@ fn is_interactive_terminal() -> bool {
         && std::io::stderr().is_terminal()
 }
 
-include!("main_tests/mod.rs");
+#[cfg(test)]
+#[allow(clippy::wildcard_imports)]
+#[path = "main_tests/mod.rs"]
+mod tests;

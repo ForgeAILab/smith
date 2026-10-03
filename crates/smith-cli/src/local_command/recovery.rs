@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use smith_client::local_result::LocalResult;
 use smith_client::recovery_report::{
     RecoveryAction, RecoveryApplied, RecoveryPreview, RecoveryReport, RevertOrigin, RevertPreview,
 };
@@ -9,6 +10,33 @@ use smith_host::GitChanges;
 use smith_runtime::host::HostSession;
 
 use super::diff::patch_lines;
+
+use super::CommandReport;
+
+pub(super) fn undo_command(host: &HostSession) -> CommandReport {
+    match undo_preview(host) {
+        RecoveryReport::UndoConfirmation(preview) => CommandReport::UndoConfirmation(preview),
+        report => CommandReport::Append(LocalResult::Recovery(Box::new(report))),
+    }
+}
+
+pub(super) fn redo_command(host: &HostSession) -> CommandReport {
+    match redo_preview(host) {
+        RecoveryReport::RedoConfirmation(preview) => CommandReport::RedoConfirmation(preview),
+        report => CommandReport::Show(LocalResult::Recovery(Box::new(report))),
+    }
+}
+
+pub(super) fn revert_command(
+    host: &HostSession,
+    project: &Path,
+    scope: Option<String>,
+) -> CommandReport {
+    match revert_preview(host, project, scope) {
+        RecoveryReport::RevertConfirmation(preview) => CommandReport::RevertConfirmation(preview),
+        report => CommandReport::Append(LocalResult::Recovery(Box::new(report))),
+    }
+}
 
 pub(super) fn undo_preview(host: &HostSession) -> RecoveryReport {
     match host.changes().undo_preview() {

@@ -1,6 +1,14 @@
 //! Background-exit policy decisions, task lifecycle handling, and reports.
 
-use super::*;
+use std::collections::BTreeSet;
+use std::time::Duration;
+
+use agent_runtime_core::ids::SessionId;
+use serde::Serialize;
+use smith_config::model::BackgroundExit;
+use smith_runtime::background_tasks::{BackgroundTaskInfo, BackgroundTaskRegistry, TaskStatus};
+
+use super::{BACKGROUND_STOP_POLL_BOUND, BACKGROUND_TASK_POLL_INTERVAL};
 
 /// One background shell task's state as the background-exit policy last
 /// observed it.

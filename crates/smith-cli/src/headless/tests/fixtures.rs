@@ -1,5 +1,7 @@
 //! Replaceable before-refactor recordings of the existing flow and output scenarios.
 
+use std::io::Write;
+
 use super::*;
 use crate::tests::fixture_support::{FixedClock, Normalizer, compare_or_update};
 

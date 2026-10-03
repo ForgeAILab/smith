@@ -1,6 +1,13 @@
 //! Configuration readiness, resolution, and explain commands.
 
-use super::*;
+use std::path::PathBuf;
+
+use anyhow::{Context, Result};
+use smith_config::resolve::{
+    ConfigReadiness, Resolution, ResolveRequest, SyntheticCacheSpendAuthority, inspect, resolve,
+};
+
+use crate::cli::Selection;
 
 pub(super) struct Prepared {
     pub(super) resolution: Resolution,

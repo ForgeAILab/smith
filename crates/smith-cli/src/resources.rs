@@ -1,6 +1,29 @@
 //! Runtime inventory, workspace/session resources, and resume selection.
 
-use super::*;
+use std::io::IsTerminal;
+
+use agent_runtime_core::clock::Timestamp;
+use agent_runtime_core::provider::ReasoningSupport;
+use anyhow::{Context, Result};
+use crossterm::event::{Event as TermEvent, EventStream};
+use futures_util::StreamExt;
+use ignore::WalkBuilder;
+use ratatui::layout::Rect;
+use smith_config::inventory::{InventoryLimit, ModelLimitOrigin, SelectionInventory};
+use smith_config::model::ProfileUse;
+use smith_config::resolve::ResolvedAgent;
+use smith_runtime::factory::AVAILABLE_ADAPTER_KINDS;
+use smith_runtime::rotation::SharedPool;
+use smith_runtime::session::{SNAPSHOT_SCHEMA_VERSION, SessionListing};
+use smith_tui::app::LEGACY_AGENT_PROFILE_PREFIX;
+use smith_tui::theme::Theme;
+use smith_tui::{
+    PickerOutcome, ResourceEntry, ResourcePicker, RuntimeResources, draw_resource_picker,
+};
+
+use crate::cli::Selection;
+use crate::config_command::prepare;
+use crate::terminal;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn runtime_resources(

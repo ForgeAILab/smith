@@ -1,6 +1,33 @@
 //! Headless turn event consumption and terminal stream output.
 
-use super::*;
+use std::collections::BTreeSet;
+use std::io::Write;
+use std::time::Duration;
+
+use agent_runtime_core::content::{Role, UserInput};
+use agent_runtime_core::goal::GoalStatus;
+use agent_runtime_core::interaction::InteractionOutcomeKind;
+use agent_runtime_core::usage::UsageDelta;
+use anyhow::{Context, Result};
+use futures_util::StreamExt;
+use smith_client::cache::{CacheLifecycleSummary, CacheProjection};
+use smith_config::model::BackgroundExit;
+use smith_host::{HeadlessApproval, HeadlessInteraction, InteractionRequired};
+use smith_runtime::ChildState;
+use smith_runtime::cache_controller::CacheControllerSnapshot;
+use smith_runtime::client::{SmithEventKind as RuntimeEvent, TurnFinish};
+use smith_runtime::host::HostSession;
+
+use super::background::apply_background_exit_policy;
+use super::output::{
+    ActivationOutput, CacheControllerEnvelope, CacheOutput, LifecycleOutput, ReasoningOutput,
+    ResultEnvelope, ResultStatus, StreamEnvelope, SyntheticUsageOutput, UsageOutput,
+    UsageProvenance, account_output, activation_output, approval_diagnostic, child_session_outputs,
+    is_synthetic_usage, outcome, plan_output, recovery_output, terminal_error, write_json,
+    write_text, write_text_projection,
+};
+use super::{HeadlessBrokers, INTERACTION_REQUIRED_EXIT, OUTPUT_SCHEMA_VERSION, Outcome};
+use crate::cli::OutputFormat;
 
 pub(super) async fn run_with_io(
     host: &HostSession,

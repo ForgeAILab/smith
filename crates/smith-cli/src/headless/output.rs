@@ -1,11 +1,32 @@
 //! Versioned headless result projections and text/JSON rendering.
 
-use super::background::BackgroundExitOutput;
-use super::*;
+use std::collections::BTreeMap;
+use std::io::Write;
+
+use agent_runtime_core::artifact::ArtifactRef;
+use agent_runtime_core::goal::{GoalProjection, GoalStatus};
+use agent_runtime_core::provider::ProviderAttemptPurpose;
+use agent_runtime_core::security::SecurityResource;
+use agent_runtime_core::usage::{UsageDelta, UsageRecord};
+use anyhow::{Context, Result};
+use serde::Serialize;
 use smith_client::agent_report::AgentSnapshot;
 pub(super) use smith_client::agent_report::HeadlessAgentOutput as ChildSessionOutput;
+use smith_client::cache::{CacheLifecycleSummary, CacheTurnSummary, CacheVisibilityState};
 use smith_client::goal_report::{GoalReport, GoalSnapshot};
 use smith_client::recovery_report::RestoreReport;
+use smith_host::{ApprovalRequired, HeadlessRotation, InteractionRequired};
+use smith_runtime::cache_controller::CacheControllerSnapshot;
+use smith_runtime::client::{
+    EstimationConfidence, PlanItemProjection, PlanSensitivity, SmithEvent as EventEnvelope,
+    TurnFinish,
+};
+use smith_runtime::host::HostSession;
+use smith_runtime::journal::{EphemeralInterruptionReason, EphemeralWorkInterruption};
+use smith_runtime::rotation::SharedPool;
+
+use super::background::BackgroundExitOutput;
+use super::{APPROVAL_REQUIRED_EXIT, INTERACTION_REQUIRED_EXIT};
 
 #[derive(Debug, Serialize)]
 pub(super) struct StreamEnvelope<'a> {

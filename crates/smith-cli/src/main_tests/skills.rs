@@ -1,3 +1,5 @@
+use super::*;
+
 // -- `/skills` ----------------------------------------------------------------
 
 /// A user root and a project root, neither of which declares a skill yet.
@@ -14,7 +16,11 @@ fn skill_roots() -> (tempfile::TempDir, tempfile::TempDir) {
     (home, project)
 }
 
-fn write_skill_body(root: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+pub(super) fn write_skill_body(
+    root: &std::path::Path,
+    name: &str,
+    body: &str,
+) -> std::path::PathBuf {
     let directory = root.join("skills").join(name);
     std::fs::create_dir_all(&directory).expect("a skill directory");
     let path = directory.join("SKILL.md");
@@ -38,7 +44,7 @@ fn skill_context(
     (sources.resolve().expect("the catalog resolves"), context)
 }
 
-const SKILL_BODY: &str = "---\ndescription: Review Rust implementation boundaries\n---\n\nRead the unsafe blocks first.\n";
+pub(super) const SKILL_BODY: &str = "---\ndescription: Review Rust implementation boundaries\n---\n\nRead the unsafe blocks first.\n";
 
 #[tokio::test]
 async fn skills_list_groups_by_layer_and_names_the_winner() {
@@ -161,8 +167,11 @@ async fn skills_trust_shows_path_and_digest_before_recording() {
     );
 
     // And the decision covers exactly that content, not that path.
-    std::fs::write(&path, "---\ndescription: Review\n---\n\nRewritten by a later commit.\n")
-        .expect("a later commit");
+    std::fs::write(
+        &path,
+        "---\ndescription: Review\n---\n\nRewritten by a later commit.\n",
+    )
+    .expect("a later commit");
     let (resolved, context) = skill_context(&home.path().join(".smith"), project.path());
     let listed = smith_client::skills_report::render_plain(&local_command::skills::report(
         &context,

@@ -382,6 +382,7 @@ async fn choose_login_method(no_color: bool, no_motion: bool) -> Result<Option<L
 }
 
 #[cfg(test)]
+#[allow(clippy::wildcard_imports)]
 mod tests {
     use super::*;
 

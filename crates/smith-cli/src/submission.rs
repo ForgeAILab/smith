@@ -1,8 +1,25 @@
 //! Prepared-input materialization, dispatch, and agent/review actions.
 
-use super::*;
+use std::sync::Arc;
+
+use agent_runtime_core::content::{ContentPart, ToolResultBlock, UserInput};
+use agent_runtime_core::delegation::{
+    ChildLimits, ChildModelSelection, ChildSpec, ToolViewScope, WorkspacePolicy,
+};
+use agent_runtime_core::ids::SessionId;
+use agent_runtime_core::provider::ModelId;
+use agent_runtime_core::steer::SteerRejectionReason;
+use agent_runtime_core::workspace::Workspace;
+use anyhow::Result;
 use smith_client::agent_report::{AgentReport, AgentResumeReport, AgentSummary, ChildLabelSurface};
 use smith_client::review_report::{ReviewReport, ReviewStartReport};
+use smith_config::resolve::ResolvedAgent;
+use smith_host::{ApprovalPrompt, GitChanges, ProjectWorkspace};
+use smith_runtime::host::HostSession;
+use smith_runtime::{ChildStatus, SpawnOutcome};
+use smith_tui::app::{App, PreparedSubmission, SubmissionTarget};
+
+use crate::local_command::LocalOutcome;
 
 #[derive(Clone, Default)]
 pub(super) struct LocalShellApprovals {

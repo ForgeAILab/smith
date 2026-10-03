@@ -20,12 +20,13 @@ use smith_config::setup::{
 use smith_config::user_config::{
     CommittedConfigEdit, prepare_provider_credential_removal, prepare_user_config_edit,
 };
-use smith_runtime::factory::{self, HostSurface};
+use smith_runtime::factory::{self, AVAILABLE_ADAPTER_KINDS, HostSurface};
 use smith_tui::ResourceEntry;
 use smith_tui::setup::SetupMode;
 
 use crate::cli::Selection;
-use crate::{AVAILABLE_ADAPTER_KINDS, chatgpt, prepare, setup};
+use crate::config_command::prepare;
+use crate::{chatgpt, setup};
 
 /// How `/connect` proceeds for a login-kind provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
