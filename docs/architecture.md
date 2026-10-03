@@ -38,3 +38,17 @@ Smith client protocol v1 is the current and minimum supported revision. The
 old public `SessionHandle` re-export is deprecated for one migration release;
 new embedders use `SmithSession`, `SmithInput`, Smith receipts, and
 `SmithEvent`. Unknown future payloads preserve their envelope and causal slot.
+
+## Client ownership
+
+`smith-client` owns session accounting, the routed command table, typed local
+reports, and plain renderers, with no terminal libraries. `smith-tui` owns
+terminal drawing and has no `smith-config` dependency. `smith-cli` composes
+the host and builds reports and setup entries. Provider descriptors in
+`smith-config` are the single source for setup entries, endpoints, model
+limits, and connectable providers; adding a provider is a `smith-config` edit.
+
+Each slash command has one definition. Reports cross the host boundary as
+typed data; renderers use fields and never parse titles or labels. Headless
+never imports `smith-tui`. Production code in `smith-cli` uses explicit
+imports, with no glob imports.

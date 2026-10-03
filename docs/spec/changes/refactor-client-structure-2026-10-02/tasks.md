@@ -1,7 +1,7 @@
 ---
 created_at: 2026-10-02T10:35:00Z
-updated_at: 2026-10-02T10:40:03Z
-completed_at:
+updated_at: 2026-10-03T04:58:44Z
+completed_at: 2026-10-03T04:58:44Z
 ---
 
 ## 1. Preconditions
@@ -112,13 +112,19 @@ completed_at:
 
 ## 7. Verification
 
-- [ ] 7.1 Fixture comparison for every local command and headless format.
-- [ ] 7.2 `cargo fmt --all -- --check`, strict Clippy, workspace tests,
+- [x] 7.1 Fixture comparison for every local command and headless format.
+- [x] 7.2 `cargo fmt --all -- --check`, strict Clippy, workspace tests,
   runtime conformance.
-- [ ] 7.3 PTY command sweep and startup sweep.
-- [ ] 7.4 Update `docs/architecture.md` with the client-side ownership rules.
-- [ ] 7.5 Stabilize the `attempts-todos-artifacts` headless fixture: under a
+- [x] 7.3 PTY command sweep and startup sweep.
+- [x] 7.4 Update `docs/architecture.md` with the client-side ownership rules.
+- [x] 7.5 Stabilize the `attempts-todos-artifacts` headless fixture: under a
   loaded full-workspace run its resume capsule recorded plan revision 1 /
   failed 0 instead of revision 2 / failed 1 (shutdown snapshot races the final
   plan update). Found 2026-10-02 verifying section 5, which does not touch
   headless; the focused fixture run passed in the same session.
+  Fixed by masking exactly the capsule's `plan.revision` and `plan.failed`
+  with the existing shutdown-race mechanism (20/20 focused runs stable).
+
+Final gate 2026-10-03: `scripts/ci.sh` against the pinned runtime (fmt,
+strict Clippy, workspace tests, shared conformance) — 2,003 passed, 0
+failed; PTY sweeps 26/26 and 40/40.

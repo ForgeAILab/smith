@@ -70,7 +70,9 @@ async fn record_flow(
     .expect("fixture flow watchdog")
     .expect("fixture outcome");
     assert_eq!(outcome.exit_code, expected_exit, "{name}");
-    // Every flow builds its terminal projection after host shutdown.
+    // run_with_io shuts down before returning, so the recorder cannot wait for
+    // the controller to reduce the final plan update before cancellation. Mask
+    // only its racing terminal capsule counters; canonical plan events remain.
     normalizer.headless_flow(true);
     record_io(name, format, stdout, stderr, &mut normalizer);
     Box::pin(host.shutdown()).await.expect("fixture shutdown");

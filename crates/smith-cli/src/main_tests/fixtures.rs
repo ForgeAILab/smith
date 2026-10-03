@@ -68,7 +68,7 @@ pub(crate) mod fixture_support {
         }
 
         // Rewrite scalar spans in place: never round-trip a result through a JSON map.
-        // Runtime counters, deterministic IDs, artifact content digests, and key order remain intact.
+        // Canonical runtime counters, deterministic IDs, artifact content digests, and key order remain intact.
         pub(crate) fn normalize(&mut self, captured: &str) -> String {
             let mut text = captured.to_owned();
             if self.dynamic {
@@ -308,7 +308,8 @@ pub(crate) mod fixture_support {
     }
 
     // Masks a product race: headless shutdown can cancel the cache worker before
-    // it reduces TurnCompleted (cache_controller.rs:630; host.rs:558). Only mask
+    // it reduces the final PlanUpdated or TurnCompleted (cache_controller.rs:631;
+    // host.rs:558). Only mask exact_state.plan's revision and failed counters,
     // lifecycle.last_event_sequence, exact_state.watermark, last_persisted_watermark,
     // idle_compaction.interval_id, cache.idle_compaction_interval_id, and
     // retained_recent_turns in terminal projections. Race edits leave runtime_event
@@ -339,6 +340,18 @@ pub(crate) mod fixture_support {
         if kind == Some("\"result\"")
             && let Some(capsule) = json_path(captured, root, &["resume_capsule"])
         {
+            for (key, placeholder) in [
+                ("revision", "\"<SHUTDOWN_PLAN_REVISION>\""),
+                ("failed", "\"<SHUTDOWN_PLAN_FAILED>\""),
+            ] {
+                scalar_edit(
+                    captured,
+                    capsule.clone(),
+                    &["exact_state", "plan", key],
+                    placeholder,
+                    edits,
+                );
+            }
             scalar_edit(
                 captured,
                 capsule.clone(),
@@ -617,6 +630,27 @@ pub(crate) mod fixture_support {
             early,
             "unaffected flows retain shutdown fields"
         );
+    }
+
+    #[test]
+    fn fixtures_normalization_masks_only_shutdown_capsule_plan_counters() {
+        let early = r#"{"type":"result","lifecycle":{"plan":{"revision":2,"counts":{"cancelled":1}}},"resume_capsule":{"exact_state":{"plan":{"revision":1,"pending":0,"completed":1,"failed":0}}},"usage":120}"#;
+        let late = r#"{"type":"result","lifecycle":{"plan":{"revision":2,"counts":{"cancelled":1}}},"resume_capsule":{"exact_state":{"plan":{"revision":2,"pending":0,"completed":1,"failed":1}}},"usage":120}"#;
+        let canonical = r#"{"type":"result","lifecycle":{"plan":{"revision":2,"counts":{"cancelled":1}}},"resume_capsule":{"exact_state":{"plan":{"revision":"<SHUTDOWN_PLAN_REVISION>","pending":0,"completed":1,"failed":"<SHUTDOWN_PLAN_FAILED>"}}},"usage":120}"#;
+        let event = r#"{"type":"runtime_event","event":{"seq":36,"payload":{"event":"plan_updated","revision":2,"counts":{"completed":1,"cancelled":1}}}}"#;
+        let mut normalizer = Normalizer::default();
+        assert_eq!(normalizer.normalize(early), early);
+        normalizer.headless_flow(true);
+        for result in [early, late] {
+            assert_eq!(normalizer.normalize(result), canonical);
+            assert_eq!(
+                normalizer.normalize(&format!("{event}\n{result}\n")),
+                format!("{event}\n{canonical}\n")
+            );
+        }
+        normalizer.headless_flow(false);
+        assert_eq!(normalizer.normalize(early), early);
+        assert_eq!(normalizer.normalize(late), late);
     }
 }
 
