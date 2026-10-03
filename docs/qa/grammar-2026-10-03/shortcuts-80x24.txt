@@ -1,0 +1,16 @@
+  Shift+Tab when idle       Previous profile (empty draft)
+  Ctrl+O                    expand or fold detail
+  Esc                       interrupt or close
+  Shift+Enter or Alt+Enter  Insert a newline
+  Alt+Up                    Edit the newest queued task
+  Ctrl+B                    Move a running shell command to the background
+  Ctrl+P                    Open the command palette
+  ? on an empty draft       Show help
+  PageUp / PageDown         Scroll the transcript
+  Home / End                Go to the oldest or newest output
+  Mouse wheel               Scroll the transcript
+  +8 rows · /help for all · any key closes
+────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────
+  any key closes · esc just closes                     zai/glm-5.3 · code · deny

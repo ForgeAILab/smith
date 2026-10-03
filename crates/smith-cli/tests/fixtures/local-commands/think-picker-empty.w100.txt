@@ -505,8 +505,8 @@
 
   Choose thinking state · type to filter
  Thinking is not adjustable for this provider/model
-
-› Ask Smith to do anything
-
-  build · example-model · <PROJECT> · ? ctx
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                           example-model · build · <PROJECT> · ? ctx
   type to filter · ↑↓ choose · enter confirm · esc cancel

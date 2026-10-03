@@ -24,6 +24,7 @@ const CLI_MODEL_PREFIX: &str = "cli/";
 
 use super::helpers::*;
 use super::layout::*;
+use super::reports;
 use super::wrap::wrap_line_with_offsets;
 
 pub(super) fn working_rows(app: &App) -> u16 {
@@ -124,49 +125,25 @@ fn render_retry_backoff(remaining: Duration) -> String {
 }
 
 pub(super) fn draw_composer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
+    let rule = Line::from(Span::styled(
+        "─".repeat(usize::from(area.width)),
+        theme.style(Tone::Dim),
+    ));
+    frame.render_widget(
+        Paragraph::new(rule.clone()),
+        Rect::new(area.x, area.y, area.width, 1),
+    );
+    frame.render_widget(
+        Paragraph::new(rule),
+        Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1),
+    );
     let input_area = Rect::new(
         area.x,
         area.y.saturating_add(1),
         area.width,
         area.height.saturating_sub(2),
     );
-    let empty = app.composer.text().is_empty();
-    // Each typed line is wrapped on its own so the cursor can be followed
-    // through the wrap: the rows one line produces, and the column each row
-    // starts at, are exactly what turns a position in the text into a cell.
-    let (cursor_line, cursor_column) = app.composer.cursor_position();
-    let mut rows: Vec<Line<'static>> = Vec::new();
-    let mut cursor = None;
-    for (index, line) in app.composer.lines().iter().enumerate() {
-        let marker = if index == 0 { glyph::INPUT } else { " " };
-        let mut spans = vec![Span::styled(
-            format!("{marker} "),
-            theme.style(Tone::Default).add_modifier(Modifier::BOLD),
-        )];
-        if empty && index == 0 {
-            spans.push(Span::styled(
-                "Ask Smith to do anything",
-                theme.style(Tone::Dim),
-            ));
-        } else {
-            spans.extend(paste_placeholder_spans(line, app, theme));
-        }
-        let (wrapped, offsets) = wrap_line_with_offsets(&Line::from(spans), input_area.width);
-        if index == cursor_line {
-            // The marker column is part of the drawn line, so the cursor is
-            // measured from the same left edge the wrap was.
-            let column = cursor_column.saturating_add(MARKER_WIDTH);
-            let row = offsets
-                .iter()
-                .rposition(|start| *start <= column)
-                .unwrap_or(0);
-            cursor = Some((
-                column.saturating_sub(offsets.get(row).copied().unwrap_or(0)),
-                rows.len().saturating_add(row),
-            ));
-        }
-        rows.extend(wrapped);
-    }
+    let (rows, cursor) = composer_content(app, theme, input_area.width);
 
     frame.render_widget(Paragraph::new(rows), input_area);
 
@@ -180,8 +157,108 @@ pub(super) fn draw_composer(frame: &mut Frame<'_>, area: Rect, app: &App, theme:
     }
 }
 
-/// Columns the `›` marker and its trailing space take ahead of typed text.
+/// Columns the prompt marker and its trailing space take ahead of typed text.
 const MARKER_WIDTH: usize = 2;
+
+/// Shared wrapping and cursor mapping for both drawing and the height budget.
+pub(super) fn composer_content(
+    app: &App,
+    theme: Theme,
+    width: u16,
+) -> (Vec<Line<'static>>, Option<(usize, usize)>) {
+    let empty = app.composer.text().is_empty();
+    // Each typed line is wrapped on its own so the cursor can be followed
+    // through the wrap: the rows one line produces, and the column each row
+    // starts at, are exactly what turns a position in the text into a cell.
+    let (cursor_line, cursor_column) = app.composer.visible_cursor_position();
+    let mut rows: Vec<Line<'static>> = Vec::new();
+    let mut cursor = None;
+    for (index, line) in app.composer.visible_text().split('\n').enumerate() {
+        let marker = if index == 0 {
+            if app.composer.is_bash_mode() {
+                "!"
+            } else {
+                glyph::INPUT
+            }
+        } else {
+            " "
+        };
+        let mut spans = vec![Span::styled(
+            format!("{marker} "),
+            theme.style(Tone::Default).add_modifier(Modifier::BOLD),
+        )];
+        if empty && index == 0 {
+            spans.push(Span::styled(
+                "Ask Smith to do anything",
+                theme.style(Tone::Dim),
+            ));
+        } else {
+            spans.extend(paste_placeholder_spans(line, app, theme));
+        }
+        let (mut wrapped, offsets) = wrap_line_with_offsets(&Line::from(spans), width);
+        if index == cursor_line {
+            // The marker column is part of the drawn line, so the cursor is
+            // measured from the same left edge the wrap was.
+            let column = if app.composer.is_bash_mode() && app.composer.cursor() == 0 {
+                // Left/word movement can reach the stored delimiter. Show
+                // that cursor on the prompt, distinct from the text start.
+                0
+            } else {
+                cursor_column.saturating_add(MARKER_WIDTH)
+            };
+            let row = offsets
+                .iter()
+                .rposition(|start| *start <= column)
+                .unwrap_or(0);
+            let column = column.saturating_sub(offsets.get(row).copied().unwrap_or(0));
+            if column >= usize::from(width) && row + 1 == wrapped.len() {
+                // Leave a cursor cell after text that fills the last row.
+                wrapped.push(Line::default());
+                cursor = Some((0, rows.len().saturating_add(row + 1)));
+            } else {
+                cursor = Some((column, rows.len().saturating_add(row)));
+            }
+        }
+        rows.extend(wrapped);
+    }
+
+    (rows, cursor)
+}
+
+/// The same key rows as `/help`, laid out in the anchored pane.
+pub(super) fn shortcuts_lines(width: u16, theme: Theme) -> Vec<Line<'static>> {
+    let keys = crate::commands::help_keys();
+    let key_width = reports::label_width(keys.iter().map(|key| key.key.as_str()), width);
+    let mut lines = reports::text("Shortcuts", width, theme.style(Tone::Heading));
+    for key in keys {
+        lines.extend(reports::field(
+            Line::from(Span::styled(key.key, theme.style(Tone::Dim))),
+            &key.description,
+            theme.style(Tone::Default),
+            key_width,
+            width,
+        ));
+    }
+    lines
+}
+
+pub(super) fn draw_shortcuts(frame: &mut Frame<'_>, area: Rect, theme: Theme) {
+    let mut lines = shortcuts_lines(area.width, theme);
+    let available = usize::from(area.height.saturating_sub(1));
+    let hidden = lines.len().saturating_sub(available);
+    lines.truncate(available);
+    let controls = if hidden == 0 {
+        "any key closes · esc just closes".to_owned()
+    } else {
+        format!("+{hidden} rows · /help for all · any key closes")
+    };
+    lines.extend(
+        reports::text(&controls, area.width, theme.style(Tone::Dim))
+            .into_iter()
+            .take(1),
+    );
+    frame.render_widget(Paragraph::new(lines), area);
+}
 
 /// Splits one composer line so registered paste placeholders render accented,
 /// making the collapsed chunk visually distinct from typed text.
@@ -372,6 +449,7 @@ fn collapsed_todo_line(item: &PlanItemProjection, hidden: usize, theme: Theme) -
 
 pub(super) fn overlay_hint(app: &App) -> Option<String> {
     match &app.overlay {
+        Some(Overlay::Shortcuts) => None,
         Some(Overlay::Approval { .. }) => {
             let waiting = app.pending_approval_count().saturating_sub(1);
             Some(if waiting == 0 {
@@ -482,9 +560,6 @@ pub(super) fn draw_control_hint(frame: &mut Frame<'_>, area: Rect, hint: &str, t
 }
 
 pub(super) fn draw_identity_footer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
-    // Identity lives at the point of action. During work, activity replaces
-    // the idle mode label; no permanent header or focusable status region is
-    // introduced.
     if app.ctrl_c_exit_hint_active() {
         frame.render_widget(
             Paragraph::new(Line::from(vec![
@@ -496,34 +571,6 @@ pub(super) fn draw_identity_footer(frame: &mut Frame<'_>, area: Rect, app: &App,
         return;
     }
 
-    let mut identity = vec![Span::styled("  ", theme.style(Tone::Dim))];
-    if !app.following {
-        identity.push(Span::styled(
-            "▼ following paused · End/Ctrl+L newest".to_owned(),
-            theme.style(Tone::Warning),
-        ));
-        push_segment(
-            &mut identity,
-            theme,
-            Span::styled(
-                if app.is_busy() {
-                    app.status.activity.label().to_owned()
-                } else {
-                    app.status.agent.clone()
-                },
-                theme.style(Tone::Accent),
-            ),
-        );
-    } else {
-        identity.push(Span::styled(
-            if app.is_busy() {
-                app.status.activity.label().to_owned()
-            } else {
-                app.status.agent.clone()
-            },
-            theme.style(Tone::Accent),
-        ));
-    }
     // An installed CLI agent's id already names what runs the turn, and the
     // resolved provider only supplies model identity and limits -- nothing is
     // called through it. Prefixing it would read as though the turn went to
@@ -534,16 +581,26 @@ pub(super) fn draw_identity_footer(frame: &mut Frame<'_>, area: Rect, app: &App,
         }
         _ => app.status.model.clone(),
     };
-    let model = if let Some(window) = &app.status.context_window {
-        format!("{model} · {window}")
-    } else {
-        model
-    };
+    let mut identity = vec![Span::styled(model, theme.style(Tone::StatusModel))];
     push_segment(
         &mut identity,
         theme,
-        Span::styled(model, theme.style(Tone::StatusModel)),
+        Span::styled(app.status.agent.clone(), theme.style(Tone::Accent)),
     );
+    if let Some(mode) = &app.status.approval_mode {
+        push_segment(
+            &mut identity,
+            theme,
+            Span::styled(mode.clone(), theme.style(Tone::Dim)),
+        );
+    }
+    if let Some(window) = &app.status.context_window {
+        push_segment(
+            &mut identity,
+            theme,
+            Span::styled(window.clone(), theme.style(Tone::Dim)),
+        );
+    }
     if area.width >= 100
         && let Some(reasoning) = &app.status.reasoning_hint
     {
@@ -624,26 +681,64 @@ pub(super) fn draw_identity_footer(frame: &mut Frame<'_>, area: Rect, app: &App,
             ),
         );
     }
-    if app.is_busy() {
-        let mut controls = if app.composer.is_blank() {
-            "Enter steer · Tab queue when typed · Esc interrupt".to_owned()
-        } else {
-            "Enter steer · Tab queue · Esc interrupt".to_owned()
-        };
-        if app.has_editable_queued_turn() {
-            controls.push_str(" · Alt+↑ edit queue");
-        }
-        push_segment(
-            &mut identity,
-            theme,
-            Span::styled(controls, theme.style(Tone::Dim)),
-        );
-    }
+    let hint = composer_hint(app, area.width);
+    let left_width = hint.width().saturating_add(2);
+    let gap = usize::from(!hint.is_empty()) * 2;
+    let budget = usize::from(area.width).saturating_sub(left_width + gap);
+    // Remove secondary identity from the right before touching the hint.
+    // Even a model that cannot fit yields to actionable keys at 44 columns.
+    let identity = truncate(identity, u16::try_from(budget).unwrap_or(u16::MAX));
+    let identity_width: usize = identity.iter().map(|span| span.content.width()).sum();
+    let padding = usize::from(area.width).saturating_sub(left_width + identity_width);
+    let mut spans = vec![Span::raw("  "), Span::styled(hint, theme.style(Tone::Dim))];
+    spans.push(Span::raw(" ".repeat(padding)));
+    spans.extend(identity);
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
 
-    frame.render_widget(
-        Paragraph::new(Line::from(truncate(identity, area.width))),
-        area,
-    );
+fn composer_hint(app: &App, width: u16) -> String {
+    if matches!(app.overlay, Some(Overlay::Shortcuts)) {
+        return "any key closes · esc just closes".to_owned();
+    }
+    if matches!(app.overlay, Some(Overlay::ResourcePicker { .. })) {
+        return String::new();
+    }
+    if app.composer.is_bash_mode() {
+        return "bash mode".to_owned();
+    }
+    if !app.following {
+        let paused = "▼ following paused · End/Ctrl+L newest";
+        if app.is_busy() {
+            for controls in [
+                "enter to steer · tab to queue · esc to interrupt",
+                "enter steer · tab queue · esc",
+            ] {
+                let hint = format!("{paused} · {controls}");
+                if hint.width() + 2 <= usize::from(width) {
+                    return hint;
+                }
+            }
+            return "▼ paused · ctrl+l · enter · tab · esc".to_owned();
+        }
+        return paused.to_owned();
+    }
+    if app.is_busy() {
+        let controls = "enter to steer · tab to queue · esc to interrupt";
+        let queued = if app.has_editable_queued_turn() {
+            " · alt+↑ edit queue"
+        } else {
+            ""
+        };
+        if controls.width() + queued.width() + 2 <= usize::from(width) {
+            return format!("{controls}{queued}");
+        }
+        return "enter steer · tab queue · esc interrupt".to_owned();
+    }
+    if app.composer.is_empty() {
+        "? for shortcuts".to_owned()
+    } else {
+        String::new()
+    }
 }
 
 // ---------------------------------------------------------------------------

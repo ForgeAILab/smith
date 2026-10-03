@@ -76,7 +76,7 @@ fn command_columns_and_selected_detail_preserve_five_choices_at_supported_sizes(
             );
             assert!(!screen.contains("[NAME|default]"), "{screen}");
             assert!(!screen.contains("[PROVIDER/MODEL]"), "{screen}");
-            let composer_y = lines.iter().position(|line| *line == "› /").unwrap();
+            let composer_y = lines.iter().position(|line| *line == "> /").unwrap();
             assert!(selected_y + 1 < composer_y, "{screen}");
             assert!(
                 screen.contains("Keep this conversation visible"),

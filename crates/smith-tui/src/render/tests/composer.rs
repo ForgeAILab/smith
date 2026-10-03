@@ -1,6 +1,143 @@
 // composer behavior tests.
 
     #[test]
+    fn composer_rules_prompt_and_placeholder_survive_without_color_at_all_widths() {
+        for width in [44, 80, 100] {
+            for theme in [Theme::new(), Theme::new().without_color()] {
+                for draft in ["", "keep this draft", "first\nsecond\nlast"] {
+                    let mut app = App::new("model", "project");
+                    app.composer.replace(draft);
+                    let mut terminal =
+                        Terminal::new(TestBackend::new(width, 16)).expect("a test terminal");
+                    terminal
+                        .draw(|frame| draw(frame, &app, theme))
+                        .expect("a frame");
+                    let buffer = terminal.backend().buffer();
+                    let screen = screen_text(buffer);
+                    let rows: Vec<_> = screen.lines().collect();
+                    let top = rows.iter().position(|row| row.starts_with('─')).unwrap();
+                    let bottom = rows.iter().rposition(|row| row.starts_with('─')).unwrap();
+                    let rule = "─".repeat(usize::from(width));
+                    assert_eq!(rows[top], rule);
+                    assert_eq!(rows[bottom], rule);
+                    assert_eq!(rows.iter().filter(|row| **row == rule).count(), 2);
+                    assert_eq!(bottom - top, draft.split('\n').count() + 1);
+                    assert!(rows[top + 1].starts_with("> "), "{screen}");
+                    if draft.is_empty() {
+                        assert_eq!(rows[top + 1], "> Ask Smith to do anything");
+                    } else if draft.contains('\n') {
+                        assert_eq!(&rows[top + 1..bottom], ["> first", "  second", "  last"]);
+                    }
+                    assert!(rows[bottom + 1].contains("model"), "{screen}");
+                    for y in [top, bottom] {
+                        for x in 0..width {
+                            let cell = &buffer[(x, u16::try_from(y).unwrap())];
+                            assert!(cell.modifier.contains(Modifier::DIM));
+                            assert_eq!(cell.fg, Color::Reset);
+                            assert_eq!(cell.bg, Color::Reset);
+                        }
+                    }
+                    if !theme.uses_color() {
+                        assert!(
+                            buffer
+                                .content
+                                .iter()
+                                .all(|cell| { cell.fg == Color::Reset && cell.bg == Color::Reset })
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn leading_bang_changes_only_the_composer_prompt_and_adds_the_bash_hint() {
+        for width in [44, 80, 100] {
+            for theme in [Theme::new(), Theme::new().without_color()] {
+                let mut app = App::new("model", "project");
+                for draft in ["!", "!ls", "!!literal"] {
+                    app.composer.replace(draft);
+                    let screen = render(&app, width, 16, theme);
+                    assert!(
+                        screen
+                            .lines()
+                            .any(|line| line == format!("! {}", &draft[1..]).trim_end()),
+                        "{screen}"
+                    );
+                    assert!(
+                        screen.lines().last().unwrap().starts_with("  bash mode"),
+                        "{screen}"
+                    );
+                    assert_eq!(app.composer.text(), draft);
+                }
+                for draft in ["", "ask !ls", " !ls"] {
+                    app.composer.replace(draft);
+                    let screen = render(&app, width, 16, theme);
+                    assert!(!screen.contains("bash mode"), "{screen}");
+                    assert!(
+                        screen.lines().any(|line| line.starts_with("> ")),
+                        "{screen}"
+                    );
+                }
+                app.composer.replace("!ls");
+                assert_eq!(
+                    app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+                    Some(crate::app::Action::RunShell {
+                        command: "ls".to_owned()
+                    })
+                );
+                app.composer.replace("!!literal");
+                match app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)) {
+                    Some(crate::app::Action::Submit { submission, .. }) => {
+                        assert_eq!(submission.display_text(), "!literal");
+                    }
+                    other => panic!("expected a literal bang submission, got {other:?}"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cursor_stays_inside_the_rules_after_line_and_draft_navigation() {
+        use ratatui::backend::Backend as _;
+        for width in [44, 80, 100] {
+            let mut app = App::new("model", "project");
+            app.composer.replace("écho\n中\nlast line");
+            for event in [
+                KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+                KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+                KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+                KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
+                KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
+                KeyEvent::new(KeyCode::Home, KeyModifiers::NONE),
+                KeyEvent::new(KeyCode::End, KeyModifiers::NONE),
+            ] {
+                app.on_key(event);
+                let mut terminal =
+                    Terminal::new(TestBackend::new(width, 16)).expect("a test terminal");
+                terminal
+                    .draw(|frame| draw(frame, &app, Theme::new().without_color()))
+                    .expect("a frame");
+                let screen = screen_text(terminal.backend().buffer());
+                let top = screen
+                    .lines()
+                    .position(|line| line.starts_with('─'))
+                    .unwrap();
+                let position = terminal
+                    .backend_mut()
+                    .get_cursor_position()
+                    .expect("a cursor");
+                let (line, column) = app.composer.cursor_position();
+                assert_eq!(
+                    (usize::from(position.x), usize::from(position.y)),
+                    (column + 2, top + 1 + line),
+                    "{screen}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn working_progress_is_one_fixed_row_outside_the_scrolled_transcript() {
         for (width, height) in [(44, 16), (80, 24), (100, 32), (40, 10)] {
             let theme = Theme::new().without_color().without_motion();
@@ -16,6 +153,10 @@
                 .position(|line| line.contains("Ask Smith"))
                 .unwrap();
             assert_eq!(progress_row + 2, composer_row, "{before}");
+            assert_eq!(
+                before.lines().nth(progress_row + 1).unwrap(),
+                "─".repeat(usize::from(width))
+            );
 
             for index in 0..40 {
                 app.transcript
@@ -131,7 +272,7 @@
                 let composer = screen
                     .lines()
                     .enumerate()
-                    .filter_map(|(row, line)| line.starts_with("› ").then_some(row))
+                    .filter_map(|(row, line)| line.starts_with("> ").then_some(row))
                     .last()
                     .unwrap();
                 assert!(pane < progress, "{screen}");
@@ -206,7 +347,6 @@
             &screen,
             &[
                 "gpt-5.3",
-                "87% ctx",
                 "> explain the retry policy",
                 "● The retry policy classifies failures.",
                 "● Read(src/retry.rs)",
@@ -222,7 +362,7 @@
 
         let screen = render(&app, 74, 16, Theme::new().without_color());
         let footer = screen.lines().last().unwrap_or_default();
-        assert!(footer.contains("gpt-5.3 · 872k"), "{footer}");
+        assert!(footer.contains("gpt-5.3 · build · 872k"), "{footer}");
     }
 
     #[test]
@@ -269,7 +409,7 @@
             &screen,
             &[
                 "no matching commands",
-                "› /bogus",
+                "> /bogus",
                 "unknown command",
                 "gpt-5.3",
             ],
@@ -334,7 +474,7 @@
                 .find(|y| row(*y).starts_with("❯ /help "))
                 .expect("selected completion row");
             let composer_y = (0..buffer.area.height)
-                .find(|y| row(*y).trim_end() == "› /")
+                .find(|y| row(*y).trim_end() == "> /")
                 .expect("composer row");
             assert!(
                 completion_y < composer_y,
@@ -386,11 +526,15 @@
     }
 
     #[test]
-    fn a_narrow_footer_keeps_the_model_and_drops_detail() {
+    fn a_narrow_busy_footer_keeps_the_keys_and_drops_identity() {
         let app = conversation();
         let screen = render(&app, 44, 14, Theme::new());
         let footer = screen.lines().last().unwrap_or_default();
-        assert!(footer.contains("gpt-5.3"), "{footer}");
+        assert!(
+            footer.contains("enter steer · tab queue · esc interrupt"),
+            "{footer}"
+        );
+        assert!(!footer.contains("gpt-5.3"), "{footer}");
         assert!(
             footer.width() <= 44,
             "the footer must not overflow: {footer}"
@@ -1320,13 +1464,13 @@
             .collect();
         let composer_row = rows
             .iter()
-            .position(|row| row.starts_with('›'))
+            .rposition(|row| row.starts_with('>'))
             .expect("the composer row");
-        // `› ` plus nineteen characters fills the forty columns, so the
+        // `> ` plus nineteen characters fills the forty columns, so the
         // draft's last two characters wrap onto the row below it.
         assert_eq!(
             rows[composer_row],
-            "› 请解释一下重试策略的实现方式和它的退避"
+            "> 请解释一下重试策略的实现方式和它的退避"
         );
         assert_eq!(rows[composer_row + 1], "曲线");
         assert_eq!(

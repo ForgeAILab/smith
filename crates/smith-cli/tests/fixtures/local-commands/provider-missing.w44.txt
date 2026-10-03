@@ -506,7 +506,7 @@ selectable; run `smith setup add-provider`
 
 
 
-
-› Ask Smith to do anything
-
-  build · example-model · <PROJECT> · ? ctx
+────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────
+  ? for shortcuts      example-model · build

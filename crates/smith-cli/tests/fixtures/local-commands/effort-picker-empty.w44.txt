@@ -505,8 +505,8 @@
 
   Choose reasoning effort · type to filter
  Effort is not adjustable for this provider/
-
-› Ask Smith to do anything
-
-  build · example-model · <PROJECT> · ? ctx
+────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────
+   example-model · build · <PROJECT> · ? ctx
   enter choose · esc cancel

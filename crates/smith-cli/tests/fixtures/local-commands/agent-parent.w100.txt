@@ -506,7 +506,7 @@ Returned to the root timeline; the root composer remained focused.
 
 
 
-
-› Ask Smith to do anything
-
-  build · example-model · <PROJECT> · ? ctx
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts                                          example-model · build · <PROJECT> · ? ctx

@@ -357,6 +357,8 @@ pub enum ResourceTarget {
 /// selection reserve a compact pane above the composer.
 #[derive(Debug)]
 pub enum Overlay {
+    /// Ephemeral keyboard guide in the anchored pane, never transcript history.
+    Shortcuts,
     /// A tool is waiting for approval.
     Approval {
         /// What the runtime is asking to run, and the channel to answer on.

@@ -199,6 +199,9 @@ impl App {
         if normalized.is_empty() {
             return;
         }
+        if matches!(self.overlay, Some(Overlay::Shortcuts)) {
+            self.overlay = None;
+        }
         match &mut self.overlay {
             None | Some(Overlay::Palette { .. }) => {
                 let lines = normalized.lines().count();

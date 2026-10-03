@@ -137,24 +137,18 @@
     }
 
     #[test]
-    fn question_mark_opens_the_same_local_help_without_a_provider_send() {
+    fn question_mark_opens_local_shortcuts_without_a_provider_send() {
         let mut app = app();
         assert_eq!(app.on_key(key(KeyCode::Char('?'))), None);
         assert!(app.composer.is_empty());
-        let help = app
-            .transcript
-            .blocks()
-            .iter()
-            .find_map(|block| match block {
-                Block::Local(LocalResult::Help(report)) => {
-                    Some(smith_client::help_report::render_plain(report))
-                }
-                _ => None,
-            })
-            .expect("question mark should render local help");
-        assert!(help.contains("Ctrl+C twice"), "{help}");
-        assert!(help.contains("Up/Down browse"), "{help}");
-        assert!(help.contains("Ctrl+R searches"), "{help}");
+        assert!(matches!(app.overlay, Some(Overlay::Shortcuts)));
+        assert!(app.transcript.is_empty());
+        assert!(
+            commands::help()
+                .keys
+                .iter()
+                .any(|key| key.key == "Ctrl+C twice")
+        );
     }
 
     #[test]

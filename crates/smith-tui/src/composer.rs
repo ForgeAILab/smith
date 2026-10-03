@@ -19,6 +19,8 @@ pub struct Composer {
     text: String,
     /// Cursor position, counted in characters from the start.
     cursor: usize,
+    /// Retain the intended display column across shorter draft lines.
+    vertical_column: Option<usize>,
     /// Accepted inputs and interrupted drafts, oldest first.
     history: VecDeque<String>,
     /// Entry currently selected while navigating [`Self::history`].
@@ -36,6 +38,34 @@ impl Composer {
     /// The current text.
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    /// The leading shell shortcut character is drawn as the prompt itself.
+    pub fn is_bash_mode(&self) -> bool {
+        self.text.starts_with('!')
+    }
+
+    /// Editable text after the prompt; submission still uses [`Self::text`].
+    /// An escaped `!!x` is displayed as `! !x` and still submits literal `!x`.
+    pub fn visible_text(&self) -> &str {
+        self.text.strip_prefix('!').unwrap_or(&self.text)
+    }
+
+    /// Cursor coordinates in the visible draft, excluding the shell prompt.
+    pub fn visible_cursor_position(&self) -> (usize, usize) {
+        let (line, column) = self.cursor_position();
+        (
+            line,
+            column.saturating_sub(usize::from(line == 0 && self.is_bash_mode())),
+        )
+    }
+
+    /// Maps a visible draft position back to the stored character cursor.
+    pub fn move_to_visible_position(&mut self, line: usize, column: usize) {
+        self.move_to_position(
+            line,
+            column.saturating_add(usize::from(line == 0 && self.is_bash_mode())),
+        );
     }
 
     /// Whether the buffer holds nothing but whitespace.
@@ -92,6 +122,7 @@ impl Composer {
 
     /// Inserts a character at the cursor.
     pub fn insert(&mut self, ch: char) {
+        self.vertical_column = None;
         self.leave_history_navigation();
         let offset = self.byte_offset(self.cursor);
         self.text.insert(offset, ch);
@@ -100,6 +131,7 @@ impl Composer {
 
     /// Inserts a string at the cursor, as a paste would.
     pub fn insert_str(&mut self, value: &str) {
+        self.vertical_column = None;
         self.leave_history_navigation();
         let offset = self.byte_offset(self.cursor);
         self.text.insert_str(offset, value);
@@ -108,6 +140,7 @@ impl Composer {
 
     /// Deletes the character before the cursor.
     pub fn backspace(&mut self) {
+        self.vertical_column = None;
         if self.cursor == 0 {
             return;
         }
@@ -132,6 +165,7 @@ impl Composer {
 
     /// Deletes the character at the cursor.
     pub fn delete(&mut self) {
+        self.vertical_column = None;
         if self.cursor >= self.len() {
             return;
         }
@@ -155,11 +189,13 @@ impl Composer {
 
     /// Moves the cursor one character left.
     pub fn move_left(&mut self) {
+        self.vertical_column = None;
         self.cursor = self.cursor.saturating_sub(1);
     }
 
     /// Moves left by one character or across one registered atomic range.
     pub fn move_left_over(&mut self, atomic_ranges: &[Range<usize>]) {
+        self.vertical_column = None;
         if let Some(range) = atomic_ranges
             .iter()
             .find(|range| range.start < self.cursor && self.cursor <= range.end)
@@ -172,11 +208,13 @@ impl Composer {
 
     /// Moves the cursor one character right.
     pub fn move_right(&mut self) {
+        self.vertical_column = None;
         self.cursor = (self.cursor + 1).min(self.len());
     }
 
     /// Moves right by one character or across one registered atomic range.
     pub fn move_right_over(&mut self, atomic_ranges: &[Range<usize>]) {
+        self.vertical_column = None;
         if let Some(range) = atomic_ranges
             .iter()
             .find(|range| range.start <= self.cursor && self.cursor < range.end)
@@ -188,6 +226,7 @@ impl Composer {
     }
 
     fn remove_range(&mut self, range: Range<usize>) {
+        self.vertical_column = None;
         debug_assert!(range.start < range.end);
         debug_assert!(range.end <= self.len());
         let start = self.byte_offset(range.start);
@@ -199,22 +238,149 @@ impl Composer {
 
     /// Moves the cursor to the start of the current line.
     pub fn move_home(&mut self) {
+        self.vertical_column = None;
         let chars: Vec<char> = self.text.chars().collect();
         let mut index = self.cursor;
         while index > 0 && chars[index - 1] != '\n' {
             index -= 1;
         }
-        self.cursor = index;
+        self.cursor = index.max(usize::from(self.is_bash_mode()));
     }
 
     /// Moves the cursor to the end of the current line.
     pub fn move_end(&mut self) {
+        self.vertical_column = None;
         let chars: Vec<char> = self.text.chars().collect();
         let mut index = self.cursor;
         while index < chars.len() && chars[index] != '\n' {
             index += 1;
         }
         self.cursor = index;
+    }
+
+    /// Moves to the start of the whole draft.
+    pub fn move_to_start(&mut self) {
+        self.vertical_column = None;
+        self.cursor = usize::from(self.is_bash_mode());
+    }
+
+    /// Moves to the end of the whole draft.
+    pub fn move_to_end(&mut self) {
+        self.vertical_column = None;
+        self.cursor = self.len();
+    }
+
+    /// Moves up a draft line, returning false only on the first line.
+    pub fn move_up_over(&mut self, atomic_ranges: &[Range<usize>]) -> bool {
+        let (line, column) = self.visible_cursor_position();
+        let Some(previous) = line.checked_sub(1) else {
+            return false;
+        };
+        self.move_vertical(previous, column, atomic_ranges);
+        true
+    }
+
+    /// Moves down a draft line, returning false only on the last line.
+    pub fn move_down_over(&mut self, atomic_ranges: &[Range<usize>]) -> bool {
+        let (line, column) = self.visible_cursor_position();
+        if line + 1 >= self.lines().len() {
+            return false;
+        }
+        self.move_vertical(line + 1, column, atomic_ranges);
+        true
+    }
+
+    fn move_vertical(&mut self, line: usize, column: usize, atomic_ranges: &[Range<usize>]) {
+        let column = self.vertical_column.unwrap_or(column);
+        self.move_to_visible_position(line, column);
+        if let Some(range) = atomic_ranges
+            .iter()
+            .find(|range| range.start < self.cursor && self.cursor < range.end)
+        {
+            self.cursor = if self.cursor - range.start <= range.end - self.cursor {
+                range.start
+            } else {
+                range.end
+            };
+        }
+        self.vertical_column = Some(column);
+    }
+
+    /// Moves left over whitespace and the preceding word or registered label.
+    pub fn move_word_left_over(&mut self, atomic_ranges: &[Range<usize>]) {
+        self.vertical_column = None;
+        let chars: Vec<char> = self.text.chars().collect();
+        let mut index = self.cursor;
+        while index > 0 && chars[index - 1].is_whitespace() {
+            index -= 1;
+        }
+        if let Some(range) = atomic_ranges
+            .iter()
+            .find(|range| range.start < index && index <= range.end)
+        {
+            self.cursor = range.start;
+            return;
+        }
+        while index > 0 && !chars[index - 1].is_whitespace() {
+            if atomic_ranges.iter().any(|range| range.end == index) {
+                break;
+            }
+            index -= 1;
+        }
+        self.cursor = index;
+    }
+
+    /// Moves right over whitespace and the next word or registered label.
+    pub fn move_word_right_over(&mut self, atomic_ranges: &[Range<usize>]) {
+        self.vertical_column = None;
+        let chars: Vec<char> = self.text.chars().collect();
+        let mut index = self.cursor;
+        while index < chars.len() && chars[index].is_whitespace() {
+            index += 1;
+        }
+        if let Some(range) = atomic_ranges
+            .iter()
+            .find(|range| range.start <= index && index < range.end)
+        {
+            self.cursor = range.end;
+            return;
+        }
+        while index < chars.len() && !chars[index].is_whitespace() {
+            if atomic_ranges.iter().any(|range| range.start == index) {
+                break;
+            }
+            index += 1;
+        }
+        self.cursor = index;
+    }
+
+    /// Deletes the word or registered label to the left of the cursor.
+    pub fn delete_word_left_over(&mut self, atomic_ranges: &[Range<usize>]) {
+        let end = self.cursor;
+        self.move_word_left_over(atomic_ranges);
+        if self.cursor < end {
+            self.remove_range(self.cursor..end);
+        }
+    }
+
+    /// Deletes to the current line's start without removing its newline.
+    pub fn delete_to_line_start(&mut self) {
+        let end = self.cursor;
+        self.move_home();
+        if self.cursor < end {
+            self.remove_range(self.cursor..end);
+        }
+    }
+
+    /// Deletes to the current line's end without removing its newline.
+    pub fn delete_to_line_end(&mut self) {
+        let start = self.cursor;
+        self.move_end();
+        let end = self.cursor;
+        self.cursor = start;
+        if start < end {
+            self.remove_range(start..end);
+        }
     }
 
     /// Moves the cursor to a `(line, column)` position, both zero-based and
@@ -224,6 +390,7 @@ impl Composer {
     /// past the end of a line lands at that line's end, and a click below the
     /// last line lands at the end of the buffer.
     pub fn move_to_position(&mut self, line: usize, column: usize) {
+        self.vertical_column = None;
         let mut index = 0usize;
         let mut current_line = 0usize;
         let mut chars = self.text.chars();
@@ -254,6 +421,7 @@ impl Composer {
 
     /// Empties the buffer.
     pub fn clear(&mut self) {
+        self.vertical_column = None;
         self.text.clear();
         self.cursor = 0;
         self.leave_history_navigation();
@@ -261,6 +429,7 @@ impl Composer {
 
     /// Replaces the draft and leaves the cursor at its end.
     pub fn replace(&mut self, value: impl Into<String>) {
+        self.vertical_column = None;
         self.text = value.into();
         self.cursor = self.text.chars().count();
         self.leave_history_navigation();
@@ -273,6 +442,7 @@ impl Composer {
 
     /// Clears the current draft and keeps it in bounded local history.
     pub fn stash_for_recall(&mut self) {
+        self.vertical_column = None;
         let draft = std::mem::take(&mut self.text);
         self.cursor = 0;
         self.record_history(draft);
@@ -280,6 +450,7 @@ impl Composer {
 
     /// Recalls the previous composer-history entry.
     pub fn recall_previous(&mut self) -> bool {
+        self.vertical_column = None;
         let Some(last) = self.history.len().checked_sub(1) else {
             return false;
         };
@@ -298,6 +469,7 @@ impl Composer {
 
     /// Moves toward newer history and restores the pre-navigation draft.
     pub fn recall_next(&mut self) -> bool {
+        self.vertical_column = None;
         let Some(current) = self.history_cursor else {
             return false;
         };
@@ -348,7 +520,7 @@ impl Composer {
             .map(|(index, entry)| (*index, (*entry).clone()))
     }
 
-    /// Whether Up/Down currently navigate composer history.
+    /// Whether a composer-history entry is currently selected.
     pub fn is_recalling(&self) -> bool {
         self.history_cursor.is_some()
     }
@@ -533,6 +705,64 @@ mod tests {
         assert_eq!(composer.cursor(), 6);
         composer.move_end();
         assert_eq!(composer.cursor(), 12);
+    }
+
+    #[test]
+    fn vertical_moves_keep_the_display_column_across_short_and_empty_lines() {
+        let mut composer = Composer::new();
+        composer.replace("abcdef\n中\nabcdef\n");
+        composer.move_to_position(0, 4);
+        assert!(!composer.move_up_over(&[]));
+        assert!(composer.move_down_over(&[]));
+        assert_eq!(composer.cursor_position(), (1, 2));
+        assert!(composer.move_down_over(&[]));
+        assert_eq!(composer.cursor_position(), (2, 4));
+        assert!(composer.move_down_over(&[]));
+        assert_eq!(composer.cursor_position(), (3, 0));
+        assert!(!composer.move_down_over(&[]));
+        assert!(composer.move_up_over(&[]));
+        assert_eq!(composer.cursor_position(), (2, 4));
+        assert!(composer.move_up_over(&[]));
+        composer.move_home();
+        assert!(composer.move_down_over(&[]));
+        assert_eq!(composer.cursor_position(), (2, 0));
+    }
+
+    #[test]
+    fn vertical_moves_snap_to_registered_placeholder_edges() {
+        let mut composer = Composer::new();
+        let label = "[Image #1 32×32]";
+        composer.replace(format!("abcdefghijklmno\n{label}\nabcdefghijklmno"));
+        let ranges = composer.registered_ranges([label]);
+        composer.move_to_position(0, 4);
+        composer.move_down_over(&ranges);
+        assert_eq!(composer.cursor(), ranges[0].start);
+        composer.move_down_over(&ranges);
+        assert_eq!(composer.cursor_position(), (2, 4));
+        composer.move_to_position(2, 13);
+        composer.move_up_over(&ranges);
+        assert_eq!(composer.cursor(), ranges[0].end);
+    }
+
+    #[test]
+    fn word_moves_and_deletion_stop_at_labels_adjacent_to_ordinary_text() {
+        let mut composer = Composer::new();
+        let label = "[Pasted text #1 +3 lines]";
+        composer.replace(format!("café{label}tail  "));
+        let ranges = composer.registered_ranges([label]);
+        composer.move_word_left_over(&ranges);
+        assert_eq!(composer.cursor(), ranges[0].end);
+        composer.move_word_left_over(&ranges);
+        assert_eq!(composer.cursor(), ranges[0].start);
+        composer.move_word_left_over(&ranges);
+        assert_eq!(composer.cursor(), 0);
+        composer.move_word_right_over(&ranges);
+        assert_eq!(composer.cursor(), ranges[0].start);
+        composer.move_word_right_over(&ranges);
+        assert_eq!(composer.cursor(), ranges[0].end);
+        composer.delete_word_left_over(&ranges);
+        assert_eq!(composer.text(), "cafétail  ");
+        assert_eq!(composer.cursor(), 4);
     }
 
     #[test]

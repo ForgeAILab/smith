@@ -769,38 +769,43 @@ pub fn help() -> HelpReport {
         .into_iter()
         .map(str::to_owned)
         .collect(),
-        keys: [
-            ("Enter", "Send a task"),
-            ("Enter while working", "send now"),
-            ("Tab while working", "queue for after this turn"),
-            ("Tab when idle", "next profile (empty draft)"),
-            ("Shift+Tab when idle", "Previous profile (empty draft)"),
-            ("Ctrl+O", "expand or fold detail"),
-            ("Esc", "interrupt or close"),
-            ("Shift+Enter or Alt+Enter", "Insert a newline"),
-            ("Alt+Up", "Edit the newest queued task"),
-            ("Ctrl+B", "Move a running shell command to the background"),
-            ("Ctrl+P", "Open the command palette"),
-            ("? on an empty draft", "Show help"),
-            ("PageUp / PageDown", "Scroll the transcript"),
-            ("Home / End", "Go to the oldest or newest output"),
-            ("Mouse wheel", "Scroll the transcript"),
-            ("Ctrl+L", "Follow the newest output"),
-            ("Up / Down", "Browse input history, then delegated agents"),
-            ("Ctrl+R", "Search input history; Enter restores, Esc closes"),
-            ("Ctrl+C", "Save the draft in history and clear it"),
-            ("Ctrl+C twice", "Exit (press twice within one second)"),
-            ("@", "Complete files and agents; @@ sends a literal @"),
-            ("!", "Run a local shell command; !! sends a literal !"),
-            ("//", "Send text with a leading slash"),
-        ]
-        .into_iter()
-        .map(|(key, description)| HelpKey {
-            key: key.to_owned(),
-            description: description.to_owned(),
-        })
-        .collect(),
+        keys: help_keys(),
     }
+}
+
+/// The shared key table for `/help` and the ephemeral shortcuts panel.
+pub fn help_keys() -> Vec<HelpKey> {
+    [
+        ("Enter", "Send a task"),
+        ("Enter while working", "send now"),
+        ("Tab while working", "queue for after this turn"),
+        ("Tab when idle", "next profile (empty draft)"),
+        ("Shift+Tab when idle", "Previous profile (empty draft)"),
+        ("Ctrl+O", "expand or fold detail"),
+        ("Esc", "interrupt or close"),
+        ("Shift+Enter or Alt+Enter", "Insert a newline"),
+        ("Alt+Up", "Edit the newest queued task"),
+        ("Ctrl+B", "Move a running shell command to the background"),
+        ("Ctrl+P", "Open the command palette"),
+        ("? on an empty draft", "Show help"),
+        ("PageUp / PageDown", "Scroll the transcript"),
+        ("Home / End", "Go to the oldest or newest output"),
+        ("Mouse wheel", "Scroll the transcript"),
+        ("Ctrl+L", "Follow the newest output"),
+        ("Up / Down", "Browse input history, then delegated agents"),
+        ("Ctrl+R", "Search input history; Enter restores, Esc closes"),
+        ("Ctrl+C", "Save the draft in history and clear it"),
+        ("Ctrl+C twice", "Exit (press twice within one second)"),
+        ("@", "Complete files and agents; @@ sends a literal @"),
+        ("!", "Run a local shell command; !! sends a literal !"),
+        ("//", "Send text with a leading slash"),
+    ]
+    .into_iter()
+    .map(|(key, description)| HelpKey {
+        key: key.to_owned(),
+        description: description.to_owned(),
+    })
+    .collect()
 }
 
 fn help_command(command: &CommandSpec) -> HelpCommand {

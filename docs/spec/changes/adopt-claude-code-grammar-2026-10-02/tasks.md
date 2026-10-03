@@ -91,13 +91,18 @@ completed_at:
 
 ## 5. Composer (after the in-flight TUI changes are committed)
 
-- [ ] 5.1 Rules above and below; `>` prompt; bash-mode prompt for `!`.
-- [ ] 5.2 Line movement inside a multi-line draft; history only from the
+- [x] 5.1 Rules above and below; `>` prompt; bash-mode prompt for `!`.
+- [x] 5.2 Line movement inside a multi-line draft; history only from the
   first or last line.
-- [ ] 5.3 Line-editing keys; Home and End act on a non-empty draft.
-- [ ] 5.4 Hint row: `? for shortcuts` when idle; hints dropped last when
+- [x] 5.3 Line-editing keys; Home and End act on a non-empty draft.
+- [x] 5.4 Hint row: `? for shortcuts` when idle; hints dropped last when
   narrow.
-- [ ] 5.5 Shortcuts panel on `?` in the anchored pane.
+- [x] 5.5 Shortcuts panel on `?` in the anchored pane.
+
+- [ ] 5.5a Key table content, shared by /help and the shortcuts panel:
+  capitalize every description; `?` shows shortcuts, not help; Home/End
+  describe the draft-first behaviour; list Up/Down line movement, `\` then
+  Enter, Ctrl+A/E/W/U/K, and Alt+B/F.
 
 ## 6. Verification
 

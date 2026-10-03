@@ -506,7 +506,7 @@ index 90be1f3..294186e 100644
 
 
 
-
-› Ask Smith to do anything
-
-  build · example-model · <PROJECT> · ? ctx
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts                                          example-model · build · <PROJECT> · ? ctx

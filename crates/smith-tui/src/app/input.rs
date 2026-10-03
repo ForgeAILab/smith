@@ -106,6 +106,17 @@ impl App {
             return None;
         }
 
+        let closing_shortcuts = matches!(self.overlay, Some(Overlay::Shortcuts));
+        if closing_shortcuts {
+            self.overlay = None;
+            if key.code == KeyCode::Esc {
+                self.last_ctrl_c = None;
+                return None;
+            }
+            // All other closing keys keep their normal meaning, including
+            // Ctrl+C, Tab, and a literal second question mark.
+        }
+
         let ignore_prompt_key = matches!(
             self.overlay,
             Some(
@@ -335,7 +346,7 @@ impl App {
                 };
             }
             Some(Overlay::ExitConfirm { .. }) => return self.on_exit_confirm_key(key),
-            None => {}
+            Some(Overlay::Shortcuts) | None => {}
         }
 
         match (key.code, key.modifiers) {
@@ -378,9 +389,14 @@ impl App {
             // and always emitting the action keeps the mapping trivial and
             // testable without a live host.
             (KeyCode::Char('b'), KeyModifiers::CONTROL) => Some(Action::BackgroundShell),
-            (KeyCode::Char('?'), KeyModifiers::NONE) if self.composer.is_empty() => {
-                self.follow_newest();
-                self.show_command_help()
+            (KeyCode::Char('?'), modifiers)
+                if !closing_shortcuts
+                    && self.composer.is_empty()
+                    && (modifiers == KeyModifiers::NONE || modifiers == KeyModifiers::SHIFT) =>
+            {
+                self.selection = None;
+                self.overlay = Some(Overlay::Shortcuts);
+                None
             }
             (KeyCode::Esc, _) => self.on_escape(),
             (KeyCode::PageUp, _) => {
@@ -395,23 +411,29 @@ impl App {
                 self.edit_newest_queued_submission();
                 None
             }
-            // The arrows serve two lists that never overlap: composer history
-            // above the prompt, delegated agents below it. History wins while
-            // it has somewhere to go, so recall behavior is unchanged for a
-            // session with no children.
+            // Draft lines own the arrows until their edge. Beyond that, keep
+            // the existing history and delegated-agent navigation order.
             (KeyCode::Up, _) => {
-                if !self.inspect_previous_child() {
+                let ranges = self
+                    .composer
+                    .registered_ranges(self.attachment_placeholders());
+                if !self.composer.move_up_over(&ranges) && !self.inspect_previous_child() {
                     self.composer.recall_previous();
                 }
                 None
             }
             (KeyCode::Down, _) => {
-                if !self.composer.recall_next() {
+                let ranges = self
+                    .composer
+                    .registered_ranges(self.attachment_placeholders());
+                if !self.composer.move_down_over(&ranges) && !self.composer.recall_next() {
                     self.inspect_next_child();
                 }
                 None
             }
-            (KeyCode::Home | KeyCode::End, _) => self.on_scroll_key(key),
+            (KeyCode::Home | KeyCode::End, _) if self.composer.is_empty() => {
+                self.on_scroll_key(key)
+            }
             _ => self.on_composer_key(key),
         }
     }
@@ -825,6 +847,9 @@ impl App {
     }
 
     pub(super) fn on_composer_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let ranges = self
+            .composer
+            .registered_ranges(self.attachment_placeholders());
         match (key.code, key.modifiers) {
             (KeyCode::Enter, m)
                 if m.contains(KeyModifiers::SHIFT) || m.contains(KeyModifiers::ALT) =>
@@ -833,6 +858,13 @@ impl App {
                 None
             }
             (KeyCode::Enter, _) => {
+                if self.composer.cursor() > 0
+                    && self.composer.text().chars().nth(self.composer.cursor() - 1) == Some('\\')
+                {
+                    self.composer.backspace();
+                    self.composer.insert('\n');
+                    return None;
+                }
                 if self.composer.is_blank() {
                     return None;
                 }
@@ -1040,11 +1072,39 @@ impl App {
                 None
             }
             (KeyCode::Home, _) => {
-                self.composer.move_home();
+                self.composer.move_to_start();
                 None
             }
             (KeyCode::End, _) => {
+                self.composer.move_to_end();
+                None
+            }
+            (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
+                self.composer.move_home();
+                None
+            }
+            (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
                 self.composer.move_end();
+                None
+            }
+            (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
+                self.composer.delete_word_left_over(&ranges);
+                None
+            }
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+                self.composer.delete_to_line_start();
+                None
+            }
+            (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
+                self.composer.delete_to_line_end();
+                None
+            }
+            (KeyCode::Char('b'), KeyModifiers::ALT) => {
+                self.composer.move_word_left_over(&ranges);
+                None
+            }
+            (KeyCode::Char('f'), KeyModifiers::ALT) => {
+                self.composer.move_word_right_over(&ranges);
                 None
             }
             (KeyCode::Char(ch), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {

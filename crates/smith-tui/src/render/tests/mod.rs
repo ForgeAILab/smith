@@ -34,6 +34,7 @@ mod tests {
     use unicode_width::UnicodeWidthStr;
 
     use crate::questionnaire::{QuestionnaireChoice, QuestionnaireForm, QuestionnaireQuestion};
+    use crate::theme::glyph;
     use crate::transcript::{LocalResult, ToolStatus};
 
     fn recovery_preview(text: &str) -> smith_client::recovery_report::RecoveryPreview {
@@ -253,6 +254,7 @@ mod tests {
     include!("transcript.rs");
     include!("markdown.rs");
     include!("composer.rs");
+    include!("composer_grammar.rs");
     include!("modal.rs");
     include!("interaction_defects.rs");
     include!("startup.rs");

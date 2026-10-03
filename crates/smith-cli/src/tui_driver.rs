@@ -138,6 +138,7 @@ pub(super) async fn run_interactive(
             })
         }));
     app.status.set_agent(policy.agent_profile.clone());
+    app.status.approval_mode = Some(policy.approval_mode.as_str().to_owned());
     // Labels the turn as executed by an installed CLI, and switches the model
     // picker to that CLI's models rather than the provider catalog.
     app.status.harness = policy

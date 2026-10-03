@@ -12,7 +12,7 @@ use smith_runtime::client::{PlanItemStatus, PlanSensitivity};
 
 use crate::app::{App, Overlay};
 use crate::picker::{compact_resource_picker_rows, draw_compact_resource_picker};
-use crate::theme::{Theme, Tone, glyph};
+use crate::theme::{Theme, Tone};
 #[cfg(test)]
 use crate::transcript::MAX_LOCAL_RESULT_BYTES;
 
@@ -115,6 +115,7 @@ fn draw_surface(
     draw_transcript(frame, transcript, app, theme, transcript_lines.take());
     if anchored.compact > 0 {
         match &app.overlay {
+            Some(Overlay::Shortcuts) => draw_shortcuts(frame, compact, theme),
             Some(Overlay::Palette {
                 selected, error, ..
             }) => draw_palette(frame, compact, app, *selected, error.as_deref(), theme),
@@ -150,7 +151,8 @@ fn draw_surface(
         Some(
             Overlay::Palette { .. }
             | Overlay::ResourcePicker { .. }
-            | Overlay::HistorySearch { .. },
+            | Overlay::HistorySearch { .. }
+            | Overlay::Shortcuts,
         ) => {}
         Some(Overlay::UndoConfirm { report }) => {
             draw_recovery_confirm(
@@ -305,8 +307,12 @@ struct AnchoredRows {
     todos: u16,
 }
 
-fn desired_compact_rows(app: &App) -> u16 {
+fn desired_compact_rows(app: &App, width: u16) -> u16 {
     match &app.overlay {
+        Some(Overlay::Shortcuts) => {
+            u16::try_from(shortcuts_lines(width, Theme::new()).len().saturating_add(1))
+                .unwrap_or(u16::MAX)
+        }
         Some(Overlay::Palette {
             selected, error, ..
         }) => desired_palette_rows(app, *selected, error.as_deref()),
@@ -317,7 +323,7 @@ fn desired_compact_rows(app: &App) -> u16 {
 }
 
 fn anchored_rows(app: &App, area: Rect, composer_rows: u16, agents_rows: u16) -> AnchoredRows {
-    let compact_desired = desired_compact_rows(app);
+    let compact_desired = desired_compact_rows(app, area.width);
     let available = area
         .height
         .saturating_sub(composer_rows)
@@ -419,7 +425,7 @@ fn agents_rows(app: &App, area: Rect, composer_rows: u16) -> u16 {
         .saturating_sub(working_rows(app))
         // A list owns the anchored pane; agent chrome yields before its five
         // choices and selected detail line on a short terminal.
-        .saturating_sub(desired_compact_rows(app))
+        .saturating_sub(desired_compact_rows(app, area.width))
         .saturating_sub(3);
     desired_agents_rows(app).min(ceiling)
 }
@@ -434,19 +440,8 @@ fn draw_too_small(frame: &mut Frame<'_>, area: Rect, theme: Theme) {
 }
 
 fn composer_rows(app: &App, width: u16) -> u16 {
-    // Mirrors `draw_composer`'s marker prefix so the height budget counts the
-    // same lines the renderer wraps.
-    let lines: Vec<Line<'static>> = app
-        .composer
-        .lines()
-        .iter()
-        .enumerate()
-        .map(|(index, line)| {
-            let marker = if index == 0 { glyph::USER } else { " " };
-            Line::from(format!("{marker} {line}"))
-        })
-        .collect();
-    u16::try_from(rendered_rows(&lines, width).clamp(1, 8)).unwrap_or(1)
+    let (lines, _) = composer_content(app, Theme::new(), width);
+    u16::try_from(lines.len().clamp(1, 8)).unwrap_or(1)
 }
 
 // ---------------------------------------------------------------------------

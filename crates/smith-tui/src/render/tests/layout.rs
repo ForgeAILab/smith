@@ -174,7 +174,11 @@
             let screen = render(&app, width, height, theme);
             assert!(screen.contains("build"), "{width}×{height}:\n{screen}");
             assert!(screen.contains("glm-5.2"), "{width}×{height}:\n{screen}");
-            assert!(screen.contains("? ctx"), "{width}×{height}:\n{screen}");
+            assert!(
+                screen.contains("? for shortcuts"),
+                "{width}×{height}:\n{screen}"
+            );
+            assert_eq!(screen.contains("? ctx"), width != 44, "{screen}");
             assert!(
                 !screen.contains("Tab agents"),
                 "{width}×{height}:\n{screen}"
@@ -198,7 +202,7 @@
         }
 
         let normal = render(&app, 74, 24, theme);
-        insta_like(&normal, &["build · zai/glm-5.2 · api:main · ? ctx"]);
+        insta_like(&normal, &["zai/glm-5.2 · build · api:main · ? ctx"]);
 
         app.apply(&event(RuntimeEvent::TurnStarted));
         let reduced_motion = render(&app, 74, 24, theme);
@@ -215,7 +219,7 @@
         for (width, height) in [(74, 16), (44, 12), (120, 40), (74, 16)] {
             let screen = render(&app, width, height, Theme::new());
             assert!(
-                screen.contains("gpt-5.3"),
+                screen.contains(if width == 44 { "tab queue" } else { "gpt-5.3" }),
                 "{width}×{height} lost the footer:\n{screen}"
             );
         }

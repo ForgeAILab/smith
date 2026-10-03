@@ -194,7 +194,7 @@
         let before_lines = before.lines().collect::<Vec<_>>();
         let before_identity = before_lines
             .iter()
-            .position(|line| line.contains("build · zai/glm-5.2"))
+            .position(|line| line.contains("zai/glm-5.2 · build"))
             .expect("idle identity row");
         let before_composer = before_lines
             .iter()
@@ -212,7 +212,7 @@
                 "agent",
                 "src/lib.rs",
                 "file · 42 bytes",
-                "build · zai/glm-5.2 · /Volumes/Data/codes/ai/agent-runtime:main · ? ctx",
+                "zai/glm-5.2 · build · /Volumes/Data/codes/ai/agent-runtime:main · ? ctx",
                 "type to filter · ↑↓ choose · enter confirm · esc cancel",
             ],
         );
@@ -221,7 +221,7 @@
         let open_lines = screen.lines().collect::<Vec<_>>();
         let open_identity = open_lines
             .iter()
-            .position(|line| line.contains("build · zai/glm-5.2"))
+            .position(|line| line.contains("zai/glm-5.2 · build"))
             .expect("picker identity row");
         let open_composer = open_lines
             .iter()

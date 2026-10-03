@@ -53,7 +53,7 @@ pub mod glyph {
     /// Prefixes a user message.
     pub const USER: &str = GRAMMAR[0];
     /// Prefixes the composer, whose grammar is owned by its own surface.
-    pub const INPUT: &str = "›";
+    pub const INPUT: &str = USER;
     /// Prefixes assistant text and quiet informational rows.
     pub const BULLET: &str = GRAMMAR[1];
     /// Prefixes model reasoning.

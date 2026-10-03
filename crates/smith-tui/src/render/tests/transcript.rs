@@ -519,7 +519,7 @@
     }
 
     #[test]
-    fn every_goal_status_and_unknown_usage_stays_visible_at_supported_widths() {
+    fn goal_status_yields_to_shortcuts_at_narrow_widths() {
         let theme = Theme::new().without_color().without_motion();
         for status in [
             GoalStatus::Active,
@@ -549,11 +549,9 @@
             for (width, height) in [(44, 14), (74, 24), (120, 32)] {
                 let screen = render(&app, width, height, theme);
                 let expected = format!("goal {}", status.as_str());
-                assert!(
-                    screen.contains(&expected),
-                    "{width}x{height} missing {expected}:\n{screen}"
-                );
-                assert!(screen.contains("?/100 tok"), "{width}x{height}:\n{screen}");
+                assert_eq!(screen.contains(&expected), width != 44, "{screen}");
+                assert_eq!(screen.contains("?/100 tok"), width != 44, "{screen}");
+                assert!(screen.contains("? for shortcuts"), "{screen}");
                 assert!(
                     screen
                         .lines()
@@ -604,7 +602,7 @@
             assert!(screen.contains("/diff · all uncommitted"), "{screen}");
             assert!(screen.contains("No changes"), "{screen}");
             assert!(screen.contains("Binary file"), "{screen}");
-            assert!(screen.contains("›"), "{screen}");
+            assert!(screen.contains("> Ask Smith to do anything"), "{screen}");
         }
     }
 

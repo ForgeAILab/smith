@@ -503,10 +503,10 @@ child-1 · Durable · Idle · resumable false ·
 
 
 
-
-› Ask Smith to do anything
-
-  build · example-model · <PROJECT> · ? ctx
+────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────
+  ? for shortcuts      example-model · build
 
   ● main
   ○ child-1  completed · child done

@@ -90,6 +90,8 @@ pub struct Status {
     pub account: Option<AccountStatus>,
     /// What the agent is doing.
     pub activity: Activity,
+    /// Effective approval mode supplied by the host, absent until resolved.
+    pub approval_mode: Option<String>,
     /// How many declared MCP servers are still connecting, and how many failed.
     ///
     /// A server that is starting or broken is operational state the user needs
@@ -121,6 +123,7 @@ impl Status {
         Self {
             account: None,
             activity: Activity::Idle,
+            approval_mode: None,
             mcp: McpStatus::default(),
             projection: smith_client::status::Status::new(model, project),
         }
