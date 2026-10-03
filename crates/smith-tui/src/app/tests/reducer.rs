@@ -1,6 +1,50 @@
 // reducer behavior tests.
 
     #[test]
+    fn reset_live_turn_clears_progress_and_keeps_the_conversation_and_draft() {
+        let mut app = app();
+        app.composer.replace("keep this draft");
+        app.transcript.push_user("keep this conversation");
+        app.apply(&turn_event("turn-reset", RuntimeEvent::TurnStarted));
+        app.apply(&turn_event(
+            "turn-reset",
+            tool_requested("call-reset", "shell"),
+        ));
+        app.apply(&turn_event(
+            "turn-reset",
+            RuntimeEvent::ProviderAttemptFinished {
+                attempt: AttemptId::new("attempt-reset"),
+                index: Some(0),
+                max_attempts: Some(3),
+                finish: agent_runtime_core::provider::FinishReason::Error,
+                retryable: true,
+                error: None,
+                retry_delay_ms: Some(200),
+            },
+        ));
+        app.apply(&turn_event(
+            "turn-reset",
+            RuntimeEvent::ExternalText {
+                text: "committed answer".to_owned(),
+            },
+        ));
+        let blocks = app.transcript.blocks().to_vec();
+        assert!(app.provider_retry().is_some());
+        assert!(app.provider_phase().is_some());
+
+        app.reset_live_turn();
+
+        assert_eq!(app.status.activity, Activity::Idle);
+        assert!(app.active_turn().is_none());
+        assert!(app.turn_elapsed().is_none());
+        assert!(app.provider_phase().is_none());
+        assert!(app.provider_retry().is_none());
+        assert!(app.work_detail_lines().is_empty());
+        assert_eq!(app.transcript.blocks(), blocks);
+        assert_eq!(app.composer.text(), "keep this draft");
+    }
+
+    #[test]
     fn a_retryable_attempt_failure_is_visible_while_retrying() {
         let mut app = app();
         app.apply(&event(RuntimeEvent::TurnStarted));
@@ -311,7 +355,7 @@
     fn a_completed_turn_uses_canonical_duration_and_clears_live_timing() {
         let mut app = app();
         app.apply(&event_at(Timestamp(1_000), RuntimeEvent::TurnStarted));
-        app.turn_started_at = Instant::now().checked_sub(Duration::from_secs(65));
+        app.live_turn.turn_started_at = Instant::now().checked_sub(Duration::from_secs(65));
         assert!(
             app.turn_elapsed()
                 .is_some_and(|elapsed| elapsed.as_secs() >= 65)
@@ -326,7 +370,7 @@
         ));
 
         assert!(app.turn_elapsed().is_none());
-        assert_eq!(app.turn_started_timestamp, None);
+        assert_eq!(app.live_turn.turn_started_timestamp, None);
         assert!(app.transcript.is_empty());
         assert_eq!(app.turn_summary.as_deref(), Some("Worked for 1m 05s"));
     }
@@ -397,7 +441,7 @@
         assert_eq!(app.visible_turn_summary(), None);
         app.apply(&event(RuntimeEvent::TurnStarted));
         assert_eq!(app.turn_summary, None);
-        app.turn_started_at = Instant::now().checked_sub(Duration::from_secs(12));
+        app.live_turn.turn_started_at = Instant::now().checked_sub(Duration::from_secs(12));
         app.apply(&event(RuntimeEvent::TurnCompleted {
             finish: TurnFinish::Failed,
             visible_output: false,

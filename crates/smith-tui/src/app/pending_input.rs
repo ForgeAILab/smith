@@ -20,7 +20,7 @@ impl App {
 
     /// Serving turn identity learned from the typed live event stream.
     pub fn active_turn(&self) -> Option<&TurnId> {
-        self.active_turn.as_ref()
+        self.live_turn.active_turn.as_ref()
     }
 
     /// Whether automatic goal continuation must remain behind real-user work.
@@ -112,9 +112,10 @@ impl App {
 
     /// Commits one accepted whole-turn submission to visible local history.
     /// Runtime turn acceptance is the boundary; merely pressing a key is not.
+    /// Live progress resets on the canonical turn-start event, not this echo.
     pub fn whole_turn_dispatched(&mut self, turn: TurnId, submission: &PreparedSubmission) {
         self.transcript.push_user(submission.committed_text());
-        self.active_turn = Some(turn);
+        self.live_turn.active_turn = Some(turn);
         self.status.activity = Activity::Working;
         self.follow_newest();
     }

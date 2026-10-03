@@ -888,7 +888,7 @@ impl App {
                     Ok(Some(submission)) => {
                         let target = if self.is_busy() {
                             SubmissionTarget::Steer {
-                                expected_turn: self.active_turn.clone(),
+                                expected_turn: self.live_turn.active_turn.clone(),
                             }
                         } else {
                             SubmissionTarget::WholeTurn
@@ -1000,18 +1000,15 @@ impl App {
                         return None;
                     }
                     if let Some(existing) = self.children.get(agent).cloned() {
-                        if !matches!(
-                            existing.state.as_str(),
-                            "idle" | "completed" | "needs input"
-                        ) {
+                        if !existing.state.accepts_follow_up() {
                             // The error goes to the root transcript, which the
                             // inspector is covering, so it also has to be
                             // visible where the user typed: the panel row and
                             // the child's own view carry the same state.
                             self.transcript.push_error(format!(
                                 "`{agent}` is {}; it takes a follow-up once it settles{}",
-                                existing.state,
-                                if existing.state == "interrupted" {
+                                existing.state.label(),
+                                if existing.state.is_resumable() {
                                     ", and `/agent resume <id>` continues its exact checkpoint"
                                 } else {
                                     ""
@@ -1019,7 +1016,7 @@ impl App {
                             ));
                             self.push_child_error(
                                 agent,
-                                format!("follow-up refused while {}", existing.state),
+                                format!("follow-up refused while {}", existing.state.label()),
                             );
                             return None;
                         }

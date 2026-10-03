@@ -828,10 +828,10 @@ fn agent_row(
     };
     // While a child works its detail IS the activity; once it settles, the
     // lifecycle label carries the outcome and the detail explains it.
-    let mut activity = match (summary.state.as_str(), &summary.detail) {
-        ("running" | "resuming", Some(detail)) => detail.clone(),
-        (state, Some(detail)) => format!("{state} {} {detail}", glyph::SEPARATOR),
-        (state, None) => state.to_owned(),
+    let mut activity = match &summary.detail {
+        Some(detail) if summary.state.is_running() => detail.clone(),
+        Some(detail) => format!("{} {} {detail}", summary.state.label(), glyph::SEPARATOR),
+        None => summary.state.label().into_owned(),
     };
     // Everything this row adds beyond the child's bare id lands in the
     // activity text, which clips first — never in `identity` — so a long
@@ -850,7 +850,7 @@ fn agent_row(
     }
     // The selected row is already bold and marked; letting it keep its state
     // colour means the eye does not lose a failure by landing on it.
-    let tone = child_state_tone(summary.state.as_str());
+    let tone = summary.state.tone();
     let mut style = theme.style(tone);
     if current {
         style = style.add_modifier(Modifier::BOLD);

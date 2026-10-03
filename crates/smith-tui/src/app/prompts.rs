@@ -276,7 +276,7 @@ impl App {
 
     fn set_tool_approval_status(&mut self, call_id: &str, status: ToolStatus) -> bool {
         let represented = self.transcript.complete_tool_call(call_id, status);
-        if let Some(work) = &mut self.work
+        if let Some(work) = &mut self.live_turn.work
             && let Some((_, work_status, started_at)) = work.tools.get_mut(call_id)
         {
             *work_status = status;

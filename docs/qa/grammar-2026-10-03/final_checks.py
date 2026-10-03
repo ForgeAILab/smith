@@ -155,6 +155,60 @@ def surfaces(binary, root, recorder, width, height, no_color=False):
         resumed.close()
 
 
+def composer_line(frame):
+    """The composer row: the line between the last two rules on screen."""
+    lines = frame.splitlines()
+    rules = [index for index, line in enumerate(lines) if line.startswith("────")]
+    if len(rules) < 2:
+        return None
+    return lines[rules[-2] + 1].rstrip()
+
+
+def reconfigure_surface(binary, root, recorder, width, height):
+    """Switching model keeps the transcript, local results, and history."""
+    tag = f"{width}x{height}"
+    project = base.make_project(root / f"reconfigure-{tag}")
+    home = base.make_home(root / f"reconfigure-{tag}")
+    pane = open_pane(binary, home, project, width, height)
+    try:
+        ready, frame = wait(pane, lambda f: "? for shortcuts" in f, timeout=20)
+        if not ready:
+            recorder.record(f"model switch keeps screen {tag}", False, frame, "never ready")
+            return
+        run_command(pane, "reply with ok", lambda f: "Worked for" in f, timeout=20)
+        run_command(pane, "/status", lambda f: "● /status" in f)
+        pane.send_key("End")
+        base.dismiss(pane)
+        passed, frame = run_command(pane, "/model", lambda f: "Choose model" in f)
+        pane.send_text("small-model")
+        time.sleep(0.5)
+        pane.send_key("Enter")
+        switched, frame = wait(
+            pane, lambda f: "small-model" in f and "? for shortcuts" in f, timeout=20
+        )
+        # The /status card is tall at 44 columns; its last row stays on screen.
+        kept = "● /status" in frame or "/diagnostics shows" in frame
+        recorder.record(
+            f"model switch keeps screen {tag}",
+            switched and kept,
+            frame,
+            "earlier turn and /status result still shown after /model",
+        )
+        recalled = False
+        for _ in range(4):
+            pane.send_key("Up")
+            time.sleep(0.3)
+            frame = pane.frame()
+            if composer_line(frame) == "> reply with ok":
+                recalled = True
+                break
+        recorder.record(
+            f"model switch keeps history {tag}", recalled, frame, "Up recalls the earlier prompt"
+        )
+    finally:
+        pane.close()
+
+
 def setup_surface(binary, root, recorder, width, height):
     tag = f"{width}x{height}"
     project = base.make_project(root / f"setup-{tag}")
@@ -189,6 +243,8 @@ def main():
         surfaces(binary, root, recorder, 80, 24, no_color=True)
         for width, height in SIZES:
             setup_surface(binary, root, recorder, width, height)
+        for width, height in ((100, 32), (44, 16)):
+            reconfigure_surface(binary, root, recorder, width, height)
     subprocess.run(["tmux", "-L", base.TMUX_SOCKET, "kill-server"], capture_output=True)
 
     (out / "checks.json").write_text(json.dumps(recorder.results, indent=2) + "\n")

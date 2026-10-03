@@ -478,7 +478,7 @@ fn nested_result_lines(
 /// back, not a different kind of thing.
 fn child_lines(app: &App, child: &str, theme: Theme, width: u16) -> Vec<Line<'static>> {
     let summary = app.children.get(child);
-    let state = summary.map_or("unknown", |summary| summary.state.as_str());
+    let state = summary.map_or(Cow::Borrowed("unknown"), |summary| summary.state.label());
     let elapsed = app
         .child_elapsed(child)
         .map(|elapsed| format!(" \u{b7} {}", render_elapsed(elapsed)))
@@ -495,7 +495,7 @@ fn child_lines(app: &App, child: &str, theme: Theme, width: u16) -> Vec<Line<'st
             ),
             Span::styled(
                 format!(" \u{b7} {state}{elapsed}"),
-                theme.style(child_state_tone(state)),
+                theme.style(summary.map_or(Tone::Dim, |summary| summary.state.tone())),
             ),
         ]),
         Line::default(),

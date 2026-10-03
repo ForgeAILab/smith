@@ -765,11 +765,7 @@ impl App {
                         ))));
                     return None;
                 };
-                let resumable = summary.state == "interrupted"
-                    && summary.detail.as_deref().is_some_and(|detail| {
-                        detail.contains("resumable") || detail.contains("exact resume available")
-                    });
-                if !resumable {
+                if !summary.state.is_resumable() {
                     self.transcript
                         .push_local(LocalResult::Agent(Box::new(AgentReport::Resume(
                             AgentResumeReport::Incompatible { child: child_id },

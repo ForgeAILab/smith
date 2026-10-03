@@ -2045,7 +2045,7 @@ async fn fixtures_local_agent() {
         app.children.insert(
             child.as_str().to_owned(),
             smith_tui::app::ChildSummary {
-                state: "completed".into(),
+                state: smith_tui::app::ChildState::Completed,
                 detail: child_status.last_result.clone(),
                 profile: None,
             },

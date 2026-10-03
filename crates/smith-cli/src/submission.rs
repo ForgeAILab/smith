@@ -17,7 +17,7 @@ use smith_config::resolve::ResolvedAgent;
 use smith_host::{ApprovalPrompt, GitChanges, ProjectWorkspace};
 use smith_runtime::host::HostSession;
 use smith_runtime::{ChildStatus, SpawnOutcome};
-use smith_tui::app::{App, PreparedSubmission, SubmissionTarget};
+use smith_tui::app::{App, ChildState, PreparedSubmission, SubmissionTarget};
 
 use crate::local_command::LocalOutcome;
 
@@ -450,9 +450,9 @@ pub(crate) fn turns_label(used: u32, max: u32) -> String {
     }
 }
 
-pub(super) fn child_summary_projection(status: &ChildStatus) -> (String, String) {
+pub(super) fn child_summary_projection(status: &ChildStatus) -> (ChildState, String) {
     let summary = AgentSummary::from(status);
-    let state = summary.state.label().into_owned();
+    let state = summary.state.into();
     let durability = summary.durability.label();
     let mut detail = format!(
         "{durability} · session {} · {} turns · {} tokens",

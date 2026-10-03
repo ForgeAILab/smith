@@ -8,6 +8,7 @@
 
 mod children;
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::{Duration, Instant};
 
@@ -16,7 +17,7 @@ use agent_runtime_core::content::{ContentPart, UserInput};
 use agent_runtime_core::ids::{AttemptId, RequestId, TurnId};
 use agent_runtime_core::steer::SteerReceipt;
 use agent_runtime_core::usage::CounterKind;
-use smith_client::agent_report::AgentSnapshot;
+use smith_client::agent_report::{AgentSnapshot, ChildState as ReportChildState};
 use smith_client::recovery_report::{RecoveryPreview, RestoreReport, RevertPreview};
 use smith_client::review_report::ReviewPreview;
 use smith_host::approval::ApprovalPrompt;
@@ -33,6 +34,7 @@ use crate::picker::{ResourceEntry, ResourcePicker};
 use crate::questionnaire::{QuestionnaireResolution, QuestionnaireState};
 use crate::selection::Selection;
 use crate::status::{Activity, Status, render_elapsed};
+use crate::theme::Tone;
 use crate::transcript::{ToolStatus, Transcript};
 
 /// How long a second `Ctrl+C` still counts as the exit press.
@@ -531,11 +533,123 @@ pub struct ChildCounts {
     pub tokens_used: u64,
 }
 
+/// Child lifecycle data, including states observed only on a live stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChildState {
+    /// The child has an active turn.
+    Running,
+    /// The child is continuing its exact checkpoint.
+    Resuming,
+    /// The child is waiting for parent input.
+    NeedsInput,
+    /// The child's latest task completed.
+    Completed,
+    /// The child has no active turn.
+    Idle,
+    /// The child's turn was interrupted.
+    Interrupted {
+        /// Whether an exact checkpoint exists.
+        resumable: bool,
+    },
+    /// The child was stopped.
+    Stopped {
+        /// Readable stopping reason.
+        reason: String,
+    },
+    /// The child failed.
+    Failed,
+    /// The child's retained session expired.
+    Expired,
+    /// Recovery is blocked.
+    Blocked,
+    /// The recovered child is terminal.
+    Terminal,
+}
+
+impl From<ReportChildState> for ChildState {
+    fn from(state: ReportChildState) -> Self {
+        match state {
+            ReportChildState::Running => Self::Running,
+            ReportChildState::Idle => Self::Idle,
+            ReportChildState::Interrupted { resumable } => Self::Interrupted { resumable },
+            ReportChildState::Stopped { reason } => Self::Stopped { reason },
+            ReportChildState::Failed => Self::Failed,
+            ReportChildState::Expired => Self::Expired,
+        }
+    }
+}
+
+impl ChildState {
+    /// Captures the shared readable stopping reason.
+    pub fn stopped(reason: &agent_runtime_core::cancel::CancelReason) -> Self {
+        ReportChildState::stopped(reason).into()
+    }
+
+    /// Existing lifecycle wording, shared with local reports where applicable.
+    pub fn label(&self) -> Cow<'static, str> {
+        match self {
+            Self::Running => ReportChildState::Running.label(),
+            Self::Resuming => "resuming".into(),
+            Self::NeedsInput => "needs input".into(),
+            Self::Completed => "completed".into(),
+            Self::Idle => ReportChildState::Idle.label(),
+            Self::Interrupted { resumable } => ReportChildState::Interrupted {
+                resumable: *resumable,
+            }
+            .label(),
+            Self::Stopped { reason } => ReportChildState::Stopped {
+                reason: reason.clone(),
+            }
+            .label(),
+            Self::Failed => ReportChildState::Failed.label(),
+            Self::Expired => ReportChildState::Expired.label(),
+            Self::Blocked => "blocked".into(),
+            Self::Terminal => "terminal".into(),
+        }
+    }
+
+    /// Whether the child is running or resuming, rather than waiting on input.
+    pub fn is_running(&self) -> bool {
+        matches!(self, Self::Running | Self::Resuming)
+    }
+
+    /// Whether the child has in-flight work or a pending input request.
+    pub fn is_live(&self) -> bool {
+        self.is_running() || matches!(self, Self::NeedsInput)
+    }
+
+    /// Whether the child finished cleanly with nothing left to decide.
+    pub fn retires_when_read(&self) -> bool {
+        matches!(self, Self::Completed | Self::Idle)
+    }
+
+    /// Whether the child can accept a new follow-up turn.
+    pub fn accepts_follow_up(&self) -> bool {
+        self.retires_when_read() || matches!(self, Self::NeedsInput)
+    }
+
+    /// Whether an interrupted child has an exact checkpoint to continue.
+    pub fn is_resumable(&self) -> bool {
+        matches!(self, Self::Interrupted { resumable: true })
+    }
+
+    /// The shared tone for the panel row and inspector heading.
+    pub fn tone(&self) -> Tone {
+        match self {
+            Self::Failed => Tone::Danger,
+            Self::NeedsInput => Tone::Warning,
+            Self::Completed | Self::Idle => Tone::Success,
+            Self::Running | Self::Resuming => Tone::Default,
+            _ => Tone::Dim,
+        }
+    }
+}
+
 /// The latest user-visible state of one child.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChildSummary {
-    /// Current lifecycle label.
-    pub state: String,
+    /// Current lifecycle state.
+    pub state: ChildState,
     /// Latest bounded result or detail.
     pub detail: Option<String>,
     /// The child's agent profile, once the spawn correlation resolves it.
@@ -548,22 +662,22 @@ pub struct ChildSummary {
 }
 
 impl ChildSummary {
-    /// Whether this child's lifecycle label describes in-flight work.
+    /// Whether this child's lifecycle describes in-flight work.
     ///
     /// Both the panel's row order and the inspector's keyboard order read
     /// this, so a live child can never sort one way and select another.
     pub fn is_live(&self) -> bool {
-        matches!(self.state.as_str(), "running" | "resuming" | "needs input")
+        self.state.is_live()
     }
 
-    /// Whether this child's lifecycle label describes work that finished
+    /// Whether this child's lifecycle describes work that finished
     /// cleanly, with nothing left for the user to decide.
     ///
     /// Only these read as success and only these retire on their own. A
     /// failure, a stop, or an interrupted checkpoint is a row the user has
     /// not dealt with yet, and it stays until they do.
     pub fn retires_when_read(&self) -> bool {
-        matches!(self.state.as_str(), "completed" | "idle")
+        self.state.retires_when_read()
     }
 }
 
@@ -779,6 +893,23 @@ impl SpeculativeAttempt {
     }
 }
 
+/// Root turn identity, active work, provider progress, and elapsed clocks.
+#[derive(Debug, Default)]
+pub(super) struct LiveTurn {
+    pub(super) active_turn: Option<TurnId>,
+    pub(super) work: Option<WorkSummary>,
+    pub(super) provider_phase: Option<(ProviderPhase, Instant)>,
+    pub(super) provider_retry: Option<ProviderRetryState>,
+    pub(super) turn_started_at: Option<Instant>,
+    pub(super) turn_started_timestamp: Option<Timestamp>,
+}
+
+impl LiveTurn {
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
 /// The whole client's state.
 #[derive(Debug)]
 pub struct App {
@@ -862,14 +993,15 @@ pub struct App {
     pub(super) task_clocks: BTreeMap<String, Instant>,
     /// Latest durable todo plan, projected in the anchored composer pane.
     pub plan: Option<PlanSummary>,
-    /// Bounded live tool detail available only through `/details`.
-    pub(super) work: Option<WorkSummary>,
+    /// The root turn's active presentation state.
+    pub(super) live_turn: LiveTurn,
     /// Whether bounded tool output and live work detail are expanded.
     pub work_details: bool,
     /// Visual-row offset and bound for the approval's reviewable content.
     pub(crate) approval_scroll: u16,
     pub(crate) approval_scroll_limit: u16,
     /// The admitted local shortcut turn, used only to attribute its call row.
+    /// Kept until its matching terminal, including across turn-start events.
     pub(super) local_shell_turn: Option<(TurnId, u64)>,
     /// Bounded local choices supplied by the host.
     pub resources: RuntimeResources,
@@ -912,9 +1044,8 @@ pub struct App {
     pub(super) turn_summary_revision: Option<u64>,
     pub(super) turn_block_revision: u64,
     /// Client-neutral accounting for the active root turn's output flow.
+    /// Retained after completion until the next turn or session starts.
     pub turn_usage: crate::status::TurnUsage,
-    pub(super) turn_started_at: Option<Instant>,
-    pub(super) turn_started_timestamp: Option<Timestamp>,
     pub(super) last_ctrl_c: Option<Instant>,
     pub(super) last_event_seq: Option<u64>,
     /// A live-stream sequence gap parked for host-driven journal replay.
@@ -926,16 +1057,11 @@ pub struct App {
     /// gaps currently being collapsed into one notice; see
     /// [`App::flush_gap_notices`].
     pub(super) pending_lost_range: Option<(u64, u64)>,
-    /// The live provider round-trip stage and when it started.
-    pub(super) provider_phase: Option<(ProviderPhase, Instant)>,
-    /// Bounded root-only presentation state for an admitted provider retry.
-    pub(super) provider_retry: Option<ProviderRetryState>,
     /// The root conversation's held-back provider output. Its transcript is
     /// [`Self::transcript`]; the two are borrowed together as a
     /// [`ConversationMut`] whenever an event is folded into either.
+    /// Finalized attempt identities survive completion until the next start.
     pub(super) speculative: SpeculativeState,
-    /// Serving turn identity from typed runtime envelopes.
-    pub(super) active_turn: Option<TurnId>,
     /// Process-local, not-yet-canonical user input.
     pub(super) pending_input: PendingInputState,
     /// Last completed turn for which a local cache notice was appended.
@@ -968,7 +1094,7 @@ impl App {
             running_tasks: Vec::new(),
             task_clocks: BTreeMap::new(),
             plan: None,
-            work: None,
+            live_turn: LiveTurn::default(),
             work_details: false,
             approval_scroll: 0,
             approval_scroll_limit: 0,
@@ -990,20 +1116,24 @@ impl App {
             turn_summary_revision: None,
             turn_block_revision: 0,
             turn_usage: crate::status::TurnUsage::default(),
-            turn_started_at: None,
-            turn_started_timestamp: None,
             last_ctrl_c: None,
             last_event_seq: None,
             stream_gap: None,
             pending_recovered_events: 0,
             pending_lost_range: None,
-            provider_phase: None,
-            provider_retry: None,
             speculative: SpeculativeState::default(),
-            active_turn: None,
             pending_input: PendingInputState::default(),
             last_cache_notice_turn: None,
         }
+    }
+
+    /// Returns root turn identity, work, provider progress, and clocks to idle.
+    /// Used at turn boundaries and when the host rebinds a retained app.
+    /// Accounting, attempt deduplication, and shell attribution keep their
+    /// existing lifetimes outside this value.
+    pub fn reset_live_turn(&mut self) {
+        self.live_turn.reset();
+        self.status.activity = Activity::Idle;
     }
 
     /// Enables or disables the layered `cache.miss_notices` presentation
@@ -1046,13 +1176,13 @@ impl App {
     pub fn restore_child(
         &mut self,
         child_id: impl Into<String>,
-        state: impl Into<String>,
+        state: ChildState,
         detail: Option<String>,
     ) {
         self.children.insert(
             child_id.into(),
             ChildSummary {
-                state: state.into(),
+                state,
                 detail,
                 // The coordinator's own status has no profile field, and a
                 // restored child was never freshly spawned in this process,
@@ -1223,7 +1353,9 @@ impl App {
 
     /// Monotonic elapsed time for the active turn.
     pub fn turn_elapsed(&self) -> Option<Duration> {
-        self.turn_started_at.map(|started| started.elapsed())
+        self.live_turn
+            .turn_started_at
+            .map(|started| started.elapsed())
     }
 
     /// The newest live success summary, only while its turn is still last.
@@ -1246,13 +1378,15 @@ impl App {
 
     /// The live provider round-trip stage and how long it has been in it.
     pub fn provider_phase(&self) -> Option<(ProviderPhase, Duration)> {
-        self.provider_phase
+        self.live_turn
+            .provider_phase
             .map(|(phase, since)| (phase, since.elapsed()))
     }
 
     /// The admitted root retry identity and any remaining backoff.
     pub fn provider_retry(&self) -> Option<ProviderRetryProgress> {
-        self.provider_retry
+        self.live_turn
+            .provider_retry
             .as_ref()
             .map(|retry| ProviderRetryProgress {
                 next_attempt: retry.next_attempt,
@@ -1312,7 +1446,7 @@ impl App {
     pub fn set_tool_result_preview(&mut self, call_id: &str, preview: impl AsRef<str>) {
         self.transcript.set_tool_result_preview(call_id, preview);
         if let Some(status) = self.transcript.tool_status(call_id)
-            && let Some(work) = &mut self.work
+            && let Some(work) = &mut self.live_turn.work
             && let Some((_, work_status, _)) = work.tools.get_mut(call_id)
         {
             *work_status = status;
@@ -1327,7 +1461,7 @@ impl App {
 
     /// Render-ready lines for explicitly requested active-work detail.
     pub(crate) fn work_detail_lines(&self) -> Vec<String> {
-        let Some(work) = &self.work else {
+        let Some(work) = &self.live_turn.work else {
             return Vec::new();
         };
         if !self.work_details {

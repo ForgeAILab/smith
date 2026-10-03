@@ -83,7 +83,7 @@
         let mut app = agent_first_app();
         app.restore_child(
             "child-1",
-            "idle",
+            ChildState::Idle,
             Some("durable · session child-session-1 · 1/4 turns".to_owned()),
         );
         app.composer.replace("@child-1 check the parser edge case");
@@ -115,7 +115,7 @@
         let mut app = agent_first_app();
         app.restore_child(
             "child-2",
-            "interrupted",
+            smith_client::agent_report::ChildState::Interrupted { resumable: true }.into(),
             Some("durable · session child-session-2 · resumable".to_owned()),
         );
         app.composer.replace("/agent resume child-2");
@@ -135,6 +135,153 @@
                 child_id: "child-2".to_owned(),
             })
         );
+    }
+
+    #[test]
+    fn live_interrupted_child_with_a_checkpoint_opens_resume_confirmation() {
+        let mut app = agent_first_app();
+        app.apply(&event(RuntimeEvent::ChildProgress {
+            child: ChildId::new("child-live"),
+            phase: ChildPhase::Interrupted {
+                child_session: SessionId::new("child-session-live"),
+                resumable: true,
+            },
+        }));
+        app.composer.replace("/agent resume child-live");
+
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert!(matches!(
+            app.overlay,
+            Some(Overlay::AgentResumeConfirm { ref child_id, .. }) if child_id == "child-live"
+        ));
+    }
+
+    #[test]
+    fn interrupted_child_without_a_checkpoint_reports_incompatible() {
+        let mut app = agent_first_app();
+        app.restore_child(
+            "child-blocked",
+            ChildState::Interrupted { resumable: false },
+            Some("durable · session resumable · exact resume available".to_owned()),
+        );
+        app.composer.replace("/agent resume child-blocked");
+
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert!(app.overlay.is_none());
+        assert!(matches!(
+            app.transcript.blocks().last(),
+            Some(Block::Local(LocalResult::Agent(report)))
+                if matches!(report.as_ref(), smith_client::agent_report::AgentReport::Resume(
+                    smith_client::agent_report::AgentResumeReport::Incompatible { child }
+                ) if child == "child-blocked")
+        ));
+    }
+
+    #[test]
+    fn interrupted_child_follow_up_refusal_includes_exact_resume_hint() {
+        let mut app = agent_first_app();
+        app.restore_child(
+            "child-checkpoint",
+            ChildState::Interrupted { resumable: true },
+            None,
+        );
+        app.composer
+            .replace("@child-checkpoint check the parser edge case");
+
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert!(app.overlay.is_none());
+        assert!(matches!(
+            app.transcript.blocks().last(),
+            Some(Block::Error { message })
+                if message == "`child-checkpoint` is interrupted (resumable); it takes a follow-up once it settles, and `/agent resume <id>` continues its exact checkpoint"
+        ));
+        assert_eq!(
+            child_log(&app, "child-checkpoint"),
+            ["failed: follow-up refused while interrupted (resumable)"]
+        );
+    }
+
+    #[test]
+    fn child_states_keep_their_existing_labels_tones_and_lifecycle_rules() {
+        use crate::theme::Tone;
+
+        for (state, label, tone, live, retires) in [
+            (ChildState::Running, "running", Tone::Default, true, false),
+            (ChildState::Resuming, "resuming", Tone::Default, true, false),
+            (
+                ChildState::NeedsInput,
+                "needs input",
+                Tone::Warning,
+                true,
+                false,
+            ),
+            (
+                ChildState::Completed,
+                "completed",
+                Tone::Success,
+                false,
+                true,
+            ),
+            (ChildState::Idle, "idle", Tone::Success, false, true),
+            (
+                ChildState::Interrupted { resumable: true },
+                "interrupted (resumable)",
+                Tone::Dim,
+                false,
+                false,
+            ),
+            (
+                ChildState::Interrupted { resumable: false },
+                "interrupted (not resumable)",
+                Tone::Dim,
+                false,
+                false,
+            ),
+            (
+                ChildState::stopped(&CancelReason::UserRequested),
+                "stopped (by request)",
+                Tone::Dim,
+                false,
+                false,
+            ),
+            (
+                ChildState::stopped(&CancelReason::Timeout),
+                "stopped (deadline elapsed)",
+                Tone::Dim,
+                false,
+                false,
+            ),
+            (
+                ChildState::stopped(&CancelReason::LimitReached),
+                "stopped (limit reached)",
+                Tone::Dim,
+                false,
+                false,
+            ),
+            (
+                ChildState::stopped(&CancelReason::Shutdown),
+                "stopped (session ended)",
+                Tone::Dim,
+                false,
+                false,
+            ),
+            (
+                ChildState::stopped(&CancelReason::Host("fixture reason".to_owned())),
+                "stopped (fixture reason)",
+                Tone::Dim,
+                false,
+                false,
+            ),
+            (ChildState::Failed, "failed", Tone::Danger, false, false),
+            (ChildState::Expired, "expired", Tone::Dim, false, false),
+            (ChildState::Blocked, "blocked", Tone::Dim, false, false),
+            (ChildState::Terminal, "terminal", Tone::Dim, false, false),
+        ] {
+            assert_eq!(state.label().as_ref(), label);
+            assert_eq!(state.tone(), tone);
+            assert_eq!(state.is_live(), live);
+            assert_eq!(state.retires_when_read(), retires);
+        }
     }
 
     #[test]
@@ -170,7 +317,10 @@
             child: child.clone(),
             result: "No findings.".to_owned(),
         }));
-        assert_eq!(app.children[child.as_str()].state, "completed");
+        assert_eq!(
+            app.children[child.as_str()].state.label().as_ref(),
+            "completed"
+        );
         assert!(app.transcript.blocks().iter().any(|block| {
             matches!(block, Block::Notice { text, .. } if text.contains("No findings"))
         }));
@@ -195,7 +345,7 @@
 
         assert_eq!(app.status.activity, Activity::ParkedAwaitingChild);
         assert_eq!(app.status.activity.label(), "waiting for child");
-        assert!(app.active_turn.is_none());
+        assert!(app.live_turn.active_turn.is_none());
 
         app.apply(&event(RuntimeEvent::ChildCompleted {
             child,
@@ -465,8 +615,16 @@
     #[test]
     fn arrow_keys_walk_the_agents_panel_and_escape_returns_to_the_root() {
         let mut app = app();
-        app.restore_child("child-done", "completed", Some("No findings.".to_owned()));
-        app.restore_child("child-live", "running", Some("ran Read".to_owned()));
+        app.restore_child(
+            "child-done",
+            ChildState::Completed,
+            Some("No findings.".to_owned()),
+        );
+        app.restore_child(
+            "child-live",
+            ChildState::Running,
+            Some("ran Read".to_owned()),
+        );
 
         // Live work sorts first in the panel, so it selects first too.
         app.on_key(key(KeyCode::Down));
@@ -494,7 +652,7 @@
     #[test]
     fn composer_history_keeps_the_arrows_until_it_runs_out() {
         let mut app = app();
-        app.restore_child("child-live", "running", None);
+        app.restore_child("child-live", ChildState::Running, None);
         app.composer.replace("earlier message");
         app.composer.record_current();
         app.composer.clear();
@@ -515,7 +673,7 @@
     #[test]
     fn an_ordinary_submission_while_inspecting_continues_that_child() {
         let mut app = agent_first_app();
-        app.restore_child("child-1", "idle", Some("1/4 turns".to_owned()));
+        app.restore_child("child-1", ChildState::Idle, Some("1/4 turns".to_owned()));
         app.on_key(key(KeyCode::Down));
         assert_eq!(app.inspected_child.as_deref(), Some("child-1"));
 
@@ -538,7 +696,7 @@
     #[test]
     fn a_working_child_refuses_a_follow_up_where_the_user_can_see_it() {
         let mut app = agent_first_app();
-        app.restore_child("child-1", "running", Some("ran Read".to_owned()));
+        app.restore_child("child-1", ChildState::Running, Some("ran Read".to_owned()));
         app.on_key(key(KeyCode::Down));
 
         type_text(&mut app, "also check the parser");
@@ -559,7 +717,7 @@
     #[test]
     fn a_local_command_while_inspecting_still_addresses_the_root() {
         let mut app = agent_first_app();
-        app.restore_child("child-1", "idle", None);
+        app.restore_child("child-1", ChildState::Idle, None);
         app.on_key(key(KeyCode::Down));
 
         type_text(&mut app, "/status");
@@ -576,13 +734,15 @@
 
     #[test]
     fn a_stale_inspector_card_never_lands_on_another_child() {
-        use smith_client::agent_report::{AgentSnapshot, AgentSummary, ChildDurability, ChildState};
+        use smith_client::agent_report::{
+            AgentSnapshot, AgentSummary, ChildDurability, ChildState as ReportChildState,
+        };
 
         let card = AgentSnapshot {
             summary: AgentSummary {
                 child: "child-a".to_owned(),
                 durability: ChildDurability::Durable,
-                state: ChildState::Running,
+                state: ReportChildState::Running,
                 resumable: false,
                 turns_used: 0,
                 max_turns: Some(1),
@@ -594,8 +754,8 @@
             last_result: None,
         };
         let mut app = app();
-        app.restore_child("child-a", "running", None);
-        app.restore_child("child-b", "running", None);
+        app.restore_child("child-a", ChildState::Running, None);
+        app.restore_child("child-b", ChildState::Running, None);
         app.inspect_child("child-a");
         app.set_inspected_detail("child-a", Some(card.clone()));
         assert_eq!(app.inspected_detail(), Some(&card));
@@ -667,7 +827,7 @@
         assert_eq!(live.children, replay.children);
         assert_eq!(live.transcript.blocks(), replay.transcript.blocks());
         assert_eq!(
-            live.children[child.as_str()].state,
+            live.children[child.as_str()].state.label().as_ref(),
             "interrupted (not resumable)"
         );
         assert!(
@@ -696,7 +856,7 @@
         }));
 
         let summary = &app.children[child.as_str()];
-        assert_eq!(summary.state, "needs input");
+        assert_eq!(summary.state.label().as_ref(), "needs input");
         assert!(
             summary
                 .detail

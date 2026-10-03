@@ -6,7 +6,6 @@ use std::time::{Duration, Instant};
 use agent_runtime_core::clock::Timestamp;
 use agent_runtime_core::ids::TurnId;
 use agent_runtime_core::provider::FinishReason;
-use smith_client::agent_report::ChildState;
 use smith_runtime::client::{
     ChildPhase, ChildRecoveryState, PlanSensitivity, SmithEvent as EventEnvelope,
     SmithEventKind as RuntimeEvent, TurnFinish,
@@ -19,21 +18,17 @@ use super::conversation::ConversationMut;
 use super::state::*;
 
 impl App {
-    pub(super) fn finish_work(&mut self) {
-        self.work = None;
-    }
-
     /// Moves the provider round-trip stage, restarting its timer only on an
     /// actual stage change so a stream of same-stage deltas reads as one
     /// continuously running phase.
     fn set_provider_phase(&mut self, phase: Option<ProviderPhase>) {
         match phase {
             Some(next) => {
-                if self.provider_phase.map(|(current, _)| current) != Some(next) {
-                    self.provider_phase = Some((next, Instant::now()));
+                if self.live_turn.provider_phase.map(|(current, _)| current) != Some(next) {
+                    self.live_turn.provider_phase = Some((next, Instant::now()));
                 }
             }
-            None => self.provider_phase = None,
+            None => self.live_turn.provider_phase = None,
         }
     }
 
@@ -62,7 +57,7 @@ impl App {
             && index.saturating_add(1) < max_attempts
         {
             let next_attempt = index.saturating_add(2);
-            self.provider_retry = Some(ProviderRetryState {
+            self.live_turn.provider_retry = Some(ProviderRetryState {
                 next_attempt,
                 max_attempts,
                 delay: Duration::from_millis(delay),
@@ -76,7 +71,7 @@ impl App {
             return;
         }
 
-        self.provider_retry = None;
+        self.live_turn.provider_retry = None;
         if retryable
             && let Some((index, max_attempts)) = exact_position
             && retry_delay_ms.is_none()
@@ -334,7 +329,7 @@ impl App {
         }
         self.conversation().apply(&envelope.payload);
         if self.is_busy()
-            && envelope.turn.as_ref() == self.active_turn.as_ref()
+            && envelope.turn.as_ref() == self.live_turn.active_turn.as_ref()
             && self.transcript.append_revision() != revision
         {
             self.turn_block_revision = self.transcript.append_revision();
@@ -346,38 +341,31 @@ impl App {
                 // inspector pointed at a name from the last one would show an
                 // empty log under a stale identity.
                 self.inspected_child = None;
-                self.status.activity = Activity::Idle;
+                self.reset_live_turn();
                 self.status.goal = None;
                 self.status.capabilities = Default::default();
                 self.status.context_plan = None;
                 self.plan = None;
-                self.work = None;
-                self.turn_started_at = None;
-                self.turn_started_timestamp = None;
                 self.speculative.clear();
-                self.active_turn = None;
                 self.pending_input = PendingInputState::default();
-                self.provider_phase = None;
-                self.provider_retry = None;
                 self.turn_summary = None;
                 self.turn_summary_revision = None;
                 self.turn_usage = Default::default();
             }
             RuntimeEvent::TurnStarted | RuntimeEvent::InternalTurnStarted { .. } => {
-                self.provider_phase = None;
-                self.provider_retry = None;
+                self.reset_live_turn();
                 self.status.activity = Activity::Working;
                 self.turn_summary = None;
                 self.turn_summary_revision = None;
                 self.turn_block_revision = self.transcript.append_revision();
                 self.turn_usage = Default::default();
                 self.plan = None;
-                self.work = Some(WorkSummary::default());
-                self.turn_started_at = Some(Instant::now());
-                self.turn_started_timestamp =
+                self.live_turn.work = Some(WorkSummary::default());
+                self.live_turn.turn_started_at = Some(Instant::now());
+                self.live_turn.turn_started_timestamp =
                     (envelope.timestamp != Timestamp::ZERO).then_some(envelope.timestamp);
                 self.speculative.finalized.clear();
-                self.active_turn.clone_from(&envelope.turn);
+                self.live_turn.active_turn.clone_from(&envelope.turn);
             }
             RuntimeEvent::TurnSteerCommitted { steer, .. } => {
                 if let Some(index) = self
@@ -468,7 +456,7 @@ impl App {
             }
             RuntimeEvent::ProviderAttemptStarted { index, .. } => {
                 self.set_provider_phase(Some(ProviderPhase::Sending));
-                if let Some(retry) = &mut self.provider_retry
+                if let Some(retry) = &mut self.live_turn.provider_retry
                     && retry.next_attempt == index.saturating_add(1)
                 {
                     retry.started = true;
@@ -506,7 +494,7 @@ impl App {
                 self.set_provider_phase(Some(ProviderPhase::Thinking));
             }
             RuntimeEvent::ExternalToolInvoked { id, name, .. } => {
-                if let Some(work) = &mut self.work {
+                if let Some(work) = &mut self.live_turn.work {
                     work.tools.insert(
                         id.clone(),
                         (name.clone(), ToolStatus::Running, Some(Instant::now())),
@@ -519,7 +507,7 @@ impl App {
                 } else {
                     ToolStatus::Failed
                 };
-                if let Some(work) = &mut self.work
+                if let Some(work) = &mut self.live_turn.work
                     && let Some((_, work_status, _)) = work.tools.get_mut(id.as_str())
                 {
                     *work_status = status;
@@ -533,7 +521,7 @@ impl App {
                 } else {
                     ToolStatus::Running
                 };
-                if let Some(work) = &mut self.work {
+                if let Some(work) = &mut self.live_turn.work {
                     work.tools.insert(
                         call.as_str().to_owned(),
                         (
@@ -553,7 +541,7 @@ impl App {
                     } else {
                         ToolStatus::Ok
                     });
-                if let Some(work) = &mut self.work
+                if let Some(work) = &mut self.live_turn.work
                     && let Some((_, work_status, _)) = work.tools.get_mut(call.as_str())
                 {
                     *work_status = status;
@@ -621,7 +609,7 @@ impl App {
             }
             RuntimeEvent::Usage { record } => {
                 self.status.record_usage_record(record);
-                if self.is_busy() && envelope.turn.as_ref() == self.active_turn.as_ref() {
+                if self.is_busy() && envelope.turn.as_ref() == self.live_turn.active_turn.as_ref() {
                     self.turn_usage.record(record);
                 }
             }
@@ -650,23 +638,30 @@ impl App {
                 {
                     self.local_shell_turn = None;
                 }
-                self.provider_phase = None;
-                self.provider_retry = None;
                 self.reconcile_pending_terminal(envelope.turn.as_ref(), finish);
                 self.cancel_pending_prompts();
-                let elapsed = self.turn_started_at.take().map(|started| started.elapsed());
-                let terminal_elapsed = self.turn_started_timestamp.take().and_then(|started| {
+                let elapsed = self
+                    .live_turn
+                    .turn_started_at
+                    .map(|started| started.elapsed());
+                let terminal_elapsed = self.live_turn.turn_started_timestamp.and_then(|started| {
                     envelope
                         .timestamp
                         .as_millis()
                         .checked_sub(started.as_millis())
                         .map(Duration::from_millis)
                 });
-                self.status.activity = Activity::Idle;
-                if self.active_turn.as_ref() == envelope.turn.as_ref() {
-                    self.active_turn = None;
+                let retained_turn = self
+                    .live_turn
+                    .active_turn
+                    .as_ref()
+                    .filter(|turn| Some(*turn) != envelope.turn.as_ref())
+                    .cloned();
+                self.reset_live_turn();
+                // An unrelated terminal never clears the serving identity.
+                if let Some(turn) = retained_turn {
+                    self.live_turn.active_turn = Some(turn);
                 }
-                self.finish_work();
                 if self.cache_miss_notices
                     && let Some(turn) = envelope.turn.as_ref().map(ToString::to_string)
                     && self.last_cache_notice_turn.as_deref() != Some(turn.as_str())
@@ -768,7 +763,7 @@ impl App {
                 self.children.insert(
                     child.to_string(),
                     ChildSummary {
-                        state: "running".to_owned(),
+                        state: ChildState::Running,
                         detail: Some(describe_workspace(workspace)),
                         profile: Some(profile),
                     },
@@ -823,12 +818,13 @@ impl App {
                     resumable,
                 } => {
                     let state = match state {
-                        ChildRecoveryState::Idle => "idle",
-                        ChildRecoveryState::Interrupted if *resumable => "interrupted (resumable)",
-                        ChildRecoveryState::Interrupted => "interrupted (not resumable)",
-                        ChildRecoveryState::Blocked => "blocked",
-                        ChildRecoveryState::Expired => "expired",
-                        ChildRecoveryState::Terminal => "terminal",
+                        ChildRecoveryState::Idle => ChildState::Idle,
+                        ChildRecoveryState::Interrupted => ChildState::Interrupted {
+                            resumable: *resumable,
+                        },
+                        ChildRecoveryState::Blocked => ChildState::Blocked,
+                        ChildRecoveryState::Expired => ChildState::Expired,
+                        ChildRecoveryState::Terminal => ChildState::Terminal,
                     };
                     let detail = format!(
                         "durable · session {child_session}{}",
@@ -838,7 +834,7 @@ impl App {
                     self.children.insert(
                         child.to_string(),
                         ChildSummary {
-                            state: state.to_owned(),
+                            state: state.clone(),
                             detail: Some(detail.clone()),
                             profile,
                         },
@@ -852,12 +848,12 @@ impl App {
                     self.push_child_notice(
                         child.as_str(),
                         "recovered",
-                        format!("{state} · {detail}"),
+                        format!("{} · {detail}", state.label()),
                     );
                 }
                 ChildPhase::TurnStarted => {
                     if let Some(summary) = self.children.get_mut(&child.to_string()) {
-                        summary.state = "running".to_owned();
+                        summary.state = ChildState::Running;
                     }
                     self.run_child_clock(child.as_str());
                     // A turn boundary, drawn as the root timeline draws its
@@ -869,7 +865,7 @@ impl App {
                     self.children.insert(
                         child.to_string(),
                         ChildSummary {
-                            state: "resuming".to_owned(),
+                            state: ChildState::Resuming,
                             detail: Some(format!("exact checkpoint · session {child_session}")),
                             profile,
                         },
@@ -891,9 +887,7 @@ impl App {
                 } => {
                     let state = ChildState::Interrupted {
                         resumable: *resumable,
-                    }
-                    .label()
-                    .into_owned();
+                    };
                     let detail = format!("durable · session {child_session}");
                     let profile = self.carried_child_profile(child.as_str());
                     self.children.insert(
@@ -909,10 +903,10 @@ impl App {
                     self.push_child_notice(
                         child.as_str(),
                         "interrupted",
-                        format!("{state} · {detail}"),
+                        format!("{} · {detail}", state.label()),
                     );
                     self.transcript
-                        .push_notice("sub-agent", format!("{child} {state} · {detail}"));
+                        .push_notice("sub-agent", format!("{child} {} · {detail}", state.label()));
                 }
                 // The completed/stopped notice that follows says everything a
                 // bare "finished a turn" would.
@@ -939,7 +933,7 @@ impl App {
                 self.children.insert(
                     child.to_string(),
                     ChildSummary {
-                        state: "needs input".to_owned(),
+                        state: ChildState::NeedsInput,
                         detail: Some(detail.clone()),
                         profile,
                     },
@@ -962,7 +956,7 @@ impl App {
                 self.children.insert(
                     child.to_string(),
                     ChildSummary {
-                        state: "completed".to_owned(),
+                        state: ChildState::Completed,
                         detail: Some(summary.clone()),
                         profile,
                     },
@@ -979,7 +973,7 @@ impl App {
                 self.arm_child_dismissal(child.as_str());
             }
             RuntimeEvent::ChildStopped { child, reason } => {
-                let state = ChildState::stopped(reason).label().into_owned();
+                let state = ChildState::stopped(reason);
                 let profile = self.carried_child_profile(child.as_str());
                 self.children.insert(
                     child.to_string(),
@@ -991,16 +985,16 @@ impl App {
                 );
                 self.settle_child_clock(child.as_str());
                 self.settle_child_tool_calls(child.as_str());
-                self.push_child_notice(child.as_str(), "stopped", state.clone());
+                self.push_child_notice(child.as_str(), "stopped", state.label().into_owned());
                 self.transcript
-                    .push_notice("sub-agent", format!("{child} {state}"));
+                    .push_notice("sub-agent", format!("{child} {}", state.label()));
             }
             RuntimeEvent::ChildFailed { child, error } => {
                 let profile = self.carried_child_profile(child.as_str());
                 self.children.insert(
                     child.to_string(),
                     ChildSummary {
-                        state: "failed".to_owned(),
+                        state: ChildState::Failed,
                         detail: Some(error.message.clone()),
                         profile,
                     },
@@ -1012,17 +1006,18 @@ impl App {
                     .push_error(format!("sub-agent {child} failed: {}", error.message));
             }
             RuntimeEvent::SessionShutdown => {
-                self.provider_phase = None;
-                self.provider_retry = None;
+                // Shutdown historically retains bounded tool detail.
+                let work = self.live_turn.work.clone();
+                self.reset_live_turn();
+                if let Some(work) = work {
+                    self.live_turn.work = Some(work);
+                }
                 // The session is over; a still-ticking child clock would lie.
                 for clock in self.child_clocks.values_mut() {
                     clock.settle();
                 }
                 self.cancel_pending_prompts();
                 self.status.activity = Activity::Ended;
-                self.turn_started_at = None;
-                self.turn_started_timestamp = None;
-                self.active_turn = None;
                 self.pending_input = PendingInputState::default();
             }
             // Planning-lifecycle events carry diagnostics the basic TUI does not
@@ -1030,7 +1025,7 @@ impl App {
             _ => {}
         }
         if self.is_busy()
-            && envelope.turn.as_ref() == self.active_turn.as_ref()
+            && envelope.turn.as_ref() == self.live_turn.active_turn.as_ref()
             && self.transcript.append_revision() != revision
         {
             self.turn_block_revision = self.transcript.append_revision();
@@ -1045,10 +1040,7 @@ impl App {
         ) {
             return;
         }
-        let pending_child = self
-            .children
-            .values()
-            .any(|child| matches!(child.state.as_str(), "running" | "resuming"));
+        let pending_child = self.children.values().any(|child| child.state.is_running());
         self.status.activity = if pending_child {
             Activity::ParkedAwaitingChild
         } else {
