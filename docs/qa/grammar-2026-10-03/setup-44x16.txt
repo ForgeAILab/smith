@@ -1,0 +1,16 @@
+
+ ┌ Smith setup ───────────────────────────┐
+ │  no agent session or provider request  │
+ │  exists yet                            │
+ │ filter: type to search                 │
+ │❯ Quick start with GLM                  │
+ │  Z.AI Coding Plan endpoint with trusted│
+ │  GLM-5.2 limits                        │
+ │  Connect OpenRouter                    │
+ │  OpenRouter API key with a fixed       │
+ │  endpoint and reviewed model limits    │
+ │                                        │
+ │ ↑/↓ choose · Enter confirm             │
+ │ Shift+Tab Back · Esc cancel            │
+ └────────────────────────────────────────┘
+

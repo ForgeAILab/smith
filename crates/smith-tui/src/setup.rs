@@ -13,8 +13,9 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use unicode_width::UnicodeWidthStr;
 
-use crate::picker::{PickerOutcome, ResourceEntry, ResourcePicker, draw_resource_picker};
+use crate::picker::{PickerOutcome, ResourceEntry, ResourcePicker};
 use crate::theme::{Theme, Tone};
 
 /// Why setup was entered.
@@ -1436,32 +1437,13 @@ pub fn draw_setup(frame: &mut Frame<'_>, app: &SetupApp, theme: Theme) {
     let outer = centered(area, 88, 30);
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Smith setup · no agent session or provider request exists yet ")
+        .title(" Smith setup ")
         .border_style(theme.style(Tone::Accent));
     let inner = block.inner(outer);
     frame.render_widget(block, outer);
 
     if let Some(picker) = &app.picker {
-        // A failure that returns to a picker step still explains itself: the
-        // error renders above the picker instead of being silently dropped.
-        let picker_area = if let Some(error) = &app.error {
-            let [message, rest] =
-                Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(inner);
-            frame.render_widget(
-                Paragraph::new(crate::render::wrap::wrap_lines(
-                    &[Line::from(Span::styled(
-                        format!("error: {error}"),
-                        theme.style(Tone::Danger),
-                    ))],
-                    message.width,
-                )),
-                message,
-            );
-            rest
-        } else {
-            inner
-        };
-        draw_resource_picker(frame, picker_area, picker, theme);
+        draw_setup_picker(frame, inner, picker, app.error.as_deref(), theme);
         return;
     }
 
@@ -1542,6 +1524,199 @@ pub fn draw_setup(frame: &mut Frame<'_>, app: &SetupApp, theme: Theme) {
         Paragraph::new(footer_text).style(theme.style(Tone::Dim)),
         footer,
     );
+}
+
+fn draw_setup_picker(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    picker: &ResourcePicker,
+    error: Option<&str>,
+    theme: Theme,
+) {
+    // Reserve controls before measuring variable-height entries or errors.
+    // Setup owns the frame; the shared picker still owns filtering and keys.
+    let footer_rows = if area.width < 60 { 2 } else { 1 };
+    let [body, footer] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(footer_rows)]).areas(area);
+    let mut heading = Vec::new();
+    if picker.title == "Smith setup" {
+        heading.extend(setup_text_lines(
+            "no agent session or provider request exists yet",
+            body.width,
+            Tone::Dim,
+            theme,
+        ));
+    } else {
+        heading.extend(setup_text_lines(
+            &picker.title,
+            body.width,
+            Tone::Heading,
+            theme,
+        ));
+    }
+    heading.push(Line::from(vec![
+        Span::styled(" filter: ", theme.style(Tone::Dim)),
+        Span::styled(
+            if picker.query.is_empty() {
+                "type to search".to_owned()
+            } else {
+                picker.query.clone()
+            },
+            theme.style(if picker.query.is_empty() {
+                Tone::Dim
+            } else {
+                Tone::Default
+            }),
+        ),
+    ]));
+    if let Some(error) = error {
+        heading.extend(setup_text_lines(
+            &format!("error: {error}"),
+            body.width,
+            Tone::Danger,
+            theme,
+        ));
+    }
+    let selected_rows = picker
+        .selected_entry()
+        .map(|entry| setup_entry_lines(entry, true, body.width, theme).len())
+        .unwrap_or(1);
+    let heading_rows = u16::try_from(heading.len()).unwrap_or(u16::MAX).min(
+        body.height
+            .saturating_sub(u16::try_from(selected_rows).unwrap_or(u16::MAX)),
+    );
+    let [heading_area, entries_area] =
+        Layout::vertical([Constraint::Length(heading_rows), Constraint::Min(0)]).areas(body);
+    frame.render_widget(Paragraph::new(heading), heading_area);
+    frame.render_widget(
+        Paragraph::new(setup_picker_lines(
+            picker,
+            usize::from(entries_area.height),
+            entries_area.width,
+            theme,
+        )),
+        entries_area,
+    );
+    frame.render_widget(
+        Paragraph::new(if footer_rows == 1 {
+            " ↑/↓ choose · Enter confirm · Shift+Tab Back · Esc cancel"
+        } else {
+            " ↑/↓ choose · Enter confirm\n Shift+Tab Back · Esc cancel"
+        })
+        .style(theme.style(Tone::Dim)),
+        footer,
+    );
+}
+
+fn setup_picker_lines(
+    picker: &ResourcePicker,
+    height: usize,
+    width: u16,
+    theme: Theme,
+) -> Vec<Line<'static>> {
+    let indices = picker.filtered_indices();
+    if indices.is_empty() {
+        return setup_text_lines(
+            if picker.entries.is_empty() {
+                &picker.empty_guidance
+            } else {
+                "No matches · Ctrl+U clear filter"
+            },
+            width,
+            Tone::Warning,
+            theme,
+        );
+    }
+    let selected = picker.selected.min(indices.len().saturating_sub(1));
+    let entries = indices
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            setup_entry_lines(&picker.entries[*entry], index == selected, width, theme)
+        })
+        .collect::<Vec<_>>();
+    let mut start = selected;
+    let mut used = entries[selected].len();
+    while start > 0 && used + entries[start - 1].len() <= height {
+        start -= 1;
+        used += entries[start].len();
+    }
+    let mut lines = Vec::new();
+    for entry in entries.into_iter().skip(start) {
+        // Do not strand a name at the bottom without its description. Moving
+        // the selection reveals each complete entry within the fixed body.
+        if !lines.is_empty() && lines.len() + entry.len() > height {
+            break;
+        }
+        lines.extend(entry);
+    }
+    lines
+}
+
+fn setup_entry_lines(
+    entry: &ResourceEntry,
+    selected: bool,
+    width: u16,
+    theme: Theme,
+) -> Vec<Line<'static>> {
+    let tone = if selected {
+        Tone::Accent
+    } else if entry.disabled_reason.is_some() {
+        Tone::Dim
+    } else {
+        Tone::Default
+    };
+    let state = match (entry.active, entry.disabled_reason.is_some()) {
+        (true, true) => " · ✓ current · unavailable",
+        (true, false) => " · ✓ current",
+        (false, true) => " · unavailable",
+        (false, false) => "",
+    };
+    let mut lines = setup_text_lines(&format!("{}{state}", entry.label), width, tone, theme);
+    if let Some(line) = lines.first_mut() {
+        line.spans[0] = Span::styled(
+            if selected { "❯ " } else { "  " },
+            theme.style(if selected { Tone::Accent } else { Tone::Dim }),
+        );
+    }
+    lines.extend(setup_text_lines(
+        &entry.description,
+        width,
+        Tone::Dim,
+        theme,
+    ));
+    if selected && entry.detail != entry.description && !entry.detail.is_empty() {
+        lines.extend(setup_text_lines(&entry.detail, width, Tone::Dim, theme));
+    }
+    if let Some(reason) = &entry.disabled_reason {
+        lines.extend(setup_text_lines(reason, width, Tone::Dim, theme));
+    }
+    lines
+}
+
+fn setup_text_lines(text: &str, width: u16, tone: Tone, theme: Theme) -> Vec<Line<'static>> {
+    // The transcript wrapper can break unbroken runs. Setup prose needs whole
+    // words and the same hanging indent on every description row.
+    let available = usize::from(width.saturating_sub(2)).max(1);
+    let mut lines = Vec::new();
+    for paragraph in text.split('\n') {
+        let mut row = String::new();
+        for word in paragraph.split_whitespace() {
+            if !row.is_empty() && row.width() + 1 + word.width() > available {
+                lines.push(row);
+                row = String::new();
+            }
+            if !row.is_empty() {
+                row.push(' ');
+            }
+            row.push_str(word);
+        }
+        lines.push(row);
+    }
+    lines
+        .into_iter()
+        .map(|line| Line::from(vec![Span::raw("  "), Span::styled(line, theme.style(tone))]))
+        .collect()
 }
 
 fn centered(area: Rect, preferred_width: u16, preferred_height: u16) -> Rect {
@@ -1751,17 +1926,28 @@ mod tests {
     }
 
     fn render_setup(app: &SetupApp, width: u16, height: u16) -> String {
+        setup_screen(&render_setup_buffer(
+            app,
+            width,
+            height,
+            Theme::new().without_color().without_motion(),
+        ))
+    }
+
+    fn render_setup_buffer(
+        app: &SetupApp,
+        width: u16,
+        height: u16,
+        theme: Theme,
+    ) -> ratatui::buffer::Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
         terminal
-            .draw(|frame| {
-                draw_setup(
-                    frame,
-                    app,
-                    Theme::from_env().without_color().without_motion(),
-                );
-            })
+            .draw(|frame| draw_setup(frame, app, theme))
             .expect("draw");
-        let buffer = terminal.backend().buffer();
+        terminal.backend().buffer().clone()
+    }
+
+    fn setup_screen(buffer: &ratatui::buffer::Buffer) -> String {
         // Read glyphs, not cells: the trailing cell of a wide character is
         // stored blank, so cell-by-cell collection garbles Chinese content.
         (0..buffer.area.height)
@@ -1772,6 +1958,245 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn setup_body_rows(buffer: &ratatui::buffer::Buffer) -> Vec<String> {
+        let inner = Block::default()
+            .borders(Borders::ALL)
+            .inner(centered(buffer.area, 88, 30));
+        (inner.y..inner.bottom())
+            .map(|y| {
+                crate::selection::glyph_bounds(buffer, inner, y)
+                    .map(|(x, _)| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn setup_steps_share_one_frame_and_one_title() {
+        let action = setup_app(SetupMode::FirstRun, Vec::new(), Vec::new());
+        let mut authentication = setup_app(SetupMode::FirstRun, Vec::new(), Vec::new());
+        choose(&mut authentication, "glm");
+        let field = setup_app(SetupMode::AddProvider, Vec::new(), Vec::new());
+        let review = glm_environment_review();
+        let mut busy = glm_environment_review();
+        busy.on_key(key(KeyCode::Enter));
+        for app in [action, authentication, field, review, busy] {
+            for (width, height) in [(44, 16), (80, 24), (100, 32)] {
+                let rendered = render_setup(&app, width, height);
+                assert_eq!(rendered.matches("Smith setup").count(), 1, "{rendered}");
+                for corner in ['┌', '┐', '└', '┘'] {
+                    assert_eq!(rendered.matches(corner).count(), 1, "{rendered}");
+                }
+                for row in rendered.lines().filter(|row| row.contains('│')) {
+                    assert_eq!(row.matches('│').count(), 2, "{rendered}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn setup_descriptions_wrap_whole_words_beneath_the_name() {
+        let description = "Review endpoint credentials and 中文 model limits before applying this connection. Every word remains available beneath the selected name.";
+        let mut app = setup_app(SetupMode::FirstRun, Vec::new(), Vec::new());
+        let mut entry = app.provider_actions[0].clone();
+        entry.detail = description.into();
+        app = app.with_provider_actions(vec![entry.clone()]);
+        for width in [44, 80] {
+            let buffer = render_setup_buffer(&app, width, 32, Theme::new().without_color());
+            let rendered = setup_screen(&buffer);
+            let rows = setup_body_rows(&buffer);
+            let name = rows
+                .iter()
+                .position(|row| row.trim_end() == format!("❯ {}", entry.label))
+                .expect("the name occupies its own line");
+            let description_rows = rows[name + 1..]
+                .iter()
+                .take_while(|row| row.starts_with("  "))
+                .filter(|row| !row.trim().is_empty())
+                .collect::<Vec<_>>();
+            assert!(description_rows.len() > 1, "{rendered}");
+            assert_eq!(
+                description_rows
+                    .iter()
+                    .map(|row| row.trim())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                description,
+                "description was split or truncated:\n{rendered}"
+            );
+            for row in &description_rows {
+                assert!(row.starts_with("  "), "{rendered}");
+                for word in row.split_whitespace() {
+                    assert!(
+                        description.split_whitespace().any(|whole| whole == word),
+                        "{rendered}"
+                    );
+                }
+            }
+            let inner = Block::default()
+                .borders(Borders::ALL)
+                .inner(centered(buffer.area, 88, 30));
+            for row in 0..description_rows.len() {
+                let y = inner.y + u16::try_from(name + 1 + row).expect("description row");
+                assert!(
+                    buffer[(inner.x + 2, y)]
+                        .modifier
+                        .contains(ratatui::style::Modifier::DIM)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn overflowing_setup_entries_scroll_without_displacing_the_footer() {
+        let description = "Keep the endpoint credentials and model available for local review before applying the change.";
+        for (width, height, footer_rows) in [(44, 16, 2), (80, 24, 1)] {
+            let mut app = setup_app(SetupMode::FirstRun, Vec::new(), Vec::new());
+            let prototype = app.provider_actions[0].clone();
+            let entries = (1..=20)
+                .map(|index| SetupEntry {
+                    id: format!("choice-{index:02}"),
+                    label: format!("Choice {index:02}"),
+                    detail: description.into(),
+                    flow: prototype.flow.clone(),
+                })
+                .collect::<Vec<_>>();
+            app = app.with_provider_actions(entries);
+            for selected in 1..=20 {
+                let buffer = render_setup_buffer(&app, width, height, Theme::new().without_color());
+                let rendered = setup_screen(&buffer);
+                let rows = setup_body_rows(&buffer);
+                let footer = rows[rows.len() - footer_rows..].join("\n");
+                for control in [
+                    "↑/↓ choose",
+                    "Enter confirm",
+                    "Shift+Tab Back",
+                    "Esc cancel",
+                ] {
+                    assert!(footer.contains(control), "{width}×{height}: {rendered}");
+                }
+                assert_eq!(rendered.matches('❯').count(), 1, "{rendered}");
+                let name = rows
+                    .iter()
+                    .position(|row| row.trim_end() == format!("❯ Choice {selected:02}"))
+                    .expect("the selected entry remains visible");
+                let description_rows = rows[name + 1..]
+                    .iter()
+                    .take_while(|row| row.starts_with("  ") && !row.trim().starts_with("Choice "))
+                    .filter(|row| !row.trim().is_empty())
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    description_rows
+                        .iter()
+                        .map(|row| row.trim())
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    description,
+                    "{width}×{height} omitted part of the selected description:\n{rendered}"
+                );
+                let visible = rows
+                    .iter()
+                    .filter_map(|row| row.trim_start_matches("❯ ").trim().strip_prefix("Choice "))
+                    .map(|number| number.parse::<usize>().expect("entry number"))
+                    .collect::<Vec<_>>();
+                assert!(visible.len() < 20, "{rendered}");
+                assert!(
+                    visible.windows(2).all(|pair| pair[0] < pair[1]),
+                    "{rendered}"
+                );
+                app.on_key(key(KeyCode::Down));
+            }
+            let wrapped = render_setup(&app, width, height);
+            assert!(wrapped.contains("❯ Choice 01"), "{wrapped}");
+            app.on_key(key(KeyCode::Up));
+            let last = render_setup(&app, width, height);
+            assert!(last.contains("❯ Choice 20"), "{last}");
+        }
+    }
+
+    #[test]
+    fn setup_no_color_preserves_selection_description_and_controls() {
+        use ratatui::style::{Color, Modifier};
+
+        let app = setup_app(SetupMode::FirstRun, Vec::new(), Vec::new());
+        for (width, height) in [(44, 16), (80, 24)] {
+            let colored = render_setup_buffer(&app, width, height, Theme::new());
+            let plain = render_setup_buffer(&app, width, height, Theme::new().without_color());
+            assert_eq!(setup_screen(&colored), setup_screen(&plain));
+            assert!(
+                plain
+                    .content
+                    .iter()
+                    .all(|cell| cell.fg == Color::Reset && cell.bg == Color::Reset)
+            );
+            let inner = Block::default()
+                .borders(Borders::ALL)
+                .inner(centered(plain.area, 88, 30));
+            let rows = setup_body_rows(&plain);
+            let name = rows
+                .iter()
+                .position(|row| row.starts_with("❯ "))
+                .expect("selection marker");
+            let y = inner.y + u16::try_from(name).expect("name row");
+            assert!(plain[(inner.x, y)].modifier.contains(Modifier::BOLD));
+            assert!(plain[(inner.x + 2, y + 1)].modifier.contains(Modifier::DIM));
+            assert!(rows.last().expect("footer").contains("Esc cancel"));
+        }
+    }
+
+    #[test]
+    fn setup_filtering_and_empty_guidance_keep_the_footer() {
+        let mut app = setup_app(SetupMode::FirstRun, Vec::new(), Vec::new());
+        app.on_paste("google");
+        let filtered = render_setup(&app, 44, 16);
+        assert!(filtered.contains("❯ Connect Google Gemini"), "{filtered}");
+        assert!(!filtered.contains("Quick start with GLM"), "{filtered}");
+        app.on_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        app.on_paste("no-such-entry");
+        let missing = render_setup(&app, 44, 16);
+        for text in [
+            "No matches",
+            "Ctrl+U clear filter",
+            "Enter confirm",
+            "Esc cancel",
+        ] {
+            assert!(missing.contains(text), "{missing}");
+        }
+        app = app.with_provider_actions(Vec::new());
+        let empty = render_setup(&app, 44, 16);
+        assert!(empty.contains("No setup actions are available."), "{empty}");
+        assert!(empty.contains("Esc cancel"), "{empty}");
+    }
+
+    #[test]
+    fn setup_picker_states_and_selected_detail_remain_visible() {
+        let entries = vec![
+            ResourceEntry::new("active", "Active provider", "Native endpoint").active(true),
+            ResourceEntry::new(
+                "unavailable",
+                "Unavailable provider",
+                "Full provider metadata",
+            )
+            .description("Custom endpoint")
+            .active(true)
+            .disabled("Adapter unavailable in this build"),
+        ];
+        let mut app = setup_app(SetupMode::AddModel { provider: None }, entries, Vec::new());
+        app.on_key(key(KeyCode::Down));
+        let rendered = render_setup(&app, 80, 24);
+        for text in [
+            "Active provider · ✓ current",
+            "❯ Unavailable provider · ✓ current · unavailable",
+            "Custom endpoint",
+            "Full provider metadata",
+            "Adapter unavailable in this build",
+        ] {
+            assert!(rendered.contains(text), "{rendered}");
+        }
+        assert!(matches!(app.on_key(key(KeyCode::Enter)), SetupEffect::None));
+        assert_eq!(app.step, Step::ProviderChoice);
     }
 
     fn glm_environment_review() -> SetupApp {
@@ -2440,10 +2865,16 @@ mod tests {
         let mut app = setup_app(SetupMode::FirstRun, Vec::new(), Vec::new());
         choose(&mut app, "glm");
         app.fail("keychain unavailable: locked", true);
-        let rendered = render_setup(&app, 72, 18);
-        assert!(
-            rendered.contains("error: keychain unavailable: locked"),
-            "{rendered}"
-        );
+        for (width, height) in [(44, 16), (80, 24)] {
+            let rendered = render_setup(&app, width, height);
+            assert!(
+                rendered.contains("error: keychain unavailable: locked"),
+                "{rendered}"
+            );
+            assert!(rendered.contains("❯ Store API key securely"), "{rendered}");
+            for control in ["Enter confirm", "Shift+Tab Back", "Esc cancel"] {
+                assert!(rendered.contains(control), "{rendered}");
+            }
+        }
     }
 }

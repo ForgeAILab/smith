@@ -75,8 +75,11 @@ completed_at:
   instead of reading the clock twice.
 - [ ] 4.4 `/diagnostics`: grouped, one fact per line, `unknown` for
   unknown.
-- [ ] 4.5 First-run setup: one frame, wrapped descriptions.
+- [x] 4.5 First-run setup: one frame, wrapped descriptions.
 
+- [ ] 4.5a Setup polish: indent each description under its name (today both
+  start at the same column, so without colour names and descriptions look
+  alike); long review and collision-preview bodies still clip.
 - [ ] 4.6 Settle two presentation rules `refactor-client-structure` kept
   for byte identity: (a) the inline-code colon exception in the single
   free-text renderer (`smith-tui` `render/transcript.rs`): decide whether
