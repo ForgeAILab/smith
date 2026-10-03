@@ -40,7 +40,7 @@ pub(super) fn draw_composer(frame: &mut Frame<'_>, area: Rect, app: &App, theme:
     let mut rows: Vec<Line<'static>> = Vec::new();
     let mut cursor = None;
     for (index, line) in app.composer.lines().iter().enumerate() {
-        let marker = if index == 0 { glyph::USER } else { " " };
+        let marker = if index == 0 { glyph::INPUT } else { " " };
         let mut spans = vec![Span::styled(
             format!("{marker} "),
             theme.style(Tone::Default).add_modifier(Modifier::BOLD),

@@ -56,7 +56,7 @@ pub use change::{
 };
 pub use display::{
     ToolCallDisplay, external_tool_result_text, has_tool_call_display_schema,
-    project_external_tool_call_display, project_tool_call_display,
+    project_external_tool_call_display, project_tool_call_display, tool_display_label,
 };
 pub use edit::EditTool;
 pub use image::{

@@ -1,6 +1,6 @@
 //! Small bounded text helpers shared by multiple visual regions.
 
-use ratatui::text::Span;
+use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::theme::{Theme, Tone, glyph};
@@ -88,4 +88,44 @@ pub(super) fn wrap_text(raw: &str, available: usize) -> Vec<String> {
     }
     lines.push(line);
     lines
+}
+
+/// Reflows a transcript line beneath its text rather than beneath its marker.
+pub(super) fn hanging_lines(line: Line<'static>, width: u16, indent: usize) -> Vec<Line<'static>> {
+    if line.width() <= usize::from(width) || usize::from(width) <= indent {
+        return vec![line];
+    }
+    let mut prefix = Vec::new();
+    let mut body = Vec::new();
+    let mut remaining = indent;
+    for span in line.spans {
+        let mut split = 0;
+        for (index, character) in span.content.char_indices() {
+            let cells = character.width().unwrap_or(0);
+            if cells > remaining || remaining == 0 {
+                break;
+            }
+            remaining -= cells;
+            split = index + character.len_utf8();
+        }
+        if split > 0 {
+            prefix.push(Span::styled(span.content[..split].to_owned(), span.style));
+        }
+        if split < span.content.len() {
+            body.push(Span::styled(span.content[split..].to_owned(), span.style));
+        }
+    }
+    let rows = super::wrap::wrap_lines(&[Line::from(body)], width - indent as u16);
+    rows.into_iter()
+        .enumerate()
+        .map(|(index, mut row)| {
+            let mut spans = if index == 0 {
+                prefix.clone()
+            } else {
+                vec![Span::raw(" ".repeat(indent))]
+            };
+            spans.append(&mut row.spans);
+            Line::from(spans)
+        })
+        .collect()
 }

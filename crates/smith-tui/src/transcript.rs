@@ -25,10 +25,7 @@ use smith_client::message_report::MessageReport;
 use smith_client::recovery_report::RecoveryReport;
 use smith_client::review_report::{ReviewReport, ReviewStartReport};
 use smith_client::shell_report::ShellOutput;
-use smith_tools::{
-    ToolCallDisplay, has_tool_call_display_schema, project_external_tool_call_display,
-    project_tool_call_display,
-};
+use smith_tools::{ToolCallDisplay, project_external_tool_call_display, project_tool_call_display};
 
 pub(crate) const MAX_LOCAL_RESULT_BYTES: usize = 512 * 1024;
 const MAX_LOCAL_RESULT_LINES: usize = 4_096;
@@ -99,13 +96,17 @@ pub enum Block {
         /// The tool name.
         name: String,
         /// Reviewed built-in target metadata, when a safe projector exists.
-        display: Option<ToolCallDisplay>,
-        /// Value-free fallback derived from protected argument keys.
+        display: Option<Box<ToolCallDisplay>>,
+        /// The user-authored shell shortcut, when this call belongs to it.
+        user_command: Option<String>,
+        /// Process-local identity that survives admission failure and late output.
+        shell_echo: Option<u64>,
+        /// Value-free fallback for protected arguments.
         protected_summary: String,
         /// The current status.
         status: ToolStatus,
-        /// Bounded, credential-redacted first lines of the tool result,
-        /// supplied by the host after completion.
+        /// Bounded, credential-redacted result detail supplied by the host.
+        /// Folding belongs to the renderer so the detail can be expanded.
         result_preview: Option<String>,
         /// When the tool call started running.
         started_at: Option<Instant>,
@@ -164,6 +165,8 @@ impl PartialEq for Block {
                     name: n1,
                     display: d1,
                     protected_summary: p1,
+                    user_command: u1,
+                    shell_echo: h1,
                     status: s1,
                     result_preview: r1,
                     enrichment: e1,
@@ -174,12 +177,24 @@ impl PartialEq for Block {
                     name: n2,
                     display: d2,
                     protected_summary: p2,
+                    user_command: u2,
+                    shell_echo: h2,
                     status: s2,
                     result_preview: r2,
                     enrichment: e2,
                     ..
                 },
-            ) => c1 == c2 && n1 == n2 && d1 == d2 && p1 == p2 && s1 == s2 && r1 == r2 && e1 == e2,
+            ) => {
+                c1 == c2
+                    && n1 == n2
+                    && d1 == d2
+                    && p1 == p2
+                    && u1 == u2
+                    && h1 == h2
+                    && s1 == s2
+                    && r1 == r2
+                    && e1 == e2
+            }
             (Self::Error { message: m1 }, Self::Error { message: m2 }) => m1 == m2,
             (
                 Self::Notice {
@@ -201,6 +216,7 @@ impl PartialEq for Block {
 #[derive(Debug, Clone, Default)]
 pub struct Transcript {
     blocks: Vec<Block>,
+    next_shell_echo: u64,
 }
 
 impl Transcript {
@@ -336,17 +352,133 @@ impl Transcript {
         arguments: Option<&Value>,
         argument_keys: &[String],
     ) {
+        let call_id = call_id.into();
+        if self
+            .blocks
+            .iter()
+            .any(|block| matches!(block, Block::Tool { call_id: id, .. } if id == &call_id))
+        {
+            return;
+        }
         self.close_open();
         self.blocks.push(Block::Tool {
-            call_id: call_id.into(),
+            call_id,
             name: name.to_owned(),
-            display: arguments.and_then(|arguments| project_tool_call_display(name, arguments)),
+            display: arguments
+                .and_then(|arguments| project_tool_call_display(name, arguments))
+                .map(Box::new),
             protected_summary: summarize_unavailable_arguments(name, argument_keys),
+            user_command: None,
+            shell_echo: None,
             status: ToolStatus::Running,
             result_preview: None,
             started_at: Some(Instant::now()),
             enrichment: Vec::new(),
         });
+    }
+
+    /// Echoes a shortcut until the host supplies its exact runtime identity.
+    pub fn push_shell_shortcut(&mut self, command: impl Into<String>) -> u64 {
+        let echo = self.next_shell_echo;
+        self.next_shell_echo = self.next_shell_echo.wrapping_add(1);
+        self.close_open();
+        self.blocks.push(Block::Tool {
+            call_id: String::new(),
+            name: "shell".to_owned(),
+            display: None,
+            protected_summary: String::new(),
+            user_command: Some(command.into()),
+            shell_echo: Some(echo),
+            status: ToolStatus::Running,
+            result_preview: None,
+            started_at: Some(Instant::now()),
+            enrichment: Vec::new(),
+        });
+        echo
+    }
+
+    /// The echo just submitted through the composer.
+    pub fn latest_shell_echo(&self) -> Option<u64> {
+        self.blocks.iter().rev().find_map(|block| match block {
+            Block::Tool { shell_echo, .. } => *shell_echo,
+            _ => None,
+        })
+    }
+
+    /// Joins a specific user echo and runtime call by the host's identity.
+    pub fn bind_shell_shortcut(&mut self, echo: u64, call_id: &str) {
+        let Some(index) = self.blocks.iter().position(|block| {
+            matches!(block,
+                Block::Tool { shell_echo: Some(id), .. } if *id == echo
+            )
+        }) else {
+            return;
+        };
+        if matches!(&self.blocks[index], Block::Tool { call_id: id, .. } if id == call_id) {
+            return;
+        }
+        if let Some(existing) = self.blocks.iter().position(|block| {
+            matches!(block,
+                Block::Tool { call_id: id, .. } if id == call_id
+            )
+        }) {
+            let mut call = self.blocks.remove(existing);
+            let index = index - usize::from(existing < index);
+            if let (
+                Block::Tool {
+                    user_command: command,
+                    ..
+                },
+                Block::Tool {
+                    user_command,
+                    shell_echo,
+                    ..
+                },
+            ) = (&mut self.blocks[index], &mut call)
+            {
+                *user_command = command.take();
+                *shell_echo = Some(echo);
+            }
+            self.blocks[index] = call;
+        } else if let Block::Tool { call_id: id, .. } = &mut self.blocks[index] {
+            *id = call_id.to_owned();
+        }
+    }
+
+    /// Settles the echo even when admission failed before a call existed.
+    pub fn finish_shell_shortcut(
+        &mut self,
+        echo: u64,
+        call_id: Option<&str>,
+        is_error: bool,
+        output: &str,
+    ) {
+        if let Some(call_id) = call_id {
+            self.bind_shell_shortcut(echo, call_id);
+        }
+        let preview = bound_result_preview(if output.trim().is_empty() {
+            "No output."
+        } else {
+            output
+        });
+        if let Some(Block::Tool {
+            status,
+            result_preview,
+            started_at,
+            ..
+        }) = self
+            .blocks
+            .iter_mut()
+            .find(|block| matches!(block, Block::Tool { shell_echo: Some(id), .. } if *id == echo))
+        {
+            *status = if is_error {
+                ToolStatus::Failed
+            } else {
+                ToolStatus::Ok
+            };
+            *result_preview = preview;
+            *started_at = None;
+        }
     }
 
     /// Records a tool an installed agent ran inside a harness turn.
@@ -373,8 +505,10 @@ impl Transcript {
                 Some(_) => vec!["agent".to_owned()],
                 None => Vec::new(),
             },
-            display,
+            display: display.map(Box::new),
             protected_summary: "run by the agent".to_owned(),
+            user_command: None,
+            shell_echo: None,
             status: ToolStatus::Running,
             result_preview: None,
             started_at: Some(Instant::now()),
@@ -427,7 +561,7 @@ impl Transcript {
             } = block
                 && id == call_id
             {
-                *slot = Some(display);
+                *slot = Some(Box::new(display));
                 return;
             }
         }
@@ -466,7 +600,7 @@ impl Transcript {
             } = block
                 && id == call_id
             {
-                let Some(current) = display.clone() else {
+                let Some(current) = display.as_deref().cloned() else {
                     return;
                 };
                 let before = current.qualifiers().len();
@@ -590,6 +724,8 @@ impl Transcript {
                                     ),
                                     // History records the call; the matching
                                     // result below supplies the outcome.
+                                    user_command: None,
+                                    shell_echo: None,
                                     status: ToolStatus::Running,
                                     // As with `display`, the host supplies a
                                     // redacted preview after rebuilding.
@@ -643,44 +779,26 @@ fn user_display_text(message: &Message) -> String {
     text
 }
 
-const MAX_PREVIEW_LINES: usize = 3;
-const MAX_PREVIEW_LINE_CHARS: usize = 160;
-
-/// Bounds a raw result to its first non-blank lines, one-line-safe and
-/// control-free, with an honest `… +N lines` tail when content was dropped.
+/// Retains bounded, control-free detail so folding can be reversed on demand.
 fn bound_result_preview(raw: &str) -> Option<String> {
-    let mut lines = raw
-        .lines()
-        .map(str::trim_end)
-        .filter(|line| !line.trim().is_empty());
-    let mut kept = Vec::new();
-    let mut dropped = 0usize;
-    for line in lines.by_ref() {
-        if kept.len() < MAX_PREVIEW_LINES {
-            kept.push(sanitize_preview_line(line));
-        } else {
-            dropped += 1;
-        }
-    }
-    if kept.is_empty() {
+    if raw.trim().is_empty() {
         return None;
     }
-    if dropped > 0 {
-        kept.push(format!(
-            "… +{dropped} more line{}",
-            if dropped == 1 { "" } else { "s" }
-        ));
-    }
-    Some(kept.join("\n"))
+    Some(
+        bound_local_result(raw.to_owned())
+            .lines()
+            .map(sanitize_preview_line)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }
 
 fn sanitize_preview_line(line: &str) -> String {
     let mut sanitized = String::new();
-    let mut chars = 0usize;
     for character in line.chars() {
-        if chars == MAX_PREVIEW_LINE_CHARS {
-            sanitized.push('…');
-            break;
+        if character == '\t' {
+            sanitized.push(' ');
+            continue;
         }
         // The same unsafe-control set the display projector strips: C0/C1
         // plus zero-width and bidi override codepoints.
@@ -696,7 +814,6 @@ fn sanitize_preview_line(line: &str) -> String {
             continue;
         }
         sanitized.push(character);
-        chars += 1;
     }
     sanitized
 }
@@ -831,44 +948,8 @@ pub(crate) fn safe_tool_name(name: &str) -> String {
 /// `pub(crate)` so the delegated-work panel can show the identical honest
 /// label — never raw argument values — when a child's tool call has no
 /// reviewed projection either; see `App::apply_child`.
-pub(crate) fn summarize_unavailable_arguments(name: &str, argument_keys: &[String]) -> String {
-    let reason = if has_tool_call_display_schema(name) {
-        "details unavailable"
-    } else {
-        "arguments hidden"
-    };
-    if argument_keys.is_empty() {
-        reason.to_owned()
-    } else {
-        const MAX_KEYS: usize = 6;
-        let mut keys = argument_keys
-            .iter()
-            .take(MAX_KEYS)
-            .map(|key| {
-                let normalized = key
-                    .chars()
-                    .take(32)
-                    .map(|character| {
-                        if character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.')
-                        {
-                            character
-                        } else {
-                            '_'
-                        }
-                    })
-                    .collect::<String>();
-                if normalized.is_empty() {
-                    "?".to_owned()
-                } else {
-                    normalized
-                }
-            })
-            .collect::<Vec<_>>();
-        if argument_keys.len() > MAX_KEYS {
-            keys.push("…".to_owned());
-        }
-        format!("{} · {reason}", keys.join(", "))
-    }
+pub(crate) fn summarize_unavailable_arguments(_name: &str, _argument_keys: &[String]) -> String {
+    "arguments hidden".to_owned()
 }
 
 /// Extracts the same sorted top-level key view the runtime emits.
@@ -1184,7 +1265,7 @@ mod tests {
                 display, status, ..
             } => {
                 assert_eq!(
-                    display.as_ref().map(ToolCallDisplay::invocation),
+                    display.as_deref().map(ToolCallDisplay::invocation),
                     Some("Read(src/retry.rs)".to_owned())
                 );
                 assert_eq!(*status, ToolStatus::Ok);
@@ -1221,7 +1302,7 @@ mod tests {
             } => {
                 assert_eq!(
                     preview,
-                    "first card\nsecond card\nthird card\n… +2 more lines"
+                    "\nfirst card\nsecond card\n\nthird card\nfourth card\nfifth card"
                 );
             }
             other => panic!("expected a tool block with a preview, got {other:?}"),
@@ -1254,7 +1335,7 @@ mod tests {
                 ..
             } => {
                 assert!(display.is_none());
-                assert_eq!(protected_summary, "command, cwd · details unavailable");
+                assert_eq!(protected_summary, "arguments hidden");
                 assert!(!protected_summary.contains("cargo test"));
             }
             other => panic!("expected a tool block, got {other:?}"),
@@ -1279,10 +1360,7 @@ mod tests {
             panic!("expected a tool block");
         };
         let invocation = display.as_ref().expect("safe projection").invocation();
-        assert_eq!(
-            invocation,
-            "Shell(printf [redacted] · cwd crates/smith-cli)"
-        );
+        assert_eq!(invocation, "Bash(printf [redacted] · cwd crates/smith-cli)");
         assert!(!invocation.contains("omitted"));
     }
 
@@ -1327,7 +1405,7 @@ mod tests {
                 assert_eq!(name, "read");
                 assert_eq!(*status, ToolStatus::Ok);
                 assert!(display.is_none());
-                assert_eq!(protected_summary, "path · details unavailable");
+                assert_eq!(protected_summary, "arguments hidden");
             }
             other => panic!("expected a tool block, got {other:?}"),
         }
@@ -1358,12 +1436,12 @@ mod tests {
                     "old_string": "before",
                     "new_string": "after"
                 }),
-                Some("Edit(src/lib.rs)"),
+                Some("Update(src/lib.rs)"),
             ),
             (
                 "shell",
                 json!({"command": "cargo test", "cwd": "crates"}),
-                Some("Shell(cargo test · cwd crates)"),
+                Some("Bash(cargo test · cwd crates)"),
             ),
             ("third_party", json!({"path": "TOP_SECRET_UNKNOWN"}), None),
         ];
@@ -1377,6 +1455,7 @@ mod tests {
                 live.set_tool_display(&call_id, display);
             }
             live.complete_tool_call(&call_id, ToolStatus::Ok);
+            live.set_tool_result_preview(&call_id, "safe first line\nsecond\nthird\nfourth\nfifth");
 
             let history = vec![
                 Message::assistant(vec![ContentPart::ToolCall(ToolCall {
@@ -1396,6 +1475,14 @@ mod tests {
             if let Some(display) = project_tool_call_display(name, &arguments) {
                 replay.set_tool_display(&call_id, display);
             }
+
+            replay
+                .set_tool_result_preview(&call_id, "safe first line\nsecond\nthird\nfourth\nfifth");
+            assert_eq!(
+                live.blocks(),
+                replay.blocks(),
+                "{name}: full result detail must survive replay enrichment"
+            );
 
             let (
                 Block::Tool {
@@ -1418,7 +1505,7 @@ mod tests {
             assert_eq!(live_fallback, replay_fallback, "{name}");
             assert_eq!(live_status, replay_status, "{name}");
             assert_eq!(
-                live_display.as_ref().map(ToolCallDisplay::invocation),
+                live_display.as_deref().map(ToolCallDisplay::invocation),
                 expected.map(str::to_owned),
                 "{name}"
             );
@@ -1455,5 +1542,96 @@ mod tests {
         transcript.replace_from_history(&[Message::system("be concise"), Message::user("hi")]);
         assert_eq!(transcript.len(), 1);
         assert!(matches!(transcript.blocks()[0], Block::User { .. }));
+    }
+}
+
+#[cfg(test)]
+mod detail_tests {
+    use super::*;
+
+    #[test]
+    fn expanded_result_detail_is_bounded_without_discarding_the_folded_tail() {
+        let mut transcript = Transcript::new();
+        transcript.push_tool_call("c", "shell", None, &[]);
+        let output = "safe output\n".repeat(MAX_LOCAL_RESULT_LINES + 10);
+        transcript.set_tool_result_preview("c", output);
+        let Block::Tool {
+            result_preview: Some(detail),
+            ..
+        } = &transcript.blocks()[0]
+        else {
+            panic!("tool detail");
+        };
+        assert!(detail.lines().count() <= MAX_LOCAL_RESULT_LINES + 1);
+        assert!(detail.ends_with("[local result truncated at the display limit]"));
+        transcript.set_tool_result_preview("c", "x".repeat(MAX_LOCAL_RESULT_BYTES + 10));
+        let Block::Tool {
+            result_preview: Some(detail),
+            ..
+        } = &transcript.blocks()[0]
+        else {
+            panic!("tool detail");
+        };
+        assert!(detail.len() <= MAX_LOCAL_RESULT_BYTES + 64);
+        assert!(detail.ends_with("[local result truncated at the display limit]"));
+    }
+
+    #[test]
+    fn a_rejected_shortcut_does_not_take_the_next_admitted_calls_identity() {
+        let mut transcript = Transcript::new();
+        let rejected = transcript.push_shell_shortcut("rejected command");
+        transcript.finish_shell_shortcut(rejected, None, true, "admission rejected");
+        let accepted = transcript.push_shell_shortcut("accepted command");
+        transcript.bind_shell_shortcut(accepted, "accepted-call");
+        transcript.push_tool_call("accepted-call", "shell", None, &[]);
+        assert_eq!(transcript.blocks().len(), 2);
+        assert!(
+            matches!(&transcript.blocks()[0], Block::Tool { status: ToolStatus::Failed, call_id, .. } if call_id.is_empty())
+        );
+        assert!(
+            matches!(&transcript.blocks()[1], Block::Tool { user_command: Some(command), call_id, .. } if command == "accepted command" && call_id == "accepted-call")
+        );
+    }
+
+    #[test]
+    fn late_admission_failures_settle_only_their_own_echo() {
+        let mut transcript = Transcript::new();
+        let rejected = transcript.push_shell_shortcut("rejected");
+        let accepted = transcript.push_shell_shortcut("accepted");
+        transcript.bind_shell_shortcut(accepted, "accepted-call");
+        transcript.finish_shell_shortcut(rejected, None, true, "requires an idle session");
+        assert!(
+            matches!(&transcript.blocks()[0], Block::Tool { status: ToolStatus::Failed, result_preview: Some(output), .. } if output == "requires an idle session")
+        );
+        assert!(
+            matches!(&transcript.blocks()[1], Block::Tool { status: ToolStatus::Running, call_id, .. } if call_id == "accepted-call")
+        );
+        transcript.replace_from_history(&[]);
+        let next = transcript.push_shell_shortcut("next");
+        assert_ne!(next, accepted);
+        transcript.finish_shell_shortcut(accepted, Some("accepted-call"), false, "late output");
+        assert!(matches!(
+            &transcript.blocks()[0],
+            Block::Tool {
+                status: ToolStatus::Running,
+                result_preview: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_result_arriving_before_the_runtime_event_keeps_the_single_user_echo() {
+        let mut transcript = Transcript::new();
+        let echo = transcript.push_shell_shortcut("ls -la");
+        transcript.bind_shell_shortcut(echo, "local");
+        transcript.complete_tool_call("local", ToolStatus::Ok);
+        transcript.set_tool_result_preview("local", "files");
+        transcript.push_tool_call("local", "shell", None, &["command".into()]);
+        transcript.bind_shell_shortcut(echo, "local");
+        assert_eq!(transcript.blocks().len(), 1);
+        assert!(
+            matches!(&transcript.blocks()[0], Block::Tool { user_command: Some(command), status: ToolStatus::Ok, result_preview: Some(output), .. } if command == "ls -la" && output == "files")
+        );
     }
 }

@@ -85,7 +85,7 @@ impl Fixture {
         App::new("example-model", self.project.path().display().to_string())
     }
 
-    fn start(
+    async fn start(
         &self,
         approvals: &LocalShellApprovals,
     ) -> tokio::sync::mpsc::UnboundedReceiver<LocalOutcome> {
@@ -98,13 +98,15 @@ impl Fixture {
             panic!("expected a local shell action");
         };
         assert_eq!(command, COMMAND);
-        start_local_shell(
+        let _ = start_local_shell(
+            app.transcript.latest_shell_echo().expect("shell echo"),
             self.host.session().clone(),
             command,
             TIMEOUT_MS,
             approvals.clone(),
             outcomes,
-        );
+        )
+        .await;
         receiver
     }
 
@@ -151,7 +153,9 @@ async fn outcome(
 
 fn assert_success(result: LocalOutcome) {
     match result {
-        LocalOutcome::Shell { content, is_error } => {
+        LocalOutcome::Shell {
+            content, is_error, ..
+        } => {
             assert!(!is_error, "{content}");
             assert!(content.contains("shortcut"), "{content}");
         }
@@ -170,7 +174,7 @@ async fn shortcut_under_ask_runs_without_presenting_approval() {
     let mut fixture = Fixture::new(ApprovalMode::Ask, false).await;
     let approvals = LocalShellApprovals::default();
     let mut app = fixture.app();
-    let mut receiver = fixture.start(&approvals);
+    let mut receiver = fixture.start(&approvals).await;
     let prompt = fixture.prompt().await;
     assert_eq!(prompt.prepared().arguments()["command"], COMMAND);
     assert_eq!(prompt.prepared().arguments()["timeout_ms"], TIMEOUT_MS);
@@ -194,7 +198,7 @@ async fn shortcut_under_ask_runs_without_presenting_approval() {
 async fn matching_model_call_after_shortcut_still_presents_approval() {
     let mut fixture = Fixture::new(ApprovalMode::Ask, true).await;
     let approvals = LocalShellApprovals::default();
-    let mut receiver = fixture.start(&approvals);
+    let mut receiver = fixture.start(&approvals).await;
     let prompt = fixture.prompt().await;
     assert!(approvals.resolve(prompt).is_none());
     assert_success(outcome(&mut receiver).await);
@@ -208,7 +212,7 @@ async fn submission_authorization_is_consumed_only_once() {
 
     let mut fixture = Fixture::new(ApprovalMode::Ask, true).await;
     let approvals = LocalShellApprovals::default();
-    let mut receiver = fixture.start(&approvals);
+    let mut receiver = fixture.start(&approvals).await;
     let prompt = fixture.prompt().await;
     let duplicate = ApprovalRequest::new(
         prompt.prepared().clone(),
@@ -232,7 +236,7 @@ async fn submission_authorization_is_consumed_only_once() {
 async fn matching_model_call_queued_during_shortcut_cannot_consume_authorization() {
     let mut fixture = Fixture::new(ApprovalMode::Ask, true).await;
     let approvals = LocalShellApprovals::default();
-    let mut receiver = fixture.start(&approvals);
+    let mut receiver = fixture.start(&approvals).await;
     let local_prompt = fixture.prompt().await;
     let local_turn = local_prompt.origin().turn().cloned().expect("local turn");
     let model = fixture
@@ -271,9 +275,17 @@ async fn rejected_shortcut_cannot_approve_an_existing_identical_model_call() {
         .send(UserInput::text("Run echo shortcut in the shell"))
         .expect("model turn");
     let model_prompt = fixture.prompt().await;
-    let mut receiver = fixture.start(&approvals);
+    let mut receiver = fixture.start(&approvals).await;
     match outcome(&mut receiver).await {
-        LocalOutcome::Error(error) => assert!(error.contains("idle session"), "{error}"),
+        LocalOutcome::Shell {
+            content,
+            is_error,
+            call,
+            ..
+        } => {
+            assert!(is_error && call.is_none());
+            assert!(content.contains("idle session"), "{content}");
+        }
         _ => panic!("busy local action must fail"),
     }
     let model_prompt = approvals
@@ -290,7 +302,7 @@ async fn rejected_shortcut_cannot_approve_an_existing_identical_model_call() {
 async fn unconsumed_authorization_is_discarded_when_local_call_is_cancelled() {
     let mut fixture = Fixture::new(ApprovalMode::Ask, true).await;
     let approvals = LocalShellApprovals::default();
-    let mut receiver = fixture.start(&approvals);
+    let mut receiver = fixture.start(&approvals).await;
     let held_prompt = fixture.prompt().await;
     // Keep the prompt unanswered so the token is still unconsumed when
     // the runtime's cancellation ends this local action.
@@ -300,7 +312,9 @@ async fn unconsumed_authorization_is_discarded_when_local_call_is_cancelled() {
         .interrupt_current_turn(CancelReason::UserRequested)
         .expect("interrupt local action");
     match outcome(&mut receiver).await {
-        LocalOutcome::Shell { content, is_error } => {
+        LocalOutcome::Shell {
+            content, is_error, ..
+        } => {
             assert!(is_error, "{content}");
             assert!(content.contains("cancel"), "{content}");
         }
@@ -324,9 +338,11 @@ async fn unconsumed_authorization_is_discarded_when_local_call_is_cancelled() {
 async fn deny_policy_still_refuses_the_shortcut() {
     let fixture = Fixture::new(ApprovalMode::Deny, true).await;
     let approvals = LocalShellApprovals::default();
-    let mut receiver = fixture.start(&approvals);
+    let mut receiver = fixture.start(&approvals).await;
     match outcome(&mut receiver).await {
-        LocalOutcome::Shell { content, is_error } => {
+        LocalOutcome::Shell {
+            content, is_error, ..
+        } => {
             assert!(is_error, "{content}");
             assert!(content.contains("approval declined"), "{content}");
         }

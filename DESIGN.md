@@ -8,11 +8,24 @@ Smith is an **operational coding surface**, not a dashboard. The transcript is
 the product. Everything else — status, approvals, background work — earns its
 space by being unavoidable, and gives the space back when it is not.
 
-The text hierarchy follows the observable grammar of OpenAI Codex CLI 0.145.0,
-captured in a real cmux terminal and checked against the matching open-source
-tag. Smith keeps its own name and runtime concepts, but uses the same quiet
-bullet-led transcript, hanging indents, semantic color roles, command labels,
-status-card structure, and compact footer.
+The text hierarchy follows the observable grammar of Claude Code: one marker
+per speaker, one row per tool call, nested results, hanging indents, and detail
+behind one expand key. Smith keeps its own decisions, listed with their reasons
+in the "Kept" table below. This is an interaction grammar, not a pixel copy.
+
+## Kept: Smith decisions that do not follow Claude Code
+
+| Decision | Reason |
+| --- | --- |
+| Sixteen ANSI colours by name, no background fills | Smith cannot know the palette |
+| No header; transcript owns the screen | `DESIGN.md` principle 1 |
+| Informational commands print inline and need no dismissal | truth spec |
+| Enter steers, Tab queues while busy | truth spec |
+| `y` / `a` / `n` approvals with a quiet-window guard | owner decision 2026-10-02 |
+| Command menu above the composer, five rows | truth spec |
+| `●` rather than `⏺`; ASCII todo marks | emoji-capable code points change width between terminals |
+| Pointer selection implemented by Smith | truth spec |
+| Estimated numbers carry `~`; unknown is stated | `DESIGN.md` principle 3 |
 
 ## 1. Principles
 
@@ -22,8 +35,8 @@ status-card structure, and compact footer.
    only one. Every state that matters is also carried by a glyph or a word,
    because terminals get themed, piped, and screenshotted in monochrome.
 3. **Uncertainty is shown, not smoothed.** An estimated token count reads
-   `~12.4k`, an unknown cost reads `cost ?`. Smith never renders a guess with
-   the same weight as a provider-reported fact.
+   `~12.4k`, an unknown cost reads `cost unknown`. Smith never renders a guess
+   with the same weight as a provider-reported fact.
 4. **Nothing moves that the user did not cause.** Streaming text appends;
    layout does not reflow, jump, or animate underneath a reader.
 5. **The keyboard is sufficient for everything.** The pointer scrolls and
@@ -32,30 +45,29 @@ status-card structure, and compact footer.
 ## 2. Layout
 
 ```text
-┌────────────────────────────────────────────────────────────────────────┐
-│                                                                        │
-│ › explain the retry policy                                             │
-│                                                                        │
-│ • The retry policy classifies provider failures into three groups…     │  transcript
-│                                                                        │  (flex, scrolls)
-│ • Read(src/retry.rs · offset 1 · limit 200) · ok                       │
-│ • Shell(cargo test -p smith-tui · cwd .) · ok                          │
-│ • turn · completed in 12s                                              │
-│                                                                        │
-├────────────────────────────────────────────────────────────────────────┤
-│   Todo                                                                 │
-│   [>] Fix the flaky test                                               │
-│   [ ] Run focused tests                                                │
-│   [x] Inspect retry policy (+2 done)  ← struck + dim                   │  anchored pane (0–9 rows)
-│   Pending for this turn                                                │
-│   › also cover the cancellation race                               │
-├────────────────────────────────────────────────────────────────────────┤
-│                                                                        │
-│ › fix the flaky test in retry.rs▏                                      │  composer (1–8 rows + inset)
-│                                                                        │
-├────────────────────────────────────────────────────────────────────────┤
-│   openai/gpt-5.3 · ~/work/api                                          │  footer (1 row)
-└────────────────────────────────────────────────────────────────────────┘
+> explain the retry policy
+
+● The retry policy classifies provider failures into three groups…
+
+● Read(src/retry.rs)
+  ⎿  Read 212 lines
+
+● Bash(cargo test -p smith-tui retry) failed
+  ⎿  running 3 tests
+     test retry::backoff ... ok
+     test retry::cancel ... FAILED
+     … +14 lines (ctrl+o to expand)
+
+  Todo
+  [>] Fix the flaky test
+  [ ] Run focused tests
+  [x] Inspect retry policy (+2 done)
+
+✻ Working… (12s · ↓ 1.2k tokens · esc to interrupt)
+────────────────────────────────────────────────────────────────────────
+> also cover the cancellation race▏
+────────────────────────────────────────────────────────────────────────
+  enter to steer · tab to queue                      gpt-5.3 · dev · ask
 ```
 
 Regions, top to bottom:
@@ -64,13 +76,16 @@ Regions, top to bottom:
 | --- | --- | --- |
 | Transcript | flex | Minimum 3 rows; below that Smith renders a size warning only. |
 | Anchored pane | 0–9 | A compact picker while one is open; otherwise bounded process-local pending input followed by the latest public plan. Hidden when neither exists, and once a plan's every item is completed and its turn has stopped. |
-| Composer | 3–10 | One-row vertical inset around 1–8 rows of input. |
-| Footer | 1–2 | Identity uses one row; resource pickers and prompts may add controls on the second. Slash completion does not. |
+| Working row | 0–1 | One live progress row directly above the composer while a turn runs; never part of the transcript. |
+| Composer | 3–10 | 1–8 rows of input between two dim rules, with a `>` prompt. |
+| Footer | 1–2 | One hint row below the composer: shortcuts or busy keys on the left, model, profile, and approval mode on the right. Resource pickers and prompts may add controls on the second row. Slash completion does not. |
 
 Typing `/` opens command completion as a compact bottom-pane list directly
-above the fixed composer, following the same selected-row grammar as Codex.
-The command list shows at most five single-line rows and scrolls its selected
-window; long descriptions yield before the command name and selection.
+above the fixed composer. The command list shows at most five rows in two
+aligned columns and scrolls its selected window; long descriptions yield
+before the command name and selection. Only the selected row adds its argument
+grammar on a detail line beneath it. Smith keeps this placement and five-row
+window as its own decision.
 Local resource choices opened by `/model`, `/provider`, `/profile`, `/resume`,
 or `@` reuse that placement and show at most five matching rows; moving the
 selection scrolls the bounded window instead of expanding or covering the
@@ -97,12 +112,13 @@ history. The composer and identity footer retain their ordinary placement.
 
 ### Narrow and short terminals
 
-- Below 60 columns the footer keeps the provider/model and drops path, then
-  secondary state.
+- Below 60 columns the footer keeps model, profile, approval mode, and the
+  active keys. Path and secondary state yield first; hints are dropped last.
 - Consequential overlays below 60 columns use the full safe width, put the
-  title and exact target first, wrap permissions and material arguments, and
-  keep decision controls on their own final lines. Bounded detail remains
-  scrollable rather than clipped.
+  title and exact target first, word-wrap the action, place, deadline, and
+  warning, and keep decision controls on their own lines. Permissions and raw
+  arguments remain behind `Ctrl+O`; expanded detail is scrollable rather than
+  clipped. The transcript stays scrollable while a prompt is open.
 - Below 10 rows or 40 columns Smith renders only `terminal too small (need
   40×10)` — a half-rendered coding surface is worse than an honest refusal.
   An open prompt remains queued and unanswered while the terminal is too small.
@@ -115,9 +131,11 @@ constructed. Partial or malformed configuration is an error, not an excuse to
 replace user state. Non-interactive and machine-output launches never open
 setup.
 
-Setup is a keyboard-first sequence of one choice or one field per screen:
-action, provider, authentication, model, automatic limit discovery, response
-compatibility, default selection, and review. For a custom model Smith first
+Setup is a keyboard-first sequence inside one frame, titled `Smith setup`
+once: action, provider, authentication, model, automatic limit discovery,
+response compatibility, default selection, and review. Each step presents one
+choice or field. Each listed entry has a name line and a wrapped dim description
+line; footer keys remain visible throughout. For a custom model Smith first
 checks the endpoint's bounded model listing, then the trusted catalog. Only
 when neither source knows the model window does setup ask for one numeric
 value: the total context window. Smith derives the input ceiling from that
@@ -146,43 +164,84 @@ ordinary coding surface; explicit `smith setup` commands exit after success.
 Terminal typography is the user's, not ours. Smith commits only to a fixed
 column grid, and assumes nothing about font family, ligatures, or size.
 
-**Width safety.** Every glyph Smith renders is either ASCII or a single-width
-codepoint verified against `unicode-width`. No emoji: they are double-width on
-some terminals and single on others, which corrupts alignment. Right-aligned
-columns are computed from display width, never `str::len`.
+**Width safety.** The grammar's glyph set is `>`, `●`, `⎿`, `✻`, `❯`, `✓`,
+and `…`. Each must report width 1 from `unicode-width` and must not be an
+emoji-capable code point. `⏺`, `✳`, and `✔` are excluded: their width changes
+between terminals. Other rendered glyphs are ASCII or verified single-width
+code points. Right-aligned columns are computed from display width, never
+`str::len`. Todo marks remain ASCII.
 
-Role markers, one per transcript block:
+One marker per speaker, with separate glyphs for controls and progress:
 
 | Marker | Meaning |
 | --- | --- |
-| `›` | User message |
-| `•` | Assistant message, reasoning, tool call, or informational notice |
-| `└` | Detail or output belonging to the row above |
-| `│` | Wrapped command continuation |
-| `■` | Error or interrupted operation |
-| `⚠` | Warning or degraded state |
-| `?` | Approval or questionnaire awaiting an explicit answer |
+| `>` | User message |
+| `●` | Smith or model prose, tool call, or informational notice |
+| `⎿` | Nested detail or output belonging to the row above |
+| `✻` | Working indicator or ephemeral successful-turn summary |
+| `❯` | Selected menu or picker row |
+| `✓` | Confirmed or current choice, accompanied by a state word |
+| `…` | Folded output or a shortened value |
 
-The first line of a block owns its marker. Continuation lines use a two-column
-hanging indent, so wrapped content never looks like a new event. The `•` itself
-is normally dim; a completed tool colors only that bullet green or red and
-keeps the action verb bold. User text remains the terminal foreground rather
-than turning the whole prompt cyan.
+The first line of a block owns its marker. Continuation lines hang under the
+text, never under the marker: two columns for user and Smith prose, and the
+nested result's text column for output under `⎿`. User text remains the
+terminal foreground rather than turning the whole prompt cyan. Errors and
+denials remain Smith blocks, with words naming their state.
+
+### Tool rows and nested results
+
+A model-requested tool call is one row: `● Name(reviewed argument)`. The name
+is the reviewed tool label (`Bash`, `Read`, `Update`, `Search`, `List`, or
+`Agent`), not the registry id. The argument is the reviewed summary a person
+would say. Protected arguments stay protected; do not list argument names or
+print `details unavailable` in their place.
+
+The bullet is dim while running, green on success, and red on failure or
+denial. A non-success row ends with the word `failed` or `denied`; color is
+never the only signal. The tool name is bold, while its reviewed argument is
+dim. A call's completion updates its row rather than printing another
+invocation. A user shell shortcut echoes once as `! command`, with its result
+nested in the same way.
+
+Results show at most four lines under `⎿`, then
+`… +N lines (ctrl+o to expand)` with the remaining-line count. A tool with no
+useful preview gets a one-line summary, such as `Read 212 lines` or
+`Updated src/retry.rs with 4 additions and 1 removal`. Edit rows already name
+their changes; a turn that changed no files gets no separate changes notice.
+The reviewed successful-row suppression set in §7 remains suppressed; failed,
+denied, and unreported calls remain visible.
+
+`Ctrl+O` is the single expand key for folded tool output, approval detail, and
+long diffs. It toggles all folded detail; pressing it again folds that detail.
+It works while a prompt is open, and `/details` is the command form of the same
+toggle. Expanded output remains bounded and redaction-safe; artifact bodies
+still require authorized, paginated reads.
+
+### Working row and turn end
 
 Reasoning is progress, not a second assistant reply. From `turn_started` until
-the turn ends, the transcript appends one animated, dim
-`Working… · 12s` row rather than rendering the provider's raw reasoning text.
-Its duration comes from a local monotonic clock. At the turn boundary the
-working row disappears and every successful terminal appends one quiet
-`turn · completed in …` notice. Its duration comes from the canonical
-millisecond interval between the turn's start and completion envelopes:
-sub-second turns use milliseconds (zero renders `<1ms`), longer turns use the
-compact second/minute/hour grammar, and an absent or backward interval omits
-the duration instead of substituting local reducer time. Absence of visible
-assistant text never adds a `reasoning only` diagnosis. Interrupted, limited,
-needs-input, and failed turns retain their attributed notice with live elapsed
-time when available. Canonical session history and the journal retain the
-start/completion events, timestamps, and reasoning needed for model
+the turn ends, one dim working row sits directly above the composer:
+`✻ Working… (12s · ↓ 1.2k tokens · esc to interrupt)`. It never enters the
+transcript, and appending a block never moves or duplicates it. Elapsed time
+comes from a local monotonic clock. Token flow is omitted until the provider
+reports it and carries `~` when estimated. During retry or backoff, the retry
+wording in §6 replaces `Working…`; elapsed time, available token flow, and the
+interrupt key remain visible. Reduced motion uses a static `●`.
+
+At a successful turn boundary the working row becomes one dim
+`✻ Worked for 1m 12s` summary attached to that turn, beneath its last block
+when one exists. It is not a transcript row, is not replayed as history, and
+is hidden as soon as any later block is appended, including a local command
+result. Its duration comes from the canonical millisecond interval between
+the turn's start and completion envelopes: sub-second turns use milliseconds
+(zero renders `<1ms`), longer turns use the compact second/minute/hour grammar,
+and an absent or backward interval omits the duration instead of substituting
+local reducer time. Earlier turns never show a summary on replay. Absence of
+visible assistant text never adds a `reasoning only` diagnosis. Interrupted,
+limited, needs-input, and failed turns retain their attributed notice with live
+elapsed time when available. Canonical session history and the journal retain
+the start/completion events, timestamps, and reasoning needed for model
 continuity, replay, timelines, and diagnostics.
 
 ## 4. Color
@@ -195,7 +254,7 @@ Smith detecting either.
 | Token | ANSI | Used for |
 | --- | --- | --- |
 | `default` | terminal default | Assistant text, transcript body |
-| `dim` | dim modifier | Timestamps, hints, tool argument detail |
+| `dim` | dim modifier | Timestamps, hints, reviewed tool arguments, descriptions, code language labels |
 | `accent` | cyan, bold | Active selection, inline code, focused control |
 | `command` | magenta | Local slash-command labels such as `/status` |
 | `success` | green | Successful tool bullet, cache hit, confirmed state |
@@ -208,12 +267,11 @@ Smith detecting either.
 
 Rules:
 
-- **Never color-only.** `success` always accompanies the word `ok`; `danger`
-  always accompanies `!` or `failed`.
-- **No fixed background fills.** Codex derives a subtle composer/user surface
-  from the detected terminal background. Smith leaves that surface at the
-  terminal default until it has equivalent bounded palette detection; a fixed
-  dark fill would break light terminals.
+- **Never color-only.** Successful tools have a written result or summary;
+  failure and denial carry `failed` or `denied`. Confirmed choices carry a
+  state word beside `✓`. Other errors and warnings name their condition.
+- **No fixed background fills.** Composer, user text, and all other surfaces
+  use the terminal default background; Smith cannot know the user's palette.
 - **Bold marks structure** — action verbs, headings, strong Markdown, modal
   titles, and the active selection. It never colors an entire paragraph.
 - Assistant Markdown follows the reference hierarchy: H1 bold+underline, H2
@@ -230,6 +288,19 @@ global and never requires a focus mode. There is no hidden modal state: a
 modal or resource picker owns input and names its controls in the hint row.
 Slash completion is the deliberate quiet exception: its selected-row grammar
 and the keyboard contract below are sufficient, so it adds no control strip.
+
+The composer sits between two dim rules, uses a `>` prompt, and shows
+placeholder text when empty. A leading `!` switches the prompt to `!` and
+the left hint to `bash mode`. `@` and `/` open their pickers. Up and Down move
+between lines of a multi-line draft; they reach history only from the first or
+last line. `Shift+Enter` and `\` then Enter insert a newline.
+
+The hint row is below the lower rule. On the left it reads `? for shortcuts`
+when idle and empty, and names the busy keys while a turn runs. On the right
+it shows model, profile, and approval mode. Hints are the last thing dropped
+when the terminal is narrow. `?` on an empty draft opens a shortcuts panel in
+the anchored pane; any key closes it. The panel is not a transcript entry and
+never contacts the provider.
 
 Smith enables button and drag reporting (`1000`/`1002`, SGR-encoded) and owns
 pointer selection itself. This is forced: mouse reporting is terminal-wide and
@@ -253,24 +324,30 @@ Bracketed paste remains enabled independently of pointer handling.
 | Key | Action |
 | --- | --- |
 | `Enter` | Send while idle; steer an eligible serving provider turn while busy |
-| `Shift+Enter` / `Alt+Enter` | Newline in the composer |
+| `Shift+Enter` / `Alt+Enter` / `\` then `Enter` | Newline in the composer |
 | `Esc` | Leave the child inspector for the root timeline; otherwise interrupt the running turn, with uncommitted steers resubmitting only eventual discards after cancellation; if idle, clear the composer |
 | `Ctrl+C` | Add a non-blank composer draft to bounded local history and clear it; replace the identity footer with `press Ctrl+C again to exit` for the 1s double-press window; a second press exits from any state |
 | `Ctrl+P` | Open command completion using the shared command registry |
 | `Ctrl+R` | Open incremental reverse search over bounded process-local composer history |
+| `Ctrl+O` | Expand or fold tool output, approval detail, and long diffs; the same toggle as `/details` |
 | `Tab` | Queue a non-empty ordinary prompt while busy; cycle `profile_order` only when empty and idle; otherwise complete or move the active overlay selection |
 | `Shift+Tab` | Move the active completion/questionnaire selection backward |
 | `Alt+Up` | Restore the newest explicitly queued future turn for editing; never edit a runtime-accepted steer |
 | `Left` / `Right` / `Backspace` / `Delete` | Edit ordinary text by Unicode character; cross or remove a registered paste/image placeholder as one unit |
-| `PageUp` / `PageDown` / `Home` / `End` | Scroll transcript or jump to either edge |
+| `Ctrl+A` / `Ctrl+E` | Move to the start or end of the current draft line |
+| `Ctrl+W` | Delete the previous word |
+| `Ctrl+U` / `Ctrl+K` | Delete to the start or end of the current draft line |
+| `Alt+B` / `Alt+F` | Move one word left or right |
+| `PageUp` / `PageDown` | Scroll transcript, including while an approval is open |
+| `Home` / `End` | Move to the start or end of a non-empty draft; jump to either transcript edge when the draft is empty |
 | `Mouse wheel` | Scroll transcript without changing composer history |
 | `Left drag` | Select rendered cells; copies to the clipboard on release |
 | `Left click` | Dismiss the current selection |
 | `Ctrl+L` | Jump to newest and re-enable follow |
-| `?` (empty composer) | Show the same local guide as `/help`; never contact the provider |
-| `Up` / `Down` (composer history) | Browse accepted or `Ctrl+C`-stashed input and return to the exact pre-navigation draft |
+| `?` (empty composer) | Open the anchored shortcuts panel; any key closes it |
+| `Up` / `Down` (composer) | Move between draft lines; from the first or last line browse accepted or `Ctrl+C`-stashed history and return to the exact pre-navigation draft |
 | `Down` / `Up` (delegated agents) | Past the newest draft, walk the delegated-work panel: each child's read-only log replaces the transcript region, and `Up` from the first child returns to the root timeline |
-| `y` / `n` / `a` | Approval: allow once / deny / allow for session |
+| `y` / `a` / `n` | Approval: allow once / allow for session / deny, after the 500 ms quiet-window guard; `Esc` denies and `Enter` never answers |
 | `Up` / `Down` or `1`–`9` | Questionnaire: move to or stage a labelled choice |
 | `Space` | Questionnaire: select the highlighted choice; never submit |
 | `Tab` / `Shift+Tab` | Questionnaire: move between answer and explicit actions |
@@ -295,7 +372,21 @@ cancellation policy. Free-form input reuses composer editing inside the
 overlay and is not sent as a new user turn.
 
 Typing `/` at the start of a composer draft opens a filtered completion menu.
-Each result has a command name, one-line description, and argument hint.
+Each result has two columns: command name, then one short dim description.
+The name column is as wide as the longest visible name. Descriptions start
+with a capital and end at a word boundary with `…` when they do not fit. Only
+the selected row shows argument grammar on a detail line beneath it. The menu,
+`Ctrl+P` palette, and `/help` use the same order and row format.
+
+```text
+  /help        List commands and keys
+❯ /goal        Inspect or control a multi-turn goal
+  /context     Show context usage or choose a window
+  /status      Show session, usage, and workspace status
+  /model       Switch model
+               [OBJECTIVE | edit … | budget N | pause | resume | clear]
+```
+
 `Tab` completes the selected command without executing it; `Shift+Tab` moves
 selection backward; `Enter` executes; and `Esc` dismisses the menu while
 preserving the draft. Name-prefix matches take priority; if none exist, the
@@ -343,10 +434,12 @@ is process-local UI memory only: it is not canonical conversation history, is
 not persisted in checkpoints, and is never sent to a provider unless the user
 later submits recalled text.
 
-With no overlay open, `Up` begins newest-first history navigation from an empty
-or non-empty composer while preserving the current text as a scratch draft.
-`Down` past the newest entry restores that draft exactly; editing recalled
-text exits navigation without recording the edit. `Ctrl+R` opens a compact
+With no overlay open, `Up` from the first draft line begins newest-first
+history navigation while preserving the current text as a scratch draft.
+Within a multi-line draft, Up and Down move between lines before reaching
+history at its first or last line. `Down` past the newest entry restores that
+draft exactly; editing recalled text exits navigation without recording the
+edit. `Ctrl+R` opens a compact
 anchored reverse-search surface over the same history. Typing performs a
 case-insensitive substring search, repeated `Ctrl+R` cycles older matches with
 bounded wrapping, `Enter` restores the selected text without submitting it,
@@ -357,16 +450,18 @@ draft before applying the existing double-press exit contract.
 
 ### Agent-first composer actions
 
-The empty idle footer identifies the selected main agent profile beside provider/model,
-project/branch, and honest context confidence. It does not reserve a persistent
-shortcut strip: `?` from an empty composer and `/help` both render the bounded
-local command/composer guide without provider spend or canonical history. This
-identity disappears while work is active; it is not a permanent header. At 44
+The hint row identifies model, selected main agent profile, and approval mode
+on the right. Project/branch and honest context confidence fit only after the
+active keys and that identity. The idle empty hint is `? for shortcuts`; during
+work it becomes the busy keys without moving the composer. `/help` appends its
+local command/composer guide inline, while `?` opens the anchored shortcuts
+panel. Neither spends provider tokens or enters canonical history. At 44
 columns, low-priority path detail disappears before mode, activity, model,
-approval, or context provenance. After a first `Ctrl+C`, the entire identity or
-activity footer temporarily becomes the warning-toned text `press Ctrl+C again
-to exit`. A second press within one second exits; expiry or any other key
-restores the current status without leaving a transcript record.
+approval, or context provenance, and hints yield last. After a first `Ctrl+C`,
+the entire identity or activity footer temporarily becomes the warning-toned
+text `press Ctrl+C again to exit`. A second press within one second exits;
+expiry or any other key restores the current status without leaving a
+transcript record.
 
 Named `[profiles]` are the shared agent presets. Each profile selects a bounded
 `build`, `plan`, or `review` posture and may be enabled for `main`, `child`, or
@@ -376,11 +471,12 @@ validated main-enabled `profile_order` only when the composer is empty, the
 runtime is idle, and no overlay is open. `/profile` uses the same atomic
 safe-boundary rebuild and clears narrower provider/model overrides.
 
-Typing `@` at a token boundary opens one bounded picker with explicit `file`
-and `agent` labels. Picker rows show the plain file or agent identity without a
-leading `@`; choosing one inserts the visible `@identity` mention into the
-composer. Files are canonical workspace-relative entries that honor ignore
-policy. On submit, Smith performs an exact prepared `read` through the runtime
+Typing `@` at a token boundary opens one bounded picker, with files first and
+agents after them. Rows show the plain file or agent identity without a leading
+`@`; agents carry a dim `agent` tag and no model metadata. Choosing one inserts
+the visible `@identity` mention into the composer. Files are canonical
+workspace-relative entries that honor ignore policy. On submit, Smith performs
+an exact prepared `read` through the runtime
 executor and contributes bounded content (or an artifact reference) with
 `prepared_read` provenance. Unresolved, ambiguous, oversized, binary, or
 outside-workspace references fail locally and preserve the draft before any
@@ -405,7 +501,8 @@ consume another task slot.
 A first non-whitespace `!` performs one direct local shell action. It uses the
 same schema preparation, broad shell authority, scheduler, deadline,
 cancellation, checkpoint, bounded output, and artifact-offload path as a
-model-requested `shell` call, then renders the committed result locally.
+model-requested `shell` call, then echoes `! command` once and nests the
+committed result beneath it.
 Submitting it is the authorization for exactly that prepared command, once:
 Smith does not ask the user to approve a command they just typed, and the
 submission grants nothing to any later call, including an identical one
@@ -413,34 +510,36 @@ requested by the model. It does not send a provider request. `!!` sends a
 normal prompt beginning with one literal `!`.
 
 During work, the latest public todo projection shares a bounded pane anchored
-immediately above the composer with pending input. It remains there through
-the turn terminal and clears when the next turn starts. Sensitive plans expose
+immediately above the composer with pending input. The pane hides the plan once
+every item is completed and its turn has stopped, as in §2. A terminal turn
+with work still outstanding keeps its reconciled todo. Sensitive plans expose
 no item text. A compact picker temporarily replaces this pane without mutating
-either projection, which returns when the picker closes. The transcript's
-progress row stays
-quiet — `Working… · 12s` — while `/details` may explicitly add bounded
-redaction-safe tool lifecycle lines. No aggregate `work` row is committed at
-the terminal. Every terminal boundary still reconciles pending/in-progress
-todo items to `cancelled (turn_ended_unfinished)` rather than inventing
-completion.
+either projection, which returns when the picker closes. The working row stays
+directly above the composer, outside the transcript, while `Ctrl+O` or
+`/details` expands bounded redaction-safe detail in place. No aggregate `work`
+row is committed at the terminal. Every terminal boundary still reconciles
+pending/in-progress todo items to `cancelled (turn_ended_unfinished)` rather
+than inventing completion.
 
-The initial command set is deliberately bounded:
+The initial command set is deliberately bounded. This order is shared by the
+menu, palette, and `/help`:
 
 | Command | Result |
 | --- | --- |
-| `/help` | List every implemented command and composer shortcut locally, grouped by primary and advanced use. |
-| `/status` | Show resolved runtime, context window, session, permission, Git, child, and attribution state locally. |
+| `/help` | Show a short start-here guide, commands in menu order, and keys in a two-column table locally. |
 | `/goal [OBJECTIVE\|edit …\|budget N\|pause\|resume\|clear]` | Inspect or control one persistent multi-turn session goal without sending the command to the provider. |
 | `/context` | Visualize the latest model-facing context plan, free input space, reserves, and compaction state locally. |
+| `/status` | Show resolved runtime, context window, session, permission, Git, child, and attribution state locally. |
+| `/model [PROVIDER/MODEL]` | With no pair, choose from provider-qualified models; apply provider and model atomically. |
+| `/diagnostics` | Show Context, Cache, Recovery, and Session facts locally, one fact per line. |
 | `/think [on\|off\|default]` | Inspect or change thinking for the next complete turn when the provider/model exposes an exact toggle. |
 | `/effort [LEVEL\|default]` | Inspect or change reasoning effort using only levels advertised for the active provider/model. |
-| `/details` | Toggle bounded redaction-safe live tool detail beneath the working row. |
+| `/details` | Expand or fold bounded redaction-safe tool output, approval detail, and long diffs; the same toggle as `Ctrl+O`. |
 | `/timeline` | Show ordered root turn, child, terminal plan/gate, and recovery evidence locally. |
 | `/new` | Save the current session and create a fresh identity. |
 | `/resume [ID]` | With no ID, choose a project session locally; otherwise validate and resume `ID`. |
 | `/profile [NAME]` | With no name, choose a configured profile; apply it while clearing narrower overrides. |
 | `/provider [NAME]` | With no name, choose a configured provider; cascade to its model choices when needed. |
-| `/model [PROVIDER/MODEL]` | With no pair, choose from provider-qualified models; apply provider and model atomically. |
 | `/agent [ID\|previous\|next\|parent\|resume ID]` | List/inspect children or explicitly resume one safe interrupted checkpoint while the root composer retains focus. |
 | `/diff [SCOPE]` | Inspect all, last-turn, staged, unstaged, untracked, file, or hunk changes. |
 | `/review [SCOPE]` | Confirm and launch a provider-backed read-only review. |
@@ -451,40 +550,41 @@ The initial command set is deliberately bounded:
 
 ### Inline local results
 
-Read-only local commands append an attributed transcript block. The command
-itself is a magenta transcript line rather than a generic result marker:
+Read-only local commands append an attributed Smith block with a `●` marker
+and a magenta command label. `/help`, `/status`, `/context`, and `/diagnostics`
+stay inline and need no dismissal. Labels and values use aligned columns;
+values word-wrap with a hanging indent and never break mid-word. Long paths
+are shortened from the left with `…`. An unknown value reads `unknown`.
+A result longer than the pane opens at its beginning; scrolling and `Ctrl+L`
+retain their existing behavior.
 
-`/help` and the empty-composer `?` shortcut open at the beginning of their new
-result, with a short starting-work guide before the complete command and
-keyboard reference. Ordinary results keep following the newest content;
-scrolling and `Ctrl+L` retain their existing behavior.
+`/help` leads with a short "start here", then commands in the menu's order and
+format, then keys in a two-column table. Key descriptions use plain words,
+such as `Enter while working: send now`. `/diagnostics` groups Context, Cache,
+Recovery, and Session facts under headings, one fact per line; unreported
+values read `unknown`, never `?/?/?`.
 
 ```text
-/status
-╭──────────────────────────────╮
-│ >_ Smith                     │
-│                              │
-│ session:   session-…         │
-│ provider:  openai            │
-│ model:     gpt-5.3           │
-│ context window:  96% input left (2.7k used / 68.9k budget) │
-│ model window:    200k total · 131k reserved                │
-╰──────────────────────────────╯
+● /status
+  session         session-…
+  provider        openai
+  model           gpt-5.3
+  context window  96% input left (2.7k used / 68.9k budget)
+  model window    200k total · 131k reserved
 ```
 
-`/status` uses a dim, content-sized border; labels are dim and values use the
-normal foreground. Its context section follows Codex's percent-left grammar,
-but names Smith's enforced **input budget** separately from the model's total
+`/status` uses dim labels and normal-foreground values. Its context section
+names Smith's enforced **input budget** separately from the model's total
 window and reserved output/reasoning space. It shows the latest request plan
 and its exact/estimated provenance; cumulative provider input is separately
 labelled as session usage because it is not the active context size. Before the
-first plan it says `not planned yet` instead of showing zero. Other local
+first plan it says `unknown (not planned yet)` instead of showing zero. Local
 results stay unboxed: help section names are bold, command names and inline
 code are cyan, diff additions are green, removals are red, and hunk headers
-are cyan. Empty results use a dim `•`; errors use a red `■`. Unavailable and
-error results state their condition in words, not color alone. Content wraps
-at terminal width and is bounded before it enters the transcript, with an
-explicit truncation line rather than silent clipping.
+are cyan. Empty results use a dim `●`; errors use a red `●` with `failed`.
+Unavailable and error results state their condition in words, not color alone.
+Content word-wraps at terminal width and is bounded before it enters the
+transcript, with an explicit truncation line rather than silent clipping.
 
 `/context` is the focused, Claude-style context view. It stays unboxed and
 starts with the active model plus latest-plan input use and percent left. A
@@ -497,10 +597,11 @@ the only channel. Its first two rows are always `system instructions` and
 developer, and ability-instruction totals for display only; telemetry keeps the
 original kinds. After planning, both rows remain visible with an honest zero
 when absent, although a zero category occupies no grid cell. Before the first
-plan their rows read `? (not counted yet)` while the grid renders only known
-capacity and reserve. Unknown never becomes zero, and Smith does not synthesize
-a request merely to size it because tool activation depends on the submitted
-turn. Below the map, Smith names exact versus estimated counting, segment
+plan their rows read `unknown (not counted yet)` while the grid renders only
+known capacity and reserve. Unknown never becomes zero, and Smith does not
+synthesize a request merely to size it because tool activation depends on the
+submitted turn.
+Below the map, Smith names exact versus estimated counting, segment
 count, provider-reported cumulative session input, cache reads, and whether
 compaction is waiting or has applied a summary. The map represents the latest
 request Smith actually planned and does not retain or reveal raw context
@@ -517,10 +618,10 @@ result instead of a guessed selector. `/status` and `/context` name the
 effective state, effort when applicable, and provider/profile/session
 provenance without rendering raw reasoning.
 
-`/help`, `/status`, `/context`, `/agent`, and every `/diff` scope use this
-primitive.
-Consecutive results append in order and remain visible while the composer stays
-active. They are TUI-local display records: they are never represented as user
+`/help`, `/status`, `/context`, `/diagnostics`, `/agent`, and every `/diff`
+scope use this primitive. Consecutive results append in order and remain
+visible while the composer stays active. They are TUI-local display records:
+they are never represented as user
 or assistant messages, never sent to the provider, and are intentionally
 dropped when the transcript is rebuilt from canonical history on resume.
 
@@ -535,13 +636,25 @@ estimated.
 
 Omitted selector arguments open the same reusable resource-picker grammar:
 type to filter bounded local metadata, `Up`/`Down` to move, `Enter` to choose,
-and `Esc` to restore the untouched composer draft. Active choices are labelled
-`current`; incompatible or incomplete entries remain visible with an
-`unavailable` reason but cannot be selected. These state labels precede optional
-metadata so long capability descriptions cannot hide them. Empty model and
-provider inventories point to `smith setup`; an empty session inventory says
-there is nothing to resume. An unmatched filter instead says there are no
-matches and offers `Ctrl+U` to clear the query without choosing a resource.
+and `Esc` to restore the untouched composer draft. Rows use two aligned columns:
+name, then one short dim description, with state at the right edge. Names and
+state remain visible at 44 columns; descriptions yield at a word boundary with
+`…`. Active choices read `✓ current`; incompatible or incomplete entries remain
+visible with an `unavailable` reason but cannot be selected. Provenance and
+full limits appear only on the selected row's detail line, never on every row.
+
+```text
+  Choose model · type to filter                                   1/10
+❯ example-model       local · 128k context                  ✓ current
+  sonnet              Claude Code CLI · 200k context
+  opus                Claude Code CLI · 200k context
+               limits from project config · input 124k · output 4k
+```
+
+Empty model and provider inventories point to `smith setup`; an empty session
+inventory says there is nothing to resume. An unmatched filter instead says
+there are no matches and offers `Ctrl+U` to clear the query without choosing a
+resource.
 At 44 columns, resource-picker hints preserve Enter/choose and Esc/cancel;
 optional filtering guidance yields first.
 Filtering and selection resolve no credential, read no model history, make no
@@ -572,9 +685,10 @@ mapping to a nearest value.
 For configured OpenAI, xAI, OpenRouter, and Z.AI Coding Plan endpoints, model rows
 may come from Smith's frozen Models.dev snapshot as well as explicit TOML. The exact
 endpoint binding is a trust boundary; a matching provider name alone is not.
-Catalog rows retain the configured provider alias, show the catalog display
-name and provider-qualified ID, summarize limits and coding capabilities, and
-label the source revision and age as `advertised`. Output metadata distinguishes
+Catalog rows retain the configured provider alias and lead with the catalog
+display name plus a short provider/context description. The selected row's
+detail line shows the provider-qualified ID, full limits, coding capabilities,
+and source revision and age labelled `advertised`. Output metadata distinguishes
 the model's published `output ceiling` from Smith's effective `request` budget,
 including whether that request value is automatic or configured. The word
 `advertised` is deliberate: the row does not claim that the current account,
@@ -599,9 +713,9 @@ available.
 The pre-host `smith --resume` picker uses the same rows before constructing a
 host. Saved-session metadata includes full identity, recency, turn count,
 provider/model, and a bounded preview. Older compatible snapshots remain
-selectable with unknown fields labelled `?`; newer incompatible schemas remain
-visible but disabled. Bare `--resume` is interactive-only, while an explicit
-session ID works unchanged in terminal and headless modes.
+selectable with unknown fields labelled `unknown`; newer incompatible schemas
+remain visible but disabled. Bare `--resume` is interactive-only, while an
+explicit session ID works unchanged in terminal and headless modes.
 
 ### Change views and confirmation
 
@@ -628,18 +742,44 @@ from raw tool arguments. Its title is the first rendered text. The body shows,
 in this order:
 
 ```text
-tool + exact canonical target
-bounded material arguments or reviewed patch
-typed permissions
-broad-authority warning, when applicable
-preparation fingerprint
-deadline
+action: the command or reviewed patch, with exact target and material arguments
+place and deadline
+the one applicable warning
+question
+choices, each on its own line with its key
 ```
+
+```text
+╭ Bash command ────────────────────────────────────────────────────────╮
+│                                                                      │
+│   cargo publish --dry-run                                            │
+│   in ~/work/api · deadline 14:30 (up to 10 min)                      │
+│                                                                      │
+│   Warning: Runs outside the sandbox with your files, environment,    │
+│     and network.                                                     │
+│                                                                      │
+│   Do you want to proceed?                                            │
+│     y  Yes                                                           │
+│     a  Yes, and don't ask again for `cargo publish` this session     │
+│     n  No                                                    (esc)   │
+│                                                                      │
+│   ctrl+o details · 1 more waiting                                    │
+╰──────────────────────────────────────────────────────────────────────╯
+```
+
+The action leads; the identity hash, full typed permission list, and raw
+arguments stay behind `Ctrl+O`. The exact target, material arguments,
+broad-authority warning when applicable, and deadline remain visible before a
+decision. For an edit the body is the reviewed diff, with bounded folded detail
+and the same expand key instead of a fixed 18-row cut. The transcript remains
+scrollable with its usual keys while the approval is open; scrolling never
+answers or dismisses it.
 
 `y`, `a`, and `n` answer exactly that fingerprint. A decision key counts only
 after the prompt has been visible for 500 ms with no key arriving in that
 window; each arriving key restarts it, so text the user was already typing can
-never answer a prompt, and the draft is kept. The same guard covers rotation,
+never answer a prompt, and the draft is kept. `Esc` denies, `Enter` never
+answers, and no choice is defaulted. The same guard covers rotation,
 trust, and recovery confirmations. Multi-line action text keeps its line
 breaks. Every confirmation names its own action in its body and its controls.
 Edited arguments are never
@@ -669,18 +809,30 @@ needs input reports an attributed `needs input` result through its parent
 instead of opening a competing overlay.
 
 **Scroll follow.** The transcript follows new output until the user scrolls up,
-then stops and shows `▼ following paused` in the hint row. `Ctrl+L`, `End`, or
-sending a message resumes it. Streaming never yanks the viewport away from
-someone reading.
+then stops and shows `▼ following paused` in the hint row. `Ctrl+L`, `End` with
+an empty draft, or sending a message resumes it. Streaming never yanks the
+viewport away from someone reading.
 
 ## 6. Streaming and motion
 
 - Provider text and reasoning deltas enter speculative buffers keyed by
-  `(request, attempt)`, never the committed transcript directly. The active
-  attempt renders with a textual `draft` marker as well as dim styling.
+  `(request, attempt)`, never the committed transcript directly. Visible model
+  text uses the same `●` block grammar while streaming and after commit;
+  provider reasoning stays out of the visible transcript.
 - An explicit attempt-commit event appends that attempt to the assistant block.
   An explicit discard removes its raw text. Usage from the discarded attempt
   remains available to status and diagnostics.
+- Streamed and committed text go through one Markdown renderer. Committing a
+  block never changes the layout of text already on screen. An unclosed
+  construct renders as far as it is known: an open code fence runs to the end
+  of the buffer, while an unclosed `**` stays literal.
+- Supported constructs are headings, bold, italic, inline code, fenced code
+  with its language as a dim label, ordered and unordered lists with nesting,
+  block quotes, tables, horizontal rules, and links. Tables wider than the
+  pane fall back to stacked `key: value` rows. Links show an underlined label
+  and, when the label is not the URL, the visible URL in dim parentheses. OSC 8
+  hyperlinks are emitted only when the terminal is known to support them.
+  Emphasis requires a non-space inside each marker; `2 * 3 * 4` stays literal.
 - `ProviderAttemptFinished` owns the retry decision shown by the root
   conversation. When its optional `index`, `max_attempts`, and
   `retry_delay_ms` metadata says a next attempt has been admitted, the
@@ -688,7 +840,7 @@ someone reading.
   `provider · retrying 2/3 in 200ms: <bounded provider cause>`. The notice
   never uses the terminal error marker. The initial attempt remains
   `Working…`; while the admitted delay is pending, its live row reads
-  `Retrying 2/3… · <turn elapsed> · backoff <positive rounded-up wait>`.
+  `✻ Retrying 2/3… (<turn elapsed> · backoff <positive rounded-up wait> · esc to interrupt)`.
   When the matching `ProviderAttemptStarted` arrives, the retry identity is
   retained and the backoff segment is replaced by the ordinary provider-phase
   elapsed segment. A `retry_delay_ms` of `0` is an admitted immediate retry;
@@ -715,8 +867,8 @@ someone reading.
   fabricated from the deliberately redacted journal. Process-exit recovery
   markers use the same metadata-only notice projection in live and replayed
   state.
-- The only animation is the single-cell spinner on the transcript's working
-  row while a turn is active: `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` at 100 ms.
+- The only animation is the single-cell `✻` working indicator directly above
+  the composer while a turn is active. Nothing in the transcript animates.
 - **Reduced motion.** With `NO_MOTION=1`, `--no-motion`, or `TERM=dumb`, the
   spinner becomes a static `●` and the elapsed timer updates once per second.
   Nothing else in Smith animates, so this is the whole contract.
@@ -769,15 +921,15 @@ plan, while provider-reported cumulative input appears only in `/status`:
 | --- | --- |
 | `82% ctx` | Exact latest plan, 82% of its input budget remains |
 | `~82% ctx` | Estimated latest plan, 82% remains |
-| `? ctx` | Unknown — never rendered as `0` |
+| `unknown ctx` | Unknown — never rendered as `0` |
 | `$0.031` | Exact, from a versioned price reference |
 | `~$0.031` | Estimated |
-| `cost ?` | No price reference for this endpoint |
+| `cost unknown` | No price reference for this endpoint |
 | `⚡8.0k` | Cache read observed this turn |
-| `⚡?` | Provider exposes no cache evidence |
+| `⚡unknown` | Provider exposes no cache evidence |
 
 Switching provider or model renders a one-line transcript notice —
-`provider changed · openai → anthropic · prior cache not transferable` — and
+`● provider changed · openai → anthropic · prior cache not transferable` — and
 the context segment falls back to `~` until the new provider reports usage. It
 also clears the resolved price, because a price describes one model and
 carrying it across a switch would bill the new one at the old one's rate.
@@ -823,14 +975,30 @@ Canonical runtime events do not expose tool argument values by default. The
 interactive host resolves the matching canonical in-process call by ID and
 clones its arguments, applies the same credential-shaped-key and exact
 registered-secret redaction used by persistence, and passes only that redacted
-clone into a typed tool-specific TUI projector. Built-in rows show bounded
-ordinary operation inputs and targets: `Read(src/retry.rs · offset 4 · limit
-20) · ok`, `Search("TurnCompleted" · crates · extension rs · limit 20) · ok`,
-or `Shell(cargo test -p smith-tui · cwd . · timeout 30000ms) · running`.
+clone into a typed tool-specific TUI projector. Each call owns one
+`● Name(reviewed argument)` row, showing only its reviewed label and bounded
+argument summary, with its result nested beneath it:
+
+```text
+● Read(src/retry.rs · lines 4–23)
+  ⎿  Read 20 lines
+
+● Search("TurnCompleted" in crates · rs files · up to 20 matches)
+  ⎿  Found 3 matches
+
+● Bash(cargo test -p smith-tui · in . · up to 30s) failed
+  ⎿  running 3 tests
+     test retry::backoff ... ok
+     test retry::cancel ... FAILED
+     … +14 lines (ctrl+o to expand)
+```
+
+Completion updates the same row; non-success ends with `failed` or `denied`.
+Result bounds and the `Ctrl+O` / `/details` toggle follow §3.
 Credential, authorization, API-key, token, password, private-key, bearer, and
 secret fields plus registered exact literals render as `[redacted]`; ordinary
 paths, patterns, commands, flags, limits, and timeouts are not described as
-protected.
+protected, but enter the row only through its reviewed summary.
 
 The interactive host tries enrichment when a tool is requested and retries by
 the same stable call ID when its completion arrives, so a transient
@@ -838,13 +1006,15 @@ request-time history race cannot leave a completed known built-in on a generic
 fallback. Edit old/new bodies and tool results stay outside the compact row
 because they are bulk content available through diff, approval, artifact, and
 explicit detail surfaces—not because all argument values are secret. Unknown,
-malformed, or still-unresolved calls show bounded argument keys plus `unknown
-schema` or `details unavailable` instead of guessing values.
+malformed, or still-unresolved calls show only the reviewed label and any
+reviewed argument summary. Without a reviewed summary, the row shows the label
+alone. It never lists argument names, prints `details unavailable`, or guesses
+values. Results remain nested and redaction-safe.
 
 The projection never changes the runtime event or journal and never enables
-raw event arguments. Resumed transcripts derive the same projection from
-canonical history, so live and replayed rows disclose the same reviewed
-metadata.
+raw event arguments. Live and resumed transcripts must derive the same reviewed
+projection from canonical history. Process-only enrichment is not replayed and
+does not supply durable transcript metadata.
 
 A small reviewed set of rows is suppressed entirely, and only when the call
 succeeded: `write_todos`, whose effect the anchored pane already renders;
@@ -863,16 +1033,18 @@ output — and it applies identically live and after resume.
 
 The approval modal is the deliberate exception: it receives the runtime's
 immutable prepared action through the separate approval channel because the
-user cannot make an informed safety decision from key names alone. Edit calls
-render the existing bounded line diff; other calls render their bounded
-material arguments, exact resource, typed permission set, broad-authority
-warning, deadline, and preparation fingerprint. Questionnaire content arrives
-through an independent interaction channel and cannot approve a tool.
+user cannot make an informed safety decision from a compact summary alone.
+The action leads: edit calls render the bounded line diff; other calls render
+their bounded material arguments and exact resource. Place and deadline, the
+applicable broad-authority warning, the question, and the choices follow. The
+full typed permission set, preparation fingerprint, and raw arguments remain
+behind `Ctrl+O`, as in §5. Questionnaire content arrives through an independent
+interaction channel and cannot approve a tool.
 
 ## 8. Background work
 
 Monitor notifications reach the TUI immediately as concise attributed
-transcript notices: `• source · summary`. They never splice into a streaming
+transcript notices: `● source · summary`. They never splice into a streaming
 assistant block and never steal composer focus. Terminal events (a monitor
 stopped, a child finished) are never coalesced away.
 
@@ -882,23 +1054,28 @@ A spawn announces itself exactly once, on its own tool row rather than a
 separate notice repeating it:
 
 ```text
-Agent(spawn · "explore the autoloads and data layer" · read only · shared
-      · child-9 · shared project workspace · profile build (inherited)) · ok
+● Agent(spawn · "explore the autoloads and data layer" · read only
+  · shared · profile inherited)
+  ⎿  Spawned agent
 ```
 
 The reviewed projection supplies the action, the bounded task excerpt, the
-tool scope, and the workspace the call declared; the runtime's own
-`ChildSpawned` then enriches that same row in place with the child's id, its
-resolved workspace posture, and its turn ceiling — omitted entirely when the
-child is unbounded, rather than printed as the sentinel's absurd number. The
-profile is named either way, marked `(inherited)` when the spawn selected
-none, so the row never implies the call chose something it did not. Because
-`ChildSpawned` carries no originating call id, that correlation is host-side
-and live-only: a resumed transcript keeps the projection's own terms and does
-not invent the rest.
+tool scope, and the workspace the call declared. It names an explicitly chosen
+profile; otherwise it says `profile inherited` without inventing a resolved
+name. The result nests under `⎿` with the same bounds and expand key as any
+other tool result. A replayed spawn row must use the same reviewed summary and
+result as the live row.
+
+`ChildSpawned` carries no originating call id. Today's host-side spawn
+enrichment is process-local and is not replayed. To keep live and replayed
+transcript rows the same, the child's id, resolved workspace posture, profile,
+and turn ceiling belong in the coordinator-backed panel and inspector unless
+canonical history retains the same reviewed metadata and its association with
+the call. An unbounded child omits the turn ceiling rather than printing the
+sentinel's absurd number.
 
 Every terminal outcome — resuming, blocking on input, completed, stopped,
-interrupted, failed — still enters the transcript as `• sub-agent · summary`,
+interrupted, failed — still enters the transcript as `● sub-agent · summary`,
 where it occurred in time. Those are new information, not a repetition of the
 spawn, so they are never folded back into its row. What the child does in
 between is panel state, because the root transcript is a record of the work
@@ -911,18 +1088,17 @@ tool projection the transcript uses rather than a bare tool name, beside the
 profile it runs and the turn and token counts the delegation coordinator owns:
 
 ```text
-  ○ child-1  review · Read(src/retry.rs) · 2/5 turns · 12.4k tokens    1m04s
+  ● child-1  review · Read(src/retry.rs) · 2/5 turns · 12.4k tokens    1m04s
 ```
 
 Those counts come from the coordinator on the host's redraw poll, for every
 visible child rather than only the inspected one; Smith derives none of them
 from the event stream. Everything past the child's id lives in the activity
 text, which clips first, so no projection or count can push the docked clock
-off screen. A tool with no reviewed display schema falls back to its name plus
-the same honest unavailable label the transcript uses, never raw argument
-values. A child recovered from a durable record has no profile to name — the
-coordinator's status carries none — and says so by omission rather than
-guessing.
+off screen. A tool with no reviewed display schema falls back to its reviewed
+label alone, never raw argument values or a list of argument names. A child
+recovered from a durable record has no profile to name — the coordinator's
+status carries none — and shows `profile unknown` rather than guessing.
 
 Nothing is discarded. Every lifecycle event, printed or not, appends to that
 child's bounded log, which is the inspector's content. `Down` past the newest
@@ -978,12 +1154,12 @@ collapsed row is charged against the same visible-item budget an uncollapsed
 item would have used, so the pane never grows: the plan's tail shrinks as the
 work lands instead of spending a row per finished step.
 
-Once every item is completed and the turn is no longer running, the pane
-retires rather than pinning a finished list until the next turn — a completed
-plan is otherwise the most persistent thing on screen and the least useful. It
-stays while the turn still works, so the user sees the plan land. A terminal
-turn with work still outstanding keeps its reconciled todo, because that is
-unfinished business rather than a result.
+The anchored pane hides a plan once every item is completed and its turn has
+stopped, as in §2, rather than pinning a finished list until the next turn — a
+completed plan is otherwise the most persistent thing on screen and the least
+useful. It stays while the turn still works, so the user sees the plan land. A
+terminal turn with work still outstanding keeps its reconciled todo, because
+that is unfinished business rather than a result.
 
 Sensitive plans show no pane, even if an invalid replay payload attempts to
 attach text. The pane is not focusable and never enters canonical model

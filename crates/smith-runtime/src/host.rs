@@ -2354,7 +2354,7 @@ mod tests {
                 .expect("matching canonical call");
         assert_eq!(
             display.invocation(),
-            "Shell(printf [redacted] · cwd crates/smith-cli)"
+            "Bash(printf [redacted] · cwd crates/smith-cli)"
         );
         assert!(!display.invocation().contains("TOP_SECRET_COMMAND"));
         let ContentPart::ToolCall(canonical) = &history[0].content[1] else {

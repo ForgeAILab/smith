@@ -865,8 +865,10 @@ pub struct App {
     pub plan: Option<PlanSummary>,
     /// Bounded live tool detail available only through `/details`.
     pub(super) work: Option<WorkSummary>,
-    /// Whether bounded live tool details are expanded.
+    /// Whether bounded tool output and live work detail are expanded.
     pub work_details: bool,
+    /// The admitted local shortcut turn, used only to attribute its call row.
+    pub(super) local_shell_turn: Option<(TurnId, u64)>,
     /// Bounded local choices supplied by the host.
     pub resources: RuntimeResources,
     /// Whether the transcript follows new output.
@@ -957,6 +959,7 @@ impl App {
             plan: None,
             work: None,
             work_details: false,
+            local_shell_turn: None,
             resources: RuntimeResources::default(),
             following: true,
             scroll_back: 0,
@@ -1271,6 +1274,11 @@ impl App {
         }
     }
 
+    /// Attributes the next shell call to an admitted local shortcut turn.
+    pub fn track_shell_shortcut(&mut self, turn: TurnId, echo: u64) {
+        self.local_shell_turn = Some((turn, echo));
+    }
+
     /// Enriches a protected live tool event with a reviewed local projection.
     pub fn set_tool_display(&mut self, call_id: &str, display: ToolCallDisplay) {
         self.transcript.set_tool_display(call_id, display);
@@ -1281,7 +1289,7 @@ impl App {
         self.transcript.set_tool_result_preview(call_id, preview);
     }
 
-    /// Toggles bounded, redaction-safe tool detail beneath the working row.
+    /// Toggles bounded, redaction-safe transcript output and live work detail.
     pub fn toggle_work_details(&mut self) {
         self.work_details = !self.work_details;
     }

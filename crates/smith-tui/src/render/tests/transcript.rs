@@ -202,7 +202,7 @@
                 "{width}x{height}: {tool_screen}"
             );
             assert!(
-                tool_screen.contains(" · ok"),
+                tool_screen.contains("● Search(") && !tool_screen.contains(" · ok"),
                 "{width}x{height}: {tool_screen}"
             );
             assert!(
@@ -293,12 +293,20 @@
     }
 
     #[test]
-    fn a_tool_row_states_its_outcome_in_words_not_only_color() {
-        let app = conversation();
-        // Monochrome rendering must still say `ok`.
-        let screen = render(&app, 74, 16, Theme::new().without_color());
-        assert!(screen.contains("ok"), "{screen}");
-        assert!(screen.contains("• Read(src/retry.rs)"), "{screen}");
+    fn a_tool_row_states_non_success_in_words_not_only_color() {
+        for status in [
+            ToolStatus::Failed,
+            ToolStatus::Denied,
+            ToolStatus::Unreported,
+        ] {
+            let mut app = conversation();
+            app.transcript.complete_tool_call("c1", status);
+            let screen = render(&app, 74, 16, Theme::new().without_color());
+            assert!(
+                screen.contains(&format!("● Read(src/retry.rs) {}", status.label())),
+                "{screen}"
+            );
+        }
     }
 
     #[test]
@@ -341,11 +349,11 @@
 
         let screen = render(&app, 74, 16, Theme::new().without_color());
         assert!(
-            screen.contains("• Search(\"[redacted]\" · src/ [31m tests) · ok"),
+            screen.contains("● Search(\"[redacted]\" · src/ [31m tests)"),
             "{screen}"
         );
         assert!(
-            screen.contains("• third_party(path · arguments hidden) · failed"),
+            screen.contains("● third_party(arguments hidden) failed"),
             "{screen}"
         );
         assert!(!screen.contains("TOP_SECRET_PATTERN"), "{screen}");
@@ -353,7 +361,7 @@
         assert!(!screen.contains("TOP_SECRET_RESULT"), "{screen}");
         assert!(!screen.contains('\u{1b}'), "{screen:?}");
         assert!(!screen.contains('\u{202e}'), "{screen:?}");
-        assert!(!screen.contains(glyph::BRANCH), "{screen}");
+        assert!(screen.contains("⎿  Completed"), "{screen}");
     }
 
     #[test]
@@ -509,7 +517,7 @@
         use smith_client::diff_report::{DiffOutcome, DiffReport};
 
         for (outcome, marker, message) in [
-            (DiffOutcome::Empty, "•", DiffReport::EMPTY_MESSAGE),
+            (DiffOutcome::Empty, "●", DiffReport::EMPTY_MESSAGE),
             (
                 DiffOutcome::Error("Git inspection is unavailable.".to_owned()),
                 "■",
@@ -907,8 +915,8 @@
 
         for (output, is_error, marker, expected, state) in [
             ("failure: `literal`", true, "■", "failure: `literal`", LocalResultState::Error),
-            (" \n", false, "•", "No output.", LocalResultState::Empty),
-            (" \n", true, "•", "No output.", LocalResultState::Empty),
+            (" \n", false, "●", "No output.", LocalResultState::Empty),
+            (" \n", true, "●", "No output.", LocalResultState::Empty),
         ] {
             let mut app = App::new("example-model", "~/work/api");
             app.show_local_report(LocalResult::Shell(Box::new(ShellReport::new(output, is_error))));
@@ -1026,7 +1034,7 @@
         })));
         let empty_screen = render(&empty, 74, 12, Theme::new().without_color());
         assert!(empty_screen.contains("/agents"), "{empty_screen}");
-        assert!(empty_screen.contains("• No output."), "{empty_screen}");
+        assert!(empty_screen.contains("● No output."), "{empty_screen}");
         assert!(empty_screen.contains("No output."), "{empty_screen}");
 
         let mut error = App::new("gpt-5.3", "~/work/api");
@@ -1101,7 +1109,7 @@
 
         let screen = render(&app, 74, 16, Theme::new().without_color());
         assert!(
-            screen.contains("• Shell(cargo test · cwd .) · running 0s"),
+            screen.contains("● Bash(cargo test) running 0s"),
             "{screen}"
         );
     }
@@ -1129,7 +1137,7 @@
         assert!(running.contains("Generate Image("), "{running}");
         assert!(running.contains("A quiet lake at sunrise"), "{running}");
         assert!(running.contains("1 reference"), "{running}");
-        assert!(running.contains(" · running 0s"), "{running}");
+        assert!(running.contains(" running 0s"), "{running}");
 
         success.apply(&event(RuntimeEvent::ToolCallCompleted {
             call: ToolCallId::new("image-success"),
@@ -1145,7 +1153,7 @@
 
         let completed = render(&success, 100, 20, theme);
         assert!(completed.contains("Generate Image("), "{completed}");
-        assert!(completed.contains(" · ok"), "{completed}");
+        assert!(!completed.contains("running") && !completed.contains(" · ok"), "{completed}");
         assert!(
             completed.contains("Saved ~/.smith/generated_images/session/image-success.png (1024x1024)"),
             "{completed}"
@@ -1177,7 +1185,7 @@
 
         let failed = render(&failure, 100, 20, theme);
         assert!(failed.contains("Generate Image("), "{failed}");
-        assert!(failed.contains(" · failed"), "{failed}");
+        assert!(failed.contains(" failed"), "{failed}");
         assert!(
             failed.contains("Image provider error: request timed out"),
             "{failed}"
@@ -1325,7 +1333,7 @@
 
         let screen = render(&app, 100, 20, Theme::new().without_color());
         assert!(
-            screen.contains("write_todos(items") && screen.contains("failed"),
+            screen.contains("write_todos(arguments hidden)") && screen.contains("failed"),
             "a failed suppressed call still renders: {screen}"
         );
         assert!(
@@ -1665,4 +1673,415 @@
             assert!(screen.contains("arguments hidden"), "{screen}");
             assert!(!screen.contains("value-that-must-not-render"), "{screen}");
         }
+    }
+
+    #[test]
+    fn transcript_roles_and_wrapped_rows_hang_under_the_text() {
+        for width in [44, 80, 100] {
+            let mut app = App::new("m", "p");
+            let prose = "The retry policy keeps the cancellation path responsive while repeated provider failures are retried with bounded backoff.";
+            app.transcript
+                .push_user(format!("{prose}\nsecond user line"));
+            app.transcript
+                .push_text_delta(&format!("{prose}\nsecond assistant line"));
+            app.transcript.close_open();
+            let lines = transcript_lines(&app, Theme::new(), width);
+            let text = lines.iter().map(ToString::to_string).collect::<Vec<_>>();
+            assert!(text[0].starts_with("> The retry"), "{text:#?}");
+            assert!(
+                text.iter().any(|line| line.starts_with("● The retry")),
+                "{text:#?}"
+            );
+            assert!(
+                text.iter().any(|line| line == "  second user line"),
+                "{text:#?}"
+            );
+            assert!(
+                text.iter().any(|line| line == "  second assistant line"),
+                "{text:#?}"
+            );
+            assert!(
+                text.iter()
+                    .filter(|line| !line.is_empty()
+                        && !line.starts_with('>')
+                        && !line.starts_with('●'))
+                    .all(|line| line.starts_with("  ")),
+                "{text:#?}"
+            );
+            assert!(lines.iter().all(|line| line.width() <= usize::from(width)));
+        }
+    }
+
+    #[test]
+    fn one_tool_row_nests_four_lines_and_expands_all_detail() {
+        for width in [44, 80, 100] {
+            let mut app = App::new("m", "p");
+            app.transcript.push_tool_call(
+                "bash-1",
+                "shell",
+                Some(&serde_json::json!({"command": "ls -la"})),
+                &[],
+            );
+            app.transcript.complete_tool_call("bash-1", ToolStatus::Ok);
+            app.set_tool_result_preview(
+                "bash-1",
+                (1..=20)
+                    .map(|line| format!("line {line}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            );
+            let folded = transcript_lines(&app, Theme::new(), width);
+            let text = folded.iter().map(ToString::to_string).collect::<Vec<_>>();
+            assert_eq!(
+                text,
+                [
+                    "● Bash(ls -la)",
+                    "  ⎿  line 1",
+                    "     line 2",
+                    "     line 3",
+                    "     line 4",
+                    "     … +16 lines (ctrl+o to expand)"
+                ]
+            );
+            assert_eq!(folded[0].spans[0].style.fg, Some(Color::Green));
+            app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+            let expanded = transcript_lines(&app, Theme::new(), width);
+            assert_eq!(expanded.len(), 21);
+            assert_eq!(expanded.last().unwrap().to_string(), "     line 20");
+            assert_eq!(
+                expanded
+                    .iter()
+                    .filter(|line| line.to_string().contains("Bash("))
+                    .count(),
+                1
+            );
+            app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+            assert_eq!(transcript_lines(&app, Theme::new(), width), folded);
+        }
+    }
+
+    #[test]
+    fn running_failed_and_denied_tool_markers_keep_their_status() {
+        for (status, color, word) in [
+            (ToolStatus::Running, None, "running"),
+            (ToolStatus::Failed, Some(Color::Red), "failed"),
+            (ToolStatus::Denied, Some(Color::Red), "denied"),
+        ] {
+            let mut app = App::new("m", "p");
+            app.transcript.push_tool_call(
+                "c",
+                "shell",
+                None,
+                &["command".into(), "cwd".into(), "timeout_ms".into()],
+            );
+            if status != ToolStatus::Running {
+                app.transcript.complete_tool_call("c", status);
+            }
+            let lines = transcript_lines(&app, Theme::new(), 100);
+            assert_eq!(lines[0].spans[0].style.fg, color);
+            if status == ToolStatus::Running {
+                assert!(lines[0].spans[0].style.add_modifier.contains(Modifier::DIM));
+            }
+            let text = lines[0].to_string();
+            assert!(text.starts_with("● Bash(arguments hidden)"), "{text}");
+            assert!(text.contains(word), "{text}");
+            for protected in ["command", "cwd", "timeout_ms", "details unavailable"] {
+                assert!(!text.contains(protected), "{text}");
+            }
+            assert!(
+                transcript_lines(&app, Theme::new().without_color(), 100)[0]
+                    .to_string()
+                    .contains(word)
+            );
+        }
+    }
+
+    #[test]
+    fn reads_and_updates_have_one_line_summaries_with_expandable_detail() {
+        let mut app = App::new("m", "p");
+        app.transcript.push_tool_call(
+            "read",
+            "read",
+            Some(&serde_json::json!({"path": "src/retry.rs"})),
+            &[],
+        );
+        app.transcript.complete_tool_call("read", ToolStatus::Ok);
+        app.set_tool_result_preview("read", "1  first\n2  second\n3  third");
+        app.transcript.push_tool_call("edit", "edit", Some(&serde_json::json!({"path": "src/retry.rs", "old_string": "before", "new_string": "one\ntwo\nthree\nfour"})), &[]);
+        app.transcript.complete_tool_call("edit", ToolStatus::Ok);
+        app.set_tool_result_preview("edit", "edited `src/retry.rs` (1 replacement(s))");
+        let folded = transcript_lines(&app, Theme::new(), 100)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            folded,
+            [
+                "● Read(src/retry.rs)",
+                "  ⎿  Read 3 lines",
+                "",
+                "● Update(src/retry.rs)",
+                "  ⎿  Updated src/retry.rs with 4 additions and 1 removal"
+            ]
+        );
+        app.toggle_work_details();
+        let expanded = transcript_lines(&app, Theme::new(), 100)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        assert!(expanded.iter().any(|line| line == "  ⎿  1  first"));
+        assert!(expanded.iter().any(|line| line == "     3  third"));
+    }
+
+    #[test]
+    fn user_shell_echo_and_runtime_call_are_one_row_with_a_nested_result() {
+        let mut app = App::new("m", "p");
+        app.composer.replace("!ls -la");
+        assert!(matches!(
+            app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            Some(crate::app::Action::RunShell { .. })
+        ));
+        let echo = app.transcript.latest_shell_echo().unwrap();
+        app.track_shell_shortcut(TurnId::new("shell-turn"), echo);
+        let mut requested = event(RuntimeEvent::ToolCallRequested {
+            call: ToolCallId::new("shell-call"),
+            name: "shell".into(),
+            argument_keys: vec!["command".into(), "cwd".into()],
+            argument_fingerprint: agent_runtime_registry::Fingerprint::of("protected"),
+            arguments: None,
+        });
+        requested.turn = Some(TurnId::new("shell-turn"));
+        app.apply(&requested);
+        assert_eq!(app.transcript.blocks().len(), 1);
+        app.transcript.bind_shell_shortcut(echo, "shell-call");
+        app.transcript
+            .complete_tool_call("shell-call", ToolStatus::Ok);
+        app.set_tool_result_preview("shell-call", "total 8\nfile one\nfile two");
+        for width in [44, 80, 100] {
+            let text = transcript_lines(&app, Theme::new().without_color(), width)
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                text,
+                ["! ls -la", "  ⎿  total 8", "     file one", "     file two"]
+            );
+            assert!(!text.concat().contains("Bash("));
+            assert!(!text.concat().contains("/shell"));
+            assert!(!text.concat().contains("changes"));
+        }
+    }
+
+    #[test]
+    fn live_and_history_replay_render_the_same_changed_rows() {
+        let cases = [
+            (
+                "shell",
+                serde_json::json!({"command": "ls -la"}),
+                (1..=20)
+                    .map(|line| format!("line {line}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+            (
+                "read",
+                serde_json::json!({"path": "src/retry.rs"}),
+                "1  first\n2  second\n3  third".to_owned(),
+            ),
+            (
+                "edit",
+                serde_json::json!({"path": "src/retry.rs", "old_string": "before", "new_string": "one\ntwo\nthree\nfour"}),
+                "edited `src/retry.rs` (1 replacement(s))".to_owned(),
+            ),
+            (
+                "search",
+                serde_json::json!({"pattern": "needle", "path": "src"}),
+                "src/retry.rs:42\nsrc/retry.rs:43".to_owned(),
+            ),
+            (
+                "list",
+                serde_json::json!({"path": "src"}),
+                "retry.rs\nmain.rs".to_owned(),
+            ),
+            (
+                "advisor",
+                serde_json::json!({}),
+                "Cover cancellation too.".to_owned(),
+            ),
+            (
+                "third_party",
+                serde_json::json!({"SECRET_ARGUMENT_NAME": "SECRET_VALUE"}),
+                "reviewed result".to_owned(),
+            ),
+            (
+                "write_todos",
+                serde_json::json!({"items": []}),
+                "recorded".to_owned(),
+            ),
+            (
+                "agent",
+                serde_json::json!({"action": "wait", "child_id": "child-1"}),
+                "ready".to_owned(),
+            ),
+            (
+                "agent",
+                serde_json::json!({"action": "spawn", "task": "review the retry policy"}),
+                "child started".to_owned(),
+            ),
+        ];
+        for (name, arguments, output) in cases {
+            for is_error in [false, true] {
+                let result = if is_error {
+                    "permission denied"
+                } else {
+                    &output
+                };
+                let user = "Inspect the retry path and explain how cancellation behaves after repeated provider failures.";
+                let answer = "The retry policy keeps cancellation responsive while it waits for the provider.";
+                let history = [
+                    Message::user(user),
+                    Message::assistant(vec![
+                        ContentPart::Text {
+                            text: answer.to_owned(),
+                        },
+                        ContentPart::ToolCall(ToolCall {
+                            id: ToolCallId::new("call"),
+                            name: name.to_owned(),
+                            arguments: arguments.clone(),
+                        }),
+                    ]),
+                    Message::tool_result(ToolResultBlock {
+                        call_id: ToolCallId::new("call"),
+                        name: name.to_owned(),
+                        content: vec![ContentPart::text(result)],
+                        is_error,
+                    }),
+                ];
+                let mut live = App::new("m", "p");
+                live.transcript.push_user(user);
+                live.transcript.push_text_delta(answer);
+                let keys = arguments
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>();
+                live.apply(&event(RuntimeEvent::ToolCallRequested {
+                    call: ToolCallId::new("call"),
+                    name: name.to_owned(),
+                    argument_keys: keys,
+                    argument_fingerprint: agent_runtime_registry::Fingerprint::of("protected"),
+                    arguments: None,
+                }));
+                live.apply(&event(RuntimeEvent::ToolCallCompleted {
+                    call: ToolCallId::new("call"),
+                    name: name.to_owned(),
+                    is_error,
+                }));
+                let mut resumed = App::new("m", "p");
+                resumed.transcript.replace_from_history(&history);
+                for app in [&mut live, &mut resumed] {
+                    if let Some(display) = smith_tools::project_tool_call_display(name, &arguments)
+                    {
+                        app.set_tool_display("call", display);
+                    }
+                    app.set_tool_result_preview("call", result);
+                }
+                for expanded in [false, true] {
+                    live.work_details = expanded;
+                    resumed.work_details = expanded;
+                    for width in [44, 80, 100] {
+                        for theme in [Theme::new(), Theme::new().without_color()] {
+                            let lines = transcript_lines(&live, theme, width);
+                            assert_eq!(
+                                lines,
+                                transcript_lines(&resumed, theme, width),
+                                "{name}, error={is_error}, expanded={expanded}, width={width}"
+                            );
+                            let text = lines
+                                .iter()
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            assert!(
+                                !text.contains("SECRET_ARGUMENT_NAME")
+                                    && !text.contains("SECRET_VALUE"),
+                                "{text}"
+                            );
+                            assert!(!text.contains("details unavailable"), "{text}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn journal_replay_keeps_external_tool_rows_and_results_identical() {
+        for ok in [true, false] {
+            let output = (1..=8)
+                .map(|line| format!("agent output {line}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let events = [
+                event(RuntimeEvent::ExternalToolInvoked {
+                    id: "external-bash".to_owned(),
+                    name: "Bash".to_owned(),
+                    detail: serde_json::json!({"command": "echo hello"}),
+                }),
+                event(RuntimeEvent::ExternalToolCompleted {
+                    id: "external-bash".to_owned(),
+                    ok,
+                    detail: serde_json::Value::String(output),
+                }),
+            ];
+            let bytes = serde_json::to_vec(&events).expect("journal events");
+            let replayed: Vec<EventEnvelope> =
+                serde_json::from_slice(&bytes).expect("replayable events");
+            let mut live = App::new("m", "p");
+            let mut replay = App::new("m", "p");
+            for event in &events {
+                live.apply(event);
+            }
+            for event in &replayed {
+                replay.apply(event);
+            }
+            assert_eq!(live.transcript.blocks(), replay.transcript.blocks());
+            for expanded in [false, true] {
+                live.work_details = expanded;
+                replay.work_details = expanded;
+                for width in [44, 80, 100] {
+                    for theme in [Theme::new(), Theme::new().without_color()] {
+                        assert_eq!(
+                            transcript_lines(&live, theme, width),
+                            transcript_lines(&replay, theme, width),
+                            "ok={ok}, expanded={expanded}, width={width}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shell_admission_errors_are_nested_under_the_exact_user_echo() {
+        let mut app = App::new("m", "p");
+        let echo = app.transcript.push_shell_shortcut("ls -la");
+        app.transcript.finish_shell_shortcut(
+            echo,
+            None,
+            true,
+            "shell action failed: requires an idle session",
+        );
+        let text = transcript_lines(&app, Theme::new().without_color(), 100)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            text,
+            [
+                "! ls -la failed",
+                "  ⎿  shell action failed: requires an idle session"
+            ]
+        );
     }

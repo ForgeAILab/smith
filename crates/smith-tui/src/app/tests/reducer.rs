@@ -1575,7 +1575,7 @@
                     "tool: {name} {} {} {} [{}]",
                     status.label(),
                     display
-                        .as_ref()
+                        .as_deref()
                         .map(smith_tools::ToolCallDisplay::invocation)
                         .unwrap_or_else(|| "-".to_owned()),
                     result_preview.clone().unwrap_or_else(|| "-".to_owned()),

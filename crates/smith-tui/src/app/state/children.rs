@@ -42,7 +42,7 @@ impl App {
         // Matches the transcript's own unknown-tool fallback exactly: the
         // tool is named, and `protected_summary` — already computed from
         // the call's real argument keys, never its values — follows it.
-        let label = display.as_ref().map_or_else(
+        let label = display.as_deref().map_or_else(
             || format!("{}({protected_summary})", safe_tool_name(name)),
             ToolCallDisplay::invocation,
         );

@@ -72,60 +72,77 @@ impl Drop for LocalShellApprovalGuard {
     }
 }
 
-pub(super) fn start_local_shell(
+pub(super) enum LocalShellIdentity {
+    Turn(agent_runtime_core::ids::TurnId),
+    Call(agent_runtime_core::ids::ToolCallId),
+}
+
+pub(super) async fn start_local_shell(
+    echo: u64,
     session: smith_runtime::SessionHandle,
     command: String,
     timeout_ms: u64,
     approvals: LocalShellApprovals,
     outcomes: tokio::sync::mpsc::UnboundedSender<LocalOutcome>,
-) {
-    tokio::spawn(async move {
-        use std::future::{Future, poll_fn};
-        use std::task::Poll;
+) -> Option<LocalShellIdentity> {
+    use std::future::{Future, poll_fn};
+    use std::task::Poll;
 
-        let mut local = std::pin::pin!(session.run_local_tool(
-            "shell",
-            serde_json::json!({
-                "command": command,
-                "cwd": ".",
-                "timeout_ms": timeout_ms,
-            }),
-            timeout_ms,
-        ));
-        // The pinned runtime reserves idle admission before its first await.
-        // A rejection completes without arming anything; Pending proves this
-        // future owns the local action, even if a model turn queues behind it.
-        let (first, authorization) = poll_fn(|context| {
-            // A prompt can be published during this poll. Keep its receiver
-            // from resolving it before the owning identity has been bound.
-            let mut pending = approvals
-                .pending
-                .lock()
-                .expect("local shell approval poisoned");
-            let first = local.as_mut().poll(context);
-            // There is no public local-call handle. Empty steering cannot
-            // enqueue input, and a local turn rejects it as NonSteerable
-            // with the exact owning identity. Fail closed on any other
-            // response instead of guessing an ID or matching command text.
-            let authorization = if first.is_pending()
-                && let Err(rejection) = session.steer_current_turn(None, UserInput::text(""))
-                && let SteerRejectionReason::NonSteerable { active_turn } = rejection.reason
-            {
-                let authorization = LocalShellAuthorization {
-                    session: session.id().clone(),
-                    turn: active_turn,
-                };
-                *pending = Some(authorization.clone());
-                Some(LocalShellApprovalGuard {
-                    approvals: approvals.clone(),
-                    authorization,
-                })
-            } else {
-                None
+    let execution_session = session.clone();
+    let mut local = Box::pin(async move {
+        execution_session
+            .run_local_tool(
+                "shell",
+                serde_json::json!({
+                    "command": command,
+                    "cwd": ".",
+                    "timeout_ms": timeout_ms,
+                }),
+                timeout_ms,
+            )
+            .await
+    });
+    // The pinned runtime reserves idle admission before its first await.
+    // A rejection completes without arming anything; Pending proves this
+    // future owns the local action, even if a model turn queues behind it.
+    let (first, authorization) = poll_fn(|context| {
+        // A prompt can be published during this poll. Keep its receiver
+        // from resolving it before the owning identity has been bound.
+        let mut pending = approvals
+            .pending
+            .lock()
+            .expect("local shell approval poisoned");
+        let first = local.as_mut().poll(context);
+        // There is no public local-call handle. Empty steering cannot
+        // enqueue input, and a local turn rejects it as NonSteerable
+        // with the exact owning identity. Fail closed on any other
+        // response instead of guessing an ID or matching command text.
+        let authorization = if first.is_pending()
+            && let Err(rejection) = session.steer_current_turn(None, UserInput::text(""))
+            && let SteerRejectionReason::NonSteerable { active_turn } = rejection.reason
+        {
+            let authorization = LocalShellAuthorization {
+                session: session.id().clone(),
+                turn: active_turn,
             };
-            Poll::Ready((first, authorization))
-        })
-        .await;
+            *pending = Some(authorization.clone());
+            Some(LocalShellApprovalGuard {
+                approvals: approvals.clone(),
+                authorization,
+            })
+        } else {
+            None
+        };
+        Poll::Ready((first, authorization))
+    })
+    .await;
+    let identity = match &first {
+        Poll::Ready(Ok(block)) => Some(LocalShellIdentity::Call(block.call_id.clone())),
+        _ => authorization
+            .as_ref()
+            .map(|guard| LocalShellIdentity::Turn(guard.authorization.turn.clone())),
+    };
+    tokio::spawn(async move {
         let outcome = match first {
             Poll::Ready(outcome) => outcome,
             Poll::Pending => local.await,
@@ -135,13 +152,21 @@ pub(super) fn start_local_shell(
         drop(authorization);
         let result = match outcome {
             Ok(block) => LocalOutcome::Shell {
+                echo,
+                call: Some(block.call_id.clone()),
                 content: tool_result_text(&block),
                 is_error: block.is_error,
             },
-            Err(error) => LocalOutcome::Error(format!("shell action failed: {error}")),
+            Err(error) => LocalOutcome::Shell {
+                echo,
+                call: None,
+                content: format!("shell action failed: {error}"),
+                is_error: true,
+            },
         };
         let _ = outcomes.send(result);
     });
+    identity
 }
 
 /// Largest PNG accepted from the clipboard, after encoding.

@@ -332,8 +332,8 @@
         }));
         app.apply_child(child.as_str(), &event(tool_requested("call-1", "read")));
 
-        // Before the host answers, the row says the shape of the call and
-        // never guesses at its values.
+        // Before the host answers, the row keeps argument names and values
+        // hidden.
         let Some(Block::Tool {
             display,
             protected_summary,
@@ -344,10 +344,8 @@
             panic!("the child's tool call is a tool row");
         };
         assert!(display.is_none());
-        assert!(
-            protected_summary.contains("path"),
-            "the protected fallback names the argument keys: {protected_summary}"
-        );
+        assert_eq!(protected_summary, "arguments hidden");
+        assert!(!protected_summary.contains("path"));
         assert_eq!(*status, ToolStatus::Running);
 
         app.set_child_tool_display(
@@ -375,7 +373,7 @@
             panic!("the outcome resolves the same row");
         };
         assert_eq!(
-            display.as_ref().map(smith_tools::ToolCallDisplay::target),
+            display.as_deref().map(smith_tools::ToolCallDisplay::target),
             Some("src/retry.rs")
         );
         assert_eq!(*status, ToolStatus::Ok);

@@ -1,0 +1,32 @@
+! ls -la
+  ⎿  total 120
+     drwxr-xr-x@  6 mai1015  wheel    192 Oct  3 04:52 .
+     drwxr-xr-x@ 73 mai1015  wheel   2336 Oct  3 05:01 ..
+     drwxr-xr-x@ 12 mai1015  wheel    384 Oct  3 04:52 .git
+     … +3 lines (ctrl+o to expand)
+
+> Read calc.py and tell me in one sentence what add does. Do not edit.
+
+● capabilities · activation epoch 1: tool:artifact.read, tool:edit, tool:read, tool:registry.search,
+  skill:smith.headless.input-and-output-modes
+
+● Read(calc.py)
+  ⎿  Read 6 lines
+
+● add returns the difference of its two arguments (a - b) rather than their sum — despite its name,
+  it subtracts.
+
+  Worked for 11s
+
+
+
+
+
+
+
+
+
+
+› Ask Smith to do anything
+
+  code · zai/glm-5.3

@@ -67,9 +67,9 @@
             &[
                 "gpt-5.3",
                 "87% ctx",
-                "› explain the retry policy",
-                "• The retry policy classifies failures.",
-                "• Read(src/retry.rs) · ok",
+                "> explain the retry policy",
+                "● The retry policy classifies failures.",
+                "● Read(src/retry.rs)",
                 "Ask Smith to do anything",
             ],
         );
@@ -452,6 +452,7 @@
         use agent_runtime_core::delegation::WorkspacePolicy;
         use agent_runtime_core::ids::ChildId;
 
+        const RAW_ARGUMENT: &str = "TOP_SECRET_QUERY";
         let mut app = App::new("gpt-5.3", "~/work/api");
         let child = ChildId::new("child-plain");
         app.apply(&event(RuntimeEvent::ChildSpawned {
@@ -468,7 +469,7 @@
                 name: "mcp__docs__some_third_party_tool".to_owned(),
                 argument_keys: vec!["query".to_owned()],
                 argument_fingerprint: agent_runtime_registry::Fingerprint::of("arguments"),
-                arguments: None,
+                arguments: Some(serde_json::json!({"query": RAW_ARGUMENT})),
             }),
         );
 
@@ -478,13 +479,12 @@
             .find(|line| line.contains(child.as_str()))
             .expect("a panel row");
         assert!(
-            // `query` is the argument's *key* — safe metadata the fallback
-            // always names — never a value, since none was ever supplied
-            // here or anywhere on this honest-fallback path.
-            row.contains("mcp__docs__some_third_party_tool(query") && row.contains("arguments hidden"),
+            row.contains("mcp__docs__some_third_party_tool(arguments hidden)"),
             "the tool is named with an honest unavailable label rather than a raw argument \
                  value: {row}"
         );
+        assert!(!row.contains("query"), "{row}");
+        assert!(!row.contains(RAW_ARGUMENT), "{row}");
     }
 
     #[test]
@@ -613,7 +613,7 @@
                 // The child's tool call draws as the root timeline's do:
                 // same row, same shape, the same reviewed arguments and
                 // result lines beneath it.
-                "Search(\"backoff\" · src/retry.rs) · ok",
+                "Search(\"backoff\" · src/retry.rs)",
                 "src/retry.rs:42",
                 "The retry policy backs off",
                 "esc back to main",

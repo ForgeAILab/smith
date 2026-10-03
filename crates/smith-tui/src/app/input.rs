@@ -124,6 +124,10 @@ impl App {
             return self.on_ctrl_c();
         }
         self.last_ctrl_c = None;
+        if key.code == KeyCode::Char('o') && key.modifiers == KeyModifiers::CONTROL {
+            self.toggle_work_details();
+            return None;
+        }
         if ignore_prompt_key {
             return None;
         }
@@ -848,7 +852,7 @@ impl App {
                     let command = command.to_owned();
                     self.composer.record_current();
                     self.composer.clear();
-                    self.transcript.push_notice("shell", format!("$ {command}"));
+                    self.transcript.push_shell_shortcut(&command);
                     self.follow_newest();
                     return Some(Action::RunShell {
                         command: self.expand_pasted(&command),

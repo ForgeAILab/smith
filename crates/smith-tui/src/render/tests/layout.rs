@@ -1,7 +1,7 @@
 // layout behavior tests.
 
     #[test]
-    fn codex_formatting_uses_quiet_markers_and_semantic_text_styles() {
+    fn claude_formatting_uses_quiet_markers_and_semantic_text_styles() {
         let mut app = App::new("gpt-5.3", "~/work/api");
         app.transcript.push_user("hello");
         app.transcript.push_text_delta(
@@ -23,7 +23,7 @@
         };
 
         let user = find_line("hello");
-        assert_eq!(user.spans[0].content, "› ");
+        assert_eq!(user.spans[0].content, "> ");
         assert!(
             user.spans[0]
                 .style
@@ -33,7 +33,7 @@
         assert_eq!(user.spans[1].style.fg, None);
 
         let heading = find_line("Heading");
-        assert_eq!(heading.spans[0].content, "• ");
+        assert_eq!(heading.spans[0].content, "● ");
         assert!(heading.spans[0].style.add_modifier.contains(Modifier::DIM));
         assert!(
             heading.spans[1]
@@ -65,7 +65,7 @@
             "closed reasoning must not render as assistant prose: {lines:#?}"
         );
 
-        let tool = find_line("read(path · details unavailable)");
+        let tool = find_line("Read(arguments hidden)");
         assert_eq!(tool.spans[0].style.fg, Some(Color::Green));
         assert!(tool.spans[0].style.add_modifier.contains(Modifier::BOLD));
         assert!(tool.spans[1].style.add_modifier.contains(Modifier::BOLD));

@@ -1,0 +1,16 @@
+  tool:artifact.read, tool:edit, tool:read,
+  tool:registry.search, skill:smith.headless
+  .input-and-output-modes
+
+● Read(calc.py)
+  ⎿  Read 6 lines
+
+● add returns the difference of its two
+  arguments (a - b) rather than their sum —
+  despite its name, it subtracts.
+
+  Worked for 11s
+
+› Ask Smith to do anything
+
+  code · zai/glm-5.3

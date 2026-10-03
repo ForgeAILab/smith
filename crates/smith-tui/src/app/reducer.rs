@@ -319,6 +319,13 @@ impl App {
         // through. What remains below is this session's own business: header
         // status, the plan, the turn clock, steering, pending input, and the
         // panel of children. A child cannot reach any of it.
+        if let RuntimeEvent::ToolCallRequested { call, name, .. } = &envelope.payload
+            && name == "shell"
+            && let Some((turn, echo)) = &self.local_shell_turn
+            && envelope.turn.as_ref() == Some(turn)
+        {
+            self.transcript.bind_shell_shortcut(*echo, call.as_str());
+        }
         self.conversation().apply(&envelope.payload);
 
         match &envelope.payload {
@@ -585,6 +592,13 @@ impl App {
             }
             RuntimeEvent::CacheObservation { .. } | RuntimeEvent::CacheStateChanged { .. } => {}
             RuntimeEvent::TurnCompleted { finish, .. } => {
+                if self
+                    .local_shell_turn
+                    .as_ref()
+                    .is_some_and(|(turn, _)| envelope.turn.as_ref() == Some(turn))
+                {
+                    self.local_shell_turn = None;
+                }
                 self.provider_phase = None;
                 self.provider_retry = None;
                 self.reconcile_pending_terminal(envelope.turn.as_ref(), finish);

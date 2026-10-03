@@ -17,6 +17,7 @@ pub struct ToolCallDisplay {
     label: &'static str,
     target: String,
     qualifiers: Vec<String>,
+    edit_lines: Option<(usize, usize)>,
 }
 
 impl ToolCallDisplay {
@@ -41,6 +42,45 @@ impl ToolCallDisplay {
         details.push(self.target.as_str());
         details.extend(self.qualifiers.iter().map(String::as_str));
         format!("{}({})", self.label, details.join(" · "))
+    }
+
+    /// A compact successful result when raw output adds no useful preview.
+    /// Only reviewed tool formats are counted; arbitrary output stays text.
+    pub fn result_summary(&self, output: &str) -> Option<String> {
+        match self.label {
+            "Read" => {
+                let mut count = 0usize;
+                for line in output.lines().filter(|line| !line.trim().is_empty()) {
+                    if line.starts_with('[') && line.ends_with(']') {
+                        continue;
+                    }
+                    let number = line.trim_start().split_once(char::is_whitespace)?.0;
+                    number.parse::<usize>().ok()?;
+                    count += 1;
+                }
+                (count > 0).then(|| format!("Read {count} lines"))
+            }
+            "Update" => {
+                let (added, removed) = self.edit_lines?;
+                let replacements = output
+                    .trim()
+                    .strip_prefix("edited `")?
+                    .rsplit_once("` (")?
+                    .1
+                    .strip_suffix(" replacement(s))")?
+                    .parse::<usize>()
+                    .ok()?;
+                let additions = added.checked_mul(replacements)?;
+                let removals = removed.checked_mul(replacements)?;
+                Some(format!(
+                    "Updated {} with {additions} addition{} and {removals} removal{}",
+                    self.target,
+                    if additions == 1 { "" } else { "s" },
+                    if removals == 1 { "" } else { "s" },
+                ))
+            }
+            _ => None,
+        }
     }
 
     /// Appends one more qualifier to an already-projected row.
@@ -95,6 +135,24 @@ pub fn project_tool_call_display(name: &str, arguments: &Value) -> Option<ToolCa
         "registry.search" => project_registry_search(arguments),
         "agent" => project_agent(arguments),
         "advisor" if arguments.is_empty() => Some(display("Advisor", String::new(), Vec::new())),
+        _ => None,
+    }
+}
+
+/// The reviewed label also used when the invocation's values are protected.
+pub fn tool_display_label(name: &str) -> Option<&'static str> {
+    match name {
+        "shell" => Some("Bash"),
+        "read" => Some("Read"),
+        "edit" => Some("Update"),
+        "search" => Some("Search"),
+        "list" => Some("List"),
+        "agent" => Some("Agent"),
+        "advisor" => Some("Advisor"),
+        "task_output" => Some("Task Output"),
+        "task_stop" => Some("Task Stop"),
+        "generate_image" => Some("Generate Image"),
+        "registry.search" => Some("Registry Search"),
         _ => None,
     }
 }
@@ -170,8 +228,8 @@ fn project_search(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
 }
 
 fn project_edit(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
-    require_string_field(arguments, "old_string")?;
-    require_string_field(arguments, "new_string")?;
+    let old = require_string_field(arguments, "old_string")?;
+    let new = require_string_field(arguments, "new_string")?;
     let target = required_target(arguments, "path")?;
     let replace_all = optional_boolean(arguments, "replace_all")?;
     let qualifiers = if replace_all == Some(true) {
@@ -179,7 +237,36 @@ fn project_edit(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
     } else {
         Vec::new()
     };
-    Some(display("Edit", target, qualifiers))
+    let mut projected = display("Update", target, qualifiers);
+    projected.edit_lines = edit_line_changes(old, new);
+    Some(projected)
+}
+
+fn edit_line_changes(old: &str, new: &str) -> Option<(usize, usize)> {
+    // Redaction can make distinct changed lines look identical. Large edits
+    // also keep their existing replacement summary instead of an estimate.
+    if old.contains("[redacted]") || new.contains("[redacted]") {
+        return None;
+    }
+    let old = old.lines().collect::<Vec<_>>();
+    let new = new.lines().collect::<Vec<_>>();
+    if old.len().checked_mul(new.len())? > 1_000_000 {
+        return None;
+    }
+    let mut previous = vec![0usize; new.len() + 1];
+    let mut current = previous.clone();
+    for before in &old {
+        for (index, after) in new.iter().enumerate() {
+            current[index + 1] = if before == after {
+                previous[index] + 1
+            } else {
+                current[index].max(previous[index + 1])
+            };
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    let unchanged = previous[new.len()];
+    Some((new.len() - unchanged, old.len() - unchanged))
 }
 
 /// The runtime's capability-discovery bootstrap (`registry.search`) is a
@@ -200,11 +287,14 @@ fn project_shell(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
     let target = required_value(arguments, "command")?;
     let cwd = optional_target(arguments, "cwd", ".")?;
     let timeout = optional_positive_integer(arguments, "timeout_ms")?;
-    let mut qualifiers = vec![format!("cwd {cwd}")];
+    let mut qualifiers = Vec::new();
+    if cwd != "." {
+        qualifiers.push(format!("cwd {cwd}"));
+    }
     if let Some(timeout) = timeout {
         qualifiers.push(format!("timeout {timeout}ms"));
     }
-    Some(display("Shell", target, qualifiers))
+    Some(display("Bash", target, qualifiers))
 }
 
 /// `task_output`'s `offset` is 0-based and 0 is its (common) default, unlike
@@ -475,7 +565,7 @@ fn project_claude_edit(detail: &Map<String, Value>) -> Option<ToolCallDisplay> {
     if replace_all == Some(true) {
         qualifiers.push("replace all".to_owned());
     }
-    Some(display("Edit", target, qualifiers))
+    Some(display("Update", target, qualifiers))
 }
 
 fn project_claude_bash(detail: &Map<String, Value>) -> Option<ToolCallDisplay> {
@@ -563,6 +653,7 @@ fn display(label: &'static str, target: String, qualifiers: Vec<String>) -> Tool
         label,
         target,
         qualifiers,
+        edit_lines: None,
     }
 }
 
@@ -712,7 +803,7 @@ mod tests {
                 "Edit",
                 json!({"file_path": "src/lib.rs", "old_string": "a", "new_string": "b", "replace_all": true})
             ),
-            "Edit(src/lib.rs · replace all)"
+            "Update(src/lib.rs · replace all)"
         );
         assert_eq!(
             agent_invocation(
@@ -849,7 +940,7 @@ mod tests {
                     "replace_all": true
                 })
             ),
-            "Edit(src/config.rs · replace all)"
+            "Update(src/config.rs · replace all)"
         );
         assert_eq!(
             invocation(
@@ -860,7 +951,7 @@ mod tests {
                     "timeout_ms": 3000
                 })
             ),
-            "Shell(printf TOP_SECRET_COMMAND · cwd crates/smith-cli · timeout 3000ms)"
+            "Bash(printf TOP_SECRET_COMMAND · cwd crates/smith-cli · timeout 3000ms)"
         );
     }
 
@@ -905,7 +996,7 @@ mod tests {
         );
         assert_eq!(
             invocation("shell", json!({"command": "hidden"})),
-            "Shell(hidden · cwd .)"
+            "Bash(hidden)"
         );
     }
 
@@ -961,7 +1052,7 @@ mod tests {
         );
         assert_eq!(
             invocation("shell", json!({"command": "curl -H [redacted]"})),
-            "Shell(curl -H [redacted] · cwd .)"
+            "Bash(curl -H [redacted])"
         );
     }
 
@@ -1227,5 +1318,79 @@ mod tests {
                 "turns 12".to_owned()
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod result_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn reviewed_labels_survive_protected_arguments() {
+        for (name, label) in [
+            ("shell", "Bash"),
+            ("read", "Read"),
+            ("edit", "Update"),
+            ("search", "Search"),
+            ("list", "List"),
+            ("agent", "Agent"),
+            ("advisor", "Advisor"),
+        ] {
+            assert_eq!(tool_display_label(name), Some(label));
+        }
+        assert_eq!(tool_display_label("unreviewed"), None);
+    }
+
+    #[test]
+    fn read_summary_counts_only_the_returned_numbered_lines() {
+        let display = project_tool_call_display("read", &json!({"path": "src/retry.rs"})).unwrap();
+        assert_eq!(
+            display
+                .result_summary("10  first\n11  second\n\n[9 more lines; read from offset 12]\n"),
+            Some("Read 2 lines".to_owned())
+        );
+        assert_eq!(display.result_summary("read failed"), None);
+        assert_eq!(display.result_summary(""), None);
+    }
+
+    #[test]
+    fn update_counts_exclude_unchanged_context_and_never_guess_through_redaction() {
+        assert_eq!(
+            edit_line_changes(
+                "first\nold\nmiddle\nold again\nlast",
+                "first\nnew\nmiddle\nlast"
+            ),
+            Some((1, 2))
+        );
+        assert_eq!(edit_line_changes("same", "same"), Some((0, 0)));
+        assert_eq!(edit_line_changes("[redacted]", "new"), None);
+        assert_eq!(
+            edit_line_changes(&"old\n".repeat(1_001), &"new\n".repeat(1_001)),
+            None
+        );
+    }
+
+    #[test]
+    fn update_summary_uses_reviewed_counts_and_the_completed_replacement_count() {
+        let display = project_tool_call_display(
+            "edit",
+            &json!({
+                "path": "src/retry.rs", "old_string": "SECRET_BEFORE",
+                "new_string": "one\ntwo\nthree\nfour"
+            }),
+        )
+        .unwrap();
+        assert_eq!(display.invocation(), "Update(src/retry.rs)");
+        assert_eq!(
+            display.result_summary("edited `src/retry.rs` (1 replacement(s))"),
+            Some("Updated src/retry.rs with 4 additions and 1 removal".to_owned())
+        );
+        assert_eq!(
+            display.result_summary("edited `src/retry.rs` (2 replacement(s))"),
+            Some("Updated src/retry.rs with 8 additions and 2 removals".to_owned())
+        );
+        assert_eq!(display.result_summary("permission denied"), None);
+        assert!(!display.invocation().contains("SECRET_BEFORE"));
     }
 }

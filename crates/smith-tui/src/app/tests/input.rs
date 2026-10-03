@@ -334,7 +334,7 @@
             } => {
                 assert_eq!(*status, ToolStatus::Denied);
                 assert!(display.is_none());
-                assert_eq!(protected_summary, "command · details unavailable");
+                assert_eq!(protected_summary, "arguments hidden");
             }
             other => panic!("expected a tool block, got {other:?}"),
         }
@@ -449,4 +449,36 @@
         release.kind = KeyEventKind::Release;
         app.on_key(release);
         assert!(app.composer.is_empty());
+    }
+
+    #[test]
+    fn ctrl_o_and_details_share_the_same_toggle_without_changing_the_draft() {
+        let mut app = app();
+        app.composer.replace("keep this draft");
+        assert_eq!(
+            app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL)),
+            None
+        );
+        assert!(app.work_details);
+        assert_eq!(app.composer.text(), "keep this draft");
+        app.composer.replace("/details");
+        app.on_key(key(KeyCode::Enter));
+        assert!(!app.work_details);
+        assert!(app.composer.is_empty());
+        app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        assert!(app.work_details);
+    }
+
+    #[tokio::test]
+    async fn ctrl_o_expands_while_a_guarded_approval_is_open_without_answering() {
+        let mut app = app();
+        app.present_approval(prompt("shell").await);
+        assert_eq!(app.pending_approval_count(), 1);
+        app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        assert!(app.work_details);
+        assert_eq!(app.pending_approval_count(), 1);
+        assert!(matches!(app.overlay, Some(Overlay::Approval { .. })));
+        app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        assert!(!app.work_details);
+        assert_eq!(app.pending_approval_count(), 1);
     }

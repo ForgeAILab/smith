@@ -2699,7 +2699,7 @@ async fn a_protected_live_event_resolves_its_safe_display_from_canonical_history
     .expect("turn completed")
     .expect("safe display was available when the protected event arrived");
 
-    assert_eq!(invocation, "Edit(tracked.txt)");
+    assert_eq!(invocation, "Update(tracked.txt)");
     host.shutdown().await.expect("clean shutdown");
     let journal = std::fs::read_to_string(journal_path).expect("event journal");
     assert!(!journal.contains(OLD), "{journal}");

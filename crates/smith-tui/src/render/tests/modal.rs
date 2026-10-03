@@ -17,7 +17,7 @@
             is_error: false,
         }));
         let rendered = render(&app, 74, 14, Theme::new());
-        assert!(rendered.contains("Advisor() · ok"), "{rendered}");
+        assert!(rendered.contains("● Advisor()"), "{rendered}");
         assert!(rendered.contains("Check the cancellation path."), "{rendered}");
         assert!(rendered.contains("Run the focused test."), "{rendered}");
     }
@@ -63,9 +63,9 @@
             is_error: false,
         }));
         let completed = render(&app, 74, 14, Theme::new());
-        assert!(completed.contains(" · ok"), "{completed}");
-        assert!(completed.contains("    card one"), "{completed}");
-        assert!(completed.contains("    card two"), "{completed}");
+        assert!(!completed.contains("running") && !completed.contains(" · ok"), "{completed}");
+        assert!(completed.contains("  ⎿  card one"), "{completed}");
+        assert!(completed.contains("     card two"), "{completed}");
     }
 
     #[test]

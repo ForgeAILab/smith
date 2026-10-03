@@ -547,6 +547,8 @@ pub(super) enum LocalOutcome {
     },
     Error(String),
     Shell {
+        echo: u64,
+        call: Option<agent_runtime_core::ids::ToolCallId>,
         content: String,
         is_error: bool,
     },

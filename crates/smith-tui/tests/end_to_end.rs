@@ -102,7 +102,7 @@ async fn a_typed_message_reaches_the_model_and_its_reply_reaches_the_screen() {
 
     let rendered = screen(&app, 74, 16);
     assert!(
-        rendered.contains("› explain the retry policy"),
+        rendered.contains("> explain the retry policy"),
         "the user's message is missing:\n{rendered}"
     );
     assert!(

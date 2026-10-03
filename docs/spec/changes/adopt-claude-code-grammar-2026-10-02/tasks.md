@@ -6,21 +6,33 @@ completed_at:
 
 ## 1. Contract
 
-- [ ] 1.1 Rewrite the reference paragraphs and sections 2 to 6 of
+- [x] 1.1 Rewrite the reference paragraphs and sections 2 to 6 of
   `DESIGN.md` to the grammar in `design.md`; add the "Kept" table.
+- [x] 1.1a Reconcile `DESIGN.md` sections outside 2 to 6 that still state
+  the old grammar: `?` unknown values, older tool examples and
+  `details unavailable` fallbacks, `•` notices and spawn rows, the
+  dot-separated retry row, and the conflicting todo-retirement rules.
 - [ ] 1.2 Obtain approval of this proposal and of the `DESIGN.md` rewrite.
-- [ ] 1.3 Confirm the glyph set reports width 1 and add a test that rejects
+  Proposal approved 2026-10-03 ("can we use codex to start the ui ux
+  polish"); the `DESIGN.md` rewrite awaits review.
+- [x] 1.3 Confirm the glyph set reports width 1 and add a test that rejects
   emoji-capable code points in the glyph table.
 
 ## 2. Transcript (after `fix-interaction-defects`)
 
-- [ ] 2.1 Role markers `>`, `●`, `⎿`; hanging indent under text.
-- [ ] 2.2 One row per tool call with reviewed label and summary; nested
+- [x] 2.1 Role markers `>`, `●`, `⎿`; hanging indent under text.
+- [x] 2.2 One row per tool call with reviewed label and summary; nested
   bounded result; one-line summaries for tools without a useful preview.
-- [ ] 2.3 Echo a user shell shortcut as `! command` with a nested result.
-- [ ] 2.4 Remove the change notice for turns that changed nothing.
-- [ ] 2.5 `Ctrl+O` expands and folds; `/details` shares the toggle.
-- [ ] 2.6 Live-versus-replay parity for every changed row.
+- [x] 2.3 Echo a user shell shortcut as `! command` with a nested result.
+- [x] 2.4 Remove the change notice for turns that changed nothing.
+- [x] 2.5 `Ctrl+O` expands and folds; `/details` shares the toggle.
+- [x] 2.6 Live-versus-replay parity for every changed row. History and
+  journal replay match live rendering at 44, 80, and 100 columns, folded,
+  expanded, and monochrome. User `!` shortcut echoes and spawn enrichment are
+  process-local and were never saved, so a resumed session does not show
+  them; `DESIGN.md` now says so.
+- [ ] 2.7 Decide whether user `!` shortcut echoes should be saved so a resumed
+  session shows them (a durability change, outside this proposal).
 
 ## 3. Progress, turn end, Markdown, approvals
 

@@ -13,7 +13,6 @@ use smith_client::agent_report::AgentSnapshot;
 use smith_client::commands::{SelectionCommand, SessionControl};
 use smith_client::local_result::LocalResult;
 use smith_client::recovery_report::{RecoveryAction, RecoveryReport, RestoreReport};
-use smith_client::shell_report::ShellReport;
 use smith_config::inventory::SelectionInventory;
 use smith_config::resolve::ResolvedAgent;
 use smith_host::{
@@ -34,7 +33,7 @@ use smith_tui::theme::Theme;
 use crate::local_command::{LocalOutcome, handle_local_command, tool_call_for_display};
 use crate::resources::{abbreviate_home, account_entries, account_status, runtime_resources};
 use crate::submission::{
-    LocalShellApprovals, attach_from_clipboard, child_summary_projection,
+    LocalShellApprovals, LocalShellIdentity, attach_from_clipboard, child_summary_projection,
     copy_selection_to_clipboard, dispatch_prepared_with_materialization, follow_up_agent,
     resume_agent, start_agent, start_local_shell, start_review,
 };
@@ -498,13 +497,20 @@ pub(super) async fn run_tui(
                                 .await;
                             }
                             Some(Action::RunShell { command }) => {
-                                start_local_shell(
+                                let echo = app.transcript.latest_shell_echo().expect("submitted shell echo");
+                                let identity = start_local_shell(
+                                    echo,
                                     session.clone(),
                                     command,
                                     host.runtime().policy().turn_time_limit_ms.unwrap_or(600_000),
                                     local_shell_approvals.clone(),
                                     local_tx.clone(),
-                                );
+                                ).await;
+                                match identity {
+                                    Some(LocalShellIdentity::Turn(turn)) => app.track_shell_shortcut(turn, echo),
+                                    Some(LocalShellIdentity::Call(call)) => app.transcript.bind_shell_shortcut(echo, call.as_str()),
+                                    None => {},
+                                }
                             }
                             Some(Action::Interrupt) => {
                                 if let Err(error) = session
@@ -793,20 +799,10 @@ pub(super) async fn run_tui(
                                 && let Some(set) = host.changes().latest()
                                 && last_change_turn != Some(set.turn)
                                 && !set.undone
+                                && let Some(notice) = change_notice(&set)
                             {
                                 last_change_turn = Some(set.turn);
-                                let attribution = if set.is_fully_attributable() {
-                                    "undo available"
-                                } else if set.has_exact_mutations() {
-                                    "contains ambiguous changes; /undo covers Smith's own \
-                                     edits, /diff shows the rest"
-                                } else {
-                                    "contains ambiguous changes only; use /diff"
-                                };
-                                app.transcript.push_notice(
-                                    "changes",
-                                    format!("Smith turn {} · {attribution}", set.turn),
-                                );
+                                app.transcript.push_notice("changes", notice);
                             }
                             if let Some(submission) = app.take_ready_submission() {
                                 dispatch_prepared_with_materialization(
@@ -905,10 +901,8 @@ pub(super) async fn run_tui(
                             app.transcript.push_notice(source, text);
                         }
                         LocalOutcome::Error(text) => app.transcript.push_error(text),
-                        LocalOutcome::Shell { content, is_error } => {
-                            app.show_local_report(LocalResult::Shell(Box::new(
-                                ShellReport::new(content, is_error),
-                            )));
+                        LocalOutcome::Shell { echo, call, content, is_error } => {
+                            app.transcript.finish_shell_shortcut(echo, call.as_ref().map(|call| call.as_str()), is_error, &content);
                         }
                     }
                     dirty = true;
@@ -1208,5 +1202,81 @@ mod tests {
                 [&CounterKind::InputCached],
             900
         );
+    }
+}
+
+fn change_notice(set: &smith_tools::TurnChangeSet) -> Option<String> {
+    // A mutating capability alone does not prove that the turn changed files.
+    if set.undone || !set.exact_mutations().any(|edit| edit.before != edit.after) {
+        return None;
+    }
+    let attribution = if set.is_fully_attributable() {
+        "undo available"
+    } else {
+        "contains ambiguous changes; /undo covers Smith's own edits, /diff shows the rest"
+    };
+    Some(format!("Smith turn {} · {attribution}", set.turn))
+}
+
+#[cfg(test)]
+mod transcript_notice_tests {
+    use super::change_notice;
+    use smith_tools::{EditMutation, ToolMutation, TurnChangeSet};
+
+    fn set(mutations: Vec<ToolMutation>) -> TurnChangeSet {
+        TurnChangeSet {
+            turn: 1,
+            mutations,
+            undone: false,
+        }
+    }
+
+    fn edit(before: &[u8], after: &[u8]) -> ToolMutation {
+        ToolMutation::Exact(EditMutation {
+            call_id: "edit".to_owned(),
+            path: "/repo/src/retry.rs".into(),
+            before: Some(before.to_vec()),
+            after: Some(after.to_vec()),
+            before_hash: String::new(),
+            after_hash: String::new(),
+            recovery_path: None,
+        })
+    }
+
+    #[test]
+    fn empty_and_ambiguous_only_turns_do_not_claim_changed_files() {
+        assert_eq!(change_notice(&set(Vec::new())), None);
+        assert_eq!(
+            change_notice(&set(vec![ToolMutation::Ambiguous {
+                call_id: "ls".to_owned(),
+                tool: "shell".to_owned()
+            }])),
+            None
+        );
+        assert_eq!(change_notice(&set(vec![edit(b"same", b"same")])), None);
+    }
+
+    #[test]
+    fn a_confirmed_file_change_keeps_its_recovery_notice() {
+        let changed = set(vec![edit(b"before", b"after")]);
+        assert_eq!(
+            change_notice(&changed).as_deref(),
+            Some("Smith turn 1 · undo available")
+        );
+        let mixed = set(vec![
+            edit(b"before", b"after"),
+            ToolMutation::Ambiguous {
+                call_id: "shell".to_owned(),
+                tool: "shell".to_owned(),
+            },
+        ]);
+        assert!(
+            change_notice(&mixed)
+                .unwrap()
+                .contains("contains ambiguous changes")
+        );
+        let mut undone = changed;
+        undone.undone = true;
+        assert_eq!(change_notice(&undone), None);
     }
 }

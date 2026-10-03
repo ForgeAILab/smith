@@ -29,7 +29,7 @@ use smith_client::shell_report::{ShellOutput, ShellReport};
 use smith_client::skills_report::SkillsReport;
 use smith_client::status_report::{StatusGoal, StatusReport};
 use smith_client::timeline_report::{TimelineEntry, TimelinePlan, TimelineReport};
-use smith_tools::ToolCallDisplay;
+use smith_tools::{ToolCallDisplay, tool_display_label};
 
 use super::helpers::*;
 use super::wrap::{wrap_lines, wrapped_row_count};
@@ -79,7 +79,7 @@ pub(super) fn block_start_row(app: &App, block: usize, theme: Theme, width: u16)
     if block >= blocks.len() {
         return None;
     }
-    let preceding = block_lines(&blocks[..block], theme, width);
+    let preceding = block_lines(&blocks[..block], theme, width, app.work_details);
     let rows = rendered_rows(&preceding, width) + usize::from(!preceding.is_empty());
     Some(u16::try_from(rows).unwrap_or(u16::MAX))
 }
@@ -100,13 +100,17 @@ pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<
     {
         return getting_started_lines(theme);
     }
-    let mut lines = block_lines(app.transcript.blocks(), theme, width);
+    let mut lines = block_lines(app.transcript.blocks(), theme, width, app.work_details);
 
     if let Some(text) = app.speculative_text() {
         if !lines.is_empty() {
             lines.push(Line::default());
         }
-        lines.extend(render_speculative_lines(text, theme));
+        lines.extend(
+            render_speculative_lines(text, theme)
+                .into_iter()
+                .flat_map(|line| hanging_lines(line, width, 2)),
+        );
     }
 
     if let Some(summary) = &app.turn_summary
@@ -237,7 +241,7 @@ fn getting_started_lines(theme: Theme) -> Vec<Line<'static>> {
 /// thing, so it must not get a second, thinner renderer that drifts from
 /// this one — whatever the runtime chooses to report about it lands in the
 /// same blocks and draws the same way.
-fn block_lines(blocks: &[Block], theme: Theme, width: u16) -> Vec<Line<'static>> {
+fn block_lines(blocks: &[Block], theme: Theme, width: u16, expanded: bool) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for block in blocks {
         // Reasoning is canonical model state, not a second assistant answer.
@@ -257,13 +261,14 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16) -> Vec<Line<'static>>
             status,
             ..
         } = block
-            && is_redundant_tool_row(name, *status, display.as_ref())
+            && is_redundant_tool_row(name, *status, display.as_deref())
         {
             continue;
         }
         if !lines.is_empty() {
             lines.push(Line::default());
         }
+        let start = lines.len();
         match block {
             Block::User { text } => {
                 for (index, raw) in text.lines().enumerate() {
@@ -287,6 +292,7 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16) -> Vec<Line<'static>>
                 protected_summary,
                 status,
                 result_preview,
+                user_command,
                 started_at,
                 enrichment,
                 ..
@@ -296,38 +302,60 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16) -> Vec<Line<'static>>
                     ToolStatus::Ok => Tone::Success,
                     ToolStatus::Failed | ToolStatus::Denied => Tone::Danger,
                 };
-                let invocation =
-                    tool_invocation(name, display.as_ref(), enrichment, protected_summary);
-                let status_text = match status {
-                    ToolStatus::Running => {
-                        if let Some(started) = started_at {
-                            format!("running {}", render_elapsed(started.elapsed()))
-                        } else {
-                            status.label().to_owned()
-                        }
-                    }
-                    _ => status.label().to_owned(),
+                let mut call = if let Some(command) = user_command {
+                    vec![Span::styled(
+                        format!("! {command}"),
+                        theme.style(Tone::Default),
+                    )]
+                } else {
+                    vec![
+                        Span::styled(
+                            format!("{} ", glyph::TOOL),
+                            theme.style(tone).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            tool_invocation(
+                                name,
+                                display.as_deref(),
+                                enrichment,
+                                protected_summary,
+                            ),
+                            theme.style(Tone::Heading),
+                        ),
+                    ]
                 };
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("{} ", glyph::TOOL),
-                        theme.style(tone).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(invocation, theme.style(Tone::Heading)),
-                    Span::styled(" · ", theme.style(Tone::Dim)),
-                    Span::styled(status_text, theme.style(tone)),
-                ]));
-                if !matches!(status, ToolStatus::Running)
-                    && let Some(preview) = result_preview
-                {
-                    for raw in preview.lines() {
-                        lines.push(Line::from(Span::styled(
-                            format!("    {raw}"),
-                            theme.style(Tone::Dim),
-                        )));
+                if !matches!(status, ToolStatus::Ok) {
+                    let status_text = match status {
+                        ToolStatus::Running => started_at
+                            .map(|started| format!("running {}", render_elapsed(started.elapsed())))
+                            .unwrap_or_else(|| status.label().to_owned()),
+                        _ => status.label().to_owned(),
+                    };
+                    call.push(Span::styled(format!(" {status_text}"), theme.style(tone)));
+                }
+                lines.push(Line::from(call));
+                if !matches!(status, ToolStatus::Running) {
+                    if let Some(preview) = result_preview {
+                        let summary =
+                            (status == &ToolStatus::Ok && !expanded && user_command.is_none())
+                                .then(|| {
+                                    display
+                                        .as_ref()
+                                        .and_then(|display| display.result_summary(preview))
+                                })
+                                .flatten();
+                        lines.extend(nested_result_lines(
+                            summary.as_deref().unwrap_or(preview),
+                            expanded,
+                            width,
+                            theme,
+                        ));
+                    } else if matches!(status, ToolStatus::Ok) {
+                        lines.extend(nested_result_lines("Completed", expanded, width, theme));
                     }
                 }
             }
+
             Block::Error { message } => {
                 for (index, raw) in message.lines().enumerate() {
                     let marker = if index == 0 { glyph::ERROR } else { " " };
@@ -428,7 +456,7 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16) -> Vec<Line<'static>>
                 lines.extend(render_diff_report(report, width, theme));
             }
             Block::Local(LocalResult::Review(report)) => {
-                lines.extend(render_review_report(report, theme));
+                lines.extend(render_review_report(report, width, theme));
             }
             Block::Local(LocalResult::Recovery(report)) => {
                 lines.extend(render_recovery_report(report, width, theme));
@@ -448,8 +476,62 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16) -> Vec<Line<'static>>
                 lines.extend(render_message_report(report, width, theme));
             }
         }
+        if matches!(
+            block,
+            Block::User { .. } | Block::Assistant { .. } | Block::Notice { .. }
+        ) {
+            let rendered = lines
+                .drain(start..)
+                .flat_map(|line| hanging_lines(line, width, 2))
+                .collect::<Vec<_>>();
+            lines.extend(rendered);
+        } else if matches!(block, Block::Tool { .. }) {
+            let call = lines.remove(start);
+            let wrapped = hanging_lines(call, width, 2);
+            drop(lines.splice(start..start, wrapped));
+        }
     }
     lines
+}
+
+fn nested_result_lines(
+    output: &str,
+    expanded: bool,
+    width: u16,
+    theme: Theme,
+) -> Vec<Line<'static>> {
+    let mut rows = Vec::new();
+    for (index, raw) in output.lines().enumerate() {
+        let prefix = if index == 0 {
+            format!("  {}  ", glyph::BRANCH)
+        } else {
+            "     ".to_owned()
+        };
+        rows.extend(hanging_lines(
+            Line::from(vec![
+                Span::styled(prefix, theme.style(Tone::Dim)),
+                Span::styled(raw.to_owned(), theme.style(Tone::Dim)),
+            ]),
+            width,
+            5,
+        ));
+    }
+    if !expanded && rows.len() > 4 {
+        let remaining = rows.len() - 4;
+        rows.truncate(4);
+        rows.extend(hanging_lines(
+            Line::from(Span::styled(
+                format!(
+                    "     {} +{remaining} lines (ctrl+o to expand)",
+                    glyph::ELIDED
+                ),
+                theme.style(Tone::Dim),
+            )),
+            width,
+            5,
+        ));
+    }
+    rows
 }
 
 /// The inspected child's read-only view: one identity heading, then the
@@ -506,7 +588,7 @@ fn child_lines(app: &App, child: &str, theme: Theme, width: u16) -> Vec<Line<'st
         )));
         return lines;
     }
-    lines.extend(block_lines(blocks, theme, width));
+    lines.extend(block_lines(blocks, theme, width, app.work_details));
     // A child answers by streaming, like any agent. Its uncommitted text draws
     // exactly where the root timeline draws its own — held out of the
     // transcript until the attempt commits, so a retry cannot leave prose
@@ -515,7 +597,11 @@ fn child_lines(app: &App, child: &str, theme: Theme, width: u16) -> Vec<Line<'st
         if !lines.is_empty() {
             lines.push(Line::default());
         }
-        lines.extend(render_speculative_lines(text, theme));
+        lines.extend(
+            render_speculative_lines(text, theme)
+                .into_iter()
+                .flat_map(|line| hanging_lines(line, width, 2)),
+        );
     }
     lines
 }
@@ -592,7 +678,10 @@ fn tool_invocation(
     protected_summary: &str,
 ) -> String {
     let Some(display) = display else {
-        return format!("{}({protected_summary})", safe_tool_name(name));
+        let label = tool_display_label(name)
+            .map(str::to_owned)
+            .unwrap_or_else(|| safe_tool_name(name));
+        return format!("{label}({protected_summary})");
     };
     if enrichment.is_empty() {
         return display.invocation();
@@ -1093,16 +1182,22 @@ fn render_recovery_report(report: &RecoveryReport, width: u16, theme: Theme) -> 
         RecoveryReport::PreviewError { message, .. }
         | RecoveryReport::ApplyError { message, .. } => render_review_error(message, theme),
         RecoveryReport::RevertUsage => render_review_error(RecoveryReport::REVERT_USAGE, theme),
-        RecoveryReport::Applied(applied) => {
-            render_report_notice(report.action().name(), &applied.render_value(), theme)
-        }
-        RecoveryReport::Cancelled(action) => {
-            render_report_notice(action.name(), RecoveryReport::CANCELLED_MESSAGE, theme)
-        }
+        RecoveryReport::Applied(applied) => render_report_notice(
+            report.action().name(),
+            &applied.render_value(),
+            width,
+            theme,
+        ),
+        RecoveryReport::Cancelled(action) => render_report_notice(
+            action.name(),
+            RecoveryReport::CANCELLED_MESSAGE,
+            width,
+            theme,
+        ),
     }
 }
 
-fn render_review_report(report: &ReviewReport, theme: Theme) -> Vec<Line<'static>> {
+fn render_review_report(report: &ReviewReport, width: u16, theme: Theme) -> Vec<Line<'static>> {
     match report {
         ReviewReport::Confirmation(preview) => {
             let mut lines = vec![Line::from(Span::styled(
@@ -1112,13 +1207,13 @@ fn render_review_report(report: &ReviewReport, theme: Theme) -> Vec<Line<'static
             lines.extend(render_review_preview(preview));
             lines
         }
-        ReviewReport::Empty => render_review_notice(ReviewReport::EMPTY_MESSAGE, theme),
+        ReviewReport::Empty => render_review_notice(ReviewReport::EMPTY_MESSAGE, width, theme),
         ReviewReport::Error(message) => render_review_error(message, theme),
         ReviewReport::Start(start) => {
             let content = start.render_value();
             match start {
                 ReviewStartReport::Started { .. } | ReviewStartReport::Queued { .. } => {
-                    render_review_notice(&content, theme)
+                    render_review_notice(&content, width, theme)
                 }
                 ReviewStartReport::Unavailable
                 | ReviewStartReport::AtCapacity { .. }
@@ -1128,11 +1223,16 @@ fn render_review_report(report: &ReviewReport, theme: Theme) -> Vec<Line<'static
     }
 }
 
-fn render_review_notice(content: &str, theme: Theme) -> Vec<Line<'static>> {
-    render_report_notice("review", content, theme)
+fn render_review_notice(content: &str, width: u16, theme: Theme) -> Vec<Line<'static>> {
+    render_report_notice("review", content, width, theme)
 }
 
-fn render_report_notice(source: &str, content: &str, theme: Theme) -> Vec<Line<'static>> {
+fn render_report_notice(
+    source: &str,
+    content: &str,
+    width: u16,
+    theme: Theme,
+) -> Vec<Line<'static>> {
     content
         .lines()
         .enumerate()
@@ -1148,6 +1248,7 @@ fn render_report_notice(source: &str, content: &str, theme: Theme) -> Vec<Line<'
                 Line::from(Span::styled(format!("  {raw}"), theme.style(Tone::Dim)))
             }
         })
+        .flat_map(|line| hanging_lines(line, width, 2))
         .collect()
 }
 
@@ -1168,29 +1269,20 @@ fn render_review_error(message: &str, theme: Theme) -> Vec<Line<'static>> {
 fn render_agent_report(report: &AgentReport, width: u16, theme: Theme) -> Vec<Line<'static>> {
     if let AgentReport::Resume(resume) = report {
         let content = resume.render_value();
+        if matches!(
+            resume,
+            AgentResumeReport::RequiresIdle | AgentResumeReport::Started { .. }
+        ) {
+            return render_report_notice(report.title(), &content, width, theme);
+        }
         return content
             .lines()
             .enumerate()
-            .map(|(index, raw)| match resume {
-                AgentResumeReport::RequiresIdle | AgentResumeReport::Started { .. } => {
-                    if index == 0 {
-                        Line::from(vec![
-                            Span::styled(format!("{} ", glyph::NOTICE), theme.style(Tone::Dim)),
-                            Span::styled(report.title().to_owned(), theme.style(Tone::Heading)),
-                            Span::styled(" · ", theme.style(Tone::Dim)),
-                            Span::styled(raw.to_owned(), theme.style(Tone::Default)),
-                        ])
-                    } else {
-                        Line::from(Span::styled(format!("  {raw}"), theme.style(Tone::Dim)))
-                    }
-                }
-                AgentResumeReport::Missing { .. }
-                | AgentResumeReport::Incompatible { .. }
-                | AgentResumeReport::Unavailable
-                | AgentResumeReport::Failed { .. } => Line::from(Span::styled(
+            .map(|(index, raw)| {
+                Line::from(Span::styled(
                     format!("{} {raw}", if index == 0 { glyph::ERROR } else { " " }),
                     theme.style(Tone::Danger),
-                )),
+                ))
             })
             .collect();
     }
