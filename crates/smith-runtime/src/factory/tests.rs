@@ -239,6 +239,39 @@ fn resolved_config() -> ResolvedConfig {
 }
 
 #[test]
+fn advisor_guidance_tracks_root_tool_registration_eligibility() {
+    for surface in [
+        HostSurface::Terminal,
+        HostSurface::Headless,
+        HostSurface::Child,
+    ] {
+        let mut request = RuntimeRequest::new(resolved_config(), surface);
+        let has_guidance = |request: &RuntimeRequest| {
+            let mut loop_config = LoopConfig::new(ModelId::new("example-model"));
+            prepare_prompt_stage(request, &mut loop_config)
+                .expect("prompt stage")
+                .contributor
+                .fragments()
+                .iter()
+                .any(|fragment| fragment.id.as_str() == "smith.prompt.advisor")
+        };
+        assert!(!has_guidance(&request));
+        request.config.agent.profile.advisor = Some(sourced("reviewer".to_owned()));
+        assert!(!has_guidance(&request));
+        request.advisor_profile = Some(AdvisorProfileRequest {
+            config: resolved_config(),
+            catalog_sources: Vec::new(),
+            provider: None,
+        });
+        assert_eq!(
+            has_guidance(&request),
+            capabilities::advisor_eligible(&request)
+        );
+        assert_eq!(has_guidance(&request), surface != HostSurface::Child);
+    }
+}
+
+#[test]
 fn reasoning_boolean_remains_fixed_and_omission_preserves_provider_default() {
     let config = resolved_config();
     let mut model_profile = profile(ModelLimits::new(128_000, 124_000, 4_096));

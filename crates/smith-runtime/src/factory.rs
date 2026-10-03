@@ -647,6 +647,7 @@ pub struct SmithRuntime {
     surface: HostSurface,
     delegation: Option<SmithDelegation>,
     advisor_slot: Option<Arc<std::sync::OnceLock<agent_runtime::runtime::SessionHandle>>>,
+    advisor: Option<Arc<AdvisorTool>>,
     goal_component: Option<Arc<GoalComponent>>,
     background_services: Option<BackgroundServices>,
     harness_identity: HarnessIdentity,
@@ -664,6 +665,24 @@ impl SmithRuntime {
     /// What this composition mapped onto the shared builder.
     pub fn policy(&self) -> &RuntimePolicy {
         &self.policy
+    }
+
+    /// Root advisor binding, including its independently resolved catalog rates.
+    pub fn advisor_route(&self) -> Option<&AdvisorRoute> {
+        self.advisor.as_ref().map(|advisor| advisor.route())
+    }
+
+    /// Canonical session state plus reported advisor usage awaiting a commit
+    /// hook, including interruptions that bypass Runtime's terminal hooks.
+    pub fn accounted_snapshot(
+        &self,
+        session: &agent_runtime::runtime::SessionHandle,
+    ) -> agent_runtime_core::store::SessionSnapshot {
+        let mut snapshot = session.snapshot();
+        if let Some(advisor) = &self.advisor {
+            advisor.account_snapshot(&mut snapshot);
+        }
+        snapshot
     }
 
     /// The resolved model profile together with every catalog layer that
@@ -1075,6 +1094,7 @@ fn prepare_prompt_stage(
         todo_planning: capabilities::todo_planning_eligible(request),
         questionnaire: capabilities::questionnaire_eligible(request),
         delegation: capabilities::delegation_eligible(request),
+        advisor: capabilities::advisor_eligible(request),
         ..DynamicPromptContext::default()
     };
     let contributor = match request.system_prompt.clone() {
@@ -1447,7 +1467,9 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         builder = builder.cache_endpoint_identity(identity.clone());
     }
     if let Some(advisor) = &capabilities.advisor {
-        builder = builder.tool_view_resolver(advisor.clone());
+        builder = builder
+            .tool_view_resolver(advisor.clone())
+            .turn_commit_hook(advisor.clone());
     }
     if let Some(component) = &capabilities.todo {
         builder = builder
@@ -1495,6 +1517,10 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         );
     }
     if let Some(store) = request.session_store.clone() {
+        let store = capabilities.advisor.as_ref().map_or_else(
+            || store.clone(),
+            |advisor| advisor.accounting_store(store.clone()),
+        );
         builder = builder.session_store(store);
     }
     if let Some(store) = durability.root_store.clone() {
@@ -1527,7 +1553,7 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
                     context_policy,
                     tool_output_context: ToolOutputContextPolicy::from_config(config),
                     loop_config,
-                    prompt_contributor: prompt.contributor.clone(),
+                    prompt_contributor: prompt.contributor.without_advisor(),
                     agent_profile_name: agent_profile.name.clone(),
                     agent_profile_revision: agent_profile.revision.clone(),
                     agent_profile_posture: agent_profile.posture.value,
@@ -1563,6 +1589,7 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         surface: request.surface,
         delegation: delegation.delegation,
         advisor_slot: capabilities.advisor_slot,
+        advisor: capabilities.advisor,
         goal_component: capabilities.goal,
         background_services: request.background_services,
         harness_identity,

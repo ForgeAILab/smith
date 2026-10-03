@@ -46,6 +46,15 @@ pub(in crate::factory) async fn prepare_advisor_route(
     route_request.built_in_tools = false;
     super::validate_pool_references(&route_request)?;
     let prepared = super::prepare(&route_request).await?;
+    let price = route_request.model_catalog.as_ref().and_then(|catalog| {
+        smith_config::catalog::catalog_provider_for(
+            &prepared.provider_kind,
+            prepared.endpoint.as_deref(),
+        )
+        .and_then(|provider| catalog.provider(provider))
+        .and_then(|provider| provider.models.get(prepared.model.as_str()))
+        .and_then(|model| model.cost)
+    });
     let provider = super::construct_runtime(
         &route_request,
         prepared.adapter,
@@ -71,6 +80,7 @@ pub(in crate::factory) async fn prepare_advisor_route(
             .instructions
             .as_ref()
             .map(|instructions| instructions.value.clone()),
+        price,
     })))
 }
 
@@ -165,6 +175,7 @@ pub(in crate::factory) async fn prepare_child_profile_routes(
             todo_planning: !agent_profile.posture.value.is_read_only(),
             questionnaire: false,
             delegation: false,
+            advisor: false,
             ..DynamicPromptContext::default()
         };
         let prompt_contributor = SmithPromptContributor::new(&prompt_context);

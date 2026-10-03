@@ -440,11 +440,10 @@ fn render_exit_cost_line(
     let price = price?;
     let cost = smith_client::status::SessionCost::compute(usage, price);
     Some(format!(
-        "{} {} · {}/{}",
+        "{} {} · {}",
         cost.render(),
         cost.label.as_str(),
-        price.provider,
-        price.model,
+        price.render_sources(usage),
     ))
 }
 

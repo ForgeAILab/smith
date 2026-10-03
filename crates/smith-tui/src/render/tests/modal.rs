@@ -1,6 +1,28 @@
 // modal behavior tests.
 
     #[test]
+    fn advisor_row_shows_the_label_and_advice_preview() {
+        let mut app = App::new("main-model", "~/work/api");
+        app.apply(&event(RuntimeEvent::ToolCallRequested {
+            call: ToolCallId::new("advisor-call"),
+            name: "advisor".to_owned(),
+            argument_keys: Vec::new(),
+            argument_fingerprint: agent_runtime_registry::Fingerprint::of("{}"),
+            arguments: Some(serde_json::json!({})),
+        }));
+        app.set_tool_result_preview("advisor-call", "Check the cancellation path.\nRun the focused test.");
+        app.apply(&event(RuntimeEvent::ToolCallCompleted {
+            call: ToolCallId::new("advisor-call"),
+            name: "advisor".to_owned(),
+            is_error: false,
+        }));
+        let rendered = render(&app, 74, 14, Theme::new());
+        assert!(rendered.contains("Advisor() · ok"), "{rendered}");
+        assert!(rendered.contains("Check the cancellation path."), "{rendered}");
+        assert!(rendered.contains("Run the focused test."), "{rendered}");
+    }
+
+    #[test]
     fn a_completed_tool_row_shows_its_bounded_result_preview() {
         // `search`, not `registry.search`: the latter is in the reviewed
         // suppression set once it succeeds (see the suppression tests in

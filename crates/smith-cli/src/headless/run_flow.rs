@@ -388,7 +388,7 @@ pub(super) async fn run_with_io(
         )?;
     }
 
-    let snapshot = session.snapshot();
+    let snapshot = host.snapshot();
     let artifacts = session.artifacts_for_turn(&turn_id);
     let output = snapshot
         .history
@@ -560,7 +560,7 @@ pub(super) async fn write_restored_interaction_required(
     let goal_continuation_turns = final_goal.as_ref().map(|_| 0);
     let (shutdown_error, cache_controller) =
         shutdown_and_write_stream_tail(host, format, stdout).await?;
-    let snapshot = session.snapshot();
+    let snapshot = host.snapshot();
     let session_usage = snapshot.usage.total();
     let synthetic_cache = SyntheticUsageOutput::from_records(snapshot.usage.records());
     let resume_capsule = host.resume_capsule();
@@ -640,7 +640,7 @@ pub(super) async fn write_submission_failure(
         None => submission_error,
         Some(shutdown) => format!("{submission_error}; shutdown also failed: {shutdown}"),
     };
-    let snapshot = session.snapshot();
+    let snapshot = host.snapshot();
     let session_usage = snapshot.usage.total();
     let synthetic_cache = SyntheticUsageOutput::from_records(snapshot.usage.records());
     let resume_capsule = host.resume_capsule();

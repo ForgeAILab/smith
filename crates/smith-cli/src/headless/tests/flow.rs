@@ -2,6 +2,152 @@
 
 use super::*;
 
+#[tokio::test]
+async fn headless_advisor_call_emits_tool_events_and_includes_usage_in_session_totals() {
+    use smith_config::model::ProfileUse;
+    use smith_config::resolve::Overrides;
+    use smith_runtime::factory::AdvisorProfileRequest;
+
+    const CONFIG: &str = r#"
+default_profile = "dev"
+[profiles.dev]
+provider = "local"
+model = "worker"
+advisor = "reviewer"
+delegation = false
+[profiles.reviewer]
+use = ["advisor"]
+provider = "local"
+model = "review-model"
+[providers.local]
+kind = "fake"
+[models."local/worker"]
+context_tokens = 128000
+max_input_tokens = 124000
+max_output_tokens = 4096
+[models."local/review-model"]
+context_tokens = 128000
+max_input_tokens = 124000
+max_output_tokens = 4096
+[approval]
+mode = "deny"
+"#;
+    let home = tempfile::tempdir().expect("home");
+    let project = tempfile::tempdir().expect("project");
+    let config_dir = project.path().join(".smith");
+    std::fs::create_dir_all(&config_dir).expect("configuration directory");
+    std::fs::write(config_dir.join("config.toml"), CONFIG).expect("configuration");
+    let resolve_request = ResolveRequest::new(project.path()).with_home_dir(home.path());
+    let config = resolve(&resolve_request).expect("main config").config;
+    let advisor_config = resolve(
+        &resolve_request
+            .with_cli(Overrides {
+                profile: Some("reviewer".into()),
+                ..Overrides::default()
+            })
+            .with_profile_use(ProfileUse::Advisor),
+    )
+    .expect("advisor config")
+    .config;
+    let mut tool_events = tool_call_fragments(0, "advisor-call", "advisor", "{}");
+    tool_events.push(usage_event(100, 5));
+    tool_events.push(ProviderStreamEvent::Finish {
+        reason: FinishReason::ToolCalls,
+    });
+    let main = Arc::new(FakeProvider::new(
+        "worker",
+        Capabilities::basic_streaming(),
+        vec![
+            ScriptedStream::new(tool_events),
+            ScriptedStream::new(vec![
+                ProviderStreamEvent::TextDelta {
+                    text: "done".into(),
+                },
+                ProviderStreamEvent::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ]),
+        ],
+    ));
+    let advisor = Arc::new(FakeProvider::new(
+        "review-model",
+        Capabilities::basic_streaming(),
+        vec![ScriptedStream::new(vec![
+            usage_event(50, 10),
+            ProviderStreamEvent::TextDelta {
+                text: "Check cancellation.".into(),
+            },
+            ProviderStreamEvent::Finish {
+                reason: FinishReason::Stop,
+            },
+        ])],
+    ));
+    let mut request = RuntimeRequest::new(config, HostSurface::Headless);
+    request.workspace = Some(Arc::new(
+        ProjectWorkspace::new(project.path()).expect("workspace"),
+    ));
+    request.provider = Some(main);
+    request.advisor_profile = Some(AdvisorProfileRequest {
+        config: advisor_config,
+        catalog_sources: Vec::new(),
+        provider: Some(advisor),
+    });
+    let host = smith_runtime::host::start(host_request(request, project.path()))
+        .await
+        .expect("host");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let outcome = tokio::time::timeout(
+        HEADLESS_TEST_WATCHDOG,
+        run_with_io(
+            &host,
+            "Review this work.".into(),
+            OutputFormat::StreamJson,
+            HeadlessBrokers::default(),
+            BackgroundExit::Error,
+            &mut stdout,
+            &mut stderr,
+        ),
+    )
+    .await
+    .expect("headless watchdog")
+    .expect("headless output");
+    assert_eq!(outcome.exit_code, 0);
+    assert!(stderr.is_empty());
+    let lines = String::from_utf8(stdout)
+        .expect("JSONL")
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("JSON event"))
+        .collect::<Vec<_>>();
+    assert!(lines.iter().any(
+        |line| line["event"]["payload"]["event"] == "tool_call_requested"
+            && line["event"]["payload"]["name"] == "advisor"
+    ));
+    assert!(lines.iter().any(
+        |line| line["event"]["payload"]["event"] == "tool_call_completed"
+            && line["event"]["payload"]["name"] == "advisor"
+    ));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line["event"]["payload"]["record"]["provenance"]["purpose"] == "advisor")
+    );
+    let result = terminal_stream_result(&lines);
+    assert_eq!(result["usage"]["session"]["input_uncached"], 150);
+    assert_eq!(result["usage"]["session"]["output"], 15);
+    assert_eq!(
+        host.tool_call_display(&agent_runtime_core::ids::ToolCallId::new("advisor-call"))
+            .expect("advisor label")
+            .label(),
+        "Advisor"
+    );
+    assert_eq!(
+        host.tool_result_text(&agent_runtime_core::ids::ToolCallId::new("advisor-call"))
+            .as_deref(),
+        Some("Check cancellation.")
+    );
+}
+
 #[test]
 fn a_failed_parent_does_not_wait_for_pending_child_delivery() {
     assert!(finish_waits_for_required_follow_up(&TurnFinish::Completed));

@@ -94,6 +94,7 @@ pub fn project_tool_call_display(name: &str, arguments: &Value) -> Option<ToolCa
         "generate_image" => project_generate_image(arguments),
         "registry.search" => project_registry_search(arguments),
         "agent" => project_agent(arguments),
+        "advisor" if arguments.is_empty() => Some(display("Advisor", String::new(), Vec::new())),
         _ => None,
     }
 }
@@ -112,6 +113,7 @@ pub fn has_tool_call_display_schema(name: &str) -> bool {
             | "generate_image"
             | "registry.search"
             | "agent"
+            | "advisor"
     )
 }
 
@@ -860,6 +862,18 @@ mod tests {
             ),
             "Shell(printf TOP_SECRET_COMMAND · cwd crates/smith-cli · timeout 3000ms)"
         );
+    }
+
+    #[test]
+    fn advisor_has_a_label_and_accepts_only_its_empty_object_schema() {
+        let display = project_tool_call_display("advisor", &json!({})).expect("advisor display");
+        assert_eq!(display.label(), "Advisor");
+        assert_eq!(display.invocation(), "Advisor()");
+        assert!(display.target().is_empty());
+        assert!(display.qualifiers().is_empty());
+        assert!(has_tool_call_display_schema("advisor"));
+        assert!(project_tool_call_display("advisor", &Value::Null).is_none());
+        assert!(project_tool_call_display("advisor", &json!({"secret": "hidden"})).is_none());
     }
 
     #[test]

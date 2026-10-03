@@ -57,6 +57,9 @@ pub struct SessionUsageRecord {
     #[serde(default)]
     pub synthetic_by_purpose:
         std::collections::BTreeMap<String, std::collections::BTreeMap<String, u64>>,
+    /// Advisor provider counters, separately attributed from root turns.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub advisor_totals: std::collections::BTreeMap<String, u64>,
     /// Context compactions observed.
     pub compactions: u32,
     /// Tokens those compactions reclaimed.
@@ -118,6 +121,11 @@ impl SessionUsageRecord {
                             .collect(),
                     )
                 })
+                .collect(),
+            advisor_totals: usage
+                .advisor_totals
+                .iter()
+                .map(|(kind, value)| (counter_label(*kind).to_owned(), *value))
                 .collect(),
             compactions: usage.compactions,
             reclaimed_tokens: usage.reclaimed_tokens,
@@ -353,6 +361,8 @@ mod tests {
             reclaimed_tokens: 0,
             delegated_totals,
             delegated_contributors: 4,
+            advisor_totals: Default::default(),
+            advisor_price: None,
             cache_miss_count: 0,
             cache_rebilled_tokens: 0,
         };
@@ -387,6 +397,8 @@ mod tests {
             reclaimed_tokens: 40_000,
             delegated_totals,
             delegated_contributors: 1,
+            advisor_totals: Default::default(),
+            advisor_price: None,
             cache_miss_count: 0,
             cache_rebilled_tokens: 0,
         };

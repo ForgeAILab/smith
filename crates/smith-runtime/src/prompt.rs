@@ -149,13 +149,18 @@ child with an exact compatible checkpoint: resume continues that unfinished turn
 follow_up starts a new turn. Never replace a missing, incompatible, or non-resumable child by \
 silently spawning another one.";
 
+const ADVISOR: &str = "\
+Consult advisor before substantive work, when stuck or when results do not fit, and before \
+declaring the task complete. Give its advice serious weight. If evidence contradicts it, \
+consult once more, naming the conflict.";
+
 const RESPONSE_STYLE: &str = "\
 Lead with the outcome. Be concise, concrete, and candid about uncertainty. Name changed \
 files, verification evidence, and remaining blockers when they materially help the user.";
 
 /// One dynamic Smith prompt contribution.
 ///
-/// The three capability flags must be derived from the same predicates the
+/// The capability flags must be derived from the same predicates the
 /// factory uses to decide registration. A flag that disagrees with the tool
 /// surface is the exact defect this split exists to prevent.
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -170,6 +175,8 @@ pub struct DynamicPromptContext {
     pub questionnaire: bool,
     /// Whether the active profile permits delegating to a child agent.
     pub delegation: bool,
+    /// Whether this root run registers the advisor tool.
+    pub advisor: bool,
     /// Activated, trusted skill instructions.
     pub activated_skills: Option<String>,
     /// Bounded memory selected by Smith policy.
@@ -193,6 +200,7 @@ impl fmt::Debug for DynamicPromptContext {
             .field("todo_planning", &self.todo_planning)
             .field("questionnaire", &self.questionnaire)
             .field("delegation", &self.delegation)
+            .field("advisor", &self.advisor)
             .field("has_activated_skills", &self.activated_skills.is_some())
             .field("has_memory", &self.memory.is_some())
             .field("has_project_context", &self.project_context.is_some())
@@ -235,6 +243,17 @@ impl SmithPromptContributor {
     /// The immutable fragments this component contributes.
     pub fn fragments(&self) -> &[ContextFragment] {
         &self.fragments
+    }
+
+    /// Narrows inherited root instructions for a child without an advisor.
+    pub(crate) fn without_advisor(&self) -> Self {
+        Self::from_fragments(
+            self.fragments
+                .iter()
+                .filter(|fragment| fragment.id.as_str() != "smith.prompt.advisor")
+                .cloned()
+                .collect(),
+        )
     }
 }
 
@@ -434,6 +453,12 @@ pub fn dynamic_fragments(context: &DynamicPromptContext) -> Vec<ContextFragment>
             "smith-prompt-delegation-2",
             context.delegation,
         ),
+        (
+            "advisor",
+            ADVISOR,
+            "smith-prompt-advisor-1",
+            context.advisor,
+        ),
     ]
     .into_iter()
     .enumerate()
@@ -577,6 +602,7 @@ mod tests {
             todo_planning: true,
             questionnaire: true,
             delegation: true,
+            advisor: true,
             ..DynamicPromptContext::default()
         }
     }
@@ -649,7 +675,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(before, after);
-        assert_eq!(dynamic.len(), 8);
+        assert_eq!(dynamic.len(), 9);
         assert!(
             dynamic
                 .iter()
@@ -768,6 +794,7 @@ mod tests {
         );
         assert!(!prompt.contains("invoke root ask_user"), "{prompt}");
         assert!(!prompt.contains("Delegate only a bounded"), "{prompt}");
+        assert!(!prompt.contains("smith.prompt.advisor"), "{prompt}");
         // The unconditional policy is untouched by the gating.
         assert!(
             prompt.contains("Never say a command, test, build"),
@@ -803,6 +830,14 @@ mod tests {
                 },
                 "smith.prompt.delegation",
             ),
+            (
+                "advisor only",
+                DynamicPromptContext {
+                    advisor: true,
+                    ..DynamicPromptContext::default()
+                },
+                "smith.prompt.advisor",
+            ),
         ] {
             let ids = dynamic_fragments(&context)
                 .iter()
@@ -810,6 +845,28 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(ids, vec![expected.to_owned()], "{label}");
         }
+    }
+
+    #[test]
+    fn advisor_guidance_covers_decision_points_and_is_removed_for_inheriting_children() {
+        let contributor = SmithPromptContributor::new(&DynamicPromptContext {
+            advisor: true,
+            ..DynamicPromptContext::default()
+        });
+        let prompt = render_fragments(contributor.fragments());
+        for guidance in [
+            "before substantive work",
+            "when stuck or when results do not fit",
+            "before declaring the task complete",
+            "Give its advice serious weight",
+            "consult once more, naming the conflict",
+        ] {
+            assert!(prompt.contains(guidance), "{prompt}");
+        }
+        assert_eq!(
+            contributor.without_advisor().fragments(),
+            SmithPromptContributor::new(&DynamicPromptContext::default()).fragments()
+        );
     }
 
     #[test]
@@ -831,6 +888,7 @@ mod tests {
                 "smith.prompt.todo-planning"
                     | "smith.prompt.questionnaire"
                     | "smith.prompt.delegation"
+                    | "smith.prompt.advisor"
                     | "smith.prompt.agent-profile"
             );
             if conditional {
@@ -963,9 +1021,9 @@ mod tests {
         });
         let debug = format!("{contributor:?}");
         assert!(!debug.contains(secret_memory), "{debug}");
-        // Eight unconditional sections, project instructions, three gated
+        // Eight unconditional sections, project instructions, four gated
         // capability sections, then skills, memory, and project context.
-        assert_eq!(contributor.fragments().len(), 15);
+        assert_eq!(contributor.fragments().len(), 16);
 
         let patch = contributor
             .contribute(&ContextView {
@@ -989,15 +1047,15 @@ mod tests {
             ContextPosition::new(ContextLane::Instructions, VARIABLE_BLOCK_SEQUENCE + 1)
         );
         assert_eq!(
-            patch.fragments[12].position,
+            patch.fragments[13].position,
             ContextPosition::new(ContextLane::Capabilities, 0)
         );
         assert_eq!(
-            patch.fragments[13].position,
+            patch.fragments[14].position,
             ContextPosition::new(ContextLane::Memory, 0)
         );
         assert_eq!(
-            patch.fragments[14].position,
+            patch.fragments[15].position,
             ContextPosition::new(ContextLane::Memory, 1)
         );
     }

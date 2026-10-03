@@ -116,7 +116,7 @@ pub(super) async fn run_interactive(
         skills,
     } = resources;
     let policy = host.runtime().policy();
-    let snapshot = host.session().snapshot();
+    let snapshot = host.snapshot();
     let project_label = GitChanges::discover(project)
         .and_then(|git| git.branch_label())
         .map_or_else(
@@ -128,6 +128,16 @@ pub(super) async fn run_interactive(
     app.status
         .switch_model(Some(policy.provider_name.clone()), policy.model.as_str());
     app.status.set_price(resolve_price(policy, &catalog));
+    app.status
+        .set_advisor_price(host.runtime().advisor_route().and_then(|advisor| {
+            advisor.price.as_ref().map(|price| {
+                smith_client::status::PriceReference::from_catalog(
+                    &advisor.provider_name,
+                    advisor.model.as_str(),
+                    price,
+                )
+            })
+        }));
     app.status.set_agent(policy.agent_profile.clone());
     // Labels the turn as executed by an installed CLI, and switches the model
     // picker to that CLI's models rather than the provider catalog.
@@ -296,8 +306,9 @@ pub(super) async fn run_interactive(
         .context("shutting the session down");
 
     if let Ok(InteractiveExit::Quit(usage, ..)) = &mut run_result {
-        let snapshot = host.session().snapshot();
+        let snapshot = host.snapshot();
         usage.reconcile_synthetic_records(snapshot.usage.records());
+        usage.reconcile_advisor_records(snapshot.usage.records());
     }
 
     restore_result?;
@@ -774,6 +785,9 @@ pub(super) async fn run_tui(
                                     }
                                     continue;
                                 }
+                            }
+                            if turn_completed && host.runtime().advisor_route().is_some() {
+                                app.status.reconcile_advisor_records(host.snapshot().usage.records());
                             }
                             if turn_completed
                                 && let Some(set) = host.changes().latest()

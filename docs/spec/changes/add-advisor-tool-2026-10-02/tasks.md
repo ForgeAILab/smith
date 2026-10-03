@@ -36,9 +36,13 @@ completed_at:
 - [x] 3.3 Render the transcript and trim it to the advisor's input budget.
 - [x] 3.4 Send the advisor request (built-in prompt plus profile
   instructions, no tools) and return the advice or a tool error.
-- [ ] 3.5 Contribute the guidance section only when the tool is registered.
-- [ ] 3.6 Record advisor usage and cost under an advisor attribution.
-- [ ] 3.7 Give the tool a display label and result preview.
+- [x] 3.5 Contribute the guidance section only when the tool is registered.
+- [x] 3.6 Record advisor usage and cost under an advisor attribution.
+  Recorded as `UsageRecord` purpose `advisor` at the advisor's catalog rates;
+  the pinned runtime has no advisor `UsageSource`, so records carry the
+  compatibility source `SemanticSummary`. A native source is an upstream
+  follow-up.
+- [x] 3.7 Give the tool a display label and result preview.
 
 ## 4. Verification
 

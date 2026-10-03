@@ -223,6 +223,12 @@ impl HostSession {
         &self.session
     }
 
+    /// Session state with all reported advisor usage included, even when an
+    /// interrupted tool-output phase bypassed Runtime's terminal hooks.
+    pub fn snapshot(&self) -> SessionSnapshot {
+        self.runtime.accounted_snapshot(&self.session)
+    }
+
     /// Versioned Smith-owned client session used by presentation surfaces.
     pub fn client(&self) -> &crate::client::SmithSession {
         &self.client

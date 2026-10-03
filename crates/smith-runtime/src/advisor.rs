@@ -1,12 +1,14 @@
 //! Tool-free review of the live canonical conversation through a separate profile.
 
+use std::collections::BTreeMap;
 use std::fmt::Write;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use agent_runtime::context::{CharRatioSizer, ContextBudget, ContextPolicy, RequestSizer};
 use agent_runtime::harness::{
-    ComponentDescriptor, ToolViewContext, ToolViewPatch, ToolViewResolver,
+    ComponentDescriptor, ToolViewContext, ToolViewPatch, ToolViewResolver, TurnCommitHook,
+    TurnCommitPatch, TurnCommitView,
 };
 use agent_runtime::registry::RegistryRevision;
 use agent_runtime::runtime::SessionHandle;
@@ -14,15 +16,16 @@ use agent_runtime_core::cancel::{CancelReason, Cancellation};
 use agent_runtime_core::catalog::ResolvedModelProfile;
 use agent_runtime_core::content::{ContentPart, Message, Role};
 use agent_runtime_core::error::RuntimeError;
-use agent_runtime_core::ids::{AttemptId, RequestId};
+use agent_runtime_core::ids::{AttemptId, RequestId, SessionId};
 use agent_runtime_core::provider::{
     FinishReason, ModelId, Provider, ProviderAttemptPurpose, ProviderCallContext, ProviderRequest,
     ProviderStreamEvent, ToolChoice,
 };
+use agent_runtime_core::store::{SessionSnapshot, SessionStore};
 use agent_runtime_core::tool::{
     InvocationContext, PreparedToolCall, Tool, ToolEffects, ToolOutcome, ToolSpec,
 };
-use agent_runtime_core::usage::UsageDelta;
+use agent_runtime_core::usage::{Provenance, UsageDelta, UsageRecord, UsageSource};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use smith_config::output_budget::OutputBudget;
@@ -31,6 +34,8 @@ use crate::reasoning::ReasoningRuntimePolicy;
 
 /// Model-facing name of the root reviewer tool.
 pub const ADVISOR_TOOL_NAME: &str = "advisor";
+/// Stable attribution for reviewer provider work, independent of parent attempts.
+pub const ADVISOR_USAGE_PURPOSE: &str = "advisor";
 
 const ADVISOR_PROMPT: &str = "You are reviewing another agent's work. You see its conversation \
 so far. Give concise, prioritized, actionable advice. Say clearly when its approach is wrong \
@@ -59,6 +64,8 @@ pub struct AdvisorRoute {
     pub output_budget: OutputBudget,
     /// Profile instructions appended to the built-in reviewer prompt.
     pub instructions: Option<String>,
+    /// Advisor model's catalog rates, used only by presentation accounting.
+    pub price: Option<smith_config::catalog::CatalogModelCost>,
 }
 
 /// One review result with provider usage retained for separate session accounting.
@@ -68,6 +75,48 @@ pub struct AdvisorResponse {
     pub outcome: ToolOutcome,
     /// All usage received, including usage before a failed or interrupted stream.
     pub usage: UsageDelta,
+}
+
+// Records partial reported usage even if the tool future is dropped by the
+// runtime during interruption. No estimates or prices enter provider requests.
+struct AdvisorUsage<'a> {
+    delta: UsageDelta,
+    recorder: Option<&'a AdvisorTool>,
+    session: SessionId,
+    provenance: Provenance,
+}
+
+impl AdvisorUsage<'_> {
+    fn finish(mut self, answer: Result<String, RuntimeError>, limit: usize) -> AdvisorResponse {
+        let response = response(answer, self.delta.clone(), limit);
+        self.provenance.failed = response.outcome.is_error;
+        response
+    }
+}
+
+impl Drop for AdvisorUsage<'_> {
+    fn drop(&mut self) {
+        if let Some(recorder) = self.recorder
+            && !self.delta.is_empty()
+        {
+            recorder
+                .accounting
+                .pending_usage
+                .lock()
+                .expect("advisor usage lock poisoned")
+                .entry(self.session.clone())
+                .or_default()
+                .push(UsageRecord {
+                    // The pinned Runtime accepts separately attributed hook
+                    // usage only through its semantic-summary channel. The
+                    // purpose, rather than this compatibility source, identifies
+                    // advisor work; no summary is generated or installed.
+                    source: UsageSource::SemanticSummary,
+                    provenance: self.provenance.clone(),
+                    delta: self.delta.clone(),
+                });
+        }
+    }
 }
 
 struct CancelAdvisorOnDrop(Cancellation);
@@ -92,14 +141,37 @@ impl AdvisorRoute {
     /// The returned usage is deliberately independent of the tool outcome so
     /// session accounting can record successful and unsuccessful calls alike.
     pub async fn consult(&self, history: &[Message], ctx: &InvocationContext) -> AdvisorResponse {
-        let mut usage = UsageDelta::new();
+        self.consult_recorded(history, ctx, None).await
+    }
+
+    async fn consult_recorded(
+        &self,
+        history: &[Message],
+        ctx: &InvocationContext,
+        recorder: Option<&AdvisorTool>,
+    ) -> AdvisorResponse {
+        let request_id = RequestId::new(format!("advisor-{}-{}", ctx.request, ctx.call_id));
+        let attempt_id = AttemptId::new(format!("advisor-{}-{}", ctx.request, ctx.call_id));
+        let mut usage = AdvisorUsage {
+            delta: UsageDelta::new(),
+            recorder,
+            session: ctx.session.clone(),
+            provenance: Provenance {
+                request: Some(request_id.clone()),
+                attempt: Some(attempt_id.clone()),
+                tool_call: Some(ctx.call_id.clone()),
+                purpose: Some(ADVISOR_USAGE_PURPOSE.to_owned()),
+                failed: true,
+                ..Provenance::default()
+            },
+        };
         if ctx.should_stop() {
             let reason = if ctx.cancel.is_cancelled() {
                 "advisor cancelled"
             } else {
                 "advisor timed out"
             };
-            return response(Err(RuntimeError::tool(reason)), usage, ctx.output_limit);
+            return usage.finish(Err(RuntimeError::tool(reason)), ctx.output_limit);
         }
         let system = Message::system(self.system_prompt());
         let input_budget =
@@ -112,7 +184,7 @@ impl AdvisorRoute {
             input_budget.saturating_sub(sizer.size_message(&system)),
         ) {
             Ok(transcript) => transcript,
-            Err(error) => return response(Err(error), usage, ctx.output_limit),
+            Err(error) => return usage.finish(Err(error), ctx.output_limit),
         };
         let mut request =
             ProviderRequest::new(self.model.clone(), vec![system, Message::user(transcript)]);
@@ -125,8 +197,8 @@ impl AdvisorRoute {
         let cancel = CancelAdvisorOnDrop(ctx.cancel.child());
         let context = ProviderCallContext {
             session: ctx.session.clone(),
-            request_id: RequestId::new(format!("advisor-{}-{}", ctx.request, ctx.call_id)),
-            attempt_id: AttemptId::new(format!("advisor-{}-{}", ctx.request, ctx.call_id)),
+            request_id,
+            attempt_id,
             cache_identity: None,
             purpose: ProviderAttemptPurpose::Ordinary,
             cancel: cancel.0.clone(),
@@ -147,7 +219,7 @@ impl AdvisorRoute {
                             remaining_chars -= 1;
                         }
                     }
-                    ProviderStreamEvent::Usage { delta } => usage.merge(&delta),
+                    ProviderStreamEvent::Usage { delta } => usage.delta.merge(&delta),
                     ProviderStreamEvent::Error { error } => return Err(error.into()),
                     ProviderStreamEvent::Finish { reason } => finish = Some(reason),
                     ProviderStreamEvent::ToolCallDelta { .. } => {
@@ -195,7 +267,7 @@ impl AdvisorRoute {
             }
             result = call => result,
         };
-        response(answer, usage, ctx.output_limit)
+        usage.finish(answer, ctx.output_limit)
     }
 }
 
@@ -233,12 +305,99 @@ fn response(
 pub struct AdvisorTool {
     session: Arc<OnceLock<SessionHandle>>,
     route: Arc<AdvisorRoute>,
+    accounting: Arc<AdvisorAccounting>,
+}
+
+#[derive(Debug, Default)]
+struct AdvisorAccounting {
+    pending_usage: Mutex<BTreeMap<SessionId, Vec<UsageRecord>>>,
+}
+
+impl AdvisorAccounting {
+    fn merge_pending(&self, snapshot: &mut SessionSnapshot) {
+        let pending = self
+            .pending_usage
+            .lock()
+            .expect("advisor usage lock poisoned");
+        if let Some(records) = pending.get(&snapshot.id) {
+            for record in records {
+                if !snapshot.usage.records().contains(record) {
+                    snapshot.usage.record(record.clone());
+                }
+            }
+        }
+    }
+}
+
+// Runtime may abort tool-output processing before calling terminal hooks. Keep
+// those already-reported counters in saved snapshots as well as Smith's live
+// accounting projection. Successful hooks still own canonical usage events.
+#[derive(Debug)]
+struct AdvisorSessionStore {
+    inner: Arc<dyn SessionStore>,
+    accounting: Arc<AdvisorAccounting>,
+}
+
+#[async_trait]
+impl SessionStore for AdvisorSessionStore {
+    async fn load(&self, session: &SessionId) -> Result<Option<SessionSnapshot>, RuntimeError> {
+        self.inner.load(session).await
+    }
+
+    async fn save(&self, snapshot: &SessionSnapshot) -> Result<(), RuntimeError> {
+        let mut snapshot = snapshot.clone();
+        self.accounting.merge_pending(&mut snapshot);
+        self.inner.save(&snapshot).await
+    }
 }
 
 impl AdvisorTool {
     /// Installs an already-prepared advisor binding with an unwired session slot.
     pub fn new(session: Arc<OnceLock<SessionHandle>>, route: Arc<AdvisorRoute>) -> Self {
-        Self { session, route }
+        Self {
+            session,
+            route,
+            accounting: Arc::new(AdvisorAccounting::default()),
+        }
+    }
+
+    /// The immutable advisor binding and its optional presentation rates.
+    pub fn route(&self) -> &AdvisorRoute {
+        &self.route
+    }
+
+    pub(crate) fn account_snapshot(&self, snapshot: &mut SessionSnapshot) {
+        self.accounting.merge_pending(snapshot);
+    }
+
+    pub(crate) fn accounting_store(&self, inner: Arc<dyn SessionStore>) -> Arc<dyn SessionStore> {
+        Arc::new(AdvisorSessionStore {
+            inner,
+            accounting: self.accounting.clone(),
+        })
+    }
+}
+
+#[async_trait]
+impl TurnCommitHook for AdvisorTool {
+    fn descriptor(&self) -> ComponentDescriptor {
+        ComponentDescriptor::new(
+            "smith.advisor.usage",
+            RegistryRevision::new("smith-advisor-usage-1"),
+        )
+    }
+
+    async fn after_commit(&self, view: &TurnCommitView) -> Result<TurnCommitPatch, RuntimeError> {
+        Ok(TurnCommitPatch {
+            usage: self
+                .accounting
+                .pending_usage
+                .lock()
+                .expect("advisor usage lock poisoned")
+                .remove(&view.session)
+                .unwrap_or_default(),
+            ..TurnCommitPatch::default()
+        })
     }
 }
 
@@ -288,7 +447,7 @@ impl Tool for AdvisorTool {
             .outcome);
         };
         let history = session.history();
-        let response = self.route.consult(&history, ctx).await;
+        let response = self.route.consult_recorded(&history, ctx, Some(self)).await;
         Ok(response.outcome)
     }
 }
@@ -383,12 +542,17 @@ fn render_transcript(history: &[Message], input_budget: u32) -> Result<String, R
 mod tests {
     use super::*;
 
+    use agent_runtime::provider::fake::tool_call_fragments;
     use agent_runtime::provider::fake::{FakeProvider, ScriptedStream, usage_event};
     use agent_runtime::registry::RegistryRevision;
+    use agent_runtime::runtime::{RuntimeBuilder, StartSession};
     use agent_runtime_core::clock::{Deadline, SystemClock};
+    use agent_runtime_core::content::UserInput;
     use agent_runtime_core::content::{ToolCall, ToolResultBlock};
+    use agent_runtime_core::event::RuntimeEvent;
     use agent_runtime_core::ids::{SessionId, ToolCallId};
     use agent_runtime_core::provider::{Capabilities, ProviderError, ProviderErrorKind};
+    use agent_runtime_core::usage::CounterKind;
     use agent_runtime_testkit::MemoryWorkspace;
     use agent_runtime_testkit::scenarios::{fake_model_profile, stop_events};
     use smith_config::output_budget::resolve_output_budget;
@@ -418,6 +582,101 @@ mod tests {
             output_budget: resolve_output_budget(128_000, 4_096, Some(128), None, 0)
                 .expect("output budget"),
             instructions: None,
+            price: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn advisor_reported_usage_reaches_session_totals_and_events_even_on_failure() {
+        for failed in [false, true] {
+            let mut advice_events = vec![usage_event(50, 10)];
+            if failed {
+                advice_events.push(ProviderStreamEvent::Error {
+                    error: ProviderError::new(ProviderErrorKind::Network, "review failed"),
+                });
+            } else {
+                advice_events.extend(stop_events("Check the cancellation path."));
+            }
+            let advisor_provider = Arc::new(FakeProvider::new(
+                "fake",
+                Capabilities::basic_streaming(),
+                vec![ScriptedStream::new(advice_events)],
+            ));
+            let slot = Arc::new(OnceLock::new());
+            let advisor = Arc::new(AdvisorTool::new(
+                slot.clone(),
+                Arc::new(route(advisor_provider)),
+            ));
+            let mut tool_step = tool_call_fragments(0, "review-call", "advisor", "{}");
+            tool_step.push(usage_event(100, 5));
+            tool_step.push(ProviderStreamEvent::Finish {
+                reason: FinishReason::ToolCalls,
+            });
+            let main_provider = Arc::new(FakeProvider::new(
+                "fake",
+                Capabilities::basic_streaming(),
+                vec![
+                    ScriptedStream::new(tool_step),
+                    ScriptedStream::new(stop_events("done")),
+                ],
+            ));
+            let runtime = RuntimeBuilder::new(ModelId::new("fake"))
+                .model_profile(fake_model_profile())
+                .provider(main_provider)
+                .workspace(Arc::new(MemoryWorkspace::new("/repo")))
+                .tool(advisor.clone())
+                .turn_commit_hook(advisor)
+                .build()
+                .expect("runtime");
+            let session = runtime
+                .start_session(StartSession::new())
+                .await
+                .expect("session");
+            slot.set(session.clone()).expect("wire advisor");
+            let mut events = session.subscribe();
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                session.run(UserInput::text("review this work")),
+            )
+            .await
+            .expect("turn finishes")
+            .expect("turn");
+            let snapshot = session.snapshot();
+            let records = snapshot
+                .usage
+                .records()
+                .iter()
+                .filter(|record| {
+                    record.provenance.purpose.as_deref() == Some(ADVISOR_USAGE_PURPOSE)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(records.len(), 1);
+            let record = records[0];
+            assert_eq!(record.delta.get(CounterKind::InputUncached), 50);
+            assert_eq!(record.delta.get(CounterKind::Output), 10);
+            assert_eq!(record.provenance.failed, failed);
+            assert_eq!(
+                record.provenance.tool_call,
+                Some(ToolCallId::new("review-call"))
+            );
+            assert!(record.provenance.request.is_some());
+            assert!(record.provenance.attempt.is_some());
+            assert_eq!(snapshot.usage.total().get(CounterKind::InputUncached), 150);
+            assert_eq!(snapshot.usage.total().get(CounterKind::Output), 15);
+            let usage_event = tokio::time::timeout(Duration::from_secs(5), async {
+                while let Some(event) = events.next().await {
+                    if let RuntimeEvent::Usage { record } = event.payload
+                        && record.provenance.purpose.as_deref() == Some(ADVISOR_USAGE_PURPOSE)
+                    {
+                        return record;
+                    }
+                }
+                panic!("missing advisor usage event");
+            })
+            .await
+            .expect("usage event");
+            assert_eq!(&usage_event, record);
+            session.shutdown().await.expect("shutdown");
         }
     }
 

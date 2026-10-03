@@ -141,11 +141,10 @@ pub(super) fn render_status_cost(
     };
     let cost = SessionCost::compute(usage, price);
     format!(
-        "{} {} · {}/{}",
+        "{} {} · {}",
         cost.render(),
         cost.label.as_str(),
-        price.provider,
-        price.model,
+        price.render_sources(usage),
     )
 }
 

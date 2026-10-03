@@ -22,6 +22,7 @@ use agent_runtime_core::goal::GoalProjection;
 use agent_runtime_core::manifest::SegmentKind;
 use agent_runtime_core::provider::ProviderAttemptPurpose;
 use agent_runtime_core::usage::{CounterKind, UsageDelta, UsageRecord};
+use smith_runtime::advisor::ADVISOR_USAGE_PURPOSE;
 use smith_runtime::client::{EstimationConfidence, SmithEvent as EventEnvelope};
 
 use crate::format::{compact_tokens, format_usd};
@@ -260,6 +261,10 @@ pub struct SessionUsage {
     /// Synthetic provider counters partitioned by their typed Runtime
     /// purpose. Keys are never inferred from text labels.
     pub synthetic_by_purpose: BTreeMap<ProviderAttemptPurpose, BTreeMap<CounterKind, u64>>,
+    /// Reviewer provider counters, disjoint from ordinary root and child work.
+    pub advisor_totals: BTreeMap<CounterKind, u64>,
+    /// Independently resolved advisor rates; absence leaves its spend unpriced.
+    pub advisor_price: Option<PriceReference>,
     /// Context compactions observed.
     pub compactions: u32,
     /// Tokens those compactions reclaimed.
@@ -288,6 +293,7 @@ impl SessionUsage {
         self.totals.is_empty()
             && self.turns == 0
             && self.synthetic_totals.is_empty()
+            && self.advisor_totals.is_empty()
             && self.delegated_totals.is_empty()
             && self.cache_miss_count == 0
             && self.cache_rebilled_tokens == 0
@@ -311,6 +317,7 @@ impl SessionUsage {
         self.total_tokens()
             + self.delegated_totals.values().copied().sum::<u64>()
             + self.synthetic_totals.values().copied().sum::<u64>()
+            + self.advisor_totals.values().copied().sum::<u64>()
     }
 
     /// Replaces the synthetic bucket from Runtime's final canonical usage
@@ -331,6 +338,19 @@ impl SessionUsage {
             for (kind, value) in record.delta.iter() {
                 *self.synthetic_totals.entry(kind).or_insert(0) += value;
                 *purpose_totals.entry(kind).or_insert(0) += value;
+            }
+        }
+    }
+
+    /// Replaces advisor counters from the durable ledger after shutdown.
+    pub fn reconcile_advisor_records(&mut self, records: &[UsageRecord]) {
+        self.advisor_totals.clear();
+        for record in records {
+            if record.provenance.purpose.as_deref() == Some(ADVISOR_USAGE_PURPOSE) {
+                self.reported |= !record.delta.is_empty();
+                for (kind, value) in record.delta.iter() {
+                    *self.advisor_totals.entry(kind).or_default() += value;
+                }
             }
         }
     }
@@ -369,13 +389,16 @@ impl SessionUsage {
         );
         let root_line =
             append_cache_diagnostics(root_line, self.cache_miss_count, self.cache_rebilled_tokens);
-        if self.delegated_totals.is_empty() && self.synthetic_totals.is_empty() {
+        if self.delegated_totals.is_empty()
+            && self.synthetic_totals.is_empty()
+            && self.advisor_totals.is_empty()
+        {
             return Some(root_line);
         }
 
         let merged = merge_counter_totals(
             &merge_counter_totals(&self.totals, &self.delegated_totals),
-            &self.synthetic_totals,
+            &merge_counter_totals(&self.synthetic_totals, &self.advisor_totals),
         );
         let mut merged_line = format!(
             "total · {}",
@@ -406,6 +429,12 @@ impl SessionUsage {
                 })
                 .collect::<Vec<_>>();
             lines.push(format!("  cache maintenance: {}", purposes.join("; ")));
+        }
+        if !self.advisor_totals.is_empty() {
+            lines.push(format!(
+                "  advisor: {}",
+                render_counter_parts(&self.advisor_totals, mark).join(" · ")
+            ));
         }
         Some(lines.join("\n"))
     }
@@ -539,6 +568,21 @@ impl PriceReference {
             table: *cost,
         }
     }
+
+    /// Names every model reference contributing to the displayed session cost.
+    pub fn render_sources(&self, usage: &SessionUsage) -> String {
+        let mut sources = format!("{}/{}", self.provider, self.model);
+        if !usage.advisor_totals.is_empty() {
+            match &usage.advisor_price {
+                Some(advisor) => sources.push_str(&format!(
+                    " · advisor {}/{}",
+                    advisor.provider, advisor.model
+                )),
+                None => sources.push_str(" · advisor price unknown"),
+            }
+        }
+        sources
+    }
 }
 
 /// Whether a computed session cost is trustworthy as a bill or only a useful
@@ -631,6 +675,19 @@ impl SessionCost {
                 );
             }
         }
+        for (kind, tokens) in &usage.advisor_totals {
+            if let Some(advisor_price) = &usage.advisor_price {
+                accumulate_price(
+                    *kind,
+                    *tokens,
+                    &advisor_price.table,
+                    &mut micro_usd,
+                    &mut all_priced,
+                );
+            } else if *tokens > 0 {
+                all_priced = false;
+            }
+        }
         // `usage.reported` is the provider-reported signal for the whole
         // session (`SessionUsage`'s own doc: "Whether any counter came from
         // the provider rather than an estimate"); an unpriced contributing
@@ -715,6 +772,8 @@ pub struct Status {
     synthetic_totals: BTreeMap<CounterKind, u64>,
     /// Synthetic counters keyed by Runtime's typed attempt purpose.
     synthetic_by_purpose: BTreeMap<ProviderAttemptPurpose, BTreeMap<CounterKind, u64>>,
+    advisor_totals: BTreeMap<CounterKind, u64>,
+    advisor_price: Option<PriceReference>,
     /// Turns that produced provider usage this session.
     turns: u32,
     /// The active provider/model's catalog price, resolved once by
@@ -746,6 +805,8 @@ impl Status {
             totals: BTreeMap::new(),
             synthetic_totals: BTreeMap::new(),
             synthetic_by_purpose: BTreeMap::new(),
+            advisor_totals: BTreeMap::new(),
+            advisor_price: None,
             turns: 0,
             price: None,
         }
@@ -819,6 +880,13 @@ impl Status {
     /// Routes one canonical Runtime usage record without allowing synthetic
     /// cache work to masquerade as a root/user turn.
     pub fn record_usage_record(&mut self, record: &UsageRecord) {
+        if record.provenance.purpose.as_deref() == Some(ADVISOR_USAGE_PURPOSE) {
+            self.usage_reported |= !record.delta.is_empty();
+            for (kind, value) in record.delta.iter() {
+                *self.advisor_totals.entry(kind).or_default() += value;
+            }
+            return;
+        }
         if let Some(purpose) = record.provenance.attempt_purpose
             && purpose.is_synthetic_cache()
         {
@@ -826,6 +894,15 @@ impl Status {
             return;
         }
         self.record_usage(&record.delta);
+    }
+
+    /// Reconciles advisor counters after a terminal event, including reported
+    /// usage from an interruption that bypassed canonical commit hooks.
+    pub fn reconcile_advisor_records(&mut self, records: &[UsageRecord]) {
+        let mut usage = self.session_usage();
+        usage.reconcile_advisor_records(records);
+        self.advisor_totals = usage.advisor_totals;
+        self.usage_reported = usage.reported;
     }
 
     /// Accounts provider usage under a typed synthetic purpose. This updates
@@ -863,6 +940,8 @@ impl Status {
             turns: self.turns,
             reported: self.usage_reported,
             totals: self.totals.clone(),
+            advisor_totals: self.advisor_totals.clone(),
+            advisor_price: self.advisor_price.clone(),
             synthetic_totals: self.synthetic_totals.clone(),
             synthetic_by_purpose: self.synthetic_by_purpose.clone(),
             compactions: self.capabilities.compactions,
@@ -885,6 +964,11 @@ impl Status {
     /// substituted from another model, provider, or a hard-coded default.
     pub fn set_price(&mut self, price: Option<PriceReference>) {
         self.price = price;
+    }
+
+    /// Sets the advisor model's own catalog reference for session spend.
+    pub fn set_advisor_price(&mut self, price: Option<PriceReference>) {
+        self.advisor_price = price;
     }
 
     /// The resolved price reference, when the catalog prices this session's
@@ -1110,6 +1194,86 @@ mod tests {
 
         status.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 1_500));
         assert_eq!(status.context.render(), "10k");
+    }
+
+    #[test]
+    fn advisor_usage_has_separate_totals_and_uses_its_own_model_prices() {
+        use agent_runtime_core::usage::{Provenance, UsageSource};
+
+        let mut status = Status::new("main", "/repo");
+        let main_price = PriceReference {
+            provider: "main-provider".into(),
+            model: "main".into(),
+            table: PriceTable {
+                input: Some(1_000_000),
+                output: Some(2_000_000),
+                cache_read: Some(100_000),
+                cache_write: Some(2_000_000),
+            },
+        };
+        let advisor_price = PriceReference {
+            provider: "advisor-provider".into(),
+            model: "reviewer".into(),
+            table: PriceTable {
+                input: Some(10_000_000),
+                output: Some(20_000_000),
+                cache_read: Some(1_000_000),
+                cache_write: Some(20_000_000),
+            },
+        };
+        status.set_advisor_price(Some(advisor_price));
+        status.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 100));
+        let record = UsageRecord {
+            source: UsageSource::SemanticSummary,
+            provenance: Provenance {
+                purpose: Some(ADVISOR_USAGE_PURPOSE.into()),
+                failed: true,
+                ..Provenance::default()
+            },
+            delta: UsageDelta::new()
+                .with(CounterKind::InputUncached, 50)
+                .with(CounterKind::InputCached, 20)
+                .with(CounterKind::CacheWrite, 5)
+                .with(CounterKind::Output, 10),
+        };
+        status.record_usage_record(&record);
+        // Output-only advice still contributes without altering root context.
+        let output_only = UsageRecord {
+            delta: UsageDelta::new().with(CounterKind::Output, 5),
+            ..record.clone()
+        };
+        status.record_usage_record(&output_only);
+        let mut usage = status.session_usage();
+        assert_eq!(usage.total_tokens(), 100);
+        assert_eq!(usage.merged_total_tokens(), 190);
+        assert_eq!(usage.turns, 1);
+        assert_eq!(status.context, TokenCount::reported(100));
+        assert!(usage.render().expect("usage").contains("  advisor:"));
+        assert_eq!(
+            SessionCost::compute(&usage, &main_price),
+            SessionCost {
+                micro_usd: 1_020,
+                label: CostLabel::Exact
+            }
+        );
+        assert_eq!(
+            main_price.render_sources(&usage),
+            "main-provider/main · advisor advisor-provider/reviewer"
+        );
+        usage.reconcile_advisor_records(&[record, output_only]);
+        assert_eq!(
+            usage.merged_total_tokens(),
+            190,
+            "reconciliation counts once"
+        );
+        usage.advisor_price = None;
+        assert_eq!(
+            SessionCost::compute(&usage, &main_price),
+            SessionCost {
+                micro_usd: 100,
+                label: CostLabel::Estimated
+            }
+        );
     }
 
     #[test]
