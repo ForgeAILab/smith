@@ -4,7 +4,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::app::App;
 use crate::commands;
-use crate::diff::{Change, EditReview};
 use crate::questionnaire::{QuestionnaireFocus, QuestionnaireState};
 use crate::theme::{Theme, Tone, glyph};
 use agent_runtime_core::clock::Deadline;
@@ -277,55 +276,6 @@ pub(super) fn deadline_text(deadline: Deadline) -> String {
         }
     };
     format!("{absolute} · {status}")
-}
-
-/// The diff body: one row per change, each marked with a sign as well as a
-/// color, because color is a second channel and never the only one
-/// (`DESIGN.md` §4).
-pub(super) fn review_lines(review: &EditReview, theme: Theme) -> (Vec<Line<'static>>, usize) {
-    let lines = review
-        .changes
-        .iter()
-        .take(MAX_BODY_LINES)
-        .map(|change| match change {
-            Change::Context(text) => {
-                Line::from(Span::styled(format!("  {text}"), theme.style(Tone::Dim)))
-            }
-            Change::Removed(text) => Line::from(Span::styled(
-                format!("{} {text}", glyph::REMOVED),
-                theme.style(Tone::Danger),
-            )),
-            Change::Added(text) => Line::from(Span::styled(
-                format!("{} {text}", glyph::ADDED),
-                theme.style(Tone::Success),
-            )),
-            Change::Skipped(count) => Line::from(Span::styled(
-                format!("{} {count} unchanged lines", glyph::ELIDED),
-                theme.style(Tone::Dim),
-            )),
-        })
-        .collect();
-    (lines, review.changes.len().saturating_sub(MAX_BODY_LINES))
-}
-
-/// The fallback body: the raw arguments, exactly as before this modal learned
-/// to read edits. Anything that is not a reviewable edit lands here, because a
-/// diff that lies about what will change is worse than no diff.
-pub(super) fn argument_lines(
-    arguments: &serde_json::Value,
-    theme: Theme,
-) -> (Vec<Line<'static>>, usize) {
-    let arguments =
-        serde_json::to_string_pretty(arguments).unwrap_or_else(|_| arguments.to_string());
-    let lines: Vec<Line<'static>> = arguments
-        .lines()
-        .take(MAX_BODY_LINES)
-        .map(|raw| Line::from(Span::styled(raw.to_owned(), theme.style(Tone::Dim))))
-        .collect();
-    (
-        lines,
-        arguments.lines().count().saturating_sub(MAX_BODY_LINES),
-    )
 }
 
 /// A modal's content, grouped by what it is willing to lose first.

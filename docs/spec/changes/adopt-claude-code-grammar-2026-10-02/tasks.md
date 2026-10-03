@@ -46,9 +46,14 @@ completed_at:
   still streaming (later wider cells reflow earlier rows today); emit OSC 8
   links once terminal support can be detected; decide whether code blocks
   drop the visible ``` fence lines and keep only the dim language label.
-- [ ] 3.4 Approval layout: action, place and deadline, warning, question,
+- [x] 3.4 Approval layout: action, place and deadline, warning, question,
   choices; detail behind `Ctrl+O`; diffs expandable.
-- [ ] 3.5 Keep transcript scrolling available while a prompt is open.
+- [x] 3.5 Keep transcript scrolling available while a prompt is open.
+- [ ] 3.5a Approval polish from the live check
+  (docs/qa/grammar-2026-10-03/approval-live.md): inner padding inside the
+  box; `deadline no deadline` wording; the tool row reads `running` while it
+  waits for approval; a denied call reads `failed` instead of `denied`, and a
+  second `approval · shell denied` row repeats it.
 
 ## 4. Menus and informational results (after `refactor-client-structure`)
 

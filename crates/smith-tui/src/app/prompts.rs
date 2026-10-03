@@ -137,6 +137,8 @@ impl App {
     pub(super) fn show_prompt(&mut self, prompt: PendingPrompt) {
         if matches!(prompt, PendingPrompt::Approval(..)) {
             self.prompt_input_guard.start();
+            self.approval_scroll = 0;
+            self.approval_scroll_limit = 0;
         }
         self.overlay = Some(match prompt {
             PendingPrompt::Approval(prompt, review) => Overlay::Approval { prompt, review },

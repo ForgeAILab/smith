@@ -38,15 +38,16 @@ impl App {
         // Selection is screen-space, so it stays available under the palette
         // (which draws inline) but not under a modal that owns the surface.
         let selectable = matches!(self.overlay, None | Some(Overlay::Palette { .. }));
+        let scrollable = selectable || matches!(self.overlay, Some(Overlay::Approval { .. }));
         match mouse.kind {
-            MouseEventKind::ScrollUp if selectable => {
+            MouseEventKind::ScrollUp if scrollable => {
                 // Scrolling slides the text under a highlight that addresses
                 // fixed cells, so the selection cannot survive it.
                 self.selection = None;
                 self.scroll_up(MOUSE_SCROLL_LINES);
                 MouseOutcome::Redraw
             }
-            MouseEventKind::ScrollDown if selectable => {
+            MouseEventKind::ScrollDown if scrollable => {
                 self.selection = None;
                 self.scroll_down(MOUSE_SCROLL_LINES);
                 MouseOutcome::Redraw
@@ -126,6 +127,36 @@ impl App {
         self.last_ctrl_c = None;
         if key.code == KeyCode::Char('o') && key.modifiers == KeyModifiers::CONTROL {
             self.toggle_work_details();
+            return None;
+        }
+        // Navigation never resolves a prompt. It remains available during the
+        // quiet window, after the guard has seen and accounted for the key.
+        if matches!(self.overlay, Some(Overlay::Approval { .. })) {
+            match key.code {
+                KeyCode::PageUp => self.scroll_up(10),
+                KeyCode::PageDown => self.scroll_down(10),
+                KeyCode::Home | KeyCode::End => {
+                    self.selection = None;
+                    return self.on_scroll_key(key);
+                }
+                KeyCode::Char('l') if key.modifiers == KeyModifiers::CONTROL => {
+                    self.follow_newest()
+                }
+                KeyCode::Up => self.approval_scroll = self.approval_scroll.saturating_sub(1),
+                KeyCode::Down => {
+                    self.approval_scroll = self
+                        .approval_scroll
+                        .saturating_add(1)
+                        .min(self.approval_scroll_limit);
+                }
+                _ => {
+                    if ignore_prompt_key {
+                        return None;
+                    }
+                    return self.on_approval_key(key);
+                }
+            }
+            self.selection = None;
             return None;
         }
         if ignore_prompt_key {

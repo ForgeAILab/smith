@@ -414,12 +414,11 @@
         insta_like(
             &screen,
             &[
-                "approval required",
-                "shell",
+                "Bash command",
                 "rm -rf build",
                 "process execution",
-                "y allow once",
-                "allow this target",
+                "y  Yes",
+                "within this target",
             ],
         );
     }
@@ -492,13 +491,13 @@
         insta_like(
             &screen,
             &[
-                "approval required",
-                "src/retry.rs",
+                "Edit file",
+                "/repo/src/retry.rs",
                 "1 removed · 1 added",
                 "- fn retry() {",
                 "+ fn retry(limit: u32) {",
                 "    once();",
-                "y allow once",
+                "y  Yes",
             ],
         );
         assert!(
@@ -508,7 +507,7 @@
     }
 
     #[tokio::test]
-    async fn a_non_edit_approval_falls_back_to_its_arguments() {
+    async fn a_non_edit_approval_shows_plain_material_arguments() {
         let mut app = conversation();
         app.present_approval(
             prompt(
@@ -519,7 +518,8 @@
         );
         let screen = render(&app, 74, 24, Theme::new());
 
-        insta_like(&screen, &["\"command\"", "rm -rf build"]);
+        insta_like(&screen, &["Bash command", "rm -rf build", "in /repo"]);
+        assert!(!screen.contains("\"command\""), "{screen}");
         assert!(
             !screen.contains("change  "),
             "a shell call has no diff to summarize:\n{screen}"
@@ -533,15 +533,16 @@
         let app = edit_approval(&old, &new).await;
         let screen = render(&app, 74, 24, Theme::new());
 
-        insta_like(&screen, &["more lines not shown", "y allow once"]);
+        insta_like(&screen, &["ctrl+o to expand", "y  Yes"]);
     }
 
     #[tokio::test]
     async fn a_change_buried_in_context_still_reaches_the_top_of_the_modal() {
         let old: String = (0..20).map(|n| format!("let x{n} = {n};\n")).collect();
         let new = old.replace("let x10 = 10;", "let x10 = 11;");
-        let app = edit_approval(&old, &new).await;
-        let screen = render(&app, 74, 40, Theme::new());
+        let mut app = edit_approval(&old, &new).await;
+        app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        let screen = render(&app, 74, 60, Theme::new());
 
         // The collapsed context is counted, not silently dropped.
         insta_like(
@@ -550,7 +551,7 @@
                 "unchanged lines",
                 "- let x10 = 10;",
                 "+ let x10 = 11;",
-                "y allow once",
+                "y  Yes",
             ],
         );
     }
@@ -560,9 +561,9 @@
         let app = edit_approval("once();\n", "twice();\n").await;
         for (width, height) in [(MIN_WIDTH, MIN_HEIGHT), (44, 12), (52, 14)] {
             let screen = render(&app, width, height, Theme::new());
-            insta_like(&screen, &["approval required", "src/retry.rs"]);
+            insta_like(&screen, &["Edit file", "/repo/src/retry.rs"]);
             assert!(
-                screen.contains("allow") && screen.contains("deny"),
+                screen.contains("y  Yes") && screen.contains("n  No (esc)"),
                 "{width}×{height} left the approval unanswerable:\n{screen}"
             );
             for line in screen.lines() {
@@ -646,4 +647,335 @@
 
         let screen = render(&app, 74, 20, Theme::new().without_color());
         assert!(screen.contains("task:7"), "{screen}");
+    }
+
+    async fn approval_evidence_prompt(
+        command: &str,
+        background: bool,
+    ) -> smith_host::approval::ApprovalPrompt {
+        let (policy, mut requests) = smith_host::approval::InteractiveApproval::new(1);
+        let command = command.to_owned();
+        tokio::spawn(async move {
+            let request = ApprovalRequest::new(
+                PreparedToolCall::new(
+                    ToolCallId::new("approval-evidence"),
+                    "shell",
+                    serde_json::json!({
+                        "command": command,
+                        "cwd": "/repo",
+                        "timeout_ms": 600_000,
+                        "run_in_background": background,
+                    }),
+                    [Permission::ProcessSpawn, Permission::FsRead, Permission::FsWrite,
+                        Permission::NetHttp, Permission::CredentialUse, Permission::DataEgress]
+                        .into_iter().collect::<PermissionSet>(),
+                    SecurityResource::other("host-shell", "sha256:exact-shell-action"),
+                    ToolEffects::read_only().with_spawn().with_network(),
+                    ToolCallDisplay::new("Run unsandboxed host shell in /repo").with_detail(
+                        "cargo publish --dry-run\nHost access: same-user files and inherited credentials",
+                    ),
+                ),
+                Deadline::after(&SystemClock, 600_000),
+                ApprovalOrigin::new(SessionId::new("session-1"), RequestId::new("request-1")),
+            );
+            let _ = policy.decide(&request).await;
+        });
+        requests.recv().await.expect("an evidence prompt")
+    }
+
+    fn approval_screen_words(screen: &str) -> String {
+        screen
+            .lines()
+            .map(|row| row.trim().trim_matches('│').trim())
+            .collect::<Vec<_>>()
+            .join(" ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    #[tokio::test]
+    async fn approval_default_view_retains_decision_evidence_at_44_columns_without_color() {
+        for (width, height) in [(100, 32), (80, 24), (44, 16)] {
+            let mut app = App::new("gpt-5.3", "/repo");
+            let prompt = approval_evidence_prompt("cargo publish --dry-run", true).await;
+            let deadline = crate::time_display::local_timestamp(
+                prompt.deadline().instant().expect("deadline").as_millis(),
+            );
+            let hash = prompt.prepared().fingerprint().as_str().to_owned();
+            app.present_approval(prompt);
+            let screen = render(&app, width, height, Theme::new().without_color());
+            let words = approval_screen_words(&screen);
+            for text in [
+                "Bash command",
+                "cargo publish --dry-run",
+                "in /repo",
+                "up to 10 min",
+                "background",
+                "deadline",
+                deadline.as_str(),
+                "remaining",
+                "Warning:",
+                "Runs outside the sandbox with your files, environment and credentials, child processes, network, and data egress.",
+                "Do you want to proceed?",
+                "y Yes",
+                "a Yes, don't ask again for this exact shell action this session",
+                "n No (esc)",
+                "ctrl+o details",
+            ] {
+                assert!(
+                    words.contains(text),
+                    "{width}×{height} missing {text}:\n{screen}"
+                );
+            }
+            let ordered = [
+                "cargo publish --dry-run",
+                "in /repo",
+                "Warning:",
+                "Do you want to proceed?",
+                "y Yes",
+                "a Yes",
+                "n No",
+            ];
+            let positions = ordered.map(|text| words.find(text).expect("default evidence"));
+            assert!(
+                positions.windows(2).all(|pair| pair[0] < pair[1]),
+                "{screen}"
+            );
+            assert_eq!(words.matches("Warning:").count(), 1, "{screen}");
+            for hidden in [
+                hash.as_str(),
+                "sha256:exact-shell-action",
+                "permissions:",
+                "raw arguments:",
+                "\"command\"",
+                "\"timeout_ms\"",
+            ] {
+                assert!(
+                    !screen.contains(hidden),
+                    "{hidden} escaped the detail view:\n{screen}"
+                );
+            }
+            assert!(
+                screen.lines().all(|row| row.width() <= usize::from(width)),
+                "{screen}"
+            );
+            if width == 44 {
+                let top = screen
+                    .lines()
+                    .find(|row| row.contains("Bash command"))
+                    .expect("border");
+                assert!(top.starts_with('╭') && top.ends_with('╮'), "{screen}");
+                assert_eq!(
+                    top.width(),
+                    44,
+                    "the narrow approval must use the safe width"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn approval_identity_permissions_and_raw_arguments_require_ctrl_o() {
+        let mut app = App::new("gpt-5.3", "/repo");
+        let prompt = approval_evidence_prompt("cargo publish --dry-run", false).await;
+        let hash = prompt.prepared().fingerprint().as_str().to_owned();
+        let permissions = prompt
+            .prepared()
+            .required_permissions()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        app.present_approval(prompt);
+        let folded = render(&app, 80, 80, Theme::new());
+        assert!(!folded.contains(&hash));
+        assert!(!folded.contains("permissions:"));
+        assert!(!folded.contains("\"command\""));
+
+        app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        let expanded = render(&app, 80, 80, Theme::new().without_color());
+        let words = approval_screen_words(&expanded);
+        insta_like(
+            &expanded,
+            &[
+                "identity:",
+                "permissions:",
+                "raw arguments:",
+                "\"command\"",
+                "\"timeout_ms\"",
+                "ctrl+o fold",
+            ],
+        );
+        // The identity may wrap; compare without inserted row whitespace.
+        assert!(words.replace(' ', "").contains(&hash), "{expanded}");
+        for permission in permissions {
+            assert!(
+                words.contains(&permission),
+                "missing {permission}:\n{expanded}"
+            );
+        }
+        assert_eq!(app.pending_approval_count(), 1);
+        app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        assert_eq!(render(&app, 80, 80, Theme::new()), folded);
+    }
+
+    #[tokio::test]
+    async fn long_edit_diffs_expand_and_scroll_without_a_fixed_row_cut() {
+        let old: String = (0..60).map(|n| format!("let x{n} = {n};\n")).collect();
+        let new = old.replace("let x", "let y");
+        let mut app = edit_approval(&old, &new).await;
+        let folded = render_synced(&mut app, 44, 16, Theme::new().without_color());
+        assert!(folded.contains("ctrl+o to expand"), "{folded}");
+        assert!(!folded.contains("+ let y23"), "{folded}");
+        assert!(!folded.contains("old_string"), "{folded}");
+
+        app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        render_synced(&mut app, 44, 16, Theme::new().without_color());
+        assert!(app.approval_scroll_limit > 18);
+        let mut seen = String::new();
+        for _ in 0..=app.approval_scroll_limit {
+            seen.push_str(&render_synced(
+                &mut app,
+                44,
+                16,
+                Theme::new().without_color(),
+            ));
+            app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        }
+        assert!(
+            seen.contains("+ let y23 = 23;"),
+            "the expanded diff is still cut"
+        );
+        assert!(seen.contains("identity:"));
+        assert!(seen.contains("permissions:"));
+        assert!(seen.contains("\"old_string\""));
+        assert_eq!(app.pending_approval_count(), 1);
+        app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        assert_eq!(app.approval_scroll, 0);
+        let refolded = render(&app, 44, 16, Theme::new().without_color());
+        insta_like(
+            &refolded,
+            &["ctrl+o to expand", "ctrl+o details", "/repo/src/retry.rs"],
+        );
+        assert!(!refolded.contains("old_string"), "{refolded}");
+        assert!(!refolded.contains("+ let y23"), "{refolded}");
+    }
+
+    #[tokio::test]
+    async fn approval_queue_hint_counts_the_shared_fifo() {
+        let mut app = App::new("gpt-5.3", "/repo");
+        app.present_approval(approval_evidence_prompt("first", false).await);
+        app.present_questionnaire(
+            QuestionnaireForm::new(
+                "waiting-question",
+                vec![QuestionnaireQuestion::new(
+                    "question",
+                    "Question",
+                    "Continue?",
+                    vec![QuestionnaireChoice::new("yes", "Yes")],
+                )],
+                Deadline::never(),
+            )
+            .expect("questionnaire"),
+        );
+        let screen = render(&app, 80, 32, Theme::new());
+        insta_like(&screen, &["first", "ctrl+o details · 1 more waiting"]);
+        app.present_approval(approval_evidence_prompt("third", false).await);
+        let screen = render(&app, 80, 32, Theme::new());
+        insta_like(&screen, &["first", "ctrl+o details · 2 more waiting"]);
+    }
+
+    #[tokio::test]
+    async fn approval_no_color_keeps_structure_and_uses_no_background_fill() {
+        let mut app = App::new("gpt-5.3", "/repo");
+        app.present_approval(approval_evidence_prompt("cargo publish --dry-run", false).await);
+        assert_eq!(
+            render(&app, 44, 16, Theme::new()),
+            render(&app, 44, 16, Theme::new().without_color())
+        );
+        let mut terminal = Terminal::new(TestBackend::new(44, 16)).expect("terminal");
+        terminal
+            .draw(|frame| draw(frame, &app, Theme::new().without_color()))
+            .expect("frame");
+        for cell in &terminal.backend().buffer().content {
+            assert_eq!(cell.fg, Color::Reset);
+            assert_eq!(cell.bg, Color::Reset);
+        }
+        let screen = screen_text(terminal.backend().buffer());
+        assert!(screen.contains("Warning:"), "{screen}");
+        assert!(!screen.contains('⚠'), "{screen}");
+    }
+
+    #[tokio::test]
+    async fn folded_edit_keeps_its_target_material_change_and_deadline_visible_when_narrow() {
+        let old: String = (0..60).map(|n| format!("let x{n} = {n};\n")).collect();
+        let new = old.replace("let x", "let y");
+        let app = edit_approval(&old, &new).await;
+        let deadline = match &app.overlay {
+            Some(Overlay::Approval { prompt, .. }) => crate::time_display::local_timestamp(
+                prompt.deadline().instant().expect("deadline").as_millis(),
+            ),
+            _ => unreachable!(),
+        };
+        let screen = render(&app, 44, 16, Theme::new().without_color());
+        let words = approval_screen_words(&screen);
+        for required in [
+            "/repo/src/retry.rs",
+            "60 removed · 60 added",
+            "- let x0 = 0;",
+            "ctrl+o to expand",
+            "deadline",
+            deadline.as_str(),
+            "remaining",
+            "Do you want to proceed?",
+            "y Yes",
+            "n No (esc)",
+        ] {
+            assert!(words.contains(required), "missing {required}:\n{screen}");
+        }
+        assert!(!screen.contains("identity:"), "{screen}");
+        assert!(!screen.contains("permissions:"), "{screen}");
+        assert!(!screen.contains("old_string"), "{screen}");
+    }
+
+    #[tokio::test]
+    async fn transcript_scrolling_redraws_the_work_behind_an_unanswered_approval() {
+        let visible_work = |screen: &str| {
+            screen
+                .lines()
+                .filter_map(|line| {
+                    let (_, index) = line.split_once("earlier work ")?;
+                    index.trim().parse::<usize>().ok()
+                })
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        let mut app = App::new("gpt-5.3", "/repo");
+        for index in 0..50 {
+            app.transcript.push_user(format!("earlier work {index}"));
+        }
+        app.present_approval(approval_evidence_prompt("cargo publish --dry-run", false).await);
+        let before = render_synced(&mut app, 100, 32, Theme::new().without_color());
+        let before_work = visible_work(&before);
+        assert!(!before_work.is_empty(), "{before}");
+        assert!(app.following);
+        app.on_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+        let after = render_synced(&mut app, 100, 32, Theme::new().without_color());
+        assert_eq!(app.scroll_back, 10);
+        let after_work = visible_work(&after);
+        assert!(!after_work.is_empty(), "{after}");
+        assert!(
+            after_work.last().expect("visible work after PageUp")
+                < before_work.last().expect("visible work before PageUp"),
+            "PageUp did not move back in history: {before_work:?} -> {after_work:?}"
+        );
+        insta_like(
+            &after,
+            &["Bash command", "cargo publish --dry-run", "n  No (esc)"],
+        );
+        assert_eq!(app.pending_approval_count(), 1);
+        app.on_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+        let newest = render_synced(&mut app, 100, 32, Theme::new().without_color());
+        assert_eq!(app.scroll_back, 0);
+        assert_eq!(visible_work(&newest), before_work, "{newest}");
+        assert_eq!(app.pending_approval_count(), 1);
     }

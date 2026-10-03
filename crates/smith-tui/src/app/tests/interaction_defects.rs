@@ -49,7 +49,7 @@ async fn typing_through_an_approval_preserves_the_draft_and_requires_a_quiet_win
         })
         .collect::<Vec<_>>()
         .join("\n");
-    for control in ["y allow once", "a allow", "n deny"] {
+    for control in ["y  Yes", "a  Yes", "n  No (esc)"] {
         assert!(screen.contains(control), "{screen}");
     }
 
@@ -282,4 +282,143 @@ async fn rotation_controls_ignore_typing_until_the_offer_has_a_quiet_window() {
         assert!(app.overlay.is_none());
         assert_eq!(app.composer.text(), "keep drafting");
     }
+}
+
+#[tokio::test]
+async fn enter_never_answers_an_approval_before_or_after_expanding_and_settling() {
+    let mut app = app();
+    let clock = prompt_clock(&mut app);
+    app.composer.replace("keep the draft");
+    let (prompt, decision) =
+        pending_prompt_with("shell", serde_json::json!({"command": "build"})).await;
+    app.present_approval(prompt);
+    for expanded in [false, true] {
+        if expanded {
+            app.on_key(ctrl('o'));
+        }
+        for elapsed in [0, 500] {
+            clock.advance(elapsed);
+            assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+            assert!(matches!(app.overlay, Some(Overlay::Approval { .. })));
+            assert!(!decision.is_finished());
+            assert_eq!(app.composer.text(), "keep the draft");
+        }
+    }
+    clock.advance(500);
+    app.on_key(key(KeyCode::Esc));
+    assert!(matches!(
+        decision.await.expect("explicit denial"),
+        ApprovalDecision::Deny { .. }
+    ));
+}
+
+#[tokio::test]
+async fn approval_scroll_keys_keep_the_transcript_available_and_the_fifo_unanswered() {
+    for settled in [false, true] {
+        let mut app = app();
+        let clock = prompt_clock(&mut app);
+        app.composer.replace("keep the draft");
+        app.sync_scroll_limit(40);
+        let (first, first_decision) =
+            pending_prompt_with("shell", serde_json::json!({"command": "first"})).await;
+        let (second, second_decision) =
+            pending_prompt_with("shell", serde_json::json!({"command": "second"})).await;
+        let identity = first.prepared().fingerprint().clone();
+        app.present_approval(first);
+        app.present_approval(second);
+        if settled {
+            clock.advance(500);
+        }
+        for (event, offset) in [
+            (key(KeyCode::PageUp), 10),
+            (key(KeyCode::PageDown), 0),
+            (key(KeyCode::Home), 40),
+            (key(KeyCode::End), 0),
+            (key(KeyCode::PageUp), 10),
+            (ctrl('l'), 0),
+        ] {
+            assert_eq!(app.on_key(event), None);
+            assert_eq!(app.scroll_back, offset, "{event:?}");
+            assert_eq!(app.following, offset == 0);
+            assert_eq!(app.composer.text(), "keep the draft");
+            assert_eq!(app.pending_approval_count(), 2);
+            match &app.overlay {
+                Some(Overlay::Approval { prompt, .. }) => {
+                    assert_eq!(prompt.prepared().fingerprint(), &identity)
+                }
+                other => panic!("navigation replaced the prompt: {other:?}"),
+            }
+            assert!(!first_decision.is_finished());
+            assert!(!second_decision.is_finished());
+        }
+        clock.advance(500);
+        app.on_key(key(KeyCode::Esc));
+        assert!(matches!(
+            first_decision.await.expect("first denied"),
+            ApprovalDecision::Deny { .. }
+        ));
+        clock.advance(500);
+        app.on_key(key(KeyCode::Esc));
+        assert!(matches!(
+            second_decision.await.expect("second denied"),
+            ApprovalDecision::Deny { .. }
+        ));
+    }
+}
+
+#[tokio::test]
+async fn mouse_wheel_scrolls_under_an_approval_without_answering_or_touching_the_draft() {
+    let mut app = app();
+    let clock = prompt_clock(&mut app);
+    app.composer.replace("keep the draft");
+    app.sync_scroll_limit(40);
+    let (prompt, decision) =
+        pending_prompt_with("shell", serde_json::json!({"command": "build"})).await;
+    app.present_approval(prompt);
+    for settled in [false, true] {
+        if settled {
+            clock.advance(500);
+        }
+        for (kind, offset) in [
+            (MouseEventKind::ScrollUp, 3),
+            (MouseEventKind::ScrollDown, 0),
+        ] {
+            assert_eq!(app.on_mouse(mouse(kind, 20, 4)), MouseOutcome::Redraw);
+            assert_eq!(app.scroll_back, offset);
+            assert_eq!(app.following, offset == 0);
+            assert_eq!(app.composer.text(), "keep the draft");
+            assert!(matches!(app.overlay, Some(Overlay::Approval { .. })));
+            assert!(!decision.is_finished());
+        }
+    }
+    app.on_key(key(KeyCode::Esc));
+    assert!(matches!(
+        decision.await.expect("explicit denial"),
+        ApprovalDecision::Deny { .. }
+    ));
+}
+
+#[tokio::test]
+async fn scrolling_during_the_quiet_window_still_restarts_the_decision_guard() {
+    let mut app = app();
+    let clock = prompt_clock(&mut app);
+    app.composer.replace("keep the draft");
+    app.sync_scroll_limit(40);
+    let (prompt, decision) =
+        pending_prompt_with("shell", serde_json::json!({"command": "build"})).await;
+    app.present_approval(prompt);
+    clock.advance(499);
+    app.on_key(key(KeyCode::PageUp));
+    assert_eq!(app.scroll_back, 10);
+    clock.advance(499);
+    app.on_key(key(KeyCode::Char('y')));
+    assert!(matches!(app.overlay, Some(Overlay::Approval { .. })));
+    assert!(!decision.is_finished());
+    assert_eq!(app.composer.text(), "keep the draft");
+    clock.advance(500);
+    app.on_key(key(KeyCode::Char('y')));
+    assert_eq!(
+        decision.await.expect("deliberate approval"),
+        ApprovalDecision::Allow
+    );
 }

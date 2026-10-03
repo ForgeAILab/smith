@@ -66,40 +66,17 @@ fn skill_trust_confirmation_names_the_skill_and_the_instructions_it_activates() 
 }
 
 #[tokio::test]
-async fn shell_approval_keeps_the_access_note_on_a_separate_indented_line() {
-    let (policy, mut requests) = smith_host::approval::InteractiveApproval::new(1);
-    tokio::spawn(async move {
-        let effects = ToolEffects::read_only().with_spawn().with_network();
-        let (permissions, resource) = effects.authorization_request("shell", "/repo");
-        let request = ApprovalRequest::new(
-            PreparedToolCall::new(
-                ToolCallId::new("shell-access-note"),
-                "shell",
-                serde_json::json!({"command": "ls -la"}),
-                permissions,
-                resource,
-                effects,
-                ToolCallDisplay::new("Run unsandboxed host shell in /repo").with_detail(
-                    "ls -la\nHost access: same-user files, inherited environment and credentials, child processes, network, and data egress",
-                ),
-            ),
-            Deadline::never(),
-            ApprovalOrigin::new(SessionId::new("session-1"), RequestId::new("request-1")),
-        );
-        let _ = policy.decide(&request).await;
-    });
+async fn shell_approval_keeps_multiline_commands_and_one_warning() {
     let mut app = App::new("gpt-5.3", "~/work/api");
-    app.present_approval(requests.recv().await.expect("a shell approval"));
-    let screen = render(&app, 160, 30, Theme::new().without_color());
+    app.present_approval(approval_evidence_prompt("ls -la\npwd", false).await);
+    let screen = render(&app, 100, 32, Theme::new().without_color());
     let rows = screen.lines().collect::<Vec<_>>();
     let command = rows
         .iter()
-        .position(|row| *row == "  action  ls -la")
+        .position(|row| row.contains("ls -la"))
         .expect("command row");
-    assert_eq!(
-        rows[command + 1],
-        "          Host access: same-user files, inherited environment and credentials, child processes, network, and data egress",
-        "{screen}",
-    );
-    assert!(!screen.contains("ls -laHost access"), "{screen}");
+    assert!(rows[command + 1].contains("pwd"), "{screen}");
+    assert_eq!(screen.matches("Warning:").count(), 1, "{screen}");
+    assert!(!screen.contains("Host access:"), "{screen}");
+    assert!(!screen.contains("ls -lapwd"), "{screen}");
 }

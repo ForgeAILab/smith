@@ -362,7 +362,7 @@ pub enum Overlay {
         /// What the runtime is asking to run, and the channel to answer on.
         prompt: Box<ApprovalPrompt>,
         /// The reviewable diff, when the request is an `edit` whose arguments
-        /// parse. `None` sends the modal back to rendering raw arguments.
+        /// parse. Other actions show their prepared material arguments.
         review: Option<EditReview>,
     },
     /// An authority-free runtime interaction is waiting for an answer.
@@ -867,6 +867,9 @@ pub struct App {
     pub(super) work: Option<WorkSummary>,
     /// Whether bounded tool output and live work detail are expanded.
     pub work_details: bool,
+    /// Visual-row offset and bound for the approval's reviewable content.
+    pub(crate) approval_scroll: u16,
+    pub(crate) approval_scroll_limit: u16,
     /// The admitted local shortcut turn, used only to attribute its call row.
     pub(super) local_shell_turn: Option<(TurnId, u64)>,
     /// Bounded local choices supplied by the host.
@@ -965,6 +968,8 @@ impl App {
             plan: None,
             work: None,
             work_details: false,
+            approval_scroll: 0,
+            approval_scroll_limit: 0,
             local_shell_turn: None,
             resources: RuntimeResources::default(),
             following: true,
@@ -1308,6 +1313,7 @@ impl App {
     /// Toggles bounded, redaction-safe transcript output and live work detail.
     pub fn toggle_work_details(&mut self) {
         self.work_details = !self.work_details;
+        self.approval_scroll = 0;
     }
 
     /// Render-ready lines for explicitly requested active-work detail.

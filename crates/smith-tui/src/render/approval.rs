@@ -1,196 +1,383 @@
-//! The anchored approval panel.
-//!
-//! Approvals are drawn in the layout above the composer rather than floated
-//! over the transcript. A user deciding whether to allow a command is judging
-//! it against the work that led there, and a box covering that work hides the
-//! very context the question is about. Anchoring also means the panel competes
-//! for rows like anything else, so a small terminal degrades by dropping
-//! detail instead of by obscuring the session.
-//!
-//! What survives truncation is ordered deliberately: the exact prepared target
-//! first, then the authority being requested, then everything else
-//! (`DESIGN.md` §9). A user who can read only two rows still sees what would
-//! run and what it could reach.
+//! Action-first approvals, with scrollable prepared-action detail.
 
+use agent_runtime_core::security::SecurityResource;
+use agent_runtime_core::tool::PreparedToolCall;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 
-use crate::diff::EditReview;
+use crate::app::{App, Overlay};
+use crate::diff::{Change, EditReview};
 use crate::theme::{Theme, Tone, glyph};
 
-use super::modal::{argument_lines, authority_warning, review_lines, security_resource_text};
+use super::modal::{
+    authority_warning, deadline_text, modal_max_height, modal_width, security_resource_text,
+};
+use super::wrap::wrap_lines;
 
-/// The most rows an approval may take before the layout bounds it further.
-///
-/// Generous on purpose. A diff is the substance of an edit approval, and a
-/// panel that shows the header but elides the change asks the user to approve
-/// something they cannot see.
-const MAX_APPROVAL_ROWS: u16 = 18;
+const DIFF_PREVIEW_LINES: usize = 4;
 
-/// Builds the panel's header and body once, so the row estimate and the render
-/// cannot disagree.
-///
-/// They did disagree while the estimate counted an assumed header height: a
-/// tool that also warns about its authority added a row the estimate never
-/// knew about, and the body lost one at the bottom. Measuring the real lines
-/// removes the class of bug rather than the instance.
-fn compose(
-    prompt: &smith_host::approval::ApprovalPrompt,
-    review: Option<&EditReview>,
+fn line(text: impl Into<String>, theme: Theme, tone: Tone) -> Line<'static> {
+    Line::from(Span::styled(text.into(), theme.style(tone)))
+}
+
+fn diff_lines(
+    review: &EditReview,
+    expanded: bool,
+    preview: usize,
     theme: Theme,
-) -> (Vec<Line<'static>>, Vec<Line<'static>>, usize) {
-    let prepared = prompt.prepared();
-    let mut head = Vec::new();
-
-    // The exact target is first so a screen reader and the tightest supported
-    // terminal both retain the fact a user cannot answer without.
-    head.push(Line::from(vec![
-        Span::styled(
-            format!("{} approval required  ", glyph::APPROVAL),
-            theme.style(Tone::Heading),
-        ),
-        Span::styled(
-            security_resource_text(prepared.resource()),
-            theme.style(Tone::Danger),
-        ),
-    ]));
-    head.push(Line::from(vec![
-        Span::styled(format!("  {}  ", prepared.tool()), theme.style(Tone::Dim)),
-        Span::raw(prepared.display().title.clone()),
-    ]));
-    if let Some(detail) = &prepared.display().detail {
-        for (index, line) in detail.split('\n').enumerate() {
-            head.push(Line::from(vec![
-                Span::styled(
-                    if index == 0 {
-                        "  action  "
-                    } else {
-                        "          "
-                    },
-                    theme.style(Tone::Dim),
-                ),
-                Span::raw(line.to_owned()),
-            ]));
-        }
-    }
-    if let Some(review) = review {
-        head.push(Line::from(vec![
-            Span::styled("  change  ", theme.style(Tone::Dim)),
-            Span::raw(review.summary()),
-        ]));
-    }
-    let permissions = prepared
-        .required_permissions()
+) -> Vec<Line<'static>> {
+    let count = if expanded {
+        review.changes.len()
+    } else {
+        preview
+    };
+    let mut lines: Vec<_> = review
+        .changes
         .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    if !permissions.is_empty() {
-        head.push(Line::from(vec![
-            Span::styled("  grants  ", theme.style(Tone::Dim)),
-            Span::styled(permissions.join(", "), theme.style(Tone::Danger)),
-        ]));
+        .take(count)
+        .map(|change| match change {
+            Change::Context(text) => line(format!("  {text}"), theme, Tone::Dim),
+            Change::Removed(text) => {
+                line(format!("{} {text}", glyph::REMOVED), theme, Tone::Danger)
+            }
+            Change::Added(text) => line(format!("{} {text}", glyph::ADDED), theme, Tone::Success),
+            Change::Skipped(count) => line(format!("… {count} unchanged lines"), theme, Tone::Dim),
+        })
+        .collect();
+    let hidden = review.changes.len().saturating_sub(count);
+    if hidden > 0 {
+        lines.push(line(
+            format!("… +{hidden} lines (ctrl+o to expand)"),
+            theme,
+            Tone::Dim,
+        ));
     }
-    if let Some(warning) = authority_warning(prepared) {
-        head.push(Line::from(Span::styled(
-            format!("  {} {warning}", glyph::WARNING),
-            theme.style(Tone::Warning),
-        )));
-    }
-
-    // A diff when there is one, the prepared arguments otherwise. Either way
-    // the user sees the substance of what they are authorizing, not its name.
-    let (body, elided) = match review {
-        Some(review) => review_lines(review, theme),
-        None => argument_lines(prepared.arguments(), theme),
-    };
-    (head, body, elided)
+    lines
 }
 
-/// Rows this panel wants, before the layout bounds it.
-pub(super) fn desired_approval_rows(
-    prompt: &smith_host::approval::ApprovalPrompt,
-    review: Option<&EditReview>,
-) -> u16 {
-    let (head, body, elided) = compose(prompt, review, Theme::default());
-    // Plus the key bar, which is never given up, and a row for the elision
-    // notice when the source already withheld something.
-    let notice = usize::from(elided > 0);
-    let rows = head
-        .len()
-        .saturating_add(body.len())
-        .saturating_add(notice)
-        .saturating_add(1);
-    u16::try_from(rows)
-        .unwrap_or(MAX_APPROVAL_ROWS)
-        .min(MAX_APPROVAL_ROWS)
-}
-
-/// Draws the approval into its anchored rows.
-pub(super) fn draw_approval(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    prompt: &smith_host::approval::ApprovalPrompt,
-    review: Option<&EditReview>,
+// Unknown tools still need their material arguments on the default view. Plain
+// fields keep that evidence readable without making raw JSON the action.
+fn material_lines(
+    name: &str,
+    value: &serde_json::Value,
     theme: Theme,
+    lines: &mut Vec<Line<'static>>,
 ) {
-    let (mut lines, mut body, elided) = compose(prompt, review, theme);
-
-    // Width-aware, because the keys are the one part that must survive: a
-    // narrow terminal that clips "deny" leaves the user unable to refuse.
-    let keys = if area.width >= 64 {
-        Line::from(vec![
-            Span::styled("  y", theme.style(Tone::Success)),
-            Span::styled(" allow once   ", theme.style(Tone::Dim)),
-            Span::styled("a", theme.style(Tone::Warning)),
-            Span::styled(
-                " allow this target for the session   ",
-                theme.style(Tone::Dim),
-            ),
-            Span::styled("n", theme.style(Tone::Danger)),
-            Span::styled(" deny", theme.style(Tone::Dim)),
-        ])
-    } else {
-        Line::from(vec![
-            Span::styled("  y", theme.style(Tone::Success)),
-            Span::styled(" allow once  ", theme.style(Tone::Dim)),
-            Span::styled("a", theme.style(Tone::Warning)),
-            Span::styled(" allow target  ", theme.style(Tone::Dim)),
-            Span::styled("n", theme.style(Tone::Danger)),
-            Span::styled(" deny", theme.style(Tone::Dim)),
-        ])
-    };
-
-    // The key bar is reserved out of the height before the body is fitted, and
-    // the header is trimmed only after the body is gone. An approval a user
-    // cannot answer is worse than one they cannot fully read, so the keys are
-    // the last thing to go and the diff is the first.
-    let height = usize::from(area.height);
-    let reserved = height.saturating_sub(1);
-    if lines.len() > reserved {
-        lines.truncate(reserved);
-    } else {
-        let room = reserved - lines.len();
-        // Whatever the source withheld plus whatever the height cannot hold.
-        // Dropping body lines silently would let a panel look complete while
-        // hiding part of the change the user is authorizing.
-        let dropped = body.len().saturating_sub(room);
-        let hidden = elided.saturating_add(dropped);
-        if hidden > 0 && room > 0 {
-            body.truncate(room.saturating_sub(1));
-            body.push(Line::from(Span::styled(
-                format!("  … {hidden} more lines not shown"),
-                theme.style(Tone::Dim),
-            )));
-        } else {
-            body.truncate(room);
+    match value {
+        serde_json::Value::Object(fields) => {
+            for (key, value) in fields {
+                let name = if name.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{name}.{key}")
+                };
+                material_lines(&name, value, theme, lines);
+            }
         }
-        lines.extend(body);
+        serde_json::Value::Array(values) if !values.is_empty() => {
+            for (index, value) in values.iter().enumerate() {
+                material_lines(&format!("{name}[{index}]"), value, theme, lines);
+            }
+        }
+        value => {
+            let text = value
+                .as_str()
+                .map_or_else(|| value.to_string(), str::to_owned);
+            for (index, text) in text.split('\n').enumerate() {
+                let prefix = if index == 0 {
+                    format!("{name}: ")
+                } else {
+                    "  ".to_owned()
+                };
+                lines.push(line(format!("{prefix}{text}"), theme, Tone::Default));
+            }
+        }
     }
-    if height > 0 {
-        lines.push(keys);
+}
+
+fn host_shell(prepared: &PreparedToolCall) -> bool {
+    prepared.tool() == "shell"
+        && matches!(prepared.resource(), SecurityResource::Other { kind, .. } if kind == "host-shell")
+}
+
+fn session_choice(prepared: &PreparedToolCall) -> String {
+    if host_shell(prepared) {
+        // The shell resource binds command, cwd, mode, and timeout. It is not
+        // a command-prefix allowance, even when two commands share a verb.
+        "Yes, don't ask again for this exact shell action this session".to_owned()
+    } else {
+        format!(
+            "Yes, don't ask for `{}` within this target, without extra permissions, this session",
+            prepared.tool(),
+        )
+    }
+}
+
+fn compose(
+    app: &App,
+    theme: Theme,
+    preview: usize,
+) -> (String, Vec<Line<'static>>, Vec<Line<'static>>) {
+    let Some(Overlay::Approval { prompt, review }) = &app.overlay else {
+        return (String::new(), Vec::new(), Vec::new());
+    };
+    let prepared = prompt.prepared();
+    let arguments = prepared.arguments();
+    let resource = security_resource_text(prepared.resource());
+    let title = match prepared.tool() {
+        "shell" => "Bash command".to_owned(),
+        "edit" => "Edit file".to_owned(),
+        _ => prepared.display().title.clone(),
+    };
+    let mut body = Vec::new();
+    if prepared.tool() == "shell" {
+        if let Some(command) = arguments.get("command").and_then(serde_json::Value::as_str) {
+            body.extend(
+                command
+                    .split('\n')
+                    .map(|text| line(text, theme, Tone::Default)),
+            );
+        } else {
+            body.push(line(prepared.display().title.clone(), theme, Tone::Heading));
+            material_lines("", arguments, theme, &mut body);
+        }
+    } else {
+        body.push(line(resource.clone(), theme, Tone::Danger));
+        if let Some(review) = review {
+            body.push(line(review.summary(), theme, Tone::Dim));
+            body.extend(diff_lines(review, app.work_details, preview, theme));
+        } else {
+            body.push(line(prepared.display().title.clone(), theme, Tone::Heading));
+            if let Some(detail) = &prepared.display().detail {
+                body.extend(
+                    detail
+                        .split('\n')
+                        .map(|text| line(text, theme, Tone::Default)),
+                );
+            }
+            material_lines("", arguments, theme, &mut body);
+        }
     }
 
-    frame.render_widget(Paragraph::new(lines), area);
+    let mut place = if prepared.tool() == "shell" {
+        // Prepared shell cwd is canonicalized by the tool. The resource is
+        // opaque for host shells; its digest belongs with the identity detail.
+        let cwd = arguments.get("cwd").and_then(serde_json::Value::as_str);
+        let shown = prepared
+            .display()
+            .title
+            .strip_prefix("Run unsandboxed host shell in ");
+        format!("in {}", cwd.or(shown).unwrap_or(&resource))
+    } else {
+        format!("at {resource}")
+    };
+    if prepared.tool() == "shell" {
+        if let Some(timeout) = arguments
+            .get("timeout_ms")
+            .and_then(serde_json::Value::as_u64)
+        {
+            let duration = if timeout.is_multiple_of(60_000) {
+                format!("{} min", timeout / 60_000)
+            } else if timeout.is_multiple_of(1_000) {
+                format!("{} s", timeout / 1_000)
+            } else {
+                format!("{timeout} ms")
+            };
+            place.push_str(&format!(" · up to {duration}"));
+        } else {
+            place.push_str(" · no execution timeout supplied");
+        }
+        if arguments
+            .get("run_in_background")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+        {
+            place.push_str(" · background");
+        }
+    }
+    place.push_str(&format!(" · deadline {}", deadline_text(prompt.deadline())));
+    body.push(line(place, theme, Tone::Dim));
+    if host_shell(prepared) {
+        body.push(line(
+            "Warning: Runs outside the sandbox with your files, environment and credentials, child processes, network, and data egress.",
+            theme,
+            Tone::Warning,
+        ));
+    } else if let Some(warning) = authority_warning(prepared) {
+        body.push(line(
+            format!(
+                "Warning: {}",
+                warning.trim_start_matches("authority warning: ")
+            ),
+            theme,
+            Tone::Warning,
+        ));
+    }
+
+    if app.work_details {
+        body.push(line(
+            format!("identity: {}", prepared.fingerprint().as_str()),
+            theme,
+            Tone::Dim,
+        ));
+        body.push(line(format!("target: {resource}"), theme, Tone::Dim));
+        let permissions = prepared
+            .required_permissions()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        body.push(line(
+            format!("permissions: {}", permissions.join(", ")),
+            theme,
+            Tone::Dim,
+        ));
+        body.push(line("raw arguments:", theme, Tone::Dim));
+        let raw = serde_json::to_string_pretty(arguments).unwrap_or_else(|_| arguments.to_string());
+        body.extend(raw.lines().map(|text| line(text, theme, Tone::Dim)));
+    }
+
+    let waiting =
+        app.pending_approval_count().saturating_sub(1) + app.pending_questionnaire_count();
+    let mut hint = if app.work_details {
+        "ctrl+o fold"
+    } else {
+        "ctrl+o details"
+    }
+    .to_owned();
+    if waiting > 0 {
+        hint.push_str(&format!(" · {waiting} more waiting"));
+    }
+    let foot = vec![
+        line("Do you want to proceed?", theme, Tone::Heading),
+        line("  y  Yes", theme, Tone::Success),
+        line(
+            format!("  a  {}", session_choice(prepared)),
+            theme,
+            Tone::Warning,
+        ),
+        line("  n  No (esc)", theme, Tone::Default),
+        line(hint, theme, Tone::Dim),
+    ];
+    (title, body, foot)
+}
+
+struct ApprovalLayout {
+    area: Rect,
+    title: String,
+    body: Vec<Line<'static>>,
+    foot: Vec<Line<'static>>,
+    scroll_limit: u16,
+}
+
+fn approval_layout(area: Rect, app: &App, theme: Theme) -> ApprovalLayout {
+    let width = if area.width < 60 {
+        area.width
+    } else {
+        modal_width(area)
+    };
+    let inner = width.saturating_sub(2);
+    let (title, body, mut controls) = compose(app, theme, DIFF_PREVIEW_LINES);
+    let mut body = wrap_lines(&body, inner);
+    let mut foot = wrap_lines(&controls, inner);
+    if !app.work_details
+        && matches!(
+            app.overlay,
+            Some(Overlay::Approval {
+                review: Some(_),
+                ..
+            })
+        )
+    {
+        // Fold the diff further before letting it push the place, warning, or
+        // deadline out of the default view on a short terminal.
+        for preview in (1..DIFF_PREVIEW_LINES).rev() {
+            if body.len() + foot.len() + 2 <= usize::from(area.height) {
+                break;
+            }
+            body = wrap_lines(&compose(app, theme, preview).1, inner);
+        }
+    }
+    let wanted = u16::try_from(body.len() + foot.len() + 2).unwrap_or(u16::MAX);
+    // The normal modal ceiling yields to decision evidence on short screens.
+    // Extra detail scrolls; controls never scroll away with the JSON or diff.
+    let minimum = if app.work_details {
+        u16::try_from(foot.len() + 5).unwrap_or(u16::MAX)
+    } else {
+        wanted
+    };
+    let height = wanted
+        .min(modal_max_height(area).max(minimum))
+        .min(area.height);
+    let modal = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    let mut room = usize::from(height.saturating_sub(2)).saturating_sub(foot.len());
+    if body.len() > room {
+        // Replace the detail hint rather than spending a scarce row that
+        // would otherwise hold the exact target on a ten-row screen.
+        if let Some(hint) = controls.last_mut() {
+            hint.spans
+                .push(Span::styled(" · ↑↓ review", theme.style(Tone::Dim)));
+        }
+        foot = wrap_lines(&controls, inner);
+        if foot.len() + 1 > usize::from(height.saturating_sub(2)) {
+            if let Some(hint) = controls.last_mut() {
+                hint.spans.pop();
+                hint.spans
+                    .push(Span::styled(" · ↑↓", theme.style(Tone::Dim)));
+            }
+            foot = wrap_lines(&controls, inner);
+        }
+        room = usize::from(height.saturating_sub(2)).saturating_sub(foot.len());
+    }
+    let scroll_limit = u16::try_from(body.len().saturating_sub(room)).unwrap_or(u16::MAX);
+    ApprovalLayout {
+        area: modal,
+        title,
+        body,
+        foot,
+        scroll_limit,
+    }
+}
+
+pub(super) fn approval_scroll_limit(area: Rect, app: &App, theme: Theme) -> u16 {
+    approval_layout(area, app, theme).scroll_limit
+}
+
+pub(super) fn draw_approval(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
+    let ApprovalLayout {
+        area,
+        title,
+        body,
+        foot,
+        scroll_limit,
+    } = approval_layout(area, app, theme);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(theme.style(Tone::Warning))
+        .title(Span::styled(
+            format!(" {title} "),
+            theme.style(Tone::Heading),
+        ));
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    let foot_height = u16::try_from(foot.len())
+        .unwrap_or(u16::MAX)
+        .min(inner.height);
+    let body_height = inner.height.saturating_sub(foot_height);
+    frame.render_widget(
+        Paragraph::new(body).scroll((app.approval_scroll.min(scroll_limit), 0)),
+        Rect::new(inner.x, inner.y, inner.width, body_height),
+    );
+    frame.render_widget(
+        Paragraph::new(foot),
+        Rect::new(inner.x, inner.y + body_height, inner.width, foot_height),
+    );
 }

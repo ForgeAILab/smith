@@ -1232,7 +1232,7 @@
         );
         let screen = render(&app, 74, 24, Theme::new());
 
-        insta_like(&screen, &["\"old_string\"", "y allow once"]);
+        insta_like(&screen, &["old_string: once();", "y  Yes"]);
         assert!(
             !screen.contains("change  "),
             "an unreviewable edit must not claim a diff:\n{screen}"
