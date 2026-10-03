@@ -659,6 +659,9 @@ pub struct ResolvedAgentProfile {
     pub instructions: Option<Sourced<String>>,
     /// Whether a main-agent runtime may expose direct-child delegation.
     pub delegation: Sourced<bool>,
+    /// Effective advisor profile name; unset and explicit `false` resolve to none.
+    /// The provenance ledger retains an explicit `false` and its source.
+    pub advisor: Option<Sourced<String>>,
     /// Placements where the profile is selectable.
     pub uses: Sourced<Vec<ProfileUse>>,
     /// Effective provider preference, when declared or inherited.
@@ -680,6 +683,7 @@ impl fmt::Debug for ResolvedAgentProfile {
             .field("description", &self.description)
             .field("has_instructions", &self.instructions.is_some())
             .field("delegation", &self.delegation)
+            .field("advisor", &self.advisor)
             .field("uses", &self.uses)
             .field("provider", &self.provider)
             .field("model", &self.model)

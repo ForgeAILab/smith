@@ -125,6 +125,8 @@ pub enum ProfileUse {
     Main,
     /// An explicit depth-one child agent.
     Child,
+    /// A model consulted for advice by a main agent.
+    Advisor,
 }
 
 impl ProfileUse {
@@ -133,6 +135,7 @@ impl ProfileUse {
         match value {
             "main" => Some(Self::Main),
             "child" => Some(Self::Child),
+            "advisor" => Some(Self::Advisor),
             _ => None,
         }
     }
@@ -142,12 +145,50 @@ impl ProfileUse {
         match self {
             Self::Main => "main",
             Self::Child => "child",
+            Self::Advisor => "advisor",
         }
     }
 
     /// Every supported placement spelling.
     pub fn spellings() -> &'static [&'static str] {
-        &["main", "child"]
+        &["main", "child", "advisor"]
+    }
+}
+
+/// An advisor profile name, or an explicit opt-out written as `false`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdvisorSelection {
+    /// The named profile to consult.
+    Profile(String),
+    /// Disable the advisor, overriding any inherited or top-level selection.
+    Disabled,
+}
+
+impl<'de> Deserialize<'de> for AdvisorSelection {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Value {
+            Profile(String),
+            Flag(bool),
+        }
+
+        match Value::deserialize(deserializer)? {
+            Value::Profile(name) => Ok(Self::Profile(name)),
+            Value::Flag(false) => Ok(Self::Disabled),
+            Value::Flag(true) => Err(serde::de::Error::custom(
+                "`advisor` must be a profile name or `false`, not `true`",
+            )),
+        }
+    }
+}
+
+impl Serialize for AdvisorSelection {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Profile(name) => serializer.serialize_str(name),
+            Self::Disabled => serializer.serialize_bool(false),
+        }
     }
 }
 
@@ -186,6 +227,9 @@ pub struct ConfigFile {
     /// The profile to select when no higher layer selects one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_profile: Option<String>,
+    /// Default advisor for main profiles without their own selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub advisor: Option<AdvisorSelection>,
     /// Stable order used by idle-composer profile cycling.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile_order: Option<Vec<String>>,
@@ -317,7 +361,7 @@ pub struct ProfileSection {
     /// Authority-narrowing behavior this profile selects.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub posture: Option<AgentPosture>,
-    /// Main/child placements where the profile is selectable.
+    /// Main/child/advisor placements where the profile is selectable.
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "use")]
     pub uses: Option<Vec<ProfileUse>>,
     /// Bounded additive developer instructions for this agent preset.
@@ -329,6 +373,9 @@ pub struct ProfileSection {
     /// delegate regardless of this value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegation: Option<bool>,
+    /// Advisor profile name or `false`, inherited through `extends`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub advisor: Option<AdvisorSelection>,
     /// The name of a provider declared in `[providers.<name>]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,

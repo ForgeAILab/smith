@@ -70,7 +70,7 @@ pub(super) fn profile_contributions(
         declared: &Declarations,
         stack: &mut Vec<String>,
         depth: usize,
-    ) -> Result<BTreeMap<String, Contribution>, ConfigError> {
+    ) -> Result<BTreeMap<String, Vec<Contribution>>, ConfigError> {
         let declaration =
             declared
                 .profiles
@@ -104,17 +104,25 @@ pub(super) fn profile_contributions(
 
         stack.push(profile.to_owned());
         let prefix = format!("{}.", join_key(&["profiles", profile]));
-        let mut own = BTreeMap::<String, Contribution>::new();
+        let mut own = BTreeMap::<String, Vec<Contribution>>::new();
         for layer in file_layers {
             for contribution in layer {
                 let Some(rest) = contribution.key.strip_prefix(&prefix) else {
                     continue;
                 };
-                own.insert(rest.to_owned(), contribution.clone());
+                // Advisor explain retains every file and inheritance source.
+                // Other settings preserve their existing winner-only behavior.
+                if rest == "advisor" {
+                    own.entry(rest.to_owned())
+                        .or_default()
+                        .push(contribution.clone());
+                } else {
+                    own.insert(rest.to_owned(), vec![contribution.clone()]);
+                }
             }
         }
 
-        let parent = match own.remove("extends") {
+        let parent = match own.remove("extends").and_then(|mut entries| entries.pop()) {
             Some(contribution) => match contribution.value {
                 SettingValue::Text(parent) => Some((parent, contribution.source)),
                 other => {
@@ -147,22 +155,30 @@ pub(super) fn profile_contributions(
         };
         stack.pop();
 
-        for (key, contribution) in own {
-            winners.insert(key, contribution);
+        for (key, contributions) in own {
+            if key == "advisor" {
+                winners.entry(key).or_default().extend(contributions);
+            } else {
+                winners.insert(key, contributions);
+            }
         }
         Ok(winners)
     }
 
     Ok(collect(file_layers, profile, declared, &mut Vec::new(), 0)?
         .into_iter()
-        .map(|(key, contribution)| Contribution {
-            key,
-            value: contribution.value,
-            source: Source {
-                layer: Layer::Profile,
-                file: contribution.source.file,
-                key: contribution.source.key,
-            },
+        .flat_map(|(key, contributions)| {
+            contributions
+                .into_iter()
+                .map(move |contribution| Contribution {
+                    key: key.clone(),
+                    value: contribution.value,
+                    source: Source {
+                        layer: Layer::Profile,
+                        file: contribution.source.file,
+                        key: contribution.source.key,
+                    },
+                })
         })
         .collect())
 }
@@ -193,6 +209,7 @@ pub(super) fn resolve_agent_profiles(
         let posture = resolve_agent_posture(&global, &format!("{scope}.posture"), declaration)?;
         let description = bounded_description(&global, &format!("{scope}.description"))?;
         let delegation = Sourced::new(true, declaration.clone());
+        let advisor = advisor_selection(&global, name)?;
         let uses = Sourced::new(vec![ProfileUse::Main], declaration.clone());
         let revision = agent_profile_revision(
             name,
@@ -200,6 +217,7 @@ pub(super) fn resolve_agent_profiles(
             description.as_ref(),
             None,
             &delegation,
+            advisor.as_ref(),
             &uses,
             None,
             None,
@@ -213,6 +231,7 @@ pub(super) fn resolve_agent_profiles(
                 description,
                 instructions: None,
                 delegation,
+                advisor,
                 uses,
                 provider: None,
                 model: None,
@@ -244,6 +263,7 @@ pub(super) fn resolve_agent_profiles(
             description.as_ref(),
             None,
             &delegation,
+            None,
             &uses,
             None,
             None,
@@ -257,6 +277,7 @@ pub(super) fn resolve_agent_profiles(
                 description,
                 instructions: None,
                 delegation,
+                advisor: None,
                 uses,
                 provider: None,
                 model: None,
@@ -265,6 +286,9 @@ pub(super) fn resolve_agent_profiles(
             },
             declaration,
         )?;
+    }
+    for profile in profiles.values() {
+        validate_advisor(profile.advisor.as_ref(), &profiles)?;
     }
     Ok(profiles)
 }
@@ -324,6 +348,14 @@ pub(super) fn resolved_profile(
     let delegation =
         flag(effective, "delegation")?.unwrap_or_else(|| Sourced::new(true, declaration.clone()));
     let uses = profile_uses(effective, declaration)?;
+    let advisor = advisor_selection(
+        if effective.winner("advisor").is_none() && uses.value.contains(&ProfileUse::Main) {
+            global
+        } else {
+            effective
+        },
+        name,
+    )?;
     let provider = text(effective, "provider")?;
     let model = text(effective, "model")?;
     let revision = agent_profile_revision(
@@ -332,6 +364,7 @@ pub(super) fn resolved_profile(
         description.as_ref(),
         instructions.as_ref(),
         &delegation,
+        advisor.as_ref(),
         &uses,
         provider.as_ref(),
         model.as_ref(),
@@ -343,6 +376,7 @@ pub(super) fn resolved_profile(
         description,
         instructions,
         delegation,
+        advisor,
         uses,
         provider,
         model,
@@ -387,6 +421,7 @@ pub(super) fn merge_legacy_profile(
         existing.description.as_ref(),
         existing.instructions.as_ref(),
         &existing.delegation,
+        existing.advisor.as_ref(),
         &existing.uses,
         existing.provider.as_ref(),
         existing.model.as_ref(),
@@ -405,7 +440,8 @@ pub(super) fn profile_uses(
     if raw.value.is_empty() {
         return Err(ConfigError::InvalidValue {
             source: raw.source,
-            message: "profile `use` must contain `main`, `child`, or both".to_owned(),
+            message: "profile `use` must contain at least one of `main`, `child`, or `advisor`"
+                .to_owned(),
         });
     }
     let mut seen = BTreeSet::new();
@@ -427,6 +463,71 @@ pub(super) fn profile_uses(
         uses.push(placement);
     }
     Ok(Sourced::new(uses, raw.source))
+}
+
+fn advisor_selection(
+    provenance: &Provenance,
+    profile: &str,
+) -> Result<Option<Sourced<String>>, ConfigError> {
+    let Some(entry) = provenance.winner("advisor") else {
+        return Ok(None);
+    };
+    match &entry.value {
+        SettingValue::Text(name) if name == profile => {
+            if entry.source.layer == Layer::Profile {
+                return Err(ConfigError::InvalidValue {
+                    source: entry.source.clone(),
+                    message: format!("profile `{profile}` cannot select itself as its `advisor`"),
+                });
+            }
+            // A top-level default never assigns a profile as its own advisor.
+            Ok(None)
+        }
+        SettingValue::Text(name) => Ok(Some(Sourced::new(name.clone(), entry.source.clone()))),
+        SettingValue::Flag(false) => Ok(None),
+        _ => Err(ConfigError::InvalidValue {
+            source: entry.source.clone(),
+            message: "`advisor` must be a profile name or `false`".to_owned(),
+        }),
+    }
+}
+
+fn validate_advisor(
+    advisor: Option<&Sourced<String>>,
+    profiles: &BTreeMap<String, ResolvedAgentProfile>,
+) -> Result<(), ConfigError> {
+    let Some(advisor) = advisor else {
+        return Ok(());
+    };
+    let Some(target) = profiles.get(&advisor.value) else {
+        let available = profiles
+            .values()
+            .filter(|profile| profile.supports(ProfileUse::Advisor))
+            .map(|profile| format!("`{}`", profile.name))
+            .collect::<Vec<_>>();
+        return Err(ConfigError::InvalidValue {
+            source: advisor.source.clone(),
+            message: format!(
+                "`advisor` names unknown profile `{}`; profiles placed as advisors: {}",
+                advisor.value,
+                if available.is_empty() {
+                    "(none)".to_owned()
+                } else {
+                    available.join(", ")
+                }
+            ),
+        });
+    };
+    if !target.supports(ProfileUse::Advisor) {
+        return Err(ConfigError::InvalidValue {
+            source: advisor.source.clone(),
+            message: format!(
+                "`advisor` names profile `{}`, whose `use` lacks the `advisor` placement",
+                advisor.value
+            ),
+        });
+    }
+    Ok(())
 }
 
 pub(super) fn bounded_instructions(
@@ -456,6 +557,7 @@ pub(super) fn agent_profile_revision(
     description: Option<&Sourced<String>>,
     instructions: Option<&Sourced<String>>,
     delegation: &Sourced<bool>,
+    advisor: Option<&Sourced<String>>,
     uses: &Sourced<Vec<ProfileUse>>,
     provider: Option<&Sourced<String>>,
     model: Option<&Sourced<String>>,
@@ -476,6 +578,13 @@ pub(super) fn agent_profile_revision(
     digest.update(uses.source.to_string().as_bytes());
     digest.update([0, u8::from(delegation.value)]);
     digest.update(delegation.source.to_string().as_bytes());
+    // Preserve revisions for configurations without an advisor.
+    if let Some(advisor) = advisor {
+        digest.update(b"\0advisor\0");
+        digest.update(advisor.value.as_bytes());
+        digest.update([0]);
+        digest.update(advisor.source.to_string().as_bytes());
+    }
     for value in [description, instructions, provider, model]
         .into_iter()
         .flatten()
@@ -683,7 +792,11 @@ pub(super) fn resolve_agent(
         );
     }
 
-    let profile = match selected_profile {
+    let default_advisor = advisor_selection(
+        provenance,
+        selected_profile.map_or(active.value.as_str(), |selected| selected.value.as_str()),
+    )?;
+    let mut profile = match selected_profile {
         Some(selected) => profiles
             .get(&selected.value)
             .cloned()
@@ -703,6 +816,7 @@ pub(super) fn resolve_agent(
                     .and_then(|mode| mode.description.clone()),
                 instructions: None,
                 delegation: Sourced::new(true, active.source.clone()),
+                advisor: default_advisor.clone(),
                 uses: Sourced::new(vec![ProfileUse::Main], active.source.clone()),
                 provider: None,
                 model: None,
@@ -717,6 +831,7 @@ pub(super) fn resolve_agent(
                         .and_then(|mode| mode.description.as_ref()),
                     None,
                     &Sourced::new(true, active.source.clone()),
+                    default_advisor.as_ref(),
                     &Sourced::new(vec![ProfileUse::Main], active.source.clone()),
                     None,
                     None,
@@ -737,6 +852,24 @@ pub(super) fn resolve_agent(
                 profile_use.as_str()
             ),
         });
+    }
+    validate_advisor(profile.advisor.as_ref(), &profiles)?;
+    if profile_use == ProfileUse::Advisor {
+        // The catalog retains the profile's selection for main use, while an
+        // advisor request has no tools and cannot consult another advisor.
+        profile.advisor = None;
+        profile.revision = agent_profile_revision(
+            &profile.name,
+            &profile.posture,
+            profile.description.as_ref(),
+            profile.instructions.as_ref(),
+            &profile.delegation,
+            None,
+            &profile.uses,
+            profile.provider.as_ref(),
+            profile.model.as_ref(),
+            profile.legacy,
+        );
     }
 
     let profile_order = match list(provenance, "profile_order")? {

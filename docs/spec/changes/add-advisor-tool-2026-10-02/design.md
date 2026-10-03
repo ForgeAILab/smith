@@ -33,8 +33,12 @@ advisor does not see that tool's result.
   the default for every main profile; the same key on a profile overrides it,
   and `advisor = false` disables it. The named profile must exist and include
   `advisor` in `use`; both are checked with the other profile placements,
-  before credential or provider construction. An advisor profile cannot itself
-  have an advisor. `smith config explain advisor` reports the winner.
+  before credential or provider construction. A profile never advises itself:
+  a top-level default naming the active profile is skipped for it, and an
+  explicit self-reference is an error. A profile's own advisor setting is
+  ignored while it serves as the advisor; the advisor request has no tools, so
+  an advisor can never consult another. `smith config explain advisor` reports
+  the winner.
   - Alternatives: only `use = ["advisor"]` with one advisor allowed (cannot
     give two main profiles different advisors); a separate `[advisor]` table
     with provider and model (duplicates profile resolution, reasoning, and

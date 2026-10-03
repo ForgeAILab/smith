@@ -1281,6 +1281,7 @@ fn agent(posture: AgentPosture) -> ResolvedAgent {
         description: None,
         instructions: None,
         delegation: sourced(true),
+        advisor: None,
         uses: sourced(vec![ProfileUse::Main]),
         provider: None,
         model: None,

@@ -193,7 +193,8 @@ cost. Its separate `cache read (session)` line is retained as the cumulative
 raw provider-read total for compatibility; it is not the latest-turn `CH`.
 
 Agent-profile selection follows the same provenance rules. One named profile
-can configure the main agent, an explicit direct child, or both:
+can configure the main agent, an explicit direct child, an advisor, or any
+combination of these placements:
 
 ```toml
 default_profile = "work"
@@ -223,12 +224,13 @@ description = "read-only independent review"
 instructions = "Report prioritized evidence-backed findings."
 ```
 
-`use` defaults to `["main"]` when omitted. `extends` names one parent; the
-child replaces inherited fields rather than concatenating instructions. Smith
-rejects missing parents, cycles, inheritance deeper than 16 profiles, invalid
-placements, and child-only entries in `profile_order` before credential or
-provider construction. Instructions are nonempty UTF-8 text bounded to 32 KiB
-and become an additive developer-instruction fragment after Smith's stable
+`use` accepts `"main"`, `"child"`, and `"advisor"`, and defaults to `["main"]`
+when omitted. `extends` names one parent; the child replaces inherited fields
+rather than concatenating instructions. Smith rejects missing parents, cycles,
+inheritance deeper than 16 profiles, invalid
+placements, and entries without main placement in `profile_order` before
+credential or provider construction. Instructions are nonempty UTF-8 text
+bounded to 32 KiB and become an additive developer-instruction fragment after Smith's stable
 host policy. Profile text and settings cannot grant a tool, credential, trust,
 approval, permission, or larger workspace.
 
@@ -237,9 +239,48 @@ Setting it to `false` on a main profile removes both the model-facing `agent`
 tool and its delegation instructions. Child surfaces never delegate, even when
 their effective profile has `delegation = true`.
 
+The top-level `advisor = "<name>"` selects a default advisor for every
+main-enabled profile. A profile's own `advisor` key, inherited through
+`extends`, overrides that default; `advisor = false` disables it. Top-level
+`advisor = false` disables the default, while a profile can still select its
+own advisor. File layers use the usual user, project, then project-local
+precedence; a profile's own value beats its parent's value, and the effective
+profile value beats the top-level default. With no applicable key, the advisor
+is off. `smith config explain advisor` reports the winner and every overridden
+source, including an explicit `false`.
+
+The target must exist and include `"advisor"` in `use`. Smith checks these
+rules before credential or provider construction. A profile never advises
+itself: a top-level default naming that profile is skipped for it, while an
+own or inherited profile-level self-reference is an error naming the key.
+A profile can serve as a main agent, a child, and an advisor, and may select
+a different advisor for its own main use. That selection is ignored while
+the profile serves as an advisor, because advisor requests carry no tools.
+For example, make `sol` the advisor for `code` (using an already declared
+`remote` provider); when `sol` runs as main, it has no advisor:
+
+```toml
+default_profile = "code"
+advisor = "sol"
+
+[profiles.code]
+provider = "remote"
+model = "vendor/working-model"
+use = ["main"]
+
+[profiles.sol]
+provider = "remote"
+model = "vendor/stronger-model"
+use = ["main", "child", "advisor"]
+```
+
+The advisor receives the conversation, including tool output and file
+contents shown by tools. Its profile may use a different provider from the
+main profile, so that conversation is disclosed to the advisor's provider.
+
 When `profile_order` is omitted, Smith derives a deterministic cycle from all
-real main-enabled profiles and excludes legacy adapters and child-only
-profiles. Guided setup writes an explicit three-profile order: the selected
+real main-enabled profiles and excludes legacy adapters and profiles without
+main placement. Guided setup writes an explicit three-profile order: the selected
 build profile plus inherited `-plan` and `-review` variants. Legacy entries
 shown by `/profile` route through the deprecated mode override and never become
 an invalid `--profile` selection.

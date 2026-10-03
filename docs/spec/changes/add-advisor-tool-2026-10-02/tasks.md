@@ -18,13 +18,14 @@ completed_at:
 
 ## 2. Configuration
 
-- [ ] 2.1 Add the `advisor` placement to `use`, the top-level and per-profile
+- [x] 2.1 Add the `advisor` placement to `use`, the top-level and per-profile
   `advisor` key (`"<name>"` or `false`), inheritance through `extends`, and
-  validation: the target exists, includes `advisor` in `use`, and has no
-  advisor of its own.
-- [ ] 2.2 Report the winner and overridden sources in
+  validation: the target exists and includes `advisor` in `use`; a profile
+  never resolves itself (a top-level default naming it is skipped; an
+  explicit self-reference is rejected).
+- [x] 2.2 Report the winner and overridden sources in
   `smith config explain advisor`.
-- [ ] 2.3 Document the keys, the disclosure note, and an example in
+- [x] 2.3 Document the keys, the disclosure note, and an example in
   `docs/configuration.md`.
 
 ## 3. Runtime

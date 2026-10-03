@@ -409,7 +409,7 @@ impl Provenance {
     /// unset, while a key Smith has never heard of reads as the typo it is.
     pub fn explain(&self, key: &str) -> Result<Explanation, ConfigError> {
         let absent = || {
-            if SETTINGS.iter().any(|(setting, _)| *setting == key) {
+            if key == "advisor" || SETTINGS.iter().any(|(setting, _)| *setting == key) {
                 ConfigError::MissingSetting {
                     key: key.to_owned(),
                     message: "no layer supplied a value".to_owned(),
