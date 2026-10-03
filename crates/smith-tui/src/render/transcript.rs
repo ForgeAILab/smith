@@ -19,6 +19,7 @@ use smith_client::diff_report::{DiffLineKind, DiffOutcome, DiffReport};
 use smith_client::goal_report::GoalReport;
 use smith_client::help_report::{HelpCommand, HelpReport};
 use smith_client::mcp_report::McpReport;
+use smith_client::review_report::{ReviewPreview, ReviewReport, ReviewStartReport};
 use smith_client::skills_report::SkillsReport;
 use smith_client::status_report::{StatusGoal, StatusReport};
 use smith_client::timeline_report::{TimelineEntry, TimelinePlan, TimelineReport};
@@ -412,6 +413,9 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16) -> Vec<Line<'static>>
                     theme.style(Tone::Command),
                 )));
                 lines.extend(render_diff_report(report, width, theme));
+            }
+            Block::Local(LocalResult::Review(report)) => {
+                lines.extend(render_review_report(report, theme));
             }
             Block::Local(LocalResult::Text {
                 title,
@@ -938,6 +942,88 @@ fn render_diff_report(report: &DiffReport, width: u16, theme: Theme) -> Vec<Line
                         Line::from(Span::styled(wrapped, theme.style(tone)))
                     }
                 })
+        })
+        .collect()
+}
+
+/// Keeps the confirmation's existing unstyled patch presentation. The modal
+/// owns wrapping and its row cap; no heading or source prefix selects a style.
+pub(super) fn render_review_preview(report: &ReviewPreview) -> Vec<Line<'static>> {
+    let mut lines = format!("scope: {}\n", report.title)
+        .lines()
+        .map(|raw| Line::from(raw.to_owned()))
+        .collect::<Vec<_>>();
+    lines.extend([
+        Line::from("provider-backed: yes"),
+        Line::from("workspace authority: read-only"),
+        Line::from(ReviewReport::AUTHORITY_MESSAGE),
+        Line::default(),
+    ]);
+    lines.extend(
+        report
+            .patch
+            .iter()
+            .flat_map(|line| line.text.lines())
+            .map(|raw| Line::from(raw.to_owned())),
+    );
+    lines
+}
+
+fn render_review_report(report: &ReviewReport, theme: Theme) -> Vec<Line<'static>> {
+    match report {
+        ReviewReport::Confirmation(preview) => {
+            let mut lines = vec![Line::from(Span::styled(
+                "/review",
+                theme.style(Tone::Command),
+            ))];
+            lines.extend(render_review_preview(preview));
+            lines
+        }
+        ReviewReport::Empty => render_review_notice(ReviewReport::EMPTY_MESSAGE, theme),
+        ReviewReport::Error(message) => render_review_error(message, theme),
+        ReviewReport::Start(start) => {
+            let content = start.render_value();
+            match start {
+                ReviewStartReport::Started { .. } | ReviewStartReport::Queued { .. } => {
+                    render_review_notice(&content, theme)
+                }
+                ReviewStartReport::Unavailable
+                | ReviewStartReport::AtCapacity { .. }
+                | ReviewStartReport::Failed(_) => render_review_error(&content, theme),
+            }
+        }
+    }
+}
+
+fn render_review_notice(content: &str, theme: Theme) -> Vec<Line<'static>> {
+    content
+        .lines()
+        .enumerate()
+        .map(|(index, raw)| {
+            if index == 0 {
+                Line::from(vec![
+                    Span::styled(format!("{} ", glyph::NOTICE), theme.style(Tone::Dim)),
+                    Span::styled("review", theme.style(Tone::Heading)),
+                    Span::styled(" · ", theme.style(Tone::Dim)),
+                    Span::styled(raw.to_owned(), theme.style(Tone::Default)),
+                ])
+            } else {
+                Line::from(Span::styled(format!("  {raw}"), theme.style(Tone::Dim)))
+            }
+        })
+        .collect()
+}
+
+fn render_review_error(message: &str, theme: Theme) -> Vec<Line<'static>> {
+    message
+        .lines()
+        .enumerate()
+        .map(|(index, raw)| {
+            let marker = if index == 0 { glyph::ERROR } else { " " };
+            Line::from(Span::styled(
+                format!("{marker} {raw}"),
+                theme.style(Tone::Danger),
+            ))
         })
         .collect()
 }

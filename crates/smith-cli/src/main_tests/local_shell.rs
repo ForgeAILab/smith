@@ -158,7 +158,7 @@ mod local_shell_tests {
                 assert!(content.contains("shortcut"), "{content}");
             }
             LocalOutcome::Error(error) => panic!("local shell failed: {error}"),
-            LocalOutcome::Notice { .. } | LocalOutcome::Agent(_) => panic!("expected a shell result"),
+            LocalOutcome::Notice { .. } | LocalOutcome::Agent(_) | LocalOutcome::Review(_) => panic!("expected a shell result"),
         }
     }
 
@@ -305,7 +305,7 @@ mod local_shell_tests {
                 assert!(content.contains("cancel"), "{content}");
             }
             LocalOutcome::Error(error) => assert!(error.contains("cancel"), "{error}"),
-            LocalOutcome::Notice { .. } | LocalOutcome::Agent(_) => panic!("expected cancellation"),
+            LocalOutcome::Notice { .. } | LocalOutcome::Agent(_) | LocalOutcome::Review(_) => panic!("expected cancellation"),
         }
         // Even the original prepared request must no longer match: checking
         // only a new model turn would not prove the old token was discarded.

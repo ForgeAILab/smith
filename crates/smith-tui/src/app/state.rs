@@ -17,6 +17,7 @@ use agent_runtime_core::ids::{AttemptId, RequestId, TurnId};
 use agent_runtime_core::steer::SteerReceipt;
 use agent_runtime_core::usage::CounterKind;
 use smith_client::agent_report::AgentSnapshot;
+use smith_client::review_report::ReviewPreview;
 use smith_host::approval::ApprovalPrompt;
 use smith_host::rotation::RotationPrompt;
 use smith_runtime::client::{PlanItemProjection, PlanSensitivity, SmithEvent as EventEnvelope};
@@ -441,10 +442,8 @@ pub enum Overlay {
     },
     /// Provider-backed read-only review awaiting explicit confirmation.
     ReviewConfirm {
-        /// Review scope.
-        scope: String,
-        /// Spend and scope explanation.
-        content: String,
+        /// Exact review scope and classified patch, before provider spend.
+        report: Box<ReviewPreview>,
     },
     /// Explicit child invocation awaiting provider-spend confirmation.
     AgentConfirm {

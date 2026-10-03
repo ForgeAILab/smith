@@ -4,6 +4,7 @@ use super::*;
 use smith_client::agent_report::AgentReport;
 use smith_client::local_result::LocalResult;
 use smith_client::mcp_report::McpReport;
+use smith_client::review_report::ReviewReport;
 use smith_client::skills_report::SkillsReport;
 use smith_client::status::{PriceReference, SessionCost, SessionUsage};
 
@@ -12,6 +13,7 @@ pub(super) mod context;
 mod diff;
 mod goal;
 pub(super) mod mcp;
+mod review;
 pub(super) mod skills;
 mod status;
 pub(crate) mod timeline;
@@ -229,25 +231,12 @@ pub(super) async fn handle_local_command(
                 host, project, scope,
             ))));
         }
-        HostCommand::Review(scope) => {
-            let scope = scope.unwrap_or_else(|| "all".to_owned());
-            match GitChanges::discover(project)
-                .and_then(|git| git.inspect(Some(scope.as_str())))
-            {
-                Ok(view) if view.content == "No changes in this scope." => {
-                    app.transcript.push_notice("review", view.content);
-                }
-                Ok(view) => app.confirm_review(
-                    scope,
-                    format!(
-                        "scope: {}\nprovider-backed: yes\nworkspace authority: read-only\n\
-                         The reviewer can read, list, and search but cannot edit or run shell commands.\n\n{}",
-                        view.title, view.content
-                    ),
-                ),
-                Err(error) => app.transcript.push_error(error.message),
-            }
-        }
+        HostCommand::Review(scope) => match review::report(project, scope) {
+            ReviewReport::Confirmation(preview) => app.confirm_review(preview),
+            report => app
+                .transcript
+                .push_local(LocalResult::Review(Box::new(report))),
+        },
         HostCommand::Undo => match host.changes().undo_preview() {
             Ok(preview) => app.confirm_undo(preview),
             Err(error) => app.transcript.push_error(error.message),
@@ -866,9 +855,9 @@ fn reasoning_status_values(policy: &RuntimePolicy) -> (String, String) {
 
 pub(super) enum LocalOutcome {
     Agent(Box<AgentReport>),
+    Review(Box<ReviewReport>),
     Notice {
-        /// The transcript block label — "agents" for child lifecycle,
-        /// "review" for reviewer starts.
+        /// The transcript block label for child lifecycle notices.
         source: &'static str,
         text: String,
     },

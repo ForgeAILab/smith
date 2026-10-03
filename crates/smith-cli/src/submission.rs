@@ -2,6 +2,7 @@
 
 use super::*;
 use smith_client::agent_report::{AgentReport, AgentResumeReport};
+use smith_client::review_report::{ReviewReport, ReviewStartReport};
 
 #[derive(Clone, Default)]
 pub(super) struct LocalShellApprovals {
@@ -586,16 +587,18 @@ pub(super) fn start_review(
         .and_then(|delegation| delegation.coordinator())
         .cloned()
     else {
-        let _ = outcomes.send(LocalOutcome::Error(
-            "read-only review is unavailable because delegation is not wired".to_owned(),
-        ));
+        let _ = outcomes.send(LocalOutcome::Review(Box::new(ReviewReport::Start(
+            ReviewStartReport::Unavailable,
+        ))));
         return;
     };
     let view = match GitChanges::discover(project).and_then(|git| git.inspect(Some(scope.as_str())))
     {
         Ok(view) => view,
         Err(error) => {
-            let _ = outcomes.send(LocalOutcome::Error(error.message));
+            let _ = outcomes.send(LocalOutcome::Review(Box::new(ReviewReport::Error(
+                error.message,
+            ))));
             return;
         }
     };
@@ -615,20 +618,18 @@ pub(super) fn start_review(
                 workspace: WorkspacePolicy::ReadOnlyView,
             })
             .await;
-        let message = match outcome {
-            Ok(SpawnOutcome::Spawned { child, .. }) => LocalOutcome::Notice {
-                source: "review",
-                text: format!("read-only reviewer {child} started"),
+        let report = match outcome {
+            Ok(SpawnOutcome::Spawned { child, .. }) => ReviewStartReport::Started {
+                child: child.to_string(),
             },
-            Ok(SpawnOutcome::Queued { child }) => LocalOutcome::Notice {
-                source: "review",
-                text: format!("read-only reviewer {child} queued"),
+            Ok(SpawnOutcome::Queued { child }) => ReviewStartReport::Queued {
+                child: child.to_string(),
             },
-            Ok(SpawnOutcome::AtCapacity { running, limit }) => LocalOutcome::Error(format!(
-                "review did not start: {running} children are already running (limit {limit})"
-            )),
-            Err(error) => LocalOutcome::Error(format!("review did not start: {}", error.message)),
+            Ok(SpawnOutcome::AtCapacity { running, limit }) => {
+                ReviewStartReport::AtCapacity { running, limit }
+            }
+            Err(error) => ReviewStartReport::Failed(error.message),
         };
-        let _ = outcomes.send(message);
+        let _ = outcomes.send(LocalOutcome::Review(Box::new(ReviewReport::Start(report))));
     });
 }

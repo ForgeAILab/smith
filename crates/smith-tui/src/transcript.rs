@@ -20,6 +20,7 @@ use serde_json::Value;
 use smith_client::agent_report::{AgentReport, AgentResumeReport};
 use smith_client::diff_report::{DiffLine, DiffLineKind, DiffOutcome, DiffReport};
 pub use smith_client::local_result::{LocalResult, LocalResultState};
+use smith_client::review_report::{ReviewReport, ReviewStartReport};
 use smith_tools::{
     ToolCallDisplay, has_tool_call_display_schema, project_external_tool_call_display,
     project_tool_call_display,
@@ -258,8 +259,8 @@ impl Transcript {
 
     /// Appends a typed local report, bounding patches and transitional text.
     pub fn push_local(&mut self, result: LocalResult) {
-        // Resume notices used to append through `push_notice`, which leaves
-        // the current stream open until its next delta or turn boundary.
+        // Resume and review notices used to append through `push_notice`,
+        // which leaves the stream open until its next delta or turn boundary.
         if !matches!(
             &result,
             LocalResult::Agent(report)
@@ -268,6 +269,16 @@ impl Transcript {
                     AgentReport::Resume(
                         AgentResumeReport::RequiresIdle | AgentResumeReport::Started { .. }
                     )
+                )
+        ) && !matches!(
+            &result,
+            LocalResult::Review(report)
+                if matches!(
+                    report.as_ref(),
+                    ReviewReport::Empty
+                        | ReviewReport::Start(
+                            ReviewStartReport::Started { .. } | ReviewStartReport::Queued { .. }
+                        )
                 )
         ) {
             self.close_open();
@@ -927,6 +938,37 @@ mod tests {
             let mut transcript = Transcript::new();
             transcript.push_text_delta("analyzing");
             transcript.push_local(LocalResult::Agent(Box::new(AgentReport::Resume(resume))));
+            assert!(matches!(
+                transcript.blocks()[0],
+                Block::Assistant { open: true, .. }
+            ));
+            transcript.push_text_delta(" the failure");
+            assert_eq!(transcript.len(), 3);
+            assert!(matches!(
+                transcript.blocks()[0],
+                Block::Assistant { open: false, .. }
+            ));
+            assert!(matches!(
+                &transcript.blocks()[2],
+                Block::Assistant { text, .. } if text == " the failure"
+            ));
+        }
+    }
+
+    #[test]
+    fn typed_review_notices_keep_the_existing_stream_boundary() {
+        for report in [
+            ReviewReport::Empty,
+            ReviewReport::Start(ReviewStartReport::Started {
+                child: "child-1".to_owned(),
+            }),
+            ReviewReport::Start(ReviewStartReport::Queued {
+                child: "child-2".to_owned(),
+            }),
+        ] {
+            let mut transcript = Transcript::new();
+            transcript.push_text_delta("analyzing");
+            transcript.push_local(LocalResult::Review(Box::new(report)));
             assert!(matches!(
                 transcript.blocks()[0],
                 Block::Assistant { open: true, .. }

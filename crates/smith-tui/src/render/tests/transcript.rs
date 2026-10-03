@@ -540,6 +540,95 @@
     }
 
     #[test]
+    fn typed_review_notices_and_errors_keep_the_previous_transcript_presentation() {
+        use smith_client::review_report::{ReviewReport, ReviewStartReport};
+
+        for report in [
+            ReviewReport::Empty,
+            ReviewReport::Error(
+                "Git-backed change inspection is unavailable outside a Git worktree\nmore detail"
+                    .to_owned(),
+            ),
+            ReviewReport::Start(ReviewStartReport::Unavailable),
+            ReviewReport::Start(ReviewStartReport::Started {
+                child: "child-1".to_owned(),
+            }),
+            ReviewReport::Start(ReviewStartReport::Queued {
+                child: "child-2".to_owned(),
+            }),
+            ReviewReport::Start(ReviewStartReport::AtCapacity {
+                running: 2,
+                limit: 2,
+            }),
+            ReviewReport::Start(ReviewStartReport::Failed("provider unavailable".to_owned())),
+        ] {
+            let content = smith_client::review_report::render_plain(&report);
+            let mut legacy = App::new("gpt-5.3", "~/work/api");
+            if matches!(
+                &report,
+                ReviewReport::Empty
+                    | ReviewReport::Start(
+                        ReviewStartReport::Started { .. } | ReviewStartReport::Queued { .. }
+                    )
+            ) {
+                legacy.transcript.push_notice("review", content);
+            } else {
+                legacy.transcript.push_error(content);
+            }
+            let mut typed = App::new("gpt-5.3", "~/work/api");
+            typed.transcript.push_local(LocalResult::Review(Box::new(report)));
+            for width in [44, 100] {
+                for theme in [Theme::new(), Theme::new().without_color()] {
+                    assert_eq!(
+                        transcript_lines(&typed, theme, width),
+                        transcript_lines(&legacy, theme, width),
+                    );
+                    assert_eq!(
+                        render(&typed, width, 24, theme),
+                        render(&legacy, width, 24, theme),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn typed_review_confirmation_does_not_recover_structure_from_source_text() {
+        use smith_client::diff_report::{DiffLine, DiffLineKind};
+        use smith_client::review_report::{ReviewPreview, ReviewReport};
+
+        let lines = render_review_preview(&ReviewPreview {
+            scope: "path#1".to_owned(),
+            title: "an arbitrary inspection title".to_owned(),
+            patch: vec![
+                DiffLine {
+                    kind: DiffLineKind::Addition,
+                    text: "origin: unknown\r\n".to_owned(),
+                },
+                DiffLine {
+                    kind: DiffLineKind::Metadata,
+                    text: "+source with a misleading prefix".to_owned(),
+                },
+            ],
+        });
+        assert_eq!(
+            lines,
+            [
+                "scope: an arbitrary inspection title",
+                "provider-backed: yes",
+                "workspace authority: read-only",
+                ReviewReport::AUTHORITY_MESSAGE,
+                "",
+                "origin: unknown",
+                "+source with a misleading prefix",
+            ]
+            .into_iter()
+            .map(Line::from)
+            .collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
     fn wrapped_local_result_continuations_keep_the_content_indent() {
         let mut report = status_report();
         report.session = "x".repeat(80);

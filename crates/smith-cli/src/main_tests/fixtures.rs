@@ -716,6 +716,15 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                                     | smith_client::agent_report::AgentResumeReport::Started { .. }
                             )
                         ) => "Notice".to_owned(),
+                    LocalResult::Review(report)
+                        if matches!(
+                            report.as_ref(),
+                            smith_client::review_report::ReviewReport::Empty
+                                | smith_client::review_report::ReviewReport::Start(
+                                    smith_client::review_report::ReviewStartReport::Started { .. }
+                                        | smith_client::review_report::ReviewStartReport::Queued { .. }
+                                )
+                        ) => "Notice".to_owned(),
                     _ => format!("{:?}", result.state()),
                 };
                 let content = match result {
@@ -730,6 +739,7 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                     LocalResult::Mcp(report) => smith_client::mcp_report::render_plain(report),
                     LocalResult::Skills(report) => smith_client::skills_report::render_plain(report),
                     LocalResult::Diff(report) => smith_client::diff_report::render_plain(report),
+                    LocalResult::Review(report) => smith_client::review_report::render_plain(report),
                     LocalResult::Text { body, .. } => body.clone(),
                 };
                 raw.push_str(&format!(
@@ -763,6 +773,9 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                     )),
                     LocalResult::Diff(report) => LocalResult::Diff(Box::new(
                         fixture_diff_view(report, normalizer),
+                    )),
+                    LocalResult::Review(report) => LocalResult::Review(Box::new(
+                        fixture_review_view(report, normalizer),
                     )),
                     LocalResult::Text { title, body, state } => LocalResult::Text {
                         title: normalizer.normalize(title),
@@ -813,14 +826,23 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                 content: normalizer.normalize(content),
             },
         )),
-        Some(Overlay::ReviewConfirm { scope, content }) => Some((
-            "review",
-            content,
-            Overlay::ReviewConfirm {
-                scope: scope.clone(),
-                content: normalizer.normalize(content),
-            },
-        )),
+        Some(Overlay::ReviewConfirm { report }) => {
+            use smith_client::review_report::ReviewReport;
+
+            let report = ReviewReport::Confirmation((**report).clone());
+            let content = smith_client::review_report::render_plain(&report);
+            raw.push_str(&format!(
+                "title: review\nstate: Confirmation\nbody:\n{content}\n"
+            ));
+            let ReviewReport::Confirmation(preview) = fixture_review_view(&report, normalizer)
+            else {
+                panic!("expected a review confirmation");
+            };
+            view.overlay = Some(Overlay::ReviewConfirm {
+                report: Box::new(preview),
+            });
+            None
+        }
         Some(Overlay::McpTrustConfirm { server, content }) => Some((
             "mcp trust",
             content,
@@ -1133,6 +1155,34 @@ fn fixture_diff_view(
                 line.text = normalizer.normalize(&line.text);
             }
         }
+    }
+    report
+}
+
+fn fixture_review_view(
+    report: &smith_client::review_report::ReviewReport,
+    normalizer: &mut fixture_support::Normalizer,
+) -> smith_client::review_report::ReviewReport {
+    use smith_client::review_report::{ReviewReport, ReviewStartReport};
+
+    let mut report = report.clone();
+    match &mut report {
+        ReviewReport::Empty => {}
+        ReviewReport::Error(message) => *message = normalizer.normalize(message),
+        ReviewReport::Confirmation(preview) => {
+            preview.scope = normalizer.normalize(&preview.scope);
+            preview.title = normalizer.normalize(&preview.title);
+            for line in &mut preview.patch {
+                line.text = normalizer.normalize(&line.text);
+            }
+        }
+        ReviewReport::Start(start) => match start {
+            ReviewStartReport::Started { child } | ReviewStartReport::Queued { child } => {
+                *child = normalizer.normalize(child);
+            }
+            ReviewStartReport::Failed(error) => *error = normalizer.normalize(error),
+            ReviewStartReport::Unavailable | ReviewStartReport::AtCapacity { .. } => {}
+        },
     }
     report
 }

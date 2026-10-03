@@ -232,11 +232,11 @@ impl App {
                     _ => None,
                 };
             }
-            Some(Overlay::ReviewConfirm { scope, .. }) => {
+            Some(Overlay::ReviewConfirm { report }) => {
                 return match key.code {
                     KeyCode::Char('y') => {
                         let action = Action::StartReview {
-                            scope: scope.clone(),
+                            scope: report.scope.clone(),
                         };
                         self.overlay = None;
                         Some(action)

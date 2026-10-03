@@ -38,17 +38,20 @@ pub(super) fn report(host: &HostSession, project: &Path, scope: DiffScope) -> Di
 }
 
 fn patch_report(title: String, patch: &str) -> DiffReport {
-    let lines = patch
+    DiffReport {
+        title,
+        outcome: DiffOutcome::Patch(patch_lines(patch)),
+    }
+}
+
+pub(super) fn patch_lines(patch: &str) -> Vec<DiffLine> {
+    patch
         .split_inclusive('\n')
         .map(|text| DiffLine {
             kind: line_kind(text),
             text: text.to_owned(),
         })
-        .collect();
-    DiffReport {
-        title,
-        outcome: DiffOutcome::Patch(lines),
-    }
+        .collect()
 }
 
 // Source-format interpretation belongs to the host, never the renderer. Keep

@@ -888,6 +888,9 @@ pub(super) async fn run_tui(
                         LocalOutcome::Agent(report) => {
                             app.transcript.push_local(smith_client::local_result::LocalResult::Agent(report));
                         }
+                        LocalOutcome::Review(report) => {
+                            app.transcript.push_local(smith_client::local_result::LocalResult::Review(report));
+                        }
                         LocalOutcome::Notice { source, text } => {
                             app.transcript.push_notice(source, text);
                         }

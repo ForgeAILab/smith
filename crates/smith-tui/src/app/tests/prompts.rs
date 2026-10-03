@@ -463,12 +463,22 @@
         assert_eq!(undo.on_key(key(KeyCode::Esc)), Some(Action::CancelUndo));
 
         let mut review = app();
-        review.confirm_review("all", "provider-backed: yes");
+        review.confirm_review(smith_client::review_report::ReviewPreview {
+            scope: "all".to_owned(),
+            title: "diff · all uncommitted".to_owned(),
+            patch: Vec::new(),
+        });
         assert_eq!(review.on_key(key(KeyCode::Enter)), None);
         assert!(matches!(
             review.overlay,
             Some(Overlay::ReviewConfirm { .. })
         ));
+        assert_eq!(
+            review.on_key(key(KeyCode::Char('y'))),
+            Some(Action::StartReview {
+                scope: "all".to_owned(),
+            }),
+        );
 
         let mut revert = app();
         revert.confirm_revert("file.txt", "fingerprint", "reverse patch");

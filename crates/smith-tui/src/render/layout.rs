@@ -156,8 +156,8 @@ fn draw_surface(
         Some(Overlay::RevertConfirm { content, .. }) => {
             draw_recovery_confirm(frame, area, "revert selected change", content, theme);
         }
-        Some(Overlay::ReviewConfirm { content, .. }) => {
-            draw_review_confirm(frame, area, content, theme);
+        Some(Overlay::ReviewConfirm { report }) => {
+            draw_review_confirm(frame, area, report, theme);
         }
         Some(Overlay::McpTrustConfirm { server, content }) => {
             draw_mcp_trust_confirm(frame, area, server, content, theme);

@@ -2,6 +2,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent};
 use smith_client::agent_report::{AgentReport, AgentResumeReport};
+use smith_client::review_report::ReviewPreview;
 
 use crate::commands::{
     self, Command, ConfirmCommand, GoalAction, HostCommand, ParsedCommand, SelectionCommand,
@@ -882,10 +883,9 @@ impl App {
     }
 
     /// Shows review scope and provider spend before dispatch.
-    pub fn confirm_review(&mut self, scope: impl Into<String>, content: impl Into<String>) {
+    pub fn confirm_review(&mut self, report: ReviewPreview) {
         self.overlay = Some(Overlay::ReviewConfirm {
-            scope: scope.into(),
-            content: content.into(),
+            report: Box::new(report),
         });
     }
 }

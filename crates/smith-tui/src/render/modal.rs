@@ -16,6 +16,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as WidgetBlock, Borders, Clear, Paragraph};
+use smith_client::review_report::ReviewPreview;
 
 use super::helpers::*;
 use super::layout::*;
@@ -645,11 +646,15 @@ pub(super) fn draw_skill_trust_confirm(
     );
 }
 
-pub(super) fn draw_review_confirm(frame: &mut Frame<'_>, area: Rect, content: &str, theme: Theme) {
-    let mut lines = content
-        .lines()
+pub(super) fn draw_review_confirm(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    report: &ReviewPreview,
+    theme: Theme,
+) {
+    let mut lines = render_review_preview(report)
+        .into_iter()
         .take(MAX_BODY_LINES.saturating_sub(2))
-        .map(|line| Line::from(line.to_owned()))
         .collect::<Vec<_>>();
     lines.push(Line::default());
     lines.push(Line::from(vec![

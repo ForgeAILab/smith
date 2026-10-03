@@ -9,6 +9,7 @@ use crate::diff_report::{DiffOutcome, DiffReport};
 use crate::goal_report::GoalReport;
 use crate::help_report::HelpReport;
 use crate::mcp_report::McpReport;
+use crate::review_report::{ReviewReport, ReviewStartReport};
 use crate::skills_report::SkillsReport;
 use crate::status_report::StatusReport;
 use crate::timeline_report::TimelineReport;
@@ -45,6 +46,8 @@ pub enum LocalResult {
     Skills(Box<SkillsReport>),
     /// Classified Git patches or the last Smith turn's recovery preview.
     Diff(Box<DiffReport>),
+    /// Read-only review scopes, inspection results, and dispatch outcomes.
+    Review(Box<ReviewReport>),
     /// Transitional output for commands that have not migrated to reports.
     Text {
         /// Command or result title.
@@ -69,6 +72,7 @@ impl LocalResult {
             Self::Mcp(_) => "mcp",
             Self::Skills(_) => "skills",
             Self::Diff(report) => &report.title,
+            Self::Review(report) => report.title(),
             Self::Text { title, .. } => title,
         }
     }
@@ -119,6 +123,19 @@ impl LocalResult {
                 DiffOutcome::Empty => LocalResultState::Empty,
                 DiffOutcome::Error(_) => LocalResultState::Error,
                 DiffOutcome::Patch(_) => LocalResultState::Info,
+            },
+            Self::Review(report) => match report.as_ref() {
+                ReviewReport::Empty => LocalResultState::Empty,
+                ReviewReport::Error(_)
+                | ReviewReport::Start(
+                    ReviewStartReport::Unavailable
+                    | ReviewStartReport::AtCapacity { .. }
+                    | ReviewStartReport::Failed(_),
+                ) => LocalResultState::Error,
+                ReviewReport::Confirmation(_)
+                | ReviewReport::Start(
+                    ReviewStartReport::Started { .. } | ReviewStartReport::Queued { .. },
+                ) => LocalResultState::Info,
             },
             Self::Text { state, .. } => *state,
         }

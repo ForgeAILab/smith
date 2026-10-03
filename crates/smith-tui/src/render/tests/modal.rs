@@ -331,10 +331,11 @@
         assert!(undo_screen.contains("apply undo"));
 
         let mut review = App::new("gpt-5.3", "~/work/api");
-        review.confirm_review(
-            "all",
-            "provider-backed: yes\nworkspace authority: read-only",
-        );
+        review.confirm_review(smith_client::review_report::ReviewPreview {
+            scope: "all".to_owned(),
+            title: "diff · all uncommitted".to_owned(),
+            patch: Vec::new(),
+        });
         let review_screen = render(&review, 74, 20, Theme::new().without_color());
         assert!(review_screen.contains("read-only review"));
         assert!(review_screen.contains("provider-backed: yes"));
