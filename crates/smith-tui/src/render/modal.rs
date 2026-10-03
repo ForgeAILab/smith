@@ -17,13 +17,15 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as WidgetBlock, Borders, Clear, Paragraph};
 use smith_client::recovery_report::RecoveryPreview;
 use smith_client::review_report::ReviewPreview;
+use unicode_width::UnicodeWidthStr;
 
 use super::helpers::*;
 use super::layout::*;
+use super::lists::{detail_line, list_row};
 use super::transcript::*;
 
 /// Command completion keeps the transcript visible by reserving at most five
-/// single-line rows for the selected window.
+/// choices for the selected window, plus its optional argument detail line.
 const MAX_VISIBLE_PALETTE_ROWS: usize = 5;
 
 pub(super) fn draw_questionnaire(
@@ -386,30 +388,39 @@ pub(super) fn draw_palette(
         )));
     } else {
         let error_rows = usize::from(error.is_some());
-        let capacity = usize::from(area.height).saturating_sub(error_rows);
-        let visible = capacity.min(MAX_VISIBLE_PALETTE_ROWS).min(matches.len());
         let selected = selected.min(matches.len().saturating_sub(1));
+        let detail = matches[selected].argument_hint;
+        let detail_rows = usize::from(!detail.is_empty());
+        let capacity = usize::from(area.height).saturating_sub(error_rows + detail_rows);
+        let visible = capacity.min(MAX_VISIBLE_PALETTE_ROWS).min(matches.len());
         let start = selected
             .saturating_sub(visible / 2)
             .min(matches.len().saturating_sub(visible));
+        let name_width = matches
+            .iter()
+            .skip(start)
+            .take(visible)
+            .map(|command| command.name.width() + 1)
+            .max()
+            .unwrap_or(0);
         for (index, command) in matches.into_iter().enumerate().skip(start).take(visible) {
-            let marker = if index == selected { "› " } else { "  " };
-            let hint = if command.argument_hint.is_empty() {
-                String::new()
-            } else {
-                format!(" {}", command.argument_hint)
-            };
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("{marker}/{}{hint}", command.name),
-                    theme.style(if index == selected {
-                        Tone::Accent
-                    } else {
-                        Tone::Default
-                    }),
-                ),
-                Span::styled(format!("  {}", command.description), theme.style(Tone::Dim)),
-            ]));
+            lines.push(list_row(
+                &format!("/{}", command.name),
+                command.description,
+                "",
+                index == selected,
+                name_width,
+                area.width,
+                if index == selected {
+                    Tone::Accent
+                } else {
+                    Tone::Default
+                },
+                theme,
+            ));
+            if index == selected && !detail.is_empty() {
+                lines.push(detail_line(detail, name_width, area.width, theme));
+            }
         }
     }
     if let Some(error) = error {
@@ -424,11 +435,15 @@ pub(super) fn draw_palette(
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-pub(super) fn desired_palette_rows(app: &App, error: Option<&str>) -> u16 {
-    let matches = commands::matches(app.composer.text())
-        .len()
-        .clamp(1, MAX_VISIBLE_PALETTE_ROWS);
-    u16::try_from(matches.saturating_add(usize::from(error.is_some()))).unwrap_or(u16::MAX)
+pub(super) fn desired_palette_rows(app: &App, selected: usize, error: Option<&str>) -> u16 {
+    let matches = commands::matches(app.composer.text());
+    let detail = matches
+        .get(selected.min(matches.len().saturating_sub(1)))
+        .is_some_and(|command| !command.argument_hint.is_empty());
+    let rows = matches.len().clamp(1, MAX_VISIBLE_PALETTE_ROWS)
+        + usize::from(detail)
+        + usize::from(error.is_some());
+    u16::try_from(rows).unwrap_or(u16::MAX)
 }
 
 pub(super) fn draw_history_search(

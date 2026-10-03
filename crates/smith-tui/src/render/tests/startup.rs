@@ -135,11 +135,11 @@ fn command_palette_scrolls_its_five_rows_to_the_selection() {
     for (width, height) in [(100, 32), (80, 24), (44, 16)] {
         let screen = render(&app, width, height, Theme::new().without_color());
         assert!(screen.contains("Existing conversation stays visible"), "{screen}");
-        assert!(screen.contains("› /quit"), "{screen}");
+        assert!(screen.contains("❯ /quit"), "{screen}");
         let menu_rows = screen
             .lines()
             .filter(|line| {
-                line.starts_with("  /") || (line.starts_with("› /") && *line != "› /")
+                line.starts_with("  /") || line.starts_with("❯ /")
             })
             .count();
         assert_eq!(menu_rows, 5, "{screen}");

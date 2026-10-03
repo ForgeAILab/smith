@@ -6,50 +6,50 @@ Type a task and press Enter.
 /help  Explore all commands
 
 Primary
-/help  list available commands
-/status [--verbose]  show session, usage, a
+/help  List commands and keys
+/goal [OBJECTIVE | edit … | budget N | pause
+ | resume | clear]  Inspect or control a mu
+lti-turn goal
+/context [NAME|default]  Show context usage
+ or choose a window
+/status [--verbose]  Show session, usage, a
 nd workspace status
-/goal [OBJECTIVE|edit …|budget N|pause|resum
-e|clear]  inspect or control a persistent m
-ulti-turn goal
-/context [NAME|default]  show context usage
- or select a named window
-/details  toggle bounded live tool detail
-/timeline  show local turn, child, and reco
+/model [PROVIDER/MODEL]  Switch model
+/details  Toggle bounded live tool detail
+/timeline  Show local turn, child, and reco
 very history
-/new  start a fresh session
-/resume [ID]  resume a saved session
-/connect [PROVIDER]  connect or reconnect a
+/new  Start a fresh session
+/resume [ID]  Resume a saved session
+/connect [PROVIDER]  Connect or reconnect a
  provider
-/disconnect [PROVIDER]  disconnect a provid
+/disconnect [PROVIDER]  Disconnect a provid
 er
-/model [PROVIDER/MODEL]  switch model
-/think [on|off|default]  set thinking for t
+/think [on|off|default]  Set thinking for t
 he next turn
-/effort [LEVEL|default]  set reasoning effo
+/effort [LEVEL|default]  Set reasoning effo
 rt for the next turn
-/account [N]  show provider accounts and th
+/account [N]  Show provider accounts and th
 eir usage
-/agent [ID|resume ID]  list, inspect, or re
+/agent [ID|resume ID]  List, inspect, or re
 sume an existing agent
-/mcp [trust NAME]  show MCP servers, or tru
+/mcp [trust NAME]  Show MCP servers, or tru
 st one so it may run
-/skills [trust NAME]  show indexed skills,
+/skills [trust NAME]  Show indexed skills,
 or trust one this project ships
-/diff [SCOPE]  inspect workspace changes
-/review [SCOPE]  run a read-only change rev
+/diff [SCOPE]  Inspect workspace changes
+/review [SCOPE]  Run a read-only change rev
 iew
-/undo  undo the last attributable turn
-/redo  reapply the newest exact undone turn
-/revert [FILE]  selectively revert a file o
+/undo  Undo the last attributable turn
+/redo  Reapply the newest exact undone turn
+/revert [FILE]  Selectively revert a file o
 r hunk
 
 Advanced
-/diagnostics  show detailed cache and recov
+/diagnostics  Show detailed cache and recov
 ery diagnostics
-/profile [NAME]  switch configured profile
-/provider [NAME]  switch provider
-/quit  exit Smith
+/profile [NAME]  Switch configured profile
+/provider [NAME]  Switch provider
+/quit  Exit Smith
 
 Composer
 ? or /help shows this local guide without co

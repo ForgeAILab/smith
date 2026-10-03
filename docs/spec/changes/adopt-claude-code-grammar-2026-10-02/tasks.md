@@ -57,10 +57,15 @@ completed_at:
 
 ## 4. Menus and informational results (after `refactor-client-structure`)
 
-- [ ] 4.1 Two-column command menu and palette; argument grammar on the
+- [x] 4.1 Two-column command menu and palette; argument grammar on the
   selected row only; one order everywhere.
-- [ ] 4.2 Picker rows: name, short description, state at the right edge;
+- [x] 4.2 Picker rows: name, short description, state at the right edge;
   detail line for the selected row.
+- [ ] 4.2a Picker and menu polish from the live check: the selected-row
+  detail line repeats text already in the row (account usage, profile
+  description); `/goal`'s argument hint spaces its `|` separators unlike every
+  other command; the startup guide hardcodes three command suggestions
+  instead of reading the command table.
 - [ ] 4.3 `/help`, `/status`, `/context`: aligned columns, word wrap,
   open at the top.
 - [ ] 4.4 `/diagnostics`: grouped, one fact per line, `unknown` for

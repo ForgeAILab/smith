@@ -767,6 +767,8 @@ impl App {
                         let completed = commands::completion(command);
                         match commands::parse(&completed) {
                             Ok(command) => {
+                                // Tab's argument separator does not belong in accepted history.
+                                let completed = completed.trim_end().to_owned();
                                 // Dispatch the selected command as the text
                                 // the user chose, so accepted history records
                                 // `/status` or `/effort`, rather than the

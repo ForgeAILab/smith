@@ -280,7 +280,7 @@
         assert!(!screen.contains("esc close"), "{screen}");
         assert!(
             !screen.contains("command completion"),
-            "the Codex-style completion list must not grow a modal title:\n{screen}"
+            "the completion list must not grow a modal title:\n{screen}"
         );
     }
 
@@ -314,7 +314,7 @@
     }
 
     #[test]
-    fn command_completion_and_footer_keep_the_codex_color_roles() {
+    fn command_completion_and_footer_keep_the_semantic_color_roles() {
         let mut app = App::new("gpt-5.3", "~/work/api");
         app.on_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
 
@@ -331,7 +331,7 @@
             };
 
             let completion_y = (0..buffer.area.height)
-                .find(|y| row(*y).starts_with("› /help "))
+                .find(|y| row(*y).starts_with("❯ /help "))
                 .expect("selected completion row");
             let composer_y = (0..buffer.area.height)
                 .find(|y| row(*y).trim_end() == "› /")
@@ -341,12 +341,15 @@
                 "completion should sit above the fixed composer"
             );
             let completion = row(completion_y);
-            let command_x = u16::try_from(completion.find("/help").expect("command position"))
-                .expect("command position fits");
+            let command_x = u16::try_from(
+                completion[..completion.find("/help").expect("command position")].width(),
+            )
+            .expect("command position fits");
             let description_x = u16::try_from(
-                completion
-                    .find("list available commands")
-                    .expect("description"),
+                completion[..completion
+                    .find("List commands and keys")
+                    .expect("description")]
+                    .width(),
             )
             .expect("description position fits");
             assert_eq!(buffer[(command_x, completion_y)].fg, Color::Cyan);

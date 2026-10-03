@@ -101,7 +101,8 @@ pub fn account_entries(
                 member.position.to_string(),
                 member.label.clone(),
                 member_detail(member, now_ms),
-            );
+            )
+            .description(usage_label(member.used_percent));
             entry.active = member.position == active;
             if let Some(until) = member.cooling_until_ms {
                 entry.disabled_reason = Some(format!(

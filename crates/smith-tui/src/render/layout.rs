@@ -299,13 +299,19 @@ struct AnchoredRows {
     todos: u16,
 }
 
-fn anchored_rows(app: &App, area: Rect, composer_rows: u16, agents_rows: u16) -> AnchoredRows {
-    let compact_desired = match &app.overlay {
-        Some(Overlay::Palette { error, .. }) => desired_palette_rows(app, error.as_deref()),
+fn desired_compact_rows(app: &App) -> u16 {
+    match &app.overlay {
+        Some(Overlay::Palette {
+            selected, error, ..
+        }) => desired_palette_rows(app, *selected, error.as_deref()),
         Some(Overlay::ResourcePicker { picker, .. }) => compact_resource_picker_rows(picker),
         Some(Overlay::HistorySearch { .. }) => 2,
         _ => 0,
-    };
+    }
+}
+
+fn anchored_rows(app: &App, area: Rect, composer_rows: u16, agents_rows: u16) -> AnchoredRows {
+    let compact_desired = desired_compact_rows(app);
     let available = area
         .height
         .saturating_sub(composer_rows)
@@ -405,6 +411,9 @@ fn agents_rows(app: &App, area: Rect, composer_rows: u16) -> u16 {
         .saturating_sub(composer_rows)
         .saturating_sub(hint_rows(app))
         .saturating_sub(working_rows(app))
+        // A list owns the anchored pane; agent chrome yields before its five
+        // choices and selected detail line on a short terminal.
+        .saturating_sub(desired_compact_rows(app))
         .saturating_sub(3);
     desired_agents_rows(app).min(ceiling)
 }

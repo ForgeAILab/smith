@@ -28,6 +28,27 @@ fn session_list_fixture() -> Vec<SessionListing> {
 }
 
 #[test]
+fn resume_picker_keeps_identity_and_preview_separate_from_selected_metadata() {
+    let entries =
+        crate::resources::session_resource_entries(session_list_fixture(), Some("session-short"));
+    assert_eq!(entries[0].id, "session-short");
+    assert_eq!(entries[0].description, "explain main.rs");
+    assert!(!entries[0].label.contains("explain main.rs"));
+    assert!(entries[0].active);
+    assert!(
+        entries[0]
+            .detail
+            .contains("session-short · 2 turns · local/example-model")
+    );
+    assert!(
+        entries[1]
+            .detail
+            .contains("unknown turns · unknown provider/model")
+    );
+    assert!(entries[1].disabled_reason.is_some());
+}
+
+#[test]
 fn session_list_piped_rows_preserve_the_exact_plugin_contract() {
     let sessions = session_list_fixture();
     let listing = format_session_list(&sessions, false, |_| panic!("no local time in TSV"));
@@ -248,6 +269,7 @@ fn model_resources_show_named_context_windows_and_the_active_choice() {
         .find(|entry| entry.id == "local/example-model")
         .expect("configured model resource");
     assert!(model.active);
+    assert_eq!(model.description, "local · 131072 context");
     assert!(
         model
             .detail
@@ -374,6 +396,10 @@ fn catalog_inventory_becomes_searchable_resource_metadata_with_disabled_reasons(
         .expect("nested catalog model");
     assert_eq!(current.label, current_name);
     assert!(current.active);
+    assert!(current.description.starts_with("openrouter · "));
+    assert!(!current.description.contains("advertised"));
+    assert!(!current.description.contains("output ceiling"));
+    assert!(!current.description.contains("automatic"));
     assert!(current.detail.contains("tools"), "{}", current.detail);
     assert!(current.detail.contains("advertised"), "{}", current.detail);
     assert!(
@@ -626,4 +652,12 @@ fn installed_agent_models_render_once_and_their_profiles_stay_selectable() {
         .find(|entry| entry.id == "cc")
         .expect("the cc profile row");
     assert!(cc.disabled_reason.is_none(), "{:?}", cc.disabled_reason);
+    let sonnet = resources
+        .models
+        .iter()
+        .find(|entry| entry.id == "cli/claude-code/sonnet")
+        .unwrap();
+    assert_eq!(sonnet.label, "sonnet");
+    assert_eq!(sonnet.description, "Claude Code CLI · 200k context");
+    assert!(sonnet.detail.contains("[built-in]"));
 }

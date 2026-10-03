@@ -92,7 +92,9 @@ pub(super) fn runtime_resources(
             } else {
                 profile.name.clone()
             };
-            let entry = ResourceEntry::new(id, profile.name.clone(), detail).active(profile.active);
+            let entry = ResourceEntry::new(id, profile.name.clone(), detail)
+                .description(format!("{} · {description}", profile.posture.as_str()))
+                .active(profile.active);
             if profile.selectable {
                 entry
             } else {
@@ -132,6 +134,7 @@ pub(super) fn runtime_resources(
                     }
                 ),
             )
+            .description(authentication)
             .active(provider.active);
             if provider.selectable {
                 entry
@@ -152,6 +155,7 @@ pub(super) fn runtime_resources(
                     provider.kind.as_deref().unwrap_or("unknown adapter")
                 ),
             )
+            .description(provider.kind.as_deref().unwrap_or("unknown adapter"))
             .active(provider.active)
         })
         .collect::<Vec<_>>();
@@ -161,11 +165,10 @@ pub(super) fn runtime_resources(
             let connection = descriptor
                 .connection
                 .expect("a connectable descriptor has a ceremony");
-            connections.push(ResourceEntry::new(
-                descriptor.id,
-                connection.label,
-                connection.description,
-            ));
+            connections.push(
+                ResourceEntry::new(descriptor.id, connection.label, connection.description)
+                    .description(connection.label),
+            );
         }
     }
     let providers = inventory
@@ -182,8 +185,17 @@ pub(super) fn runtime_resources(
                     "models"
                 }
             );
-            let entry = ResourceEntry::new(provider.name.clone(), provider.name, detail)
-                .active(provider.active);
+            let source = provider
+                .source
+                .as_ref()
+                .map_or_else(|| "unknown source".to_owned(), ToString::to_string);
+            let entry = ResourceEntry::new(
+                provider.name.clone(),
+                provider.name,
+                format!("{detail} · source {source}"),
+            )
+            .description(detail)
+            .active(provider.active);
             if provider.selectable {
                 entry
             } else {
@@ -253,17 +265,26 @@ pub(super) fn runtime_resources(
             } else {
                 String::new()
             };
+            let advertised = if model.catalog_provider.is_some() { "advertised " } else { "" };
+            let limit_source = model.context_tokens.as_ref().map_or_else(
+                || "unknown".to_owned(), |limit| inventory_limit_source(&limit.origin),
+            );
             let entry = ResourceEntry::new(
                 id.clone(),
                 model.label,
                 format!(
-                    "{id} · ctx {} · input {} · output ceiling {} · request {}{capabilities}{provenance}{profiles}{window_detail}",
-                    render_optional_inventory_limit(model.context_tokens.as_ref()),
-                    render_optional_inventory_limit(model.max_input_tokens.as_ref()),
-                    render_optional_inventory_limit(model.max_output_tokens.as_ref()),
+                    "{advertised}limits from {} · input {} · output ceiling {} · request {} · ctx {} · {id}{capabilities}{provenance}{profiles}{window_detail}",
+                    limit_source,
+                    render_picker_limit(model.max_input_tokens.as_ref(), &limit_source),
+                    render_picker_limit(model.max_output_tokens.as_ref(), &limit_source),
                     render_optional_output_budget(model.output_budget.as_ref()),
+                    render_optional_inventory_limit(model.context_tokens.as_ref()),
                 ),
             )
+            .description(format!(
+                "{} · {} context", model.provider,
+                model.context_tokens.as_ref().map_or_else(|| "unknown".to_owned(), |limit| token_quantity(limit.value)),
+            ))
             .active(model.active);
             match model.disabled_reason {
                 Some(reason) => entry.disabled(reason),
@@ -452,8 +473,8 @@ pub(super) fn runtime_resources(
 
     // Installed coding agents appear alongside provider models, under their
     // own `cli/<agent>/<model>` namespace, and in the same row shape: the
-    // agent and model as the name, then the id and what Smith planned
-    // against. They are listed whether or not the CLI is installed -- a row
+    // model name, short agent description, then selected bookkeeping detail.
+    // They are listed whether or not the CLI is installed -- a row
     // that says the program is missing is how someone discovers the
     // capability exists at all.
     let mut models = models;
@@ -470,14 +491,19 @@ pub(super) fn runtime_resources(
             // than dressed up as advertised capability.
             let row = ResourceEntry::new(
                 id.clone(),
-                format!("{} {model}", entry.description),
+                *model,
                 format!(
-                    "{id} · ctx {} · input {} · output {} [built-in] · agent runs its own tools",
-                    token_quantity(smith_config::cli_agents::CLI_AGENT_CONTEXT_TOKENS),
+                    "limits from built-in · input {} · output {} [built-in] · ctx {} · {id} · agent runs its own tools",
                     token_quantity(smith_config::cli_agents::CLI_AGENT_MAX_INPUT_TOKENS),
                     token_quantity(smith_config::cli_agents::CLI_AGENT_MAX_OUTPUT_TOKENS),
+                    token_quantity(smith_config::cli_agents::CLI_AGENT_CONTEXT_TOKENS),
                 ),
             )
+            .description(format!(
+                "{} CLI · {} context",
+                entry.description,
+                token_quantity(smith_config::cli_agents::CLI_AGENT_CONTEXT_TOKENS)
+            ))
             .active(active);
             models.push(match installed {
                 true => row,
@@ -606,9 +632,10 @@ pub(super) fn session_resource_entries(
                 .as_deref()
                 .map(|preview| bounded_text(preview, 64))
                 .unwrap_or_else(|| "No user preview".to_owned());
-            let turns = session
-                .turn_count
-                .map_or_else(|| "? turns".to_owned(), |count| format!("{count} turns"));
+            let turns = session.turn_count.map_or_else(
+                || "unknown turns".to_owned(),
+                |count| format!("{count} turns"),
+            );
             let pair = match (session.provider.as_deref(), session.model.as_deref()) {
                 (Some(provider), Some(model)) => format!("{provider}/{model}"),
                 _ => "unknown provider/model".to_owned(),
@@ -618,9 +645,10 @@ pub(super) fn session_resource_entries(
                 .map_or_else(|| "unknown update".to_owned(), format_session_updated);
             let entry = ResourceEntry::new(
                 &id,
-                format!("{} · {preview}", short_session_id(&id)),
-                format!("{turns} · {pair} · updated {updated}"),
+                short_session_id(&id),
+                format!("{id} · {turns} · {pair} · updated {updated} · {preview}"),
             )
+            .description(session.user_preview.as_deref().unwrap_or("No user preview"))
             .active(active);
             if session.schema_version == SNAPSHOT_SCHEMA_VERSION {
                 entry
@@ -695,7 +723,12 @@ pub(super) fn format_session_offset(offset: time::UtcOffset) -> String {
 }
 
 pub(super) fn render_inventory_limit(limit: &InventoryLimit) -> String {
-    let provenance = match &limit.origin {
+    let provenance = inventory_limit_source(&limit.origin);
+    format!("{} [{provenance}]", token_quantity(limit.value))
+}
+
+fn inventory_limit_source(origin: &ModelLimitOrigin) -> String {
+    match origin {
         ModelLimitOrigin::Configured(source) => source.layer.label().to_owned(),
         ModelLimitOrigin::Trusted { catalog, revision } => {
             format!("{catalog} r{revision}")
@@ -706,8 +739,22 @@ pub(super) fn render_inventory_limit(limit: &InventoryLimit) -> String {
             retrieved_at_ms: _,
         } => catalog.clone(),
         ModelLimitOrigin::BuiltIn => "built-in".to_owned(),
-    };
-    format!("{} [{provenance}]", token_quantity(limit.value))
+    }
+}
+
+fn render_picker_limit(limit: Option<&InventoryLimit>, source: &str) -> String {
+    // Name a shared source once so the detail line has room for the limits.
+    // Mixed sources keep their own labels so compactness loses no provenance.
+    limit.map_or_else(
+        || "unknown".to_owned(),
+        |limit| {
+            if inventory_limit_source(&limit.origin) == source {
+                token_quantity(limit.value)
+            } else {
+                render_inventory_limit(limit)
+            }
+        },
+    )
 }
 
 pub(super) fn render_optional_inventory_limit(limit: Option<&InventoryLimit>) -> String {

@@ -257,4 +257,5 @@ mod tests {
     include!("interaction_defects.rs");
     include!("startup.rs");
     include!("picker_startup.rs");
+    include!("list_rows.rs");
 }

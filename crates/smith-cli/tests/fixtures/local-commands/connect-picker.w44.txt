@@ -503,8 +503,8 @@
 
 
 
-  Connect provider · type to filter
-› Local provider  configured fixture
+  Connect provider · type to filter      1/1
+❯ Local provider  configured fixture
 
 › Ask Smith to do anything
 

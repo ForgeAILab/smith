@@ -2095,9 +2095,11 @@ async fn fixtures_local_accounts_connections() {
     let fixture = Box::pin(fixture_local_populated()).await;
     let mut accounts = fixture_local_app(false, false);
     accounts.set_accounts(vec![
-        smith_tui::picker::ResourceEntry::new("0", "1 · active", "env:FIRST · 25% used")
+        smith_tui::picker::ResourceEntry::new("0", "1", "env:FIRST · 25% used")
+            .description("25% used")
             .active(true),
-        smith_tui::picker::ResourceEntry::new("1", "2 · available", "env:SECOND · 75% used"),
+        smith_tui::picker::ResourceEntry::new("1", "2", "env:SECOND · 75% used")
+            .description("75% used"),
     ]);
     Box::pin(fixture.command("account-picker", "/account", accounts)).await;
     let mut active = fixture_local_app(false, false);

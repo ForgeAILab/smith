@@ -1,0 +1,11 @@
+
+  /help     List commands and keys
+❯ /goal     Inspect or control a multi-turn goal
+            [OBJECTIVE | edit … | budget N | pause | resume | clear]
+  /context  Show context usage or choose a window
+  /status   Show session, usage, and workspace status
+  /model    Switch model
+
+› /
+
+  code · zai/glm-5.3

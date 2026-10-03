@@ -9,12 +9,14 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use unicode_width::UnicodeWidthStr;
 
+use crate::render::lists::{clip_words, detail_line, list_row};
 use crate::theme::{Theme, Tone};
 
 /// Maximum number of resource matches shown beside the composer.
 ///
-/// Runtime choice is deliberately a small Codex-style pane. Setup and the
+/// Runtime choice keeps five choices beside the composer. Setup and the
 /// standalone pre-host resume surface keep using the full bordered picker.
 const COMPACT_VISIBLE_ENTRIES: usize = 5;
 
@@ -25,7 +27,9 @@ pub struct ResourceEntry {
     pub id: String,
     /// Primary display label.
     pub label: String,
-    /// Bounded one-line context.
+    /// Short context shown on every row.
+    pub description: String,
+    /// Full context shown only beneath the selected row.
     pub detail: String,
     /// Marks the currently active resource.
     pub active: bool,
@@ -36,12 +40,34 @@ pub struct ResourceEntry {
 impl ResourceEntry {
     /// A selectable entry.
     pub fn new(id: impl Into<String>, label: impl Into<String>, detail: impl Into<String>) -> Self {
+        let detail = detail.into();
         Self {
             id: id.into(),
             label: label.into(),
-            detail: detail.into(),
+            description: detail.clone(),
+            detail,
             active: false,
             disabled_reason: None,
+        }
+    }
+
+    /// Separates a short row description from the full selected-row context.
+    #[must_use]
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
+        self
+    }
+
+    fn selected_detail(&self) -> String {
+        let detail = if self.detail == self.description {
+            ""
+        } else {
+            &self.detail
+        };
+        match (&self.disabled_reason, detail.is_empty()) {
+            (Some(reason), true) => reason.clone(),
+            (Some(reason), false) => format!("{reason} · {detail}"),
+            (None, _) => detail.to_owned(),
         }
     }
 
@@ -112,7 +138,12 @@ impl ResourcePicker {
                 query.is_empty()
                     || entry.id.to_ascii_lowercase().contains(&query)
                     || entry.label.to_ascii_lowercase().contains(&query)
+                    || entry.description.to_ascii_lowercase().contains(&query)
                     || entry.detail.to_ascii_lowercase().contains(&query)
+                    || entry
+                        .disabled_reason
+                        .as_ref()
+                        .is_some_and(|reason| reason.to_ascii_lowercase().contains(&query))
             })
             .map(|(index, _)| index)
             .collect()
@@ -209,10 +240,10 @@ pub fn draw_resource_picker(
     let footer_rows = if inner.width < 60 { 2 } else { 1 };
     let [body, footer] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(footer_rows)]).areas(inner);
-    let lines = picker_lines(picker, usize::from(body.height), theme);
+    let lines = picker_lines(picker, usize::from(body.height), body.width, theme);
     // Empty-inventory guidance may be longer than a narrow pane and should
-    // still expose its setup command. Entry metadata, by contrast, is kept
-    // one row so it cannot consume the rows needed by the next state label.
+    // still expose its setup command. Choices and their selected detail, by
+    // contrast, each stay on one row so the next state label keeps its place.
     let lines = if picker.filtered_indices().is_empty() && lines.len() > 1 {
         let mut wrapped = vec![lines[0].clone()];
         wrapped.extend(crate::render::wrap::wrap_lines(&lines[1..], body.width));
@@ -220,9 +251,8 @@ pub fn draw_resource_picker(
     } else {
         lines
     };
-    // Entry metadata is optional one-line context. Let it clip at the edge so
-    // a long capability description cannot consume the rows needed to show
-    // the next resource or its availability state.
+    // Choice descriptions and selected detail are already bounded by width;
+    // wrapping here would consume the next resource's reserved row.
     frame.render_widget(Paragraph::new(lines), body);
     frame.render_widget(
         Paragraph::new(if footer_rows == 1 {
@@ -248,8 +278,8 @@ pub(crate) fn draw_compact_resource_picker(
 
     let indices = picker.filtered_indices();
     let selected = picker.selected.min(indices.len().saturating_sub(1));
-    let position = if indices.len() > COMPACT_VISIBLE_ENTRIES {
-        format!(" · {}/{}", selected.saturating_add(1), indices.len())
+    let position = if !indices.is_empty() {
+        format!("{}/{}", selected.saturating_add(1), indices.len())
     } else {
         String::new()
     };
@@ -258,27 +288,55 @@ pub(crate) fn draw_compact_resource_picker(
     } else {
         format!("filter: {}", picker.query)
     };
+    let heading_budget = usize::from(area.width).saturating_sub(position.width() + 4);
+    let title = clip_words(&picker.title, heading_budget);
+    let filter = clip_words(&filter, heading_budget.saturating_sub(title.width() + 3));
+    let filter = if filter.is_empty() {
+        filter
+    } else {
+        format!(" · {filter}")
+    };
+    let heading_width = 2 + title.width() + filter.width();
     let mut lines = vec![Line::from(vec![
-        Span::styled(format!("  {}", picker.title), theme.style(Tone::Heading)),
-        Span::styled(format!(" · {filter}{position}"), theme.style(Tone::Dim)),
+        Span::styled(format!("  {title}"), theme.style(Tone::Heading)),
+        Span::styled(filter, theme.style(Tone::Dim)),
+        Span::styled(
+            format!(
+                "{}{position}",
+                " ".repeat(
+                    usize::from(area.width).saturating_sub(heading_width + position.width())
+                )
+            ),
+            theme.style(Tone::Dim),
+        ),
     ])];
     lines.extend(picker_entry_lines(
         picker,
         usize::from(area.height).saturating_sub(1),
+        area.width,
         theme,
     ));
-    // Runtime entries stay one row each. Long metadata clips at the terminal
-    // edge instead of making the compact pane grow or reflow.
+    // Choices and the selected detail have separate reserved rows. Wrapping
+    // them here would make the compact pane grow into the composer.
     frame.render_widget(Paragraph::new(lines), area);
 }
 
 /// Rows requested by the compact runtime picker before terminal constraints.
 pub(crate) fn compact_resource_picker_rows(picker: &ResourcePicker) -> u16 {
     let matches = picker.filtered_indices().len().max(1);
-    u16::try_from(matches.min(COMPACT_VISIBLE_ENTRIES).saturating_add(1)).unwrap_or(u16::MAX)
+    let detail = picker
+        .selected_entry()
+        .is_some_and(|entry| !entry.selected_detail().is_empty());
+    u16::try_from(matches.min(COMPACT_VISIBLE_ENTRIES) + 1 + usize::from(detail))
+        .unwrap_or(u16::MAX)
 }
 
-fn picker_lines(picker: &ResourcePicker, height: usize, theme: Theme) -> Vec<Line<'static>> {
+fn picker_lines(
+    picker: &ResourcePicker,
+    height: usize,
+    width: u16,
+    theme: Theme,
+) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(vec![
         Span::styled(" filter: ", theme.style(Tone::Dim)),
         Span::styled(
@@ -294,11 +352,21 @@ fn picker_lines(picker: &ResourcePicker, height: usize, theme: Theme) -> Vec<Lin
             }),
         ),
     ])];
-    lines.extend(picker_entry_lines(picker, height.saturating_sub(1), theme));
+    lines.extend(picker_entry_lines(
+        picker,
+        height.saturating_sub(1),
+        width,
+        theme,
+    ));
     lines
 }
 
-fn picker_entry_lines(picker: &ResourcePicker, height: usize, theme: Theme) -> Vec<Line<'static>> {
+fn picker_entry_lines(
+    picker: &ResourcePicker,
+    height: usize,
+    width: u16,
+    theme: Theme,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let indices = picker.filtered_indices();
     if indices.is_empty() {
@@ -312,26 +380,58 @@ fn picker_entry_lines(picker: &ResourcePicker, height: usize, theme: Theme) -> V
             theme.style(Tone::Warning),
         )));
     } else {
-        let capacity = height.max(1);
+        let detail = picker
+            .selected_entry()
+            .map(|entry| entry.selected_detail())
+            .unwrap_or_default();
+        let capacity = height
+            .saturating_sub(usize::from(!detail.is_empty()))
+            .max(1);
         let selected = picker.selected.min(indices.len().saturating_sub(1));
         let start = selected
             .saturating_sub(capacity / 2)
             .min(indices.len().saturating_sub(capacity));
-        for (filtered_index, raw_index) in indices.iter().enumerate().skip(start).take(capacity) {
-            let entry = &picker.entries[*raw_index];
-            let marker = if filtered_index == selected {
-                "› "
-            } else {
-                "  "
-            };
-            let mut state = String::new();
-            if entry.active {
-                state.push_str(" · current");
-            }
-            if let Some(reason) = &entry.disabled_reason {
-                state.push_str(" · unavailable: ");
-                state.push_str(reason);
-            }
+        let visible = indices
+            .iter()
+            .skip(start)
+            .take(capacity)
+            .map(|index| &picker.entries[*index])
+            .collect::<Vec<_>>();
+        let name_width = visible
+            .iter()
+            .map(|entry| entry.label.width())
+            .max()
+            .unwrap_or(0);
+        // Keep the state docked even when an identity or unavailable reason is
+        // too long. The complete reason remains on the selected detail line.
+        let states = visible
+            .iter()
+            .map(|entry| {
+                let current = if entry.active { "✓ current" } else { "" };
+                match &entry.disabled_reason {
+                    Some(reason) => {
+                        let prefix = if current.is_empty() {
+                            String::new()
+                        } else {
+                            format!("{current} · ")
+                        };
+                        let full = format!("{prefix}unavailable: {reason}");
+                        if 2 + name_width + 2 + full.width() <= usize::from(width) {
+                            full
+                        } else {
+                            format!("{prefix}unavailable")
+                        }
+                    }
+                    None => current.to_owned(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let state_width = states.iter().map(|state| state.width()).max().unwrap_or(0);
+        let name_width = name_width
+            .min(usize::from(width).saturating_sub(4 + state_width))
+            .min(usize::from(width) / 2);
+        for (offset, entry) in visible.iter().enumerate() {
+            let filtered_index = start + offset;
             let tone = if entry.disabled_reason.is_some() {
                 Tone::Dim
             } else if filtered_index == selected {
@@ -339,20 +439,19 @@ fn picker_entry_lines(picker: &ResourcePicker, height: usize, theme: Theme) -> V
             } else {
                 Tone::Default
             };
-            let mut spans = vec![Span::styled(
-                format!("{marker}{}", entry.label),
-                theme.style(tone),
-            )];
-            if !state.is_empty() {
-                spans.push(Span::styled(state, theme.style(tone)));
+            lines.push(list_row(
+                &entry.label,
+                &entry.description,
+                &states[offset],
+                filtered_index == selected,
+                name_width,
+                width,
+                tone,
+                theme,
+            ));
+            if filtered_index == selected && !detail.is_empty() && height > capacity {
+                lines.push(detail_line(&detail, name_width, width, theme));
             }
-            if !entry.detail.is_empty() {
-                spans.push(Span::styled(
-                    format!("  {}", entry.detail),
-                    theme.style(Tone::Dim),
-                ));
-            }
-            lines.push(Line::from(spans));
         }
     }
     lines
@@ -408,6 +507,26 @@ mod tests {
     }
 
     #[test]
+    fn filtering_keeps_selected_detail_and_short_description_searchable() {
+        let mut picker = ResourcePicker::new(
+            "Choose model",
+            vec![
+                ResourceEntry::new("local/model", "model", "project config · input 124k")
+                    .description("local · 128k context"),
+            ],
+            "run setup",
+        );
+        for query in ["project config", "input 124k", "128k context"] {
+            picker.query = query.to_owned();
+            assert_eq!(picker.filtered_indices(), [0]);
+            assert_eq!(
+                picker.on_key(key(KeyCode::Enter)),
+                PickerOutcome::Selected("local/model".to_owned())
+            );
+        }
+    }
+
+    #[test]
     fn empty_inventory_and_unmatched_filter_have_distinct_guidance() {
         let empty = ResourcePicker::new(
             "Models",
@@ -417,6 +536,7 @@ mod tests {
         let empty_lines = picker_lines(
             &empty,
             3,
+            44,
             Theme::from_env().without_color().without_motion(),
         );
         let empty_text = empty_lines
@@ -437,6 +557,7 @@ mod tests {
         let filtered_lines = picker_lines(
             &filtered,
             3,
+            44,
             Theme::from_env().without_color().without_motion(),
         );
         let filtered_text = filtered_lines
@@ -463,15 +584,18 @@ mod tests {
     }
 
     #[test]
-    fn state_labels_precede_long_metadata_and_unavailable_stays_disabled() {
+    fn state_labels_stay_at_the_right_and_unavailable_stays_disabled() {
         let long_detail =
             "advertised capabilities, context window, output ceiling, and request budget "
                 .repeat(4);
         let mut picker = ResourcePicker::new(
             "Models",
             vec![
-                ResourceEntry::new("local/model", "model", long_detail.clone()).active(true),
+                ResourceEntry::new("local/model", "model", long_detail.clone())
+                    .description("local")
+                    .active(true),
                 ResourceEntry::new("broken/model", "broken", long_detail)
+                    .description("local")
                     .disabled("missing limits"),
             ],
             "run setup",
@@ -510,7 +634,7 @@ mod tests {
 
     #[test]
     fn narrow_no_color_picker_keeps_active_disabled_and_controls_textual() {
-        let picker = ResourcePicker::new(
+        let mut picker = ResourcePicker::new(
             "Models",
             vec![
                 ResourceEntry::new("zai/glm", "zai/glm", "trusted").active(true),
@@ -520,30 +644,47 @@ mod tests {
             "run setup",
         );
         let mut terminal = Terminal::new(TestBackend::new(40, 8)).expect("terminal");
-        terminal
-            .draw(|frame| {
-                draw_resource_picker(
-                    frame,
-                    frame.area(),
-                    &picker,
-                    Theme::from_env().without_color().without_motion(),
-                );
-            })
-            .expect("draw");
-        let buffer = terminal.backend().buffer();
-        let rendered = (0..buffer.area.height)
-            .map(|y| {
-                (0..buffer.area.width)
-                    .map(|x| buffer[(x, y)].symbol())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(rendered.contains("current"), "{rendered}");
-        assert!(rendered.contains("unavailable:"), "{rendered}");
-        assert!(rendered.contains("missing limits"), "{rendered}");
+        let mut render_picker = |picker: &ResourcePicker| {
+            terminal
+                .draw(|frame| {
+                    draw_resource_picker(
+                        frame,
+                        frame.area(),
+                        picker,
+                        Theme::from_env().without_color().without_motion(),
+                    );
+                })
+                .expect("draw");
+            let buffer = terminal.backend().buffer();
+            (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let rendered = render_picker(&picker);
+        assert!(rendered.contains("✓ current"), "{rendered}");
+        assert!(
+            rendered
+                .lines()
+                .any(|line| line.contains("broken") && line.ends_with("unavailable│")),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("missing limits"), "{rendered}");
         assert!(rendered.contains("Enter confirm"), "{rendered}");
-        assert!(rendered.contains('›'), "{rendered}");
+        assert!(rendered.contains('❯'), "{rendered}");
+
+        picker.on_key(key(KeyCode::Down));
+        let rendered = render_picker(&picker);
+        assert!(
+            rendered.lines().collect::<Vec<_>>().windows(2).any(|rows| {
+                rows[0].contains("❯ broken") && rows[1].contains("missing limits")
+            }),
+            "{rendered}"
+        );
     }
 
     #[test]
@@ -578,6 +719,7 @@ mod tests {
         let lines = picker_lines(
             &picker,
             6,
+            80,
             Theme::from_env().without_color().without_motion(),
         );
         assert_eq!(lines.len(), 6, "rendering is bounded to the viewport");

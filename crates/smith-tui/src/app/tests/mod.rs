@@ -33,7 +33,7 @@ mod tests {
     use smith_host::approval::InteractiveApproval;
 
     use crate::app::MouseOutcome;
-    use crate::commands::{self, HostCommand, SelectionCommand, SessionControl};
+    use crate::commands::{self, GoalAction, HostCommand, SelectionCommand, SessionControl};
     use crate::questionnaire::{QuestionnaireChoice, QuestionnaireForm, QuestionnaireQuestion};
     use crate::transcript::{Block, LocalResult, ToolStatus};
     use ratatui::layout::Rect;

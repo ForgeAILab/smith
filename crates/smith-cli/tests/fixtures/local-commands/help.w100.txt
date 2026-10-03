@@ -6,35 +6,35 @@ Type a task and press Enter.
 /help  Explore all commands
 
 Primary
-/help  list available commands
-/status [--verbose]  show session, usage, and workspace status
-/goal [OBJECTIVE|edit …|budget N|pause|resume|clear]  inspect or control a persistent multi-turn go
-al
-/context [NAME|default]  show context usage or select a named window
-/details  toggle bounded live tool detail
-/timeline  show local turn, child, and recovery history
-/new  start a fresh session
-/resume [ID]  resume a saved session
-/connect [PROVIDER]  connect or reconnect a provider
-/disconnect [PROVIDER]  disconnect a provider
-/model [PROVIDER/MODEL]  switch model
-/think [on|off|default]  set thinking for the next turn
-/effort [LEVEL|default]  set reasoning effort for the next turn
-/account [N]  show provider accounts and their usage
-/agent [ID|resume ID]  list, inspect, or resume an existing agent
-/mcp [trust NAME]  show MCP servers, or trust one so it may run
-/skills [trust NAME]  show indexed skills, or trust one this project ships
-/diff [SCOPE]  inspect workspace changes
-/review [SCOPE]  run a read-only change review
-/undo  undo the last attributable turn
-/redo  reapply the newest exact undone turn
-/revert [FILE]  selectively revert a file or hunk
+/help  List commands and keys
+/goal [OBJECTIVE | edit … | budget N | pause | resume | clear]  Inspect or control a multi-turn goa
+l
+/context [NAME|default]  Show context usage or choose a window
+/status [--verbose]  Show session, usage, and workspace status
+/model [PROVIDER/MODEL]  Switch model
+/details  Toggle bounded live tool detail
+/timeline  Show local turn, child, and recovery history
+/new  Start a fresh session
+/resume [ID]  Resume a saved session
+/connect [PROVIDER]  Connect or reconnect a provider
+/disconnect [PROVIDER]  Disconnect a provider
+/think [on|off|default]  Set thinking for the next turn
+/effort [LEVEL|default]  Set reasoning effort for the next turn
+/account [N]  Show provider accounts and their usage
+/agent [ID|resume ID]  List, inspect, or resume an existing agent
+/mcp [trust NAME]  Show MCP servers, or trust one so it may run
+/skills [trust NAME]  Show indexed skills, or trust one this project ships
+/diff [SCOPE]  Inspect workspace changes
+/review [SCOPE]  Run a read-only change review
+/undo  Undo the last attributable turn
+/redo  Reapply the newest exact undone turn
+/revert [FILE]  Selectively revert a file or hunk
 
 Advanced
-/diagnostics  show detailed cache and recovery diagnostics
-/profile [NAME]  switch configured profile
-/provider [NAME]  switch provider
-/quit  exit Smith
+/diagnostics  Show detailed cache and recovery diagnostics
+/profile [NAME]  Switch configured profile
+/provider [NAME]  Switch provider
+/quit  Exit Smith
 
 Composer
 ? or /help shows this local guide without contacting the model.

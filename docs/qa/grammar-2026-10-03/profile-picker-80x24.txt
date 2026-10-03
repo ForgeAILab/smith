@@ -1,0 +1,12 @@
+  Choose profile · type to filter                                           1/15
+❯ build   build · coding workflow with policy-bounded mutation
+          build · use main · zai/glm-5.3 · coding workflow with policy-bounded…
+  cc      build · runs turns on an installed coding agent
+  claude  build · claude-fable-5-1 via dddai (Anthropic Messages)
+  code    build · Implementation agent: inspect, edit, run, and…       ✓ current
+  cx      build · runs turns on Codex
+
+› Ask Smith to do anything
+
+  code · zai/glm-5.3
+  type to filter · ↑↓ choose · enter confirm · esc cancel

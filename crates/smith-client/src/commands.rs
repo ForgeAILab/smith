@@ -235,40 +235,18 @@ command_registry! {
     Ui Help => CommandSpec {
         name: "help",
         argument_hint: "",
-        description: "list available commands",
+        description: "List commands and keys",
         requires_idle: false,
         advanced: false,
         grammar: ArgumentGrammar::NoValue(|| Command::Ui(UiCommand::Help)),
         usage_example: "/help",
         complete_without_value: true,
     },
-    /// Show session, usage, and workspace status.
-    Host Status => CommandSpec {
-        name: "status",
-        argument_hint: "[--verbose]",
-        description: "show session, usage, and workspace status",
-        requires_idle: false,
-        advanced: false,
-        grammar: ArgumentGrammar::OptionalValue(parse_status),
-        usage_example: "/status --verbose",
-        complete_without_value: true,
-    },
-    /// Show detailed cache and recovery diagnostics.
-    Host Diagnostics => CommandSpec {
-        name: "diagnostics",
-        argument_hint: "",
-        description: "show detailed cache and recovery diagnostics",
-        requires_idle: false,
-        advanced: true,
-        grammar: ArgumentGrammar::NoValue(|| Command::Host(HostCommand::Diagnostics)),
-        usage_example: "/diagnostics",
-        complete_without_value: true,
-    },
     /// Inspect or control a persistent multi-turn goal.
     Host Goal(GoalAction) => CommandSpec {
         name: "goal",
-        argument_hint: "[OBJECTIVE|edit …|budget N|pause|resume|clear]",
-        description: "inspect or control a persistent multi-turn goal",
+        argument_hint: "[OBJECTIVE | edit … | budget N | pause | resume | clear]",
+        description: "Inspect or control a multi-turn goal",
         requires_idle: false,
         advanced: false,
         grammar: ArgumentGrammar::WholeValue(parse_goal),
@@ -279,11 +257,33 @@ command_registry! {
     Ui Context(String) => CommandSpec {
         name: "context",
         argument_hint: "[NAME|default]",
-        description: "show context usage or select a named window",
+        description: "Show context usage or choose a window",
         requires_idle: false,
         advanced: false,
         grammar: ArgumentGrammar::OptionalValue(parse_context),
         usage_example: "/context 272k",
+        complete_without_value: false,
+    },
+    /// Show session, usage, and workspace status.
+    Host Status => CommandSpec {
+        name: "status",
+        argument_hint: "[--verbose]",
+        description: "Show session, usage, and workspace status",
+        requires_idle: false,
+        advanced: false,
+        grammar: ArgumentGrammar::OptionalValue(parse_status),
+        usage_example: "/status --verbose",
+        complete_without_value: true,
+    },
+    /// Switch model.
+    Ui Model(Option<String>) => CommandSpec {
+        name: "model",
+        argument_hint: "[PROVIDER/MODEL]",
+        description: "Switch model",
+        requires_idle: true,
+        advanced: false,
+        grammar: ArgumentGrammar::OptionalValue(|value| Ok(Command::Ui(UiCommand::Model(value)))),
+        usage_example: "/model zai",
         complete_without_value: false,
     },
     /// Visualize the latest model-facing context plan.
@@ -292,7 +292,7 @@ command_registry! {
     Ui Details => CommandSpec {
         name: "details",
         argument_hint: "",
-        description: "toggle bounded live tool detail",
+        description: "Toggle bounded live tool detail",
         requires_idle: false,
         advanced: false,
         grammar: ArgumentGrammar::NoValue(|| Command::Ui(UiCommand::Details)),
@@ -303,7 +303,7 @@ command_registry! {
     Host Timeline => CommandSpec {
         name: "timeline",
         argument_hint: "",
-        description: "show local turn, child, and recovery history",
+        description: "Show local turn, child, and recovery history",
         requires_idle: false,
         advanced: false,
         grammar: ArgumentGrammar::NoValue(|| Command::Host(HostCommand::Timeline)),
@@ -313,7 +313,7 @@ command_registry! {
     Session => CommandSpec {
         name: "new",
         argument_hint: "",
-        description: "start a fresh session",
+        description: "Start a fresh session",
         requires_idle: true,
         advanced: false,
         grammar: ArgumentGrammar::NoValue(|| Command::Session(SessionControl::Reconfigure(SelectionCommand::NewSession))),
@@ -324,7 +324,7 @@ command_registry! {
     Ui Resume(Option<String>) => CommandSpec {
         name: "resume",
         argument_hint: "[ID]",
-        description: "resume a saved session",
+        description: "Resume a saved session",
         requires_idle: true,
         advanced: false,
         grammar: ArgumentGrammar::OptionalValue(|value| Ok(Command::Ui(UiCommand::Resume(value)))),
@@ -335,7 +335,7 @@ command_registry! {
     Ui Connect(Option<String>) => CommandSpec {
         name: "connect",
         argument_hint: "[PROVIDER]",
-        description: "connect or reconnect a provider",
+        description: "Connect or reconnect a provider",
         requires_idle: true,
         advanced: false,
         grammar: ArgumentGrammar::OptionalValue(|value| Ok(Command::Ui(UiCommand::Connect(value)))),
@@ -346,29 +346,18 @@ command_registry! {
     Ui Disconnect(Option<String>) => CommandSpec {
         name: "disconnect",
         argument_hint: "[PROVIDER]",
-        description: "disconnect a provider",
+        description: "Disconnect a provider",
         requires_idle: true,
         advanced: false,
         grammar: ArgumentGrammar::OptionalValue(|value| Ok(Command::Ui(UiCommand::Disconnect(value)))),
         usage_example: "/disconnect openrouter",
         complete_without_value: false,
     },
-    /// Switch model.
-    Ui Model(Option<String>) => CommandSpec {
-        name: "model",
-        argument_hint: "[PROVIDER/MODEL]",
-        description: "switch model",
-        requires_idle: true,
-        advanced: false,
-        grammar: ArgumentGrammar::OptionalValue(|value| Ok(Command::Ui(UiCommand::Model(value)))),
-        usage_example: "/model zai",
-        complete_without_value: false,
-    },
     /// Set thinking for the next turn.
     Ui Think(Option<String>) => CommandSpec {
         name: "think",
         argument_hint: "[on|off|default]",
-        description: "set thinking for the next turn",
+        description: "Set thinking for the next turn",
         requires_idle: true,
         advanced: false,
         grammar: ArgumentGrammar::OptionalValue(|value| Ok(Command::Ui(UiCommand::Think(value)))),
@@ -379,7 +368,7 @@ command_registry! {
     Ui Effort(Option<String>) => CommandSpec {
         name: "effort",
         argument_hint: "[LEVEL|default]",
-        description: "set reasoning effort for the next turn",
+        description: "Set reasoning effort for the next turn",
         requires_idle: true,
         advanced: false,
         grammar: ArgumentGrammar::OptionalValue(|value| Ok(Command::Ui(UiCommand::Effort(value)))),
@@ -390,7 +379,7 @@ command_registry! {
     Ui Account(Option<String>) => CommandSpec {
         name: "account",
         argument_hint: "[N]",
-        description: "show provider accounts and their usage",
+        description: "Show provider accounts and their usage",
         requires_idle: true,
         advanced: false,
         grammar: ArgumentGrammar::OptionalValue(|value| Ok(Command::Ui(UiCommand::Account(value)))),
@@ -401,7 +390,7 @@ command_registry! {
     Host Agent(AgentAction) => CommandSpec {
         name: "agent",
         argument_hint: "[ID|resume ID]",
-        description: "list, inspect, or resume an existing agent",
+        description: "List, inspect, or resume an existing agent",
         requires_idle: false,
         advanced: false,
         grammar: ArgumentGrammar::Subcommand(parse_agent),
@@ -414,7 +403,7 @@ command_registry! {
     Host Mcp(McpAction) => CommandSpec {
         name: "mcp",
         argument_hint: "[trust NAME]",
-        description: "show MCP servers, or trust one so it may run",
+        description: "Show MCP servers, or trust one so it may run",
         requires_idle: false,
         advanced: false,
         grammar: ArgumentGrammar::Subcommand(parse_mcp),
@@ -425,7 +414,7 @@ command_registry! {
     Host Skills(SkillsAction) => CommandSpec {
         name: "skills",
         argument_hint: "[trust NAME]",
-        description: "show indexed skills, or trust one this project ships",
+        description: "Show indexed skills, or trust one this project ships",
         requires_idle: false,
         advanced: false,
         grammar: ArgumentGrammar::Subcommand(parse_skills),
@@ -436,7 +425,7 @@ command_registry! {
     Host Diff(DiffScope) => CommandSpec {
         name: "diff",
         argument_hint: "[SCOPE]",
-        description: "inspect workspace changes",
+        description: "Inspect workspace changes",
         requires_idle: false,
         advanced: false,
         grammar: ArgumentGrammar::OptionalValue(parse_diff),
@@ -447,7 +436,7 @@ command_registry! {
     Host Review(Option<String>) => CommandSpec {
         name: "review",
         argument_hint: "[SCOPE]",
-        description: "run a read-only change review",
+        description: "Run a read-only change review",
         requires_idle: true,
         advanced: false,
         grammar: ArgumentGrammar::OptionalValue(|value| Ok(Command::Host(HostCommand::Review(value)))),
@@ -458,7 +447,7 @@ command_registry! {
     Host Undo => CommandSpec {
         name: "undo",
         argument_hint: "",
-        description: "undo the last attributable turn",
+        description: "Undo the last attributable turn",
         requires_idle: true,
         advanced: false,
         grammar: ArgumentGrammar::NoValue(|| Command::Host(HostCommand::Undo)),
@@ -469,7 +458,7 @@ command_registry! {
     Host Redo => CommandSpec {
         name: "redo",
         argument_hint: "",
-        description: "reapply the newest exact undone turn",
+        description: "Reapply the newest exact undone turn",
         requires_idle: true,
         advanced: false,
         grammar: ArgumentGrammar::NoValue(|| Command::Host(HostCommand::Redo)),
@@ -480,18 +469,29 @@ command_registry! {
     Host Revert(Option<String>) => CommandSpec {
         name: "revert",
         argument_hint: "[FILE]",
-        description: "selectively revert a file or hunk",
+        description: "Selectively revert a file or hunk",
         requires_idle: true,
         advanced: false,
         grammar: ArgumentGrammar::OptionalValue(|value| Ok(Command::Host(HostCommand::Revert(value)))),
         usage_example: "/revert tracked.txt",
         complete_without_value: false,
     },
+    /// Show detailed cache and recovery diagnostics.
+    Host Diagnostics => CommandSpec {
+        name: "diagnostics",
+        argument_hint: "",
+        description: "Show detailed cache and recovery diagnostics",
+        requires_idle: false,
+        advanced: true,
+        grammar: ArgumentGrammar::NoValue(|| Command::Host(HostCommand::Diagnostics)),
+        usage_example: "/diagnostics",
+        complete_without_value: true,
+    },
     /// Switch configured profile.
     Ui Profile(Option<String>) => CommandSpec {
         name: "profile",
         argument_hint: "[NAME]",
-        description: "switch configured profile",
+        description: "Switch configured profile",
         requires_idle: true,
         advanced: true,
         grammar: ArgumentGrammar::OptionalValue(|value| Ok(Command::Ui(UiCommand::Profile(value)))),
@@ -502,7 +502,7 @@ command_registry! {
     Ui Provider(Option<String>) => CommandSpec {
         name: "provider",
         argument_hint: "[NAME]",
-        description: "switch provider",
+        description: "Switch provider",
         requires_idle: true,
         advanced: true,
         grammar: ArgumentGrammar::OptionalValue(|value| Ok(Command::Ui(UiCommand::Provider(value)))),
@@ -513,7 +513,7 @@ command_registry! {
     Ui Quit => CommandSpec {
         name: "quit",
         argument_hint: "",
-        description: "exit Smith",
+        description: "Exit Smith",
         requires_idle: false,
         advanced: true,
         grammar: ArgumentGrammar::NoValue(|| Command::Ui(UiCommand::Quit)),

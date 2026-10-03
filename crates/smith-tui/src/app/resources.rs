@@ -148,25 +148,22 @@ impl App {
             ResourceTarget::Reference => {
                 let mut entries = self
                     .resources
-                    .child_agents
+                    .files
                     .iter()
-                    .chain(&self.resources.files)
+                    .chain(&self.resources.child_agents)
                     .cloned()
+                    .map(|mut entry| {
+                        // Mentions identify an agent, not its runtime selection.
+                        // Keep model and profile provenance out of this picker.
+                        if entry.id.starts_with("agent:") {
+                            entry.description = "agent".to_owned();
+                            entry.detail.clear();
+                        }
+                        entry
+                    })
                     .collect::<Vec<_>>();
-                entries.extend(self.children.iter().map(|(child, summary)| {
-                    ResourceEntry::new(
-                        format!("agent:{child}"),
-                        child.clone(),
-                        format!(
-                            "existing child · {}{}",
-                            summary.state,
-                            summary
-                                .detail
-                                .as_deref()
-                                .map(|detail| format!(" · {detail}"))
-                                .unwrap_or_default()
-                        ),
-                    )
+                entries.extend(self.children.keys().map(|child| {
+                    ResourceEntry::new(format!("agent:{child}"), child.clone(), "agent")
                 }));
                 (
                     entries,

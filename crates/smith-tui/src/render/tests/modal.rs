@@ -209,7 +209,7 @@
             &[
                 "Attach file or invoke agent",
                 "review",
-                "child profile · review",
+                "agent",
                 "src/lib.rs",
                 "file · 42 bytes",
                 "build · zai/glm-5.2 · /Volumes/Data/codes/ai/agent-runtime:main · ? ctx",
@@ -246,7 +246,7 @@
             app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
             None
         );
-        assert_eq!(app.composer.text(), "@src/lib.rs ");
+        assert_eq!(app.composer.text(), "@review ");
     }
 
     #[test]

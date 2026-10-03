@@ -501,10 +501,10 @@
 
 
 
-
-  Choose account · type to filter
-› 1 · active · current  env:FIRST · 25% used
-  2 · available  env:SECOND · 75% used
+  Choose account · type to filter        1/2
+❯ 1  25% used                      ✓ current
+     env:FIRST · 25% used
+  2  75% used
 
 › Ask Smith to do anything
 

@@ -438,12 +438,12 @@
         app.on_key(key(KeyCode::Down));
         assert_eq!(
             app.on_key(key(KeyCode::Enter)),
-            Some(Action::Command(HostCommand::Status))
+            Some(Action::Command(HostCommand::Goal(GoalAction::Show)))
         );
         assert!(app.overlay.is_none());
         assert!(app.composer.is_empty());
         app.on_key(key(KeyCode::Up));
-        assert_eq!(app.composer.text(), "/status");
+        assert_eq!(app.composer.text(), "/goal");
     }
 
     #[test]
