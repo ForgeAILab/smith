@@ -23,7 +23,7 @@ use smith_tools::ToolCallDisplay;
 
 use super::conversation::{Conversation, SpeculativeState};
 
-use crate::commands::CommandAction;
+use crate::commands::{HostCommand, SessionControl};
 use crate::composer::Composer;
 use crate::diff::EditReview;
 use crate::picker::{ResourceEntry, ResourcePicker};
@@ -217,10 +217,10 @@ pub enum Action {
     /// Leave the application.
     Quit,
     /// Rebuild or replace the hosted session at a safe turn boundary.
-    Reconfigure(PaletteCommand),
+    Reconfigure(SessionControl),
     /// Execute a local product command without sending composer text to the
     /// provider.
-    Command(CommandAction),
+    Command(HostCommand),
     /// Apply the already-previewed last-turn undo.
     ApplyUndo,
     /// Record that the already-previewed undo was explicitly cancelled.
@@ -284,39 +284,6 @@ pub enum Action {
         /// Stable existing child identity.
         child_id: String,
     },
-}
-
-/// A command selected from the TUI command palette.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PaletteCommand {
-    /// Create a fresh session with the current selection.
-    NewSession,
-    /// Resume an existing session identity.
-    Resume(String),
-    /// Select a configured profile and clear narrower provider/model flags.
-    Profile(String),
-    /// Select a model, with the provider that serves it when there is one.
-    Model {
-        /// Serving provider, absent for an installed CLI agent: nothing is
-        /// called through a provider to run its turn.
-        provider: Option<String>,
-        /// Model ID.
-        model: String,
-    },
-    /// Open the reviewed connection ceremony for a provider or backend.
-    Connect(String),
-    /// Remove one provider or backend authentication source.
-    Disconnect(String),
-    /// Select a deprecated legacy root mode at a safe session boundary.
-    Agent(String),
-    /// Select an explicit thinking state; `None` restores provider behavior.
-    Think(Option<bool>),
-    /// Select an advertised effort; `None` restores provider behavior.
-    Effort(Option<String>),
-    /// Select a model context window; `None` restores the model default.
-    ContextWindow(Option<String>),
-    /// Switch the active provider credential to a pool position.
-    Account(usize),
 }
 
 /// Bounded local resources available to runtime pickers.

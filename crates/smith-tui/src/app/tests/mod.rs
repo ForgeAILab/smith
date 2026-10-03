@@ -1,7 +1,6 @@
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::SkillsAction;
     use agent_runtime_core::approval::{
         ApprovalDecision, ApprovalOrigin, ApprovalPolicy, ApprovalRequest,
     };
@@ -34,7 +33,7 @@ mod tests {
     use smith_host::approval::InteractiveApproval;
 
     use crate::app::MouseOutcome;
-    use crate::commands;
+    use crate::commands::{self, HostCommand, SelectionCommand, SessionControl};
     use crate::questionnaire::{QuestionnaireChoice, QuestionnaireForm, QuestionnaireQuestion};
     use crate::transcript::{Block, ToolStatus};
     use ratatui::layout::Rect;

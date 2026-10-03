@@ -128,22 +128,6 @@ async fn granting_trust_records_the_decision_and_leaves_the_session_running() {
     assert!(unknown.contains("not a declared MCP server"), "{unknown}");
 }
 
-#[test]
-fn the_mcp_command_parses_its_only_two_forms() {
-    assert_eq!(
-        smith_tui::commands::parse("/mcp"),
-        Ok(CommandAction::Mcp(smith_tui::McpAction::List))
-    );
-    assert_eq!(
-        smith_tui::commands::parse("/mcp trust github"),
-        Ok(CommandAction::Mcp(smith_tui::McpAction::Trust(
-            "github".to_owned()
-        )))
-    );
-    assert!(smith_tui::commands::parse("/mcp trust").is_err());
-    assert!(smith_tui::commands::parse("/mcp nonsense").is_err());
-}
-
 #[tokio::test]
 async fn a_project_declaring_no_server_gets_no_supervisor_and_no_trust_file() {
     let (home, project) = mcp_project("");

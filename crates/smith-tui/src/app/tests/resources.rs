@@ -7,10 +7,12 @@
         let action = app.on_key(key(KeyCode::Enter));
         assert_eq!(
             action,
-            Some(Action::Reconfigure(PaletteCommand::Model {
-                provider: Some("local".into()),
-                model: "model-2".into(),
-            })),
+            Some(Action::Reconfigure(SessionControl::Reconfigure(
+                SelectionCommand::Model {
+                    provider: Some("local".into()),
+                    model: "model-2".into(),
+                }
+            ))),
             "a slash command runs the same host action as the palette"
         );
         assert!(
@@ -36,15 +38,17 @@
         type_text(&mut app, "/context 272k");
         assert_eq!(
             app.on_key(key(KeyCode::Enter)),
-            Some(Action::Reconfigure(PaletteCommand::ContextWindow(Some(
-                "272k".into()
-            ))))
+            Some(Action::Reconfigure(SessionControl::Reconfigure(
+                SelectionCommand::ContextWindow(Some("272k".into()))
+            )))
         );
 
         type_text(&mut app, "/context default");
         assert_eq!(
             app.on_key(key(KeyCode::Enter)),
-            Some(Action::Reconfigure(PaletteCommand::ContextWindow(None)))
+            Some(Action::Reconfigure(SessionControl::Reconfigure(
+                SelectionCommand::ContextWindow(None)
+            )))
         );
     }
 
@@ -103,22 +107,6 @@
     }
 
     #[test]
-    fn slash_skills_parses_its_list_and_trust_forms() {
-        assert_eq!(
-            commands::parse("/skills"),
-            Ok(CommandAction::Skills(SkillsAction::List))
-        );
-        assert_eq!(
-            commands::parse("/skills trust deploy"),
-            Ok(CommandAction::Skills(SkillsAction::Trust("deploy".into())))
-        );
-        let error = commands::parse("/skills trust").expect_err("a name is required");
-        assert!(error.contains("requires a skill name"), "{error}");
-        let error = commands::parse("/skills deploy").expect_err("trust is the only verb");
-        assert!(error.contains("is neither"), "{error}");
-    }
-
-    #[test]
     fn connect_and_disconnect_use_idle_local_pickers_and_typed_boundaries() {
         let mut connect = app();
         type_text(&mut connect, "/connect");
@@ -133,7 +121,7 @@
         connect.on_key(key(KeyCode::Down));
         assert_eq!(
             connect.on_key(key(KeyCode::Enter)),
-            Some(Action::Reconfigure(PaletteCommand::Connect(
+            Some(Action::Reconfigure(SessionControl::Connect(
                 "openrouter".to_owned()
             )))
         );
@@ -142,7 +130,7 @@
         type_text(&mut disconnect, "/disconnect local");
         assert_eq!(
             disconnect.on_key(key(KeyCode::Enter)),
-            Some(Action::Reconfigure(PaletteCommand::Disconnect(
+            Some(Action::Reconfigure(SessionControl::Disconnect(
                 "local".to_owned()
             )))
         );
@@ -170,22 +158,22 @@
     #[test]
     fn the_palette_emits_typed_safe_boundary_commands() {
         let cases = [
-            ("new", PaletteCommand::NewSession),
+            ("new", SelectionCommand::NewSession),
             (
                 "resume session-7",
-                PaletteCommand::Resume("session-7".into()),
+                SelectionCommand::Resume("session-7".into()),
             ),
-            ("profile work", PaletteCommand::Profile("work".into())),
+            ("profile work", SelectionCommand::Profile("work".into())),
             (
                 "provider local",
-                PaletteCommand::Model {
+                SelectionCommand::Model {
                     provider: Some("local".into()),
                     model: "model-2".into(),
                 },
             ),
             (
                 "model model-2",
-                PaletteCommand::Model {
+                SelectionCommand::Model {
                     provider: Some("local".into()),
                     model: "model-2".into(),
                 },
@@ -198,7 +186,7 @@
             type_text(&mut app, input);
             assert_eq!(
                 app.on_key(key(KeyCode::Enter)),
-                Some(Action::Reconfigure(expected))
+                Some(Action::Reconfigure(SessionControl::Reconfigure(expected)))
             );
             assert!(app.overlay.is_none());
         }
@@ -229,7 +217,9 @@
         type_text(&mut direct, "/think off");
         assert_eq!(
             direct.on_key(key(KeyCode::Enter)),
-            Some(Action::Reconfigure(PaletteCommand::Think(Some(false))))
+            Some(Action::Reconfigure(SessionControl::Reconfigure(
+                SelectionCommand::Think(Some(false))
+            )))
         );
 
         let mut picker_app = app();
@@ -245,9 +235,9 @@
         picker_app.on_key(key(KeyCode::Down));
         assert_eq!(
             picker_app.on_key(key(KeyCode::Enter)),
-            Some(Action::Reconfigure(PaletteCommand::Effort(Some(
-                "low".to_owned()
-            ))))
+            Some(Action::Reconfigure(SessionControl::Reconfigure(
+                SelectionCommand::Effort(Some("low".to_owned()))
+            )))
         );
     }
 
@@ -289,10 +279,12 @@
         app.on_key(key(KeyCode::Down));
         assert_eq!(
             app.on_key(key(KeyCode::Enter)),
-            Some(Action::Reconfigure(PaletteCommand::Model {
-                provider: Some("openrouter".into()),
-                model: "openai/gpt-4o-mini".into(),
-            }))
+            Some(Action::Reconfigure(SessionControl::Reconfigure(
+                SelectionCommand::Model {
+                    provider: Some("openrouter".into()),
+                    model: "openai/gpt-4o-mini".into(),
+                }
+            )))
         );
     }
 
@@ -327,10 +319,12 @@
         );
         assert_eq!(
             app.on_key(key(KeyCode::Enter)),
-            Some(Action::Reconfigure(PaletteCommand::Model {
-                provider: Some("router".into()),
-                model: "alpha".into(),
-            }))
+            Some(Action::Reconfigure(SessionControl::Reconfigure(
+                SelectionCommand::Model {
+                    provider: Some("router".into()),
+                    model: "alpha".into(),
+                }
+            )))
         );
     }
 
@@ -442,7 +436,7 @@
         app.on_key(key(KeyCode::Down));
         assert_eq!(
             app.on_key(key(KeyCode::Enter)),
-            Some(Action::Command(CommandAction::Status))
+            Some(Action::Command(HostCommand::Status))
         );
         assert!(app.overlay.is_none());
         assert!(app.composer.is_empty());
@@ -530,8 +524,8 @@
         let mut app = agent_first_app();
         assert_eq!(
             app.on_key(key(KeyCode::Tab)),
-            Some(Action::Reconfigure(PaletteCommand::Profile(
-                "plan".to_owned()
+            Some(Action::Reconfigure(SessionControl::Reconfigure(
+                SelectionCommand::Profile("plan".to_owned())
             )))
         );
 
@@ -542,8 +536,8 @@
         app.composer.clear();
         assert_eq!(
             app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)),
-            Some(Action::Reconfigure(PaletteCommand::Profile(
-                "review".to_owned()
+            Some(Action::Reconfigure(SessionControl::Reconfigure(
+                SelectionCommand::Profile("review".to_owned())
             )))
         );
 
@@ -570,8 +564,8 @@
 
         assert_eq!(
             app.on_key(key(KeyCode::Tab)),
-            Some(Action::Reconfigure(PaletteCommand::Agent(
-                "review".to_owned()
+            Some(Action::Reconfigure(SessionControl::Reconfigure(
+                SelectionCommand::Agent("review".to_owned())
             )))
         );
     }
@@ -587,7 +581,16 @@
         type_text(&mut palette, "rev");
         let palette_matches = commands::matches(palette.composer.text());
 
-        assert_eq!(slash_matches, palette_matches);
+        assert_eq!(
+            slash_matches
+                .iter()
+                .map(|command| command.name)
+                .collect::<Vec<_>>(),
+            palette_matches
+                .iter()
+                .map(|command| command.name)
+                .collect::<Vec<_>>()
+        );
         assert_eq!(
             slash_matches
                 .iter()

@@ -1,4 +1,0 @@
-title: account
-state: Error
-body:
-account selection is handled by the picker

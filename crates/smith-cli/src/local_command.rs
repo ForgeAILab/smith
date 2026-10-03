@@ -45,62 +45,46 @@ pub(super) async fn handle_local_command(
     project: &std::path::Path,
     mcp: Option<&crate::mcp::McpContext>,
     skills: &crate::skills::SkillContext,
-    command: CommandAction,
+    command: HostCommand,
 ) {
     match command {
-        CommandAction::Skills(action) => match action {
-            smith_tui::SkillsAction::List => {
+        HostCommand::Skills(action) => match action {
+            smith_client::commands::SkillsAction::List => {
                 app.show_local_result("skills", skills.render_list(host.runtime().skill_index()));
             }
             // The path and the digest are what the decision binds, so the path
             // and the digest are what the confirmation shows.
-            smith_tui::SkillsAction::Trust(skill) => match skills.confirmation(&skill) {
+            smith_client::commands::SkillsAction::Trust(skill) => match skills.confirmation(&skill)
+            {
                 Ok(content) => app.confirm_skill_trust(skill, content),
                 Err(error) => app.show_local_error("skills", error),
             },
         },
-        CommandAction::Mcp(action) => match (mcp, action) {
+        HostCommand::Mcp(action) => match (mcp, action) {
             (None, _) => app.show_local_result(
                 "mcp",
                 "no MCP servers are declared; add an `[mcp.servers.<name>]` table",
             ),
-            (Some(context), smith_tui::McpAction::List) => {
+            (Some(context), smith_client::commands::McpAction::List) => {
                 app.show_local_result("mcp", context.render_list());
             }
             // Showing the resolved invocation and its content identity is the
             // whole point of the confirmation: the decision is about exactly
             // this content, so exactly this content is what gets displayed.
-            (Some(context), smith_tui::McpAction::Trust(server)) => {
+            (Some(context), smith_client::commands::McpAction::Trust(server)) => {
                 match context.confirmation(&server) {
                     Ok(content) => app.confirm_mcp_trust(server, content),
                     Err(error) => app.show_local_error("mcp", error),
                 }
             }
         },
-        CommandAction::Account(_) => {
-            // Resolved entirely in the TUI against live pool state, which the
-            // host does not need to be consulted about.
-            app.show_local_error("account", "account selection is handled by the picker");
-        }
-        CommandAction::Connect(_) | CommandAction::Disconnect(_) => {
-            app.show_local_error(
-                "connect",
-                "connection commands must run at the safe session-rebuild boundary",
-            );
-        }
-        CommandAction::Context(None) => {
+        HostCommand::Context => {
             app.show_local_result(
                 "context",
                 render_context_view(&app.status, host.runtime().policy()),
             );
         }
-        CommandAction::Context(Some(_)) => {
-            app.show_local_error(
-                "context",
-                "context-window selection must run at the safe session boundary",
-            );
-        }
-        CommandAction::Timeline => {
+        HostCommand::Timeline => {
             let events = match host.client_timeline_events().await {
                 Ok(events) => events,
                 Err(error) => {
@@ -160,8 +144,8 @@ pub(super) async fn handle_local_command(
                 app.show_local_result("timeline", lines.join("\n"));
             }
         }
-        action @ (CommandAction::Status | CommandAction::Diagnostics) => {
-            let detailed = matches!(action, CommandAction::Diagnostics);
+        action @ (HostCommand::Status | HostCommand::Diagnostics) => {
+            let detailed = matches!(action, HostCommand::Diagnostics);
             let policy = host.runtime().policy();
             let git = GitChanges::discover(project)
                 .and_then(|git| git.status_summary())
@@ -299,7 +283,7 @@ pub(super) async fn handle_local_command(
                 ),
             );
         }
-        CommandAction::Goal(action) => {
+        HostCommand::Goal(action) => {
             let result = match action {
                 GoalAction::Show => match host.goal() {
                     Ok(Some(goal)) => {
@@ -413,7 +397,7 @@ pub(super) async fn handle_local_command(
                 Err(error) => app.show_local_error("goal", error.to_string()),
             }
         }
-        CommandAction::Agent(selected) => {
+        HostCommand::Agent(selected) => {
             let Some(coordinator) = host
                 .runtime()
                 .delegation()
@@ -426,8 +410,8 @@ pub(super) async fn handle_local_command(
                 return;
             };
             let children = coordinator.list();
-            let selected = match selected.as_deref() {
-                Some("parent") => {
+            let selected = match selected {
+                AgentAction::Parent => {
                     app.leave_child_inspection();
                     app.show_local_result(
                         "agent",
@@ -435,8 +419,8 @@ pub(super) async fn handle_local_command(
                     );
                     return;
                 }
-                Some("next" | "previous") if children.is_empty() => None,
-                Some(direction @ ("next" | "previous")) => {
+                AgentAction::Next | AgentAction::Previous if children.is_empty() => None,
+                direction @ (AgentAction::Next | AgentAction::Previous) => {
                     let current = app
                         .inspected_child
                         .as_deref()
@@ -446,15 +430,15 @@ pub(super) async fn handle_local_command(
                                 .position(|status| status.child.as_str() == current)
                         })
                         .unwrap_or(0);
-                    let index = if direction == "next" {
+                    let index = if direction == AgentAction::Next {
                         (current + 1) % children.len()
                     } else {
                         current.checked_sub(1).unwrap_or(children.len() - 1)
                     };
                     Some(children[index].child.as_str().to_owned())
                 }
-                Some(selected) => Some(selected.to_owned()),
-                None => None,
+                AgentAction::Inspect(selected) => Some(selected),
+                AgentAction::List => None,
             };
             if let Some(selected) = selected {
                 let Some(status) = children
@@ -494,13 +478,12 @@ pub(super) async fn handle_local_command(
                 );
             }
         }
-        CommandAction::Diff(scope) => {
-            if scope.as_deref() == Some("last-turn") {
-                match host.changes().undo_preview() {
-                    Ok(preview) => app.show_local_result("diff · last Smith turn", preview),
-                    Err(error) => app.show_local_error("diff · last Smith turn", error.message),
-                }
-            } else {
+        HostCommand::Diff(scope) => match scope {
+            DiffScope::LastTurn => match host.changes().undo_preview() {
+                Ok(preview) => app.show_local_result("diff · last Smith turn", preview),
+                Err(error) => app.show_local_error("diff · last Smith turn", error.message),
+            },
+            DiffScope::Git(scope) => {
                 match GitChanges::discover(project).and_then(|git| git.inspect(scope.as_deref())) {
                     Ok(view) if view.content == "No changes in this scope." => {
                         app.show_local_empty(view.title, view.content);
@@ -509,8 +492,8 @@ pub(super) async fn handle_local_command(
                     Err(error) => app.show_local_error("diff", error.message),
                 }
             }
-        }
-        CommandAction::Review(scope) => {
+        },
+        HostCommand::Review(scope) => {
             let scope = scope.unwrap_or_else(|| "all".to_owned());
             match GitChanges::discover(project)
                 .and_then(|git| git.inspect(Some(scope.as_str())))
@@ -529,15 +512,15 @@ pub(super) async fn handle_local_command(
                 Err(error) => app.transcript.push_error(error.message),
             }
         }
-        CommandAction::Undo => match host.changes().undo_preview() {
+        HostCommand::Undo => match host.changes().undo_preview() {
             Ok(preview) => app.confirm_undo(preview),
             Err(error) => app.transcript.push_error(error.message),
         },
-        CommandAction::Redo => match host.changes().redo_preview() {
+        HostCommand::Redo => match host.changes().redo_preview() {
             Ok(preview) => app.confirm_redo(preview),
             Err(error) => app.show_local_error("redo", error.message),
         },
-        CommandAction::Revert(Some(scope)) => {
+        HostCommand::Revert(Some(scope)) => {
             match GitChanges::discover(project).and_then(|git| git.preview_revert(&scope)) {
                 Ok(mut preview) => {
                     let path = scope.split('#').next().unwrap_or(scope.as_str());
@@ -559,22 +542,9 @@ pub(super) async fn handle_local_command(
                 Err(error) => app.transcript.push_error(error.message),
             }
         }
-        CommandAction::Revert(None) => app
+        HostCommand::Revert(None) => app
             .transcript
             .push_error("usage: /revert FILE or /revert FILE#HUNK; use /diff to choose a scope"),
-        CommandAction::Help
-        | CommandAction::Details
-        | CommandAction::NewSession
-        | CommandAction::Resume(_)
-        | CommandAction::Profile(_)
-        | CommandAction::Provider(_)
-        | CommandAction::Model(_)
-        | CommandAction::Think(_)
-        | CommandAction::Effort(_)
-        | CommandAction::AgentResume(_)
-        | CommandAction::Quit => {
-            unreachable!("the reducer handles this command before host dispatch")
-        }
     }
 }
 

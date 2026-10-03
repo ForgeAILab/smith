@@ -195,7 +195,7 @@
             &mut selection,
             &mut resume,
             "current-session".into(),
-            PaletteCommand::Profile("work".into()),
+            SelectionCommand::Profile("work".into()),
         );
         assert_eq!(selection.profile.as_deref(), Some("work"));
         assert_eq!(selection.provider, None);
@@ -206,7 +206,7 @@
             &mut selection,
             &mut resume,
             "current-session".into(),
-            PaletteCommand::Agent("review".into()),
+            SelectionCommand::Agent("review".into()),
         );
         assert_eq!(selection.profile.as_deref(), Some("work"));
         assert_eq!(selection.agent.as_deref(), Some("review"));
@@ -215,7 +215,7 @@
             &mut selection,
             &mut resume,
             "current-session".into(),
-            PaletteCommand::NewSession,
+            SelectionCommand::NewSession,
         );
         assert_eq!(resume, None);
 
@@ -223,7 +223,7 @@
             &mut selection,
             &mut resume,
             "ignored".into(),
-            PaletteCommand::Resume("selected-session".into()),
+            SelectionCommand::Resume("selected-session".into()),
         );
         assert_eq!(resume.as_deref(), Some("selected-session"));
     }

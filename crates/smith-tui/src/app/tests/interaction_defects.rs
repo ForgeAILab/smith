@@ -227,7 +227,7 @@ fn cancelling_a_command_picker_clears_the_composer_before_the_next_command() {
         type_text(&mut app, "/status");
         assert_eq!(
             app.on_key(key(KeyCode::Enter)),
-            Some(Action::Command(CommandAction::Status))
+            Some(Action::Command(HostCommand::Status))
         );
         assert!(app.composer.is_empty());
     }

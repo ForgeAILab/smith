@@ -51,14 +51,19 @@ completed_at:
 
 ## 3. Command registry
 
-- [ ] 3.1 Define the command table and the routed command type in the new
+- [x] 3.1 Define the command table and the routed command type in the new
   crate; move parsing beside it.
-- [ ] 3.2 Drive completion, `Ctrl+P`, and `/help` from the table.
-- [ ] 3.3 Dispatch by route; delete the reverse name map and the
+- [x] 3.2 Drive completion, `Ctrl+P`, and `/help` from the table.
+- [x] 3.3 Dispatch by route; delete the reverse name map and the
   `unreachable!` arms on both sides.
-- [ ] 3.4 Move `/agent` and `/diff` sub-argument parsing out of the CLI and
+  The four `*-host-boundary` fixtures (`/context 256k`, `/account`,
+  `/connect`, `/disconnect` sent straight to the host) recorded the deleted
+  runtime guard; that call no longer compiles, so the cases and their 12
+  files were removed and a `compile_fail` doctest in
+  `smith-client/src/commands.rs` replaces them.
+- [x] 3.4 Move `/agent` and `/diff` sub-argument parsing out of the CLI and
   into the table's grammar; remove the dead `accounts` alias.
-- [ ] 3.5 Add a test that each entry parses its own usage example.
+- [x] 3.5 Add a test that each entry parses its own usage example.
 
 ## 4. Typed local results
 

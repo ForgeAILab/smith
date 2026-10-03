@@ -523,42 +523,39 @@ pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
                 frozen_catalog = Some(catalog);
                 continue;
             }
-            InteractiveExit::Reconfigure(command) => {
-                match &command {
-                    PaletteCommand::Connect(provider) => {
-                        resume = Some(current_session);
-                        frozen_catalog = None;
-                        let _completed = connection::connect(
-                            args.selection.clone(),
-                            provider,
-                            args.no_color,
-                            args.no_motion,
-                        )
-                        .await?;
-                        continue;
-                    }
-                    PaletteCommand::Disconnect(provider) => {
-                        let outcome = connection::disconnect(&args.selection, provider).await?;
-                        if outcome == connection::DisconnectOutcome::ActiveDirectProvider {
-                            println!(
-                                "The active provider was disconnected. The session is saved; restart Smith with a connected provider to resume it."
-                            );
-                            return Ok(0);
-                        }
-                        resume = Some(current_session);
-                        frozen_catalog = None;
-                        continue;
-                    }
-                    _ => {}
+            InteractiveExit::Connect(provider) => {
+                resume = Some(current_session);
+                frozen_catalog = None;
+                let _completed = connection::connect(
+                    args.selection.clone(),
+                    &provider,
+                    args.no_color,
+                    args.no_motion,
+                )
+                .await?;
+                continue;
+            }
+            InteractiveExit::Disconnect(provider) => {
+                let outcome = connection::disconnect(&args.selection, &provider).await?;
+                if outcome == connection::DisconnectOutcome::ActiveDirectProvider {
+                    println!(
+                        "The active provider was disconnected. The session is saved; restart Smith with a connected provider to resume it."
+                    );
+                    return Ok(0);
                 }
+                resume = Some(current_session);
+                frozen_catalog = None;
+                continue;
+            }
+            InteractiveExit::Reconfigure(command) => {
                 frozen_catalog = matches!(
                     &command,
-                    PaletteCommand::Profile(_)
-                        | PaletteCommand::Model { .. }
-                        | PaletteCommand::Agent(_)
-                        | PaletteCommand::Think(_)
-                        | PaletteCommand::Effort(_)
-                        | PaletteCommand::ContextWindow(_)
+                    SelectionCommand::Profile(_)
+                        | SelectionCommand::Model { .. }
+                        | SelectionCommand::Agent(_)
+                        | SelectionCommand::Think(_)
+                        | SelectionCommand::Effort(_)
+                        | SelectionCommand::ContextWindow(_)
                 )
                 .then_some(catalog);
                 apply_palette_command(&mut args.selection, &mut resume, current_session, command);
@@ -599,22 +596,22 @@ pub(super) fn apply_palette_command(
     selection: &mut Selection,
     resume: &mut Option<String>,
     current_session: String,
-    command: PaletteCommand,
+    command: SelectionCommand,
 ) {
     match command {
-        PaletteCommand::NewSession => {
+        SelectionCommand::NewSession => {
             *resume = None;
         }
-        PaletteCommand::Resume(session) => {
+        SelectionCommand::Resume(session) => {
             *resume = Some(session);
         }
-        PaletteCommand::Profile(profile) => {
+        SelectionCommand::Profile(profile) => {
             selection.profile = Some(profile);
             selection.provider = None;
             selection.model = None;
             *resume = Some(current_session);
         }
-        PaletteCommand::Model { provider, model } => {
+        SelectionCommand::Model { provider, model } => {
             // A provider-served model narrows the selection to that pair. An
             // installed CLI agent has none: it runs the turn itself, and the
             // profile stays selected because its provider is still what
@@ -626,29 +623,21 @@ pub(super) fn apply_palette_command(
             selection.model = Some(model);
             *resume = Some(current_session);
         }
-        PaletteCommand::Connect(_) | PaletteCommand::Disconnect(_) => {
-            unreachable!("connection commands are handled before selection reconfiguration")
-        }
-        PaletteCommand::Account(_) => {
-            // An account switch is live pool state, not a selection: it needs
-            // no runtime rebuild, so it is applied before this point.
-            unreachable!("account switches are applied to the live pool, not by rebuilding")
-        }
-        PaletteCommand::Agent(agent) => {
+        SelectionCommand::Agent(agent) => {
             selection.agent = Some(agent);
             *resume = Some(current_session);
         }
-        PaletteCommand::Think(enabled) => {
+        SelectionCommand::Think(enabled) => {
             selection.reasoning_enabled = enabled;
             selection.reasoning_enabled_reset = enabled.is_none();
             *resume = Some(current_session);
         }
-        PaletteCommand::Effort(effort) => {
+        SelectionCommand::Effort(effort) => {
             selection.reasoning_effort = effort;
             selection.reasoning_effort_reset = selection.reasoning_effort.is_none();
             *resume = Some(current_session);
         }
-        PaletteCommand::ContextWindow(window) => {
+        SelectionCommand::ContextWindow(window) => {
             selection.context_window_reset = window.is_none();
             selection.context_window = window;
             *resume = Some(current_session);

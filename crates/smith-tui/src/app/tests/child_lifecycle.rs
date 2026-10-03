@@ -26,8 +26,8 @@
 
         assert_eq!(
             app.on_key(key(KeyCode::Enter)),
-            Some(Action::Reconfigure(PaletteCommand::Agent(
-                "review".to_owned()
+            Some(Action::Reconfigure(SessionControl::Reconfigure(
+                SelectionCommand::Agent("review".to_owned())
             )))
         );
     }
@@ -567,7 +567,7 @@
         type_text(&mut app, "/status");
         assert!(matches!(
             app.on_key(key(KeyCode::Enter)),
-            Some(Action::Command(CommandAction::Status))
+            Some(Action::Command(HostCommand::Status))
         ));
         assert_eq!(
             app.inspected_child.as_deref(),

@@ -23,7 +23,6 @@
 
 pub mod accounts;
 pub mod app;
-pub mod commands;
 pub mod composer;
 pub mod diff;
 pub mod picker;
@@ -38,18 +37,21 @@ pub mod theme;
 pub mod transcript;
 
 // Shared session projections; terminal rendering remains in this crate.
-pub use smith_client::{cache, time_display, usage_log};
+pub use smith_client::{cache, commands, time_display, usage_log};
 
 pub use app::{
-    Action, App, MouseOutcome, Overlay, PaletteCommand, PendingInputPreview, PreparedSubmission,
-    ResourceTarget, RuntimeResources, SubmissionTarget,
+    Action, App, MouseOutcome, Overlay, PendingInputPreview, PreparedSubmission, ResourceTarget,
+    RuntimeResources, SubmissionTarget,
 };
 pub use cache::{
     CacheLifecycleSummary, CacheOperationDisposition, CacheOperationSummary, CachePrice,
     CacheProjection, CacheTurnSummary, CacheVisibilityState, MISS_NOTICE_COST_MICRO_USD,
     MISS_NOTICE_TOKENS,
 };
-pub use commands::{COMMANDS, CommandAction, CommandSpec, GoalAction, McpAction, SkillsAction};
+pub use commands::{
+    COMMANDS, Command, CommandSpec, ConfirmCommand, GoalAction, HostCommand, McpAction,
+    SelectionCommand, SessionControl, SkillsAction, UiCommand,
+};
 pub use composer::Composer;
 pub use diff::{Change, EditReview, diff_lines};
 pub use picker::{PickerOutcome, ResourceEntry, ResourcePicker, draw_resource_picker};

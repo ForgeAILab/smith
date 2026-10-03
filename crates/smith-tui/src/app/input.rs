@@ -7,7 +7,7 @@ use crossterm::event::{
 };
 use smith_host::approval::PromptScope;
 
-use crate::commands::{self, CommandAction};
+use crate::commands;
 use crate::questionnaire::QuestionnaireResolution;
 use crate::references::{ComposerReference, parse_references};
 use crate::selection::Selection;
@@ -347,7 +347,7 @@ impl App {
             (KeyCode::Char('b'), KeyModifiers::CONTROL) => Some(Action::BackgroundShell),
             (KeyCode::Char('?'), KeyModifiers::NONE) if self.composer.is_empty() => {
                 self.follow_newest();
-                self.dispatch_command(CommandAction::Help)
+                self.show_command_help()
             }
             (KeyCode::Esc, _) => self.on_escape(),
             (KeyCode::PageUp, _) => {

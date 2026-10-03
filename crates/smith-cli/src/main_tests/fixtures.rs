@@ -844,12 +844,15 @@ async fn fixture_command(
     mcp: Option<&crate::mcp::McpContext>,
     skills: &crate::skills::SkillContext,
 ) {
-    let parsed = smith_tui::commands::parse(command).expect("fixture command parses");
+    let parsed = smith_client::commands::parse(command).expect("fixture command parses");
     app.composer.replace(command.to_owned());
     let action = app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     match action {
         Some(Action::Command(actual)) => {
-            assert_eq!(actual, parsed);
+            assert_eq!(
+                smith_client::commands::Command::Host(actual.clone()),
+                parsed.command
+            );
             Box::pin(handle_local_command(
                 &mut app, host, project, mcp, skills, actual,
             ))
@@ -925,31 +928,45 @@ impl FixtureLocal {
 
     async fn replay(&self, command: &str) {
         let mut app = fixture_local_app(false, false);
+        let smith_client::commands::Command::Host(command) = smith_client::commands::parse(command)
+            .expect("replayed command")
+            .command
+        else {
+            panic!("replay requires a host command");
+        };
         Box::pin(handle_local_command(
             &mut app,
             &self.host,
             self.project.path(),
             None,
             &self.skills,
-            smith_tui::commands::parse(command).expect("replayed command"),
+            command,
         ))
         .await;
     }
 
-    // Host-boundary and ephemeral cases intentionally call the handler directly.
-    // The latter have no persisted session paths for fixture_command to inspect.
+    // Ephemeral cases intentionally call the handler directly.
+    // They have no persisted session paths for fixture_command to inspect.
     async fn direct_commands(&self, cases: &[(&str, &str)]) {
         for (name, command) in cases {
             let mut app = fixture_local_app(false, false);
-            Box::pin(handle_local_command(
-                &mut app,
-                &self.host,
-                self.project.path(),
-                None,
-                &self.skills,
-                smith_tui::commands::parse(command).expect("direct command"),
-            ))
-            .await;
+            match smith_client::commands::parse(command)
+                .expect("direct command")
+                .command
+            {
+                smith_client::commands::Command::Host(command) => {
+                    Box::pin(handle_local_command(
+                        &mut app,
+                        &self.host,
+                        self.project.path(),
+                        None,
+                        &self.skills,
+                        command,
+                    ))
+                    .await;
+                }
+                other => panic!("fixture requires a host command: {other:?}"),
+            }
             let mut normalizer =
                 fixture_support::Normalizer::new(self.home.path(), self.project.path());
             normalizer.session(self.host.session().id().as_str());
@@ -1267,7 +1284,6 @@ async fn fixtures_local_context() {
         ("context-argument", "/context 256k"),
     ]))
     .await;
-    Box::pin(fixture.direct_commands(&[("context-host-boundary", "/context 256k")])).await;
     for (name, reported) in [("context-planned", false), ("context-usage", true)] {
         Box::pin(fixture.command(name, "/context", fixture_local_app(true, reported))).await;
     }
@@ -1423,12 +1439,6 @@ async fn fixtures_local_accounts_connections() {
         ("connect-missing", "/connect missing"),
         ("disconnect-picker-empty", "/disconnect"),
         ("disconnect-missing", "/disconnect missing"),
-    ]))
-    .await;
-    Box::pin(fixture.direct_commands(&[
-        ("account-host-boundary", "/account"),
-        ("connect-host-boundary", "/connect local"),
-        ("disconnect-host-boundary", "/disconnect local"),
     ]))
     .await;
     Box::pin(fixture.shutdown()).await;

@@ -2,7 +2,10 @@
 
 use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::commands::{self, CommandAction, GoalAction};
+use crate::commands::{
+    self, Command, ConfirmCommand, GoalAction, HostCommand, ParsedCommand, SelectionCommand,
+    SessionControl, UiCommand,
+};
 use crate::picker::{PickerOutcome, ResourceEntry, ResourcePicker};
 use crate::status::Activity;
 use crate::transcript::LocalResultState;
@@ -217,19 +220,21 @@ impl App {
                         .push_error("the account picker returned an invalid pool position");
                     return None;
                 };
-                Some(Action::Reconfigure(PaletteCommand::Account(position)))
+                Some(Action::Reconfigure(SessionControl::Account(position)))
             }
             ResourceTarget::Connect => {
                 self.composer.clear();
-                Some(Action::Reconfigure(PaletteCommand::Connect(id)))
+                Some(Action::Reconfigure(SessionControl::Connect(id)))
             }
             ResourceTarget::Disconnect => {
                 self.composer.clear();
-                Some(Action::Reconfigure(PaletteCommand::Disconnect(id)))
+                Some(Action::Reconfigure(SessionControl::Disconnect(id)))
             }
             ResourceTarget::Profile => {
                 self.composer.clear();
-                Some(Action::Reconfigure(profile_palette_command(id)))
+                Some(Action::Reconfigure(SessionControl::Reconfigure(
+                    profile_palette_command(id),
+                )))
             }
             ResourceTarget::Resume => {
                 self.composer.clear();
@@ -238,13 +243,15 @@ impl App {
                         .push_notice("resume", "already in the selected session");
                     None
                 } else {
-                    Some(Action::Reconfigure(PaletteCommand::Resume(id)))
+                    Some(Action::Reconfigure(SessionControl::Reconfigure(
+                        SelectionCommand::Resume(id),
+                    )))
                 }
             }
             ResourceTarget::Think => {
                 self.composer.clear();
-                Some(Action::Reconfigure(PaletteCommand::Think(
-                    match id.as_str() {
+                Some(Action::Reconfigure(SessionControl::Reconfigure(
+                    SelectionCommand::Think(match id.as_str() {
                         "default" => None,
                         "on" => Some(true),
                         "off" => Some(false),
@@ -253,13 +260,13 @@ impl App {
                                 .push_error("thinking picker returned an invalid typed value");
                             return None;
                         }
-                    },
+                    }),
                 )))
             }
             ResourceTarget::Effort => {
                 self.composer.clear();
-                Some(Action::Reconfigure(PaletteCommand::Effort(
-                    (id != "default").then_some(id),
+                Some(Action::Reconfigure(SessionControl::Reconfigure(
+                    SelectionCommand::Effort((id != "default").then_some(id)),
                 )))
             }
             ResourceTarget::Reference => {
@@ -315,8 +322,8 @@ impl App {
             None if backwards => selectable.len() - 1,
             None => 0,
         };
-        Some(Action::Reconfigure(profile_palette_command(
-            selectable[next].id.clone(),
+        Some(Action::Reconfigure(SessionControl::Reconfigure(
+            profile_palette_command(selectable[next].id.clone()),
         )))
     }
 
@@ -325,10 +332,12 @@ impl App {
         // needs no provider identity: nothing will be called through one.
         if id.starts_with(CLI_MODEL_PREFIX) {
             self.composer.clear();
-            return Some(Action::Reconfigure(PaletteCommand::Model {
-                provider: None,
-                model: id.to_owned(),
-            }));
+            return Some(Action::Reconfigure(SessionControl::Reconfigure(
+                SelectionCommand::Model {
+                    provider: None,
+                    model: id.to_owned(),
+                },
+            )));
         }
         let Some((provider, model)) = model_pair(&self.resources.providers, id) else {
             self.transcript
@@ -336,10 +345,12 @@ impl App {
             return None;
         };
         self.composer.clear();
-        Some(Action::Reconfigure(PaletteCommand::Model {
-            provider: Some(provider),
-            model,
-        }))
+        Some(Action::Reconfigure(SessionControl::Reconfigure(
+            SelectionCommand::Model {
+                provider: Some(provider),
+                model,
+            },
+        )))
     }
 
     pub(super) fn direct_model(&mut self, value: &str, restore: String) -> Option<Action> {
@@ -448,42 +459,18 @@ impl App {
         None
     }
 
-    pub(super) fn dispatch_command(&mut self, command: CommandAction) -> Option<Action> {
-        let Some(spec) = commands::COMMANDS.iter().find(|spec| {
-            let name = match &command {
-                CommandAction::Help => "help",
-                CommandAction::Status => "status",
-                CommandAction::Diagnostics => "diagnostics",
-                CommandAction::Goal(_) => "goal",
-                CommandAction::Context(_) => "context",
-                CommandAction::Details => "details",
-                CommandAction::Timeline => "timeline",
-                CommandAction::NewSession => "new",
-                CommandAction::Resume(_) => "resume",
-                CommandAction::Profile(_) => "profile",
-                CommandAction::Provider(_) => "provider",
-                CommandAction::Connect(_) => "connect",
-                CommandAction::Disconnect(_) => "disconnect",
-                CommandAction::Model(_) => "model",
-                CommandAction::Think(_) => "think",
-                CommandAction::Effort(_) => "effort",
-                CommandAction::Account(_) => "account",
-                CommandAction::Agent(_) | CommandAction::AgentResume(_) => "agent",
-                CommandAction::Mcp(_) => "mcp",
-                CommandAction::Skills(_) => "skills",
-                CommandAction::Diff(_) => "diff",
-                CommandAction::Review(_) => "review",
-                CommandAction::Undo => "undo",
-                CommandAction::Redo => "redo",
-                CommandAction::Revert(_) => "revert",
-                CommandAction::Quit => "quit",
-            };
-            spec.name == name
-        }) else {
-            unreachable!("parsed commands always have registry entries");
-        };
+    pub(super) fn show_command_help(&mut self) -> Option<Action> {
+        self.overlay = None;
+        self.accept_composer_input();
+        self.show_local_result("help", commands::help());
+        self.scroll_to_block = self.transcript.len().checked_sub(1);
+        None
+    }
 
-        let context_selection_requires_idle = matches!(command, CommandAction::Context(Some(_)));
+    pub(super) fn dispatch_command(&mut self, parsed: ParsedCommand) -> Option<Action> {
+        let ParsedCommand { spec, command } = parsed;
+
+        let context_selection_requires_idle = matches!(command, Command::Ui(UiCommand::Context(_)));
         if (spec.requires_idle || context_selection_requires_idle)
             && (self.is_busy() || self.has_pending_input())
         {
@@ -500,13 +487,13 @@ impl App {
         if self.is_busy()
             && matches!(
                 command,
-                CommandAction::Goal(
+                Command::Host(HostCommand::Goal(
                     GoalAction::Create(_)
                         | GoalAction::Edit(_)
                         | GoalAction::Budget(_)
                         | GoalAction::Resume
                         | GoalAction::Clear
-                )
+                ))
             )
         {
             self.overlay = None;
@@ -520,13 +507,8 @@ impl App {
         self.overlay = None;
         let restore = self.composer.text().to_owned();
         match command {
-            CommandAction::Help => {
-                self.accept_composer_input();
-                self.show_local_result("help", commands::help());
-                self.scroll_to_block = self.transcript.len().checked_sub(1);
-                None
-            }
-            CommandAction::Details => {
+            Command::Ui(UiCommand::Help) => self.show_command_help(),
+            Command::Ui(UiCommand::Details) => {
                 self.accept_composer_input();
                 self.toggle_work_details();
                 self.transcript.push_notice(
@@ -539,25 +521,25 @@ impl App {
                 );
                 None
             }
-            CommandAction::Quit => {
+            Command::Ui(UiCommand::Quit) => {
                 self.accept_composer_input();
                 self.request_exit()
             }
-            CommandAction::NewSession => {
+            Command::Session(control) => {
                 self.accept_composer_input();
-                Some(Action::Reconfigure(PaletteCommand::NewSession))
+                Some(Action::Reconfigure(control))
             }
-            CommandAction::Resume(None) => {
+            Command::Ui(UiCommand::Resume(None)) => {
                 self.accept_composer_input();
                 self.open_target_picker(ResourceTarget::Resume, restore);
                 None
             }
-            CommandAction::Account(None) => {
+            Command::Ui(UiCommand::Account(None)) => {
                 self.accept_composer_input();
                 self.open_target_picker(ResourceTarget::Account, restore);
                 None
             }
-            CommandAction::Account(Some(value)) => {
+            Command::Ui(UiCommand::Account(Some(value))) => {
                 self.accept_composer_input();
                 // The argument is the number the picker shows, which is
                 // 1-based; pool positions are not.
@@ -584,7 +566,7 @@ impl App {
                         if let Some(reason) = &entry.disabled_reason {
                             self.transcript.push_notice("account", reason.clone());
                         }
-                        Some(Action::Reconfigure(PaletteCommand::Account(position)))
+                        Some(Action::Reconfigure(SessionControl::Account(position)))
                     }
                     None => {
                         self.transcript
@@ -593,7 +575,7 @@ impl App {
                     }
                 }
             }
-            CommandAction::Resume(Some(id)) => {
+            Command::Ui(UiCommand::Resume(Some(id))) => {
                 let selectable = self
                     .resources
                     .sessions
@@ -609,12 +591,12 @@ impl App {
                     None
                 }
             }
-            CommandAction::Profile(None) => {
+            Command::Ui(UiCommand::Profile(None)) => {
                 self.accept_composer_input();
                 self.open_target_picker(ResourceTarget::Profile, restore);
                 None
             }
-            CommandAction::Profile(Some(name)) => {
+            Command::Ui(UiCommand::Profile(Some(name))) => {
                 let selectable = self
                     .resources
                     .profiles
@@ -636,12 +618,12 @@ impl App {
                     None
                 }
             }
-            CommandAction::Provider(None) => {
+            Command::Ui(UiCommand::Provider(None)) => {
                 self.accept_composer_input();
                 self.open_target_picker(ResourceTarget::Provider, restore);
                 None
             }
-            CommandAction::Provider(Some(name)) => {
+            Command::Ui(UiCommand::Provider(Some(name))) => {
                 let selectable = self
                     .resources
                     .providers
@@ -668,12 +650,12 @@ impl App {
                     None
                 }
             }
-            CommandAction::Connect(None) => {
+            Command::Ui(UiCommand::Connect(None)) => {
                 self.accept_composer_input();
                 self.open_target_picker(ResourceTarget::Connect, restore);
                 None
             }
-            CommandAction::Connect(Some(name)) => {
+            Command::Ui(UiCommand::Connect(Some(name))) => {
                 let selectable = self
                     .resources
                     .connections
@@ -689,12 +671,12 @@ impl App {
                     None
                 }
             }
-            CommandAction::Disconnect(None) => {
+            Command::Ui(UiCommand::Disconnect(None)) => {
                 self.accept_composer_input();
                 self.open_target_picker(ResourceTarget::Disconnect, restore);
                 None
             }
-            CommandAction::Disconnect(Some(name)) => {
+            Command::Ui(UiCommand::Disconnect(Some(name))) => {
                 let selectable = self
                     .resources
                     .disconnections
@@ -710,33 +692,35 @@ impl App {
                     None
                 }
             }
-            CommandAction::Model(None) => {
+            Command::Ui(UiCommand::Model(None)) => {
                 self.accept_composer_input();
                 self.open_target_picker(ResourceTarget::Model, restore);
                 None
             }
-            CommandAction::Model(Some(name)) => self.direct_model(&name, restore),
-            CommandAction::Think(None) => {
+            Command::Ui(UiCommand::Model(Some(name))) => self.direct_model(&name, restore),
+            Command::Ui(UiCommand::Think(None)) => {
                 self.accept_composer_input();
                 self.open_target_picker(ResourceTarget::Think, restore);
                 None
             }
-            CommandAction::Think(Some(value)) => {
+            Command::Ui(UiCommand::Think(Some(value))) => {
                 self.apply_direct_reasoning_choice(ResourceTarget::Think, &value, restore)
             }
-            CommandAction::Effort(None) => {
+            Command::Ui(UiCommand::Effort(None)) => {
                 self.accept_composer_input();
                 self.open_target_picker(ResourceTarget::Effort, restore);
                 None
             }
-            CommandAction::Effort(Some(value)) => {
+            Command::Ui(UiCommand::Effort(Some(value))) => {
                 self.apply_direct_reasoning_choice(ResourceTarget::Effort, &value, restore)
             }
-            CommandAction::Context(Some(value)) if value == "default" => {
+            Command::Ui(UiCommand::Context(value)) if value == "default" => {
                 self.accept_composer_input();
-                Some(Action::Reconfigure(PaletteCommand::ContextWindow(None)))
+                Some(Action::Reconfigure(SessionControl::Reconfigure(
+                    SelectionCommand::ContextWindow(None),
+                )))
             }
-            CommandAction::Context(Some(value)) => {
+            Command::Ui(UiCommand::Context(value)) => {
                 if self.resources.context_windows.is_empty() {
                     self.transcript.push_error(
                         "the active model has no selectable context windows".to_owned(),
@@ -749,9 +733,9 @@ impl App {
                     .any(|entry| entry.id == value && entry.disabled_reason.is_none())
                 {
                     self.accept_composer_input();
-                    Some(Action::Reconfigure(PaletteCommand::ContextWindow(Some(
-                        value,
-                    ))))
+                    Some(Action::Reconfigure(SessionControl::Reconfigure(
+                        SelectionCommand::ContextWindow(Some(value)),
+                    )))
                 } else {
                     let available = self
                         .resources
@@ -766,7 +750,7 @@ impl App {
                     None
                 }
             }
-            CommandAction::AgentResume(child_id) => {
+            Command::Confirm(ConfirmCommand::AgentResume(child_id)) => {
                 if self.is_busy() {
                     self.overlay = None;
                     self.transcript.push_notice(
@@ -800,14 +784,14 @@ impl App {
                 });
                 None
             }
-            CommandAction::Goal(GoalAction::Pause) => {
+            Command::Host(local @ HostCommand::Goal(GoalAction::Pause)) => {
                 if self.is_busy() {
                     self.status.activity = Activity::Interrupting;
                 }
                 self.accept_composer_input();
-                Some(Action::Command(CommandAction::Goal(GoalAction::Pause)))
+                Some(Action::Command(local))
             }
-            local => {
+            Command::Host(local) => {
                 self.accept_composer_input();
                 Some(Action::Command(local))
             }
@@ -899,10 +883,10 @@ impl App {
 
 /// Routes a profile choice to the legacy root-mode override when the entry is
 /// a transition-release adapter, and to the unified profile path otherwise.
-fn profile_palette_command(id: String) -> PaletteCommand {
+fn profile_palette_command(id: String) -> SelectionCommand {
     match id.strip_prefix(LEGACY_AGENT_PROFILE_PREFIX) {
-        Some(agent) => PaletteCommand::Agent(agent.to_owned()),
-        None => PaletteCommand::Profile(id),
+        Some(agent) => SelectionCommand::Agent(agent.to_owned()),
+        None => SelectionCommand::Profile(id),
     }
 }
 

@@ -49,6 +49,9 @@ use crossterm::event::{Event as TermEvent, EventStream, KeyCode, KeyEventKind, K
 use futures_util::StreamExt;
 use ignore::WalkBuilder;
 use ratatui::layout::Rect;
+use smith_client::commands::{
+    AgentAction, DiffScope, GoalAction, HostCommand, SelectionCommand, SessionControl,
+};
 #[cfg(test)]
 use smith_client::status::ContextPlanUpdate;
 use smith_client::status::{Status, TokenCount, render_elapsed};
@@ -83,10 +86,8 @@ use smith_runtime::rotation::SharedPool;
 use smith_runtime::session::{SNAPSHOT_SCHEMA_VERSION, SessionListing};
 use smith_runtime::{ChildDurability, ChildState, ChildStatus, SpawnOutcome};
 use smith_tui::app::{
-    Action, App, LEGACY_AGENT_PROFILE_PREFIX, MouseOutcome, PaletteCommand, PreparedSubmission,
-    SubmissionTarget,
+    Action, App, LEGACY_AGENT_PROFILE_PREFIX, MouseOutcome, PreparedSubmission, SubmissionTarget,
 };
-use smith_tui::commands::{CommandAction, GoalAction};
 use smith_tui::theme::{Theme, glyph};
 use smith_tui::{
     PickerOutcome, ResourceEntry, ResourcePicker, RuntimeResources, draw_resource_picker,

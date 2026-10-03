@@ -304,12 +304,12 @@
         )
         .expect("a skill context");
         let commands = [
-            CommandAction::Status,
-            CommandAction::Diagnostics,
-            CommandAction::Context(None),
-            CommandAction::Agent(None),
-            CommandAction::Diff(None),
-            CommandAction::Skills(smith_tui::SkillsAction::List),
+            HostCommand::Status,
+            HostCommand::Diagnostics,
+            HostCommand::Context,
+            HostCommand::Agent(AgentAction::List),
+            HostCommand::Diff(DiffScope::Git(None)),
+            HostCommand::Skills(smith_client::commands::SkillsAction::List),
         ];
         for command in commands {
             handle_local_command(&mut app, &host, project.path(), None, &skills, command).await;
@@ -331,7 +331,7 @@
             project.path(),
             None,
             &skills,
-            CommandAction::Diff(Some("unstaged".to_owned())),
+            HostCommand::Diff(DiffScope::Git(Some("unstaged".to_owned()))),
         )
         .await;
 

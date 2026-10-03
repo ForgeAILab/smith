@@ -22,7 +22,9 @@ pub(super) enum InteractiveExit {
         Option<smith_client::status::PriceReference>,
         Option<Box<smith_client::cache::CacheTurnSummary>>,
     ),
-    Reconfigure(PaletteCommand),
+    Reconfigure(SelectionCommand),
+    Connect(String),
+    Disconnect(String),
 }
 
 pub(super) struct PresentationOptions {
@@ -494,30 +496,38 @@ pub(super) async fn run_tui(
                             // An account switch is live pool state, so it is
                             // applied here rather than by tearing the session
                             // down and rebuilding it around a new selection.
-                            Some(Action::Reconfigure(PaletteCommand::Account(position))) => {
-                                match switch_account(
-                                    credential_pool.as_ref(),
-                                    &mut accounts,
-                                    position,
-                                )
-                                .await
-                                {
-                                    Some(notice) => {
-                                        app.transcript.push_notice("account", notice);
-                                        app.set_accounts(account_entries(
-                                            credential_pool.as_ref(),
-                                        ));
-                                        app.status.account =
-                                            account_status(credential_pool.as_ref());
+                            Some(Action::Reconfigure(command)) => match command {
+                                SessionControl::Account(position) => {
+                                    match switch_account(
+                                        credential_pool.as_ref(),
+                                        &mut accounts,
+                                        position,
+                                    )
+                                    .await
+                                    {
+                                        Some(notice) => {
+                                            app.transcript.push_notice("account", notice);
+                                            app.set_accounts(account_entries(
+                                                credential_pool.as_ref(),
+                                            ));
+                                            app.status.account =
+                                                account_status(credential_pool.as_ref());
+                                        }
+                                        None => app
+                                            .transcript
+                                            .push_notice("account", "already using that account"),
                                     }
-                                    None => app
-                                        .transcript
-                                        .push_notice("account", "already using that account"),
                                 }
-                            }
-                            Some(Action::Reconfigure(command)) => {
-                                break InteractiveExit::Reconfigure(command);
-                            }
+                                SessionControl::Reconfigure(selection) => {
+                                    break InteractiveExit::Reconfigure(selection);
+                                }
+                                SessionControl::Connect(provider) => {
+                                    break InteractiveExit::Connect(provider);
+                                }
+                                SessionControl::Disconnect(provider) => {
+                                    break InteractiveExit::Disconnect(provider);
+                                }
+                            },
                             Some(Action::Command(command)) => {
                                 handle_local_command(
                                     &mut app,

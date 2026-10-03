@@ -33,7 +33,7 @@
         type_text(&mut app, "/status");
         assert!(matches!(
             app.on_key(key(KeyCode::Enter)),
-            Some(Action::Command(CommandAction::Status))
+            Some(Action::Command(HostCommand::Status))
         ));
         type_text(&mut app, "!cargo test");
         assert_eq!(
