@@ -7,6 +7,7 @@ mod layout;
 pub(crate) mod lists;
 mod markdown;
 mod modal;
+mod reports;
 mod transcript;
 pub(crate) mod wrap;
 

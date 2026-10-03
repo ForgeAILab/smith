@@ -66,8 +66,13 @@ completed_at:
   description); `/goal`'s argument hint spaces its `|` separators unlike every
   other command; the startup guide hardcodes three command suggestions
   instead of reading the command table.
-- [ ] 4.3 `/help`, `/status`, `/context`: aligned columns, word wrap,
+- [x] 4.3 `/help`, `/status`, `/context`: aligned columns, word wrap,
   open at the top.
+- [ ] 4.3a Flaky test seen once under full-suite load:
+  `a_cleanly_finished_row_retires_itself_but_the_child_stays_known` takes
+  `Instant::now()` after the app records the child's finish time, so a slow
+  scheduler makes `due - 1ms` reach the expiry. Pass the finish instant in
+  instead of reading the clock twice.
 - [ ] 4.4 `/diagnostics`: grouped, one fact per line, `unknown` for
   unknown.
 - [ ] 4.5 First-run setup: one frame, wrapped descriptions.

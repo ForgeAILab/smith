@@ -883,6 +883,9 @@ pub struct App {
     /// A local result to reveal from its beginning at the next valid frame.
     /// The renderer resolves this block index using the current wrap width.
     pub(crate) scroll_to_block: Option<usize>,
+    /// Reading an informational result pauses following only until another
+    /// block is appended; ordinary manual scrolling keeps its usual behavior.
+    pub(crate) result_scroll_revision: Option<u64>,
     /// The live pointer selection, in rendered-cell coordinates.
     ///
     /// Smith owns selection because enabling wheel reporting takes the
@@ -976,6 +979,7 @@ impl App {
             scroll_back: 0,
             scroll_limit: 0,
             scroll_to_block: None,
+            result_scroll_revision: None,
             selection: None,
             tick: 0,
             should_quit: false,

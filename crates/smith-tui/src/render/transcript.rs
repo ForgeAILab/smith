@@ -7,7 +7,6 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
 use crate::status::{Activity, render_elapsed};
@@ -33,6 +32,7 @@ use smith_tools::{ToolCallDisplay, tool_display_label};
 
 use super::helpers::*;
 use super::markdown::render_assistant_lines;
+use super::reports;
 use super::wrap::{wrap_lines, wrapped_row_count};
 
 pub(super) fn draw_transcript(
@@ -48,7 +48,9 @@ pub(super) fn draw_transcript(
         .scroll_to_block
         .filter(|_| app.inspected_child.is_none())
         .and_then(|block| block_start_row(app, block, theme, area.width));
-    let offset = if let Some(offset) = pending_offset {
+    let offset = if app.inspected_child.is_none() && app.output_after_result() {
+        max_scroll
+    } else if let Some(offset) = pending_offset {
         offset.min(max_scroll)
     } else if app.following {
         max_scroll
@@ -342,10 +344,7 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16, expanded: bool) -> Ve
                 }
             }
             Block::Local(LocalResult::Status(report)) => {
-                lines.push(Line::from(Span::styled(
-                    "/status",
-                    theme.style(Tone::Command),
-                )));
+                lines.push(report_title("/status", theme));
                 lines.extend(render_status_card(report, width, theme));
             }
             Block::Local(LocalResult::Diagnostics(report)) => {
@@ -356,17 +355,11 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16, expanded: bool) -> Ve
                 lines.extend(render_diagnostics_report(report, width, theme));
             }
             Block::Local(LocalResult::Context(report)) => {
-                lines.push(Line::from(Span::styled(
-                    "/context",
-                    theme.style(Tone::Command),
-                )));
+                lines.push(report_title("/context", theme));
                 lines.extend(render_context_report(report, width, theme));
             }
             Block::Local(LocalResult::Help(report)) => {
-                lines.push(Line::from(Span::styled(
-                    "/help",
-                    theme.style(Tone::Command),
-                )));
+                lines.push(report_title("/help", theme));
                 lines.extend(render_help_report(report, width, theme));
             }
             Block::Local(LocalResult::Timeline(report)) => {
@@ -687,14 +680,11 @@ pub(super) fn render_status_card(
     width: u16,
     theme: Theme,
 ) -> Vec<Line<'static>> {
-    let available = usize::from(width.saturating_sub(4)).max(1);
     let mut fields = vec![
         ("session", report.session.clone()),
         ("profile", report.profile.clone()),
-        (
-            "provider",
-            format!("{} · model: {}", report.provider, report.model),
-        ),
+        ("provider", report.provider.clone()),
+        ("model", report.model.clone()),
         ("permission", report.permission.clone()),
         ("reasoning", report.reasoning.clone()),
         ("reasoning controls", report.reasoning_controls.clone()),
@@ -724,107 +714,54 @@ pub(super) fn render_status_card(
         ("usage", report.usage.clone()),
         ("cost", report.cost.clone()),
     ]);
-    let label_width = fields
-        .iter()
-        .map(|(label, _)| label.width())
-        .max()
-        .unwrap_or(0);
-
-    let mut body = vec![
-        Line::from(vec![
-            Span::styled(" >_ ", theme.style(Tone::Dim)),
-            Span::styled("Smith", theme.style(Tone::Heading)),
-        ]),
-        Line::default(),
-    ];
-
+    let label_width = reports::label_width(fields.iter().map(|(label, _)| *label), width);
+    let value_width = usize::from(width).saturating_sub(label_width + 4);
+    let mut lines = Vec::new();
     for (label, value) in fields {
-        let mut value_lines = value.lines();
-        body.extend(render_status_field(
+        let value = if label == "project" {
+            reports::left_shorten(&value, value_width)
+        } else {
+            value
+        };
+        lines.extend(report_field(
             label,
-            value_lines.next().unwrap_or_default().trim_start(),
+            &value,
+            Tone::Default,
             label_width,
-            available,
+            width,
             theme,
         ));
-        for raw in value_lines {
-            body.extend(
-                wrap_text(raw, available)
-                    .into_iter()
-                    .map(|line| Line::from(Span::styled(line, theme.style(Tone::Default)))),
-            );
-        }
     }
-    body.extend(
-        wrap_text(StatusReport::DIAGNOSTICS_HINT, available)
-            .into_iter()
-            .map(|line| Line::from(Span::styled(line, theme.style(Tone::Default)))),
-    );
-
-    let inner_width = body
-        .iter()
-        .map(Line::width)
-        .max()
-        .unwrap_or(1)
-        .min(available)
-        .max(1);
-    let mut bordered = Vec::with_capacity(body.len() + 2);
-    bordered.push(Line::from(Span::styled(
-        format!("╭{}╮", "─".repeat(inner_width + 2)),
-        theme.style(Tone::Dim),
-    )));
-    for line in body {
-        let used = line.width().min(inner_width);
-        let mut spans = vec![Span::styled("│ ", theme.style(Tone::Dim))];
-        spans.extend(line.spans);
-        spans.push(Span::styled(
-            format!("{} │", " ".repeat(inner_width.saturating_sub(used))),
-            theme.style(Tone::Dim),
-        ));
-        bordered.push(Line::from(spans));
-    }
-    bordered.push(Line::from(Span::styled(
-        format!("╰{}╯", "─".repeat(inner_width + 2)),
-        theme.style(Tone::Dim),
-    )));
-    bordered
+    lines.extend(reports::text(
+        StatusReport::DIAGNOSTICS_HINT,
+        width,
+        theme.style(Tone::Default),
+    ));
+    lines
 }
 
-pub(super) fn render_status_field(
+fn report_title(command: &str, theme: Theme) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("{} ", glyph::BULLET), theme.style(Tone::Dim)),
+        Span::styled(command.to_owned(), theme.style(Tone::Command)),
+    ])
+}
+
+fn report_field(
     label: &str,
     value: &str,
+    tone: Tone,
     label_width: usize,
-    available: usize,
+    width: u16,
     theme: Theme,
 ) -> Vec<Line<'static>> {
-    let padding = 3 + label_width.saturating_sub(label.width());
-    let prefix = format!(" {label}:{}", " ".repeat(padding));
-    let prefix_width = prefix.width();
-    if prefix_width >= available {
-        return wrap_text(&format!("{label}: {value}"), available)
-            .into_iter()
-            .map(|line| Line::from(Span::styled(line, theme.style(Tone::Default))))
-            .collect();
-    }
-
-    let chunks = wrap_text(value, available - prefix_width);
-    chunks
-        .into_iter()
-        .enumerate()
-        .map(|(index, chunk)| {
-            if index == 0 {
-                Line::from(vec![
-                    Span::styled(prefix.clone(), theme.style(Tone::Dim)),
-                    Span::styled(chunk, theme.style(Tone::Default)),
-                ])
-            } else {
-                Line::from(vec![
-                    Span::styled(" ".repeat(prefix_width), theme.style(Tone::Dim)),
-                    Span::styled(chunk, theme.style(Tone::Default)),
-                ])
-            }
-        })
-        .collect()
+    reports::field(
+        Line::from(Span::styled(label.to_owned(), theme.style(Tone::Dim))),
+        value,
+        theme.style(tone),
+        label_width,
+        width,
+    )
 }
 
 fn render_diagnostics_report(
@@ -1595,95 +1532,84 @@ pub(super) fn render_help_report(
     width: u16,
     theme: Theme,
 ) -> Vec<Line<'static>> {
-    let available = usize::from(width).max(1);
-    let mut lines = wrap_context_line(
-        Line::from(Span::styled(
-            HelpReport::GETTING_STARTED_HEADING,
-            theme.style(Tone::Heading),
-        )),
-        available,
+    let commands = report
+        .getting_started
+        .iter()
+        .chain(&report.primary)
+        .chain(&report.advanced);
+    let names = commands
+        .map(|command| format!("/{}", command.name))
+        .collect::<Vec<_>>();
+    let name_width = reports::label_width(names.iter().map(String::as_str), width);
+    let mut lines = reports::text(
+        HelpReport::START_HERE_HEADING,
+        width,
+        theme.style(Tone::Heading),
     );
-    lines.extend(wrap_context_line(
-        Line::from(Span::styled(
-            report.introduction.clone(),
-            theme.style(Tone::Dim),
-        )),
-        available,
+    lines.extend(reports::text(
+        &report.introduction,
+        width,
+        theme.style(Tone::Dim),
     ));
-    lines.extend(
-        report
-            .getting_started
-            .iter()
-            .flat_map(|command| render_help_command(command, available, theme)),
-    );
+    for command in &report.getting_started {
+        lines.extend(render_help_command(command, name_width, width, theme));
+    }
     for (heading, commands) in [
         (HelpReport::PRIMARY_HEADING, &report.primary),
         (HelpReport::ADVANCED_HEADING, &report.advanced),
     ] {
         lines.push(Line::default());
-        lines.extend(wrap_context_line(
-            Line::from(Span::styled(heading, theme.style(Tone::Heading))),
-            available,
-        ));
-        lines.extend(
-            commands
-                .iter()
-                .flat_map(|command| render_help_command(command, available, theme)),
-        );
+        lines.extend(reports::text(heading, width, theme.style(Tone::Heading)));
+        for command in commands {
+            lines.extend(render_help_command(command, name_width, width, theme));
+        }
     }
     lines.push(Line::default());
-    lines.extend(wrap_context_line(
-        Line::from(Span::styled(
-            HelpReport::COMPOSER_HEADING,
-            theme.style(Tone::Dim),
-        )),
-        available,
+    lines.extend(reports::text(
+        HelpReport::KEYS_HEADING,
+        width,
+        theme.style(Tone::Heading),
     ));
-    lines.extend(report.composer.iter().flat_map(|guidance| {
-        wrap_context_line(
-            Line::from(Span::styled(guidance.clone(), theme.style(Tone::Dim))),
-            available,
-        )
-    }));
+    let key_width = reports::label_width(report.keys.iter().map(|key| key.key.as_str()), width);
+    for key in &report.keys {
+        lines.extend(report_field(
+            &key.key,
+            &key.description,
+            Tone::Default,
+            key_width,
+            width,
+            theme,
+        ));
+    }
     lines
 }
 
 fn render_help_command(
     command: &HelpCommand,
-    available: usize,
+    name_width: usize,
+    width: u16,
     theme: Theme,
 ) -> Vec<Line<'static>> {
-    let invocation = command.invocation();
-    let command_end = invocation.len();
-    let description_start = command_end + " — ".len();
-    let raw = format!("{invocation} — {}", command.description);
-    let mut start = 0;
-    wrap_text(&raw, available)
-        .into_iter()
-        .map(|wrapped| {
-            let end = start + wrapped.len();
-            // Preserve wrapping before replacing the plain separator with two
-            // spaces. Only a row containing the entire separator has a code
-            // span; its boundaries come from the fields, never parsed text.
-            let line = if start <= command_end && end >= description_start {
-                Line::from(vec![
-                    Span::styled(
-                        wrapped[..command_end - start].to_owned(),
-                        theme.style(Tone::Code),
-                    ),
-                    Span::styled("  ", theme.style(Tone::Dim)),
-                    Span::styled(
-                        wrapped[description_start - start..].to_owned(),
-                        theme.style(Tone::Dim),
-                    ),
-                ])
-            } else {
-                Line::from(Span::styled(wrapped, theme.style(Tone::Dim)))
-            };
-            start = end;
-            line
-        })
-        .collect()
+    let mut lines = reports::field(
+        Line::from(Span::styled(
+            format!("/{}", command.name),
+            theme.style(Tone::Code),
+        )),
+        &command.description,
+        theme.style(Tone::Dim),
+        name_width,
+        width,
+    );
+    if !command.argument_hint.is_empty() {
+        lines.extend(reports::field(
+            Line::default(),
+            &command.argument_hint,
+            theme.style(Tone::Dim),
+            name_width,
+            width,
+        ));
+    }
+    lines
 }
 
 pub(super) fn render_context_report(
@@ -1691,114 +1617,130 @@ pub(super) fn render_context_report(
     width: u16,
     theme: Theme,
 ) -> Vec<Line<'static>> {
-    let available = usize::from(width).max(1);
-    let mut body = vec![Line::from(Span::styled(
-        ContextReport::HEADING,
-        theme.style(Tone::Heading),
-    ))];
-    if !report.available_windows.is_empty() {
-        body.push(context_field(
-            "available context windows",
-            report.available_windows_value(),
-            Tone::Default,
-            theme,
-        ));
-    }
-    body.push(Line::from(Span::styled(
-        report.summary.clone(),
-        theme.style(Tone::Dim),
-    )));
-    body.push(Line::default());
-    for row in report.grid() {
-        let mut spans = Vec::new();
-        for (index, kind) in row.into_iter().enumerate() {
-            if index > 0 {
-                spans.push(Span::styled(" ", theme.style(Tone::Default)));
-            }
-            let (glyph, tone) = context_category_style(kind);
-            spans.push(Span::styled(glyph, theme.style(tone)));
-        }
-        if report.grid_is_empty() {
-            spans.push(Span::styled(" ", theme.style(Tone::Default)));
-        }
-        body.push(Line::from(spans));
-    }
-    body.push(Line::default());
-    body.push(Line::from(Span::styled(
-        report.usage.category_heading(),
-        theme.style(Tone::Dim).add_modifier(Modifier::ITALIC),
-    )));
-    for category in &report.categories {
-        body.push(context_category_line(
-            category.kind,
-            &category.label,
-            &category.value,
-            theme,
-        ));
-    }
-    body.push(context_category_line(
-        ContextCategoryKind::Free,
-        "free input",
-        &report.free_input.value,
-        theme,
-    ));
-    body.push(context_category_line(
-        ContextCategoryKind::Reserve,
-        "output/reasoning reserve",
-        &report.reserve.value,
-        theme,
-    ));
-    body.extend([
-        context_field(
-            "model window",
-            report.model_window.clone(),
-            Tone::Default,
-            theme,
-        ),
-        context_field("counting", report.counting.clone(), Tone::Warning, theme),
-        context_field(
+    let mut fields = vec![
+        ("model window", report.model_window.clone(), Tone::Default),
+        ("counting", report.counting.clone(), Tone::Warning),
+        (
             "compaction",
             report.compaction.render_value(),
             match report.compaction {
                 ContextCompaction::Applied { .. } => Tone::Success,
                 ContextCompaction::Enabled { .. } => Tone::Default,
             },
-            theme,
         ),
-        context_field(
-            "tool context",
-            report.tool_context.clone(),
-            Tone::Default,
-            theme,
-        ),
-        Line::from(Span::styled(
-            ContextReport::OCCUPANCY_HINT,
-            theme.style(Tone::Dim),
-        )),
-        context_field(
+        ("tool context", report.tool_context.clone(), Tone::Default),
+        (
             "provider input (session)",
             report.provider_input.clone(),
             Tone::Default,
-            theme,
         ),
-        context_field(
+        (
             "cache read (session)",
             report.cache_read.clone(),
             Tone::Default,
-            theme,
         ),
-        context_field("cache", report.cache.clone(), Tone::Default, theme),
-        context_field("reasoning", report.reasoning.clone(), Tone::Default, theme),
-        context_field(
+        ("cache", report.cache.clone(), Tone::Default),
+        ("reasoning", report.reasoning.clone(), Tone::Default),
+        (
             "reasoning controls",
             report.reasoning_controls.clone(),
             Tone::Default,
-            theme,
         ),
-    ]);
-    body.into_iter()
-        .flat_map(|line| wrap_context_line(line, available))
-        .collect()
+    ];
+    if !report.available_windows.is_empty() {
+        fields.insert(
+            0,
+            (
+                "available context windows",
+                report.available_windows_value(),
+                Tone::Default,
+            ),
+        );
+    }
+    let categories = report
+        .categories
+        .iter()
+        .map(|category| {
+            (
+                category.kind,
+                category.label.as_str(),
+                category.value.as_str(),
+            )
+        })
+        .chain([
+            (
+                ContextCategoryKind::Free,
+                "free input",
+                report.free_input.value.as_str(),
+            ),
+            (
+                ContextCategoryKind::Reserve,
+                "output/reasoning reserve",
+                report.reserve.value.as_str(),
+            ),
+        ])
+        .collect::<Vec<_>>();
+    let labels = categories
+        .iter()
+        .map(|(_, label, _)| format!("  {label}"))
+        .chain(fields.iter().map(|(label, _, _)| (*label).to_owned()))
+        .collect::<Vec<_>>();
+    let label_width = reports::label_width(labels.iter().map(String::as_str), width);
+    let mut lines = reports::text(ContextReport::HEADING, width, theme.style(Tone::Heading));
+    if !report.available_windows.is_empty() {
+        let (label, value, tone) = fields.remove(0);
+        lines.extend(report_field(label, &value, tone, label_width, width, theme));
+    }
+    lines.extend(reports::text(
+        &report.summary,
+        width,
+        theme.style(Tone::Dim),
+    ));
+    lines.push(Line::default());
+    for row in report.grid() {
+        let mut spans = vec![Span::raw("  ")];
+        for (index, kind) in row.into_iter().enumerate() {
+            if index > 0 {
+                spans.push(Span::raw(" "));
+            }
+            let (glyph, tone) = context_category_style(kind);
+            spans.push(Span::styled(glyph, theme.style(tone)));
+        }
+        if report.grid_is_empty() {
+            spans.push(Span::raw(" "));
+        }
+        lines.push(Line::from(spans));
+    }
+    lines.push(Line::default());
+    lines.extend(reports::text(
+        report.usage.category_heading(),
+        width,
+        theme.style(Tone::Dim).add_modifier(Modifier::ITALIC),
+    ));
+    for (kind, label, value) in categories {
+        let (glyph, tone) = context_category_style(kind);
+        lines.extend(reports::field(
+            Line::from(vec![
+                Span::styled(format!("{glyph} "), theme.style(tone)),
+                Span::styled(label.to_owned(), theme.style(Tone::Default)),
+            ]),
+            value,
+            theme.style(Tone::Dim),
+            label_width,
+            width,
+        ));
+    }
+    for (label, value, tone) in fields {
+        lines.extend(report_field(label, &value, tone, label_width, width, theme));
+        if label == "tool context" {
+            lines.extend(reports::text(
+                ContextReport::OCCUPANCY_HINT,
+                width,
+                theme.style(Tone::Dim),
+            ));
+        }
+    }
+    lines
 }
 
 fn context_category_style(kind: ContextCategoryKind) -> (&'static str, Tone) {
@@ -1812,21 +1754,6 @@ fn context_category_style(kind: ContextCategoryKind) -> (&'static str, Tone) {
         ContextCategoryKind::Free => (glyph::CONTEXT_FREE, Tone::Dim),
         ContextCategoryKind::Reserve => (glyph::CONTEXT_RESERVE, Tone::Dim),
     }
-}
-
-fn context_category_line(
-    kind: ContextCategoryKind,
-    label: &str,
-    value: &str,
-    theme: Theme,
-) -> Line<'static> {
-    let (glyph, tone) = context_category_style(kind);
-    Line::from(vec![
-        Span::styled(glyph, theme.style(tone)),
-        Span::raw(" "),
-        Span::styled(format!("{label}:"), theme.style(Tone::Default)),
-        Span::styled(format!(" {value}"), theme.style(Tone::Dim)),
-    ])
 }
 
 fn context_field(label: &str, value: String, tone: Tone, theme: Theme) -> Line<'static> {

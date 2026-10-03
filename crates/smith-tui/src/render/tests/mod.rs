@@ -258,4 +258,5 @@ mod tests {
     include!("startup.rs");
     include!("picker_startup.rs");
     include!("list_rows.rs");
+    include!("informational.rs");
 }

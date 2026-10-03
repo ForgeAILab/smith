@@ -14,11 +14,18 @@ pub struct HelpReport {
     pub primary: Vec<HelpCommand>,
     /// Commands in the advanced registry group, in discovery order.
     pub advanced: Vec<HelpCommand>,
-    /// Composer guidance, retaining the existing line boundaries.
+    /// Plain-text capture guidance, kept separately so terminal key wording
+    /// does not change the recorder's existing plain-text output.
     pub composer: Vec<String>,
+    /// Keys and input forms offered by the terminal, in plain words.
+    pub keys: Vec<HelpKey>,
 }
 
 impl HelpReport {
+    /// The terminal's short orientation section.
+    pub const START_HERE_HEADING: &str = "Start here";
+    /// The terminal's key table heading.
+    pub const KEYS_HEADING: &str = "Keys";
     /// The existing heading for the getting-started section.
     pub const GETTING_STARTED_HEADING: &str = "Getting started";
     /// The existing heading for primary commands.
@@ -27,6 +34,15 @@ impl HelpReport {
     pub const ADVANCED_HEADING: &str = "Advanced";
     /// The existing heading for composer guidance.
     pub const COMPOSER_HEADING: &str = "Composer";
+}
+
+/// One terminal key or input form and its action, without layout delimiters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HelpKey {
+    /// Key name and any condition needed to use it.
+    pub key: String,
+    /// The action in plain words.
+    pub description: String,
 }
 
 /// One command's display values, without presentation delimiters.

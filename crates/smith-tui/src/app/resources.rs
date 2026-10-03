@@ -463,7 +463,6 @@ impl App {
         self.overlay = None;
         self.accept_composer_input();
         self.show_local_report(LocalResult::Help(Box::new(commands::help())));
-        self.scroll_to_block = self.transcript.len().checked_sub(1);
         None
     }
 
@@ -803,7 +802,15 @@ impl App {
     /// Appends a typed command report to the transcript.
     pub fn show_local_report(&mut self, result: LocalResult) {
         self.follow_newest();
+        let open_at_top = matches!(
+            result,
+            LocalResult::Help(_) | LocalResult::Status(_) | LocalResult::Context(_)
+        );
         self.transcript.push_local(result);
+        if open_at_top {
+            self.scroll_to_block = self.transcript.len().checked_sub(1);
+            self.result_scroll_revision = Some(self.transcript.append_revision());
+        }
     }
 
     /// Shows an exact undo preview with no default action.

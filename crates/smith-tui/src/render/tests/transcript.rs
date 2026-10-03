@@ -910,18 +910,22 @@
     #[test]
     fn wrapped_local_result_continuations_keep_the_content_indent() {
         let mut report = status_report();
-        report.session = "x".repeat(80);
-        let screen = render_status_card(&report, 44, Theme::new().without_color())
+        report.session = "a long session description that needs several lines".to_owned();
+        let lines = render_status_card(&report, 44, Theme::new().without_color());
+        let screen = lines
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            screen.lines().all(|line| !line.starts_with('x')),
+            screen.lines().all(|line| line.starts_with("  ")),
             "a wrapped continuation escaped the local-result indent:\n{screen}"
         );
         assert!(
-            screen.lines().filter(|line| line.starts_with('│')).count() >= 2,
+            screen
+                .lines()
+                .filter(|line| line.starts_with(&" ".repeat(22)))
+                .count() >= 2,
             "{screen}"
         );
     }

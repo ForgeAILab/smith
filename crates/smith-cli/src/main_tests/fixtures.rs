@@ -1156,6 +1156,10 @@ fn fixture_help_view(
     for guidance in &mut report.composer {
         *guidance = normalizer.normalize(guidance);
     }
+    for key in &mut report.keys {
+        key.key = normalizer.normalize(&key.key);
+        key.description = normalizer.normalize(&key.description);
+    }
     report
 }
 
@@ -1535,6 +1539,14 @@ async fn fixture_command(
 }
 
 fn fixture_record(name: &str, app: &App, normalizer: &mut fixture_support::Normalizer) {
+    // A grouped scenario may need replay to reach one report. Limit writes
+    // during re-recording without changing the scenario or other goldens.
+    if std::env::var_os("SMITH_UPDATE_FIXTURES").is_some_and(|value| value == "1")
+        && let Ok(names) = std::env::var("SMITH_FIXTURE_NAMES")
+        && !names.split(',').any(|selected| selected == name)
+    {
+        return;
+    }
     let (raw, view) = fixture_raw_and_view(app, normalizer);
     fixture_support::compare_or_update(&format!("local-commands/{name}.raw.txt"), &raw);
     for width in [100, 44] {

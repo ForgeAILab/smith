@@ -1,51 +1,51 @@
-/context
-Context usage
-example-model · 2k / 123.9k input tokens · 9
-8% left
+● /context
+  Context usage
+  example-model · 2k / 123.9k input tokens ·
+  98% left
 
-■ ◆ ● ● · · · · · ·
-· · · · · · · · · ·
-· · · · · · · · · ·
-· · · · · · · · · ·
-· · · · · · · · □ □
+  ■ ◆ ● ● · · · · · ·
+  · · · · · · · · · ·
+  · · · · · · · · · ·
+  · · · · · · · · · ·
+  · · · · · · · · □ □
 
-Exact usage by category
-■ system instructions: 200 (0.1%)
-◆ tool schemas: 500 (0.4%)
-● history: 1.3k (1.0%)
-· free input: 121.9k (98.3%)
-□ output/reasoning reserve: 4k (3.2%)
-model window: 128k total · 123.9k input budg
-et
-counting: exact tokenizer · 3 segments
-compaction: enabled on overflow · 74.3k reco
-very target
-tool context: offload above 8192 serialized
-bytes · artifact pages up to 2048 bytes
-Input occupancy above is the last planned re
-quest, not cumulative session usage.
-provider input (session): ?
-cache read (session): ?
-cache: state unknown · CH ? · misses 0 · re-
-billed 0 · guarantee ? · maintenance calls 0
-reasoning: provider default · effort provide
-r default · provider/model default
-reasoning controls: unsupported · switch una
-vailable · efforts none · resolved model cat
-alog (presence only)
-
-
-
-
-
-
-
-
-
-
-
-
-
+  Exact usage by category
+  ■ system            200 (0.1%)
+  instructions
+  ◆ tool schemas      500 (0.4%)
+  ● history           1.3k (1.0%)
+  · free input        121.9k (98.3%)
+  □ output/reasoning  4k (3.2%)
+  reserve
+  model window        128k total · 123.9k
+                      input budget
+  counting            exact tokenizer · 3
+                      segments
+  compaction          enabled on overflow ·
+                      74.3k recovery target
+  tool context        offload above 8192
+                      serialized bytes ·
+                      artifact pages up to
+                      2048 bytes
+  Input occupancy above is the last planned
+  request, not cumulative session usage.
+  provider input      ?
+  (session)
+  cache read          ?
+  (session)
+  cache               state unknown · CH ? ·
+                      misses 0 · re-billed 0
+                      · guarantee ? ·
+                      maintenance calls 0
+  reasoning           provider default ·
+                      effort provider
+                      default ·
+                      provider/model default
+  reasoning controls  unsupported · switch
+                      unavailable · efforts
+                      none · resolved model
+                      catalog (presence
+                      only)
 
 
 

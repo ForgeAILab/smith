@@ -1,122 +1,122 @@
-/help
-Getting started
-Type a task and press Enter.
-/model  Choose a model
-/connect  Add a connection
-/help  Explore all commands
+● /help
+  Start here
+  Type a task and press Enter.
+  /model        Choose a model
+  /connect      Add a connection
+  /help         Explore all commands
 
-Primary
-/help  List commands and keys
-/goal [OBJECTIVE | edit … | budget N | pause
- | resume | clear]  Inspect or control a mu
-lti-turn goal
-/context [NAME|default]  Show context usage
- or choose a window
-/status [--verbose]  Show session, usage, a
-nd workspace status
-/model [PROVIDER/MODEL]  Switch model
-/details  Toggle bounded live tool detail
-/timeline  Show local turn, child, and reco
-very history
-/new  Start a fresh session
-/resume [ID]  Resume a saved session
-/connect [PROVIDER]  Connect or reconnect a
- provider
-/disconnect [PROVIDER]  Disconnect a provid
-er
-/think [on|off|default]  Set thinking for t
-he next turn
-/effort [LEVEL|default]  Set reasoning effo
-rt for the next turn
-/account [N]  Show provider accounts and th
-eir usage
-/agent [ID|resume ID]  List, inspect, or re
-sume an existing agent
-/mcp [trust NAME]  Show MCP servers, or tru
-st one so it may run
-/skills [trust NAME]  Show indexed skills,
-or trust one this project ships
-/diff [SCOPE]  Inspect workspace changes
-/review [SCOPE]  Run a read-only change rev
-iew
-/undo  Undo the last attributable turn
-/redo  Reapply the newest exact undone turn
-/revert [FILE]  Selectively revert a file o
-r hunk
+  Primary
+  /help         List commands and keys
+  /goal         Inspect or control a
+                multi-turn goal
+                [OBJECTIVE | edit … | budget
+                N | pause | resume | clear]
+  /context      Show context usage or choose
+                a window
+                [NAME|default]
+  /status       Show session, usage, and
+                workspace status
+                [--verbose]
+  /model        Switch model
+                [PROVIDER/MODEL]
+  /details      Toggle bounded live tool
+                detail
+  /timeline     Show local turn, child, and
+                recovery history
+  /new          Start a fresh session
+  /resume       Resume a saved session
+                [ID]
+  /connect      Connect or reconnect a
+                provider
+                [PROVIDER]
+  /disconnect   Disconnect a provider
+                [PROVIDER]
+  /think        Set thinking for the next
+                turn
+                [on|off|default]
+  /effort       Set reasoning effort for the
+                next turn
+                [LEVEL|default]
+  /account      Show provider accounts and
+                their usage
+                [N]
+  /agent        List, inspect, or resume an
+                existing agent
+                [ID|resume ID]
+  /mcp          Show MCP servers, or trust
+                one so it may run
+                [trust NAME]
+  /skills       Show indexed skills, or
+                trust one this project ships
+                [trust NAME]
+  /diff         Inspect workspace changes
+                [SCOPE]
+  /review       Run a read-only change
+                review
+                [SCOPE]
+  /undo         Undo the last attributable
+                turn
+  /redo         Reapply the newest exact
+                undone turn
+  /revert       Selectively revert a file or
+                hunk
+                [FILE]
 
-Advanced
-/diagnostics  Show detailed cache and recov
-ery diagnostics
-/profile [NAME]  Switch configured profile
-/provider [NAME]  Switch provider
-/quit  Exit Smith
+  Advanced
+  /diagnostics  Show detailed cache and
+                recovery diagnostics
+  /profile      Switch configured profile
+                [NAME]
+  /provider     Switch provider
+                [NAME]
+  /quit         Exit Smith
 
-Composer
-? or /help shows this local guide without co
-ntacting the model.
-Tab cycles the configured profile order only
- while empty and idle.
-While work is serving, Enter steers an ordin
-ary prompt and Tab queues it.
-Alt+Up restores the newest explicit queued t
-urn for editing.
-Esc interrupts; uncommitted steers are resen
-t only after cancellation discards them.
-Ctrl+B moves a running foreground shell comm
-and to the background without killing it.
-@ completes exact files and read-only agents
-; @@ sends a literal @.
-! runs a prepared local shell action; !! sen
-ds a literal !.
-PageUp/PageDown/Home/End or the mouse wheel
-scrolls the transcript.
-Up/Down browse accepted and Ctrl+C-stashed i
-nput without losing your draft.
-Down past the newest draft walks the delegat
-ed agents; the transcript shows
-that agent's log, Enter continues it, and Es
-c returns to the root timeline.
-Ctrl+R searches composer history; Enter rest
-ores a match and Esc cancels.
-Ctrl+C twice within 1s exits; the first pres
-s stashes and clears the draft.
-Start a message with // to send a literal le
-ading slash.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+  Keys
+  Enter               Send a task
+  Enter while         send now
+  working
+  Tab while working   queue for after this
+                      turn
+  Tab when idle       next profile (empty
+                      draft)
+  Shift+Tab when      Previous profile
+  idle                (empty draft)
+  Ctrl+O              expand or fold detail
+  Esc                 interrupt or close
+  Shift+Enter or      Insert a newline
+  Alt+Enter
+  Alt+Up              Edit the newest queued
+                      task
+  Ctrl+B              Move a running shell
+                      command to the
+                      background
+  Ctrl+P              Open the command
+                      palette
+  ? on an empty       Show help
+  draft
+  PageUp / PageDown   Scroll the transcript
+  Home / End          Go to the oldest or
+                      newest output
+  Mouse wheel         Scroll the transcript
+  Ctrl+L              Follow the newest
+                      output
+  Up / Down           Browse input history,
+                      then delegated agents
+  Ctrl+R              Search input history;
+                      Enter restores, Esc
+                      closes
+  Ctrl+C              Save the draft in
+                      history and clear it
+  Ctrl+C twice        Exit (press twice
+                      within one second)
+  @                   Complete files and
+                      agents; @@ sends a
+                      literal @
+  !                   Run a local shell
+                      command; !! sends a
+                      literal !
+  //                  Send text with a
+                      leading slash
 
 
 

@@ -1111,7 +1111,7 @@ impl App {
         self.following = self.scroll_back == 0;
     }
 
-    /// Scrolls down, resuming following at the bottom.
+    /// Scrolls down, resuming following at the bottom unless reading a result.
     pub fn scroll_down(&mut self, lines: u16) {
         if lines == 0 {
             return;
@@ -1121,7 +1121,7 @@ impl App {
             .scroll_back
             .min(self.scroll_limit)
             .saturating_sub(lines);
-        if self.scroll_back == 0 {
+        if self.scroll_back == 0 && self.result_scroll_revision.is_none() {
             self.following = true;
         }
     }
@@ -1129,8 +1129,14 @@ impl App {
     /// Jumps to newest output and resumes following.
     pub fn follow_newest(&mut self) {
         self.scroll_to_block = None;
+        self.result_scroll_revision = None;
         self.scroll_back = 0;
         self.following = true;
+    }
+
+    pub(crate) fn output_after_result(&self) -> bool {
+        self.result_scroll_revision
+            .is_some_and(|revision| self.transcript.append_revision() != revision)
     }
 
     /// Synchronizes scroll state with the viewport computed by the renderer.
@@ -1148,13 +1154,13 @@ impl App {
             .scroll_limit
             .saturating_sub(self.scroll_back.min(self.scroll_limit));
         self.scroll_limit = limit;
-        if limit == 0 {
+        if limit == 0 && self.result_scroll_revision.is_none() {
             self.follow_newest();
             return;
         }
 
         self.scroll_back = limit.saturating_sub(visible_offset.min(limit));
-        if self.scroll_back == 0 {
+        if self.scroll_back == 0 && self.result_scroll_revision.is_none() {
             self.following = true;
         }
     }

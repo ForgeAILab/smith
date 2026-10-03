@@ -54,6 +54,9 @@ pub fn draw_synced(frame: &mut Frame<'_>, app: &mut App, theme: Theme) {
     }
 
     let transcript = transcript_rect(area, app);
+    if app.inspected_child.is_none() && app.output_after_result() {
+        app.follow_newest();
+    }
     let lines = transcript_lines(app, theme, transcript.width);
     let limit = visual_scroll_limit(&lines, transcript);
     app.sync_scroll_limit(limit);
@@ -67,6 +70,9 @@ pub fn draw_synced(frame: &mut Frame<'_>, app: &mut App, theme: Theme) {
     {
         app.scroll_back = limit.saturating_sub(offset);
         app.following = app.scroll_back == 0;
+        if app.following {
+            app.result_scroll_revision = None;
+        }
     }
     draw_surface(frame, app, theme, Some(lines));
 }

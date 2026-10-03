@@ -1,35 +1,35 @@
-/status
-╭──────────────────────────────────────────╮
-│  >_ Smith                                │
-│                                          │
-│  session:              <SESSION_ID>      │
-│  profile:              dev               │
-│  provider:             local · model: ex │
-│                        ample-model       │
-│  permission:           Ask               │
-│  reasoning:            provider default  │
-│                        · effort provider │
-│                         default · provid │
-│                        er/model default  │
-│  reasoning controls:   unsupported · swi │
-│                        tch unavailable · │
-│                         efforts none · r │
-│                        esolved model cat │
-│                        alog (presence on │
-│                        ly)               │
-│  prompt cache:         usage not reporte │
-│                        d                 │
-│  cache maintenance:    off               │
-│  resume checkpoint:    saved <TIMESTAMP> │
-│  project:              <PROJECT>         │
-│  Git:                  2 changed path(s) │
-│  goal:                 none              │
-│  children:             0                 │
-│  usage:                nothing spent yet │
-│  cost:                 nothing spent yet │
-│ /diagnostics shows detailed cache and re │
-│ covery information                       │
-╰──────────────────────────────────────────╯
+● /status
+  session             <SESSION_ID>
+  profile             dev
+  provider            local
+  model               example-model
+  permission          Ask
+  reasoning           provider default ·
+                      effort provider
+                      default ·
+                      provider/model default
+  reasoning controls  unsupported · switch
+                      unavailable · efforts
+                      none · resolved model
+                      catalog (presence
+                      only)
+  prompt cache        usage not reported
+  cache maintenance   off
+  resume checkpoint   saved <TIMESTAMP>
+  project             <PROJECT>
+  Git                 2 changed path(s)
+  goal                none
+  children            0
+  usage               nothing spent yet
+  cost                nothing spent yet
+  /diagnostics shows detailed cache and
+  recovery information
+
+
+
+
+
+
 
 
 

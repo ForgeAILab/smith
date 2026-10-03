@@ -69,10 +69,10 @@ fn help_opens_at_its_new_result_after_wrapped_conversation() {
             open_startup_help(&mut app, shortcut);
 
             let preview = render(&app, width, height, theme);
-            assert_eq!(preview.lines().next(), Some("/help"), "{preview}");
+            assert_eq!(preview.lines().next(), Some("● /help"), "{preview}");
             let screen = render_synced(&mut app, width, height, theme);
-            assert_eq!(screen.lines().next(), Some("/help"), "{screen}");
-            assert!(screen.contains("Getting started"), "{screen}");
+            assert_eq!(screen.lines().next(), Some("● /help"), "{screen}");
+            assert!(screen.contains("Start here"), "{screen}");
             assert!(!screen.contains("Earlier conversation"), "{screen}");
             assert!(!app.following);
             assert!(app.scroll_to_block.is_none());
@@ -83,7 +83,7 @@ fn help_opens_at_its_new_result_after_wrapped_conversation() {
             app.on_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
             let newest = render_synced(&mut app, width, height, theme);
             assert!(app.following);
-            assert!(newest.contains("Start a message with //"), "{newest}");
+            assert!(newest.contains("leading slash"), "{newest}");
 
             app.show_local_report(LocalResult::Message(Box::new(
                 smith_client::message_report::MessageReport::Notice {
@@ -107,13 +107,13 @@ fn help_anchor_survives_a_too_small_frame_and_can_be_overridden() {
     assert!(small.contains("terminal too small"));
     assert!(app.scroll_to_block.is_some());
     let restored = render_synced(&mut app, 80, 24, theme);
-    assert_eq!(restored.lines().next(), Some("/help"), "{restored}");
+    assert_eq!(restored.lines().next(), Some("● /help"), "{restored}");
 
     open_startup_help(&mut app, true);
     app.on_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
     assert!(app.scroll_to_block.is_none());
     let newest = render_synced(&mut app, 80, 24, theme);
-    assert!(newest.contains("Start a message with //"), "{newest}");
+    assert!(newest.contains("leading slash"), "{newest}");
     assert!(app.following);
 }
 

@@ -77,12 +77,12 @@
         assert!(tool.spans[1].style.add_modifier.contains(Modifier::BOLD));
 
         let command = find_line("/status");
-        assert_eq!(command.spans[0].style.fg, Some(Color::Magenta));
-        let border = find_line("╭");
-        assert!(border.spans[0].style.add_modifier.contains(Modifier::DIM));
-        let status = find_line("session:");
+        assert_eq!(command.spans[0].content, "● ");
+        assert_eq!(command.spans[1].style.fg, Some(Color::Magenta));
+        assert!(!lines.iter().any(|line| line.to_string().contains('╭')));
+        let status = find_line("session");
         assert!(status.spans[1].style.add_modifier.contains(Modifier::DIM));
-        assert_eq!(status.spans[2].style.fg, None);
+        assert_eq!(status.spans.last().unwrap().style.fg, None);
     }
 
     #[test]
