@@ -434,11 +434,16 @@
 
     #[test]
     fn local_results_render_inline_across_supported_sizes() {
+        use smith_client::diff_report::{DiffLine, DiffLineKind, DiffOutcome, DiffReport};
+
         let mut app = App::new("gpt-5.3", "~/work/api");
-        app.show_local_result(
-            "diff · all uncommitted",
-            "No changes in this scope.\nBinary file exists; content omitted.",
-        );
+        app.show_local_report(LocalResult::Diff(Box::new(DiffReport {
+            title: "diff · all uncommitted".to_owned(),
+            outcome: DiffOutcome::Patch(vec![DiffLine {
+                kind: DiffLineKind::Context,
+                text: "No changes in this scope.\nBinary file exists; content omitted.".to_owned(),
+            }]),
+        })));
         assert!(app.overlay.is_none());
         for (width, height) in [(44, 12), (74, 20), (120, 30)] {
             let screen = render(&app, width, height, Theme::new().without_color());
@@ -446,6 +451,91 @@
             assert!(screen.contains("No changes"), "{screen}");
             assert!(screen.contains("Binary file"), "{screen}");
             assert!(screen.contains("›"), "{screen}");
+        }
+    }
+
+    #[test]
+    fn typed_diff_kinds_choose_style_without_title_or_prefix_parsing() {
+        use smith_client::diff_report::{DiffLine, DiffLineKind, DiffOutcome, DiffReport};
+
+        let theme = Theme::new();
+        for (kind, text, tone) in [
+            (
+                DiffLineKind::Addition,
+                "-removal-looking content",
+                Tone::Success,
+            ),
+            (
+                DiffLineKind::Removal,
+                "+addition-looking content",
+                Tone::Danger,
+            ),
+            (DiffLineKind::Metadata, "plain file header", Tone::Dim),
+            (DiffLineKind::Hunk, "plain hunk header", Tone::Code),
+            (
+                DiffLineKind::Context,
+                "@@ hunk-looking content",
+                Tone::Default,
+            ),
+        ] {
+            let mut app = App::new("gpt-5.3", "~/work/api");
+            app.show_local_report(LocalResult::Diff(Box::new(DiffReport {
+                title: "arbitrary title".to_owned(),
+                outcome: DiffOutcome::Patch(vec![DiffLine {
+                    kind,
+                    text: text.to_owned(),
+                }]),
+            })));
+            let lines = transcript_lines(&app, theme, 8);
+            assert_eq!(lines[0].to_string(), "/arbitrary title");
+            let body = &lines[1..];
+            assert_eq!(
+                body.iter().map(ToString::to_string).collect::<String>(),
+                text
+            );
+            assert!(body.len() > 1, "expected a wrapped line");
+            assert!(body.iter().all(|line| {
+                line.width() <= 8
+                    && line
+                        .spans
+                        .iter()
+                        .all(|span| span.style == theme.style(tone))
+            }));
+        }
+    }
+
+    #[test]
+    fn typed_diff_empty_and_error_states_keep_their_markers_and_wrapping() {
+        use smith_client::diff_report::{DiffOutcome, DiffReport};
+
+        for (outcome, marker, message) in [
+            (DiffOutcome::Empty, "•", DiffReport::EMPTY_MESSAGE),
+            (
+                DiffOutcome::Error("Git inspection is unavailable.".to_owned()),
+                "■",
+                "Git inspection is unavailable.",
+            ),
+        ] {
+            let mut app = App::new("gpt-5.3", "~/work/api");
+            app.show_local_report(LocalResult::Diff(Box::new(DiffReport {
+                title: "diff".to_owned(),
+                outcome,
+            })));
+            let lines = transcript_lines(&app, Theme::new().without_color(), 12);
+            let body = &lines[1..];
+            assert!(body[0].to_string().starts_with(&format!("{marker} ")));
+            assert!(
+                body.iter()
+                    .skip(1)
+                    .all(|line| line.to_string().starts_with("  "))
+            );
+            assert_eq!(
+                body.iter()
+                    .map(|line| line.to_string().chars().skip(2).collect::<String>())
+                    .collect::<String>(),
+                message,
+            );
+            assert!(body.iter().all(|line| line.width() <= 12));
         }
     }
 

@@ -729,6 +729,7 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                     LocalResult::Agent(report) => smith_client::agent_report::render_plain(report),
                     LocalResult::Mcp(report) => smith_client::mcp_report::render_plain(report),
                     LocalResult::Skills(report) => smith_client::skills_report::render_plain(report),
+                    LocalResult::Diff(report) => smith_client::diff_report::render_plain(report),
                     LocalResult::Text { body, .. } => body.clone(),
                 };
                 raw.push_str(&format!(
@@ -759,6 +760,9 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                     )),
                     LocalResult::Skills(report) => LocalResult::Skills(Box::new(
                         fixture_skills_view(report, normalizer),
+                    )),
+                    LocalResult::Diff(report) => LocalResult::Diff(Box::new(
+                        fixture_diff_view(report, normalizer),
                     )),
                     LocalResult::Text { title, body, state } => LocalResult::Text {
                         title: normalizer.normalize(title),
@@ -1107,6 +1111,26 @@ fn fixture_skills_view(
                 for value in [&mut problem.name, &mut problem.reason, &mut problem.path] {
                     *value = normalizer.normalize(value);
                 }
+            }
+        }
+    }
+    report
+}
+
+fn fixture_diff_view(
+    report: &smith_client::diff_report::DiffReport,
+    normalizer: &mut fixture_support::Normalizer,
+) -> smith_client::diff_report::DiffReport {
+    use smith_client::diff_report::DiffOutcome;
+
+    let mut report = report.clone();
+    report.title = normalizer.normalize(&report.title);
+    match &mut report.outcome {
+        DiffOutcome::Empty => {}
+        DiffOutcome::Error(message) => *message = normalizer.normalize(message),
+        DiffOutcome::Patch(lines) => {
+            for line in lines {
+                line.text = normalizer.normalize(&line.text);
             }
         }
     }

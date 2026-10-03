@@ -53,8 +53,8 @@ use futures_util::StreamExt;
 use ignore::WalkBuilder;
 use ratatui::layout::Rect;
 #[cfg(test)]
-use smith_client::commands::AgentAction;
-use smith_client::commands::{DiffScope, HostCommand, SelectionCommand, SessionControl};
+use smith_client::commands::{AgentAction, DiffScope};
+use smith_client::commands::{HostCommand, SelectionCommand, SessionControl};
 #[cfg(test)]
 use smith_client::status::ContextPlanUpdate;
 use smith_client::status::{Status, TokenCount, render_elapsed};

@@ -18,6 +18,7 @@ use std::time::Instant;
 use agent_runtime_core::content::{ContentPart, Message, Role};
 use serde_json::Value;
 use smith_client::agent_report::{AgentReport, AgentResumeReport};
+use smith_client::diff_report::{DiffLine, DiffLineKind, DiffOutcome, DiffReport};
 pub use smith_client::local_result::{LocalResult, LocalResultState};
 use smith_tools::{
     ToolCallDisplay, has_tool_call_display_schema, project_external_tool_call_display,
@@ -255,7 +256,7 @@ impl Transcript {
         });
     }
 
-    /// Appends a typed local report, bounding transitional text as before.
+    /// Appends a typed local report, bounding patches and transitional text.
     pub fn push_local(&mut self, result: LocalResult) {
         // Resume notices used to append through `push_notice`, which leaves
         // the current stream open until its next delta or turn boundary.
@@ -272,6 +273,7 @@ impl Transcript {
             self.close_open();
         }
         let result = match result {
+            LocalResult::Diff(report) => LocalResult::Diff(Box::new(bound_diff_report(*report))),
             LocalResult::Text { title, body, state } => {
                 let title = title
                     .replace(['\r', '\n'], " ")
@@ -727,6 +729,60 @@ fn bound_local_result(content: String) -> String {
     bounded
 }
 
+/// Applies the existing local-output limits without reconstructing patch roles.
+fn bound_diff_report(mut report: DiffReport) -> DiffReport {
+    report.title = report
+        .title
+        .replace(['\r', '\n'], " ")
+        .chars()
+        .take(MAX_LOCAL_RESULT_TITLE_CHARS)
+        .collect();
+    match &mut report.outcome {
+        DiffOutcome::Empty => {}
+        DiffOutcome::Error(message) => {
+            *message = bound_local_result(std::mem::take(message));
+        }
+        DiffOutcome::Patch(patch) => {
+            let mut bytes = 0;
+            let mut lines = 1;
+            let mut last_character = None;
+            let mut truncated_at = None;
+            for (index, line) in patch.iter_mut().enumerate() {
+                let mut end = 0;
+                for (offset, character) in line.text.char_indices() {
+                    if bytes + character.len_utf8() > MAX_LOCAL_RESULT_BYTES
+                        || (character == '\n' && lines >= MAX_LOCAL_RESULT_LINES)
+                    {
+                        truncated_at = Some(index);
+                        break;
+                    }
+                    bytes += character.len_utf8();
+                    if character == '\n' {
+                        lines += 1;
+                    }
+                    last_character = Some(character);
+                    end = offset + character.len_utf8();
+                }
+                if truncated_at.is_some() {
+                    line.text.truncate(end);
+                    break;
+                }
+            }
+            if let Some(index) = truncated_at {
+                patch.truncate(index + 1);
+                if last_character != Some('\n') {
+                    patch[index].text.push('\n');
+                }
+                patch.push(DiffLine {
+                    kind: DiffLineKind::Context,
+                    text: "[local result truncated at the display limit]".to_owned(),
+                });
+            }
+        }
+    }
+    report
+}
+
 /// A single-line, control-free tool name safe to interpolate into a
 /// fallback row.
 ///
@@ -911,6 +967,66 @@ mod tests {
             transcript.blocks()[2],
             Block::Assistant { open: true, .. }
         ));
+    }
+
+    #[test]
+    fn typed_diff_limits_preserve_patch_kinds_and_model_stream_boundaries() {
+        let cases = [
+            vec![DiffLine {
+                kind: DiffLineKind::Addition,
+                text: format!("+{}終", "x".repeat(MAX_LOCAL_RESULT_BYTES - 2)),
+            }],
+            vec![
+                DiffLine {
+                    kind: DiffLineKind::Removal,
+                    text: format!("-{}\n", "x".repeat(MAX_LOCAL_RESULT_BYTES - 2)),
+                },
+                DiffLine {
+                    kind: DiffLineKind::Addition,
+                    text: "+next\n".to_owned(),
+                },
+            ],
+            (0..MAX_LOCAL_RESULT_LINES)
+                .map(|_| DiffLine {
+                    kind: DiffLineKind::Metadata,
+                    text: "header\n".to_owned(),
+                })
+                .collect(),
+        ];
+        for patch in cases {
+            let expected =
+                bound_local_result(patch.iter().map(|line| line.text.as_str()).collect());
+            let first_kind = patch[0].kind;
+            let mut transcript = Transcript::new();
+            transcript.push_text_delta("answer");
+            transcript.push_local(LocalResult::Diff(Box::new(DiffReport {
+                title: "diff\ninjected".to_owned(),
+                outcome: DiffOutcome::Patch(patch),
+            })));
+            transcript.push_text_delta("next");
+
+            let Block::Local(LocalResult::Diff(report)) = &transcript.blocks()[1] else {
+                panic!("expected a typed diff report");
+            };
+            assert_eq!(report.title, "diff injected");
+            assert_eq!(smith_client::diff_report::render_plain(report), expected);
+            let DiffOutcome::Patch(patch) = &report.outcome else {
+                panic!("expected classified patch lines");
+            };
+            assert_eq!(patch[0].kind, first_kind);
+            assert_eq!(
+                patch.last().expect("truncation note").kind,
+                DiffLineKind::Context
+            );
+            assert!(matches!(
+                transcript.blocks()[0],
+                Block::Assistant { open: false, .. }
+            ));
+            assert!(matches!(
+                transcript.blocks()[2],
+                Block::Assistant { open: true, .. }
+            ));
+        }
     }
 
     #[test]

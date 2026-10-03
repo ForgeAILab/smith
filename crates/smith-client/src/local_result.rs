@@ -5,6 +5,7 @@
 
 use crate::agent_report::{AgentReport, AgentResumeReport};
 use crate::context_report::ContextReport;
+use crate::diff_report::{DiffOutcome, DiffReport};
 use crate::goal_report::GoalReport;
 use crate::help_report::HelpReport;
 use crate::mcp_report::McpReport;
@@ -42,6 +43,8 @@ pub enum LocalResult {
     Mcp(Box<McpReport>),
     /// Indexed skills, discovery problems, and local trust outcomes.
     Skills(Box<SkillsReport>),
+    /// Classified Git patches or the last Smith turn's recovery preview.
+    Diff(Box<DiffReport>),
     /// Transitional output for commands that have not migrated to reports.
     Text {
         /// Command or result title.
@@ -65,6 +68,7 @@ impl LocalResult {
             Self::Agent(report) => report.title(),
             Self::Mcp(_) => "mcp",
             Self::Skills(_) => "skills",
+            Self::Diff(report) => &report.title,
             Self::Text { title, .. } => title,
         }
     }
@@ -110,6 +114,11 @@ impl LocalResult {
                 SkillsReport::Empty
                 | SkillsReport::Indexed { .. }
                 | SkillsReport::Trusted { .. } => LocalResultState::Info,
+            },
+            Self::Diff(report) => match &report.outcome {
+                DiffOutcome::Empty => LocalResultState::Empty,
+                DiffOutcome::Error(_) => LocalResultState::Error,
+                DiffOutcome::Patch(_) => LocalResultState::Info,
             },
             Self::Text { state, .. } => *state,
         }

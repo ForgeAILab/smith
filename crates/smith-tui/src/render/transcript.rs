@@ -15,6 +15,7 @@ use crate::theme::{Theme, Tone, glyph};
 use crate::transcript::{Block, LocalResult, LocalResultState, ToolStatus};
 use smith_client::agent_report::{AgentReport, AgentResumeReport, AgentSnapshot};
 use smith_client::context_report::{ContextCategoryKind, ContextCompaction, ContextReport};
+use smith_client::diff_report::{DiffLineKind, DiffOutcome, DiffReport};
 use smith_client::goal_report::GoalReport;
 use smith_client::help_report::{HelpCommand, HelpReport};
 use smith_client::mcp_report::McpReport;
@@ -405,6 +406,13 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16) -> Vec<Line<'static>>
                 )));
                 lines.extend(render_skills_report(report, width, theme));
             }
+            Block::Local(LocalResult::Diff(report)) => {
+                lines.push(Line::from(Span::styled(
+                    format!("/{}", report.title),
+                    theme.style(Tone::Command),
+                )));
+                lines.extend(render_diff_report(report, width, theme));
+            }
             Block::Local(LocalResult::Text {
                 title,
                 body: content,
@@ -416,7 +424,7 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16) -> Vec<Line<'static>>
                 )));
                 match state {
                     LocalResultState::Info => {
-                        lines.extend(render_local_content(title, content, width, theme));
+                        lines.extend(render_local_content(content, width, theme));
                     }
                     LocalResultState::Empty => {
                         lines.extend(render_prefixed_local_state(
@@ -878,20 +886,60 @@ pub(super) fn render_status_field(
         .collect()
 }
 
-pub(super) fn render_local_content(
-    title: &str,
-    content: &str,
-    width: u16,
-    theme: Theme,
-) -> Vec<Line<'static>> {
+pub(super) fn render_local_content(content: &str, width: u16, theme: Theme) -> Vec<Line<'static>> {
     let available = usize::from(width).max(1);
     let mut lines = Vec::new();
     for raw in content.lines() {
         for wrapped in wrap_text(raw, available) {
-            lines.push(styled_local_line(title, &wrapped, theme));
+            lines.push(styled_local_line(&wrapped, theme));
         }
     }
     lines
+}
+
+fn render_diff_report(report: &DiffReport, width: u16, theme: Theme) -> Vec<Line<'static>> {
+    let patch = match &report.outcome {
+        DiffOutcome::Empty => {
+            return render_prefixed_local_state(
+                glyph::BULLET,
+                DiffReport::EMPTY_MESSAGE,
+                width,
+                theme.style(Tone::Dim),
+            );
+        }
+        DiffOutcome::Error(message) => {
+            return render_prefixed_local_state(
+                glyph::ERROR,
+                message,
+                width,
+                theme.style(Tone::Danger),
+            );
+        }
+        DiffOutcome::Patch(lines) => lines,
+    };
+    let available = usize::from(width).max(1);
+    patch
+        .iter()
+        .flat_map(|line| {
+            let tone = match line.kind {
+                DiffLineKind::Hunk => Tone::Code,
+                DiffLineKind::Addition => Tone::Success,
+                DiffLineKind::Removal => Tone::Danger,
+                DiffLineKind::Metadata => Tone::Dim,
+                DiffLineKind::Context => Tone::Default,
+            };
+            line.text
+                .lines()
+                .flat_map(move |raw| wrap_text(raw, available))
+                .map(move |wrapped| {
+                    if wrapped.is_empty() {
+                        Line::default()
+                    } else {
+                        Line::from(Span::styled(wrapped, theme.style(tone)))
+                    }
+                })
+        })
+        .collect()
 }
 
 fn render_agent_report(report: &AgentReport, width: u16, theme: Theme) -> Vec<Line<'static>> {
@@ -1626,29 +1674,10 @@ fn wrap_context_line(line: Line<'static>, available: usize) -> Vec<Line<'static>
     rows
 }
 
-pub(super) fn styled_local_line(title: &str, raw: &str, theme: Theme) -> Line<'static> {
+pub(super) fn styled_local_line(raw: &str, theme: Theme) -> Line<'static> {
     if raw.is_empty() {
         return Line::default();
     }
-    if title.starts_with("diff") {
-        let tone = if raw.starts_with("@@") {
-            Tone::Code
-        } else if raw.starts_with('+') && !raw.starts_with("+++") {
-            Tone::Success
-        } else if raw.starts_with('-') && !raw.starts_with("---") {
-            Tone::Danger
-        } else if raw.starts_with("diff --git")
-            || raw.starts_with("index ")
-            || raw.starts_with("---")
-            || raw.starts_with("+++")
-        {
-            Tone::Dim
-        } else {
-            Tone::Default
-        };
-        return Line::from(Span::styled(raw.to_owned(), theme.style(tone)));
-    }
-
     if let Some((label, value)) = raw.split_once(':') {
         return Line::from(vec![
             Span::styled(format!("{label}:"), theme.style(Tone::Dim)),

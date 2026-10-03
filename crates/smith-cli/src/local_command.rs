@@ -9,6 +9,7 @@ use smith_client::status::{PriceReference, SessionCost, SessionUsage};
 
 pub(crate) mod agent;
 pub(super) mod context;
+mod diff;
 mod goal;
 pub(super) mod mcp;
 pub(super) mod skills;
@@ -223,21 +224,11 @@ pub(super) async fn handle_local_command(
                 }
             }
         }
-        HostCommand::Diff(scope) => match scope {
-            DiffScope::LastTurn => match host.changes().undo_preview() {
-                Ok(preview) => app.show_local_result("diff · last Smith turn", preview),
-                Err(error) => app.show_local_error("diff · last Smith turn", error.message),
-            },
-            DiffScope::Git(scope) => {
-                match GitChanges::discover(project).and_then(|git| git.inspect(scope.as_deref())) {
-                    Ok(view) if view.content == "No changes in this scope." => {
-                        app.show_local_empty(view.title, view.content);
-                    }
-                    Ok(view) => app.show_local_result(view.title, view.content),
-                    Err(error) => app.show_local_error("diff", error.message),
-                }
-            }
-        },
+        HostCommand::Diff(scope) => {
+            app.show_local_report(LocalResult::Diff(Box::new(diff::report(
+                host, project, scope,
+            ))));
+        }
         HostCommand::Review(scope) => {
             let scope = scope.unwrap_or_else(|| "all".to_owned());
             match GitChanges::discover(project)
