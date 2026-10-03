@@ -1,12 +1,141 @@
 // transcript behavior tests.
 
     #[test]
+    fn a_success_summary_belongs_to_its_turn_and_disappears_after_any_later_block() {
+        for (width, height) in [(44, 16), (80, 24), (100, 32)] {
+            for append in 0..5 {
+                let theme = Theme::new().without_color().without_motion();
+                let mut app = App::new("model", "project");
+                app.apply(&event_at(Timestamp(1_000), RuntimeEvent::TurnStarted));
+                app.transcript.push_text_delta("The turn's answer.");
+                app.apply(&event_at(
+                    Timestamp(73_000),
+                    RuntimeEvent::TurnCompleted {
+                        finish: TurnFinish::Completed,
+                        visible_output: true,
+                    },
+                ));
+                let before = render(&app, width, height, theme);
+                assert_eq!(before.matches("✻ Worked for 1m 12s").count(), 1, "{before}");
+                let lines = transcript_lines(&app, theme, width);
+                let summary = lines.last().unwrap();
+                assert_eq!(summary.to_string(), "✻ Worked for 1m 12s");
+                assert!(summary.spans[0].style.add_modifier.contains(Modifier::DIM));
+                assert_eq!(app.transcript.len(), 1);
+                match append {
+                    0 => app.show_local_report(LocalResult::Status(Box::new(status_report()))),
+                    1 => app.transcript.push_notice("monitor", "later notice"),
+                    2 => app.transcript.push_user("another turn"),
+                    3 => app
+                        .transcript
+                        .push_tool_call("later-call", "read", None, &[]),
+                    _ => app
+                        .transcript
+                        .push_reasoning_delta("later hidden reasoning", false),
+                }
+                let after = render(&app, width, height, theme);
+                assert!(!after.contains("Worked"), "{after}");
+                app.apply(&event(RuntimeEvent::RegistrySnapshotSealed {
+                    snapshot: agent_runtime_registry::Fingerprint::of("registry"),
+                    entries: 1,
+                }));
+                assert!(!render(&app, width, height, theme).contains("Worked"));
+            }
+        }
+    }
+
+    #[test]
+    fn a_local_card_appended_before_completion_does_not_receive_the_turn_summary() {
+        let mut app = App::new("model", "project");
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        app.apply(&event(RuntimeEvent::TextDelta {
+            request: RequestId::new("r"),
+            attempt: AttemptId::new("a"),
+            text: "The turn's answer.".to_owned(),
+        }));
+        app.apply(&event(RuntimeEvent::ProviderAttemptOutputCommitted {
+            request: RequestId::new("r"),
+            attempt: AttemptId::new("a"),
+        }));
+        app.show_local_report(LocalResult::Status(Box::new(status_report())));
+        app.apply(&event(RuntimeEvent::TurnCompleted {
+            finish: TurnFinish::Completed,
+            visible_output: true,
+        }));
+        let screen = render(&app, 100, 32, Theme::new());
+        assert!(
+            screen.contains("The turn's answer.") && screen.contains("/status"),
+            "{screen}"
+        );
+        assert!(!screen.contains("Worked"), "{screen}");
+    }
+
+    #[test]
+    fn journal_and_history_replay_preserve_rows_without_replaying_a_success_summary() {
+        let events = [
+            event_at(Timestamp(1_000), RuntimeEvent::TurnStarted),
+            event(RuntimeEvent::TextDelta {
+                request: RequestId::new("r"),
+                attempt: AttemptId::new("a"),
+                text: "The turn's answer.".to_owned(),
+            }),
+            event(RuntimeEvent::ProviderAttemptOutputCommitted {
+                request: RequestId::new("r"),
+                attempt: AttemptId::new("a"),
+            }),
+            event_at(
+                Timestamp(1_842),
+                RuntimeEvent::TurnCompleted {
+                    finish: TurnFinish::Completed,
+                    visible_output: true,
+                },
+            ),
+        ];
+        let bytes = serde_json::to_vec(&events).unwrap();
+        let replayed: Vec<EventEnvelope> = serde_json::from_slice(&bytes).unwrap();
+        let mut live = App::new("model", "project");
+        let mut journal = App::new("model", "project");
+        let mut history = App::new("model", "project");
+        for event in &events {
+            live.apply(event);
+        }
+        for event in &replayed {
+            journal.apply_recovered(event);
+        }
+        history
+            .transcript
+            .replace_from_history(&[Message::assistant(vec![ContentPart::Text {
+                text: "The turn's answer.".to_owned(),
+            }])]);
+        assert_eq!(live.transcript.blocks(), journal.transcript.blocks());
+        assert_eq!(live.transcript.blocks(), history.transcript.blocks());
+        for width in [44, 80, 100] {
+            for theme in [Theme::new(), Theme::new().without_color()] {
+                let live_lines = transcript_lines(&live, theme, width);
+                let journal_lines = transcript_lines(&journal, theme, width);
+                let history_lines = transcript_lines(&history, theme, width);
+                assert_eq!(live_lines[..live_lines.len() - 2], journal_lines);
+                assert_eq!(journal_lines, history_lines);
+            }
+        }
+        // Replacing even an equal-length transcript invalidates a live anchor.
+        live.transcript
+            .replace_from_history(&[Message::assistant(vec![ContentPart::Text {
+                text: "The turn's answer.".to_owned(),
+            }])]);
+        assert!(!render(&live, 100, 32, Theme::new()).contains("Worked"));
+    }
+
+    #[test]
     fn working_indicator_replaces_raw_reasoning_until_the_turn_finishes() {
         let mut app = App::new("gpt-5.3", "~/work/api");
         app.apply(&event(RuntimeEvent::TurnStarted));
 
         let waiting = render(&app, 74, 12, Theme::new());
-        assert!(waiting.contains("Working… · 0s"), "{waiting}");
+        assert!(
+            waiting.contains("✻ Working… (0s · esc to interrupt)"),
+            "{waiting}"
+        );
         assert!(!waiting.contains("plan 0 active"), "{waiting}");
         assert!(!waiting.contains("tools 0 active"), "{waiting}");
 
@@ -46,6 +175,7 @@
             let theme = Theme::new().without_color().without_motion();
             let mut app = App::new("gpt-5.3", "~/work/api");
             app.apply(&event(RuntimeEvent::TurnStarted));
+            app.turn_usage.output = crate::status::TokenCount::estimated(1_200);
             app.apply(&event(RuntimeEvent::ProviderAttemptFinished {
                 attempt: AttemptId::new("attempt-1"),
                 index: Some(0),
@@ -62,6 +192,14 @@
             let backoff = render(&app, width, height, theme);
             assert!(backoff.contains("Retrying 2/3…"), "{width}x{height}: {backoff}");
             assert!(backoff.contains("backoff <1s"), "{width}x{height}: {backoff}");
+            assert!(backoff.contains("↓ ~1.2k"), "{width}x{height}: {backoff}");
+            assert!(
+                backoff.lines().any(|line| line.starts_with("● Retrying 2/3… (")
+                    && line.contains("backoff <1s")
+                    && line.contains("esc")
+                    && line.ends_with(')')),
+                "{width}x{height}: {backoff}"
+            );
             assert!(
                 backoff.contains("retrying 2/3 in 200ms"),
                 "{width}x{height}: {backoff}"
@@ -77,6 +215,14 @@
             assert!(active.contains("Retrying 2/3…"), "{width}x{height}: {active}");
             assert!(active.contains("↑"), "{width}x{height}: {active}");
             assert!(!active.contains("backoff"), "{width}x{height}: {active}");
+            assert!(active.contains("↓ ~1.2k"), "{width}x{height}: {active}");
+            assert!(
+                active.lines().any(|line| line.starts_with("● Retrying 2/3… (")
+                    && line.contains("↑")
+                    && line.contains("esc")
+                    && line.ends_with(')')),
+                "{width}x{height}: {active}"
+            );
         }
     }
 

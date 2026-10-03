@@ -68,6 +68,8 @@ pub mod glyph {
     pub const NOTICE: &str = BULLET;
     /// Prefixes tool output or other detail belonging to the prior row.
     pub const BRANCH: &str = GRAMMAR[2];
+    /// Prefixes active work and an ephemeral successful-turn summary.
+    pub const WORK: &str = GRAMMAR[3];
     /// Prefixes a wrapped command continuation.
     pub const CONTINUATION: &str = "│";
     /// Prefixes an approval request.
@@ -113,7 +115,7 @@ pub mod glyph {
     /// Marks streamed answer text arriving.
     pub const RECEIVING: &str = "↓";
     /// The spinner frames, 100 ms apart.
-    pub const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    pub const SPINNER: [&str; 4] = [WORK, "✼", "✽", "✼"];
 }
 
 /// Resolves [`Tone`]s to styles, honoring the no-color and reduced-motion
@@ -380,7 +382,7 @@ mod tests {
 
     #[test]
     fn grammar_glyphs_are_single_width_and_never_emoji_capable() {
-        for glyph in glyph::GRAMMAR {
+        for glyph in glyph::GRAMMAR.into_iter().chain(glyph::SPINNER) {
             assert!(
                 grammar_glyph_is_safe(glyph),
                 "unsafe grammar glyph: {glyph}"
@@ -441,6 +443,9 @@ mod tests {
 
         let moving = Theme::new();
         assert_ne!(moving.spinner(0), moving.spinner(1));
-        assert_eq!(moving.spinner(0), moving.spinner(10));
+        assert_eq!(
+            moving.spinner(0),
+            moving.spinner(glyph::SPINNER.len() as u64)
+        );
     }
 }

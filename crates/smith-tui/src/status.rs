@@ -4,7 +4,7 @@ use std::ops::{Deref, DerefMut};
 
 pub use smith_client::status::{
     CapabilityStatus, Confidence, ContextPlanStatus, ContextPlanUpdate, CostLabel, PriceReference,
-    PriceTable, SessionCost, SessionUsage, TokenCount, counter_label, render_elapsed,
+    PriceTable, SessionCost, SessionUsage, TokenCount, TurnUsage, counter_label, render_elapsed,
     render_terminal_elapsed,
 };
 

@@ -3,9 +3,10 @@
 use std::time::Duration;
 
 use crate::app::{
-    App, ChildCounts, ChildSummary, MAX_PENDING_PREVIEW_ENTRIES, Overlay, RunningTaskSummary,
+    App, ChildCounts, ChildSummary, MAX_PENDING_PREVIEW_ENTRIES, Overlay, ProviderPhase,
+    RunningTaskSummary,
 };
-use crate::status::{TokenCount, render_elapsed};
+use crate::status::{Activity, Confidence, TokenCount, render_elapsed};
 use crate::theme::{Theme, Tone, glyph};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -24,6 +25,103 @@ const CLI_MODEL_PREFIX: &str = "cli/";
 use super::helpers::*;
 use super::layout::*;
 use super::wrap::wrap_line_with_offsets;
+
+pub(super) fn working_rows(app: &App) -> u16 {
+    u16::from(app.is_busy())
+}
+
+pub(super) fn draw_working(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
+    frame.render_widget(Paragraph::new(working_line(app, theme, area.width)), area);
+}
+
+pub(super) fn working_line(app: &App, theme: Theme, width: u16) -> Line<'static> {
+    let retry = app.provider_retry();
+    let label = retry
+        .map(|retry| format!("Retrying {}/{}", retry.next_attempt, retry.max_attempts))
+        .unwrap_or_else(|| {
+            if app.status.activity == Activity::Interrupting {
+                "Interrupting".to_owned()
+            } else {
+                "Working".to_owned()
+            }
+        });
+    let elapsed = app
+        .turn_elapsed()
+        .map(render_elapsed)
+        .unwrap_or_else(|| "unknown".to_owned());
+    let phase = match retry.and_then(|retry| retry.backoff_remaining) {
+        Some(remaining) => format!(" · backoff {}", render_retry_backoff(remaining)),
+        None if retry.is_some() => app
+            .provider_phase()
+            .map(|(phase, elapsed)| {
+                let marker = match phase {
+                    ProviderPhase::Sending => glyph::SENDING,
+                    ProviderPhase::Thinking => "thinking",
+                    ProviderPhase::Responding => glyph::RECEIVING,
+                };
+                format!(" · {marker} {}", render_elapsed(elapsed))
+            })
+            .unwrap_or_default(),
+        None => String::new(),
+    };
+    let output = (app.turn_usage.output.confidence != Confidence::Unknown)
+        .then(|| app.turn_usage.output.render());
+    let mut extra = match app.live_child_count() {
+        0 => String::new(),
+        1 => " · 1 agent".to_owned(),
+        count => format!(" · {count} agents"),
+    };
+    if let Some(detail) = app.work_detail_lines().first() {
+        extra.push_str(&format!(" · {detail}"));
+    }
+    let prefix = format!("{} ", theme.spinner(app.tick));
+    // Secondary detail yields first. Then shorten units and the key hint,
+    // keeping the measured count and retry wording on the same single row.
+    let mut body = String::new();
+    'fit: for interrupt in ["esc to interrupt", "esc"] {
+        for unit in [" tokens", ""] {
+            for extra in [extra.as_str(), ""] {
+                let flow = output
+                    .as_ref()
+                    .map(|tokens| format!(" · {} {tokens}{unit}", glyph::RECEIVING))
+                    .unwrap_or_default();
+                body = format!(
+                    "{label}{} ({elapsed}{phase}{flow}{extra} · {interrupt})",
+                    glyph::ELIDED
+                );
+                if prefix.width() + body.width() <= usize::from(width) {
+                    break 'fit;
+                }
+            }
+        }
+    }
+    if prefix.width() + body.width() > usize::from(width) {
+        body = body.replace(" · ", "·");
+    }
+    if prefix.width() + body.width() > usize::from(width) {
+        let suffix = "·esc)";
+        body = format!(
+            "{}{suffix}",
+            clip_line(
+                body.trim_end_matches(suffix).to_owned(),
+                usize::from(width).saturating_sub(prefix.width() + suffix.width())
+            ),
+        );
+    }
+    Line::from(vec![
+        Span::styled(prefix, theme.style(Tone::Dim)),
+        Span::styled(body, theme.style(Tone::Dim)),
+    ])
+}
+
+fn render_retry_backoff(remaining: Duration) -> String {
+    let millis = remaining.as_millis();
+    if millis < 1_000 {
+        "<1s".to_owned()
+    } else {
+        format!("{}s", millis.saturating_add(999) / 1_000)
+    }
+}
 
 pub(super) fn draw_composer(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
     let input_area = Rect::new(

@@ -1,6 +1,146 @@
 // composer behavior tests.
 
     #[test]
+    fn working_progress_is_one_fixed_row_outside_the_scrolled_transcript() {
+        for (width, height) in [(44, 16), (80, 24), (100, 32), (40, 10)] {
+            let theme = Theme::new().without_color().without_motion();
+            let mut app = App::new("model", "project");
+            app.apply(&event(RuntimeEvent::TurnStarted));
+            let before = render_synced(&mut app, width, height, theme);
+            let progress_row = before
+                .lines()
+                .position(|line| line.contains("Working… ("))
+                .unwrap();
+            let composer_row = before
+                .lines()
+                .position(|line| line.contains("Ask Smith"))
+                .unwrap();
+            assert_eq!(progress_row + 2, composer_row, "{before}");
+
+            for index in 0..40 {
+                app.transcript
+                    .push_notice("monitor", format!("notice {index}"));
+            }
+            app.composer.replace("keep this draft");
+            let appended = render_synced(&mut app, width, height, theme);
+            assert_eq!(
+                appended
+                    .lines()
+                    .position(|line| line.contains("Working… (")),
+                Some(progress_row)
+            );
+            assert_eq!(appended.matches("Working… (").count(), 1, "{appended}");
+            assert!(
+                appended
+                    .lines()
+                    .nth(composer_row)
+                    .unwrap()
+                    .contains("keep this draft")
+            );
+            assert!(
+                visual_scroll_limit(
+                    &transcript_lines(&app, theme, width),
+                    transcript_rect(Rect::new(0, 0, width, height), &app)
+                ) > 0
+            );
+
+            app.following = false;
+            app.scroll_back = u16::MAX;
+            let scrolled = render_synced(&mut app, width, height, theme);
+            assert!(scrolled.contains("notice 0"), "{scrolled}");
+            assert_eq!(
+                scrolled
+                    .lines()
+                    .position(|line| line.contains("Working… (")),
+                Some(progress_row)
+            );
+            assert!(
+                transcript_lines(&app, theme, width)
+                    .iter()
+                    .all(|line| !line.to_string().contains("Working"))
+            );
+        }
+    }
+
+    #[test]
+    fn working_progress_keeps_token_provenance_and_interrupt_visible_when_narrow() {
+        let mut app = App::new("model", "project");
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        let theme = Theme::new();
+        assert_eq!(
+            working_line(&app, theme, 100).to_string(),
+            "✻ Working… (0s · esc to interrupt)"
+        );
+        app.apply(&event(RuntimeEvent::Usage {
+            record: UsageRecord {
+                source: UsageSource::ProviderAttempt,
+                provenance: Provenance::default(),
+                delta: UsageDelta::new().with(CounterKind::Output, 1_200),
+            },
+        }));
+        assert_eq!(
+            working_line(&app, theme, 100).to_string(),
+            "✻ Working… (0s · ↓ 1.2k tokens · esc to interrupt)"
+        );
+        app.turn_usage.output = crate::status::TokenCount::estimated(1_200);
+        for width in [40, 44, 80, 100] {
+            let line =
+                working_line(&app, theme.without_motion().without_color(), width).to_string();
+            assert!(line.starts_with("● Working… (0s · ↓ ~1.2k"), "{line}");
+            assert!(line.contains("esc") && line.ends_with(')'), "{line}");
+            assert!(line.width() <= usize::from(width), "{line}");
+        }
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let line = working_line(&app, theme, 100).to_string();
+        assert!(
+            line.contains("Interrupting… (0s · ↓ ~1.2k tokens · esc to interrupt)"),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn working_progress_sits_between_the_anchored_pane_and_composer() {
+        let mut app = App::new("model", "project");
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        app.apply(&event(RuntimeEvent::PlanUpdated {
+            revision: 1,
+            sensitivity: PlanSensitivity::Public,
+            counts: std::collections::BTreeMap::new(),
+            items: Some(vec![PlanItemProjection {
+                id: "todo".to_owned(),
+                text: "Inspect the retry policy".to_owned(),
+                status: PlanItemStatus::InProgress,
+                reason: None,
+            }]),
+        }));
+        let theme = Theme::new().without_motion();
+        for picker in [false, true] {
+            if picker {
+                app.on_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+            }
+            for (width, height) in [(44, 16), (80, 24), (100, 32)] {
+                let screen = render(&app, width, height, theme);
+                let progress = screen
+                    .lines()
+                    .position(|line| line.contains("Working… ("))
+                    .unwrap();
+                let pane = screen
+                    .lines()
+                    .position(|line| line.contains(if picker { "/help" } else { "Todo" }))
+                    .unwrap();
+                let composer = screen
+                    .lines()
+                    .enumerate()
+                    .filter_map(|(row, line)| line.starts_with("› ").then_some(row))
+                    .last()
+                    .unwrap();
+                assert!(pane < progress, "{screen}");
+                assert_eq!(progress + 2, composer, "{screen}");
+            }
+        }
+    }
+
+    #[test]
     fn pending_input_is_bounded_labelled_and_shares_the_anchored_budget_with_todos() {
         let mut app = App::new("gpt-5.3", "~/work/api");
         app.apply(&event(RuntimeEvent::TurnStarted));

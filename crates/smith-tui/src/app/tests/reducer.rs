@@ -332,6 +332,83 @@
     }
 
     #[test]
+    fn output_flow_belongs_to_the_active_root_turn_and_resets_at_the_next_start() {
+        let mut app = app();
+        app.apply(&turn_event("turn-1", RuntimeEvent::TurnStarted));
+        app.apply(&turn_event(
+            "turn-1",
+            usage_event(UsageDelta::new().with(CounterKind::InputUncached, 100)),
+        ));
+        assert_eq!(app.turn_usage.output, crate::status::TokenCount::UNKNOWN);
+        app.apply(&turn_event(
+            "turn-1",
+            usage_event(UsageDelta::new().with(CounterKind::Output, 1_200)),
+        ));
+        app.apply(&turn_event(
+            "another-turn",
+            usage_event(UsageDelta::new().with(CounterKind::Output, 900)),
+        ));
+        app.apply_child(
+            "child-1",
+            &turn_event(
+                "child-turn",
+                usage_event(UsageDelta::new().with(CounterKind::Output, 500)),
+            ),
+        );
+        assert_eq!(
+            app.turn_usage.output,
+            crate::status::TokenCount::reported(1_200)
+        );
+        app.apply(&turn_event(
+            "turn-1",
+            RuntimeEvent::TurnCompleted {
+                finish: TurnFinish::Completed,
+                visible_output: false,
+            },
+        ));
+        app.apply(&turn_event(
+            "turn-1",
+            usage_event(UsageDelta::new().with(CounterKind::Output, 500)),
+        ));
+        assert_eq!(
+            app.turn_usage.output,
+            crate::status::TokenCount::reported(1_200)
+        );
+        app.apply(&turn_event("turn-2", RuntimeEvent::TurnStarted));
+        assert_eq!(app.turn_usage.output, crate::status::TokenCount::UNKNOWN);
+        assert_eq!(app.visible_turn_summary(), None);
+    }
+
+    #[test]
+    fn success_summaries_never_move_to_a_later_turn_or_survive_a_non_success_terminal() {
+        let mut app = app();
+        app.apply(&event_at(Timestamp(1_000), RuntimeEvent::TurnStarted));
+        app.transcript.push_text_delta("First answer.");
+        app.apply(&event_at(
+            Timestamp(1_000),
+            RuntimeEvent::TurnCompleted {
+                finish: TurnFinish::Completed,
+                visible_output: true,
+            },
+        ));
+        assert_eq!(app.visible_turn_summary(), Some("Worked for <1ms"));
+
+        app.transcript.push_notice("monitor", "a later block");
+        assert_eq!(app.visible_turn_summary(), None);
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        assert_eq!(app.turn_summary, None);
+        app.turn_started_at = Instant::now().checked_sub(Duration::from_secs(12));
+        app.apply(&event(RuntimeEvent::TurnCompleted {
+            finish: TurnFinish::Failed,
+            visible_output: false,
+        }));
+        assert_eq!(app.visible_turn_summary(), None);
+        assert!(matches!(app.transcript.blocks().last(),
+            Some(Block::Notice { source, text }) if source == "turn" && text.starts_with("Failed after 12s")
+        ));
+    }
+
+    #[test]
     fn a_success_without_visible_text_keeps_an_honest_subsecond_notice() {
         let mut app = app();
         app.apply(&event_at(Timestamp(1_000), RuntimeEvent::TurnStarted));
@@ -1077,7 +1154,7 @@
         let mut replayed = app();
         replayed.present_recovered_ephemeral_work(1, 1, 1);
         for event in &replayed_events {
-            replayed.apply(event);
+            replayed.apply_recovered(event);
         }
 
         assert_eq!(live.transcript.blocks(), replayed.transcript.blocks());
@@ -1100,7 +1177,8 @@
         assert!(rendered.contains("call-approved-edit"));
         assert!(rendered.contains("call-question"));
         assert!(rendered.contains("not restarted"));
-        assert_eq!(live.turn_summary, replayed.turn_summary);
+        assert_eq!(replayed.turn_summary, None);
+        assert_eq!(replayed.visible_turn_summary(), None);
         assert!(
             live.turn_summary
                 .as_deref()

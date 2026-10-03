@@ -36,9 +36,9 @@ completed_at:
 
 ## 3. Progress, turn end, Markdown, approvals
 
-- [ ] 3.1 Move the working row above the composer with elapsed time, token
+- [x] 3.1 Move the working row above the composer with elapsed time, token
   flow, and the interrupt key; keep retry and backoff wording.
-- [ ] 3.2 Attach the turn summary to its turn; hide it when a later block is
+- [x] 3.2 Attach the turn summary to its turn; hide it when a later block is
   appended.
 - [ ] 3.3 One Markdown renderer for streamed and committed text; lists,
   quotes, tables, fences with a language label, links with visible targets.

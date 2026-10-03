@@ -88,6 +88,7 @@ fn draw_surface(
         approval,
         pending,
         todos,
+        working,
         composer,
         hint,
         agents,
@@ -97,6 +98,7 @@ fn draw_surface(
         Constraint::Length(anchored.approval),
         Constraint::Length(anchored.pending),
         Constraint::Length(anchored.todos),
+        Constraint::Length(working_rows(app)),
         Constraint::Length(composer_rows),
         Constraint::Length(hint_rows(app)),
         Constraint::Length(agents_rows),
@@ -127,6 +129,9 @@ fn draw_surface(
     }
     if anchored.todos > 0 {
         draw_todos(frame, todos, app, theme);
+    }
+    if working_rows(app) > 0 {
+        draw_working(frame, working, app, theme);
     }
     draw_composer(frame, composer, app, theme);
     draw_hint(frame, hint, app, theme);
@@ -279,12 +284,13 @@ fn transcript_rect(area: Rect, app: &App) -> Rect {
     let composer_rows = composer_rows(app, area.width).saturating_add(2);
     let agents_rows = agents_rows(app, area, composer_rows);
     let anchored = anchored_rows(app, area, composer_rows, agents_rows);
-    let [transcript, _, _, _, _, _, _, _] = Layout::vertical([
+    let [transcript, _, _, _, _, _, _, _, _] = Layout::vertical([
         Constraint::Min(3),
         Constraint::Length(anchored.compact),
         Constraint::Length(anchored.approval),
         Constraint::Length(anchored.pending),
         Constraint::Length(anchored.todos),
+        Constraint::Length(working_rows(app)),
         Constraint::Length(composer_rows),
         Constraint::Length(hint_rows(app)),
         Constraint::Length(agents_rows),
@@ -319,6 +325,7 @@ fn anchored_rows(app: &App, area: Rect, composer_rows: u16, agents_rows: u16) ->
         .saturating_sub(composer_rows)
         .saturating_sub(hint_rows(app))
         .saturating_sub(agents_rows)
+        .saturating_sub(working_rows(app))
         .saturating_sub(3);
     let pending_desired = desired_pending_input_rows(app);
     let todo_desired = desired_todo_rows(app);
@@ -336,6 +343,7 @@ fn anchored_rows(app: &App, area: Rect, composer_rows: u16, agents_rows: u16) ->
             .saturating_sub(composer_rows)
             .saturating_sub(hint_rows(app))
             .saturating_sub(agents_rows)
+            .saturating_sub(working_rows(app))
             .saturating_sub(1);
         return AnchoredRows {
             compact: 0,
@@ -427,6 +435,7 @@ fn agents_rows(app: &App, area: Rect, composer_rows: u16) -> u16 {
         .height
         .saturating_sub(composer_rows)
         .saturating_sub(hint_rows(app))
+        .saturating_sub(working_rows(app))
         .saturating_sub(3);
     desired_agents_rows(app).min(ceiling)
 }

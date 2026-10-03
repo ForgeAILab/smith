@@ -1,7 +1,5 @@
 //! Transcript, Markdown, tool, status, and local-result rendering.
 
-use std::time::Duration;
-
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -9,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, ProviderPhase};
+use crate::app::App;
 use crate::status::{Activity, render_elapsed};
 use crate::theme::{Theme, Tone, glyph};
 use crate::transcript::{Block, LocalResult, ToolStatus};
@@ -96,7 +94,7 @@ pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<
         && !app.has_live_work()
         && app.live_child_count() == 0
         && app.speculative_text().is_none()
-        && app.turn_summary.is_none()
+        && app.visible_turn_summary().is_none()
     {
         return getting_started_lines(theme);
     }
@@ -113,7 +111,7 @@ pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<
         );
     }
 
-    if let Some(summary) = &app.turn_summary
+    if let Some(summary) = app.visible_turn_summary()
         && !matches!(
             app.status.activity,
             Activity::Working | Activity::Interrupting
@@ -123,93 +121,12 @@ pub(super) fn transcript_lines(app: &App, theme: Theme, width: u16) -> Vec<Line<
             lines.push(Line::default());
         }
         lines.push(Line::from(Span::styled(
-            format!("  {summary}"),
+            format!("{} {summary}", glyph::WORK),
             theme.style(Tone::Dim),
         )));
     }
 
-    if matches!(
-        app.status.activity,
-        Activity::Working | Activity::Interrupting
-    ) {
-        if !lines.is_empty() {
-            lines.push(Line::default());
-        }
-        let working_label = match app.status.activity {
-            Activity::Working => "Working",
-            Activity::Interrupting => "Interrupting",
-            Activity::Idle | Activity::ParkedAwaitingChild | Activity::Ended => {
-                unreachable!("activity was filtered above")
-            }
-        };
-        let details = app.work_detail_lines();
-        let retry = app.provider_retry();
-        let label = retry
-            .map(|retry| format!("Retrying {}/{}", retry.next_attempt, retry.max_attempts))
-            .unwrap_or_else(|| working_label.to_owned());
-        // The provider round-trip stage answers "is anything happening?"
-        // during an otherwise silent wait: `↑ 45s` is a stall the user can
-        // see, where a bare `Working…` looks identical to progress. The
-        // transfer phases read as direction; only thinking keeps its word.
-        let phase = match retry.and_then(|retry| retry.backoff_remaining) {
-            Some(remaining) => format!(" · backoff {}", render_retry_backoff(remaining),),
-            None => app
-                .provider_phase()
-                .map(|(phase, elapsed)| {
-                    let marker = match phase {
-                        ProviderPhase::Sending => glyph::SENDING,
-                        ProviderPhase::Thinking => "thinking",
-                        ProviderPhase::Responding => glyph::RECEIVING,
-                    };
-                    format!(" · {marker} {}", render_elapsed(elapsed))
-                })
-                .unwrap_or_default(),
-        };
-        // Delegated work is part of "is anything happening?": a silent
-        // parent waiting on children would otherwise look stalled.
-        let agents = match app.live_child_count() {
-            0 => String::new(),
-            1 => " · 1 agent".to_owned(),
-            count => format!(" · {count} agents"),
-        };
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("{} ", theme.spinner(app.tick)),
-                theme.style(Tone::Accent),
-            ),
-            Span::styled(
-                format!(
-                    "{label}{} · {}{phase}{agents}{}",
-                    glyph::ELIDED,
-                    app.turn_elapsed()
-                        .map(render_elapsed)
-                        .unwrap_or_else(|| "?".to_owned()),
-                    details
-                        .first()
-                        .map(|line| format!(" · {line}"))
-                        .unwrap_or_default(),
-                ),
-                theme.style(Tone::Reasoning),
-            ),
-        ]));
-        for detail in details.iter().skip(1) {
-            lines.push(Line::from(vec![
-                Span::styled("  ", theme.style(Tone::Dim)),
-                Span::styled(detail.clone(), theme.style(Tone::Reasoning)),
-            ]));
-        }
-    }
-
     lines
-}
-
-fn render_retry_backoff(remaining: Duration) -> String {
-    let millis = remaining.as_millis();
-    if millis < 1_000 {
-        "<1s".to_owned()
-    } else {
-        format!("{}s", millis.saturating_add(999) / 1_000)
-    }
 }
 
 fn getting_started_lines(theme: Theme) -> Vec<Line<'static>> {
@@ -245,7 +162,7 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16, expanded: bool) -> Ve
     let mut lines = Vec::new();
     for block in blocks {
         // Reasoning is canonical model state, not a second assistant answer.
-        // The turn-level working row below represents progress without
+        // The anchored working row represents progress without
         // exposing raw provider reasoning as transcript prose.
         if matches!(block, Block::Reasoning { .. }) {
             continue;

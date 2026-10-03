@@ -154,9 +154,15 @@
             .iter()
             .position(|line| line.contains("Ask Smith to do anything"))
             .expect("composer row");
+        let working_y = lines
+            .iter()
+            .position(|line| line.contains("Working… ("))
+            .expect("working row");
         assert!(picker_y < composer_y, "{rendered}");
+        assert!(picker_y < working_y && working_y < composer_y, "{rendered}");
+        // Include the working row in the pane-to-composer span.
         assert!(
-            composer_y - picker_y <= 7,
+            composer_y - picker_y <= 8,
             "pane grew too tall:\n{rendered}"
         );
         assert_eq!(

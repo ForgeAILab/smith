@@ -21,7 +21,7 @@ use std::time::Duration;
 use agent_runtime_core::goal::GoalProjection;
 use agent_runtime_core::manifest::SegmentKind;
 use agent_runtime_core::provider::ProviderAttemptPurpose;
-use agent_runtime_core::usage::{CounterKind, UsageDelta, UsageRecord};
+use agent_runtime_core::usage::{CounterKind, UsageDelta, UsageRecord, UsageSource};
 use smith_runtime::advisor::ADVISOR_USAGE_PURPOSE;
 use smith_runtime::client::{EstimationConfidence, SmithEvent as EventEnvelope};
 
@@ -78,6 +78,52 @@ impl TokenCount {
             Confidence::Unknown => "?".to_owned(),
             Confidence::Reported => compact_tokens(self.value),
             Confidence::Estimated => format!("~{}", compact_tokens(self.value)),
+        }
+    }
+}
+
+/// Output flow for one active root turn, separate from session spend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TurnUsage {
+    /// Output tokens received so far, with their measurement provenance.
+    pub output: TokenCount,
+}
+
+impl Default for TurnUsage {
+    fn default() -> Self {
+        Self {
+            output: TokenCount::UNKNOWN,
+        }
+    }
+}
+
+impl TurnUsage {
+    /// Adds root output, including failed attempts, without counting rollups
+    /// or separately attributed cache and advisor work a second time.
+    pub fn record(&mut self, record: &UsageRecord) {
+        if !matches!(
+            record.source,
+            UsageSource::ProviderAttempt | UsageSource::ExternalAgent
+        ) || record.provenance.purpose.as_deref() == Some(ADVISOR_USAGE_PURPOSE)
+            || record
+                .provenance
+                .attempt_purpose
+                .is_some_and(|purpose| purpose.is_synthetic_cache())
+        {
+            return;
+        }
+        let output = record.delta.get(CounterKind::Output);
+        // UsageDelta is sparse: zero cannot distinguish absent output from a
+        // reported zero, so it supplies no output-flow measurement.
+        if output > 0 {
+            self.output = TokenCount {
+                value: self.output.value.saturating_add(output),
+                confidence: if self.output.confidence == Confidence::Estimated {
+                    Confidence::Estimated
+                } else {
+                    Confidence::Reported
+                },
+            };
         }
     }
 }
@@ -1142,6 +1188,46 @@ impl Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn turn_output_flow_counts_attempts_without_inventing_or_double_counting_usage() {
+        use agent_runtime_core::usage::Provenance;
+
+        let mut usage = TurnUsage::default();
+        let mut record = UsageRecord {
+            source: UsageSource::ProviderAttempt,
+            provenance: Provenance::default(),
+            delta: UsageDelta::new().with(CounterKind::InputUncached, 100),
+        };
+        usage.record(&record);
+        assert_eq!(usage.output, TokenCount::UNKNOWN);
+
+        record.delta = UsageDelta::new().with(CounterKind::Output, 800);
+        record.provenance.failed = true;
+        usage.record(&record);
+        record.provenance.failed = false;
+        record.delta = UsageDelta::new().with(CounterKind::Output, 400);
+        usage.record(&record);
+        assert_eq!(usage.output, TokenCount::reported(1_200));
+
+        record.source = UsageSource::Rollup;
+        usage.record(&record);
+        record.source = UsageSource::ProviderAttempt;
+        record.provenance.purpose = Some(ADVISOR_USAGE_PURPOSE.to_owned());
+        usage.record(&record);
+        record.provenance.purpose = None;
+        record.provenance.attempt_purpose = Some(ProviderAttemptPurpose::CacheKeepalive);
+        usage.record(&record);
+        assert_eq!(usage.output, TokenCount::reported(1_200));
+
+        record.provenance.attempt_purpose = None;
+        record.source = UsageSource::ExternalAgent;
+        usage.record(&record);
+        assert_eq!(usage.output, TokenCount::reported(1_600));
+        usage.output = TokenCount::estimated(1_600);
+        usage.record(&record);
+        assert_eq!(usage.output.render(), "~2k");
+    }
 
     #[test]
     fn elapsed_time_stays_compact_from_seconds_through_hours() {

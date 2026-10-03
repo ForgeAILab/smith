@@ -901,7 +901,13 @@ pub struct App {
     ///
     /// Deliberately not a transcript block: one row per historical turn is
     /// noise in the UI, while the journal keeps the full per-turn record.
+    /// Rendering hides it as soon as a later block is appended.
     pub turn_summary: Option<String>,
+    /// The turn's last block, rather than a later local result or notice.
+    pub(super) turn_summary_revision: Option<u64>,
+    pub(super) turn_block_revision: u64,
+    /// Client-neutral accounting for the active root turn's output flow.
+    pub turn_usage: crate::status::TurnUsage,
     pub(super) turn_started_at: Option<Instant>,
     pub(super) turn_started_timestamp: Option<Timestamp>,
     pub(super) last_ctrl_c: Option<Instant>,
@@ -973,6 +979,9 @@ impl App {
             image_attachments: Vec::new(),
             image_counter: 0,
             turn_summary: None,
+            turn_summary_revision: None,
+            turn_block_revision: 0,
+            turn_usage: crate::status::TurnUsage::default(),
             turn_started_at: None,
             turn_started_timestamp: None,
             last_ctrl_c: None,
@@ -1207,6 +1216,13 @@ impl App {
     /// Monotonic elapsed time for the active turn.
     pub fn turn_elapsed(&self) -> Option<Duration> {
         self.turn_started_at.map(|started| started.elapsed())
+    }
+
+    /// The newest live success summary, only while its turn is still last.
+    pub(crate) fn visible_turn_summary(&self) -> Option<&str> {
+        self.turn_summary
+            .as_deref()
+            .filter(|_| self.turn_summary_revision == Some(self.transcript.append_revision()))
     }
 
     /// Takes the parked live-stream gap so the host can replay it from the

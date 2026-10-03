@@ -12,7 +12,7 @@ use smith_runtime::client::{
 };
 
 use crate::status::{Activity, ContextPlanUpdate, render_elapsed, render_terminal_elapsed};
-use crate::transcript::ToolStatus;
+use crate::transcript::{Block, ToolStatus};
 
 use super::conversation::ConversationMut;
 use super::state::*;
@@ -253,6 +253,10 @@ impl App {
             self.flush_gap_notices();
         }
         self.apply_now(envelope);
+        // Recovered terminals restore lifecycle state, never historical UI
+        // punctuation. A live completion can create the next summary.
+        self.turn_summary = None;
+        self.turn_summary_revision = None;
     }
 
     /// Accumulates events recovered from the journal for the run of gaps
@@ -307,6 +311,7 @@ impl App {
         // highlight. Dropping it is honest; repainting it over whatever landed
         // there instead is not.
         self.selection = None;
+        let revision = self.transcript.append_revision();
 
         // Cache evidence is a presentation projection of canonical runtime
         // events. Fold it before the semantic match so newly added runtime
@@ -327,6 +332,12 @@ impl App {
             self.transcript.bind_shell_shortcut(*echo, call.as_str());
         }
         self.conversation().apply(&envelope.payload);
+        if self.is_busy()
+            && envelope.turn.as_ref() == self.active_turn.as_ref()
+            && self.transcript.append_revision() != revision
+        {
+            self.turn_block_revision = self.transcript.append_revision();
+        }
 
         match &envelope.payload {
             RuntimeEvent::SessionStarted => {
@@ -347,12 +358,18 @@ impl App {
                 self.pending_input = PendingInputState::default();
                 self.provider_phase = None;
                 self.provider_retry = None;
+                self.turn_summary = None;
+                self.turn_summary_revision = None;
+                self.turn_usage = Default::default();
             }
             RuntimeEvent::TurnStarted | RuntimeEvent::InternalTurnStarted { .. } => {
                 self.provider_phase = None;
                 self.provider_retry = None;
                 self.status.activity = Activity::Working;
                 self.turn_summary = None;
+                self.turn_summary_revision = None;
+                self.turn_block_revision = self.transcript.append_revision();
+                self.turn_usage = Default::default();
                 self.plan = None;
                 self.work = Some(WorkSummary::default());
                 self.turn_started_at = Some(Instant::now());
@@ -589,9 +606,28 @@ impl App {
             }
             RuntimeEvent::Usage { record } => {
                 self.status.record_usage_record(record);
+                if self.is_busy() && envelope.turn.as_ref() == self.active_turn.as_ref() {
+                    self.turn_usage.record(record);
+                }
             }
             RuntimeEvent::CacheObservation { .. } | RuntimeEvent::CacheStateChanged { .. } => {}
             RuntimeEvent::TurnCompleted { finish, .. } => {
+                // Direct user echoes and canonical text can be supplied by
+                // the host too; a later local card or notice must not inherit
+                // the turn's summary when the terminal finally arrives.
+                if matches!(
+                    self.transcript.blocks().last(),
+                    Some(
+                        Block::User { .. }
+                            | Block::Assistant { .. }
+                            | Block::Reasoning { .. }
+                            | Block::Tool { .. }
+                    )
+                ) {
+                    self.turn_block_revision = self.transcript.append_revision();
+                }
+                self.turn_summary = None;
+                self.turn_summary_revision = None;
                 if self
                     .local_shell_turn
                     .as_ref()
@@ -668,14 +704,13 @@ impl App {
                         );
                     }
                     TurnFinish::Completed => {
-                        // Routine completions never enter the transcript: one
-                        // row per historical turn is log detail, not UI. The
-                        // newest summary renders beneath the transcript until
-                        // the next turn starts.
+                        // Routine completions are punctuation on their turn,
+                        // not another block to save or replay.
                         self.turn_summary = Some(terminal_elapsed.map_or_else(
                             || "Worked".to_owned(),
                             |elapsed| format!("Worked for {}", render_terminal_elapsed(elapsed)),
                         ));
+                        self.turn_summary_revision = Some(self.turn_block_revision);
                     }
                     TurnFinish::Failed => {
                         self.transcript.push_notice(
@@ -975,6 +1010,12 @@ impl App {
             // Planning-lifecycle events carry diagnostics the basic TUI does not
             // surface yet; they are recorded by the session log regardless.
             _ => {}
+        }
+        if self.is_busy()
+            && envelope.turn.as_ref() == self.active_turn.as_ref()
+            && self.transcript.append_revision() != revision
+        {
+            self.turn_block_revision = self.transcript.append_revision();
         }
         self.refresh_parked_activity();
     }

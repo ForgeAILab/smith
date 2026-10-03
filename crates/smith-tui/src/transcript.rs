@@ -217,6 +217,7 @@ impl PartialEq for Block {
 pub struct Transcript {
     blocks: Vec<Block>,
     next_shell_echo: u64,
+    append_revision: u64,
 }
 
 impl Transcript {
@@ -228,6 +229,16 @@ impl Transcript {
     /// The blocks, oldest first.
     pub fn blocks(&self) -> &[Block] {
         &self.blocks
+    }
+
+    /// Identifies the newest appended block, even after history replacement.
+    pub(crate) fn append_revision(&self) -> u64 {
+        self.append_revision
+    }
+
+    fn push_block(&mut self, block: Block) {
+        self.append_revision = self.append_revision.wrapping_add(1);
+        self.blocks.push(block);
     }
 
     /// The number of blocks.
@@ -243,12 +254,12 @@ impl Transcript {
     /// Appends a user message.
     pub fn push_user(&mut self, text: impl Into<String>) {
         self.close_open();
-        self.blocks.push(Block::User { text: text.into() });
+        self.push_block(Block::User { text: text.into() });
     }
 
     /// Appends a notice, which never merges with adjacent blocks.
     pub fn push_notice(&mut self, source: impl Into<String>, text: impl Into<String>) {
-        self.blocks.push(Block::Notice {
+        self.push_block(Block::Notice {
             source: source.into(),
             text: text.into(),
         });
@@ -257,7 +268,7 @@ impl Transcript {
     /// Appends an error.
     pub fn push_error(&mut self, message: impl Into<String>) {
         self.close_open();
-        self.blocks.push(Block::Error {
+        self.push_block(Block::Error {
             message: message.into(),
         });
     }
@@ -302,7 +313,7 @@ impl Transcript {
             }
             report => report,
         };
-        self.blocks.push(Block::Local(result));
+        self.push_block(Block::Local(result));
     }
 
     /// Appends assistant text, extending the open assistant block if there is
@@ -313,7 +324,7 @@ impl Transcript {
             return;
         }
         self.close_open();
-        self.blocks.push(Block::Assistant {
+        self.push_block(Block::Assistant {
             text: delta.to_owned(),
             open: true,
         });
@@ -333,7 +344,7 @@ impl Transcript {
             return;
         }
         self.close_open();
-        self.blocks.push(Block::Reasoning {
+        self.push_block(Block::Reasoning {
             text: delta.to_owned(),
             redacted: delta_redacted,
             open: true,
@@ -361,7 +372,7 @@ impl Transcript {
             return;
         }
         self.close_open();
-        self.blocks.push(Block::Tool {
+        self.push_block(Block::Tool {
             call_id,
             name: name.to_owned(),
             display: arguments
@@ -382,7 +393,7 @@ impl Transcript {
         let echo = self.next_shell_echo;
         self.next_shell_echo = self.next_shell_echo.wrapping_add(1);
         self.close_open();
-        self.blocks.push(Block::Tool {
+        self.push_block(Block::Tool {
             call_id: String::new(),
             name: "shell".to_owned(),
             display: None,
@@ -498,7 +509,7 @@ impl Transcript {
     ) {
         self.close_open();
         let display = project_external_tool_call_display(name, detail);
-        self.blocks.push(Block::Tool {
+        self.push_block(Block::Tool {
             call_id: call_id.into(),
             name: name.to_owned(),
             enrichment: match display {
@@ -687,6 +698,7 @@ impl Transcript {
     /// Used when resuming a session: history is the source of truth, and any
     /// live-only blocks (notices, in-flight tools) are intentionally dropped.
     pub fn replace_from_history(&mut self, history: &[Message]) {
+        self.append_revision = self.append_revision.wrapping_add(1);
         self.blocks.clear();
         for message in history {
             match message.role {
@@ -696,13 +708,13 @@ impl Transcript {
                     for part in &message.content {
                         match part {
                             ContentPart::Text { text } => {
-                                self.blocks.push(Block::Assistant {
+                                self.push_block(Block::Assistant {
                                     text: text.clone(),
                                     open: false,
                                 });
                             }
                             ContentPart::Reasoning { text, redacted, .. } => {
-                                self.blocks.push(Block::Reasoning {
+                                self.push_block(Block::Reasoning {
                                     text: text.clone(),
                                     redacted: *redacted,
                                     open: false,
@@ -710,7 +722,7 @@ impl Transcript {
                             }
                             ContentPart::ToolCall(call) => {
                                 let argument_keys = argument_keys(&call.arguments);
-                                self.blocks.push(Block::Tool {
+                                self.push_block(Block::Tool {
                                     call_id: call.id.as_str().to_owned(),
                                     name: call.name.clone(),
                                     // Canonical history is intentionally not
