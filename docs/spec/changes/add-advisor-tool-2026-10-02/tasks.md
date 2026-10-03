@@ -1,7 +1,7 @@
 ---
 created_at: 2026-10-03T03:19:53Z
-updated_at: 2026-10-03T03:19:53Z
-completed_at:
+updated_at: 2026-10-03T05:23:35Z
+completed_at: 2026-10-03T05:23:35Z
 ---
 
 # Tasks: Add an advisor tool
@@ -46,12 +46,12 @@ completed_at:
 
 ## 4. Verification
 
-- [ ] 4.1 Tests: configuration validation and explain; tool registration
+- [x] 4.1 Tests: configuration validation and explain; tool registration
   only on root surfaces with an advisor; transcript rendering, image
   omission, and trimming; error results; usage attribution; prompt section
   present only with the tool.
-- [ ] 4.2 `cargo fmt --all -- --check`, strict Clippy, workspace tests, and
+- [x] 4.2 `cargo fmt --all -- --check`, strict Clippy, workspace tests, and
   fixture compare unchanged.
-- [ ] 4.3 Live: a project-local configuration that makes `sol` the advisor
+- [x] 4.3 Live: a project-local configuration that makes `sol` the advisor
   for `code`; ask for a plan, confirm one advisor call, its advice in the
   transcript, and its cost in `/status`.

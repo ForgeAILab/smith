@@ -1,0 +1,45 @@
+    2. **Explain the fix:** replace `return a - b` with `return a + b` in `calc.py`. The shown test expects
+`5`, while the current expression produces `-1` for `add…
+    … +1 more line
+
+• The fix: In calc.py line 2, change return a - b to return a + b. The add function currently subtracts, so
+add(2, 3) returns -1 while test_calc.py asserts it should be 5.
+
+  What the advisor said: It confirmed the diagnosis and fix — replace return a - b with return a + b, noting
+the test expects 5 while the current expression produces -1. It also advised leaving the files untouched (as
+you requested) and not claiming tests passed without actually running them.
+
+  Per your instruction, I made no edits. I also haven't run the test — the conclusion is based on reading the
+code and assertion directly, so let me know if you'd like me to apply the fix and verify.
+
+/status
+╭────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│  >_ Smith                                                                                                  │
+│                                                                                                            │
+│  session:              session-861f0da3-d5f9-4f06-9cd4-78745876f820                                        │
+│  profile:              code                                                                                │
+│  provider:             zai · model: glm-5.3                                                                │
+│  permission:           Ask                                                                                 │
+│  reasoning:            provider default · effort provider default · provider/model default                 │
+│  reasoning controls:   controllable · switch optional · efforts none · Z.AI Coding Plan thinking switch (c │
+│                        atalog-advertised reasoning model)                                                  │
+│  prompt cache:         3.7k cached input tokens (last turn)                                                │
+│  cache maintenance:    off                                                                                 │
+│  resume checkpoint:    saved 2026-10-03 01:15:10 -04:00                                                    │
+│  project:              /private/tmp/claude-501/-Volumes-Data-codes-ai-tui/76a7e2f5-dad4-4eee-80b8-6fe4d950 │
+│                        1186/scratchpad/live-advisor                                                        │
+│  Git:                  clean                                                                               │
+│  goal:                 none                                                                                │
+│  children:             0                                                                                   │
+│  usage:                total · input 2.5k · cached 3.7k · output 579 · reasoning 516                       │
+│   root: 3 turn(s) · input 2.3k · cached 3.7k · output 442                                                  │
+│   advisor: input 269 · output 137 · reasoning 516                                                          │
+│  cost:                 ~$0.000 estimated · zai/glm-5.3 · advisor price unknown                             │
+│ /diagnostics shows detailed cache and recovery information                                                 │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+  Worked for 44s
+
+› Ask Smith to do anything
+
+  code · zai/glm-5.3

@@ -1,0 +1,27 @@
+› test_calc.py fails. Read calc.py, then consult the advisor tool about the right fix before answering. Do not
+edit any file; just tell me the fix and what the advisor said.
+• capabilities · activation epoch 1: tool:advisor, tool:artifact.read, tool:edit, tool:read,
+tool:registry.search, skill:smith.security
+• Read(calc.py) · ok
+    1  def add(a, b):
+    2      return a - b
+• Read(test_calc.py) · ok
+    1  from calc import add
+    2  assert add(2, 3) == 5
+• I've read both files. calc.py implements add(a, b) as return a - b, and test_calc.py asserts add(2, 3) == 5
+— so the test gets -1 and fails. Now consulting the advisor as requested.
+• Advisor() · ok
+    Your diagnosis is correct. Recommend changing **`calc.py`, line 2** from:
+    ```python
+    return a - b
+    … +7 more lines
+• The fix: in calc.py, change line 2 from return a - b to return a + b. The add function currently subtracts,
+so add(2, 3) returns -1 instead of the 5 that test_calc.py asserts.
+  What the advisor said: it confirmed the diagnosis — the one-character fix (- → + on line 2 of calc.py) is
+correct, since 2 - 3 = -1 fails the assertion while 2 + 3 = 5 satisfies it. It also confirmed that no files
+should be edited, per your instruction.
+  Per your request, I made no edits. Note this is verification by inspection only — I did not run the test
+suite.
+  Worked for 47s
+› Ask Smith to do anything
+  code · zai/glm-5.3
