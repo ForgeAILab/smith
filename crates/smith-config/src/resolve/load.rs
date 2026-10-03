@@ -39,7 +39,13 @@ pub fn resolve(request: &ResolveRequest) -> Result<Resolution, ConfigError> {
     normalize_idle_compaction_aliases(&mut session)?;
 
     let agent_profiles = resolve_agent_profiles(&file_layers, &declared)?;
-    let selected = select_profile(&file_layers, &env, &cli, &session, &declared)?;
+    let (selected, advisor_binding) = match &request.advisor_route {
+        None => (
+            select_profile(&file_layers, &env, &cli, &session, &declared)?,
+            Vec::new(),
+        ),
+        Some(target) => advisor_route_selection(target, &declared)?,
+    };
     let profile_layer = selected
         .as_ref()
         .map(|profile| profile_contributions(&file_layers, &profile.value, &declared))
@@ -54,6 +60,7 @@ pub fn resolve(request: &ResolveRequest) -> Result<Resolution, ConfigError> {
     provenance.extend(env);
     provenance.extend(cli);
     provenance.extend(session);
+    provenance.extend(advisor_binding);
     apply_product_model_defaults(&mut provenance);
     apply_image_generation_defaults(&mut provenance);
 
@@ -63,8 +70,7 @@ pub fn resolve(request: &ResolveRequest) -> Result<Resolution, ConfigError> {
         selected,
         &declared,
         agent_profiles,
-        request.profile_use,
-        request.synthetic_cache_spend,
+        request,
     )?;
     let cache_miss_notices = required_flag(&provenance, "cache.miss_notices")?;
     Ok(Resolution {

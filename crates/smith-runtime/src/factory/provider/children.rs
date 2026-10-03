@@ -2,6 +2,8 @@
 
 use super::*;
 
+use smith_config::resolve::AdvisorTarget;
+
 use super::adapter;
 use super::credentials;
 
@@ -26,11 +28,15 @@ pub(in crate::factory) async fn prepare_advisor_route(
                     selected.value
                 ),
             })?;
-    if advisor.config.agent.profile.name != selected.value
-        || !advisor.config.agent.profile.supports(ProfileUse::Advisor)
-    {
+    let matches_selection = match &selected.value {
+        AdvisorTarget::Profile(name) => advisor.config.agent.profile.name == *name,
+        AdvisorTarget::Model { provider, model } => {
+            advisor.config.provider.name.value == *provider && advisor.config.model.value == *model
+        }
+    };
+    if !matches_selection {
         return Err(FactoryError::Runtime(RuntimeError::config(
-            "the resolved advisor route does not match the selected advisor profile",
+            "the resolved advisor route does not match the selected advisor",
         )));
     }
     let mut route_request = RuntimeRequest::new(advisor.config.clone(), HostSurface::Child);
@@ -73,12 +79,10 @@ pub(in crate::factory) async fn prepare_advisor_route(
         context_policy: prepared.context_policy,
         reasoning: prepared.reasoning,
         output_budget: prepared.output_budget,
-        instructions: advisor
-            .config
-            .agent
-            .profile
-            .instructions
-            .as_ref()
+        // A model advisor carries no profile, so no profile's instructions.
+        instructions: matches!(selected.value, AdvisorTarget::Profile(_))
+            .then(|| advisor.config.agent.profile.instructions.as_ref())
+            .flatten()
             .map(|instructions| instructions.value.clone()),
         price,
     })))

@@ -1,12 +1,13 @@
-//! Advisor selection, early placement validation, and source provenance.
+//! Advisor selection by profile or model, early validation, and source provenance.
 
 use smith_config::model::{AdvisorSelection, ConfigFile, ProfileUse};
 use smith_config::resolve::{
-    ConfigError, Layer, Overrides, Resolution, ResolveRequest, SettingValue, resolve,
+    AdvisorTarget, ConfigError, Layer, Overrides, ReferenceKind, Resolution, ResolveRequest,
+    SettingValue, resolve,
 };
 use tempfile::TempDir;
 
-const SOL: &str = "use = [\"main\", \"child\", \"advisor\"]";
+const SOL: &str = "use = [\"main\", \"child\"]";
 
 struct Fixture {
     home: TempDir,
@@ -42,6 +43,18 @@ impl Fixture {
     fn resolve(&self) -> Result<Resolution, ConfigError> {
         resolve(&self.request())
     }
+
+    /// Resolves the advisor binding the main resolution selected.
+    fn resolve_route(&self, main: &Resolution) -> Result<Resolution, ConfigError> {
+        let target = main
+            .config
+            .agent
+            .profile
+            .advisor
+            .clone()
+            .expect("main resolution selects an advisor");
+        resolve(&self.request().with_advisor_route(target))
+    }
 }
 
 fn config(default: &str, code: &str, sol: &str) -> String {
@@ -68,6 +81,17 @@ credential = "file:must-not-be-read"
     )
 }
 
+fn profile(name: &str) -> AdvisorTarget {
+    AdvisorTarget::Profile(name.to_owned())
+}
+
+fn model(provider: &str, model: &str) -> AdvisorTarget {
+    AdvisorTarget::Model {
+        provider: provider.to_owned(),
+        model: model.to_owned(),
+    }
+}
+
 #[test]
 fn advisor_top_level_default_resolves_for_main_profiles() {
     let fixture = Fixture::new(&config("advisor = \"sol\"", "", SOL));
@@ -76,13 +100,9 @@ fn advisor_top_level_default_resolves_for_main_profiles() {
     let advisor = agent.profile.advisor.as_ref().expect("resolved advisor");
 
     assert_eq!(agent.profile.name, "code");
-    assert_eq!(advisor.value, "sol");
+    assert_eq!(advisor.value, profile("sol"));
     assert_eq!(advisor.source.layer, Layer::ProjectFile);
     assert_eq!(advisor.source.key, "advisor");
-    assert_eq!(
-        agent.profiles["sol"].uses.value,
-        [ProfileUse::Main, ProfileUse::Child, ProfileUse::Advisor]
-    );
     assert!(agent.profiles["sol"].advisor.is_none());
     assert!(agent.child_profile("sol").is_some());
     let explained = resolution
@@ -92,6 +112,195 @@ fn advisor_top_level_default_resolves_for_main_profiles() {
     assert_eq!(explained.value, SettingValue::Text("sol".to_owned()));
     assert_eq!(explained.source, advisor.source);
     assert!(explained.overridden.is_empty());
+}
+
+#[test]
+fn advisor_profile_needs_no_placement() {
+    for sol in ["use = [\"main\"]", "use = [\"child\"]", ""] {
+        let fixture = Fixture::new(&config("advisor = \"sol\"", "", sol));
+        let main = fixture.resolve().expect("any profile may advise");
+        assert_eq!(
+            main.config.agent.profile.advisor.as_ref().unwrap().value,
+            profile("sol")
+        );
+
+        let route = fixture
+            .resolve_route(&main)
+            .expect("the advisor route resolves whatever the placements");
+        assert_eq!(route.config.agent.profile.name, "sol");
+        assert_eq!(route.config.provider.name.value, "acme");
+        assert_eq!(route.config.model.value, "advisor-model");
+        assert!(route.config.agent.profile.advisor.is_none());
+    }
+}
+
+#[test]
+fn advisor_placement_spelling_is_rejected() {
+    let fixture = Fixture::new(&config("", "", "use = [\"main\", \"child\", \"advisor\"]"));
+    let error = fixture
+        .resolve()
+        .expect_err("advisor is no longer a placement");
+
+    match error {
+        ConfigError::Malformed { message, .. } => {
+            assert!(
+                message.contains("unknown variant `advisor`, expected `main` or `child`"),
+                "{message}"
+            );
+        }
+        other => panic!("expected an invalid placement, got {other:?}"),
+    }
+}
+
+#[test]
+fn advisor_profile_route_beats_the_main_profile_selection() {
+    let fixture = Fixture::new(&config("advisor = \"sol\"", "", SOL));
+    let main = fixture.resolve().expect("main selects sol");
+    let target = main.config.agent.profile.advisor.clone().unwrap();
+    let route = resolve(
+        &fixture
+            .request()
+            .with_cli(Overrides {
+                profile: Some("code".to_owned()),
+                ..Overrides::default()
+            })
+            .with_advisor_route(target),
+    )
+    .expect("the route selects its own profile");
+
+    assert_eq!(route.config.agent.profile.name, "sol");
+    assert_eq!(route.config.model.value, "advisor-model");
+}
+
+#[test]
+fn advisor_model_reference_resolves_without_any_profile_layer() {
+    let fixture = Fixture::new(&config(
+        "advisor = \"acme/review-model\"",
+        "max_output_tokens = 8192\ninstructions = \"You are the code agent.\"\n[profiles.code.reasoning]\neffort = \"low\"",
+        SOL,
+    ));
+    let main = fixture.resolve().expect("a model advisor");
+    let advisor = main.config.agent.profile.advisor.as_ref().unwrap();
+    assert_eq!(advisor.value, model("acme", "review-model"));
+    assert_eq!(advisor.source.key, "advisor");
+    assert_eq!(
+        main.config
+            .max_output_tokens
+            .as_ref()
+            .map(|value| value.value),
+        Some(8192)
+    );
+
+    let route = fixture.resolve_route(&main).expect("the model route");
+    assert_eq!(route.config.provider.name.value, "acme");
+    assert_eq!(route.config.model.value, "review-model");
+    assert_eq!(route.config.model.source.key, "advisor");
+    assert!(route.config.agent.profile.instructions.is_none());
+    assert!(route.config.agent.profile.advisor.is_none());
+    assert_ne!(
+        route
+            .config
+            .max_output_tokens
+            .as_ref()
+            .map(|value| value.value),
+        Some(8192),
+        "the main profile's output cap must not reach the advisor"
+    );
+    assert!(route.config.reasoning.effort.is_none());
+}
+
+#[test]
+fn advisor_model_reference_beats_main_session_provider_and_model_overrides() {
+    let fixture = Fixture::new(&format!(
+        "{}\n[providers.other]\nkind = \"openai-compatible\"\nbase_url = \"https://other.example.test/v1\"\n",
+        config("advisor = \"acme/review-model\"", "", SOL)
+    ));
+    let main = fixture.resolve().expect("a model advisor");
+    let target = main.config.agent.profile.advisor.clone().unwrap();
+    let route = resolve(
+        &fixture
+            .request()
+            .with_env([("SMITH_PROVIDER", "other"), ("SMITH_MODEL", "env-model")])
+            .with_advisor_route(target),
+    )
+    .expect("the advisor binding wins");
+
+    assert_eq!(route.config.provider.name.value, "acme");
+    assert_eq!(route.config.model.value, "review-model");
+}
+
+#[test]
+fn advisor_model_reference_keeps_slashes_after_the_provider() {
+    let fixture = Fixture::new(&config("advisor = \"acme/vendor/large\"", "", SOL));
+    let main = fixture.resolve().expect("a namespaced model");
+    assert_eq!(
+        main.config.agent.profile.advisor.as_ref().unwrap().value,
+        model("acme", "vendor/large")
+    );
+    let route = fixture.resolve_route(&main).expect("the namespaced route");
+    assert_eq!(route.config.model.value, "vendor/large");
+}
+
+#[test]
+fn advisor_model_reference_requires_a_declared_provider_before_credentials() {
+    let text = config("advisor = \"missing/review-model\"", "", SOL)
+        .replace("file:must-not-be-read", "invalid-credential");
+    let fixture = Fixture::new(&text);
+    let error = fixture.resolve().expect_err("an unknown provider");
+
+    match error {
+        ConfigError::UnusableReference {
+            source, what, name, ..
+        } => {
+            assert_eq!(source.key, "advisor");
+            assert_eq!(what, ReferenceKind::Provider);
+            assert_eq!(name, "missing");
+        }
+        other => panic!("expected an unknown provider, got {other:?}"),
+    }
+}
+
+#[test]
+fn advisor_model_reference_naming_the_main_binding_is_skipped() {
+    let fixture = Fixture::new(&config("advisor = \"acme/advisor-model\"", "", SOL));
+    let code = fixture.resolve().expect("code consults sol's model");
+    assert_eq!(
+        code.config.agent.profile.advisor.as_ref().unwrap().value,
+        model("acme", "advisor-model")
+    );
+
+    let sol = resolve(&fixture.request().with_cli(Overrides {
+        profile: Some("sol".to_owned()),
+        ..Overrides::default()
+    }))
+    .expect("sol never consults its own model");
+    assert!(sol.config.agent.profile.advisor.is_none());
+
+    let overridden = resolve(&fixture.request().with_cli(Overrides {
+        model: Some("advisor-model".to_owned()),
+        ..Overrides::default()
+    }))
+    .expect("a main override to the advisor's model skips it");
+    assert_eq!(overridden.config.agent.profile.name, "code");
+    assert!(overridden.config.agent.profile.advisor.is_none());
+}
+
+#[test]
+fn advisor_rejects_malformed_values() {
+    for value in ["\"\"", "\"/model\"", "\"acme/\""] {
+        let fixture = Fixture::new(&config(&format!("advisor = {value}"), "", SOL));
+        let error = fixture.resolve().expect_err("a malformed advisor");
+        match error {
+            ConfigError::InvalidValue { source, message } => {
+                assert_eq!(source.key, "advisor");
+                assert!(
+                    message.contains("a profile name, `provider/model`, or `false`"),
+                    "{message}"
+                );
+            }
+            other => panic!("expected a malformed advisor, got {other:?}"),
+        }
+    }
 }
 
 #[test]
@@ -124,7 +333,7 @@ fn advisor_profile_false_disables_top_level_default() {
 fn advisor_top_level_file_precedence_is_source_explainable() {
     let fixture = Fixture::new(&config("advisor = false", "", SOL));
     fixture.write_user("advisor = \"sol\"\n");
-    fixture.write_project("config.local.toml", "advisor = \"sol\"\n");
+    fixture.write_project("config.local.toml", "advisor = \"acme/review-model\"\n");
     let resolution = fixture.resolve().expect("project-local advisor default");
     let advisor = resolution
         .config
@@ -138,7 +347,7 @@ fn advisor_top_level_file_precedence_is_source_explainable() {
         .explain("advisor")
         .expect("file precedence");
 
-    assert_eq!(advisor.value, "sol");
+    assert_eq!(advisor.value, model("acme", "review-model"));
     assert_eq!(advisor.source.layer, Layer::ProjectLocalFile);
     assert_eq!(explained.source, advisor.source);
     assert_eq!(explained.overridden.len(), 2);
@@ -152,49 +361,29 @@ fn advisor_top_level_file_precedence_is_source_explainable() {
 }
 
 #[test]
-fn advisor_target_requires_placement_before_provider_and_credential_validation() {
-    let text = config("advisor = \"plan\"", "", SOL)
+fn advisor_unknown_profile_is_rejected_before_provider_and_credential_validation() {
+    let text = config("advisor = \"sool\"", "", SOL)
         .replace(
             "kind = \"openai-compatible\"",
             "kind = \"invalid-provider\"",
         )
         .replace("file:must-not-be-read", "invalid-credential");
-    let fixture = Fixture::new(&format!("{text}\n[profiles.plan]\nuse = [\"main\"]\n"));
-    let error = fixture
-        .resolve()
-        .expect_err("a target without advisor placement");
-
-    match error {
-        ConfigError::InvalidValue { source, message } => {
-            assert_eq!(source.key, "advisor");
-            assert!(message.contains("`plan`"), "{message}");
-            assert!(
-                message.contains("`use` lacks the `advisor` placement"),
-                "{message}"
-            );
-        }
-        other => panic!("expected a placement error before provider resolution, got {other:?}"),
-    }
-}
-
-#[test]
-fn advisor_unknown_target_lists_only_advisor_profiles() {
-    let fixture = Fixture::new(&format!(
-        "{}\n[profiles.other]\nuse = [\"advisor\"]\n[profiles.main_only]\nuse = [\"main\"]\n",
-        config("advisor = \"missing\"", "", SOL)
-    ));
+    let fixture = Fixture::new(&text);
     let error = fixture.resolve().expect_err("an unknown advisor");
 
     match error {
-        ConfigError::InvalidValue { source, message } => {
+        ConfigError::UnusableReference {
+            source,
+            what,
+            name,
+            suggestions,
+        } => {
             assert_eq!(source.key, "advisor");
-            assert!(message.contains("unknown profile `missing`"), "{message}");
-            assert!(
-                message.ends_with("profiles placed as advisors: `other`, `sol`"),
-                "{message}"
-            );
+            assert_eq!(what, ReferenceKind::Profile);
+            assert_eq!(name, "sool");
+            assert_eq!(suggestions, ["sol"]);
         }
-        other => panic!("expected an advisor inventory diagnostic, got {other:?}"),
+        other => panic!("expected an unknown profile before provider resolution, got {other:?}"),
     }
 }
 
@@ -212,7 +401,7 @@ fn advisor_selection_is_inherited_through_extends() {
             assert!(advisor.is_none());
         } else {
             let advisor = advisor.as_ref().expect("inherited advisor name");
-            assert_eq!(advisor.value, "sol");
+            assert_eq!(advisor.value, profile("sol"));
             assert_eq!(advisor.source.key, "profiles.ancestor.advisor");
             assert_eq!(advisor.source.layer, Layer::Profile);
         }
@@ -227,13 +416,13 @@ fn advisor_selection_is_inherited_through_extends() {
 }
 
 #[test]
-fn advisor_placed_profile_may_select_another_advisor_for_main_use() {
+fn advisor_profile_may_select_another_advisor_for_main_use() {
     for sol in [
-        "use = [\"main\", \"child\", \"advisor\"]\nadvisor = \"other\"",
-        "use = [\"main\", \"child\", \"advisor\"]\nextends = \"mentor\"",
+        "use = [\"main\", \"child\"]\nadvisor = \"other\"",
+        "use = [\"main\", \"child\"]\nextends = \"mentor\"",
     ] {
         let fixture = Fixture::new(&format!(
-            "{}\n[profiles.mentor]\nadvisor = \"other\"\n[profiles.other]\nuse = [\"main\", \"advisor\"]\n",
+            "{}\n[profiles.mentor]\nadvisor = \"other\"\n[profiles.other]\nuse = [\"main\"]\n",
             config("advisor = \"sol\"", "", sol)
         ));
         let code = fixture
@@ -241,7 +430,7 @@ fn advisor_placed_profile_may_select_another_advisor_for_main_use() {
             .expect("the target's main advisor is valid");
         assert_eq!(
             code.config.agent.profile.advisor.as_ref().unwrap().value,
-            "sol"
+            profile("sol")
         );
         assert_eq!(
             code.config.agent.profiles["sol"]
@@ -249,7 +438,7 @@ fn advisor_placed_profile_may_select_another_advisor_for_main_use() {
                 .as_ref()
                 .unwrap()
                 .value,
-            "other"
+            profile("other")
         );
         assert_eq!(
             code.config.agent.profiles["other"]
@@ -257,7 +446,7 @@ fn advisor_placed_profile_may_select_another_advisor_for_main_use() {
                 .as_ref()
                 .unwrap()
                 .value,
-            "sol"
+            profile("sol")
         );
 
         let request = fixture.request().with_cli(Overrides {
@@ -268,20 +457,21 @@ fn advisor_placed_profile_may_select_another_advisor_for_main_use() {
         assert_eq!(main.config.agent.profile.name, "sol");
         assert_eq!(
             main.config.agent.profile.advisor.as_ref().unwrap().value,
-            "other"
+            profile("other")
         );
 
-        let advisor = resolve(&request.with_profile_use(ProfileUse::Advisor))
+        let route = fixture
+            .resolve_route(&code)
             .expect("sol's own selection is ignored while advising");
-        assert_eq!(advisor.config.agent.profile.name, "sol");
-        assert!(advisor.config.agent.profile.advisor.is_none());
+        assert_eq!(route.config.agent.profile.name, "sol");
+        assert!(route.config.agent.profile.advisor.is_none());
         assert_eq!(
-            advisor.config.agent.profiles["sol"]
+            route.config.agent.profiles["sol"]
                 .advisor
                 .as_ref()
                 .unwrap()
                 .value,
-            "other"
+            profile("other")
         );
     }
 }
@@ -294,7 +484,7 @@ fn advisor_top_level_self_default_is_skipped_for_main_profile() {
         .expect("the natural top-level default loads");
     assert_eq!(
         code.config.agent.profile.advisor.as_ref().unwrap().value,
-        "sol"
+        profile("sol")
     );
     assert!(code.config.agent.profiles["sol"].advisor.is_none());
 
@@ -311,7 +501,7 @@ fn advisor_top_level_self_default_is_skipped_for_main_profile() {
             .as_ref()
             .unwrap()
             .value,
-        "sol"
+        profile("sol")
     );
 }
 
@@ -321,13 +511,13 @@ fn advisor_explicit_self_selection_is_rejected_including_inherited_selection() {
         ("advisor = \"code\"", SOL, "", "profiles.code.advisor"),
         (
             "",
-            "use = [\"main\", \"child\", \"advisor\"]\nadvisor = \"sol\"",
+            "use = [\"main\", \"child\"]\nadvisor = \"sol\"",
             "",
             "profiles.sol.advisor",
         ),
         (
             "",
-            "use = [\"main\", \"child\", \"advisor\"]\nextends = \"mentor\"",
+            "use = [\"main\", \"child\"]\nextends = \"mentor\"",
             "[profiles.mentor]\nadvisor = \"sol\"\n",
             "profiles.mentor.advisor",
         ),
@@ -459,7 +649,7 @@ fn advisor_profile_selection_overrides_top_level_false() {
         .advisor
         .expect("selected advisor");
 
-    assert_eq!(advisor.value, "sol");
+    assert_eq!(advisor.value, profile("sol"));
     assert_eq!(advisor.source.key, "profiles.code.advisor");
     let explained = resolution
         .provenance
@@ -471,10 +661,13 @@ fn advisor_profile_selection_overrides_top_level_false() {
 
 #[test]
 fn advisor_defaults_only_apply_to_main_placements() {
-    let fixture = Fixture::new(&config("advisor = \"sol\"", "", "use = [\"advisor\"]"));
+    let fixture = Fixture::new(&format!(
+        "{}\n[profiles.helper]\nuse = [\"child\"]\n",
+        config("advisor = \"sol\"", "", SOL)
+    ));
     let resolution = fixture
         .resolve()
-        .expect("an advisor-only target has no main default");
+        .expect("a child-only profile has no main default");
 
     assert_eq!(
         resolution
@@ -485,11 +678,13 @@ fn advisor_defaults_only_apply_to_main_placements() {
             .as_ref()
             .unwrap()
             .value,
-        "sol"
+        profile("sol")
     );
-    assert!(resolution.config.agent.profiles["sol"].advisor.is_none());
-    assert_eq!(resolution.config.agent.profile_order.value, ["code"]);
-    assert!(resolution.config.agent.child_profile("sol").is_none());
+    assert!(resolution.config.agent.profiles["helper"].advisor.is_none());
+    assert_eq!(
+        resolution.config.agent.profiles["helper"].uses.value,
+        [ProfileUse::Child]
+    );
 }
 
 #[test]
@@ -520,21 +715,43 @@ fn advisor_changes_are_reflected_in_profile_revisions() {
     let fixture = Fixture::new(&config("", "", SOL));
     let without = fixture.resolve().expect("no advisor");
     fixture.write_project("config.local.toml", "advisor = \"sol\"\n");
-    let with = fixture.resolve().expect("an advisor");
+    let with_profile = fixture.resolve().expect("a profile advisor");
+    fixture.write_project("config.local.toml", "advisor = \"acme/advisor-model\"\n");
+    let with_model = fixture.resolve().expect("a model advisor");
 
     assert_ne!(
         without.config.agent.profile.revision,
-        with.config.agent.profile.revision
+        with_profile.config.agent.profile.revision
+    );
+    assert_ne!(
+        with_profile.config.agent.profile.revision,
+        with_model.config.agent.profile.revision
+    );
+}
+
+#[test]
+fn advisor_target_parsing_splits_on_the_first_slash() {
+    assert_eq!(AdvisorTarget::parse("sol"), Some(profile("sol")));
+    assert_eq!(
+        AdvisorTarget::parse("openrouter/openai/gpt-4o-mini"),
+        Some(model("openrouter", "openai/gpt-4o-mini"))
+    );
+    for invalid in ["", "/", "/model", "provider/"] {
+        assert_eq!(AdvisorTarget::parse(invalid), None, "{invalid}");
+    }
+    assert_eq!(
+        model("chatgpt", "gpt-6.1-sol").to_string(),
+        "chatgpt/gpt-6.1-sol"
     );
 }
 
 #[test]
 fn advisor_file_values_round_trip_and_reject_true_or_wrong_types() {
-    let text = config("advisor = \"sol\"", "advisor = false", SOL);
+    let text = config("advisor = \"acme/review-model\"", "advisor = false", SOL);
     let file = ConfigFile::parse(&text).expect("advisor file model");
     assert_eq!(
         file.advisor,
-        Some(AdvisorSelection::Profile("sol".to_owned()))
+        Some(AdvisorSelection::Target("acme/review-model".to_owned()))
     );
     assert_eq!(
         file.profiles["code"].advisor,

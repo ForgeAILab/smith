@@ -1,7 +1,6 @@
 ---
 created_at: 2026-10-03T03:19:53Z
-updated_at: 2026-10-03T05:23:35Z
-completed_at: 2026-10-03T05:23:35Z
+updated_at: 2026-10-03T18:00:00Z
 ---
 
 # Tasks: Add an advisor tool
@@ -55,3 +54,24 @@ completed_at: 2026-10-03T05:23:35Z
 - [x] 4.3 Live: a project-local configuration that makes `sol` the advisor
   for `code`; ask for a plan, confirm one advisor call, its advice in the
   transcript, and its cost in `/status`.
+
+## 5. Selection by profile or model (owner revision, 2026-10-03)
+
+- [x] 5.1 Remove the `advisor` placement from `use`; accept
+  `advisor = "<profile>"` for any configured profile and
+  `advisor = "<provider>/<model>"` for a declared provider, rejecting
+  malformed values.
+- [x] 5.2 Resolve the advisor binding with `with_advisor_route`: a profile
+  target selects that profile; a model target applies no profile layer and
+  wins over main-session provider/model overrides. Skip a model advisor equal
+  to the main binding.
+- [x] 5.3 Match the runtime route by target kind; append instructions only
+  for a profile advisor.
+- [x] 5.4 Tests: configuration (profile without placement, model reference,
+  namespaced model id, undeclared provider, malformed values, self-binding
+  skip) and runtime (model advisor binding without profile instructions or
+  caps).
+- [x] 5.5 Docs and spec deltas updated; `scripts/ci.sh` passes (2,055
+  tests).
+- [ ] 5.6 Live: `advisor = "sol"` with no `use` change, and
+  `advisor = "chatgpt/gpt-6.1-sol"`, against the owner's configuration.

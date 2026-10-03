@@ -193,8 +193,7 @@ cost. Its separate `cache read (session)` line is retained as the cumulative
 raw provider-read total for compatibility; it is not the latest-turn `CH`.
 
 Agent-profile selection follows the same provenance rules. One named profile
-can configure the main agent, an explicit direct child, an advisor, or any
-combination of these placements:
+can configure the main agent, an explicit direct child, or both:
 
 ```toml
 default_profile = "work"
@@ -224,8 +223,7 @@ description = "read-only independent review"
 instructions = "Report prioritized evidence-backed findings."
 ```
 
-`use` accepts `"main"`, `"child"`, and `"advisor"`, and defaults to `["main"]`
-when omitted. `extends` names one parent; the child replaces inherited fields
+`use` accepts `"main"` and `"child"`, and defaults to `["main"]` when omitted. `extends` names one parent; the child replaces inherited fields
 rather than concatenating instructions. Smith rejects missing parents, cycles,
 inheritance deeper than 16 profiles, invalid
 placements, and entries without main placement in `profile_order` before
@@ -239,44 +237,54 @@ Setting it to `false` on a main profile removes both the model-facing `agent`
 tool and its delegation instructions. Child surfaces never delegate, even when
 their effective profile has `delegation = true`.
 
-The top-level `advisor = "<name>"` selects a default advisor for every
-main-enabled profile. A profile's own `advisor` key, inherited through
-`extends`, overrides that default; `advisor = false` disables it. Top-level
-`advisor = false` disables the default, while a profile can still select its
-own advisor. File layers use the usual user, project, then project-local
-precedence; a profile's own value beats its parent's value, and the effective
-profile value beats the top-level default. With no applicable key, the advisor
-is off. `smith config explain advisor` reports the winner and every overridden
+`advisor` picks the stronger model the main agent can consult, the same way
+a profile or a model is picked elsewhere: `advisor = "<profile>"` names any
+configured profile, and `advisor = "<provider>/<model>"` names a model of a
+declared provider, as `/model` does. Profile names never contain `/`, so the
+first `/` separates the provider from a model id that may itself contain `/`.
+
+A profile advisor uses that profile's provider, model, reasoning, limits, and
+instructions; its `use` placements do not matter. A model advisor uses only
+the top-level settings and the `[models."<provider>/<model>"]` entry; no
+profile's settings or instructions apply to it, including the main profile's.
+
+The top-level `advisor` key is the default for every main-enabled profile. A
+profile's own `advisor` key, inherited through `extends`, overrides that
+default; `advisor = false` disables it. Top-level `advisor = false` disables
+the default, while a profile can still select its own advisor. File layers
+use the usual user, project, then project-local precedence; a profile's own
+value beats its parent's value, and the effective profile value beats the
+top-level default. With no applicable key, the advisor is off.
+`smith config explain advisor` reports the winner and every overridden
 source, including an explicit `false`.
 
-The target must exist and include `"advisor"` in `use`. Smith checks these
-rules before credential or provider construction. A profile never advises
-itself: a top-level default naming that profile is skipped for it, while an
-own or inherited profile-level self-reference is an error naming the key.
-A profile can serve as a main agent, a child, and an advisor, and may select
-a different advisor for its own main use. That selection is ignored while
-the profile serves as an advisor, because advisor requests carry no tools.
+Smith rejects an unknown profile, an undeclared provider, or a malformed value
+before credential or provider construction. Nothing advises itself: a
+top-level default naming the active profile is skipped for it, an own or
+inherited profile-level self-reference is an error naming the key, and a model
+advisor naming the session's own provider and model is skipped. A profile may
+select a different advisor for its own main use; that selection is ignored
+while it serves as an advisor, because advisor requests carry no tools.
+
 For example, make `sol` the advisor for `code` (using an already declared
 `remote` provider); when `sol` runs as main, it has no advisor:
 
 ```toml
 default_profile = "code"
-advisor = "sol"
+advisor = "sol"                        # or "remote/vendor/stronger-model"
 
 [profiles.code]
 provider = "remote"
 model = "vendor/working-model"
-use = ["main"]
 
 [profiles.sol]
 provider = "remote"
 model = "vendor/stronger-model"
-use = ["main", "child", "advisor"]
 ```
 
 The advisor receives the conversation, including tool output and file
-contents shown by tools. Its profile may use a different provider from the
-main profile, so that conversation is disclosed to the advisor's provider.
+contents shown by tools. It may use a different provider from the main
+profile, so that conversation is disclosed to the advisor's provider.
 
 When `profile_order` is omitted, Smith derives a deterministic cycle from all
 real main-enabled profiles and excludes legacy adapters and profiles without

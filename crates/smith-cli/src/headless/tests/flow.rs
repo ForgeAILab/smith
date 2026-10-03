@@ -4,8 +4,6 @@ use super::*;
 
 #[tokio::test]
 async fn headless_advisor_call_emits_tool_events_and_includes_usage_in_session_totals() {
-    use smith_config::model::ProfileUse;
-    use smith_config::resolve::Overrides;
     use smith_runtime::factory::AdvisorProfileRequest;
 
     const CONFIG: &str = r#"
@@ -16,7 +14,6 @@ model = "worker"
 advisor = "reviewer"
 delegation = false
 [profiles.reviewer]
-use = ["advisor"]
 provider = "local"
 model = "review-model"
 [providers.local]
@@ -40,12 +37,14 @@ mode = "deny"
     let resolve_request = ResolveRequest::new(project.path()).with_home_dir(home.path());
     let config = resolve(&resolve_request).expect("main config").config;
     let advisor_config = resolve(
-        &resolve_request
-            .with_cli(Overrides {
-                profile: Some("reviewer".into()),
-                ..Overrides::default()
-            })
-            .with_profile_use(ProfileUse::Advisor),
+        &resolve_request.with_advisor_route(
+            config
+                .agent
+                .profile
+                .advisor
+                .clone()
+                .expect("dev selects an advisor"),
+        ),
     )
     .expect("advisor config")
     .config;

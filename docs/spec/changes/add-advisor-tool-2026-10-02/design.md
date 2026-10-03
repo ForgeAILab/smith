@@ -29,24 +29,42 @@ advisor does not see that tool's result.
 
 ## Decisions
 
-- **Selection.** `use` gains `advisor`. `advisor = "<name>"` at top level is
-  the default for every main profile; the same key on a profile overrides it,
-  and `advisor = false` disables it. The named profile must exist and include
-  `advisor` in `use`; both are checked with the other profile placements,
-  before credential or provider construction. A profile never advises itself:
-  a top-level default naming the active profile is skipped for it, and an
-  explicit self-reference is an error. A profile's own advisor setting is
-  ignored while it serves as the advisor; the advisor request has no tools, so
-  an advisor can never consult another. `smith config explain advisor` reports
-  the winner.
-  - Alternatives: only `use = ["advisor"]` with one advisor allowed (cannot
-    give two main profiles different advisors); a separate `[advisor]` table
-    with provider and model (duplicates profile resolution, reasoning, and
-    context windows).
-- **Route.** The advisor profile is resolved through the same `prepare`
+- **Selection.** `advisor` names a profile or a model, the way `--profile`
+  and `/model` pick them: `advisor = "<profile>"` or
+  `advisor = "<provider>/<model>"`. Profile names are ASCII letters, digits,
+  `-`, and `_`, so a `/` marks a model reference; the first `/` splits the
+  provider from a model id that may contain `/` (`openrouter/openai/x`).
+  At top level it is the default for every main profile; the same key on a
+  profile overrides it, and `advisor = false` disables it. A named profile
+  must exist (any placements); a model's provider must be declared; both are
+  checked before credential or provider construction. Nothing advises itself:
+  a top-level default naming the active profile is skipped for it, an
+  explicit profile self-reference is an error, and a model reference equal
+  to the main session's resolved provider and model is skipped (a `/model`
+  switch can make them equal mid-session, so this cannot be an error). A
+  profile's own advisor setting is ignored while it serves as the advisor;
+  the advisor request has no tools, so an advisor can never consult another.
+  `smith config explain advisor` reports the winner.
+  - Revised 2026-10-03 at the owner's request. The first version also
+    required `use = ["advisor"]` on the target, so turning the advisor on
+    meant editing two places, and it could not name a bare model.
+  - Alternatives: resolve a model reference with the main profile still
+    applied, as `/model` does in a session (rejected: the main profile's
+    `max_output_tokens`, reasoning, context reserves, and instructions would
+    leak into the advisor; `glm`'s 8192-token cap would cap a `sol`
+    advisor); a separate `[advisor]` table with provider and model
+    (duplicates profile resolution, reasoning, and context windows).
+- **Advisor route resolution.** `ResolveRequest::with_advisor_route(target)`
+  resolves the binding: a profile target selects that profile regardless of
+  `default_profile` or `--profile` and skips placement checks; a model
+  target applies no profile layer and contributes `provider` and `model`
+  above every other layer, so main-session `SMITH_PROVIDER`/`--model`
+  values cannot redirect it. Either way the route's own `advisor` is
+  cleared.
+- **Route.** The advisor binding is resolved through the same `prepare`
   path a child route uses, so its provider, model, credentials, reasoning,
   context window, and output budget follow existing rules, including flat
-  model limits. A broken advisor profile fails startup like a broken child
+  model limits. A broken advisor binding fails startup like a broken child
   profile does today.
 - **Tool.** `advisor`, empty object schema, root surfaces only (named
   predicate `advisor_eligible`, shared with the prompt section). Smith
@@ -69,8 +87,9 @@ advisor does not see that tool's result.
 - **Prompt.** A built-in advisor system prompt: you are reviewing another
   agent's work; you see its full conversation; give concise, prioritized,
   actionable advice; say when the approach is wrong; do not claim to have run
-  anything. The advisor profile's `instructions` are appended.
-- **Request.** No tools. The advisor profile's reasoning settings and output
+  anything. A profile advisor's `instructions` are appended; a model advisor
+  has none.
+- **Request.** No tools. The advisor binding's reasoning settings and output
   budget apply. The invocation's cancellation and deadline apply, so an
   interrupt stops the advisor call.
 - **Result.** The advice text is the tool result, bounded by the
@@ -93,7 +112,7 @@ advisor does not see that tool's result.
   Mitigation: off by default, guidance limits calls to decision points, usage
   is visible in `/status`.
 - Disclosure: tool output and file contents reach the advisor's provider.
-  Mitigation: documented; the owner chooses the advisor profile.
+  Mitigation: documented; the owner chooses the advisor.
 - Context fit: a long session can exceed the advisor's window. Mitigation:
   oldest-first trimming with an explicit omission marker.
 - History timing: if the runtime does not expose the in-flight step to a

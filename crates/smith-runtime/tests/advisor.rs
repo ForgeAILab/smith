@@ -40,7 +40,6 @@ advisor = "review"
 delegation = false
 
 [profiles.review]
-use = ["advisor"]
 provider = "reviewer"
 model = "review-model"
 instructions = "REVIEW_PROFILE_INSTRUCTION: prioritize correctness."
@@ -105,6 +104,23 @@ impl Fixture {
         .config
     }
 
+    /// Resolves the advisor binding the main configuration selected.
+    fn advisor_config(&self, main: &ResolvedConfig) -> ResolvedConfig {
+        resolve(
+            &ResolveRequest::new(self.project.path())
+                .with_home_dir(self.home.path())
+                .with_advisor_route(
+                    main.agent
+                        .profile
+                        .advisor
+                        .clone()
+                        .expect("main selects an advisor"),
+                ),
+        )
+        .expect("resolved advisor")
+        .config
+    }
+
     fn request(
         &self,
         surface: HostSurface,
@@ -122,7 +138,7 @@ impl Fixture {
         request.built_in_tools = false;
         if request.config.agent.profile.advisor.is_some() {
             request.advisor_profile = Some(AdvisorProfileRequest {
-                config: self.config("review", ProfileUse::Advisor),
+                config: self.advisor_config(&request.config),
                 catalog_sources: Vec::new(),
                 provider: Some(advisor),
             });
@@ -581,6 +597,59 @@ async fn hosted_mid_turn_advisor_sees_task_tool_calls_results_and_image_placehol
             .iter()
             .any(|(id, text)| id == &call && text == "Check the missing cancellation path.")
     );
+    host.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
+async fn model_advisor_uses_its_binding_without_profile_instructions() {
+    let fixture = Fixture::new(&CONFIG.replace(
+        "advisor = \"review\"",
+        "advisor = \"reviewer/review-model\"",
+    ));
+    let main = Arc::new(FakeProvider::new(
+        "worker",
+        Capabilities::basic_streaming(),
+        vec![
+            step("advisor-call", "advisor", "{}"),
+            ScriptedStream::new(stop_events("done after model review")),
+        ],
+    ));
+    let advisor = advisor_provider(stop_events("Model advice."));
+    let request = fixture.request(HostSurface::Headless, main, advisor.clone());
+    let route = &request
+        .advisor_profile
+        .as_ref()
+        .expect("advisor route")
+        .config;
+    assert_eq!(route.provider.name.value, "reviewer");
+    assert_eq!(route.model.value, "review-model");
+    let host = start(HostSessionRequest::new(request, fixture.project.path()))
+        .await
+        .expect("host wires the model advisor");
+    let advisor_route = host.runtime().advisor_route().expect("advisor route");
+    assert_eq!(advisor_route.provider_name, "reviewer");
+    assert_eq!(advisor_route.model.as_str(), "review-model");
+    assert!(advisor_route.instructions.is_none());
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        host.session()
+            .run(UserInput::text("USER_TASK: review with a model advisor.")),
+    )
+    .await
+    .expect("turn does not hang")
+    .expect("turn");
+
+    let requests = advisor.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].model.as_str(), "review-model");
+    assert_ne!(
+        requests[0].max_output_tokens,
+        Some(128),
+        "the review profile's cap belongs to that profile, not the model"
+    );
+    let system = requests[0].messages[0].joined_text();
+    assert!(system.contains("reviewing another agent's work"));
+    assert!(!system.contains("REVIEW_PROFILE_INSTRUCTION"), "{system}");
     host.shutdown().await.expect("shutdown");
 }
 

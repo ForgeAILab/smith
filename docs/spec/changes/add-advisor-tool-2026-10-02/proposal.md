@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-03T03:19:53Z
-updated_at: 2026-10-03T05:23:35Z
+updated_at: 2026-10-03T18:00:00Z
 ---
 
 # Proposal: Add an advisor tool backed by a stronger model
@@ -17,14 +17,15 @@ advisor feature").
 
 ## What Changes
 
-- Profiles gain an `advisor` placement in `use`, and a top-level or
-  per-profile `advisor = "<profile>"` key selects which profile advises the
-  main agent. `advisor = false` on a profile turns it off. The feature is off
-  unless configured.
+- A top-level or per-profile `advisor` key picks the advisor the way a
+  profile or model is picked elsewhere: `advisor = "<profile>"` names any
+  configured profile, and `advisor = "<provider>/<model>"` names a model.
+  `advisor = false` on a profile turns it off. The feature is off unless
+  configured.
 - Root sessions with an advisor register a model-facing `advisor` tool that
   takes no arguments. Calling it sends the session's conversation so far,
-  including this turn's tool calls and results, to the advisor profile's
-  provider and model as one request with no tools, and returns the advice as
+  including this turn's tool calls and results, to the advisor's provider
+  and model as one request with no tools, and returns the advice as
   the tool result.
 - The main agent's instructions gain a short section on when to consult the
   advisor and how to weigh its advice, contributed only when the tool is
@@ -36,13 +37,13 @@ advisor feature").
 ## Impact
 
 - Affected specs: new `advisor`; `configuration`.
-- Affected code: `smith-config` (profile placement, advisor key, validation,
-  `config explain`), `smith-runtime` (advisor route built like a child route,
+- Affected code: `smith-config` (advisor key, profile-or-model target,
+  advisor route resolution, validation, `config explain`), `smith-runtime` (advisor route built like a child route,
   the `advisor` tool, transcript rendering, prompt section, usage
   attribution), `smith-tools` (tool-call display label), docs.
 - No change for configurations that do not set `advisor`.
-- The advisor sends the conversation, including tool output, to the advisor
-  profile's provider. That provider may differ from the main one; the
+- The advisor sends the conversation, including tool output, to the
+  advisor's provider. That provider may differ from the main one; the
   configuration documentation says so.
 
 ## Authorization
@@ -51,3 +52,8 @@ The owner approved this proposal before review ("i approve the spec proposal
 as i trust you", 2026-10-02) and delegated the open design choices; they are
 recorded in design.md. Implementation runs on `feat/advisor-tool`, based on
 `refactor/client-structure`, and ships with that release.
+
+After the first live run the owner revised selection (2026-10-03: "i think
+advisor should be like we pick a profile or model"): the `advisor` placement
+in `use` is removed, and `advisor` accepts a profile name or
+`provider/model`.

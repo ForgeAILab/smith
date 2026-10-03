@@ -256,7 +256,9 @@ fn advisor_guidance_tracks_root_tool_registration_eligibility() {
                 .any(|fragment| fragment.id.as_str() == "smith.prompt.advisor")
         };
         assert!(!has_guidance(&request));
-        request.config.agent.profile.advisor = Some(sourced("reviewer".to_owned()));
+        request.config.agent.profile.advisor = Some(sourced(
+            smith_config::resolve::AdvisorTarget::Profile("reviewer".to_owned()),
+        ));
         assert!(!has_guidance(&request));
         request.advisor_profile = Some(AdvisorProfileRequest {
             config: resolved_config(),

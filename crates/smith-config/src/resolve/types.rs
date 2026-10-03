@@ -67,6 +67,9 @@ pub struct ResolveRequest {
     pub session: Overrides,
     /// Placement the selected agent profile must support.
     pub profile_use: ProfileUse,
+    /// Resolves the tool-free advisor binding for this target instead of a
+    /// configured profile selection; `profile_use` is not checked.
+    pub advisor_route: Option<Sourced<AdvisorTarget>>,
     /// Explicit host authority for synthetic cache spend.  This value is
     /// intentionally injected by the host rather than read from any project
     /// or repository file: untrusted configuration may narrow authority but
@@ -118,6 +121,13 @@ impl ResolveRequest {
     /// Requires the selected profile to support `placement`.
     pub fn with_profile_use(mut self, placement: ProfileUse) -> Self {
         self.profile_use = placement;
+        self
+    }
+
+    /// Resolves the advisor binding `target` names: a profile selects that
+    /// profile in any placement, and a model resolves with no profile layer.
+    pub fn with_advisor_route(mut self, target: Sourced<AdvisorTarget>) -> Self {
+        self.advisor_route = Some(target);
         self
     }
 
@@ -646,6 +656,47 @@ impl ResolvedAgent {
     }
 }
 
+/// What an `advisor` setting names.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AdvisorTarget {
+    /// A configured profile, consulted with its own provider, model, and settings.
+    Profile(String),
+    /// A provider-qualified model, consulted with no profile's settings.
+    Model {
+        /// The declared provider name.
+        provider: String,
+        /// The model identifier, which may itself contain `/`.
+        model: String,
+    },
+}
+
+impl AdvisorTarget {
+    /// Parses a configured value. Profile names never contain `/`, so the first
+    /// `/` separates a provider from its model, as in `[models."<provider>/<model>"]`.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.split_once('/') {
+            Some((provider, model)) if !provider.is_empty() && !model.is_empty() => {
+                Some(Self::Model {
+                    provider: provider.to_owned(),
+                    model: model.to_owned(),
+                })
+            }
+            Some(_) => None,
+            None if value.is_empty() => None,
+            None => Some(Self::Profile(value.to_owned())),
+        }
+    }
+}
+
+impl fmt::Display for AdvisorTarget {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Profile(name) => formatter.write_str(name),
+            Self::Model { provider, model } => write!(formatter, "{provider}/{model}"),
+        }
+    }
+}
+
 /// One resolved reusable agent profile.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ResolvedAgentProfile {
@@ -659,9 +710,9 @@ pub struct ResolvedAgentProfile {
     pub instructions: Option<Sourced<String>>,
     /// Whether a main-agent runtime may expose direct-child delegation.
     pub delegation: Sourced<bool>,
-    /// Effective advisor profile name; unset and explicit `false` resolve to none.
+    /// Effective advisor; unset and explicit `false` resolve to none.
     /// The provenance ledger retains an explicit `false` and its source.
-    pub advisor: Option<Sourced<String>>,
+    pub advisor: Option<Sourced<AdvisorTarget>>,
     /// Placements where the profile is selectable.
     pub uses: Sourced<Vec<ProfileUse>>,
     /// Effective provider preference, when declared or inherited.

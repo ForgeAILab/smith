@@ -220,12 +220,13 @@ pub(super) async fn start_host(
     if !matches!(surface, HostSurface::Child)
         && let Some(advisor) = &agents.profile.advisor
     {
+        // The advisor route selects its own profile or model; main-session
+        // overrides were selected against the main binding, so the reviewer
+        // uses its own reasoning and context limits.
         let mut advisor_selection = selection.clone();
-        advisor_selection.profile = Some(advisor.value.clone());
+        advisor_selection.profile = None;
         advisor_selection.provider = None;
         advisor_selection.model = None;
-        // Main-session overrides were selected against the main binding;
-        // the reviewer uses its own profile's reasoning and context limits.
         advisor_selection.reasoning_enabled = None;
         advisor_selection.reasoning_effort = None;
         advisor_selection.context_window = None;
@@ -233,9 +234,9 @@ pub(super) async fn start_host(
         advisor_selection.effort = None;
         advisor_selection.context_window_flag = None;
         let (_, advisor_request) = resolution_request(&advisor_selection)?;
-        let advisor_resolution = resolve(&advisor_request.with_profile_use(ProfileUse::Advisor))
+        let advisor_resolution = resolve(&advisor_request.with_advisor_route(advisor.clone()))
             .map_err(|error| anyhow::anyhow!("{error}"))
-            .with_context(|| format!("resolving advisor profile `{}`", advisor.value))?;
+            .with_context(|| format!("resolving advisor `{}`", advisor.value))?;
         let mut catalog_sources = Vec::new();
         if let Some(source) = runtime_catalog_source(
             &catalog,

@@ -288,7 +288,7 @@ pub(super) fn resolve_agent_profiles(
         )?;
     }
     for profile in profiles.values() {
-        validate_advisor(profile.advisor.as_ref(), &profiles)?;
+        validate_advisor(profile.advisor.as_ref(), &profiles, declared)?;
     }
     Ok(profiles)
 }
@@ -440,8 +440,7 @@ pub(super) fn profile_uses(
     if raw.value.is_empty() {
         return Err(ConfigError::InvalidValue {
             source: raw.source,
-            message: "profile `use` must contain at least one of `main`, `child`, or `advisor`"
-                .to_owned(),
+            message: "profile `use` must contain `main`, `child`, or both".to_owned(),
         });
     }
     let mut seen = BTreeSet::new();
@@ -468,66 +467,109 @@ pub(super) fn profile_uses(
 fn advisor_selection(
     provenance: &Provenance,
     profile: &str,
-) -> Result<Option<Sourced<String>>, ConfigError> {
+) -> Result<Option<Sourced<AdvisorTarget>>, ConfigError> {
     let Some(entry) = provenance.winner("advisor") else {
         return Ok(None);
     };
+    let invalid = || ConfigError::InvalidValue {
+        source: entry.source.clone(),
+        message: "`advisor` must be a profile name, `provider/model`, or `false`".to_owned(),
+    };
     match &entry.value {
-        SettingValue::Text(name) if name == profile => {
-            if entry.source.layer == Layer::Profile {
-                return Err(ConfigError::InvalidValue {
-                    source: entry.source.clone(),
-                    message: format!("profile `{profile}` cannot select itself as its `advisor`"),
-                });
+        SettingValue::Text(value) => match AdvisorTarget::parse(value).ok_or_else(invalid)? {
+            AdvisorTarget::Profile(name) if name == profile => {
+                if entry.source.layer == Layer::Profile {
+                    return Err(ConfigError::InvalidValue {
+                        source: entry.source.clone(),
+                        message: format!(
+                            "profile `{profile}` cannot select itself as its `advisor`"
+                        ),
+                    });
+                }
+                // A top-level default never assigns a profile as its own advisor.
+                Ok(None)
             }
-            // A top-level default never assigns a profile as its own advisor.
-            Ok(None)
-        }
-        SettingValue::Text(name) => Ok(Some(Sourced::new(name.clone(), entry.source.clone()))),
+            target => Ok(Some(Sourced::new(target, entry.source.clone()))),
+        },
         SettingValue::Flag(false) => Ok(None),
-        _ => Err(ConfigError::InvalidValue {
-            source: entry.source.clone(),
-            message: "`advisor` must be a profile name or `false`".to_owned(),
-        }),
+        _ => Err(invalid()),
     }
 }
 
+/// Checks that an advisor names a configured profile or a declared provider.
 fn validate_advisor(
-    advisor: Option<&Sourced<String>>,
+    advisor: Option<&Sourced<AdvisorTarget>>,
     profiles: &BTreeMap<String, ResolvedAgentProfile>,
+    declared: &Declarations,
 ) -> Result<(), ConfigError> {
     let Some(advisor) = advisor else {
         return Ok(());
     };
-    let Some(target) = profiles.get(&advisor.value) else {
-        let available = profiles
-            .values()
-            .filter(|profile| profile.supports(ProfileUse::Advisor))
-            .map(|profile| format!("`{}`", profile.name))
-            .collect::<Vec<_>>();
-        return Err(ConfigError::InvalidValue {
-            source: advisor.source.clone(),
-            message: format!(
-                "`advisor` names unknown profile `{}`; profiles placed as advisors: {}",
-                advisor.value,
-                if available.is_empty() {
-                    "(none)".to_owned()
-                } else {
-                    available.join(", ")
-                }
-            ),
-        });
-    };
-    if !target.supports(ProfileUse::Advisor) {
-        return Err(ConfigError::InvalidValue {
-            source: advisor.source.clone(),
-            message: format!(
-                "`advisor` names profile `{}`, whose `use` lacks the `advisor` placement",
-                advisor.value
-            ),
-        });
+    match &advisor.value {
+        AdvisorTarget::Profile(name) => {
+            if profiles.get(name).is_some_and(|profile| !profile.legacy) {
+                return Ok(());
+            }
+            Err(ConfigError::UnusableReference {
+                source: advisor.source.clone(),
+                what: ReferenceKind::Profile,
+                name: name.clone(),
+                suggestions: nearest(
+                    name,
+                    profiles
+                        .values()
+                        .filter(|profile| !profile.legacy)
+                        .map(|profile| profile.name.as_str()),
+                ),
+            })
+        }
+        AdvisorTarget::Model { provider, .. } => {
+            if declared.providers.contains_key(provider) {
+                return Ok(());
+            }
+            Err(ConfigError::UnusableReference {
+                source: advisor.source.clone(),
+                what: ReferenceKind::Provider,
+                name: provider.clone(),
+                suggestions: nearest(provider, declared.providers.keys().map(String::as_str)),
+            })
+        }
     }
-    Ok(())
+}
+
+/// Selects the profile an advisor route resolves, or the binding a model
+/// advisor contributes above every other layer in place of a profile.
+pub(super) fn advisor_route_selection(
+    target: &Sourced<AdvisorTarget>,
+    declared: &Declarations,
+) -> Result<(Option<Sourced<String>>, Vec<Contribution>), ConfigError> {
+    match &target.value {
+        AdvisorTarget::Profile(name) => {
+            if !declared.profiles.contains_key(name) {
+                return Err(ConfigError::UnusableReference {
+                    source: target.source.clone(),
+                    what: ReferenceKind::Profile,
+                    name: name.clone(),
+                    suggestions: nearest(name, declared.profiles.keys().map(String::as_str)),
+                });
+            }
+            Ok((
+                Some(Sourced::new(name.clone(), target.source.clone())),
+                Vec::new(),
+            ))
+        }
+        AdvisorTarget::Model { provider, model } => Ok((
+            None,
+            [("provider", provider), ("model", model)]
+                .into_iter()
+                .map(|(key, value)| Contribution {
+                    key: key.to_owned(),
+                    value: SettingValue::Text(value.clone()),
+                    source: target.source.clone(),
+                })
+                .collect(),
+        )),
+    }
 }
 
 pub(super) fn bounded_instructions(
@@ -557,7 +599,7 @@ pub(super) fn agent_profile_revision(
     description: Option<&Sourced<String>>,
     instructions: Option<&Sourced<String>>,
     delegation: &Sourced<bool>,
-    advisor: Option<&Sourced<String>>,
+    advisor: Option<&Sourced<AdvisorTarget>>,
     uses: &Sourced<Vec<ProfileUse>>,
     provider: Option<&Sourced<String>>,
     model: Option<&Sourced<String>>,
@@ -581,7 +623,7 @@ pub(super) fn agent_profile_revision(
     // Preserve revisions for configurations without an advisor.
     if let Some(advisor) = advisor {
         digest.update(b"\0advisor\0");
-        digest.update(advisor.value.as_bytes());
+        digest.update(advisor.value.to_string().as_bytes());
         digest.update([0]);
         digest.update(advisor.source.to_string().as_bytes());
     }
@@ -605,9 +647,9 @@ pub(super) fn extract(
     profile: Option<Sourced<String>>,
     declared: &Declarations,
     agent_profiles: BTreeMap<String, ResolvedAgentProfile>,
-    profile_use: ProfileUse,
-    synthetic_cache_spend: SyntheticCacheSpendAuthority,
+    request: &ResolveRequest,
 ) -> Result<ResolvedConfig, ConfigError> {
+    let synthetic_cache_spend = request.synthetic_cache_spend;
     let provider_name =
         text(provenance, "provider")?.ok_or_else(|| ConfigError::MissingSetting {
             key: "provider".to_owned(),
@@ -634,7 +676,8 @@ pub(super) fn extract(
         declared,
         profile.as_ref(),
         agent_profiles,
-        profile_use,
+        request.profile_use,
+        request.advisor_route.is_some(),
     )?;
     let provider = resolve_provider(provenance, provider_name)?;
     let model_limits = resolve_model_limits(provenance, &provider.name.value, &model.value)?;
@@ -706,6 +749,7 @@ pub(super) fn resolve_agent(
     selected_profile: Option<&Sourced<String>>,
     profiles: BTreeMap<String, ResolvedAgentProfile>,
     profile_use: ProfileUse,
+    advisor_route: bool,
 ) -> Result<ResolvedAgent, ConfigError> {
     let active = required_text(provenance, "agent")?;
     if !declared.agent_modes.contains_key(&active.value) {
@@ -840,7 +884,8 @@ pub(super) fn resolve_agent(
                 legacy: true,
             }),
     };
-    if !profile.supports(profile_use) {
+    // Any configured profile may advise, whatever its placements.
+    if !advisor_route && !profile.supports(profile_use) {
         return Err(ConfigError::InvalidValue {
             source: selected_profile.map_or_else(
                 || profile.uses.source.clone(),
@@ -853,10 +898,11 @@ pub(super) fn resolve_agent(
             ),
         });
     }
-    validate_advisor(profile.advisor.as_ref(), &profiles)?;
-    if profile_use == ProfileUse::Advisor {
-        // The catalog retains the profile's selection for main use, while an
-        // advisor request has no tools and cannot consult another advisor.
+    validate_advisor(profile.advisor.as_ref(), &profiles, declared)?;
+    // An advisor request has no tools and cannot consult another advisor; the
+    // catalog retains the profile's own selection for its main use. A model
+    // advisor naming the session's own binding would only consult itself.
+    if advisor_route || advises_own_binding(provenance, profile.advisor.as_ref())? {
         profile.advisor = None;
         profile.revision = agent_profile_revision(
             &profile.name,
@@ -904,7 +950,7 @@ pub(super) fn resolve_agent(
                     });
                 }
             }
-            if profile_use == ProfileUse::Main && !seen.contains(&profile.name) {
+            if profile_use == ProfileUse::Main && !advisor_route && !seen.contains(&profile.name) {
                 return Err(ConfigError::InvalidValue {
                     source: order.source.clone(),
                     message: format!(
@@ -941,6 +987,21 @@ pub(super) fn resolve_agent(
         profiles,
         profile_order,
     })
+}
+
+/// Whether a model advisor names the provider and model this run resolved.
+fn advises_own_binding(
+    provenance: &Provenance,
+    advisor: Option<&Sourced<AdvisorTarget>>,
+) -> Result<bool, ConfigError> {
+    let Some(AdvisorTarget::Model { provider, model }) = advisor.map(|advisor| &advisor.value)
+    else {
+        return Ok(false);
+    };
+    Ok(
+        text(provenance, "provider")?.is_some_and(|selected| selected.value == *provider)
+            && text(provenance, "model")?.is_some_and(|selected| selected.value == *model),
+    )
 }
 
 pub(super) fn validate_agent_name(

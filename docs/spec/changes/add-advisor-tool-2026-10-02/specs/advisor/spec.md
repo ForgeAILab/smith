@@ -10,7 +10,7 @@ approval prompt.
 
 #### Scenario: Advisor configured
 
-- **GIVEN** the active main profile resolves advisor profile `sol`
+- **GIVEN** the active main profile resolves advisor `sol`
 - **WHEN** a root session starts
 - **THEN** the model's tool list includes `advisor` with an empty argument
   schema
@@ -30,10 +30,10 @@ approval prompt.
 
 ### Requirement: Advisor sees the whole conversation
 
-When the `advisor` tool is invoked, Smith SHALL send the advisor profile's
-model the session's conversation so far, including the current turn's tool
-calls and results, as a plain-text transcript framed as data, together with a
-built-in reviewer prompt and the advisor profile's instructions. The request
+When the `advisor` tool is invoked, Smith SHALL send the advisor's model the
+session's conversation so far, including the current turn's tool calls and
+results, as a plain-text transcript framed as data, together with a built-in
+reviewer prompt and, for a profile advisor, that profile's instructions. The request
 SHALL declare no tools. If the transcript exceeds the advisor's input budget,
 Smith SHALL omit the oldest messages after the first user message and SHALL
 say how many were omitted.
