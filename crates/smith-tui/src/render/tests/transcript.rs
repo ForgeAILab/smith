@@ -451,9 +451,13 @@
 
     #[test]
     fn wrapped_local_result_continuations_keep_the_content_indent() {
-        let mut app = App::new("gpt-5.3", "~/work/api");
-        app.show_local_result("status", format!("session: {}", "x".repeat(80)));
-        let screen = render(&app, 44, 14, Theme::new().without_color());
+        let mut report = status_report();
+        report.session = "x".repeat(80);
+        let screen = render_status_card(&report, 44, Theme::new().without_color())
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(
             screen.lines().all(|line| !line.starts_with('x')),
             "a wrapped continuation escaped the local-result indent:\n{screen}"
@@ -465,30 +469,37 @@
     }
 
     #[test]
-    fn context_status_stays_bounded_across_supported_widths() {
+    fn typed_status_stays_bounded_across_supported_widths() {
         let mut app = App::new("glm-4.7", "~/work/api");
-        app.show_local_result(
-            "status",
-            "context window: ~98% input left (~1.1k used / 68.9k budget)\n\
-             model window: 200k total · 131k reserved\n\
-             context plan: estimated · 8 segments\n\
-               system instruction: ~21\n\
-               tool schema: ~1.1k\n\
-               user input: ~12\n\
-             provider input (session): 1.3k",
-        );
+        let mut report = status_report();
+        report.usage = "~98% input left (~1.1k used / 68.9k budget)".to_owned();
+        app.show_local_report(LocalResult::Status(Box::new(report)));
 
-        for (width, height) in [(44, 30), (74, 24), (120, 24)] {
-            let screen = render(&app, width, height, Theme::new().without_color());
-            assert!(screen.contains("/status"), "{width}×{height}:\n{screen}");
-            assert!(screen.contains("~98% input"), "{width}×{height}:\n{screen}");
+        for width in [44, 74, 120] {
+            let lines = transcript_lines(&app, Theme::new().without_color(), width);
+            let screen = lines
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(screen.contains("/status"), "{width} columns:\n{screen}");
+            assert!(screen.contains("~98% input"), "{width} columns:\n{screen}");
             assert!(
-                screen
-                    .lines()
+                lines
+                    .iter()
                     .all(|line| line.width() <= usize::from(width)),
-                "{width}×{height} overflowed:\n{screen}"
+                "{width} columns overflowed:\n{screen}"
             );
         }
+    }
+
+    #[test]
+    fn text_results_do_not_select_the_status_card_by_title() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.show_local_result("status", "session: text stays text");
+        let screen = render(&app, 74, 24, Theme::new().without_color());
+        assert!(screen.contains("session: text stays text"), "{screen}");
+        assert!(!screen.contains('╭'), "{screen}");
     }
 
     #[test]

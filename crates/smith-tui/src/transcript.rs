@@ -17,6 +17,7 @@ use std::time::Instant;
 
 use agent_runtime_core::content::{ContentPart, Message, Role};
 use serde_json::Value;
+pub use smith_client::local_result::{LocalResult, LocalResultState};
 use smith_tools::{
     ToolCallDisplay, has_tool_call_display_schema, project_external_tool_call_display,
     project_tool_call_display,
@@ -25,17 +26,6 @@ use smith_tools::{
 pub(crate) const MAX_LOCAL_RESULT_BYTES: usize = 512 * 1024;
 const MAX_LOCAL_RESULT_LINES: usize = 4_096;
 const MAX_LOCAL_RESULT_TITLE_CHARS: usize = 96;
-
-/// Semantic state of a local command result.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocalResultState {
-    /// Informational output.
-    Info,
-    /// A successful command with no matching data.
-    Empty,
-    /// A local command that could not produce its result.
-    Error,
-}
 
 /// How a tool call ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,14 +129,7 @@ pub enum Block {
     },
     /// Read-only host information shown locally and excluded from canonical
     /// provider conversation history.
-    LocalResult {
-        /// Command or result title.
-        title: String,
-        /// Bounded display content.
-        content: String,
-        /// Text-visible result state.
-        state: LocalResultState,
-    },
+    Local(LocalResult),
 }
 
 impl PartialEq for Block {
@@ -201,18 +184,7 @@ impl PartialEq for Block {
                     text: t2,
                 },
             ) => s1 == s2 && t1 == t2,
-            (
-                Self::LocalResult {
-                    title: t1,
-                    content: c1,
-                    state: s1,
-                },
-                Self::LocalResult {
-                    title: t2,
-                    content: c2,
-                    state: s2,
-                },
-            ) => t1 == t2 && c1 == c2 && s1 == s2,
+            (Self::Local(r1), Self::Local(r2)) => r1 == r2,
             _ => false,
         }
     }
@@ -275,24 +247,33 @@ impl Transcript {
         content: impl Into<String>,
         state: LocalResultState,
     ) {
-        self.close_open();
-        let title = title
-            .into()
-            .replace(['\r', '\n'], " ")
-            .chars()
-            .take(MAX_LOCAL_RESULT_TITLE_CHARS)
-            .collect();
-        let content = content.into();
-        let (content, state) = if content.trim().is_empty() {
-            ("No output.".to_owned(), LocalResultState::Empty)
-        } else {
-            (bound_local_result(content), state)
-        };
-        self.blocks.push(Block::LocalResult {
-            title,
-            content,
+        self.push_local(LocalResult::Text {
+            title: title.into(),
+            body: content.into(),
             state,
         });
+    }
+
+    /// Appends a typed local report, bounding transitional text as before.
+    pub fn push_local(&mut self, result: LocalResult) {
+        self.close_open();
+        let result = match result {
+            LocalResult::Text { title, body, state } => {
+                let title = title
+                    .replace(['\r', '\n'], " ")
+                    .chars()
+                    .take(MAX_LOCAL_RESULT_TITLE_CHARS)
+                    .collect();
+                let (body, state) = if body.trim().is_empty() {
+                    ("No output.".to_owned(), LocalResultState::Empty)
+                } else {
+                    (bound_local_result(body), state)
+                };
+                LocalResult::Text { title, body, state }
+            }
+            report => report,
+        };
+        self.blocks.push(Block::Local(result));
     }
 
     /// Appends assistant text, extending the open assistant block if there is
@@ -878,9 +859,9 @@ mod tests {
 
         assert_eq!(transcript.len(), 3);
         match &transcript.blocks()[1] {
-            Block::LocalResult { title, content, .. } => {
+            Block::Local(LocalResult::Text { title, body, .. }) => {
                 assert_eq!(title, "diff injected");
-                assert!(content.ends_with("[local result truncated at the display limit]"));
+                assert!(body.ends_with("[local result truncated at the display limit]"));
             }
             other => panic!("expected a local result, got {other:?}"),
         }

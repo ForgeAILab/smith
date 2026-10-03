@@ -12,7 +12,7 @@
         app.transcript
             .push_tool_call("c1", "read", None, &["path".to_owned()]);
         app.transcript.complete_tool_call("c1", ToolStatus::Ok);
-        app.show_local_result("status", "session: s1\nmodel: gpt-5.3");
+        app.show_local_report(LocalResult::Status(Box::new(status_report())));
 
         let lines = transcript_lines(&app, Theme::new(), 80);
         let find_line = |needle: &str| {

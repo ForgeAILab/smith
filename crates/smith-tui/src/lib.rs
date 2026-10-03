@@ -72,4 +72,4 @@ pub use status::{
     Activity, Confidence, ContextPlanStatus, ContextPlanUpdate, McpStatus, Status, TokenCount,
 };
 pub use theme::{Theme, Tone};
-pub use transcript::{Block, LocalResultState, ToolStatus, Transcript};
+pub use transcript::{Block, LocalResult, LocalResultState, ToolStatus, Transcript};

@@ -30,10 +30,32 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
     use ratatui::style::{Color, Modifier};
+    use smith_client::status_report::{StatusGoal, StatusReport};
     use unicode_width::UnicodeWidthStr;
 
     use crate::questionnaire::{QuestionnaireChoice, QuestionnaireForm, QuestionnaireQuestion};
-    use crate::transcript::ToolStatus;
+    use crate::transcript::{LocalResult, ToolStatus};
+
+    fn status_report() -> StatusReport {
+        StatusReport {
+            session: "s1".to_owned(),
+            profile: "dev".to_owned(),
+            provider: "local".to_owned(),
+            model: "gpt-5.3".to_owned(),
+            permission: "Ask".to_owned(),
+            reasoning: "provider default".to_owned(),
+            reasoning_controls: "unsupported".to_owned(),
+            prompt_cache: "usage not reported".to_owned(),
+            cache_maintenance: "off".to_owned(),
+            resume_checkpoint: "not yet saved".to_owned(),
+            project: "~/work/api".to_owned(),
+            git: "clean".to_owned(),
+            goal: StatusGoal::None,
+            children: 0,
+            usage: "nothing spent yet".to_owned(),
+            cost: "nothing spent yet".to_owned(),
+        }
+    }
 
     fn render(app: &App, width: u16, height: u16, theme: Theme) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("a test terminal");

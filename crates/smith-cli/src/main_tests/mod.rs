@@ -5,7 +5,7 @@ mod tests {
     use smith_runtime::checkpoint::{
         CheckpointKey, CheckpointKeyProvider, CheckpointProtectionError,
     };
-    use smith_tui::{Block, LocalResultState};
+    use smith_tui::{Block, LocalResult, LocalResultState};
 
     #[derive(Debug)]
     struct TestCheckpointKeys;

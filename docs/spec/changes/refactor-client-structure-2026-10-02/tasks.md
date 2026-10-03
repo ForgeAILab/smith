@@ -27,9 +27,9 @@ completed_at:
   (c) run compare mode at the branch tip, so sections 2 and 3 are checked
   against the fresh recording. Re-recording at the tip instead would bake a
   rebase mistake into the baseline.
-  Done 2026-10-02 before any section 2 work: recorder committed (`ea1f896`),
+  Done 2026-10-02 before any section 2 work: recorder committed (`005aa52`),
   branch rebased onto main `99ad421`, re-recorded with only the recorder
-  applied (`a8d95a3`); all 12 changed fixtures are explained by
+  applied (`038ecd5`); all 12 changed fixtures are explained by
   `show-provider-retry-progress` (headless attempt fields) and
   `fix-interaction-defects` 3.3 (redo and trust confirmation copy). Compare
   mode at the new base: 22 of 22 recorder tests pass.
@@ -67,11 +67,12 @@ completed_at:
 
 ## 4. Typed local results
 
-- [ ] 4.1 Add `LocalResult` and the transitional `Text` variant; carry it in
+- [x] 4.1 Add `LocalResult` and the transitional `Text` variant; carry it in
   the transcript block.
 - [ ] 4.2 Convert `/status`, then `/context`, `/help`, `/timeline`, `/goal`,
   `/agent`, `/mcp`, `/skills`, `/diff`, `/review`, the undo, redo, and revert
   previews, and `/diagnostics`; one commit each, fixtures unchanged.
+  Converted so far: `/status`.
 - [ ] 4.3 Render headless goal, child, and restore text from the same
   reports; remove the duplicate formatters.
 - [ ] 4.4 Delete renderer branches that inspect titles, headings, glyphs, or

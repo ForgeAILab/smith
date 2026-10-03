@@ -702,19 +702,28 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
     }
     for block in app.transcript.blocks() {
         match block {
-            Block::LocalResult {
-                title,
-                state,
-                content,
-            } => {
+            Block::Local(result) => {
+                let title = result.title();
+                let state = result.state();
+                let content = match result {
+                    LocalResult::Status(report) => smith_client::status_report::render_plain(report),
+                    LocalResult::Text { body, .. } => body.clone(),
+                };
                 raw.push_str(&format!(
                     "title: {title}\nstate: {state:?}\nbody:\n{content}\n"
                 ));
-                view.transcript.push_local_result(
-                    normalizer.normalize(title),
-                    normalizer.normalize(content),
-                    *state,
-                );
+                // Draw a normalized typed report, never a prose round-trip.
+                let normalized = match result {
+                    LocalResult::Status(report) => LocalResult::Status(Box::new(
+                        fixture_status_view(report, normalizer),
+                    )),
+                    LocalResult::Text { title, body, state } => LocalResult::Text {
+                        title: normalizer.normalize(title),
+                        body: normalizer.normalize(body),
+                        state: *state,
+                    },
+                };
+                view.transcript.push_local(normalized);
             }
             Block::Error { message } => {
                 raw.push_str(&format!("title: error\nstate: Error\nbody:\n{message}\n"));
@@ -814,6 +823,51 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
     }
     assert!(!raw.is_empty(), "command produced no captured local result");
     (normalizer.normalize(&raw), view)
+}
+
+fn fixture_status_view(
+    report: &smith_client::status_report::StatusReport,
+    normalizer: &mut fixture_support::Normalizer,
+) -> smith_client::status_report::StatusReport {
+    let mut report = report.clone();
+    for value in [
+        &mut report.session,
+        &mut report.profile,
+        &mut report.provider,
+        &mut report.model,
+        &mut report.permission,
+        &mut report.reasoning,
+        &mut report.reasoning_controls,
+        &mut report.prompt_cache,
+        &mut report.cache_maintenance,
+        &mut report.resume_checkpoint,
+        &mut report.project,
+        &mut report.git,
+        &mut report.usage,
+        &mut report.cost,
+    ] {
+        *value = normalizer.normalize(value);
+    }
+    match &mut report.goal {
+        smith_client::status_report::StatusGoal::None => {}
+        smith_client::status_report::StatusGoal::Unavailable(error) => {
+            *error = normalizer.normalize(error);
+        }
+        smith_client::status_report::StatusGoal::Active(goal) => {
+            for value in [
+                &mut goal.objective,
+                &mut goal.status,
+                &mut goal.tokens,
+                &mut goal.budget,
+                &mut goal.active_elapsed,
+                &mut goal.reason,
+                &mut goal.id,
+            ] {
+                *value = normalizer.normalize(value);
+            }
+        }
+    }
+    report
 }
 
 fn fixture_screen(app: &App, width: u16) -> String {

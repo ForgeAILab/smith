@@ -12,7 +12,8 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::{App, ProviderPhase};
 use crate::status::{Activity, render_elapsed};
 use crate::theme::{Theme, Tone, glyph};
-use crate::transcript::{Block, LocalResultState, ToolStatus};
+use crate::transcript::{Block, LocalResult, LocalResultState, ToolStatus};
+use smith_client::status_report::{StatusGoal, StatusReport};
 use smith_tools::ToolCallDisplay;
 
 use super::helpers::*;
@@ -348,19 +349,23 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16) -> Vec<Line<'static>>
                     }
                 }
             }
-            Block::LocalResult {
+            Block::Local(LocalResult::Status(report)) => {
+                lines.push(Line::from(Span::styled(
+                    "/status",
+                    theme.style(Tone::Command),
+                )));
+                lines.extend(render_status_card(report, width, theme));
+            }
+            Block::Local(LocalResult::Text {
                 title,
-                content,
+                body: content,
                 state,
-            } => {
+            }) => {
                 lines.push(Line::from(Span::styled(
                     format!("/{title}"),
                     theme.style(Tone::Command),
                 )));
                 match state {
-                    LocalResultState::Info if title == "status" => {
-                        lines.extend(render_status_card(content, width, theme));
-                    }
                     LocalResultState::Info if title == "context" => {
                         lines.extend(render_context_content(content, width, theme));
                     }
@@ -687,16 +692,51 @@ pub(super) fn render_inline_markdown(raw: &str, base: Style, theme: Theme) -> Ve
     spans
 }
 
-pub(super) fn render_status_card(content: &str, width: u16, theme: Theme) -> Vec<Line<'static>> {
+pub(super) fn render_status_card(
+    report: &StatusReport,
+    width: u16,
+    theme: Theme,
+) -> Vec<Line<'static>> {
     let available = usize::from(width.saturating_sub(4)).max(1);
-    let parsed = content
-        .lines()
-        .map(|raw| raw.split_once(':'))
-        .collect::<Vec<_>>();
-    let label_width = parsed
+    let mut fields = vec![
+        ("session", report.session.clone()),
+        ("profile", report.profile.clone()),
+        (
+            "provider",
+            format!("{} · model: {}", report.provider, report.model),
+        ),
+        ("permission", report.permission.clone()),
+        ("reasoning", report.reasoning.clone()),
+        ("reasoning controls", report.reasoning_controls.clone()),
+        ("prompt cache", report.prompt_cache.clone()),
+        ("cache maintenance", report.cache_maintenance.clone()),
+        ("resume checkpoint", report.resume_checkpoint.clone()),
+        ("project", report.project.clone()),
+        ("Git", report.git.clone()),
+    ];
+    match &report.goal {
+        StatusGoal::None => fields.push(("goal", "none".to_owned())),
+        StatusGoal::Unavailable(error) => {
+            fields.push(("goal", format!("unavailable ({error})")));
+        }
+        StatusGoal::Active(goal) => fields.extend([
+            ("goal", goal.objective.clone()),
+            ("status", goal.status.clone()),
+            ("tokens", goal.tokens.clone()),
+            ("budget", goal.budget.clone()),
+            ("active elapsed", goal.active_elapsed.clone()),
+            ("reason", goal.reason.clone()),
+            ("id", goal.id.clone()),
+        ]),
+    }
+    fields.extend([
+        ("children", report.children.to_string()),
+        ("usage", report.usage.clone()),
+        ("cost", report.cost.clone()),
+    ]);
+    let label_width = fields
         .iter()
-        .flatten()
-        .map(|(label, _)| label.trim().width())
+        .map(|(label, _)| label.width())
         .max()
         .unwrap_or(0);
 
@@ -708,16 +748,16 @@ pub(super) fn render_status_card(content: &str, width: u16, theme: Theme) -> Vec
         Line::default(),
     ];
 
-    for (raw, field) in content.lines().zip(parsed) {
-        if let Some((label, value)) = field {
-            body.extend(render_status_field(
-                label.trim(),
-                value.trim_start(),
-                label_width,
-                available,
-                theme,
-            ));
-        } else {
+    for (label, value) in fields {
+        let mut value_lines = value.lines();
+        body.extend(render_status_field(
+            label,
+            value_lines.next().unwrap_or_default().trim_start(),
+            label_width,
+            available,
+            theme,
+        ));
+        for raw in value_lines {
             body.extend(
                 wrap_text(raw, available)
                     .into_iter()
@@ -725,6 +765,11 @@ pub(super) fn render_status_card(content: &str, width: u16, theme: Theme) -> Vec
             );
         }
     }
+    body.extend(
+        wrap_text(StatusReport::DIAGNOSTICS_HINT, available)
+            .into_iter()
+            .map(|line| Line::from(Span::styled(line, theme.style(Tone::Default)))),
+    );
 
     let inner_width = body
         .iter()

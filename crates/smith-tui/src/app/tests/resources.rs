@@ -77,8 +77,8 @@
             .blocks()
             .iter()
             .find_map(|block| match block {
-                Block::LocalResult { title, content, .. } if title == "help" => {
-                    Some(content.clone())
+                Block::Local(LocalResult::Text { title, body, .. }) if title == "help" => {
+                    Some(body.clone())
                 }
                 _ => None,
             })
@@ -146,7 +146,7 @@
             .blocks()
             .iter()
             .find_map(|block| match block {
-                Block::LocalResult { title, content, .. } if title == "help" => Some(content),
+                Block::Local(LocalResult::Text { title, body, .. }) if title == "help" => Some(body),
                 _ => None,
             })
             .expect("question mark should render local help");
@@ -617,7 +617,7 @@
             .blocks()
             .iter()
             .filter_map(|block| match block {
-                Block::LocalResult { title, .. } => Some(title.as_str()),
+                Block::Local(result) => Some(result.title()),
                 _ => None,
             })
             .collect::<Vec<_>>();

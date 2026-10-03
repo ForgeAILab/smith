@@ -1,4 +1,4 @@
-//! Smith's client-neutral session accounting and command registry.
+//! Smith's client-neutral session accounting, commands, and local reports.
 //!
 //! Terminal and headless clients share the same cache projection, usage
 //! counters, catalog pricing, and append-only usage log. These modules consume
@@ -7,6 +7,8 @@
 pub mod cache;
 pub mod commands;
 mod format;
+pub mod local_result;
 pub mod status;
+pub mod status_report;
 pub mod time_display;
 pub mod usage_log;

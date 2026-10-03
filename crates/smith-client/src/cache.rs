@@ -221,16 +221,17 @@ pub struct CacheLifecycleSummary {
 /// Missing counters are not zero. The lifecycle may be unsupported even when
 /// the provider reports cached input, so do not use it to gate this display.
 pub fn render_cache_read_usage(percent: Option<u8>, tokens: Option<u64>) -> Option<String> {
+    render_cache_read_usage_value(percent, tokens).map(|value| format!("prompt cache: {value}"))
+}
+
+fn render_cache_read_usage_value(percent: Option<u8>, tokens: Option<u64>) -> Option<String> {
     match (percent, tokens) {
         (Some(percent), Some(tokens)) => Some(format!(
-            "prompt cache: {percent}% of input read from cache · {} cached tokens",
+            "{percent}% of input read from cache · {} cached tokens",
             compact_tokens(tokens),
         )),
-        (Some(percent), None) => Some(format!("prompt cache: {percent}% of input read from cache")),
-        (None, Some(tokens)) => Some(format!(
-            "prompt cache: {} cached input tokens",
-            compact_tokens(tokens)
-        )),
+        (Some(percent), None) => Some(format!("{percent}% of input read from cache")),
+        (None, Some(tokens)) => Some(format!("{} cached input tokens", compact_tokens(tokens))),
         (None, None) => None,
     }
 }
@@ -238,8 +239,14 @@ pub fn render_cache_read_usage(percent: Option<u8>, tokens: Option<u64>) -> Opti
 impl CacheTurnSummary {
     /// Usage from the last completed root turn; not a prediction for the next.
     pub fn render_usage(&self) -> Option<String> {
-        render_cache_read_usage(self.cache_read_percent, self.observed_read_tokens)
-            .map(|line| format!("{line} (last turn)"))
+        self.render_usage_value()
+            .map(|value| format!("prompt cache: {value}"))
+    }
+
+    /// The usage value without a field label, for typed local reports.
+    pub fn render_usage_value(&self) -> Option<String> {
+        render_cache_read_usage_value(self.cache_read_percent, self.observed_read_tokens)
+            .map(|value| format!("{value} (last turn)"))
     }
     /// The footer's compact cache-hit metric.
     pub fn render_ch(&self) -> String {

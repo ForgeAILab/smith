@@ -35,7 +35,7 @@ mod tests {
     use crate::app::MouseOutcome;
     use crate::commands::{self, HostCommand, SelectionCommand, SessionControl};
     use crate::questionnaire::{QuestionnaireChoice, QuestionnaireForm, QuestionnaireQuestion};
-    use crate::transcript::{Block, ToolStatus};
+    use crate::transcript::{Block, LocalResult, ToolStatus};
     use ratatui::layout::Rect;
 
     fn fingerprint(seed: &str) -> agent_runtime_registry::Fingerprint {

@@ -348,7 +348,7 @@
             .blocks()
             .iter()
             .filter_map(|block| match block {
-                Block::LocalResult { title, state, .. } => Some((title.as_str(), *state)),
+                Block::Local(result) => Some((result.title(), result.state())),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -371,17 +371,18 @@
             history_before,
             "local output became provider conversation history"
         );
-        let status_content = app
+        let status_report = app
             .transcript
             .blocks()
             .iter()
             .find_map(|block| match block {
-                Block::LocalResult { title, content, .. } if title == "status" => {
-                    Some(content.as_str())
-                }
+                Block::Local(LocalResult::Status(report)) => Some(report),
                 _ => None,
             })
             .expect("status output");
+        assert_eq!(status_report.profile, "dev");
+        assert_eq!(status_report.cost, "nothing spent yet");
+        let status_content = smith_client::status_report::render_plain(status_report);
         assert!(status_content.contains("profile: dev"), "{status_content}");
         assert!(status_content.contains("/diagnostics"), "{status_content}");
         assert!(
@@ -398,8 +399,8 @@
             .blocks()
             .iter()
             .find_map(|block| match block {
-                Block::LocalResult { title, content, .. } if title == "diagnostics" => {
-                    Some(content.as_str())
+                Block::Local(LocalResult::Text { title, body, .. }) if title == "diagnostics" => {
+                    Some(body.as_str())
                 }
                 _ => None,
             })
@@ -429,8 +430,8 @@
             .blocks()
             .iter()
             .find_map(|block| match block {
-                Block::LocalResult { title, content, .. } if title == "context" => {
-                    Some(content.as_str())
+                Block::Local(LocalResult::Text { title, body, .. }) if title == "context" => {
+                    Some(body.as_str())
                 }
                 _ => None,
             })

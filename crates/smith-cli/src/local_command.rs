@@ -1,7 +1,10 @@
 //! Typed local commands and status/context rendering.
 
 use super::*;
+use smith_client::local_result::LocalResult;
 use smith_client::status::{PriceReference, SessionCost, SessionUsage};
+
+mod status;
 
 pub(super) fn tool_call_for_display(
     event: &RuntimeEvent,
@@ -144,8 +147,12 @@ pub(super) async fn handle_local_command(
                 app.show_local_result("timeline", lines.join("\n"));
             }
         }
-        action @ (HostCommand::Status | HostCommand::Diagnostics) => {
-            let detailed = matches!(action, HostCommand::Diagnostics);
+        HostCommand::Status => {
+            app.show_local_report(LocalResult::Status(Box::new(status::report(
+                app, host, project,
+            ))));
+        }
+        HostCommand::Diagnostics => {
             let policy = host.runtime().policy();
             let git = GitChanges::discover(project)
                 .and_then(|git| git.status_summary())
@@ -221,30 +228,6 @@ pub(super) async fn handle_local_command(
                 app.status.price(),
                 (&policy.provider_name, policy.model.as_str()),
             );
-            if !detailed {
-                let cache = app
-                    .status
-                    .cache_summary()
-                    .and_then(|summary| summary.render_usage())
-                    .unwrap_or_else(|| "prompt cache: usage not reported".to_owned());
-                let maintenance = host
-                    .cache_lifecycle()
-                    .map(|controller| render_cache_controller_summary(&controller))
-                    .unwrap_or_else(|| "cache maintenance: off".to_owned());
-                let saved = host
-                    .resume_capsule()
-                    .map(|capsule| render_resume_summary(&capsule))
-                    .unwrap_or_else(|| "resume checkpoint: not available".to_owned());
-                app.show_local_result("status", format!(
-                    "session: {}\nprofile: {}\nprovider: {} · model: {}\npermission: {:?}\n{reasoning}\n\
-                     {cache}\n{maintenance}\n{saved}\nproject: {}\nGit: {git}\ngoal: {goal}\n\
-                     children: {child_count}\nusage: {usage}\ncost: {cost}\n\
-                     /diagnostics shows detailed cache and recovery information",
-                    host.session().id(), policy.agent_profile, policy.provider_name, policy.model,
-                    policy.approval_mode, project.display(),
-                ));
-                return;
-            }
             app.show_local_result(
                 "diagnostics",
                 format!(
@@ -938,6 +921,15 @@ fn diagnostic_label(value: impl std::fmt::Debug) -> String {
 pub(super) fn render_cache_controller_summary(
     controller: &smith_runtime::cache_controller::CacheControllerSnapshot,
 ) -> String {
+    format!(
+        "cache maintenance: {}",
+        cache_controller_summary_value(controller)
+    )
+}
+
+fn cache_controller_summary_value(
+    controller: &smith_runtime::cache_controller::CacheControllerSnapshot,
+) -> String {
     use smith_runtime::cache_lifecycle::CacheMaintenanceMode;
     if !controller.synthetic_attempts.is_empty() {
         let usage = controller
@@ -956,7 +948,7 @@ pub(super) fn render_cache_controller_summary(
                 total
             });
         return format!(
-            "cache maintenance: {} attempts · input {} · cached {} · writes {} · output {} · reasoning {}",
+            "{} attempts · input {} · cached {} · writes {} · output {} · reasoning {}",
             controller.synthetic_attempts.len(),
             usage[0],
             usage[1],
@@ -966,34 +958,38 @@ pub(super) fn render_cache_controller_summary(
         );
     }
     if controller.requested_maintenance == CacheMaintenanceMode::Off {
-        return "cache maintenance: off".to_owned();
+        return "off".to_owned();
     }
     if controller.effective_maintenance == CacheMaintenanceMode::Off {
-        return "cache maintenance: unavailable under the current provider or policy; see /diagnostics".to_owned();
+        return "unavailable under the current provider or policy; see /diagnostics".to_owned();
     }
     if controller.operation_in_flight {
-        return "cache maintenance: running".to_owned();
+        return "running".to_owned();
     }
     if controller.effective_maintenance == CacheMaintenanceMode::Observe {
-        return "cache maintenance: observe only (no background requests)".to_owned();
+        return "observe only (no background requests)".to_owned();
     }
     if let Some(at) = controller.scheduled_for {
         return format!(
-            "cache maintenance: scheduled for {}",
+            "scheduled for {}",
             smith_client::time_display::local_timestamp(at.0)
         );
     }
-    "cache maintenance: idle".to_owned()
+    "idle".to_owned()
 }
 
 pub(super) fn render_resume_summary(
     capsule: &smith_runtime::resume_capsule::RedactedResumeCapsule,
 ) -> String {
+    format!("resume checkpoint: {}", resume_summary_value(capsule))
+}
+
+fn resume_summary_value(capsule: &smith_runtime::resume_capsule::RedactedResumeCapsule) -> String {
     capsule.last_persisted_at.map_or_else(
-        || "resume checkpoint: not yet saved".to_owned(),
+        || "not yet saved".to_owned(),
         |at| {
             format!(
-                "resume checkpoint: saved {}",
+                "saved {}",
                 smith_client::time_display::local_timestamp(at.0)
             )
         },
@@ -1198,6 +1194,11 @@ const fn cache_operation_reason(
 }
 
 pub(super) fn render_reasoning_status(policy: &RuntimePolicy) -> String {
+    let (reasoning, controls) = reasoning_status_values(policy);
+    format!("reasoning: {reasoning}\nreasoning controls: {controls}")
+}
+
+fn reasoning_status_values(policy: &RuntimePolicy) -> (String, String) {
     let support = match policy.reasoning.support {
         ReasoningSupport::Unsupported => "unsupported",
         ReasoningSupport::Fixed => "fixed",
@@ -1208,13 +1209,18 @@ pub(super) fn render_reasoning_status(policy: &RuntimePolicy) -> String {
     } else {
         policy.reasoning.efforts.join(", ")
     };
-    format!(
-        "reasoning: {} · effort {} · {}\nreasoning controls: {support} · switch {} · efforts {efforts} · {}",
-        policy.reasoning.effective_state(),
-        policy.reasoning.effective_effort(),
-        policy.reasoning.selection_source,
-        policy.reasoning.switch.as_str(),
-        policy.reasoning.capability_source,
+    (
+        format!(
+            "{} · effort {} · {}",
+            policy.reasoning.effective_state(),
+            policy.reasoning.effective_effort(),
+            policy.reasoning.selection_source,
+        ),
+        format!(
+            "{support} · switch {} · efforts {efforts} · {}",
+            policy.reasoning.switch.as_str(),
+            policy.reasoning.capability_source,
+        ),
     )
 }
 
