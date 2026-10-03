@@ -3,11 +3,13 @@
 use super::*;
 use smith_client::agent_report::AgentReport;
 use smith_client::local_result::LocalResult;
+use smith_client::mcp_report::McpReport;
 use smith_client::status::{PriceReference, SessionCost, SessionUsage};
 
 pub(crate) mod agent;
 pub(super) mod context;
 mod goal;
+pub(super) mod mcp;
 mod status;
 pub(crate) mod timeline;
 
@@ -43,12 +45,9 @@ pub(super) async fn handle_local_command(
             },
         },
         HostCommand::Mcp(action) => match (mcp, action) {
-            (None, _) => app.show_local_result(
-                "mcp",
-                "no MCP servers are declared; add an `[mcp.servers.<name>]` table",
-            ),
+            (None, _) => app.show_local_report(LocalResult::Mcp(Box::new(mcp::report(None)))),
             (Some(context), smith_client::commands::McpAction::List) => {
-                app.show_local_result("mcp", context.render_list());
+                app.show_local_report(LocalResult::Mcp(Box::new(mcp::report(Some(context)))));
             }
             // Showing the resolved invocation and its content identity is the
             // whole point of the confirmation: the decision is about exactly
@@ -56,7 +55,9 @@ pub(super) async fn handle_local_command(
             (Some(context), smith_client::commands::McpAction::Trust(server)) => {
                 match context.confirmation(&server) {
                     Ok(content) => app.confirm_mcp_trust(server, content),
-                    Err(error) => app.show_local_error("mcp", error),
+                    Err(error) => {
+                        app.show_local_report(LocalResult::Mcp(Box::new(McpReport::Error(error))));
+                    }
                 }
             }
         },

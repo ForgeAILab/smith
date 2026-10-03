@@ -727,6 +727,7 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                     }
                     LocalResult::Goal(report) => smith_client::goal_report::render_plain(report),
                     LocalResult::Agent(report) => smith_client::agent_report::render_plain(report),
+                    LocalResult::Mcp(report) => smith_client::mcp_report::render_plain(report),
                     LocalResult::Text { body, .. } => body.clone(),
                 };
                 raw.push_str(&format!(
@@ -751,6 +752,9 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                     )),
                     LocalResult::Agent(report) => LocalResult::Agent(Box::new(
                         fixture_agent_view(report, normalizer),
+                    )),
+                    LocalResult::Mcp(report) => LocalResult::Mcp(Box::new(
+                        fixture_mcp_view(report, normalizer),
                     )),
                     LocalResult::Text { title, body, state } => LocalResult::Text {
                         title: normalizer.normalize(title),
@@ -1033,6 +1037,43 @@ fn fixture_agent_view(
                 *error = normalizer.normalize(error);
             }
         },
+    }
+    report
+}
+
+fn fixture_mcp_view(
+    report: &smith_client::mcp_report::McpReport,
+    normalizer: &mut fixture_support::Normalizer,
+) -> smith_client::mcp_report::McpReport {
+    use smith_client::mcp_report::{McpReport, McpServerState};
+
+    let mut report = report.clone();
+    match &mut report {
+        McpReport::Empty { .. } | McpReport::Unavailable => {}
+        McpReport::Error(error) => *error = normalizer.normalize(error),
+        McpReport::Trusted { server, digest } => {
+            *server = normalizer.normalize(server);
+            *digest = normalizer.normalize(digest);
+        }
+        McpReport::Servers(servers) => {
+            for server in servers {
+                for value in [&mut server.name, &mut server.transport, &mut server.source] {
+                    *value = normalizer.normalize(value);
+                }
+                if let McpServerState::Failed { reason } = &mut server.state {
+                    *reason = normalizer.normalize(reason);
+                }
+                for rejected in &mut server.rejected {
+                    *rejected = normalizer.normalize(rejected);
+                }
+                for value in &mut server.values {
+                    value.name = normalizer.normalize(&value.name);
+                    if let Some(credential) = &mut value.credential {
+                        *credential = normalizer.normalize(credential);
+                    }
+                }
+            }
+        }
     }
     report
 }

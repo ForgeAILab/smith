@@ -12,6 +12,7 @@ mod format;
 pub mod goal_report;
 pub mod help_report;
 pub mod local_result;
+pub mod mcp_report;
 pub mod status;
 pub mod status_report;
 pub mod time_display;

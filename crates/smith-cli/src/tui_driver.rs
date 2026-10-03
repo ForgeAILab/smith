@@ -540,16 +540,11 @@ pub(super) async fn run_tui(
                                 .await;
                             }
                             Some(Action::TrustMcpServer { server }) => {
-                                match mcp.as_ref().map(|context| context.trust(&server)) {
-                                    Some(Ok(notice)) => {
-                                        app.show_local_result("mcp", notice);
-                                    }
-                                    Some(Err(error)) => app.show_local_error("mcp", error),
-                                    None => app.show_local_error(
-                                        "mcp",
-                                        "no MCP servers are declared",
-                                    ),
-                                }
+                                app.show_local_report(
+                                    smith_client::local_result::LocalResult::Mcp(Box::new(
+                                        local_command::mcp::trust(mcp.as_deref(), &server),
+                                    )),
+                                );
                             }
                             Some(Action::TrustSkill { skill: name }) => {
                                 match skills.trust(&name) {

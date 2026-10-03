@@ -17,8 +17,8 @@ use std::sync::{Arc, Mutex};
 
 use smith_config::mcp::{self, McpConfirmation};
 use smith_config::resolve::{ResolvedConfig, ResolvedMcpServer};
-use smith_config::trust::{TrustDecision, TrustStatus, TrustStore};
-use smith_runtime::mcp::{McpOptions, McpState, McpSupervisor};
+use smith_config::trust::{ContentDigest, TrustDecision, TrustStatus, TrustStore};
+use smith_runtime::mcp::{McpOptions, McpServerReport, McpSupervisor};
 
 /// Everything the `/mcp` command needs, owned for the life of the process.
 ///
@@ -80,52 +80,14 @@ impl McpContext {
         Arc::clone(&self.supervisor)
     }
 
-    /// Every declared server, with its state and — where it has one — its tool
-    /// count, its configuration source, and a bounded failure reason.
-    pub(super) fn render_list(&self) -> String {
-        let mut lines = Vec::new();
-        for report in self.supervisor.reports() {
-            let state = match &report.state {
-                McpState::Connected { tools } => {
-                    format!("connected · {tools} tool{}", plural(*tools))
-                }
-                McpState::Connecting => "connecting".to_owned(),
-                McpState::Disabled => "disabled".to_owned(),
-                McpState::NeedsTrust(TrustStatus::Changed) => format!(
-                    "untrusted · its command changed — run `/mcp trust {}`",
-                    report.name
-                ),
-                McpState::NeedsTrust(TrustStatus::Denied) => format!(
-                    "refused · you declined it — run `/mcp trust {}` to reconsider",
-                    report.name
-                ),
-                McpState::NeedsTrust(_) => {
-                    format!(
-                        "untrusted · needs approval — run `/mcp trust {}`",
-                        report.name
-                    )
-                }
-                McpState::Failed { reason } => format!("failed · {reason}"),
-            };
-            lines.push(format!(
-                "{} · {} · {state} · {}",
-                report.name, report.transport, report.source
-            ));
-            for rejected in &report.rejected {
-                lines.push(format!("  refused a tool: {rejected}"));
-            }
-            if let Some(server) = self.servers.get(&report.name) {
-                lines.extend(
-                    environment_lines(server)
-                        .into_iter()
-                        .map(|line| format!("  {line}")),
-                );
-            }
-        }
-        if lines.is_empty() {
-            return "no MCP servers are declared".to_owned();
-        }
-        lines.join("\n")
+    /// Supervisor snapshots for the typed local report.
+    pub(super) fn reports(&self) -> Vec<McpServerReport> {
+        self.supervisor.reports()
+    }
+
+    /// The resolved declaration used to name a server's credential references.
+    pub(super) fn server(&self, name: &str) -> Option<&ResolvedMcpServer> {
+        self.servers.get(name)
     }
 
     /// Renders what the user is being asked to authorize, without recording
@@ -146,7 +108,7 @@ impl McpContext {
     /// The decision is persisted before the server is dialed: a spawn that
     /// happened on the strength of an unsaved decision would run again
     /// unattended on the next start.
-    pub(super) fn trust(&self, name: &str) -> Result<String, String> {
+    pub(super) fn trust(&self, name: &str) -> Result<ContentDigest, String> {
         let server = self.declared(name)?;
         let executable = mcp::executable(server);
         self.trust
@@ -155,10 +117,7 @@ impl McpContext {
             .record(&self.project, &executable, TrustDecision::Allow)
             .map_err(|error| error.to_string())?;
         self.supervisor.admit_now(server);
-        Ok(format!(
-            "`{name}` is trusted at {} and is connecting; its tools join at the next safe boundary",
-            executable.digest()
-        ))
+        Ok(executable.digest().clone())
     }
 
     fn declared(&self, name: &str) -> Result<&ResolvedMcpServer, String> {
@@ -176,26 +135,6 @@ impl McpContext {
             }
         })
     }
-}
-
-fn plural(count: usize) -> &'static str {
-    if count == 1 { "" } else { "s" }
-}
-
-/// One line per environment variable and header: its name, and where its
-/// value comes from. Never the value.
-fn environment_lines(server: &ResolvedMcpServer) -> Vec<String> {
-    let confirmation = mcp::confirmation(server, TrustStatus::Untrusted);
-    confirmation
-        .environment
-        .iter()
-        .map(|value| ("env", value))
-        .chain(confirmation.headers.iter().map(|value| ("header", value)))
-        .map(|(kind, value)| match &value.credential {
-            Some(reference) => format!("{kind} {} ← {reference}", value.name),
-            None => format!("{kind} {} ← value withheld", value.name),
-        })
-        .collect()
 }
 
 fn render_confirmation(confirmation: &McpConfirmation) -> String {

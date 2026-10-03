@@ -45,7 +45,8 @@ async fn mcp_command_never_renders_a_credential_value() {
     // path may print it if it did.
     let context = mcp_context(home.path(), project.path());
 
-    let listed = context.render_list();
+    let listed =
+        smith_client::mcp_report::render_plain(&local_command::mcp::report(Some(&context)));
     assert!(listed.contains("github"), "{listed}");
     assert!(
         listed.contains("untrusted") && listed.contains("/mcp trust github"),
@@ -90,9 +91,13 @@ async fn a_literal_environment_value_is_withheld_from_every_mcp_surface() {
         .expect("an owner-only user config");
 
     let context = mcp_context(home.path(), project.path());
-    let listed = context.render_list();
+    let listed =
+        smith_client::mcp_report::render_plain(&local_command::mcp::report(Some(&context)));
     let confirmation = context.confirmation("docs").expect("a confirmation");
-    assert!(listed.contains("DOCS_TOKEN") && listed.contains("withheld"), "{listed}");
+    assert!(
+        listed.contains("DOCS_TOKEN") && listed.contains("withheld"),
+        "{listed}"
+    );
     assert!(!listed.contains(LITERAL), "{listed}");
     assert!(!confirmation.contains(LITERAL), "{confirmation}");
 }
@@ -101,9 +106,17 @@ async fn a_literal_environment_value_is_withheld_from_every_mcp_surface() {
 async fn granting_trust_records_the_decision_and_leaves_the_session_running() {
     let (home, project) = mcp_project("[mcp.servers.github]\ncommand = \"npx\"\n");
     let context = mcp_context(home.path(), project.path());
-    assert!(context.render_list().contains("untrusted"));
+    assert!(
+        smith_client::mcp_report::render_plain(&local_command::mcp::report(Some(&context)))
+            .contains("untrusted")
+    );
 
-    let notice = context.trust("github").expect("a recorded decision");
+    let outcome = local_command::mcp::trust(Some(&context), "github");
+    assert!(matches!(
+        outcome,
+        smith_client::mcp_report::McpReport::Trusted { .. }
+    ));
+    let notice = smith_client::mcp_report::render_plain(&outcome);
     assert!(
         notice.contains("trusted") && notice.contains("next safe boundary"),
         "{notice}"
@@ -124,7 +137,12 @@ async fn granting_trust_records_the_decision_and_leaves_the_session_running() {
         smith_config::trust::TrustStatus::Trusted
     );
 
-    let unknown = context.trust("nope").expect_err("an undeclared server");
+    let outcome = local_command::mcp::trust(Some(&context), "nope");
+    assert!(matches!(
+        outcome,
+        smith_client::mcp_report::McpReport::Error(_)
+    ));
+    let unknown = smith_client::mcp_report::render_plain(&outcome);
     assert!(unknown.contains("not a declared MCP server"), "{unknown}");
 }
 
@@ -162,7 +180,8 @@ async fn a_remote_server_is_listed_by_endpoint_with_its_credentials_named() {
     );
     let context = mcp_context(home.path(), project.path());
 
-    let listed = context.render_list();
+    let listed =
+        smith_client::mcp_report::render_plain(&local_command::mcp::report(Some(&context)));
     assert!(listed.contains("http"), "the transport is named: {listed}");
     assert!(
         listed.contains("header Authorization ← keychain:smith/internal"),

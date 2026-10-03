@@ -7,6 +7,7 @@ use crate::agent_report::{AgentReport, AgentResumeReport};
 use crate::context_report::ContextReport;
 use crate::goal_report::GoalReport;
 use crate::help_report::HelpReport;
+use crate::mcp_report::McpReport;
 use crate::status_report::StatusReport;
 use crate::timeline_report::TimelineReport;
 
@@ -36,6 +37,8 @@ pub enum LocalResult {
     Goal(Box<GoalReport>),
     /// Child lists, inspection snapshots, and exact-resume outcomes.
     Agent(Box<AgentReport>),
+    /// MCP server snapshots and local trust outcomes.
+    Mcp(Box<McpReport>),
     /// Transitional output for commands that have not migrated to reports.
     Text {
         /// Command or result title.
@@ -57,6 +60,7 @@ impl LocalResult {
             Self::Timeline(_) => "timeline",
             Self::Goal(_) => "goal",
             Self::Agent(report) => report.title(),
+            Self::Mcp(_) => "mcp",
             Self::Text { title, .. } => title,
         }
     }
@@ -88,6 +92,12 @@ impl LocalResult {
                     | AgentResumeReport::Failed { .. } => LocalResultState::Error,
                 },
                 AgentReport::Parent | AgentReport::List(_) | AgentReport::Inspector(_) => {
+                    LocalResultState::Info
+                }
+            },
+            Self::Mcp(report) => match report.as_ref() {
+                McpReport::Unavailable | McpReport::Error(_) => LocalResultState::Error,
+                McpReport::Empty { .. } | McpReport::Servers(_) | McpReport::Trusted { .. } => {
                     LocalResultState::Info
                 }
             },

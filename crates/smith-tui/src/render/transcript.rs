@@ -17,6 +17,7 @@ use smith_client::agent_report::{AgentReport, AgentResumeReport, AgentSnapshot};
 use smith_client::context_report::{ContextCategoryKind, ContextCompaction, ContextReport};
 use smith_client::goal_report::GoalReport;
 use smith_client::help_report::{HelpCommand, HelpReport};
+use smith_client::mcp_report::McpReport;
 use smith_client::status_report::{StatusGoal, StatusReport};
 use smith_client::timeline_report::{TimelineEntry, TimelinePlan, TimelineReport};
 use smith_tools::ToolCallDisplay;
@@ -391,6 +392,10 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16) -> Vec<Line<'static>>
             }
             Block::Local(LocalResult::Agent(report)) => {
                 lines.extend(render_agent_report(report, width, theme));
+            }
+            Block::Local(LocalResult::Mcp(report)) => {
+                lines.push(Line::from(Span::styled("/mcp", theme.style(Tone::Command))));
+                lines.extend(render_mcp_report(report, width, theme));
             }
             Block::Local(LocalResult::Text {
                 title,
@@ -1002,6 +1007,102 @@ fn render_agent_inspector(child: &AgentSnapshot, theme: Theme) -> Vec<Line<'stat
             .collect::<Vec<_>>()
     })
     .collect()
+}
+
+fn render_mcp_report(report: &McpReport, width: u16, theme: Theme) -> Vec<Line<'static>> {
+    let servers = match report {
+        McpReport::Empty { guidance } => {
+            return render_mcp_text(
+                if *guidance {
+                    McpReport::EMPTY_GUIDANCE
+                } else {
+                    McpReport::EMPTY_MESSAGE
+                },
+                width,
+                theme,
+            );
+        }
+        McpReport::Unavailable => {
+            return render_prefixed_local_state(
+                glyph::ERROR,
+                McpReport::EMPTY_MESSAGE,
+                width,
+                theme.style(Tone::Danger),
+            );
+        }
+        McpReport::Error(error) => {
+            return render_prefixed_local_state(
+                glyph::ERROR,
+                error,
+                width,
+                theme.style(Tone::Danger),
+            );
+        }
+        McpReport::Trusted { server, digest } => {
+            return render_mcp_text(&McpReport::trusted_value(server, digest), width, theme);
+        }
+        McpReport::Servers(servers) => servers,
+    };
+    let available = usize::from(width).max(1);
+    let mut lines = Vec::new();
+    for server in servers {
+        lines.extend(render_mcp_text(
+            &format!(
+                "{} · {} · {} · {}",
+                server.name,
+                server.transport,
+                server.state.render_value(&server.name),
+                server.source,
+            ),
+            width,
+            theme,
+        ));
+        for rejected in &server.rejected {
+            lines.extend(wrap_context_line(
+                context_field("  refused a tool", rejected.clone(), Tone::Default, theme),
+                available,
+            ));
+        }
+        for value in &server.values {
+            lines.extend(wrap_context_line(
+                Line::from(vec![
+                    Span::styled(
+                        format!("  {} {} ← ", value.kind.label(), value.name),
+                        theme.style(Tone::Default),
+                    ),
+                    Span::styled(
+                        value
+                            .credential
+                            .as_deref()
+                            .unwrap_or("value withheld")
+                            .to_owned(),
+                        theme.style(Tone::Default),
+                    ),
+                ]),
+                available,
+            ));
+        }
+    }
+    lines
+}
+
+/// Retains character wrapping before inline Markdown for the typed MCP fields.
+fn render_mcp_text(content: &str, width: u16, theme: Theme) -> Vec<Line<'static>> {
+    content
+        .lines()
+        .flat_map(|raw| {
+            wrap_text(raw, usize::from(width).max(1))
+                .into_iter()
+                .map(|wrapped| {
+                    Line::from(render_inline_markdown(
+                        &wrapped,
+                        theme.style(Tone::Default),
+                        theme,
+                    ))
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 fn render_goal_report(report: &GoalReport, width: u16, theme: Theme) -> Vec<Line<'static>> {
