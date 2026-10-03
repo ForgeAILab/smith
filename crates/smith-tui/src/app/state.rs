@@ -1136,6 +1136,70 @@ impl App {
         self.status.activity = Activity::Idle;
     }
 
+    /// Detaches idle host state while keeping the conversation and composer.
+    pub fn rebind_host(&mut self) {
+        self.reset_live_turn();
+        self.overlay = None;
+        self.prompt_input_guard = super::prompts::PromptInputGuard::default();
+        self.last_event_seq = None;
+        self.stream_gap = None;
+        self.pending_recovered_events = 0;
+        self.pending_lost_range = None;
+        self.pending_spawns.clear();
+        self.local_shell_turn = None;
+        self.speculative.clear();
+        self.selection = None;
+        // A change notice must not resume following a previously read result.
+        self.scroll_to_block = None;
+        self.result_scroll_revision = None;
+    }
+
+    /// Moves recall history, including stored attachments, to a new session.
+    pub fn inherit_composer_history(&mut self, previous: &mut Self) {
+        self.composer = std::mem::take(&mut previous.composer);
+        self.composer.clear();
+        self.pasted_chunks = std::mem::take(&mut previous.pasted_chunks);
+        self.paste_counter = previous.paste_counter;
+        self.image_attachments = std::mem::take(&mut previous.image_attachments);
+        self.image_counter = previous.image_counter;
+    }
+
+    /// Replaces coordinator state, retaining logs only for listed children.
+    pub fn replace_children<I>(&mut self, children: I)
+    where
+        I: IntoIterator<Item = (String, ChildState, Option<String>)>,
+    {
+        self.children.clear();
+        for (child, state, detail) in children {
+            self.restore_child(child, state, detail);
+        }
+        self.child_conversations
+            .retain(|child, _| self.children.contains_key(child));
+        for conversation in self.child_conversations.values_mut() {
+            conversation.speculative.clear();
+            conversation.live = false;
+        }
+        self.child_clocks.clear();
+        self.child_counts.clear();
+        self.child_dismiss_at.clear();
+        self.retired_children.clear();
+        if self
+            .inspected_child
+            .as_ref()
+            .is_some_and(|child| !self.children.contains_key(child))
+        {
+            self.inspected_child = None;
+        }
+        self.inspected_detail = None;
+    }
+
+    /// Whether a runtime prompt still belongs to this host.
+    pub fn has_pending_prompt(&self) -> bool {
+        self.pending_approval_count() > 0
+            || self.pending_questionnaire_count() > 0
+            || matches!(self.overlay, Some(Overlay::RotationConfirm { .. }))
+    }
+
     /// Enables or disables the layered `cache.miss_notices` presentation
     /// policy. Canonical cache state is collected regardless of this flag.
     pub fn set_cache_miss_notices(&mut self, enabled: bool) {

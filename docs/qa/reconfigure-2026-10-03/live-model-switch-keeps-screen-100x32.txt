@@ -1,0 +1,32 @@
+  skill:smith.configuration.project-instructions-and-context-identity
+
+● /status
+  session             session-0aefa0ee-c4a1-40f7-9e8e-3082f77b4d44
+  profile             code
+  provider            zai
+  model               glm-5.3
+  permission          ask
+  reasoning           provider default · effort provider default · provider/model default
+  reasoning controls  controllable · switch optional · efforts none · Z.AI Coding Plan thinking
+                      switch (catalog-advertised reasoning model)
+  prompt cache        usage not reported
+  cache maintenance   off
+  resume checkpoint   saved 2026-10-03 19:27:57 -04:00
+  project             …Data-codes-ai-tui/f77870a1-b4e2-491f-8fe4-e8d253f8d930/scratchpad/live-reconf
+  Git                 clean
+  goal                none
+  children            0
+  usage               nothing spent yet
+  cost                nothing spent yet
+  /diagnostics shows detailed cache and recovery information
+
+● first answer
+
+● provider · changed · zai/glm-5.3 → google/gemini-3.8-flash · prior cache not transferable
+
+● reasoning · thinking on · effort provider default · provider/model default · applies to the next
+  turn
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts                                               google/gemini-3.8-flash · code · ask

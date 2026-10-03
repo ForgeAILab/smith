@@ -1,0 +1,16 @@
+  children            0
+  usage               1 turn(s) · input 6 ·
+                      output 3
+  cost                unknown · no price
+                      reference for
+                      local/example-model
+  /diagnostics shows detailed cache and
+  recovery information
+
+● provider · changed · local/example-model →
+  local/small-model · prior cache not
+  transferable
+────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────
+  ? for shortcuts  local/small-model · build

@@ -1,4 +1,5 @@
 use super::*;
+use smith_runtime::host::HostSessionError;
 
 // host routing behavior tests.
 
@@ -244,8 +245,23 @@ fn reasoning_startup_errors_are_distinguished_for_compatible_switch_cleanup() {
     .context("starting the Smith session");
     assert!(is_reasoning_startup_error(&reasoning));
 
+    let wrapped_reasoning =
+        anyhow::Error::new(HostSessionError::Factory(FactoryError::Reasoning {
+            provider: "example".to_owned(),
+            model: ModelId::new("fixed-model"),
+            message: "reasoning is not adjustable".to_owned(),
+        }))
+        .context("starting the Smith session");
+    assert!(is_reasoning_startup_error(&wrapped_reasoning));
+
     let unrelated = anyhow::anyhow!("provider is unavailable");
     assert!(!is_reasoning_startup_error(&unrelated));
+
+    let resume_disabled = anyhow::Error::new(HostSessionError::ResumeDisabled {
+        session: SessionId::new("saved-session"),
+    })
+    .context("starting the Smith session");
+    assert!(!is_reasoning_startup_error(&resume_disabled));
 }
 
 #[test]

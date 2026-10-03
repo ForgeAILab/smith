@@ -43,6 +43,33 @@ impl Terminal {
         self.restored = true;
         Ok(())
     }
+
+    /// Gives another interactive flow the normal screen and cooked input.
+    pub(crate) fn suspend(&mut self) -> Result<()> {
+        self.restore()
+    }
+
+    /// Returns to the application with fresh buffers for a full redraw.
+    pub(crate) fn resume(&mut self) -> Result<()> {
+        if !self.restored {
+            return Ok(());
+        }
+        enable_raw_mode()?;
+        self.restored = false;
+        let result = (|| -> Result<Inner> {
+            enter_screen(&mut stdout())?;
+            clear_screen(&mut stdout())?;
+            Ok(ratatui::Terminal::new(CrosstermBackend::new(stdout()))?)
+        })();
+        match result {
+            Ok(inner) => self.inner = inner,
+            Err(error) => {
+                let _ = self.restore();
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Drop for Terminal {
@@ -78,15 +105,7 @@ pub(crate) fn enter() -> Result<Terminal> {
             return Err(error.into());
         }
     };
-    // A write-only clear, never `ratatui::Terminal::clear()`: that one opens
-    // with an `ESC[6n` cursor-position query whose reply can be swallowed by
-    // crossterm's global event reader once an `EventStream` has existed — the
-    // exact state a palette/slash reconfiguration re-enters this function in.
-    // Under a multiplexer (observed in cmux) the query then times out and a
-    // working session dies at the handshake. The screen still needs wiping
-    // because a re-entered alternate screen can show the previous TUI frame,
-    // and a fresh ratatui terminal redraws fully on its first frame anyway.
-    if let Err(error) = execute!(stdout(), Clear(ClearType::All), MoveTo(0, 0)) {
+    if let Err(error) = clear_screen(&mut stdout()) {
         let _ = leave();
         return Err(error.into());
     }
@@ -94,6 +113,15 @@ pub(crate) fn enter() -> Result<Terminal> {
         inner: terminal,
         restored: false,
     })
+}
+
+fn clear_screen(writer: &mut impl Write) -> std::io::Result<()> {
+    // A write-only clear, never `ratatui::Terminal::clear()`: its `ESC[6n`
+    // query can lose its reply to crossterm's global reader after an
+    // `EventStream` has existed, then time out under a multiplexer (cmux).
+    // Host rebuilds keep the screen; entering a connection flow or resuming
+    // afterwards still needs this clear and fresh buffers for a full redraw.
+    execute!(writer, Clear(ClearType::All), MoveTo(0, 0))
 }
 
 /// Restores the terminal. Safe to call more than once.
@@ -162,5 +190,15 @@ mod tests {
         let entered = String::from_utf8(entered).expect("ANSI is UTF-8");
         // `1003` would report a bare hover; nothing in Smith consumes one.
         assert!(!entered.contains("?1003h"), "{entered:?}");
+    }
+
+    #[test]
+    fn screen_clear_never_queries_the_cursor_position() {
+        let mut cleared = Vec::new();
+        clear_screen(&mut cleared).expect("clear sequences");
+        let cleared = String::from_utf8(cleared).expect("ANSI is UTF-8");
+        assert!(cleared.contains("\u{1b}[2J"), "{cleared:?}");
+        assert!(cleared.contains("\u{1b}[1;1H"), "{cleared:?}");
+        assert!(!cleared.contains("\u{1b}[6n"), "{cleared:?}");
     }
 }

@@ -21,7 +21,7 @@ use smith_runtime::factory::{
     AVAILABLE_ADAPTER_KINDS, AdvisorProfileRequest, ChildProfileRequest, FactoryError, HostSurface,
     RuntimeRequest,
 };
-use smith_runtime::host::{HostSession, HostSessionRequest};
+use smith_runtime::host::{HostSession, HostSessionError, HostSessionRequest};
 use smith_runtime::journal::DefaultRedactor;
 use smith_runtime::model_catalog::{CatalogLoader, runtime_catalog_source};
 use smith_runtime::pool::CredentialPool;
@@ -35,7 +35,7 @@ use crate::tui_driver::{
     InteractiveExit, InteractiveRequests, InteractiveResources, PresentationOptions,
     run_interactive,
 };
-use crate::{MAX_STDIN_PROMPT_BYTES, connection};
+use crate::{MAX_STDIN_PROMPT_BYTES, connection, terminal};
 
 /// How long an interactive start waits for declared servers before opening the
 /// prompt without them.
@@ -515,11 +515,24 @@ fn report_session_usage(
     }
 }
 
-pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
+pub(super) async fn run_interactive_command(args: RunArgs) -> Result<u8> {
+    let mut terminal = None;
+    let result = run_interactive_hosts(args, &mut terminal).await;
+    if let Some(terminal) = terminal.as_mut() {
+        terminal.restore().context("restoring the terminal")?;
+    }
+    result
+}
+
+async fn run_interactive_hosts(
+    mut args: RunArgs,
+    terminal: &mut Option<terminal::Terminal>,
+) -> Result<u8> {
     let mut resume = args.resume.take();
     let mut frozen_catalog = None;
     let mut reasoning_notice = None;
     let mut mcp: Option<Arc<crate::mcp::McpContext>> = None;
+    let mut app = None;
     loop {
         let started = match start_host(
             &args.selection,
@@ -567,7 +580,19 @@ pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
         } = started;
         mcp = started_mcp;
         let current_session = host.session().id().as_str().to_owned();
-        match run_interactive(
+        if terminal.is_none() {
+            match terminal::enter() {
+                Ok(entered) => *terminal = Some(entered),
+                Err(error) => {
+                    let _ = host.shutdown().await;
+                    return Err(error).context("entering the alternate screen");
+                }
+            }
+        }
+        let terminal = terminal.as_mut().expect("entered terminal");
+        let (exit, retained) = run_interactive(
+            terminal,
+            app.take(),
             &host,
             InteractiveRequests {
                 approvals,
@@ -592,9 +617,11 @@ pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
                 cache_miss_notices,
             },
         )
-        .await?
-        {
+        .await?;
+        app = Some(retained);
+        match exit {
             InteractiveExit::Quit(usage, price, cache) => {
+                terminal.restore().context("restoring the terminal")?;
                 report_session_usage(
                     &host,
                     &current_session,
@@ -614,6 +641,7 @@ pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
             InteractiveExit::Connect(provider) => {
                 resume = Some(current_session);
                 frozen_catalog = None;
+                terminal.suspend().context("suspending the terminal")?;
                 let _completed = connection::connect(
                     args.selection.clone(),
                     &provider,
@@ -621,16 +649,20 @@ pub(super) async fn run_interactive_command(mut args: RunArgs) -> Result<u8> {
                     args.no_motion,
                 )
                 .await?;
+                terminal.resume().context("resuming the terminal")?;
                 continue;
             }
             InteractiveExit::Disconnect(provider) => {
+                terminal.suspend().context("suspending the terminal")?;
                 let outcome = connection::disconnect(&args.selection, &provider).await?;
                 if outcome == connection::DisconnectOutcome::ActiveDirectProvider {
+                    terminal.restore().context("restoring the terminal")?;
                     println!(
                         "The active provider was disconnected. The session is saved; restart Smith with a connected provider to resume it."
                     );
                     return Ok(0);
                 }
+                terminal.resume().context("resuming the terminal")?;
                 resume = Some(current_session);
                 frozen_catalog = None;
                 continue;
@@ -676,6 +708,9 @@ pub(super) fn is_reasoning_startup_error(error: &anyhow::Error) -> bool {
         matches!(
             source.downcast_ref::<FactoryError>(),
             Some(FactoryError::Reasoning { .. })
+        ) || matches!(
+            source.downcast_ref::<HostSessionError>(),
+            Some(HostSessionError::Factory(FactoryError::Reasoning { .. }))
         )
     })
 }

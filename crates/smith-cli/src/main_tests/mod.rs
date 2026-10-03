@@ -93,6 +93,9 @@ mod fixtures;
 mod host_routing;
 #[cfg(test)]
 #[allow(clippy::wildcard_imports)]
+mod interactive_rebind;
+#[cfg(test)]
+#[allow(clippy::wildcard_imports)]
 mod local_commands;
 #[cfg(test)]
 #[allow(clippy::wildcard_imports)]

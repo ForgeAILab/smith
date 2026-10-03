@@ -45,8 +45,7 @@ pub(super) enum InteractiveExit {
     /// boundary; the connections themselves survive it.
     CapabilitiesChanged,
     /// The session's usage, plus the price reference it was resolved against
-    /// (if any) — carried out here because `Status` does not survive past
-    /// `run_tui`'s return, and the exit report needs the identical
+    /// (if any) — carried out here because the exit report needs the identical
     /// reference `/status` read from during the session rather than a fresh
     /// catalog lookup of its own.
     Quit(
@@ -149,41 +148,196 @@ pub(super) fn restore_transcript(
     }
 }
 
-pub(super) async fn run_interactive(
+/// The application and the binding it last displayed, retained between hosts.
+pub(super) struct InteractiveApp {
+    pub(super) app: App,
+    session: String,
+    binding: AppBinding,
+}
+
+struct AppBinding {
+    provider: String,
+    model: String,
+    profile: String,
+    reasoning: smith_runtime::reasoning::ReasoningRuntimePolicy,
+    context_window: Option<String>,
+}
+
+impl AppBinding {
+    fn from_host(host: &HostSession) -> Self {
+        let policy = host.runtime().policy();
+        Self {
+            provider: policy.provider_name.clone(),
+            model: policy.model.as_str().to_owned(),
+            profile: policy.agent_profile.clone(),
+            reasoning: policy.reasoning.clone(),
+            context_window: policy.context_window.clone(),
+        }
+    }
+}
+
+/// Selects a fresh seed or a same-session rebind without touching the terminal.
+pub(super) async fn prepare_interactive_app(
     host: &HostSession,
-    requests: InteractiveRequests,
     project: &std::path::Path,
-    resources: InteractiveResources,
-    presentation: PresentationOptions,
-) -> Result<InteractiveExit> {
-    let InteractiveRequests {
-        approvals,
-        interactions,
-        rotations,
-        accounts,
-    } = requests;
-    let InteractiveResources {
-        inventory,
-        agents,
-        sessions,
-        credential_pool,
-        catalog,
-        mcp,
-        skills,
-    } = resources;
+    resources: &InteractiveResources,
+    presentation: &PresentationOptions,
+    previous: Option<InteractiveApp>,
+) -> InteractiveApp {
+    let session = host.session().id().as_str().to_owned();
+    let binding = AppBinding::from_host(host);
+    let app = match previous {
+        Some(mut previous) if previous.session == session => {
+            rebind_app(
+                host,
+                &mut previous.app,
+                &previous.binding,
+                project,
+                resources,
+                presentation,
+            )
+            .await;
+            previous.app
+        }
+        previous => {
+            let mut app = seed_app(host, project, resources, presentation).await;
+            if let Some(mut previous) = previous {
+                app.inherit_composer_history(&mut previous.app);
+            }
+            app
+        }
+    };
+    InteractiveApp {
+        app,
+        session,
+        binding,
+    }
+}
+
+async fn seed_app(
+    host: &HostSession,
+    project: &std::path::Path,
+    resources: &InteractiveResources,
+    presentation: &PresentationOptions,
+) -> App {
     let policy = host.runtime().policy();
     let snapshot = host.snapshot();
-    let project_label = GitChanges::discover(project)
+    let mut app = App::new(policy.model.as_str(), project_label(project));
+    restore_transcript(host, &mut app, &snapshot.history);
+    seed_host_state(host, &mut app, project, resources, presentation).await;
+    if policy.reasoning.has_override() {
+        app.transcript.push_notice(
+            "reasoning",
+            format!(
+                "thinking {} · effort {} · {} · applies to the next turn",
+                policy.reasoning.effective_state(),
+                policy.reasoning.effective_effort(),
+                policy.reasoning.selection_source,
+            ),
+        );
+    }
+    if let Some(notice) = presentation.reasoning_notice.as_ref() {
+        app.transcript.push_notice("reasoning", notice);
+    }
+    if let Some(previous) = snapshot.manifests.last().map(|entry| &entry.manifest.model)
+        && (previous.provider != policy.provider_name || previous.model != policy.model)
+    {
+        app.transcript.push_notice(
+            "provider",
+            format!(
+                "changed · {}/{} → {}/{} · prior cache not transferable",
+                previous.provider, previous.model, policy.provider_name, policy.model
+            ),
+        );
+    }
+    // The shared seed replayed status; only a new app presents its cache notice.
+    app.restore_cache_events(std::iter::empty());
+    app
+}
+
+async fn rebind_app(
+    host: &HostSession,
+    app: &mut App,
+    previous: &AppBinding,
+    project: &std::path::Path,
+    resources: &InteractiveResources,
+    presentation: &PresentationOptions,
+) {
+    app.rebind_host();
+    seed_host_state(host, app, project, resources, presentation).await;
+    let policy = host.runtime().policy();
+    if previous.provider != policy.provider_name || previous.model != policy.model.as_str() {
+        app.transcript.push_notice(
+            "provider",
+            format!(
+                "changed · {}/{} → {}/{} · prior cache not transferable",
+                previous.provider, previous.model, policy.provider_name, policy.model
+            ),
+        );
+    }
+    if let Some(notice) = presentation.reasoning_notice.as_ref() {
+        app.transcript.push_notice("reasoning", notice);
+    } else if previous.reasoning.effective_state() != policy.reasoning.effective_state()
+        || previous.reasoning.effective_effort() != policy.reasoning.effective_effort()
+        || previous.reasoning.selected_enabled != policy.reasoning.selected_enabled
+        || previous.reasoning.selected_effort != policy.reasoning.selected_effort
+    {
+        app.transcript.push_notice(
+            "reasoning",
+            format!(
+                "thinking {} · effort {} · {} · applies to the next turn",
+                policy.reasoning.effective_state(),
+                policy.reasoning.effective_effort(),
+                policy.reasoning.selection_source,
+            ),
+        );
+    }
+    if previous.context_window != policy.context_window {
+        app.transcript.push_notice(
+            "context",
+            format!(
+                "window changed · {} → {}",
+                previous
+                    .context_window
+                    .as_deref()
+                    .unwrap_or("model default"),
+                policy.context_window.as_deref().unwrap_or("model default"),
+            ),
+        );
+    }
+    if previous.profile != policy.agent_profile {
+        app.transcript.push_notice(
+            "profile",
+            format!("changed · {} → {}", previous.profile, policy.agent_profile),
+        );
+    }
+}
+
+fn project_label(project: &std::path::Path) -> String {
+    GitChanges::discover(project)
         .and_then(|git| git.branch_label())
         .map_or_else(
             |_| abbreviate_home(&project.to_string_lossy()),
             |branch| format!("{}:{branch}", abbreviate_home(&project.to_string_lossy())),
-        );
-    let mut app = App::new(policy.model.as_str(), project_label);
+        )
+}
+
+/// Rebuilds every host-backed projection from the same durable sources.
+async fn seed_host_state(
+    host: &HostSession,
+    app: &mut App,
+    project: &std::path::Path,
+    resources: &InteractiveResources,
+    presentation: &PresentationOptions,
+) {
+    let policy = host.runtime().policy();
+    let snapshot = host.snapshot();
+    app.status = smith_tui::status::Status::new(policy.model.as_str(), project_label(project));
     app.set_cache_miss_notices(presentation.cache_miss_notices);
     app.status
         .switch_model(Some(policy.provider_name.clone()), policy.model.as_str());
-    app.status.set_price(resolve_price(policy, &catalog));
+    app.status
+        .set_price(resolve_price(policy, &resources.catalog));
     app.status
         .set_advisor_price(host.runtime().advisor_route().and_then(|advisor| {
             advisor.price.as_ref().map(|price| {
@@ -216,44 +370,34 @@ pub(super) async fn run_interactive(
                 policy.reasoning.effective_effort(),
             )
         }));
-    if policy.reasoning.has_override() {
-        app.transcript.push_notice(
-            "reasoning",
-            format!(
-                "thinking {} · effort {} · {} · applies to the next turn",
-                policy.reasoning.effective_state(),
-                policy.reasoning.effective_effort(),
-                policy.reasoning.selection_source,
-            ),
-        );
-    }
-    if let Some(notice) = presentation.reasoning_notice {
-        app.transcript.push_notice("reasoning", notice);
-    }
     app.set_resources(runtime_resources(
-        inventory,
-        sessions,
+        resources.inventory.clone(),
+        resources.sessions.clone(),
         host.session().id().as_str(),
         project,
-        &agents,
+        &resources.agents,
         &policy.reasoning,
         &policy.context_windows,
         policy.context_window.as_deref(),
-        credential_pool.as_ref(),
+        resources.credential_pool.as_ref(),
         policy.harness.as_ref(),
     ));
-    app.status.account = account_status(credential_pool.as_ref());
-    restore_transcript(host, &mut app, &snapshot.history);
-    if let Some(coordinator) = host
+    app.status.account = account_status(resources.credential_pool.as_ref());
+    let children = host
         .runtime()
         .delegation()
         .and_then(|delegation| delegation.coordinator())
-    {
-        for child in coordinator.list() {
-            let (state, detail) = child_summary_projection(&child);
-            app.restore_child(child.child.as_str(), state, Some(detail));
-        }
-    }
+        .map_or_else(Vec::new, |coordinator| {
+            coordinator
+                .list()
+                .into_iter()
+                .map(|child| {
+                    let (state, detail) = child_summary_projection(&child);
+                    (child.child.as_str().to_owned(), state, Some(detail))
+                })
+                .collect()
+        });
+    app.replace_children(children);
     if let Some(turn) = host.session().interrupted_on_resume() {
         let report = RestoreReport::ActivationChanged {
             turn: turn.to_string(),
@@ -283,13 +427,6 @@ pub(super) async fn run_interactive(
     if let Some(previous) = snapshot.manifests.last().map(|entry| &entry.manifest.model)
         && (previous.provider != policy.provider_name || previous.model != policy.model)
     {
-        app.transcript.push_notice(
-            "provider",
-            format!(
-                "changed · {}/{} → {}/{} · prior cache not transferable",
-                previous.provider, previous.model, policy.provider_name, policy.model
-            ),
-        );
         // The aggregate snapshot usage belongs to the prior provider/model.
         // Keep its magnitude for context, but stop presenting it as a current
         // provider report and clear cache evidence.
@@ -299,10 +436,11 @@ pub(super) async fn run_interactive(
         // evidence, but this branch's target is the same active `policy`
         // already resolved above — the prior *snapshot's* model, not this
         // session's — so the price is re-resolved rather than left cleared.
-        app.status.set_price(resolve_price(policy, &catalog));
+        app.status
+            .set_price(resolve_price(policy, &resources.catalog));
     }
     if let Ok(events) = host.client_timeline_events().await {
-        app.restore_cache_events(events);
+        app.status.replay_cache_events(events);
     }
     // Old snapshots only carry an aggregate positive cached-input counter.
     // Keep it as a legacy fallback after replay, and never let it override or
@@ -316,14 +454,35 @@ pub(super) async fn run_interactive(
     {
         app.status.record_cache(cache_read);
     }
+}
 
-    let mut terminal = match terminal::enter() {
-        Ok(terminal) => terminal,
-        Err(error) => {
-            let _ = host.shutdown().await;
-            return Err(error).context("entering the alternate screen");
-        }
-    };
+pub(super) async fn run_interactive(
+    terminal: &mut terminal::Terminal,
+    previous: Option<InteractiveApp>,
+    host: &HostSession,
+    requests: InteractiveRequests,
+    project: &std::path::Path,
+    resources: InteractiveResources,
+    presentation: PresentationOptions,
+) -> Result<(InteractiveExit, InteractiveApp)> {
+    let InteractiveApp {
+        app,
+        session,
+        binding,
+    } = prepare_interactive_app(host, project, &resources, &presentation, previous).await;
+    let InteractiveRequests {
+        approvals,
+        interactions,
+        rotations,
+        accounts,
+    } = requests;
+    let InteractiveResources {
+        agents,
+        credential_pool,
+        mcp,
+        skills,
+        ..
+    } = resources;
     let mut theme = Theme::from_env();
     if presentation.no_color {
         theme = theme.without_color();
@@ -332,7 +491,7 @@ pub(super) async fn run_interactive(
         theme = theme.without_motion();
     }
     let mut run_result = run_tui(
-        &mut terminal,
+        terminal,
         app,
         TuiRunInputs {
             host,
@@ -349,22 +508,29 @@ pub(super) async fn run_interactive(
         },
     )
     .await;
-    let restore_result = terminal.restore().context("restoring the terminal");
     let shutdown_result = host
         .shutdown()
         .await
         .map_err(|error| anyhow::anyhow!("{error}"))
         .context("shutting the session down");
 
-    if let Ok(InteractiveExit::Quit(usage, ..)) = &mut run_result {
+    if let Ok((InteractiveExit::Quit(usage, ..), _)) = &mut run_result {
         let snapshot = host.snapshot();
         usage.reconcile_synthetic_records(snapshot.usage.records());
         usage.reconcile_advisor_records(snapshot.usage.records());
     }
 
-    restore_result?;
     shutdown_result?;
-    run_result
+    run_result.map(|(exit, app)| {
+        (
+            exit,
+            InteractiveApp {
+                app,
+                session,
+                binding,
+            },
+        )
+    })
 }
 
 /// Seeds the status projection from durable Runtime records without losing
@@ -465,7 +631,7 @@ pub(super) async fn run_tui(
     terminal: &mut terminal::Terminal,
     mut app: App,
     inputs: TuiRunInputs<'_>,
-) -> Result<InteractiveExit> {
+) -> Result<(InteractiveExit, App)> {
     let TuiRunInputs {
         host,
         project,
@@ -625,14 +791,10 @@ pub(super) async fn run_tui(
                                             .push_notice("account", "already using that account"),
                                     }
                                 }
-                                SessionControl::Reconfigure(selection) => {
-                                    break InteractiveExit::Reconfigure(selection);
-                                }
-                                SessionControl::Connect(provider) => {
-                                    break InteractiveExit::Connect(provider);
-                                }
-                                SessionControl::Disconnect(provider) => {
-                                    break InteractiveExit::Disconnect(provider);
+                                command => {
+                                    if let Some(exit) = reconfigure_exit(&mut app, command) {
+                                        break exit;
+                                    }
                                 }
                             },
                             Some(Action::Command(command)) => {
@@ -1019,6 +1181,7 @@ pub(super) async fn run_tui(
                 if (remote_tools_pending || trusted_skill_pending)
                     && !app.is_busy()
                     && !app.has_pending_input()
+                    && !app.has_pending_prompt()
                     && app.overlay.is_none()
                 {
                     break InteractiveExit::CapabilitiesChanged;
@@ -1109,13 +1272,45 @@ pub(super) async fn run_tui(
             );
         }
     };
-    // A normal exit clears the title exactly once, ahead of the caller's
-    // terminal restore. An I/O error leaving the loop through `?` skips this
-    // and leaves the last title standing until the shell's own prompt hook
+    // A normal exit clears the title exactly once, ahead of a new host's
+    // tracker or the caller's terminal restore. An I/O error through `?` skips
+    // this and leaves the last title standing until the shell's own prompt hook
     // reasserts its title on the next prompt -- that same hook is why
     // restoring a remembered pre-session title is deliberately not attempted.
     let _ = window_title.clear();
-    Ok(exit)
+    Ok((exit, app))
+}
+
+/// Defence behind command validation: no host-owned work may cross a rebuild.
+pub(super) fn reconfigure_exit(app: &mut App, command: SessionControl) -> Option<InteractiveExit> {
+    let name = match &command {
+        SessionControl::Reconfigure(selection) => match selection {
+            SelectionCommand::NewSession => "new",
+            SelectionCommand::Resume(_) => "resume",
+            SelectionCommand::Profile(_) => "profile",
+            SelectionCommand::Model { .. } => "model",
+            SelectionCommand::Agent(_) => "agent",
+            SelectionCommand::Think(_) => "think",
+            SelectionCommand::Effort(_) => "effort",
+            SelectionCommand::ContextWindow(_) => "context",
+        },
+        SessionControl::Connect(_) => "connect",
+        SessionControl::Disconnect(_) => "disconnect",
+        SessionControl::Account(_) => return None,
+    };
+    if app.is_busy() || app.has_pending_input() || app.has_pending_prompt() {
+        app.transcript.push_notice(
+            "smith",
+            format!("/{name} requires an idle turn; draft preserved"),
+        );
+        return None;
+    }
+    match command {
+        SessionControl::Reconfigure(selection) => Some(InteractiveExit::Reconfigure(selection)),
+        SessionControl::Connect(provider) => Some(InteractiveExit::Connect(provider)),
+        SessionControl::Disconnect(provider) => Some(InteractiveExit::Disconnect(provider)),
+        SessionControl::Account(_) => None,
+    }
 }
 
 /// Bounds a background task's command for compact, single-line display.

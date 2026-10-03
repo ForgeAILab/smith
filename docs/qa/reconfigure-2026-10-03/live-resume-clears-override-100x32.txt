@@ -1,0 +1,32 @@
+> Reply with exactly: first answer
+
+● first answer
+
+> Reply with exactly: second answer
+
+● second answer
+
+● reasoning · cleared the saved thinking/effort override because the selected provider/model cannot
+  represent it
+
+● provider · changed · google/gemini-3.8-flash → zai/glm-5.3 · prior cache not transferable
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts                                                           zai/glm-5.3 · code · ask
