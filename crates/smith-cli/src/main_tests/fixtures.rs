@@ -30,10 +30,16 @@ pub(crate) mod fixture_support {
                 ..Self::default()
             };
             for (path, placeholder) in [(project, "<PROJECT>"), (home, "<HOME>")] {
-                if let Ok(canonical) = path.canonicalize() {
-                    this.add(canonical.display().to_string(), placeholder);
+                let canonical = path.canonicalize().ok();
+                for spelling in canonical.iter().map(|path| path.as_path()).chain([path]) {
+                    let spelling = spelling.display().to_string();
+                    // macOS reaches `/var` and `/tmp` through `/private`, so a
+                    // canonical path also appears in output without that prefix.
+                    if let Some(alias) = spelling.strip_prefix("/private") {
+                        this.add(alias.to_owned(), placeholder);
+                    }
+                    this.add(spelling, placeholder);
                 }
-                this.add(path.display().to_string(), placeholder);
             }
             let project_id = smith_runtime::host::project_id(project).expect("project identity");
             this.add(project_id.to_string(), "<PROJECT_ID>");

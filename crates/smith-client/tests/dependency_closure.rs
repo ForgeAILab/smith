@@ -13,10 +13,12 @@ fn normal_dependency_closure_has_no_terminal_libraries() {
         .and_then(Path::parent)
         .expect("smith-client is a workspace crate");
     let output = Command::new(env!("CARGO"))
-        .args(["metadata", "--format-version", "1", "--offline", "--locked"])
+        // Not `--offline`: metadata covers every target platform, and a
+        // checkout that built for one host has not downloaded the others.
+        .args(["metadata", "--format-version", "1", "--locked"])
         .current_dir(workspace)
         .output()
-        .expect("read offline Cargo dependency metadata");
+        .expect("read Cargo dependency metadata");
     assert!(
         output.status.success(),
         "cargo metadata failed: {}",
