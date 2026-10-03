@@ -730,6 +730,7 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                 };
                 let content = match result {
                     LocalResult::Status(report) => smith_client::status_report::render_plain(report),
+                    LocalResult::Diagnostics(report) => smith_client::diagnostics_report::render_plain(report),
                     LocalResult::Context(report) => smith_client::context_report::render_plain(report),
                     LocalResult::Help(report) => smith_client::help_report::render_plain(report),
                     LocalResult::Timeline(report) => {
@@ -751,6 +752,9 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                 let normalized = match result {
                     LocalResult::Status(report) => LocalResult::Status(Box::new(
                         fixture_status_view(report, normalizer),
+                    )),
+                    LocalResult::Diagnostics(report) => LocalResult::Diagnostics(Box::new(
+                        fixture_diagnostics_view(report, normalizer),
                     )),
                     LocalResult::Context(report) => LocalResult::Context(Box::new(
                         fixture_context_view(report, normalizer),
@@ -962,6 +966,27 @@ fn fixture_status_view(
                 &mut goal.id,
             ] {
                 *value = normalizer.normalize(value);
+            }
+        }
+    }
+    report
+}
+
+fn fixture_diagnostics_view(
+    report: &smith_client::diagnostics_report::DiagnosticsReport,
+    normalizer: &mut fixture_support::Normalizer,
+) -> smith_client::diagnostics_report::DiagnosticsReport {
+    use smith_client::diagnostics_report::DiagnosticsRow;
+
+    let mut report = report.clone();
+    for section in &mut report.sections {
+        for row in &mut section.rows {
+            match row {
+                DiagnosticsRow::Field { label, value } => {
+                    *label = normalizer.normalize(label);
+                    *value = normalizer.normalize(value);
+                }
+                DiagnosticsRow::Line(line) => *line = normalizer.normalize(line),
             }
         }
     }

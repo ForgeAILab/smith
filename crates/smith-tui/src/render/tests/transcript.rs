@@ -793,6 +793,58 @@
     }
 
     #[test]
+    fn typed_diagnostics_preserves_wrapping_and_inline_text() {
+        use smith_client::diagnostics_report::{DiagnosticsReport, DiagnosticsRow, DiagnosticsSection};
+
+        let report = DiagnosticsReport {
+            sections: vec![
+                DiagnosticsSection {
+                    rows: vec![
+                        DiagnosticsRow::Field {
+                            label: "profile".to_owned(),
+                            value: "dev · posture build · use main · rev <PROFILE_REVISION>… · source built-in default `agent_modes.build.posture`".to_owned(),
+                        },
+                        DiagnosticsRow::Field {
+                            label: "latest capability retrieval".to_owned(),
+                            value: "resolver-test · tool:read, tool:search".to_owned(),
+                        },
+                        DiagnosticsRow::Field {
+                            label: "  tool schema".to_owned(),
+                            value: "~500".to_owned(),
+                        },
+                    ],
+                },
+                DiagnosticsSection {
+                    rows: vec![
+                        DiagnosticsRow::Field {
+                            label: "goal".to_owned(),
+                            value: "Fix `tool:read` and `write`\nFollow **these steps**\n".to_owned(),
+                        },
+                        DiagnosticsRow::Line(String::new()),
+                        DiagnosticsRow::Line("**literal: text** and `inline code`".to_owned()),
+                        DiagnosticsRow::Line("Free **text** with `inline code`".to_owned()),
+                        DiagnosticsRow::Line(String::new()),
+                    ],
+                },
+            ],
+        };
+        let plain = smith_client::diagnostics_report::render_plain(&report);
+        let mut app = App::new("example-model", "~/work/api");
+        app.show_local_report(LocalResult::Diagnostics(Box::new(report)));
+        for width in [44, 100] {
+            let theme = Theme::new().without_color();
+            let typed = transcript_lines(&app, theme, width);
+            let mut legacy = vec![Line::from("/diagnostics")];
+            legacy.extend(render_local_content(&plain, width, theme));
+            assert_eq!(
+                typed.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                legacy.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                "{width} columns",
+            );
+        }
+    }
+
+    #[test]
     fn text_results_do_not_select_the_status_card_by_title() {
         let mut app = App::new("gpt-5.3", "~/work/api");
         app.show_local_result("status", "session: text stays text");

@@ -5,7 +5,15 @@
         report as context_report,
     };
     use smith_client::context_report::{ContextCategoryKind, render_plain as render_context_plain};
+    use crate::local_command::diagnostics::{context_section, harness_section};
+    use smith_client::diagnostics_report::{DiagnosticsReport, DiagnosticsSection};
     use smith_client::status::{PriceReference, PriceTable, SessionUsage};
+
+    fn diagnostics_section_plain(section: DiagnosticsSection) -> String {
+        smith_client::diagnostics_report::render_plain(&DiagnosticsReport {
+            sections: vec![section],
+        })
+    }
 
     #[test]
     fn status_cost_reports_unknown_without_assuming_a_price() {
@@ -151,7 +159,7 @@
         });
         status.record_compaction(250);
 
-        let rendered = render_harness_status(&status);
+        let rendered = diagnostics_section_plain(harness_section(&status));
         assert!(
             rendered.contains("registry snapshot: registry-fingerprint · 6 entries"),
             "{rendered}"
@@ -208,7 +216,7 @@
         let history_before = host.session().history().len();
         let mut app = App::new("example-model", project.path().display().to_string());
 
-        let before_plan = render_context_status(&app.status, host.runtime().policy());
+        let before_plan = diagnostics_section_plain(context_section(&app.status, host.runtime().policy()));
         assert!(before_plan.contains("not planned yet"), "{before_plan}");
         assert!(
             before_plan.contains("128k total · 4k reserved"),
@@ -278,7 +286,7 @@
             totals: &totals,
             confidence: EstimationConfidence::Estimated,
         });
-        let planned = render_context_status(&app.status, host.runtime().policy());
+        let planned = diagnostics_section_plain(context_section(&app.status, host.runtime().policy()));
         assert!(planned.contains("~98% input left"), "{planned}");
         assert!(planned.contains("~2k used / 123.9k budget"), "{planned}");
         assert!(planned.contains("provider input (session): ?"), "{planned}");
@@ -400,17 +408,16 @@
             !status_content.contains("resume capsule:"),
             "{status_content}"
         );
-        let diagnostics_content = app
+        let diagnostics_report = app
             .transcript
             .blocks()
             .iter()
             .find_map(|block| match block {
-                Block::Local(LocalResult::Text { title, body, .. }) if title == "diagnostics" => {
-                    Some(body.as_str())
-                }
+                Block::Local(LocalResult::Diagnostics(report)) => Some(report),
                 _ => None,
             })
             .expect("diagnostic output");
+        let diagnostics_content = smith_client::diagnostics_report::render_plain(diagnostics_report);
         assert!(
             diagnostics_content.contains("~98% input left"),
             "{diagnostics_content}"
@@ -474,7 +481,7 @@
             totals: &totals,
             confidence: EstimationConfidence::Estimated,
         });
-        let compacted = render_context_status(&app.status, host.runtime().policy());
+        let compacted = diagnostics_section_plain(context_section(&app.status, host.runtime().policy()));
         assert!(
             compacted.contains("compaction: applied · ~600 summary · 74.3k recovery target"),
             "{compacted}"

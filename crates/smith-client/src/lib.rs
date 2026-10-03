@@ -8,6 +8,7 @@ pub mod agent_report;
 pub mod cache;
 pub mod commands;
 pub mod context_report;
+pub mod diagnostics_report;
 pub mod diff_report;
 mod format;
 pub mod goal_report;

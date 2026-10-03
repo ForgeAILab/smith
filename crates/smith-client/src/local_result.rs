@@ -5,6 +5,7 @@
 
 use crate::agent_report::{AgentReport, AgentResumeReport};
 use crate::context_report::ContextReport;
+use crate::diagnostics_report::DiagnosticsReport;
 use crate::diff_report::{DiffOutcome, DiffReport};
 use crate::goal_report::GoalReport;
 use crate::help_report::HelpReport;
@@ -31,6 +32,8 @@ pub enum LocalResultState {
 pub enum LocalResult {
     /// The session's status snapshot.
     Status(Box<StatusReport>),
+    /// The session's detailed cache, context, and recovery snapshot.
+    Diagnostics(Box<DiagnosticsReport>),
     /// The session's context occupancy snapshot.
     Context(Box<ContextReport>),
     /// The command guide derived from the registry.
@@ -67,6 +70,7 @@ impl LocalResult {
     pub fn title(&self) -> &str {
         match self {
             Self::Status(_) => "status",
+            Self::Diagnostics(_) => "diagnostics",
             Self::Context(_) => "context",
             Self::Help(_) => "help",
             Self::Timeline(_) => "timeline",
@@ -84,7 +88,9 @@ impl LocalResult {
     /// The result's semantic state.
     pub fn state(&self) -> LocalResultState {
         match self {
-            Self::Status(_) | Self::Context(_) | Self::Help(_) => LocalResultState::Info,
+            Self::Status(_) | Self::Diagnostics(_) | Self::Context(_) | Self::Help(_) => {
+                LocalResultState::Info
+            }
             Self::Timeline(report) => match report.as_ref() {
                 TimelineReport::Empty => LocalResultState::Empty,
                 TimelineReport::Unavailable(_) => LocalResultState::Error,

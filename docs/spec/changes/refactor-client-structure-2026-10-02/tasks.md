@@ -69,10 +69,10 @@ completed_at:
 
 - [x] 4.1 Add `LocalResult` and the transitional `Text` variant; carry it in
   the transcript block.
-- [ ] 4.2 Convert `/status`, then `/context`, `/help`, `/timeline`, `/goal`,
+- [x] 4.2 Convert `/status`, then `/context`, `/help`, `/timeline`, `/goal`,
   `/agent`, `/mcp`, `/skills`, `/diff`, `/review`, the undo, redo, and revert
   previews, and `/diagnostics`; one commit each, fixtures unchanged.
-  Converted so far: `/status`, `/context`, `/help`, `/timeline`, `/goal`, `/agent`, `/mcp`, `/skills`, `/diff`, `/review`, the undo, redo, and revert previews.
+  All converted, one commit each; fixture compare unchanged at every step.
 - [ ] 4.3 Render headless goal, child, and restore text from the same
   reports; remove the duplicate formatters.
 - [ ] 4.4 Delete renderer branches that inspect titles, headings, glyphs, or

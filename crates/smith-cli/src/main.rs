@@ -40,7 +40,6 @@ use agent_runtime_core::delegation::{
 };
 #[cfg(test)]
 use agent_runtime_core::goal::GoalCommand;
-use agent_runtime_core::goal::GoalProjection;
 use agent_runtime_core::ids::{ChildId, SessionId};
 use agent_runtime_core::provider::{ModelId, ReasoningSupport};
 use agent_runtime_core::steer::SteerRejectionReason;
@@ -57,7 +56,7 @@ use smith_client::commands::{AgentAction, DiffScope};
 use smith_client::commands::{HostCommand, SelectionCommand, SessionControl};
 #[cfg(test)]
 use smith_client::status::ContextPlanUpdate;
-use smith_client::status::{Status, TokenCount, render_elapsed};
+use smith_client::status::{Status, render_elapsed};
 use smith_config::credential::CredentialResolver;
 use smith_config::inventory::{
     InventoryLimit, ModelLimitOrigin, SelectionInventory, local_inventory_with_catalog,
@@ -72,8 +71,10 @@ use smith_host::{
     HeadlessRotation, InteractionRequests, InteractiveApproval, InteractiveInteraction,
     InteractiveRotation, ProjectWorkspace, RotationPrompt, RotationRequests,
 };
+#[cfg(test)]
+use smith_runtime::client::EstimationConfidence;
 use smith_runtime::client::{
-    ChildPhase, EstimationConfidence, SmithEvent as EventEnvelope, SmithEventKind as RuntimeEvent,
+    ChildPhase, SmithEvent as EventEnvelope, SmithEventKind as RuntimeEvent,
 };
 use smith_runtime::factory::{
     AVAILABLE_ADAPTER_KINDS, ChildProfileRequest, FactoryError, HostSurface, RuntimePolicy,

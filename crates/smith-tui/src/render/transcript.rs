@@ -15,6 +15,7 @@ use crate::theme::{Theme, Tone, glyph};
 use crate::transcript::{Block, LocalResult, LocalResultState, ToolStatus};
 use smith_client::agent_report::{AgentReport, AgentResumeReport, AgentSnapshot};
 use smith_client::context_report::{ContextCategoryKind, ContextCompaction, ContextReport};
+use smith_client::diagnostics_report::{DiagnosticsReport, DiagnosticsRow};
 use smith_client::diff_report::{DiffLine, DiffLineKind, DiffOutcome, DiffReport};
 use smith_client::goal_report::GoalReport;
 use smith_client::help_report::{HelpCommand, HelpReport};
@@ -365,6 +366,13 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16) -> Vec<Line<'static>>
                     theme.style(Tone::Command),
                 )));
                 lines.extend(render_status_card(report, width, theme));
+            }
+            Block::Local(LocalResult::Diagnostics(report)) => {
+                lines.push(Line::from(Span::styled(
+                    "/diagnostics",
+                    theme.style(Tone::Command),
+                )));
+                lines.extend(render_diagnostics_report(report, width, theme));
             }
             Block::Local(LocalResult::Context(report)) => {
                 lines.push(Line::from(Span::styled(
@@ -892,6 +900,61 @@ pub(super) fn render_status_field(
             }
         })
         .collect()
+}
+
+fn render_diagnostics_report(
+    report: &DiagnosticsReport,
+    width: u16,
+    theme: Theme,
+) -> Vec<Line<'static>> {
+    let available = usize::from(width).max(1);
+    let mut lines = Vec::new();
+    let mut rows = report
+        .sections
+        .iter()
+        .flat_map(|section| &section.rows)
+        .peekable();
+    while let Some(row) = rows.next() {
+        let (mut content, label_bytes) = match row {
+            DiagnosticsRow::Field { label, value } => {
+                let prefix = format!("{label}:");
+                (format!("{prefix} {value}"), prefix.len())
+            }
+            DiagnosticsRow::Line(line) => (line.clone(), 0),
+        };
+        // Retain line endings at row boundaries just as the plain renderer's
+        // newline join does, including trailing newlines in user text.
+        if rows.peek().is_some() {
+            content.push('\n');
+        }
+        let mut offset = 0;
+        for raw in content.lines() {
+            for wrapped in wrap_text(raw, available) {
+                let wrapped_bytes = wrapped.len();
+                let label_end = label_bytes.saturating_sub(offset).min(wrapped.len());
+                let line = if label_end > 0 {
+                    Line::from(vec![
+                        Span::styled(wrapped[..label_end].to_owned(), theme.style(Tone::Dim)),
+                        Span::styled(wrapped[label_end..].to_owned(), theme.style(Tone::Default)),
+                    ])
+                } else if wrapped.contains(':') {
+                    // Preserve the previous literal inline-Markdown treatment
+                    // of colons in values. They never identify a field or label.
+                    Line::from(Span::styled(wrapped, theme.style(Tone::Default)))
+                } else {
+                    Line::from(render_inline_markdown(
+                        &wrapped,
+                        theme.style(Tone::Default),
+                        theme,
+                    ))
+                };
+                offset += wrapped_bytes;
+                lines.push(line);
+            }
+            offset += 1;
+        }
+    }
+    lines
 }
 
 pub(super) fn render_local_content(content: &str, width: u16, theme: Theme) -> Vec<Line<'static>> {

@@ -11,6 +11,7 @@ use smith_client::status::{PriceReference, SessionCost, SessionUsage};
 
 pub(crate) mod agent;
 pub(super) mod context;
+pub(super) mod diagnostics;
 mod diff;
 mod goal;
 pub(super) mod mcp;
@@ -92,118 +93,9 @@ pub(super) async fn handle_local_command(
             ))));
         }
         HostCommand::Diagnostics => {
-            let policy = host.runtime().policy();
-            let git = GitChanges::discover(project)
-                .and_then(|git| git.status_summary())
-                .unwrap_or_else(|_| "unavailable (not a Git worktree)".to_owned());
-            let child_count = host
-                .runtime()
-                .delegation()
-                .and_then(|delegation| delegation.coordinator())
-                .map_or(0, |coordinator| coordinator.list().len());
-            let attribution = host.changes().latest().map_or_else(
-                || {
-                    if host.changes().has_historical_records() {
-                        "historical metadata only; not automatically undoable".to_owned()
-                    } else {
-                        "no attributable turn recorded".to_owned()
-                    }
-                },
-                |set| {
-                    if set.undone || !set.has_exact_mutations() {
-                        format!("Smith turn {} · automatic undo unavailable", set.turn)
-                    } else if set.is_fully_attributable() {
-                        format!("Smith turn {} · undo available", set.turn)
-                    } else {
-                        format!(
-                            "Smith turn {} · undo covers Smith's own edits; \
-                             ambiguous changes need /diff",
-                            set.turn
-                        )
-                    }
-                },
-            );
-            let context = render_context_status(&app.status, policy);
-            let cache_controller = host.cache_lifecycle().map_or_else(
-                || "cache maintenance: unavailable".to_owned(),
-                |snapshot| render_cache_controller_status(&snapshot),
-            );
-            let resume_capsule = host.resume_capsule().map_or_else(
-                || "resume capsule: disabled".to_owned(),
-                |capsule| render_resume_capsule_status(&capsule),
-            );
-            let harness = render_harness_status(&app.status);
-            let reasoning = render_reasoning_status(policy);
-            let goal = host.goal().map_or_else(
-                |error| format!("unavailable ({error})"),
-                |goal| goal.as_ref().map_or_else(|| "none".to_owned(), render_goal),
-            );
-            let connections = if app.resources.disconnections.is_empty() {
-                "none".to_owned()
-            } else {
-                app.resources
-                    .disconnections
-                    .iter()
-                    .map(|entry| format!("{} ({})", entry.label, entry.detail))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            };
-            // The same merged/root/agents shape the exit report carries,
-            // named honestly when nothing has been spent yet — `/status` is
-            // the one place a user checks usage mid-session rather than at
-            // exit.
-            let session_usage = app.session_usage();
-            let usage = session_usage
-                .render()
-                .unwrap_or_else(|| "nothing spent yet".to_owned());
-            // Unlike the exit report, `/status` reports cost as unknown
-            // rather than omitting it when the catalog carries no price
-            // entry for the active model (`usage-accounting`'s "Price is
-            // unavailable"; `DESIGN.md` §7's `cost ?`) — a user checking
-            // mid-session should never have to wonder whether "no cost line"
-            // means "free" or "unpriced".
-            let cost = render_status_cost(
-                &session_usage,
-                app.status.price(),
-                (&policy.provider_name, policy.model.as_str()),
-            );
-            app.show_local_result(
-                "diagnostics",
-                format!(
-                    "session: {}\nprofile: {} · posture {} · use {} · rev {} · source {}{}\n\
-                     provider: {}\nmodel: {}\npermission: {:?}\n\
-                     {reasoning}\n\
-                     protected mid-turn recovery: {}\n\
-                     {harness}\n{context}\n{cache_controller}\n{resume_capsule}\nproject: {}\nGit: {}\n\
-                     goal: {goal}\nconnections: {connections}\nchildren: {}\nusage: {usage}\n\
-                     cost: {cost}\n\
-                     change attribution: {}",
-                    host.session().id(),
-                    policy.agent_profile,
-                    policy.agent_posture.as_str(),
-                    policy
-                        .agent_profile_uses
-                        .iter()
-                        .map(|placement| placement.as_str())
-                        .collect::<Vec<_>>()
-                        .join("+"),
-                    bounded_text(&policy.agent_profile_revision, 12),
-                    bounded_text(&policy.agent_profile_source, 80),
-                    if policy.agent_profile_legacy {
-                        " · legacy adapter; migrate to [profiles]"
-                    } else {
-                        ""
-                    },
-                    policy.provider_name,
-                    policy.model,
-                    policy.approval_mode,
-                    policy.mid_turn_durability.as_str(),
-                    project.display(),
-                    git,
-                    child_count,
-                    attribution,
-                ),
-            );
+            app.show_local_report(LocalResult::Diagnostics(Box::new(diagnostics::report(
+                app, host, project,
+            ))));
         }
         HostCommand::Goal(action) => {
             app.show_local_report(LocalResult::Goal(Box::new(
@@ -288,170 +180,6 @@ pub(super) fn render_status_cost(
         price.provider,
         price.model,
     )
-}
-
-pub(super) fn render_goal(goal: &GoalProjection) -> String {
-    let status = goal.status.as_str();
-    let usage = goal
-        .usage
-        .charged_tokens
-        .map_or_else(|| "unknown".to_owned(), |tokens| tokens.to_string());
-    let budget = goal
-        .token_budget
-        .map_or_else(|| "none".to_owned(), |tokens| tokens.to_string());
-    let provenance = goal.usage.provenance.as_str();
-    let reason = goal.stopped_reason.as_ref().map_or_else(
-        || "none".to_owned(),
-        |reason| {
-            reason.detail.as_ref().map_or_else(
-                || reason.code.clone(),
-                |detail| format!("{} · {detail}", reason.code),
-            )
-        },
-    );
-    format!(
-        "{}\nstatus: {status}\ntokens: {usage} · {provenance}\nbudget: {budget}\nactive elapsed: {}\nreason: {reason}\nid: {} · generation {}",
-        goal.objective,
-        render_elapsed(Duration::from_millis(goal.usage.active_elapsed_ms)),
-        goal.id,
-        goal.generation,
-    )
-}
-
-pub(super) fn render_harness_status(status: &Status) -> String {
-    let capabilities = &status.capabilities;
-    let mut lines = Vec::new();
-    match &capabilities.registry {
-        Some((fingerprint, entries)) => {
-            lines.push(format!(
-                "registry snapshot: {fingerprint} · {entries} entries"
-            ));
-        }
-        None => lines.push("registry snapshot: waiting for live lifecycle".to_owned()),
-    }
-    if let Some((fingerprint, visible)) = &capabilities.view {
-        lines.push(format!(
-            "scoped capability view: {fingerprint} · {visible} visible"
-        ));
-    }
-    if let Some((revision, candidates)) = &capabilities.retrieval {
-        let candidates = if candidates.is_empty() {
-            "(none)".to_owned()
-        } else {
-            candidates.join(", ")
-        };
-        lines.push(format!(
-            "latest capability retrieval: {revision} · {candidates}"
-        ));
-    }
-    if let Some((epoch, active)) = &capabilities.activation {
-        let active = if active.is_empty() {
-            "(none)".to_owned()
-        } else {
-            active.join(", ")
-        };
-        lines.push(format!("activation epoch: {epoch} · {active}"));
-    }
-    if let Some(plan) = &status.context_plan {
-        lines.push(format!(
-            "context provenance: {} · cache {}",
-            plan.fingerprint, plan.cache_fingerprint
-        ));
-    }
-    if capabilities.compactions > 0 {
-        lines.push(format!(
-            "context compaction: {} run(s) · {} tokens reclaimed",
-            capabilities.compactions, capabilities.reclaimed_tokens
-        ));
-    }
-    lines.join("\n")
-}
-
-pub(super) fn render_context_status(status: &Status, policy: &RuntimePolicy) -> String {
-    let limits = policy.model_profile.limits;
-    let declared_reserve = policy
-        .context_policy
-        .output_reserve
-        .saturating_add(policy.context_policy.reasoning_reserve);
-    let input_budget = limits.input_budget(declared_reserve);
-    let exact = |tokens: u32| TokenCount::reported(u64::from(tokens)).render();
-    let with_confidence = |tokens: u32, confidence: EstimationConfidence| match confidence {
-        EstimationConfidence::Exact => TokenCount::reported(u64::from(tokens)).render(),
-        EstimationConfidence::Estimated => TokenCount::estimated(u64::from(tokens)).render(),
-    };
-
-    let mut lines = Vec::new();
-    if let Some(plan) = &status.context_plan {
-        let percent_prefix = if plan.confidence == EstimationConfidence::Estimated {
-            "~"
-        } else {
-            ""
-        };
-        lines.push(format!(
-            "context window: {percent_prefix}{}% input left ({} used / {} budget)",
-            plan.percent_left(),
-            plan.render_input(),
-            exact(plan.input_budget_tokens),
-        ));
-        lines.push(format!(
-            "model window: {} total · {} reserved",
-            exact(limits.context_tokens),
-            exact(plan.reserved_tokens),
-        ));
-        lines.push(format!(
-            "context plan: {} · {} segments",
-            plan.confidence_label(),
-            plan.segment_count,
-        ));
-        for (kind, tokens) in &plan.totals {
-            lines.push(format!(
-                "  {}: {}",
-                kind.replace('_', " "),
-                with_confidence(*tokens, plan.confidence),
-            ));
-        }
-        let compaction_target = exact(policy.compaction_policy.low_watermark);
-        if let Some(summary_tokens) = plan.totals.get("summary").filter(|tokens| **tokens > 0) {
-            lines.push(format!(
-                "compaction: applied · {} summary · {} recovery target",
-                with_confidence(*summary_tokens, plan.confidence),
-                compaction_target,
-            ));
-        } else {
-            lines.push(format!(
-                "compaction: enabled on overflow · {compaction_target} recovery target"
-            ));
-        }
-    } else {
-        lines.push(format!(
-            "context window: not planned yet (? used / {} input budget)",
-            exact(input_budget),
-        ));
-        lines.push(format!(
-            "model window: {} total · {} reserved",
-            exact(limits.context_tokens),
-            exact(declared_reserve),
-        ));
-        lines.push("context plan: waiting for first turn".to_owned());
-        lines.push(format!(
-            "compaction: enabled on overflow · {} recovery target",
-            exact(policy.compaction_policy.low_watermark),
-        ));
-    }
-    lines.push(format!(
-        "provider input (session): {}",
-        status.context.render()
-    ));
-    lines.push(format!("cache read (session): {}", status.render_cache()));
-    lines.push(render_cache_status(status));
-    lines.push(render_reasoning_status(policy));
-    lines.join("\n")
-}
-
-/// Renders the canonical cache state and derived miss diagnostics shared by
-/// `/status` and the detailed context view. Unknown values remain `?`.
-pub(super) fn render_cache_status(status: &Status) -> String {
-    format!("cache: {}", cache_status_value(status))
 }
 
 fn cache_status_value(status: &Status) -> String {
@@ -610,8 +338,18 @@ fn resume_summary_value(capsule: &smith_runtime::resume_capsule::RedactedResumeC
     )
 }
 
-/// Renders Smith's bounded adaptive scheduler diagnostics.
+#[cfg(test)]
 pub(super) fn render_cache_controller_status(
+    controller: &smith_runtime::cache_controller::CacheControllerSnapshot,
+) -> String {
+    format!(
+        "cache maintenance: {}",
+        cache_controller_status_value(controller)
+    )
+}
+
+/// Captures Smith's bounded adaptive scheduler diagnostics without a field label.
+fn cache_controller_status_value(
     controller: &smith_runtime::cache_controller::CacheControllerSnapshot,
 ) -> String {
     let requested = format!("{:?}", controller.requested_maintenance).to_ascii_lowercase();
@@ -639,7 +377,7 @@ pub(super) fn render_cache_controller_status(
     let synthetic = render_synthetic_attempt_status(controller);
     let Some(lease) = controller.lifecycle.current() else {
         return format!(
-            "cache maintenance: requested {requested} · effective {effective} · authority {} · lease none · calls {}/{} · scheduled {scheduled} · decision {decision}{narrowing}{idle}{synthetic}",
+            "requested {requested} · effective {effective} · authority {} · lease none · calls {}/{} · scheduled {scheduled} · decision {decision}{narrowing}{idle}{synthetic}",
             if controller.synthetic_spend_authorized {
                 "allowed"
             } else {
@@ -668,7 +406,7 @@ pub(super) fn render_cache_controller_status(
         |reason| format!("{reason:?}").to_ascii_lowercase(),
     );
     format!(
-        "cache maintenance: requested {requested} · effective {effective} · authority {} · lease {:?} · preserved {} · reads {reads} · writes {writes} · guarantee {guarantee} · calls {}/{} · synthetic in/out {}/{} · last {last} · scheduled {scheduled} · decision {decision} · suspension {suspension}{narrowing}{idle}{synthetic}",
+        "requested {requested} · effective {effective} · authority {} · lease {:?} · preserved {} · reads {reads} · writes {writes} · guarantee {guarantee} · calls {}/{} · synthetic in/out {}/{} · last {last} · scheduled {scheduled} · decision {decision} · suspension {suspension}{narrowing}{idle}{synthetic}",
         if controller.synthetic_spend_authorized {
             "allowed"
         } else {
@@ -757,7 +495,7 @@ fn render_idle_compaction_status(
     )
 }
 
-pub(super) fn render_resume_capsule_status(
+fn resume_capsule_status_value(
     capsule: &smith_runtime::resume_capsule::RedactedResumeCapsule,
 ) -> String {
     let summary = capsule.semantic_summary.as_ref().map_or_else(
@@ -775,7 +513,7 @@ pub(super) fn render_resume_capsule_status(
         },
     );
     format!(
-        "resume capsule: schema {} · watermark {} · persisted {} · summary {summary}",
+        "schema {} · watermark {} · persisted {} · summary {summary}",
         capsule.schema_version,
         capsule.last_persisted_watermark,
         capsule.last_persisted_at.map_or_else(
@@ -805,11 +543,6 @@ const fn cache_operation_reason(
         CacheOperationReason::Shutdown => "shutdown",
         CacheOperationReason::Conflict => "conflict",
     }
-}
-
-pub(super) fn render_reasoning_status(policy: &RuntimePolicy) -> String {
-    let (reasoning, controls) = reasoning_status_values(policy);
-    format!("reasoning: {reasoning}\nreasoning controls: {controls}")
 }
 
 fn reasoning_status_values(policy: &RuntimePolicy) -> (String, String) {
