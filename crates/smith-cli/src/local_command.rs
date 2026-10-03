@@ -6,6 +6,7 @@ use smith_client::status::{PriceReference, SessionCost, SessionUsage};
 
 pub(super) mod context;
 mod status;
+pub(crate) mod timeline;
 
 pub(super) fn tool_call_for_display(
     event: &RuntimeEvent,
@@ -89,64 +90,9 @@ pub(super) async fn handle_local_command(
             ))));
         }
         HostCommand::Timeline => {
-            let events = match host.client_timeline_events().await {
-                Ok(events) => events,
-                Err(error) => {
-                    app.show_local_error("timeline", format!("timeline unavailable: {error}"));
-                    return;
-                }
-            };
-            let timeline = render_runtime_timeline(&events);
-            let mut lines = timeline.lines;
-            if lines.is_empty() {
-                lines.extend(host.session().snapshot().manifests.iter().map(|manifest| {
-                    format!(
-                        "root {} · committed · {}/{} · {} activated capability/capabilities",
-                        manifest.turn,
-                        manifest.manifest.model.provider,
-                        manifest.manifest.model.model,
-                        manifest.manifest.activation.len(),
-                    )
-                }));
-            }
-            if let Some(coordinator) = host
-                .runtime()
-                .delegation()
-                .and_then(|delegation| delegation.coordinator())
-            {
-                lines.extend(
-                    coordinator
-                        .list()
-                        .into_iter()
-                        .filter(|child| !timeline.children.contains(&child.child))
-                        .map(|child| {
-                            format!(
-                                "child {} · session {} · {:?} · {:?} · resumable {} · {} turns",
-                                child.child,
-                                child.session,
-                                child.durability,
-                                child.state,
-                                child.resumable(),
-                                crate::submission::turns_label(child.turns_used, child.max_turns),
-                            )
-                        }),
-                );
-            }
-            lines.extend(
-                host.changes()
-                    .timeline()
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, entry)| format!("recovery recovery-{} · {entry}", index + 1)),
-            );
-            if lines.len() > 100 {
-                lines.drain(..lines.len().saturating_sub(100));
-            }
-            if lines.is_empty() {
-                app.show_local_empty("timeline", "No turns, children, or recovery actions yet.");
-            } else {
-                app.show_local_result("timeline", lines.join("\n"));
-            }
+            app.show_local_report(LocalResult::Timeline(Box::new(
+                timeline::report(host).await,
+            )));
         }
         HostCommand::Status => {
             app.show_local_report(LocalResult::Status(Box::new(status::report(
@@ -590,123 +536,6 @@ pub(super) fn render_goal(goal: &GoalProjection) -> String {
         goal.id,
         goal.generation,
     )
-}
-
-#[derive(Debug, Default)]
-pub(super) struct RuntimeTimeline {
-    pub(super) lines: Vec<String>,
-    pub(super) children: BTreeSet<ChildId>,
-}
-
-#[derive(Debug, Default)]
-pub(super) struct TurnTimelineState {
-    plan: Option<BTreeMap<String, u32>>,
-    passed_gates: u32,
-    failed_gates: u32,
-}
-
-pub(super) fn render_runtime_timeline(events: &[EventEnvelope]) -> RuntimeTimeline {
-    let mut timeline = RuntimeTimeline::default();
-    let mut turns = BTreeMap::<String, TurnTimelineState>::new();
-    let mut tools = BTreeMap::<String, String>::new();
-
-    for event in events {
-        match &event.payload {
-            RuntimeEvent::PlanUpdated { counts, .. } => {
-                if let Some(turn) = &event.turn {
-                    turns.entry(turn.as_str().to_owned()).or_default().plan = Some(counts.clone());
-                }
-            }
-            RuntimeEvent::ToolCallRequested { call, name, .. } => {
-                tools.insert(call.as_str().to_owned(), name.clone());
-            }
-            RuntimeEvent::ToolCallCompleted { call, is_error, .. }
-                if tools.get(call.as_str()).is_some_and(|name| name == "shell") =>
-            {
-                if let Some(turn) = &event.turn {
-                    let state = turns.entry(turn.as_str().to_owned()).or_default();
-                    if *is_error {
-                        state.failed_gates = state.failed_gates.saturating_add(1);
-                    } else {
-                        state.passed_gates = state.passed_gates.saturating_add(1);
-                    }
-                }
-            }
-            RuntimeEvent::TurnCompleted { finish, .. } => {
-                if let Some(turn) = &event.turn {
-                    let state = turns.remove(turn.as_str()).unwrap_or_default();
-                    timeline.lines.push(format!(
-                        "root {} · {} · {} · gates {} passed/{} failed",
-                        turn,
-                        turn_finish_label(finish),
-                        render_terminal_plan(state.plan.as_ref()),
-                        state.passed_gates,
-                        state.failed_gates,
-                    ));
-                }
-            }
-            RuntimeEvent::ChildSpawned {
-                child,
-                workspace,
-                max_turns,
-                ..
-            } => {
-                timeline.children.insert(child.clone());
-                timeline.lines.push(if *max_turns == u32::MAX {
-                    format!("child {child} · started · {workspace:?}")
-                } else {
-                    format!("child {child} · started · {workspace:?} · {max_turns} turn limit")
-                });
-            }
-            RuntimeEvent::ChildNeedsInput { child, .. } => {
-                timeline.children.insert(child.clone());
-                timeline.lines.push(format!("child {child} · needs input"));
-            }
-            RuntimeEvent::ChildCompleted { child, .. } => {
-                timeline.children.insert(child.clone());
-                timeline
-                    .lines
-                    .push(format!("child {child} · task completed"));
-            }
-            RuntimeEvent::ChildStopped { child, reason } => {
-                timeline.children.insert(child.clone());
-                timeline
-                    .lines
-                    .push(format!("child {child} · stopped ({reason:?})"));
-            }
-            RuntimeEvent::ChildFailed { child, .. } => {
-                timeline.children.insert(child.clone());
-                timeline.lines.push(format!("child {child} · failed"));
-            }
-            _ => {}
-        }
-    }
-
-    timeline
-}
-
-pub(super) fn render_terminal_plan(counts: Option<&BTreeMap<String, u32>>) -> String {
-    let Some(counts) = counts else {
-        return "plan none".to_owned();
-    };
-    let count = |status: &str| counts.get(status).copied().unwrap_or_default();
-    format!(
-        "plan {} active/{} pending/{} done/{} cancelled",
-        count("in_progress"),
-        count("pending"),
-        count("completed"),
-        count("cancelled")
-    )
-}
-
-pub(super) fn turn_finish_label(finish: &TurnFinish) -> String {
-    match finish {
-        TurnFinish::Completed => "completed".to_owned(),
-        TurnFinish::Cancelled { reason } => format!("cancelled ({reason:?})"),
-        TurnFinish::LimitReached { limit } => format!("limit reached ({limit:?})"),
-        TurnFinish::NeedsInput { request } => format!("needs input ({request})"),
-        TurnFinish::Failed => "failed".to_owned(),
-    }
 }
 
 pub(super) fn render_harness_status(status: &Status) -> String {

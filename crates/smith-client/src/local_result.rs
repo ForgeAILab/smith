@@ -6,6 +6,7 @@
 use crate::context_report::ContextReport;
 use crate::help_report::HelpReport;
 use crate::status_report::StatusReport;
+use crate::timeline_report::TimelineReport;
 
 /// Semantic state of a local command result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,6 +28,8 @@ pub enum LocalResult {
     Context(Box<ContextReport>),
     /// The command guide derived from the registry.
     Help(Box<HelpReport>),
+    /// The session's root, child, and recovery timeline.
+    Timeline(Box<TimelineReport>),
     /// Transitional output for commands that have not migrated to reports.
     Text {
         /// Command or result title.
@@ -45,6 +48,7 @@ impl LocalResult {
             Self::Status(_) => "status",
             Self::Context(_) => "context",
             Self::Help(_) => "help",
+            Self::Timeline(_) => "timeline",
             Self::Text { title, .. } => title,
         }
     }
@@ -53,6 +57,11 @@ impl LocalResult {
     pub fn state(&self) -> LocalResultState {
         match self {
             Self::Status(_) | Self::Context(_) | Self::Help(_) => LocalResultState::Info,
+            Self::Timeline(report) => match report.as_ref() {
+                TimelineReport::Empty => LocalResultState::Empty,
+                TimelineReport::Unavailable(_) => LocalResultState::Error,
+                TimelineReport::Entries(_) => LocalResultState::Info,
+            },
             Self::Text { state, .. } => *state,
         }
     }

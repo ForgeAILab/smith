@@ -709,6 +709,9 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                     LocalResult::Status(report) => smith_client::status_report::render_plain(report),
                     LocalResult::Context(report) => smith_client::context_report::render_plain(report),
                     LocalResult::Help(report) => smith_client::help_report::render_plain(report),
+                    LocalResult::Timeline(report) => {
+                        smith_client::timeline_report::render_plain(report)
+                    }
                     LocalResult::Text { body, .. } => body.clone(),
                 };
                 raw.push_str(&format!(
@@ -724,6 +727,9 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                     )),
                     LocalResult::Help(report) => LocalResult::Help(Box::new(
                         fixture_help_view(report, normalizer),
+                    )),
+                    LocalResult::Timeline(report) => LocalResult::Timeline(Box::new(
+                        fixture_timeline_view(report, normalizer),
                     )),
                     LocalResult::Text { title, body, state } => LocalResult::Text {
                         title: normalizer.normalize(title),
@@ -942,6 +948,71 @@ fn fixture_help_view(
     }
     for guidance in &mut report.composer {
         *guidance = normalizer.normalize(guidance);
+    }
+    report
+}
+
+fn fixture_timeline_view(
+    report: &smith_client::timeline_report::TimelineReport,
+    normalizer: &mut fixture_support::Normalizer,
+) -> smith_client::timeline_report::TimelineReport {
+    use smith_client::timeline_report::{TimelineChildEvent, TimelineEntry, TimelineReport};
+
+    let mut report = report.clone();
+    match &mut report {
+        TimelineReport::Empty => {}
+        TimelineReport::Unavailable(error) => {
+            *error = normalizer.normalize(error);
+        }
+        TimelineReport::Entries(entries) => {
+            for entry in entries {
+                match entry {
+                    TimelineEntry::RootTurn { turn, finish, .. } => {
+                        *turn = normalizer.normalize(turn);
+                        *finish = normalizer.normalize(finish);
+                    }
+                    TimelineEntry::RootManifest {
+                        turn,
+                        provider,
+                        model,
+                        ..
+                    } => {
+                        for value in [turn, provider, model] {
+                            *value = normalizer.normalize(value);
+                        }
+                    }
+                    TimelineEntry::ChildEvent { child, event } => {
+                        *child = normalizer.normalize(child);
+                        match event {
+                            TimelineChildEvent::Started { workspace, .. } => {
+                                *workspace = normalizer.normalize(workspace);
+                            }
+                            TimelineChildEvent::Stopped { reason } => {
+                                *reason = normalizer.normalize(reason);
+                            }
+                            TimelineChildEvent::NeedsInput
+                            | TimelineChildEvent::Completed
+                            | TimelineChildEvent::Failed => {}
+                        }
+                    }
+                    TimelineEntry::ChildSnapshot {
+                        child,
+                        session,
+                        durability,
+                        state,
+                        turns,
+                        ..
+                    } => {
+                        for value in [child, session, durability, state, turns] {
+                            *value = normalizer.normalize(value);
+                        }
+                    }
+                    TimelineEntry::Recovery { detail, .. } => {
+                        *detail = normalizer.normalize(detail);
+                    }
+                }
+            }
+        }
     }
     report
 }

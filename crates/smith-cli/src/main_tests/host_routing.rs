@@ -2,8 +2,12 @@
 
     #[test]
     fn runtime_timeline_uses_stable_ids_terminal_plan_and_redacted_gate_evidence() {
+        use std::collections::BTreeSet;
+
         use agent_runtime_core::clock::Timestamp;
-        use smith_runtime::client::PlanSensitivity;
+        use crate::local_command::timeline::runtime_entries;
+        use smith_client::timeline_report::{TimelineReport, render_plain};
+        use smith_runtime::client::{PlanSensitivity, TurnFinish};
         use agent_runtime_core::ids::{EventId, ToolCallId, TurnId};
 
         let session = SessionId::new("session-1");
@@ -80,17 +84,17 @@
             ),
         ];
 
-        let rendered = render_runtime_timeline(&events);
+        let timeline = runtime_entries(&events);
+        assert_eq!(timeline.children, BTreeSet::from([ChildId::new("child-2")]));
+        let joined = render_plain(&TimelineReport::Entries(timeline.entries));
         assert_eq!(
-            rendered.lines,
+            joined.lines().collect::<Vec<_>>(),
             [
                 "root turn-7 · completed · plan 0 active/0 pending/2 done/1 cancelled · gates 1 passed/0 failed",
                 "child child-2 · started · ReadOnlyView · 1 turn limit",
                 "child child-2 · task completed",
             ]
         );
-        assert_eq!(rendered.children, BTreeSet::from([ChildId::new("child-2")]));
-        let joined = rendered.lines.join("\n");
         assert!(!joined.contains("secret-command"));
         assert!(!joined.contains("secret-child-result"));
     }

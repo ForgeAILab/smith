@@ -13,4 +13,5 @@ pub mod local_result;
 pub mod status;
 pub mod status_report;
 pub mod time_display;
+pub mod timeline_report;
 pub mod usage_log;

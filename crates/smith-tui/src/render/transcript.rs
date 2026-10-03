@@ -16,6 +16,7 @@ use crate::transcript::{Block, LocalResult, LocalResultState, ToolStatus};
 use smith_client::context_report::{ContextCategoryKind, ContextCompaction, ContextReport};
 use smith_client::help_report::{HelpCommand, HelpReport};
 use smith_client::status_report::{StatusGoal, StatusReport};
+use smith_client::timeline_report::{TimelineEntry, TimelinePlan, TimelineReport};
 use smith_tools::ToolCallDisplay;
 
 use super::helpers::*;
@@ -371,6 +372,13 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16) -> Vec<Line<'static>>
                     theme.style(Tone::Command),
                 )));
                 lines.extend(render_help_report(report, width, theme));
+            }
+            Block::Local(LocalResult::Timeline(report)) => {
+                lines.push(Line::from(Span::styled(
+                    "/timeline",
+                    theme.style(Tone::Command),
+                )));
+                lines.extend(render_timeline_report(report, width, theme));
             }
             Block::Local(LocalResult::Text {
                 title,
@@ -861,6 +869,79 @@ pub(super) fn render_local_content(
     for raw in content.lines() {
         for wrapped in wrap_text(raw, available) {
             lines.push(styled_local_line(title, &wrapped, theme));
+        }
+    }
+    lines
+}
+
+fn render_timeline_report(report: &TimelineReport, width: u16, theme: Theme) -> Vec<Line<'static>> {
+    let entries = match report {
+        TimelineReport::Empty => {
+            return render_prefixed_local_state(
+                glyph::BULLET,
+                TimelineReport::EMPTY_MESSAGE,
+                width,
+                theme.style(Tone::Dim),
+            );
+        }
+        TimelineReport::Unavailable(error) => {
+            return render_prefixed_local_state(
+                glyph::ERROR,
+                &format!("timeline unavailable: {error}"),
+                width,
+                theme.style(Tone::Danger),
+            );
+        }
+        TimelineReport::Entries(entries) => entries,
+    };
+    let available = usize::from(width).max(1);
+    let mut lines = Vec::new();
+    for entry in entries {
+        let content = match entry {
+            TimelineEntry::RootTurn {
+                turn,
+                finish,
+                plan,
+                passed_gates,
+                failed_gates,
+            } => format!(
+                "root {turn} · {finish} · {} · gates {passed_gates} passed/{failed_gates} failed",
+                plan.as_ref()
+                    .map_or_else(|| "plan none".to_owned(), TimelinePlan::render_value),
+            ),
+            TimelineEntry::RootManifest {
+                turn,
+                provider,
+                model,
+                activated_capabilities,
+            } => format!(
+                "root {turn} · committed · {provider}/{model} · {activated_capabilities} activated capability/capabilities",
+            ),
+            TimelineEntry::ChildEvent { child, event } => {
+                format!("child {child} · {}", event.render_value())
+            }
+            TimelineEntry::ChildSnapshot {
+                child,
+                session,
+                durability,
+                state,
+                resumable,
+                turns,
+            } => format!(
+                "child {child} · session {session} · {durability} · {state} · resumable {resumable} · {turns} turns",
+            ),
+            TimelineEntry::Recovery { number, detail } => {
+                format!("recovery recovery-{number} · {detail}")
+            }
+        };
+        for raw in content.lines() {
+            for wrapped in wrap_text(raw, available) {
+                lines.push(Line::from(render_inline_markdown(
+                    &wrapped,
+                    theme.style(Tone::Default),
+                    theme,
+                )));
+            }
         }
     }
     lines

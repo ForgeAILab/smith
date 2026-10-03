@@ -24,7 +24,8 @@ mod terminal;
 mod tui_driver;
 mod xai;
 
-use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
+use std::collections::BTreeMap;
 use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -71,7 +72,6 @@ use smith_host::{
 };
 use smith_runtime::client::{
     ChildPhase, EstimationConfidence, SmithEvent as EventEnvelope, SmithEventKind as RuntimeEvent,
-    TurnFinish,
 };
 use smith_runtime::factory::{
     AVAILABLE_ADAPTER_KINDS, ChildProfileRequest, FactoryError, HostSurface, RuntimePolicy,
