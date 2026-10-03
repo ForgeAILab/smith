@@ -95,3 +95,13 @@ Two headless turns each, `--provider xai --model grok-4.3`. With
 `advisor` once in turn 1 (advisor usage 332/113/320 and 294/88), used the
 advice, and answered correctly in turn 2. Main-model cache reads were 5,632
 and 5,248 tokens in turn 1.
+
+### Run 6: Claude Code plugin with gemini-3.8-flash
+
+With the 0.3.0 candidate installed as `~/.local/bin/smith`, the Claude Code
+Smith plugin listed all 13 profiles through `scripts/smith-profiles`, and its
+`smith-delegate` agent dispatched a read-only task with
+`--profile gemini --approval deny`, then resumed the same session. Both
+envelopes returned `status: ok` from `gemini-3.8-flash`, with correct answers
+(the parser `AdvisorTarget::parse`, and the test
+`advisor_target_parsing_splits_on_the_first_slash`).
