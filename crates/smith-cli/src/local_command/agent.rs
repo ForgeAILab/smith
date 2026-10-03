@@ -2,7 +2,6 @@
 
 use smith_client::agent_report::{AgentReport, AgentSnapshot, AgentSummary};
 use smith_client::commands::AgentAction;
-use smith_runtime::ChildStatus;
 use smith_runtime::host::HostSession;
 
 pub(super) fn report(
@@ -45,33 +44,11 @@ pub(super) fn report(
             .find(|status| status.child.as_str() == selected)
             .map_or_else(
                 || AgentReport::Missing(selected),
-                |status| AgentReport::Inspector(snapshot(status)),
+                |status| AgentReport::Inspector(AgentSnapshot::from(status)),
             )
     } else if children.is_empty() {
         AgentReport::Empty
     } else {
-        AgentReport::List(children.iter().map(summary).collect())
-    }
-}
-
-/// The same authoritative inspector snapshot is refreshed on host redraws.
-pub(crate) fn snapshot(status: &ChildStatus) -> AgentSnapshot {
-    AgentSnapshot {
-        summary: summary(status),
-        session: status.session.to_string(),
-        workspace: format!("{:?}", status.workspace),
-        incompatibility: status.incompatibility.clone(),
-        last_result: status.last_result.clone(),
-    }
-}
-
-fn summary(status: &ChildStatus) -> AgentSummary {
-    AgentSummary {
-        child: status.child.to_string(),
-        durability: format!("{:?}", status.durability),
-        state: format!("{:?}", status.state),
-        resumable: status.resumable(),
-        turns: crate::submission::turns_label(status.turns_used, status.max_turns),
-        tokens_used: status.tokens_used,
+        AgentReport::List(children.iter().map(AgentSummary::from).collect())
     }
 }

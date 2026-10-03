@@ -1232,7 +1232,7 @@ fn render_agent_report(report: &AgentReport, width: u16, theme: Theme) -> Vec<Li
                     child.durability,
                     child.state,
                     child.resumable,
-                    child.turns,
+                    child.turns_value(),
                     child.tokens_used,
                 );
                 lines.extend(wrap_context_line(
@@ -1255,7 +1255,7 @@ fn render_agent_inspector(child: &AgentSnapshot, theme: Theme) -> Vec<Line<'stat
             child.session,
             child.summary.durability,
             child.summary.state,
-            child.summary.turns,
+            child.summary.turns_value(),
             child.summary.tokens_used,
             child.workspace,
         ),

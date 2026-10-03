@@ -2,6 +2,10 @@
 
 use super::background::BackgroundExitOutput;
 use super::*;
+use smith_client::agent_report::AgentSnapshot;
+pub(super) use smith_client::agent_report::HeadlessAgentOutput as ChildSessionOutput;
+use smith_client::goal_report::{GoalReport, GoalSnapshot};
+use smith_client::recovery_report::RestoreReport;
 
 #[derive(Debug, Serialize)]
 pub(super) struct StreamEnvelope<'a> {
@@ -374,22 +378,6 @@ pub(super) struct LifecycleOutput {
 }
 
 #[derive(Debug, Serialize)]
-pub(super) struct ChildSessionOutput {
-    pub(super) child_id: String,
-    pub(super) child_session_id: String,
-    pub(super) durability: &'static str,
-    pub(super) state: &'static str,
-    pub(super) resumable: bool,
-    pub(super) turns_used: u32,
-    /// Absent for an unbounded child.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) max_turns: Option<u32>,
-    pub(super) tokens_used: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) incompatibility: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
 pub(super) struct ActivationOutput {
     pub(super) epoch: u64,
     pub(super) capabilities: Vec<String>,
@@ -488,26 +476,24 @@ pub(super) fn child_session_outputs(host: &HostSession) -> Vec<ChildSessionOutpu
             coordinator
                 .list()
                 .into_iter()
-                .map(|status| ChildSessionOutput {
-                    child_id: status.child.to_string(),
-                    child_session_id: status.session.to_string(),
-                    durability: match status.durability {
+                .map(|status| {
+                    let mut report = AgentSnapshot::from(&status);
+                    // Retain today's headless labels until task 4.5 unifies them.
+                    report.summary.durability = match status.durability {
                         ChildDurability::Ephemeral => "ephemeral",
                         ChildDurability::Durable => "durable",
-                    },
-                    state: match &status.state {
+                    }
+                    .to_owned();
+                    report.summary.state = match &status.state {
                         ChildState::Running => "running",
                         ChildState::Idle => "idle",
                         ChildState::Interrupted { .. } => "interrupted",
                         ChildState::Stopped { .. } => "stopped",
                         ChildState::Failed => "failed",
                         ChildState::Expired => "expired",
-                    },
-                    resumable: status.resumable(),
-                    turns_used: status.turns_used,
-                    max_turns: (status.max_turns != u32::MAX).then_some(status.max_turns),
-                    tokens_used: status.tokens_used,
-                    incompatibility: status.incompatibility,
+                    }
+                    .to_owned();
+                    report.into_headless_output()
                 })
                 .collect()
         })
@@ -658,24 +644,11 @@ pub(super) fn write_text_projection(
         lines.push(format!("parent: {parent_state}"));
     }
     if let Some(goal) = &result.goal {
-        let status = goal.status.as_str();
-        let used = goal
-            .usage
-            .charged_tokens
-            .map_or_else(|| "unknown".to_owned(), |tokens| tokens.to_string());
-        let budget = goal
-            .token_budget
-            .map_or_else(|| "none".to_owned(), |tokens| tokens.to_string());
-        lines.push(format!(
-            "goal: {status} · {used} tokens · budget {budget} · {} continuation turn(s)",
-            result.goal_continuation_turns.unwrap_or_default()
+        let report = GoalReport::Snapshot(GoalSnapshot::from(goal));
+        lines.extend(smith_client::goal_report::render_headless_plain(
+            &report,
+            result.goal_continuation_turns.unwrap_or_default(),
         ));
-        if let Some(reason) = &goal.stopped_reason {
-            lines.push(reason.detail.as_ref().map_or_else(
-                || format!("goal reason: {}", reason.code),
-                |detail| format!("goal reason: {} · {detail}", reason.code),
-            ));
-        }
     }
     if result.lifecycle.attempts_committed > 0 || result.lifecycle.attempts_discarded > 0 {
         lines.push(format!(
@@ -743,19 +716,22 @@ pub(super) fn write_text_projection(
     }
     if let Some(recovery) = &result.recovery {
         if let Some(turn) = &recovery.interrupted_turn {
-            lines.push(format!("session restored: tools changed since turn {turn}; unfinished action not retried; check previous changes before continuing"));
+            lines.extend(
+                smith_client::recovery_report::render_restore_headless_plain(
+                    &RestoreReport::ActivationChanged { turn: turn.clone() },
+                ),
+            );
         }
-        if !recovery.interrupted_children.is_empty()
-            || !recovery.interrupted_monitors.is_empty()
-            || !recovery.interrupted_tasks.is_empty()
-        {
-            lines.push(format!(
-            "recovery {} · {} child(ren) interrupted · {} monitor(s) interrupted · not restarted",
-            recovery.reason,
-            recovery.interrupted_children.len(),
-            recovery.interrupted_monitors.len()
-        ));
-        }
+        lines.extend(
+            smith_client::recovery_report::render_restore_headless_plain(
+                &RestoreReport::EphemeralWork {
+                    reason: recovery.reason.to_owned(),
+                    children: recovery.interrupted_children.len(),
+                    monitors: recovery.interrupted_monitors.len(),
+                    tasks: recovery.interrupted_tasks.len(),
+                },
+            ),
+        );
     }
 
     for line in lines {

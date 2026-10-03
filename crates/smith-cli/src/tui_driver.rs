@@ -3,8 +3,9 @@
 use std::collections::VecDeque;
 
 use agent_runtime_core::usage::UsageRecord;
+use smith_client::agent_report::AgentSnapshot;
 use smith_client::local_result::LocalResult;
-use smith_client::recovery_report::{RecoveryAction, RecoveryReport};
+use smith_client::recovery_report::{RecoveryAction, RecoveryReport, RestoreReport};
 use smith_tui::app::RunningTaskSummary;
 
 use super::*;
@@ -163,9 +164,12 @@ pub(super) async fn run_interactive(
         }
     }
     if let Some(turn) = host.session().interrupted_on_resume() {
-        app.transcript.push_notice("session restored", format!(
-            "Available tools changed since turn {turn} was saved. Your conversation is restored; the unfinished action was not retried. Check previous changes before continuing. Any active goal is paused; use /goal resume to continue it.",
-        ));
+        let report = RestoreReport::ActivationChanged {
+            turn: turn.to_string(),
+        };
+        if let Some(text) = smith_client::recovery_report::render_restore_plain(&report) {
+            app.transcript.push_notice(report.source(), text);
+        }
     }
     if let Some(interruption) = host.recovered_ephemeral_work() {
         app.present_recovered_ephemeral_work(
@@ -976,7 +980,7 @@ pub(super) async fn run_tui(
                         let card = statuses
                             .iter()
                             .find(|status| status.child.as_str() == inspected)
-                            .map(crate::local_command::agent::snapshot);
+                            .map(AgentSnapshot::from);
                         app.set_inspected_detail(&inspected, card);
                     }
                     app.set_child_counts(

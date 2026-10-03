@@ -17,7 +17,7 @@ use agent_runtime_core::ids::{AttemptId, RequestId, TurnId};
 use agent_runtime_core::steer::SteerReceipt;
 use agent_runtime_core::usage::CounterKind;
 use smith_client::agent_report::AgentSnapshot;
-use smith_client::recovery_report::{RecoveryPreview, RevertPreview};
+use smith_client::recovery_report::{RecoveryPreview, RestoreReport, RevertPreview};
 use smith_client::review_report::ReviewPreview;
 use smith_host::approval::ApprovalPrompt;
 use smith_host::rotation::RotationPrompt;
@@ -1260,47 +1260,15 @@ impl App {
         interrupted_monitors: usize,
         interrupted_tasks: usize,
     ) {
-        let mut work = Vec::new();
-        if interrupted_children > 0 {
-            work.push(format!(
-                "{interrupted_children} prior {}",
-                if interrupted_children == 1 {
-                    "child"
-                } else {
-                    "children"
-                }
-            ));
+        let report = RestoreReport::EphemeralWork {
+            reason: "process_exit".to_owned(),
+            children: interrupted_children,
+            monitors: interrupted_monitors,
+            tasks: interrupted_tasks,
+        };
+        if let Some(text) = smith_client::recovery_report::render_restore_plain(&report) {
+            self.transcript.push_notice(report.source(), text);
         }
-        if interrupted_monitors > 0 {
-            work.push(format!(
-                "{interrupted_monitors} prior {}",
-                if interrupted_monitors == 1 {
-                    "monitor"
-                } else {
-                    "monitors"
-                }
-            ));
-        }
-        if interrupted_tasks > 0 {
-            work.push(format!(
-                "{interrupted_tasks} prior background {}",
-                if interrupted_tasks == 1 {
-                    "task"
-                } else {
-                    "tasks"
-                }
-            ));
-        }
-        if work.is_empty() {
-            return;
-        }
-        self.transcript.push_notice(
-            "recovery",
-            format!(
-                "{} interrupted when the prior Smith process exited · not restarted",
-                work.join(" and ")
-            ),
-        );
     }
 
     /// Enriches a protected live tool event with a reviewed local projection.

@@ -1,9 +1,109 @@
-//! Local undo, redo, and selective-revert reports and plain-text rendering.
+//! Local recovery and session-restore reports and plain-text rendering.
 //!
 //! Confirmation patches and apply outcomes cross the host boundary as data.
 //! Terminal drawing belongs to `smith-tui`.
 
 use crate::diff_report::DiffLine;
+
+/// Metadata-only reconciliation after restoring a saved session.
+/// Startup notices and headless output render the same report, retaining
+/// each surface's existing wording.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RestoreReport {
+    /// A saved turn was interrupted because the active tools changed.
+    ActivationChanged {
+        /// The interrupted turn's stable identity.
+        turn: String,
+    },
+    /// Process-owned work was interrupted and was not restarted.
+    EphemeralWork {
+        /// Existing recovery reason label.
+        reason: String,
+        /// Number of interrupted children.
+        children: usize,
+        /// Number of interrupted monitors.
+        monitors: usize,
+        /// Number of interrupted background tasks.
+        tasks: usize,
+    },
+}
+
+impl RestoreReport {
+    /// Existing transcript notice source.
+    pub fn source(&self) -> &'static str {
+        match self {
+            Self::ActivationChanged { .. } => "session restored",
+            Self::EphemeralWork { .. } => "recovery",
+        }
+    }
+}
+
+/// Renders the existing startup notice body, omitting empty process recovery.
+pub fn render_restore_plain(report: &RestoreReport) -> Option<String> {
+    match report {
+        RestoreReport::ActivationChanged { turn } => Some(format!(
+            "Available tools changed since turn {turn} was saved. Your conversation is restored; the unfinished action was not retried. Check previous changes before continuing. Any active goal is paused; use /goal resume to continue it.",
+        )),
+        RestoreReport::EphemeralWork {
+            children,
+            monitors,
+            tasks,
+            ..
+        } => {
+            let mut work = Vec::new();
+            if *children > 0 {
+                work.push(format!(
+                    "{children} prior {}",
+                    if *children == 1 { "child" } else { "children" }
+                ));
+            }
+            if *monitors > 0 {
+                work.push(format!(
+                    "{monitors} prior {}",
+                    if *monitors == 1 {
+                        "monitor"
+                    } else {
+                        "monitors"
+                    }
+                ));
+            }
+            if *tasks > 0 {
+                work.push(format!(
+                    "{tasks} prior background {}",
+                    if *tasks == 1 { "task" } else { "tasks" }
+                ));
+            }
+            if work.is_empty() {
+                return None;
+            }
+            Some(format!(
+                "{} interrupted when the prior Smith process exited · not restarted",
+                work.join(" and ")
+            ))
+        }
+    }
+}
+
+/// Renders one existing headless metadata line without the stderr prefix.
+/// Background tasks trigger the recovery line but retain its existing
+/// child/monitor-only counts.
+pub fn render_restore_headless_plain(report: &RestoreReport) -> Option<String> {
+    match report {
+        RestoreReport::ActivationChanged { turn } => Some(format!(
+            "session restored: tools changed since turn {turn}; unfinished action not retried; check previous changes before continuing"
+        )),
+        RestoreReport::EphemeralWork {
+            reason,
+            children,
+            monitors,
+            tasks,
+        } => (*children > 0 || *monitors > 0 || *tasks > 0).then(|| {
+            format!(
+                "recovery {reason} · {children} child(ren) interrupted · {monitors} monitor(s) interrupted · not restarted"
+            )
+        }),
+    }
+}
 
 /// The recovery operation, independent of its displayed title.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

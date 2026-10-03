@@ -1069,7 +1069,6 @@ fn fixture_agent_summary_view(
         &mut summary.child,
         &mut summary.durability,
         &mut summary.state,
-        &mut summary.turns,
     ] {
         *value = normalizer.normalize(value);
     }

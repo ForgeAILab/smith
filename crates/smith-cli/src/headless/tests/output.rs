@@ -156,8 +156,8 @@ fn machine_lifecycle_projects_durable_child_continuation_without_content() {
         children: vec![ChildSessionOutput {
             child_id: "child-3".to_owned(),
             child_session_id: "child-session-3".to_owned(),
-            durability: "durable",
-            state: "interrupted",
+            durability: "durable".to_owned(),
+            state: "interrupted".to_owned(),
             resumable: true,
             turns_used: 1,
             max_turns: None,

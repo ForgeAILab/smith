@@ -3,6 +3,9 @@
 //! Lists, inspector cards, and exact-resume outcomes carry data. Terminal
 //! drawing belongs to `smith-tui`; lifecycle labels retain their current text.
 
+use serde::Serialize;
+use smith_runtime::ChildStatus;
+
 /// The result of listing, inspecting, navigating, or resuming a child.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentReport {
@@ -48,16 +51,42 @@ impl AgentReport {
 pub struct AgentSummary {
     /// Stable child identity.
     pub child: String,
-    /// Existing debug-formatted durability value.
+    /// Existing durability label for the chosen surface.
     pub durability: String,
-    /// Existing debug-formatted lifecycle value.
+    /// Existing lifecycle label for the chosen surface.
     pub state: String,
     /// Whether exact recovery is available.
     pub resumable: bool,
-    /// Existing used/maximum turn value, without the field label.
-    pub turns: String,
+    /// Coordinator-reported turn usage.
+    pub turns_used: u32,
+    /// Finite turn limit; absent for an unbounded child.
+    pub max_turns: Option<u32>,
     /// Coordinator-reported token usage.
     pub tokens_used: u64,
+}
+
+impl From<&ChildStatus> for AgentSummary {
+    fn from(status: &ChildStatus) -> Self {
+        Self {
+            child: status.child.to_string(),
+            durability: format!("{:?}", status.durability),
+            state: format!("{:?}", status.state),
+            resumable: status.resumable(),
+            turns_used: status.turns_used,
+            max_turns: (status.max_turns != u32::MAX).then_some(status.max_turns),
+            tokens_used: status.tokens_used,
+        }
+    }
+}
+
+impl AgentSummary {
+    /// Existing used/maximum turn value, without the field label.
+    pub fn turns_value(&self) -> String {
+        self.max_turns.map_or_else(
+            || self.turns_used.to_string(),
+            |max| format!("{}/{max}", self.turns_used),
+        )
+    }
 }
 
 /// The extra coordinator fields shown when one child is inspected.
@@ -73,6 +102,62 @@ pub struct AgentSnapshot {
     pub incompatibility: Option<String>,
     /// Last child result; absent when no result is available.
     pub last_result: Option<String>,
+}
+
+impl From<&ChildStatus> for AgentSnapshot {
+    fn from(status: &ChildStatus) -> Self {
+        Self {
+            summary: AgentSummary::from(status),
+            session: status.session.to_string(),
+            workspace: format!("{:?}", status.workspace),
+            incompatibility: status.incompatibility.clone(),
+            last_result: status.last_result.clone(),
+        }
+    }
+}
+
+impl AgentSnapshot {
+    /// Renders the redaction-safe headless serialization view of this report.
+    /// Headless has no child text line; workspace and result content stay out
+    /// of its machine lifecycle metadata.
+    pub fn into_headless_output(self) -> HeadlessAgentOutput {
+        HeadlessAgentOutput {
+            child_id: self.summary.child,
+            child_session_id: self.session,
+            durability: self.summary.durability,
+            state: self.summary.state,
+            resumable: self.summary.resumable,
+            turns_used: self.summary.turns_used,
+            max_turns: self.summary.max_turns,
+            tokens_used: self.summary.tokens_used,
+            incompatibility: self.incompatibility,
+        }
+    }
+}
+
+/// Existing headless child fields rendered from an inspector snapshot.
+#[derive(Debug, Serialize)]
+pub struct HeadlessAgentOutput {
+    /// Stable child identity.
+    pub child_id: String,
+    /// Child session identity.
+    pub child_session_id: String,
+    /// Surface-supplied durability label.
+    pub durability: String,
+    /// Surface-supplied lifecycle label.
+    pub state: String,
+    /// Whether exact recovery is available.
+    pub resumable: bool,
+    /// Coordinator-reported turn usage.
+    pub turns_used: u32,
+    /// Finite turn limit; omitted for an unbounded child.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_turns: Option<u32>,
+    /// Coordinator-reported token usage.
+    pub tokens_used: u64,
+    /// Exact-resume incompatibility, if present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub incompatibility: Option<String>,
 }
 
 /// Validation and execution outcomes for `/agent resume`.
@@ -147,7 +232,7 @@ pub fn render_plain(report: &AgentReport) -> String {
                     child.durability,
                     child.state,
                     child.resumable,
-                    child.turns,
+                    child.turns_value(),
                     child.tokens_used,
                 )
             })
@@ -158,7 +243,7 @@ pub fn render_plain(report: &AgentReport) -> String {
             child.session,
             child.summary.durability,
             child.summary.state,
-            child.summary.turns,
+            child.summary.turns_value(),
             child.summary.tokens_used,
             child.workspace,
             child.summary.resumable,

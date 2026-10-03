@@ -1,7 +1,13 @@
 //! The local `/goal` snapshot and its plain-text rendering.
 //!
-//! Availability and goal fields travel as data. Usage, budget, and stopping
-//! reason stay separate so headless text can later draw the same snapshot.
+//! Availability and goal fields travel as data. Transcript and headless text
+//! draw the same snapshot with their existing presentation.
+
+use std::time::Duration;
+
+use agent_runtime_core::goal::GoalProjection;
+
+use crate::status::render_elapsed;
 
 /// The result of showing or changing a persistent goal.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +52,28 @@ pub struct GoalSnapshot {
     pub id: String,
     /// Monotonic goal generation.
     pub generation: u64,
+}
+
+impl From<&GoalProjection> for GoalSnapshot {
+    fn from(goal: &GoalProjection) -> Self {
+        Self {
+            objective: goal.objective.clone(),
+            status: goal.status.as_str().to_owned(),
+            charged_tokens: goal.usage.charged_tokens,
+            token_budget: goal.token_budget,
+            usage_provenance: goal.usage.provenance.as_str().to_owned(),
+            active_elapsed: render_elapsed(Duration::from_millis(goal.usage.active_elapsed_ms)),
+            stopped_reason: goal
+                .stopped_reason
+                .as_ref()
+                .map(|reason| GoalStoppedReason {
+                    code: reason.code.clone(),
+                    detail: reason.detail.clone(),
+                }),
+            id: goal.id.to_string(),
+            generation: goal.generation,
+        }
+    }
 }
 
 impl GoalSnapshot {
@@ -109,4 +137,24 @@ pub fn render_plain(report: &GoalReport) -> String {
         goal.id,
         goal.generation,
     )
+}
+
+/// Renders headless metadata lines, without the stderr source prefix.
+/// Headless exposes snapshots only; absent goals produce no metadata lines.
+/// Each returned string keeps its original line boundaries, including any
+/// newlines in a runtime-owned stopping reason.
+pub fn render_headless_plain(report: &GoalReport, continuation_turns: u32) -> Vec<String> {
+    let GoalReport::Snapshot(goal) = report else {
+        return Vec::new();
+    };
+    let mut lines = vec![format!(
+        "goal: {} · {} tokens · budget {} · {continuation_turns} continuation turn(s)",
+        goal.status,
+        goal.charged_tokens_value(),
+        goal.budget_value(),
+    )];
+    if let Some(reason) = &goal.stopped_reason {
+        lines.push(format!("goal reason: {}", reason.render_value()));
+    }
+    lines
 }
