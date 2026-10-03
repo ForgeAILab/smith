@@ -21,6 +21,7 @@ use agent_runtime::registry::{
 };
 use agent_runtime_core::tool::{Tool, ToolSpec, canonicalize_json};
 
+use crate::advisor::ADVISOR_TOOL_NAME;
 use crate::delegation::AGENT_TOOL_NAME;
 
 /// Named readiness fact required before `ask_user` may activate.
@@ -217,6 +218,7 @@ fn keywords(name: &str) -> Vec<&'static str> {
             "parallel",
             "investigate",
         ],
+        ADVISOR_TOOL_NAME => vec!["advisor", "advice", "review", "reviewer", "consult"],
         QUESTIONNAIRE_TOOL_NAME => vec!["ask", "question", "clarify", "choice", "user"],
         WRITE_TODOS_TOOL_NAME => vec![
             "plan",
@@ -255,6 +257,7 @@ fn affordances(name: &str, permissions: &[Permission]) -> Vec<&'static str> {
         "task_output" => vec!["task-read"],
         "task_stop" => vec!["task-control"],
         AGENT_TOOL_NAME => vec!["agent-delegation"],
+        ADVISOR_TOOL_NAME => vec!["agent-advice"],
         QUESTIONNAIRE_TOOL_NAME => vec!["user-interaction", "task-question"],
         WRITE_TODOS_TOOL_NAME => vec!["plan-management"],
         ARTIFACT_READ_TOOL_NAME => vec!["artifact-read"],

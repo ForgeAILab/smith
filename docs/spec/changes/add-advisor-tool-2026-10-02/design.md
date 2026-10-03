@@ -49,7 +49,11 @@ advisor does not see that tool's result.
   model limits. A broken advisor profile fails startup like a broken child
   profile does today.
 - **Tool.** `advisor`, empty object schema, root surfaces only (named
-  predicate `advisor_eligible`, shared with the prompt section). It declares
+  predicate `advisor_eligible`, shared with the prompt section). Smith
+  activates tools by affordance per turn; the advisor carries an
+  `agent-advice` affordance and contributes a routing hint every turn, so it
+  is offered without the user naming it while ordinary activation still
+  authorizes and budgets it. It declares
   no workspace effects and no permissions, so no approval prompt appears; the
   owner opted in by configuring an advisor. It reaches the session through a
   slot filled after session start, mirroring `AgentTool`.

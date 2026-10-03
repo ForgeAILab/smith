@@ -30,11 +30,11 @@ completed_at:
 
 ## 3. Runtime
 
-- [ ] 3.1 Build the advisor route through the child-route `prepare` path.
-- [ ] 3.2 Add the `advisor` tool behind `advisor_eligible`, reaching the
+- [x] 3.1 Build the advisor route through the child-route `prepare` path.
+- [x] 3.2 Add the `advisor` tool behind `advisor_eligible`, reaching the
   session through a slot filled after start.
-- [ ] 3.3 Render the transcript and trim it to the advisor's input budget.
-- [ ] 3.4 Send the advisor request (built-in prompt plus profile
+- [x] 3.3 Render the transcript and trim it to the advisor's input budget.
+- [x] 3.4 Send the advisor request (built-in prompt plus profile
   instructions, no tools) and return the advice or a tool error.
 - [ ] 3.5 Contribute the guidance section only when the tool is registered.
 - [ ] 3.6 Record advisor usage and cost under an advisor attribution.

@@ -8,7 +8,9 @@ mod credentials;
 mod resolution;
 
 pub(super) use adapter::{Adapter, PreparedCommandProvider};
-pub(super) use children::{cache_endpoint_identity, prepare_child_profile_routes};
+pub(super) use children::{
+    cache_endpoint_identity, prepare_advisor_route, prepare_child_profile_routes,
+};
 pub(super) use credentials::{active_credential_reference, validate_pool_references};
 pub(super) use resolution::prepare;
 

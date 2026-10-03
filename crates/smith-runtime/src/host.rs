@@ -1173,6 +1173,7 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
     // Root sessions get their delegation coordinator now that the session
     // exists: the `agent` tool starts answering, and completed child results
     // are routed into the session's safe-boundary inbox.
+    runtime.wire_advisor(&session)?;
     let mut delegation_lifecycle = None;
     if let Some(delegation) = runtime.delegation() {
         let wait_policy = DelegationWaitPolicy::new(

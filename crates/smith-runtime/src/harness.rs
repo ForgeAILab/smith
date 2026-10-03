@@ -483,6 +483,15 @@ pub fn resolve(spec: HarnessSpec) -> Result<ResolvedHarness, HarnessResolutionEr
             profile.config.agent.profile
         )
     }));
+    if let Some(advisor) = &request.advisor_profile {
+        delegation_inputs.push(format!(
+            "advisor={:?};provider={:?};model={:?};agent={:?}",
+            advisor.config.profile,
+            advisor.config.provider,
+            advisor.config.model,
+            advisor.config.agent.profile
+        ));
+    }
     let delegation = policy_record(
         "delegation-v2",
         delegation_inputs.iter().map(String::as_str),

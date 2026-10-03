@@ -18,7 +18,8 @@ use smith_host::{
     RotationRequests,
 };
 use smith_runtime::factory::{
-    AVAILABLE_ADAPTER_KINDS, ChildProfileRequest, FactoryError, HostSurface, RuntimeRequest,
+    AVAILABLE_ADAPTER_KINDS, AdvisorProfileRequest, ChildProfileRequest, FactoryError, HostSurface,
+    RuntimeRequest,
 };
 use smith_runtime::host::{HostSession, HostSessionRequest};
 use smith_runtime::journal::DefaultRedactor;
@@ -213,6 +214,46 @@ pub(super) async fn start_host(
         runtime.child_profiles.push(ChildProfileRequest {
             config: child_resolution.config,
             catalog_sources,
+        });
+    }
+
+    if !matches!(surface, HostSurface::Child)
+        && let Some(advisor) = &agents.profile.advisor
+    {
+        let mut advisor_selection = selection.clone();
+        advisor_selection.profile = Some(advisor.value.clone());
+        advisor_selection.provider = None;
+        advisor_selection.model = None;
+        // Main-session overrides were selected against the main binding;
+        // the reviewer uses its own profile's reasoning and context limits.
+        advisor_selection.reasoning_enabled = None;
+        advisor_selection.reasoning_effort = None;
+        advisor_selection.context_window = None;
+        advisor_selection.context_window_reset = false;
+        advisor_selection.effort = None;
+        advisor_selection.context_window_flag = None;
+        let (_, advisor_request) = resolution_request(&advisor_selection)?;
+        let advisor_resolution = resolve(&advisor_request.with_profile_use(ProfileUse::Advisor))
+            .map_err(|error| anyhow::anyhow!("{error}"))
+            .with_context(|| format!("resolving advisor profile `{}`", advisor.value))?;
+        let mut catalog_sources = Vec::new();
+        if let Some(source) = runtime_catalog_source(
+            &catalog,
+            &advisor_resolution.config.provider.name.value,
+            &advisor_resolution.config.provider.kind.value,
+            advisor_resolution
+                .config
+                .provider
+                .base_url
+                .as_ref()
+                .map(|value| value.value.as_str()),
+        ) {
+            catalog_sources.push(source);
+        }
+        runtime.advisor_profile = Some(AdvisorProfileRequest {
+            config: advisor_resolution.config,
+            catalog_sources,
+            provider: None,
         });
     }
 

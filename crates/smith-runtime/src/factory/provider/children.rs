@@ -5,6 +5,75 @@ use super::*;
 use super::adapter;
 use super::credentials;
 
+/// A single tool-free reviewer binding prepared exactly like a child binding.
+pub(in crate::factory) async fn prepare_advisor_route(
+    request: &RuntimeRequest,
+) -> Result<Option<Arc<AdvisorRoute>>, FactoryError> {
+    if matches!(request.surface, HostSurface::Child) {
+        return Ok(None);
+    }
+    let Some(selected) = &request.config.agent.profile.advisor else {
+        return Ok(None);
+    };
+    let advisor =
+        request
+            .advisor_profile
+            .as_ref()
+            .ok_or_else(|| FactoryError::MissingHostPolicy {
+                what: "resolved advisor profile",
+                message: format!(
+                    "resolve advisor profile `{}` before composition",
+                    selected.value
+                ),
+            })?;
+    if advisor.config.agent.profile.name != selected.value
+        || !advisor.config.agent.profile.supports(ProfileUse::Advisor)
+    {
+        return Err(FactoryError::Runtime(RuntimeError::config(
+            "the resolved advisor route does not match the selected advisor profile",
+        )));
+    }
+    let mut route_request = RuntimeRequest::new(advisor.config.clone(), HostSurface::Child);
+    route_request.workspace = request.workspace.clone();
+    route_request.approval = request.approval.clone();
+    route_request.credentials = request.credentials.clone();
+    route_request.transport = request.transport.clone();
+    route_request.credential_timeout_ms = request.credential_timeout_ms;
+    route_request.catalog_sources = advisor.catalog_sources.clone();
+    route_request.model_catalog = request.model_catalog.clone();
+    route_request.persistence_redactor = request.persistence_redactor.clone();
+    route_request.provider = advisor.provider.clone();
+    route_request.built_in_tools = false;
+    super::validate_pool_references(&route_request)?;
+    let prepared = super::prepare(&route_request).await?;
+    let provider = super::construct_runtime(
+        &route_request,
+        prepared.adapter,
+        prepared.endpoint,
+        prepared.secret,
+        &prepared.profile.profile,
+        &prepared.reasoning,
+        prepared.command.map(|command| command.provider),
+    )?
+    .provider;
+    Ok(Some(Arc::new(AdvisorRoute {
+        provider,
+        provider_name: prepared.provider_name,
+        model: prepared.model,
+        model_profile: prepared.profile.profile,
+        context_policy: prepared.context_policy,
+        reasoning: prepared.reasoning,
+        output_budget: prepared.output_budget,
+        instructions: advisor
+            .config
+            .agent
+            .profile
+            .instructions
+            .as_ref()
+            .map(|instructions| instructions.value.clone()),
+    })))
+}
+
 pub(in crate::factory) async fn prepare_child_profile_routes(
     request: &RuntimeRequest,
     project_instructions: Option<&ProjectInstructionsSnapshot>,

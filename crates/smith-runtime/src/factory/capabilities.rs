@@ -5,10 +5,22 @@ use super::*;
 pub(super) fn prepare(
     request: &RuntimeRequest,
     agent_tool_profiles: Vec<AgentToolProfile>,
+    advisor_route: Option<Arc<AdvisorRoute>>,
     image_backend: Option<Arc<dyn smith_tools::ImageGenerationBackend>>,
     image_history: Arc<crate::image_history::SessionImageHistory>,
 ) -> Result<CapabilityStage, FactoryError> {
     let mut tools = tools(request, image_backend, image_history);
+    let (advisor, advisor_slot) = if advisor_eligible(request) {
+        let route = advisor_route.ok_or_else(|| {
+            FactoryError::Runtime(RuntimeError::config("advisor route was not prepared"))
+        })?;
+        let slot = Arc::new(std::sync::OnceLock::new());
+        let tool = Arc::new(AdvisorTool::new(slot.clone(), route));
+        tools.push(tool.clone());
+        (Some(tool), Some(slot))
+    } else {
+        (None, None)
+    };
     // No tool, no projected plan state: a posture that cannot write a plan
     // should not carry one in its context either.
     let todo = todo_planning_eligible(request).then(|| Arc::new(TodoComponent::public()));
@@ -88,6 +100,8 @@ pub(super) fn prepare(
         todo,
         goal,
         delegation_slot,
+        advisor,
+        advisor_slot,
     })
 }
 
@@ -155,7 +169,7 @@ pub(super) fn goal_component_eligible(request: &RuntimeRequest) -> bool {
     request.config.persistence.enabled.value && !matches!(request.surface, HostSurface::Child)
 }
 
-// The three predicates below decide both whether a tool is registered and
+// The predicates below decide both whether a tool is registered and
 // whether its instruction section is contributed. They exist as named
 // functions precisely so those two decisions cannot drift apart: a run whose
 // prompt describes a capability it did not register is a run that will try to
@@ -168,6 +182,13 @@ pub(super) fn questionnaire_eligible(request: &RuntimeRequest) -> bool {
 /// Whether this run registers the child-delegation `agent` tool.
 pub(super) fn delegation_eligible(request: &RuntimeRequest) -> bool {
     !matches!(request.surface, HostSurface::Child) && request.config.agent.profile.delegation.value
+}
+
+/// Whether this run registers the root advisor tool and its future guidance section.
+pub(super) fn advisor_eligible(request: &RuntimeRequest) -> bool {
+    !matches!(request.surface, HostSurface::Child)
+        && request.config.agent.profile.advisor.is_some()
+        && request.advisor_profile.is_some()
 }
 
 /// Whether this run registers the todo-planning tool.

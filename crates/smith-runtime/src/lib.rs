@@ -12,6 +12,7 @@
 //! crate. Presentation may differ between hosts; runtime policy may not.
 
 pub mod abilities;
+pub mod advisor;
 pub mod artifact;
 mod authority;
 pub mod background_tasks;

@@ -126,6 +126,7 @@ use agent_runtime_core::grant::SecurityCheckMode;
 use smith_host::rotation::{HeadlessRotation, RotationPolicy};
 
 use crate::abilities::{INTERACTION_READY_CONFIG, seal_tool_abilities};
+use crate::advisor::{AdvisorRoute, AdvisorTool};
 use crate::authority::SmithToolAuthority;
 use crate::background_tasks::BackgroundServices;
 use crate::budget_notice::{BudgetNoticeComponent, DEFAULT_NOTICE_THRESHOLD_TOKENS};
@@ -422,6 +423,8 @@ pub struct RuntimeRequest {
     pub model_catalog: Option<Arc<smith_config::catalog::CatalogSnapshot>>,
     /// Fully resolved child-enabled profiles preflighted before child dispatch.
     pub child_profiles: Vec<ChildProfileRequest>,
+    /// Fully resolved advisor profile, required when the root selects an advisor.
+    pub advisor_profile: Option<AdvisorProfileRequest>,
     /// The runtime's event broadcast buffer.
     pub event_buffer: usize,
     /// The bounded-shutdown grace period, in milliseconds.
@@ -466,6 +469,7 @@ impl RuntimeRequest {
             catalog_sources: Vec::new(),
             model_catalog: None,
             child_profiles: Vec::new(),
+            advisor_profile: None,
             event_buffer: DEFAULT_EVENT_BUFFER,
             shutdown_timeout_ms: DEFAULT_SHUTDOWN_TIMEOUT_MS,
         }
@@ -479,6 +483,17 @@ pub struct ChildProfileRequest {
     pub config: ResolvedConfig,
     /// Catalog layers applicable to that profile's provider/model.
     pub catalog_sources: Vec<Arc<dyn ModelCatalogSource>>,
+}
+
+/// One advisor-enabled profile resolved through the normal configuration path.
+#[derive(Debug, Clone)]
+pub struct AdvisorProfileRequest {
+    /// Profile-selected, provenance-carrying advisor configuration.
+    pub config: ResolvedConfig,
+    /// Catalog layers applicable to the advisor's provider/model.
+    pub catalog_sources: Vec<Arc<dyn ModelCatalogSource>>,
+    /// Optional provider injection for deterministic tests and trusted embedders.
+    pub provider: Option<Arc<dyn Provider>>,
 }
 
 /// What one composition actually mapped onto the shared builder.
@@ -631,6 +646,7 @@ pub struct SmithRuntime {
     artifact_store: Option<Arc<dyn ArtifactStore>>,
     surface: HostSurface,
     delegation: Option<SmithDelegation>,
+    advisor_slot: Option<Arc<std::sync::OnceLock<agent_runtime::runtime::SessionHandle>>>,
     goal_component: Option<Arc<GoalComponent>>,
     background_services: Option<BackgroundServices>,
     harness_identity: HarnessIdentity,
@@ -687,6 +703,18 @@ impl SmithRuntime {
     /// tool (root surfaces only — a child runtime never has one).
     pub fn delegation(&self) -> Option<&SmithDelegation> {
         self.delegation.as_ref()
+    }
+
+    /// Connects the advisor to canonical history after session start, before a turn.
+    pub fn wire_advisor(
+        &self,
+        session: &agent_runtime::runtime::SessionHandle,
+    ) -> Result<(), RuntimeError> {
+        if let Some(slot) = &self.advisor_slot {
+            slot.set(session.clone())
+                .map_err(|_| RuntimeError::conflict("advisor session is already wired"))?;
+        }
+        Ok(())
     }
 
     /// Standard persistent-goal component for eligible root sessions.
@@ -947,6 +975,8 @@ struct CapabilityStage {
     goal: Option<Arc<GoalComponent>>,
     delegation_slot:
         Option<Arc<std::sync::OnceLock<agent_runtime::delegation::DelegationCoordinator>>>,
+    advisor: Option<Arc<AdvisorTool>>,
+    advisor_slot: Option<Arc<std::sync::OnceLock<agent_runtime::runtime::SessionHandle>>>,
 }
 
 /// Exact checkpoint state prepared independently of completed-turn storage.
@@ -1207,6 +1237,7 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
     let child_profile_routes =
         provider::prepare_child_profile_routes(&request, prompt.project_instructions.as_ref())
             .await?;
+    let advisor_route = provider::prepare_advisor_route(&request).await?;
     // Built from the exact same routes `SmithChildFactory.profile_routes`
     // resolves below, so the model-facing `agent` tool can never advertise or
     // accept a profile name the factory would fail to route.
@@ -1241,6 +1272,7 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
     let capabilities = capabilities::prepare(
         &request,
         agent_tool_profiles,
+        advisor_route,
         image_backend,
         image_history.clone(),
     )?;
@@ -1414,6 +1446,9 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
     if let Some(identity) = cache_endpoint_identity.as_ref() {
         builder = builder.cache_endpoint_identity(identity.clone());
     }
+    if let Some(advisor) = &capabilities.advisor {
+        builder = builder.tool_view_resolver(advisor.clone());
+    }
     if let Some(component) = &capabilities.todo {
         builder = builder
             .context_contributor(component.clone())
@@ -1527,6 +1562,7 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         artifact_store: request.artifact_store,
         surface: request.surface,
         delegation: delegation.delegation,
+        advisor_slot: capabilities.advisor_slot,
         goal_component: capabilities.goal,
         background_services: request.background_services,
         harness_identity,
