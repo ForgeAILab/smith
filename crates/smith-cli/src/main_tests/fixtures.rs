@@ -712,6 +712,7 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                     LocalResult::Timeline(report) => {
                         smith_client::timeline_report::render_plain(report)
                     }
+                    LocalResult::Goal(report) => smith_client::goal_report::render_plain(report),
                     LocalResult::Text { body, .. } => body.clone(),
                 };
                 raw.push_str(&format!(
@@ -730,6 +731,9 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                     )),
                     LocalResult::Timeline(report) => LocalResult::Timeline(Box::new(
                         fixture_timeline_view(report, normalizer),
+                    )),
+                    LocalResult::Goal(report) => LocalResult::Goal(Box::new(
+                        fixture_goal_view(report, normalizer),
                     )),
                     LocalResult::Text { title, body, state } => LocalResult::Text {
                         title: normalizer.normalize(title),
@@ -948,6 +952,39 @@ fn fixture_help_view(
     }
     for guidance in &mut report.composer {
         *guidance = normalizer.normalize(guidance);
+    }
+    report
+}
+
+fn fixture_goal_view(
+    report: &smith_client::goal_report::GoalReport,
+    normalizer: &mut fixture_support::Normalizer,
+) -> smith_client::goal_report::GoalReport {
+    use smith_client::goal_report::GoalReport;
+
+    let mut report = report.clone();
+    match &mut report {
+        GoalReport::Empty | GoalReport::Cleared => {}
+        GoalReport::Unavailable(error) => {
+            *error = normalizer.normalize(error);
+        }
+        GoalReport::Snapshot(goal) => {
+            for value in [
+                &mut goal.objective,
+                &mut goal.status,
+                &mut goal.usage_provenance,
+                &mut goal.active_elapsed,
+                &mut goal.id,
+            ] {
+                *value = normalizer.normalize(value);
+            }
+            if let Some(reason) = &mut goal.stopped_reason {
+                reason.code = normalizer.normalize(&reason.code);
+                if let Some(detail) = &mut reason.detail {
+                    *detail = normalizer.normalize(detail);
+                }
+            }
+        }
     }
     report
 }

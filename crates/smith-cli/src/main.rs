@@ -38,7 +38,9 @@ use agent_runtime_core::content::{ContentPart, ToolResultBlock, UserInput};
 use agent_runtime_core::delegation::{
     ChildLimits, ChildModelSelection, ChildSpec, ToolViewScope, WorkspacePolicy,
 };
-use agent_runtime_core::goal::{GoalCommand, GoalProjection};
+#[cfg(test)]
+use agent_runtime_core::goal::GoalCommand;
+use agent_runtime_core::goal::GoalProjection;
 use agent_runtime_core::ids::{ChildId, SessionId};
 use agent_runtime_core::provider::{ModelId, ReasoningSupport};
 use agent_runtime_core::steer::SteerRejectionReason;
@@ -51,7 +53,7 @@ use futures_util::StreamExt;
 use ignore::WalkBuilder;
 use ratatui::layout::Rect;
 use smith_client::commands::{
-    AgentAction, DiffScope, GoalAction, HostCommand, SelectionCommand, SessionControl,
+    AgentAction, DiffScope, HostCommand, SelectionCommand, SessionControl,
 };
 #[cfg(test)]
 use smith_client::status::ContextPlanUpdate;

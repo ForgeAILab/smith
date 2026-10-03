@@ -5,6 +5,7 @@ use smith_client::local_result::LocalResult;
 use smith_client::status::{PriceReference, SessionCost, SessionUsage};
 
 pub(super) mod context;
+mod goal;
 mod status;
 pub(crate) mod timeline;
 
@@ -214,118 +215,9 @@ pub(super) async fn handle_local_command(
             );
         }
         HostCommand::Goal(action) => {
-            let result = match action {
-                GoalAction::Show => match host.goal() {
-                    Ok(Some(goal)) => {
-                        app.show_local_result("goal", render_goal(&goal));
-                        return;
-                    }
-                    Ok(None) if host.runtime().goal_component().is_some() => {
-                        app.show_local_empty(
-                            "goal",
-                            "No persistent goal. Create one with `/goal <objective>`.",
-                        );
-                        return;
-                    }
-                    Ok(None) => {
-                        app.show_local_error(
-                            "goal",
-                            "Persistent goals require a persisted root session; they are unavailable in ephemeral and child sessions.",
-                        );
-                        return;
-                    }
-                    Err(error) => Err(error),
-                },
-                GoalAction::Create(objective) => {
-                    host.control_goal(GoalCommand::Create {
-                        objective,
-                        token_budget: None,
-                    })
-                    .await
-                }
-                GoalAction::Edit(objective) => match host.goal() {
-                    Ok(Some(goal)) => {
-                        host.control_goal(GoalCommand::Edit {
-                            id: goal.id,
-                            generation: goal.generation,
-                            objective,
-                        })
-                        .await
-                    }
-                    Ok(None) => {
-                        app.show_local_error("goal", "No goal to edit; use `/goal <objective>`.");
-                        return;
-                    }
-                    Err(error) => Err(error),
-                },
-                GoalAction::Budget(token_budget) => match host.goal() {
-                    Ok(Some(goal)) => {
-                        host.control_goal(GoalCommand::SetBudget {
-                            id: goal.id,
-                            generation: goal.generation,
-                            token_budget,
-                        })
-                        .await
-                    }
-                    Ok(None) => {
-                        app.show_local_error(
-                            "goal",
-                            "No goal budget to change; use `/goal <objective>` first.",
-                        );
-                        return;
-                    }
-                    Err(error) => Err(error),
-                },
-                GoalAction::Pause => match host.goal() {
-                    Ok(Some(goal)) => {
-                        host.control_goal(GoalCommand::Pause {
-                            id: goal.id,
-                            generation: goal.generation,
-                        })
-                        .await
-                    }
-                    Ok(None) => {
-                        app.show_local_error("goal", "No active goal to pause.");
-                        return;
-                    }
-                    Err(error) => Err(error),
-                },
-                GoalAction::Resume => match host.goal() {
-                    Ok(Some(goal)) => {
-                        host.control_goal(GoalCommand::Resume {
-                            id: goal.id,
-                            generation: goal.generation,
-                        })
-                        .await
-                    }
-                    Ok(None) => {
-                        app.show_local_error("goal", "No stopped goal to resume.");
-                        return;
-                    }
-                    Err(error) => Err(error),
-                },
-                GoalAction::Clear => match host.goal() {
-                    Ok(Some(goal)) => {
-                        host.control_goal(GoalCommand::Clear {
-                            id: goal.id,
-                            generation: goal.generation,
-                        })
-                        .await
-                    }
-                    Ok(None) => {
-                        app.show_local_error("goal", "No goal to clear.");
-                        return;
-                    }
-                    Err(error) => Err(error),
-                },
-            };
-            match result {
-                Ok(result) => match result.goal {
-                    Some(goal) => app.show_local_result("goal", render_goal(&goal)),
-                    None => app.show_local_result("goal", "Goal cleared."),
-                },
-                Err(error) => app.show_local_error("goal", error.to_string()),
-            }
+            app.show_local_report(LocalResult::Goal(Box::new(
+                goal::report(host, action).await,
+            )));
         }
         HostCommand::Agent(selected) => {
             let Some(coordinator) = host

@@ -4,6 +4,7 @@
 //! Terminal drawing belongs to `smith-tui`.
 
 use crate::context_report::ContextReport;
+use crate::goal_report::GoalReport;
 use crate::help_report::HelpReport;
 use crate::status_report::StatusReport;
 use crate::timeline_report::TimelineReport;
@@ -30,6 +31,8 @@ pub enum LocalResult {
     Help(Box<HelpReport>),
     /// The session's root, child, and recovery timeline.
     Timeline(Box<TimelineReport>),
+    /// The result of showing or changing the session's persistent goal.
+    Goal(Box<GoalReport>),
     /// Transitional output for commands that have not migrated to reports.
     Text {
         /// Command or result title.
@@ -49,6 +52,7 @@ impl LocalResult {
             Self::Context(_) => "context",
             Self::Help(_) => "help",
             Self::Timeline(_) => "timeline",
+            Self::Goal(_) => "goal",
             Self::Text { title, .. } => title,
         }
     }
@@ -61,6 +65,11 @@ impl LocalResult {
                 TimelineReport::Empty => LocalResultState::Empty,
                 TimelineReport::Unavailable(_) => LocalResultState::Error,
                 TimelineReport::Entries(_) => LocalResultState::Info,
+            },
+            Self::Goal(report) => match report.as_ref() {
+                GoalReport::Empty => LocalResultState::Empty,
+                GoalReport::Unavailable(_) => LocalResultState::Error,
+                GoalReport::Cleared | GoalReport::Snapshot(_) => LocalResultState::Info,
             },
             Self::Text { state, .. } => *state,
         }

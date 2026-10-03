@@ -14,6 +14,7 @@ use crate::status::{Activity, render_elapsed};
 use crate::theme::{Theme, Tone, glyph};
 use crate::transcript::{Block, LocalResult, LocalResultState, ToolStatus};
 use smith_client::context_report::{ContextCategoryKind, ContextCompaction, ContextReport};
+use smith_client::goal_report::GoalReport;
 use smith_client::help_report::{HelpCommand, HelpReport};
 use smith_client::status_report::{StatusGoal, StatusReport};
 use smith_client::timeline_report::{TimelineEntry, TimelinePlan, TimelineReport};
@@ -379,6 +380,13 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16) -> Vec<Line<'static>>
                     theme.style(Tone::Command),
                 )));
                 lines.extend(render_timeline_report(report, width, theme));
+            }
+            Block::Local(LocalResult::Goal(report)) => {
+                lines.push(Line::from(Span::styled(
+                    "/goal",
+                    theme.style(Tone::Command),
+                )));
+                lines.extend(render_goal_report(report, width, theme));
             }
             Block::Local(LocalResult::Text {
                 title,
@@ -870,6 +878,72 @@ pub(super) fn render_local_content(
         for wrapped in wrap_text(raw, available) {
             lines.push(styled_local_line(title, &wrapped, theme));
         }
+    }
+    lines
+}
+
+fn render_goal_report(report: &GoalReport, width: u16, theme: Theme) -> Vec<Line<'static>> {
+    let goal = match report {
+        GoalReport::Empty => {
+            return render_prefixed_local_state(
+                glyph::BULLET,
+                GoalReport::EMPTY_MESSAGE,
+                width,
+                theme.style(Tone::Dim),
+            );
+        }
+        GoalReport::Unavailable(error) => {
+            return render_prefixed_local_state(
+                glyph::ERROR,
+                error,
+                width,
+                theme.style(Tone::Danger),
+            );
+        }
+        GoalReport::Cleared => {
+            return wrap_context_line(
+                Line::from(Span::styled(
+                    GoalReport::CLEARED_MESSAGE,
+                    theme.style(Tone::Default),
+                )),
+                usize::from(width).max(1),
+            );
+        }
+        GoalReport::Snapshot(goal) => goal,
+    };
+    let available = usize::from(width).max(1);
+    let mut lines = Vec::new();
+    for raw in goal.objective.split('\n') {
+        for wrapped in wrap_text(raw.strip_suffix('\r').unwrap_or(raw), available) {
+            lines.push(Line::from(render_inline_markdown(
+                &wrapped,
+                theme.style(Tone::Default),
+                theme,
+            )));
+        }
+    }
+    for (label, value) in [
+        ("status", goal.status.clone()),
+        (
+            "tokens",
+            format!(
+                "{} · {}",
+                goal.charged_tokens_value(),
+                goal.usage_provenance
+            ),
+        ),
+        ("budget", goal.budget_value()),
+        ("active elapsed", goal.active_elapsed.clone()),
+        ("reason", goal.reason_value()),
+        (
+            "id",
+            format!("{} · generation {}", goal.id, goal.generation),
+        ),
+    ] {
+        lines.extend(wrap_context_line(
+            context_field(label, value, Tone::Default, theme),
+            available,
+        ));
     }
     lines
 }
