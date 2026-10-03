@@ -18,6 +18,7 @@ use smith_client::context_report::{ContextCategoryKind, ContextCompaction, Conte
 use smith_client::goal_report::GoalReport;
 use smith_client::help_report::{HelpCommand, HelpReport};
 use smith_client::mcp_report::McpReport;
+use smith_client::skills_report::SkillsReport;
 use smith_client::status_report::{StatusGoal, StatusReport};
 use smith_client::timeline_report::{TimelineEntry, TimelinePlan, TimelineReport};
 use smith_tools::ToolCallDisplay;
@@ -396,6 +397,13 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16) -> Vec<Line<'static>>
             Block::Local(LocalResult::Mcp(report)) => {
                 lines.push(Line::from(Span::styled("/mcp", theme.style(Tone::Command))));
                 lines.extend(render_mcp_report(report, width, theme));
+            }
+            Block::Local(LocalResult::Skills(report)) => {
+                lines.push(Line::from(Span::styled(
+                    "/skills",
+                    theme.style(Tone::Command),
+                )));
+                lines.extend(render_skills_report(report, width, theme));
             }
             Block::Local(LocalResult::Text {
                 title,
@@ -1099,6 +1107,86 @@ fn render_mcp_text(content: &str, width: u16, theme: Theme) -> Vec<Line<'static>
                         theme.style(Tone::Default),
                         theme,
                     ))
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn render_skills_report(report: &SkillsReport, width: u16, theme: Theme) -> Vec<Line<'static>> {
+    let (groups, problems) = match report {
+        SkillsReport::Empty => {
+            return render_skills_text(SkillsReport::EMPTY_MESSAGE, width, theme);
+        }
+        SkillsReport::Error(error) => {
+            return render_prefixed_local_state(
+                glyph::ERROR,
+                error,
+                width,
+                theme.style(Tone::Danger),
+            );
+        }
+        SkillsReport::Trusted { skill, digest } => {
+            return render_skills_text(&SkillsReport::trusted_value(skill, digest), width, theme);
+        }
+        SkillsReport::Indexed { groups, problems } => (groups, problems),
+    };
+    let mut lines = Vec::new();
+    for group in groups {
+        lines.extend(render_skills_text(group.layer.as_str(), width, theme));
+        for entry in &group.entries {
+            lines.extend(render_skills_text(
+                &format!(
+                    "  {} · {} · {}",
+                    entry.name,
+                    entry.state.render_value(&entry.name),
+                    entry.description,
+                ),
+                width,
+                theme,
+            ));
+        }
+    }
+    if groups.is_empty() {
+        lines.extend(render_skills_text(
+            SkillsReport::EMPTY_MESSAGE,
+            width,
+            theme,
+        ));
+    }
+    if !problems.is_empty() {
+        lines.extend(render_skills_text("not loaded", width, theme));
+        for problem in problems {
+            lines.extend(render_skills_text(
+                &format!("  {} · {} · {}", problem.name, problem.reason, problem.path,),
+                width,
+                theme,
+            ));
+        }
+    }
+    lines
+}
+
+/// Retains wrapping before inline Markdown for the typed skill fields.
+fn render_skills_text(content: &str, width: u16, theme: Theme) -> Vec<Line<'static>> {
+    content
+        .lines()
+        .flat_map(|raw| {
+            wrap_text(raw, usize::from(width).max(1))
+                .into_iter()
+                .map(|wrapped| {
+                    // The previous generic text path left rows containing a
+                    // colon literal. Keep those bytes without interpreting
+                    // the value as a label or recovering report structure.
+                    if wrapped.contains(':') {
+                        Line::from(Span::styled(wrapped, theme.style(Tone::Default)))
+                    } else {
+                        Line::from(render_inline_markdown(
+                            &wrapped,
+                            theme.style(Tone::Default),
+                            theme,
+                        ))
+                    }
                 })
                 .collect::<Vec<_>>()
         })

@@ -8,6 +8,7 @@ use crate::context_report::ContextReport;
 use crate::goal_report::GoalReport;
 use crate::help_report::HelpReport;
 use crate::mcp_report::McpReport;
+use crate::skills_report::SkillsReport;
 use crate::status_report::StatusReport;
 use crate::timeline_report::TimelineReport;
 
@@ -39,6 +40,8 @@ pub enum LocalResult {
     Agent(Box<AgentReport>),
     /// MCP server snapshots and local trust outcomes.
     Mcp(Box<McpReport>),
+    /// Indexed skills, discovery problems, and local trust outcomes.
+    Skills(Box<SkillsReport>),
     /// Transitional output for commands that have not migrated to reports.
     Text {
         /// Command or result title.
@@ -61,6 +64,7 @@ impl LocalResult {
             Self::Goal(_) => "goal",
             Self::Agent(report) => report.title(),
             Self::Mcp(_) => "mcp",
+            Self::Skills(_) => "skills",
             Self::Text { title, .. } => title,
         }
     }
@@ -100,6 +104,12 @@ impl LocalResult {
                 McpReport::Empty { .. } | McpReport::Servers(_) | McpReport::Trusted { .. } => {
                     LocalResultState::Info
                 }
+            },
+            Self::Skills(report) => match report.as_ref() {
+                SkillsReport::Error(_) => LocalResultState::Error,
+                SkillsReport::Empty
+                | SkillsReport::Indexed { .. }
+                | SkillsReport::Trusted { .. } => LocalResultState::Info,
             },
             Self::Text { state, .. } => *state,
         }

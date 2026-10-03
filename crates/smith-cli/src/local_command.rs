@@ -4,12 +4,14 @@ use super::*;
 use smith_client::agent_report::AgentReport;
 use smith_client::local_result::LocalResult;
 use smith_client::mcp_report::McpReport;
+use smith_client::skills_report::SkillsReport;
 use smith_client::status::{PriceReference, SessionCost, SessionUsage};
 
 pub(crate) mod agent;
 pub(super) mod context;
 mod goal;
 pub(super) mod mcp;
+pub(super) mod skills;
 mod status;
 pub(crate) mod timeline;
 
@@ -34,14 +36,21 @@ pub(super) async fn handle_local_command(
     match command {
         HostCommand::Skills(action) => match action {
             smith_client::commands::SkillsAction::List => {
-                app.show_local_result("skills", skills.render_list(host.runtime().skill_index()));
+                app.show_local_report(LocalResult::Skills(Box::new(skills::report(
+                    skills,
+                    host.runtime().skill_index(),
+                ))));
             }
             // The path and the digest are what the decision binds, so the path
             // and the digest are what the confirmation shows.
             smith_client::commands::SkillsAction::Trust(skill) => match skills.confirmation(&skill)
             {
                 Ok(content) => app.confirm_skill_trust(skill, content),
-                Err(error) => app.show_local_error("skills", error),
+                Err(error) => {
+                    app.show_local_report(LocalResult::Skills(Box::new(SkillsReport::Error(
+                        error,
+                    ))));
+                }
             },
         },
         HostCommand::Mcp(action) => match (mcp, action) {

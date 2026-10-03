@@ -72,7 +72,7 @@ completed_at:
 - [ ] 4.2 Convert `/status`, then `/context`, `/help`, `/timeline`, `/goal`,
   `/agent`, `/mcp`, `/skills`, `/diff`, `/review`, the undo, redo, and revert
   previews, and `/diagnostics`; one commit each, fixtures unchanged.
-  Converted so far: `/status`, `/context`, `/help`, `/timeline`, `/goal`, `/agent`, `/mcp`.
+  Converted so far: `/status`, `/context`, `/help`, `/timeline`, `/goal`, `/agent`, `/mcp`, `/skills`.
 - [ ] 4.3 Render headless goal, child, and restore text from the same
   reports; remove the duplicate formatters.
 - [ ] 4.4 Delete renderer branches that inspect titles, headings, glyphs, or

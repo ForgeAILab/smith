@@ -47,7 +47,10 @@ async fn skills_list_groups_by_layer_and_names_the_winner() {
     write_skill_body(&home.path().join(".smith"), "rust-review", SKILL_BODY);
 
     let (resolved, context) = skill_context(&home.path().join(".smith"), project.path());
-    let listed = context.render_list(resolved.index());
+    let listed = smith_client::skills_report::render_plain(&local_command::skills::report(
+        &context,
+        resolved.index(),
+    ));
 
     assert!(listed.contains("built-in"), "{listed}");
     assert!(listed.contains("user"), "{listed}");
@@ -82,7 +85,10 @@ async fn skills_list_reports_discovery_problems() {
     );
 
     let (resolved, context) = skill_context(&home.path().join(".smith"), project.path());
-    let listed = context.render_list(resolved.index());
+    let listed = smith_client::skills_report::render_plain(&local_command::skills::report(
+        &context,
+        resolved.index(),
+    ));
 
     assert!(listed.contains("good · active"), "{listed}");
     assert!(listed.contains("not loaded"), "{listed}");
@@ -98,7 +104,10 @@ async fn an_untrusted_project_skill_says_what_to_do_about_it() {
     write_skill_body(&project.path().join(".smith"), "deploy", SKILL_BODY);
 
     let (resolved, context) = skill_context(&home.path().join(".smith"), project.path());
-    let listed = context.render_list(resolved.index());
+    let listed = smith_client::skills_report::render_plain(&local_command::skills::report(
+        &context,
+        resolved.index(),
+    ));
 
     assert!(
         listed.contains("deploy · withheld · needs approval — run `/skills trust deploy`"),
@@ -131,14 +140,23 @@ async fn skills_trust_shows_path_and_digest_before_recording() {
         entry.layer != smith_runtime::skills::SmithSkillLayer::Workspace || !entry.activatable
     }));
 
-    let notice = context.trust("deploy").expect("the decision records");
+    let outcome = local_command::skills::trust(&context, "deploy");
+    assert!(matches!(
+        outcome,
+        smith_client::skills_report::SkillsReport::Trusted { .. }
+    ));
+    let notice = smith_client::skills_report::render_plain(&outcome);
     assert!(notice.contains("idle boundary"), "{notice}");
 
     // The next composition — the one the idle boundary triggers — admits it.
     let (resolved, context) = skill_context(&home.path().join(".smith"), project.path());
     assert!(resolved.index().iter().all(|entry| entry.activatable));
     assert!(
-        context.render_list(resolved.index()).contains("deploy · active"),
+        smith_client::skills_report::render_plain(&local_command::skills::report(
+            &context,
+            resolved.index(),
+        ))
+        .contains("deploy · active"),
         "the trusted skill is active"
     );
 
@@ -146,7 +164,10 @@ async fn skills_trust_shows_path_and_digest_before_recording() {
     std::fs::write(&path, "---\ndescription: Review\n---\n\nRewritten by a later commit.\n")
         .expect("a later commit");
     let (resolved, context) = skill_context(&home.path().join(".smith"), project.path());
-    let listed = context.render_list(resolved.index());
+    let listed = smith_client::skills_report::render_plain(&local_command::skills::report(
+        &context,
+        resolved.index(),
+    ));
     assert!(
         listed.contains("deploy · withheld · its content changed"),
         "{listed}"
@@ -175,7 +196,10 @@ async fn a_user_skill_is_never_withheld_and_a_malformed_one_does_not_hide_it() {
     write_skill_body(&home.path().join(".smith"), "half-written", "---\n");
 
     let (resolved, context) = skill_context(&home.path().join(".smith"), project.path());
-    let listed = context.render_list(resolved.index());
+    let listed = smith_client::skills_report::render_plain(&local_command::skills::report(
+        &context,
+        resolved.index(),
+    ));
     assert!(listed.contains("rust-review · active"), "{listed}");
     assert!(listed.contains("half-written ·"), "{listed}");
     assert!(

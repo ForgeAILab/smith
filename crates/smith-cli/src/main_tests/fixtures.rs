@@ -728,6 +728,7 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                     LocalResult::Goal(report) => smith_client::goal_report::render_plain(report),
                     LocalResult::Agent(report) => smith_client::agent_report::render_plain(report),
                     LocalResult::Mcp(report) => smith_client::mcp_report::render_plain(report),
+                    LocalResult::Skills(report) => smith_client::skills_report::render_plain(report),
                     LocalResult::Text { body, .. } => body.clone(),
                 };
                 raw.push_str(&format!(
@@ -755,6 +756,9 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                     )),
                     LocalResult::Mcp(report) => LocalResult::Mcp(Box::new(
                         fixture_mcp_view(report, normalizer),
+                    )),
+                    LocalResult::Skills(report) => LocalResult::Skills(Box::new(
+                        fixture_skills_view(report, normalizer),
                     )),
                     LocalResult::Text { title, body, state } => LocalResult::Text {
                         title: normalizer.normalize(title),
@@ -1071,6 +1075,37 @@ fn fixture_mcp_view(
                     if let Some(credential) = &mut value.credential {
                         *credential = normalizer.normalize(credential);
                     }
+                }
+            }
+        }
+    }
+    report
+}
+
+fn fixture_skills_view(
+    report: &smith_client::skills_report::SkillsReport,
+    normalizer: &mut fixture_support::Normalizer,
+) -> smith_client::skills_report::SkillsReport {
+    use smith_client::skills_report::SkillsReport;
+
+    let mut report = report.clone();
+    match &mut report {
+        SkillsReport::Empty => {}
+        SkillsReport::Error(error) => *error = normalizer.normalize(error),
+        SkillsReport::Trusted { skill, digest } => {
+            *skill = normalizer.normalize(skill);
+            *digest = normalizer.normalize(digest);
+        }
+        SkillsReport::Indexed { groups, problems } => {
+            for group in groups {
+                for entry in &mut group.entries {
+                    entry.name = normalizer.normalize(&entry.name);
+                    entry.description = normalizer.normalize(&entry.description);
+                }
+            }
+            for problem in problems {
+                for value in [&mut problem.name, &mut problem.reason, &mut problem.path] {
+                    *value = normalizer.normalize(value);
                 }
             }
         }

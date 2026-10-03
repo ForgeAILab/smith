@@ -547,13 +547,16 @@ pub(super) async fn run_tui(
                                 );
                             }
                             Some(Action::TrustSkill { skill: name }) => {
-                                match skills.trust(&name) {
-                                    Ok(notice) => {
-                                        trusted_skill_pending = true;
-                                        app.show_local_result("skills", notice);
-                                    }
-                                    Err(error) => app.show_local_error("skills", error),
+                                let report = local_command::skills::trust(&skills, &name);
+                                if matches!(
+                                    &report,
+                                    smith_client::skills_report::SkillsReport::Trusted { .. }
+                                ) {
+                                    trusted_skill_pending = true;
                                 }
+                                app.show_local_report(
+                                    smith_client::local_result::LocalResult::Skills(Box::new(report)),
+                                );
                             }
                             Some(Action::ApplyUndo) => match host.changes().undo_latest() {
                                 // Accurate for a mixed turn too: the preview

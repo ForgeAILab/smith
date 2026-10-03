@@ -14,8 +14,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use smith_config::trust::{Executable, ExecutableKind, TrustDecision, TrustStatus, TrustStore};
-use smith_runtime::skills::{SkillIndexEntry, SkillProblem, SmithSkillLayer, SmithSkillSources};
+use smith_config::trust::{
+    ContentDigest, Executable, ExecutableKind, TrustDecision, TrustStatus, TrustStore,
+};
+use smith_runtime::skills::{SkillProblem, SmithSkillSources};
 
 /// Everything `/skills` needs, owned for the life of one composed session.
 ///
@@ -74,87 +76,9 @@ impl SkillContext {
         ))
     }
 
-    /// Every indexed skill grouped by source layer, plus every refused file.
-    ///
-    /// Shadowed entries stay visible: "which layer won this name" is the
-    /// question a layered catalog exists to raise, and hiding the losers turns
-    /// a deliberate override into a skill that mysteriously changed behavior.
-    pub(super) fn render_list(&self, index: &[SkillIndexEntry]) -> String {
-        let mut lines = Vec::new();
-        for layer in [
-            SmithSkillLayer::BuiltIn,
-            SmithSkillLayer::User,
-            SmithSkillLayer::Workspace,
-            SmithSkillLayer::Session,
-        ] {
-            let entries = index
-                .iter()
-                .filter(|entry| entry.layer == layer)
-                .collect::<Vec<_>>();
-            if entries.is_empty() {
-                continue;
-            }
-            lines.push(layer.as_str().to_owned());
-            for entry in entries {
-                lines.push(format!(
-                    "  {} · {} · {}",
-                    entry.name(),
-                    self.state(index, entry),
-                    entry.description()
-                ));
-            }
-        }
-        if lines.is_empty() {
-            lines.push("no skills are indexed".to_owned());
-        }
-        if !self.problems.is_empty() {
-            lines.push("not loaded".to_owned());
-            for problem in &self.problems {
-                lines.push(format!(
-                    "  {} · {} · {}",
-                    problem.name,
-                    problem.reason,
-                    problem.path.display()
-                ));
-            }
-        }
-        lines.join("\n")
-    }
-
-    /// One entry's state, in the words that say what to do about it.
-    fn state(&self, index: &[SkillIndexEntry], entry: &SkillIndexEntry) -> String {
-        if !entry.activatable {
-            return match entry.trust {
-                _ if self.status(entry.name()) == Some(TrustStatus::Changed) => {
-                    format!(
-                        "withheld · its content changed — run `/skills trust {}`",
-                        entry.name()
-                    )
-                }
-                _ if self.status(entry.name()) == Some(TrustStatus::Denied) => format!(
-                    "withheld · you declined it — run `/skills trust {}` to reconsider",
-                    entry.name()
-                ),
-                _ => format!(
-                    "withheld · needs approval — run `/skills trust {}`",
-                    entry.name()
-                ),
-            };
-        }
-        // The resolver admits by layer order, so the winner for a name is its
-        // highest activatable entry. Anything below that is present, correct,
-        // and not what the agent would get.
-        let winner = index
-            .iter()
-            .filter(|other| other.name() == entry.name() && other.activatable)
-            .map(|other| other.layer)
-            .max();
-        match winner {
-            Some(layer) if layer != entry.layer => {
-                format!("shadowed by the {} skill of the same name", layer.as_str())
-            }
-            _ => "active".to_owned(),
-        }
+    /// Files discovery refused, retained for the typed local report.
+    pub(super) fn problems(&self) -> &[SkillProblem] {
+        &self.problems
     }
 
     /// Renders what the user is being asked to admit, recording nothing.
@@ -180,21 +104,18 @@ impl SkillContext {
     }
 
     /// Records the user's decision so the next composition admits the skill.
-    pub(super) fn trust(&self, name: &str) -> Result<String, String> {
+    pub(super) fn trust(&self, name: &str) -> Result<ContentDigest, String> {
         let (executable, _) = self.decide(name)?;
         self.trust
             .lock()
             .expect("trust store")
             .record(&self.project, &executable, TrustDecision::Allow)
             .map_err(|error| error.message)?;
-        Ok(format!(
-            "`{name}` is trusted at {}; it joins the catalog at the next idle boundary",
-            executable.digest()
-        ))
+        Ok(executable.digest().clone())
     }
 
     /// This project's decision about the named workspace skill, if it has one.
-    fn status(&self, name: &str) -> Option<TrustStatus> {
+    pub(super) fn status(&self, name: &str) -> Option<TrustStatus> {
         self.decide(name).ok().map(|(_, status)| status)
     }
 
