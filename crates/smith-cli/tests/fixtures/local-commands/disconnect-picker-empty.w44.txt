@@ -504,9 +504,9 @@
 
 
   Disconnect provider · type to filter
- No provider is currently connected
+  No provider is currently connected
 ────────────────────────────────────────────
 > Ask Smith to do anything
 ────────────────────────────────────────────
            example-model · build · <PROJECT>
-  enter choose · esc cancel
+  enter confirm · esc cancel · ↑↓ choose

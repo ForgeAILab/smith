@@ -504,9 +504,9 @@
 
 
   Choose account · type to filter
- This provider declares a single credential
+  This provider declares a single…
 ────────────────────────────────────────────
 > Ask Smith to do anything
 ────────────────────────────────────────────
            example-model · build · <PROJECT>
-  enter choose · esc cancel
+  enter confirm · esc cancel · ↑↓ choose

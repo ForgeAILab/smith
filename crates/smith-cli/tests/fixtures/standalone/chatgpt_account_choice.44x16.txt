@@ -1,14 +1,14 @@
+  Connect ChatGPT · already connected
+
+❯ 1. Add another account
+     usage-aware pool · /account switches
+     between them
+  2. Replace the stored login
+
+  enter confirm · esc cancel
+  ↑↓ or 1–2 choose
 
 
-
-
-
-  ┌ Connect ChatGPT · already connected ─┐
-  │ filter: type to search               │
-  │❯ Add another account  usage-aware…   │
-  │ ↑/↓ choose · Enter confirm           │
-  │ Esc cancel                           │
-  └──────────────────────────────────────┘
 
 
 

@@ -1,16 +1,16 @@
+  Smith setup
 
- ┌ Smith setup ───────────────────────────┐
- │  no agent session or provider request  │
- │  exists yet                            │
- │ filter: type to search                 │
- │❯ Quick start with GLM                  │
- │    Z.AI Coding Plan endpoint with      │
- │    trusted GLM-5.2 limits              │
- │  Connect OpenRouter                    │
- │    OpenRouter API key with a fixed     │
- │    endpoint and reviewed model limits  │
- │                                        │
- │ ↑/↓ choose · Enter confirm             │
- │ Shift+Tab Back · Esc cancel            │
- └────────────────────────────────────────┘
+❯ 1. Quick start with GLM
+     Z.AI Coding Plan endpoint with trusted
+     GLM-5.2 limits
+  2. Connect OpenRouter
+  3. Custom OpenAI-compatible provider
+  4. Anthropic Messages API
+  5. Connect ChatGPT (experimental)
+  6. Connect xAI Grok
+  7. Connect Google Gemini
+  no agent session or provider request
+  exists yet
 
+  enter confirm · esc cancel
+  ↑↓ or 1–7 choose

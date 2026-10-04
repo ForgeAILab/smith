@@ -46,7 +46,7 @@ impl App {
         };
         match outcome {
             PickerOutcome::Pending => None,
-            PickerOutcome::Cancelled => {
+            PickerOutcome::Cancelled | PickerOutcome::Back => {
                 if let Some(Overlay::ResourcePicker { target, .. }) = self.overlay.take()
                     && target != ResourceTarget::Reference
                 {

@@ -1,6 +1,6 @@
-//! Before-runner recordings of the current standalone terminal screens.
+//! Recordings of the production standalone terminal screens.
 //!
-//! Keep the complete terminal height: blank rows locate the centered boxes.
+//! Keep the complete terminal height to reveal top-left placement and unused rows.
 
 use std::path::PathBuf;
 
@@ -11,7 +11,7 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, CellWidth};
 use ratatui::{Frame, Terminal};
 use smith_runtime::session::{SNAPSHOT_SCHEMA_VERSION, SessionListing};
-use smith_tui::picker::{draw_resource_picker, standalone_picker_area};
+use smith_tui::picker::draw_resource_picker;
 use smith_tui::setup::{SetupApp, SetupEffect, SetupMode, draw_setup};
 use smith_tui::{ResourcePicker, Theme};
 
@@ -54,7 +54,7 @@ fn fixture_screen(buffer: &Buffer) -> String {
 
 fn fixture_picker(screen: &str, picker: &ResourcePicker) {
     fixture_screens(screen, |frame, theme| {
-        let area = standalone_picker_area(frame.area(), picker.entries.len());
+        let area = frame.area();
         draw_resource_picker(frame, area, picker, theme);
     });
 }
@@ -123,7 +123,6 @@ fn setup_key(app: &mut SetupApp, code: KeyCode) {
 
 fn glm_credentials() -> SetupApp {
     let mut app = first_run_setup();
-    app.on_paste("glm");
     setup_key(&mut app, KeyCode::Enter);
     assert!(!app.is_choosing_action());
     app
@@ -172,8 +171,7 @@ fn fixtures_standalone_setup_key_field() {
 #[test]
 fn fixtures_standalone_setup_review() {
     let mut app = glm_credentials();
-    app.on_paste("environment");
-    setup_key(&mut app, KeyCode::Enter);
+    setup_key(&mut app, KeyCode::Char('4'));
     for character in "ZAI_API_KEY".chars() {
         setup_key(&mut app, KeyCode::Char(character));
     }
@@ -190,7 +188,7 @@ fn fixtures_standalone_chatgpt_login_method() {
 
 #[test]
 fn fixtures_standalone_chatgpt_account_choice() {
-    let picker = ResourcePicker::new(
+    let picker = ResourcePicker::choices(
         "Connect ChatGPT · already connected",
         connection::connect_mode_entries(1),
         "No connection choices",

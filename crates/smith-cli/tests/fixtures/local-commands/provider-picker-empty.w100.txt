@@ -504,9 +504,9 @@
 
 
   Choose provider · type to filter
- No provider is selectable · run smith setup add-provider
+  No provider is selectable · run smith setup add-provider
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 > Ask Smith to do anything
 ────────────────────────────────────────────────────────────────────────────────────────────────────
                                                      example-model · build · <PROJECT> · unknown ctx
-  type to filter · ↑↓ choose · enter confirm · esc cancel
+  ↑↓ choose · enter confirm · esc cancel

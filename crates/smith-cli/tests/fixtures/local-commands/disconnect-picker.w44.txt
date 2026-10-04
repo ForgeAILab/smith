@@ -503,10 +503,10 @@
 
 
 
-  Disconnect provider · type to filter   1/1
+  Disconnect provider · type to filter
 ❯ Local provider  configured fixture
 ────────────────────────────────────────────
 > Ask Smith to do anything
 ────────────────────────────────────────────
            example-model · build · <PROJECT>
-  enter choose · esc cancel
+  enter confirm · esc cancel · ↑↓ choose

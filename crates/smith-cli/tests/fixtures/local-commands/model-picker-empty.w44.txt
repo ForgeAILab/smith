@@ -504,9 +504,9 @@
 
 
   Choose model · type to filter
- No local model is selectable · run smith se
+  No local model is selectable · run smith…
 ────────────────────────────────────────────
 > Ask Smith to do anything
 ────────────────────────────────────────────
            example-model · build · <PROJECT>
-  enter choose · esc cancel
+  enter confirm · esc cancel · ↑↓ choose

@@ -475,9 +475,7 @@ pub(super) fn overlay_hint(app: &App) -> Option<String> {
             })
         }
         Some(Overlay::Palette { .. }) => None,
-        Some(Overlay::ResourcePicker { .. }) => {
-            Some("type to filter · ↑↓ choose · enter confirm · esc cancel".to_owned())
-        }
+        Some(Overlay::ResourcePicker { picker, .. }) => Some(picker.footer().hint(u16::MAX)),
         Some(Overlay::HistorySearch { .. }) => {
             Some("ctrl+r older · enter use · esc cancel".to_owned())
         }
@@ -512,17 +510,11 @@ pub(super) fn draw_hint(frame: &mut Frame<'_>, area: Rect, app: &App, theme: The
         return;
     }
     if let Some(hint) = overlay_hint(app) {
-        // `draw_control_hint` intentionally keeps each hint span atomic so a
-        // footer can drop optional segments without splitting their style.
-        // Resource pickers have two controls that remain actionable at every
-        // supported width, so replace only their overlong hint with the
-        // compact form before that truncation policy runs.
-        let hint = if matches!(app.overlay, Some(Overlay::ResourcePicker { .. }))
-            && hint.width().saturating_add(2) > usize::from(area.width)
-        {
-            "enter choose · esc cancel".to_owned()
-        } else {
-            hint
+        // The shared footer prioritizes Enter and Escape at narrow widths;
+        // the session host keeps those controls in its existing single hint row.
+        let hint = match &app.overlay {
+            Some(Overlay::ResourcePicker { picker, .. }) => picker.footer().hint(area.width),
+            _ => hint,
         };
         if has_stacked_control_hint(app) && area.height > 1 {
             let [identity, controls] =

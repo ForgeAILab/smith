@@ -16,7 +16,7 @@ use smith_runtime::factory::AVAILABLE_ADAPTER_KINDS;
 use smith_runtime::rotation::SharedPool;
 use smith_runtime::session::{SNAPSHOT_SCHEMA_VERSION, SessionListing};
 use smith_tui::app::LEGACY_AGENT_PROFILE_PREFIX;
-use smith_tui::{ResourceEntry, ResourcePicker, RuntimeResources};
+use smith_tui::{FlowOutcome, ResourceEntry, ResourcePicker, RuntimeResources};
 
 use crate::cli::Selection;
 use crate::config_command::prepare;
@@ -937,7 +937,7 @@ pub(super) async fn choose_resume_session(
     session.finish(result, "restoring the terminal")
 }
 
-/// Runs one standalone picker to a selection, cancellation, or input end.
+/// Runs fixed account actions with digit selection instead of inventory filtering.
 ///
 /// Returns the selected entry's id, or `None` when the user backs out.
 pub(super) async fn pick_one(
@@ -949,7 +949,8 @@ pub(super) async fn pick_one(
 ) -> Result<Option<String>> {
     let mut session = ScreenSession::enter(no_color, no_motion)
         .with_context(|| format!("entering the {title} picker"))?;
-    let result = pick_one_in_screen(title, entries, empty_hint, &mut session).await;
+    let mut picker = ResourcePicker::choices(title, entries, empty_hint);
+    let result = run_picker_in_screen(&mut picker, &mut session).await;
     session.finish(
         result,
         &format!("restoring the terminal after the {title} picker"),
@@ -964,9 +965,17 @@ pub(super) async fn pick_one_in_screen(
     session: &mut ScreenSession,
 ) -> Result<Option<String>> {
     let mut picker = ResourcePicker::new(title, entries, empty_hint);
+    run_picker_in_screen(&mut picker, session).await
+}
+
+/// Both fixed account choices and inventories use the same screen runner.
+async fn run_picker_in_screen(
+    picker: &mut ResourcePicker,
+    session: &mut ScreenSession,
+) -> Result<Option<String>> {
     match session
         .run(
-            &mut picker,
+            picker,
             ScreenContext {
                 draw: None,
                 input: "reading a terminal event",
@@ -974,7 +983,8 @@ pub(super) async fn pick_one_in_screen(
         )
         .await?
     {
-        ScreenResult::Outcome(selected) => Ok(selected),
+        ScreenResult::Outcome(FlowOutcome::Completed(selected)) => Ok(Some(selected)),
+        ScreenResult::Outcome(FlowOutcome::Back | FlowOutcome::Cancelled) => Ok(None),
         ScreenResult::InputEnded => Ok(None),
         ScreenResult::Effect(never) | ScreenResult::Completed(never) => match never {},
     }

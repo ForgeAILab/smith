@@ -281,10 +281,7 @@ fn picker_columns_dock_states_and_show_only_the_selected_provenance() {
                 17,
                 "{screen}"
             );
-            assert!(
-                lines[selected_y + 1].starts_with("                 source-0"),
-                "{screen}"
-            );
+            assert!(lines[selected_y + 1].starts_with("  source-0"), "{screen}");
             assert!(!current.contains("source-0"), "{screen}");
             assert_eq!(screen.matches("source-").count(), 1, "{screen}");
             for index in 1..5 {
@@ -351,7 +348,7 @@ fn picker_state_survives_long_identity_and_unavailable_reason_at_44_columns() {
     assert!(
         screen
             .lines()
-            .any(|line| line.trim_start().starts_with("missing…")),
+            .any(|line| line.trim_start().starts_with("missing enforceable limits")),
         "{screen}"
     );
     assert!(screen.lines().all(|line| line.width() <= 44), "{screen}");

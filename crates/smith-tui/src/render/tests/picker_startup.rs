@@ -22,7 +22,7 @@ fn narrow_resource_picker_hint_keeps_choose_and_cancel_controls() {
     let screen = render(&app, 44, 16, Theme::new().without_color().without_motion());
     let hint = screen
         .lines()
-        .find(|line| line.contains("enter choose"))
+        .find(|line| line.contains("enter confirm"))
         .expect("the narrow resource picker hint is rendered");
     assert!(hint.contains("esc cancel"), "{screen}");
     assert!(

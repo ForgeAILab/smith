@@ -296,6 +296,12 @@ send -- "ZAI_API_KEY"
 after 150
 send -- "\033"
 expect {
+    -exact "Authentication" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+send -- "\003"
+expect {
     -exact "TERMINAL_RESTORED" {}
     timeout { exit 124 }
     eof { exit 125 }
@@ -319,6 +325,12 @@ expect {
 }
 
 fn setup_entry_advances_and_cancels(query: &str, next_step: &str) {
+    let index =
+        smith_config::setup::provider_descriptors(smith_runtime::factory::AVAILABLE_ADAPTER_KINDS)
+            .iter()
+            .position(|entry| entry.setup_id.contains(query))
+            .expect("setup action")
+            + 1;
     for args in ["--no-color --no-motion", "setup --no-color --no-motion"] {
         let fixture = Fixture::new();
         let interaction = format!(
@@ -328,11 +340,15 @@ expect {{
     timeout {{ exit 124 }}
     eof {{ exit 125 }}
 }}
-send -- "{query}"
-after 150
-send -- "\r"
+send -- "{index}"
 expect {{
     -exact "{next_step}" {{}}
+    timeout {{ exit 124 }}
+    eof {{ exit 125 }}
+}}
+send -- "\033"
+expect {{
+    -exact "Quick start with GLM" {{}}
     timeout {{ exit 124 }}
     eof {{ exit 125 }}
 }}
@@ -370,8 +386,8 @@ fn anthropic_setup_entry_reaches_authentication_and_cancels_without_writes() {
 
 #[test]
 fn chatgpt_setup_entry_reaches_oauth_picker_and_cancels_without_writes() {
-    // Cancelling the method picker happens before constructing an OAuth
-    // client, opening a browser, or making a network request.
+    // Backing out of the method picker returns to setup before constructing
+    // an OAuth client; Escape on setup's first step then cancels with no writes.
     setup_entry_advances_and_cancels("chatgpt", "Browser login");
 }
 

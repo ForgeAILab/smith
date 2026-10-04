@@ -1,14 +1,14 @@
+  Connect ChatGPT · experimental
+
+❯ 1. Browser login
+     Smith PKCE callback · owner-only
+     auth.json · direct Responses calls
+  2. Device-code login
+
+  enter confirm · esc cancel
+  ↑↓ or 1–2 choose
 
 
-
-
-
-  ┌ Connect ChatGPT · experimental ──────┐
-  │ filter: type to search               │
-  │❯ Browser login  Smith PKCE callback… │
-  │ ↑/↓ choose · Enter confirm           │
-  │ Esc cancel                           │
-  └──────────────────────────────────────┘
 
 
 

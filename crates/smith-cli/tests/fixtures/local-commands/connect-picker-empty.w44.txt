@@ -504,9 +504,9 @@
 
 
   Connect provider · type to filter
- No supported provider connection is availab
+  No supported provider connection is…
 ────────────────────────────────────────────
 > Ask Smith to do anything
 ────────────────────────────────────────────
            example-model · build · <PROJECT>
-  enter choose · esc cancel
+  enter confirm · esc cancel · ↑↓ choose

@@ -66,7 +66,7 @@ pub use references::{
     ComposerReference, MAX_COMPOSER_REFERENCES, ParsedReferences, parse_references,
 };
 pub use render::{draw, draw_synced, selected_text};
-pub use screen::{Screen, ScreenEvent, Step};
+pub use screen::{FlowOutcome, Screen, ScreenEvent, Step};
 pub use setup::{
     ResolveModelLimits, ResolvedModelLimits, SetupApp, SetupCredential, SetupEffect, SetupMode,
     SetupModelLimits, SetupSubmission, draw_setup,

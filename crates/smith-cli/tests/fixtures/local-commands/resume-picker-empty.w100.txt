@@ -504,9 +504,9 @@
 
 
   Resume session · type to filter
- Nothing to resume for this project · use /new
+  Nothing to resume for this project · use /new
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 > Ask Smith to do anything
 ────────────────────────────────────────────────────────────────────────────────────────────────────
                                                      example-model · build · <PROJECT> · unknown ctx
-  type to filter · ↑↓ choose · enter confirm · esc cancel
+  ↑↓ choose · enter confirm · esc cancel

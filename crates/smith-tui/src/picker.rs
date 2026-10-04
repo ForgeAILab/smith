@@ -8,19 +8,19 @@ use std::convert::Infallible;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use crate::render::lists::{clip_words, detail_line, list_row};
-use crate::screen::{Screen, ScreenEvent, Step};
+use crate::render::lists::{clip_words, list_row};
+use crate::screen::{FlowOutcome, Screen, ScreenEvent, Step};
 use crate::theme::{Theme, Tone};
 
 /// Maximum number of resource matches shown beside the composer.
 ///
 /// Runtime choice keeps five choices beside the composer. Setup and the
-/// standalone pre-host resume surface keep using the full bordered picker.
+/// standalone pre-host resume surface use the available terminal height.
 const COMPACT_VISIBLE_ENTRIES: usize = 5;
 
 /// One locally selectable resource.
@@ -110,6 +110,10 @@ pub struct ResourcePicker {
     pub selected: usize,
     /// Guidance shown when the local inventory is empty.
     pub empty_guidance: String,
+    // Fixed choices cannot accidentally consume letters as a filter.
+    numbered: bool,
+    // The owning flow supplies whether Escape has a previous step.
+    back: bool,
 }
 
 /// A completed picker interaction.
@@ -119,6 +123,8 @@ pub enum PickerOutcome {
     Pending,
     /// Leave without applying a value.
     Cancelled,
+    /// Return to the owning flow’s previous step without committing.
+    Back,
     /// Apply the full stable entry ID.
     Selected(String),
 }
@@ -136,12 +142,47 @@ impl ResourcePicker {
             entries,
             selected: 0,
             empty_guidance: empty_guidance.into(),
+            numbered: false,
+            back: false,
+        }
+    }
+
+    /// Creates fixed choices so digits confirm and prose cannot hide an option.
+    ///
+    /// Flows should offer at most nine choices; longer inventories use `new`.
+    pub fn choices(
+        title: impl Into<String>,
+        entries: Vec<ResourceEntry>,
+        empty_guidance: impl Into<String>,
+    ) -> Self {
+        Self {
+            numbered: true,
+            ..Self::new(title, entries, empty_guidance)
+        }
+    }
+
+    /// Makes Escape return one step while Ctrl+C still cancels the entire flow.
+    #[must_use]
+    pub fn with_back(mut self, back: bool) -> Self {
+        self.back = back;
+        self
+    }
+
+    /// Supplies shared control wording to hosts whose footer is outside the list.
+    pub fn footer(&self) -> ScreenFooter {
+        ScreenFooter::List {
+            choices: self.numbered.then_some(self.entries.len().min(9)),
+            back: self.back,
         }
     }
 
     /// Indices of entries matching the current filter.
     pub fn filtered_indices(&self) -> Vec<usize> {
-        let query = self.query.trim().to_ascii_lowercase();
+        let query = if self.numbered {
+            String::new()
+        } else {
+            self.query.trim().to_ascii_lowercase()
+        };
         self.entries
             .iter()
             .enumerate()
@@ -174,9 +215,11 @@ impl ResourcePicker {
             return PickerOutcome::Pending;
         }
         match (key.code, key.modifiers) {
-            (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+            (KeyCode::Char('c'), modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
                 PickerOutcome::Cancelled
             }
+            (KeyCode::Esc | KeyCode::BackTab, _) if self.back => PickerOutcome::Back,
+            (KeyCode::Esc, _) => PickerOutcome::Cancelled,
             (KeyCode::Up | KeyCode::BackTab, _) => {
                 let count = self.filtered_indices().len();
                 if count > 0 {
@@ -191,7 +234,9 @@ impl ResourcePicker {
                 }
                 PickerOutcome::Pending
             }
-            (KeyCode::Char('u' | 'U'), modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
+            (KeyCode::Char('u' | 'U'), modifiers)
+                if !self.numbered && modifiers.contains(KeyModifiers::CONTROL) =>
+            {
                 self.query.clear();
                 self.selected = 0;
                 PickerOutcome::Pending
@@ -202,7 +247,7 @@ impl ResourcePicker {
                 }
                 _ => PickerOutcome::Pending,
             },
-            (KeyCode::Backspace, _) => {
+            (KeyCode::Backspace, _) if !self.numbered => {
                 self.query.pop();
                 self.selected = 0;
                 PickerOutcome::Pending
@@ -212,8 +257,21 @@ impl ResourcePicker {
                     KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
                 ) =>
             {
-                self.query.push(character);
-                self.selected = 0;
+                if self.numbered {
+                    if let Some(index) = character
+                        .to_digit(10)
+                        .filter(|digit| (1..=9).contains(digit))
+                        .map(|digit| digit as usize - 1)
+                        && let Some(entry) = self.entries.get(index)
+                        && entry.disabled_reason.is_none()
+                    {
+                        self.selected = index;
+                        return PickerOutcome::Selected(entry.id.clone());
+                    }
+                } else {
+                    self.query.push(character);
+                    self.selected = 0;
+                }
                 PickerOutcome::Pending
             }
             _ => PickerOutcome::Pending,
@@ -222,6 +280,9 @@ impl ResourcePicker {
 
     /// Appends pasted text to the filter query, control characters dropped.
     pub fn paste(&mut self, text: &str) {
+        if self.numbered {
+            return;
+        }
         let cleaned = text
             .chars()
             .filter(|character| !character.is_control())
@@ -235,24 +296,20 @@ impl ResourcePicker {
 }
 
 impl Screen for ResourcePicker {
-    type Outcome = Option<String>;
+    type Outcome = FlowOutcome<String>;
     type Effect = Infallible;
 
     fn draw(&self, frame: &mut Frame<'_>, area: Rect, theme: Theme) {
-        draw_resource_picker(
-            frame,
-            standalone_picker_area(area, self.entries.len()),
-            self,
-            theme,
-        );
+        draw_resource_picker(frame, area, self, theme);
     }
 
     fn on_event(&mut self, event: ScreenEvent) -> Step<Self::Outcome, Self::Effect> {
         match event {
             ScreenEvent::Key(key) => match self.on_key(key) {
                 PickerOutcome::Pending => Step::Pending,
-                PickerOutcome::Cancelled => Step::Outcome(None),
-                PickerOutcome::Selected(id) => Step::Outcome(Some(id)),
+                PickerOutcome::Cancelled => Step::Outcome(FlowOutcome::Cancelled),
+                PickerOutcome::Back => Step::Outcome(FlowOutcome::Back),
+                PickerOutcome::Selected(id) => Step::Outcome(FlowOutcome::Completed(id)),
             },
             ScreenEvent::Paste(text) => {
                 self.paste(&text);
@@ -263,66 +320,206 @@ impl Screen for ResourcePicker {
     }
 }
 
-/// Keeps the standalone box geometry shared by screens and their recorded fixtures.
-pub fn standalone_picker_area(area: Rect, entry_count: usize) -> Rect {
-    if area.width < 24 || area.height < 8 {
-        return area;
-    }
-    let width = area.width.saturating_sub(4).min(100);
-    let height = u16::try_from(entry_count.saturating_add(4))
-        .unwrap_or(u16::MAX)
-        .clamp(6, area.height.saturating_sub(2));
-    Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    )
+/// Shared lowercase controls keep every screen's navigation vocabulary consistent.
+#[derive(Debug, Clone, Copy)]
+pub enum ScreenFooter {
+    /// Numbered choices advertise digits; inventories advertise arrow selection.
+    List {
+        /// Digit range advertised only for fixed choices.
+        choices: Option<usize>,
+        /// Whether the owner can resume an earlier step.
+        back: bool,
+    },
+    /// Fields continue to another step without submitting the transaction.
+    Field {
+        /// Whether the owner can resume an earlier step.
+        back: bool,
+    },
+    /// Review can include its existing wrapped-row scroll position.
+    Review {
+        /// Whether the owner can resume an earlier step.
+        back: bool,
+        /// Position and total of the review's wrapped-row viewport.
+        scroll: Option<(usize, usize)>,
+    },
+    /// Login waits can return to their method list when owned by setup.
+    Progress {
+        /// Whether login is nested in setup rather than a standalone flow.
+        back: bool,
+    },
+    /// Busy screens still expose whole-flow cancellation to the host.
+    Busy {
+        /// Whether there is an earlier editable step.
+        back: bool,
+    },
 }
 
-/// Draws a bordered picker within `area`.
+impl ScreenFooter {
+    fn segments(self) -> Vec<String> {
+        let escape = |back| if back { "esc back" } else { "esc cancel" }.to_owned();
+        match self {
+            Self::List { choices, back } => vec![
+                choices.filter(|count| *count > 0).map_or_else(
+                    || "↑↓ choose".to_owned(),
+                    |count| format!("↑↓ or 1–{count} choose"),
+                ),
+                "enter confirm".into(),
+                escape(back),
+            ],
+            Self::Field { back } => vec!["enter continue".into(), escape(back)],
+            Self::Review { back, scroll } => {
+                let mut segments = vec!["enter confirm".into(), escape(back)];
+                if let Some((position, total)) = scroll {
+                    segments.push(format!("↑↓/PgUp/PgDn review · {position}/{total}"));
+                }
+                segments
+            }
+            Self::Progress { back: true } => vec![escape(true), "ctrl+c cancel".into()],
+            Self::Progress { back: false } => vec![escape(false)],
+            Self::Busy { back } => vec![escape(back), "ctrl+c cancel".into()],
+        }
+    }
+
+    /// Fits controls as whole hints, prioritizing Enter and Escape when space is tight.
+    pub fn rows(self, width: u16) -> Vec<String> {
+        let mut segments = self.segments();
+        let available = usize::from(width.saturating_sub(2));
+        if matches!(self, Self::List { .. })
+            && (width < 60 || segments.join(" · ").width() > available)
+        {
+            segments.rotate_left(1);
+        }
+        let mut rows = Vec::new();
+        let mut row = String::new();
+        for segment in segments {
+            if !row.is_empty() && row.width() + 3 + segment.width() > available {
+                rows.push(row);
+                row = String::new();
+            }
+            if !row.is_empty() {
+                row.push_str(" · ");
+            }
+            row.push_str(&segment);
+        }
+        if !row.is_empty() {
+            rows.push(row);
+        }
+        rows
+    }
+
+    /// Session hosts have one hint row, so optional selection controls yield first.
+    pub(crate) fn hint(self, width: u16) -> String {
+        self.rows(width).into_iter().next().unwrap_or_default()
+    }
+}
+
+/// Reserves the title, a blank row, and a content-sized footer before body rendering.
+///
+/// The body reaches the bottom only when it overflows; short screens have no
+/// filler between their content and controls. Hosts can scroll the returned area.
+pub fn draw_inline_surface(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    title: &str,
+    content_rows: usize,
+    footer: ScreenFooter,
+    theme: Theme,
+) -> Rect {
+    frame.render_widget(Clear, area);
+    let footer_lines = footer.rows(area.width);
+    let footer_rows = u16::try_from(footer_lines.len())
+        .unwrap_or(u16::MAX)
+        .min(area.height.saturating_sub(1));
+    let height = u16::try_from(content_rows)
+        .unwrap_or(u16::MAX)
+        .min(area.height.saturating_sub(3 + footer_rows));
+    let body = Rect::new(area.x, area.y.saturating_add(2), area.width, height);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!("  {title}"),
+            theme.style(Tone::Heading),
+        ))),
+        Rect::new(area.x, area.y, area.width, area.height.min(1)),
+    );
+    let footer_y = body
+        .bottom()
+        .saturating_add(1)
+        .min(area.bottom().saturating_sub(footer_rows));
+    frame.render_widget(
+        Paragraph::new(
+            footer_lines
+                .into_iter()
+                .map(|line| Line::from(format!("  {line}")))
+                .collect::<Vec<_>>(),
+        )
+        .style(theme.style(Tone::Dim)),
+        Rect::new(area.x, footer_y, area.width, footer_rows),
+    );
+    body
+}
+
+/// Draws the same unframed list before a session exists.
 pub fn draw_resource_picker(
     frame: &mut Frame<'_>,
     area: Rect,
     picker: &ResourcePicker,
     theme: Theme,
 ) {
-    frame.render_widget(Clear, area);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(format!(" {} ", picker.title))
-        .border_style(theme.style(Tone::Dim));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    let footer_rows = if inner.width < 60 { 2 } else { 1 };
-    let [body, footer] =
-        Layout::vertical([Constraint::Min(1), Constraint::Length(footer_rows)]).areas(inner);
-    let lines = picker_lines(picker, usize::from(body.height), body.width, theme);
-    // Empty-inventory guidance may be longer than a narrow pane and should
-    // still expose its setup command. Choices and their selected detail, by
-    // contrast, each stay on one row so the next state label keeps its place.
-    let lines = if picker.filtered_indices().is_empty() && lines.len() > 1 {
-        let mut wrapped = vec![lines[0].clone()];
-        wrapped.extend(crate::render::wrap::wrap_lines(&lines[1..], body.width));
-        wrapped
-    } else {
-        lines
-    };
-    // Choice descriptions and selected detail are already bounded by width;
-    // wrapping here would consume the next resource's reserved row.
-    frame.render_widget(Paragraph::new(lines), body);
-    frame.render_widget(
-        Paragraph::new(if footer_rows == 1 {
-            " ↑/↓ choose · Enter confirm · Esc cancel"
-        } else {
-            " ↑/↓ choose · Enter confirm\n Esc cancel"
-        })
-        .style(theme.style(Tone::Dim)),
-        footer,
-    );
+    draw_picker_with_context(frame, area, picker, &picker.title, None, None, theme);
 }
 
-/// Draws a bounded runtime picker directly above the fixed composer.
+/// Setup adds its existing note and validation text without owning a second list renderer.
+pub(crate) fn draw_picker_with_context(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    picker: &ResourcePicker,
+    title: &str,
+    note: Option<&str>,
+    error: Option<&str>,
+    theme: Theme,
+) {
+    let mut prefix = Vec::new();
+    let mut suffix = note
+        .map(|note| indented_words(note, area.width, 2, Tone::Dim, theme))
+        .unwrap_or_default();
+    if let Some(error) = error {
+        prefix.extend(indented_words(
+            &format!("error: {error}"),
+            area.width,
+            2,
+            Tone::Danger,
+            theme,
+        ));
+    }
+    let all = entry_view(picker, usize::MAX, area.width, theme, false);
+    let body = draw_inline_surface(
+        frame,
+        area,
+        title,
+        prefix.len() + all.lines.len() + suffix.len(),
+        picker.footer(),
+        theme,
+    );
+    let prefix_rows = prefix.len().min(usize::from(body.height).saturating_sub(1));
+    let suffix_rows = suffix
+        .len()
+        .min(usize::from(body.height).saturating_sub(prefix_rows + 1));
+    let view = entry_view(
+        picker,
+        usize::from(body.height).saturating_sub(prefix_rows + suffix_rows),
+        area.width,
+        theme,
+        false,
+    );
+    draw_picker_heading(frame, area, picker, title, view.scrolling, theme);
+    prefix.truncate(prefix_rows);
+    prefix.extend(view.lines);
+    suffix.truncate(suffix_rows);
+    prefix.extend(suffix);
+    frame.render_widget(Paragraph::new(prefix), body);
+}
+
+/// Draws a bounded runtime picker above the composer; the host draws its shared footer.
 pub(crate) fn draw_compact_resource_picker(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -332,186 +529,308 @@ pub(crate) fn draw_compact_resource_picker(
     if area.is_empty() {
         return;
     }
+    let view = entry_view(
+        picker,
+        usize::from(area.height).saturating_sub(1),
+        area.width,
+        theme,
+        true,
+    );
+    draw_picker_heading(frame, area, picker, &picker.title, view.scrolling, theme);
+    frame.render_widget(
+        Paragraph::new(view.lines),
+        Rect::new(
+            area.x,
+            area.y + 1,
+            area.width,
+            area.height.saturating_sub(1),
+        ),
+    );
+}
 
-    let indices = picker.filtered_indices();
-    let selected = picker.selected.min(indices.len().saturating_sub(1));
-    let position = if !indices.is_empty() {
-        format!("{}/{}", selected.saturating_add(1), indices.len())
+fn draw_picker_heading(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    picker: &ResourcePicker,
+    title: &str,
+    scrolling: bool,
+    theme: Theme,
+) {
+    let count = picker.filtered_indices().len();
+    let position = if scrolling && count > 0 {
+        format!("{}/{}", picker.selected.min(count - 1) + 1, count)
     } else {
         String::new()
     };
-    let filter = if picker.query.is_empty() {
+    let filter = if picker.numbered {
+        String::new()
+    } else if picker.query.is_empty() {
         "type to filter".to_owned()
     } else {
         format!("filter: {}", picker.query)
     };
-    let heading_budget = usize::from(area.width).saturating_sub(position.width() + 4);
-    let title = clip_words(&picker.title, heading_budget);
-    let filter = clip_words(&filter, heading_budget.saturating_sub(title.width() + 3));
+    let budget = usize::from(area.width)
+        .saturating_sub(2 + position.width() + usize::from(!position.is_empty()));
+    let title = clip_words(title, budget);
+    let filter = clip_words(&filter, budget.saturating_sub(title.width() + 3));
     let filter = if filter.is_empty() {
         filter
     } else {
         format!(" · {filter}")
     };
-    let heading_width = 2 + title.width() + filter.width();
-    let mut lines = vec![Line::from(vec![
-        Span::styled(format!("  {title}"), theme.style(Tone::Heading)),
-        Span::styled(filter, theme.style(Tone::Dim)),
-        Span::styled(
-            format!(
-                "{}{position}",
-                " ".repeat(
-                    usize::from(area.width).saturating_sub(heading_width + position.width())
-                )
+    let gap = usize::from(area.width)
+        .saturating_sub(2 + title.width() + filter.width() + position.width());
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(format!("  {title}"), theme.style(Tone::Heading)),
+            Span::styled(filter, theme.style(Tone::Dim)),
+            Span::styled(
+                format!("{}{position}", " ".repeat(gap)),
+                theme.style(Tone::Dim),
             ),
-            theme.style(Tone::Dim),
-        ),
-    ])];
-    lines.extend(picker_entry_lines(
-        picker,
-        usize::from(area.height).saturating_sub(1),
-        area.width,
-        theme,
-    ));
-    // Choices and the selected detail have separate reserved rows. Wrapping
-    // them here would make the compact pane grow into the composer.
-    frame.render_widget(Paragraph::new(lines), area);
+        ])),
+        Rect::new(area.x, area.y, area.width, area.height.min(1)),
+    );
 }
 
-/// Rows requested by the compact runtime picker before terminal constraints.
+/// Row measurement uses the production viewport logic, preserving the five-choice cap.
 pub(crate) fn compact_resource_picker_rows(picker: &ResourcePicker) -> u16 {
-    let matches = picker.filtered_indices().len().max(1);
-    let detail = picker
-        .selected_entry()
-        .is_some_and(|entry| !entry.selected_detail().is_empty());
-    u16::try_from(matches.min(COMPACT_VISIBLE_ENTRIES) + 1 + usize::from(detail))
-        .unwrap_or(u16::MAX)
+    let view = entry_view(picker, usize::MAX, u16::MAX, Theme::new(), true);
+    u16::try_from(view.lines.len() + 1).unwrap_or(u16::MAX)
 }
 
-fn picker_lines(
+struct EntryView {
+    lines: Vec<Line<'static>>,
+    scrolling: bool,
+}
+
+fn entry_view(
     picker: &ResourcePicker,
     height: usize,
     width: u16,
     theme: Theme,
-) -> Vec<Line<'static>> {
-    let mut lines = vec![Line::from(vec![
-        Span::styled(" filter: ", theme.style(Tone::Dim)),
-        Span::styled(
-            if picker.query.is_empty() {
-                "type to search".to_owned()
-            } else {
-                picker.query.clone()
-            },
-            theme.style(if picker.query.is_empty() {
+    compact: bool,
+) -> EntryView {
+    let indices = picker.filtered_indices();
+    if indices.is_empty() {
+        let guidance = if picker.entries.is_empty() {
+            picker.empty_guidance.as_str()
+        } else {
+            "No matches · Ctrl+U clear filter"
+        };
+        let mut lines = indented_words(guidance, width, 2, Tone::Warning, theme);
+        if compact {
+            lines = vec![Line::from(Span::styled(
+                format!(
+                    "  {}",
+                    clip_words(guidance, usize::from(width.saturating_sub(2)))
+                ),
+                theme.style(Tone::Warning),
+            ))];
+        }
+        lines.truncate(height);
+        return EntryView {
+            lines,
+            scrolling: false,
+        };
+    }
+    let selected = picker.selected.min(indices.len() - 1);
+    // Both column budgets use the complete filtered list, so neither changes on scroll.
+    let max_name = indices
+        .iter()
+        .map(|index| picker.entries[*index].label.width())
+        .max()
+        .unwrap_or(0);
+    let states = indices
+        .iter()
+        .map(|index| {
+            let entry = &picker.entries[*index];
+            let current = if entry.active { "✓ current" } else { "" };
+            match &entry.disabled_reason {
+                Some(reason) => {
+                    let prefix = if current.is_empty() {
+                        String::new()
+                    } else {
+                        format!("{current} · ")
+                    };
+                    let full = format!("{prefix}unavailable: {reason}");
+                    if 2 + max_name + 2 + full.width() + 2 + entry.description.width().min(8)
+                        <= usize::from(width)
+                    {
+                        full
+                    } else {
+                        format!("{prefix}unavailable")
+                    }
+                }
+                None => current.to_owned(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let state_width = states.iter().map(|state| state.width()).max().unwrap_or(0);
+    let name_width = max_name
+        .min(usize::from(width).saturating_sub(4 + state_width))
+        .min(usize::from(width) / 2);
+    let groups = indices
+        .iter()
+        .enumerate()
+        .map(|(offset, index)| {
+            let entry = &picker.entries[*index];
+            let chosen = offset == selected;
+            let tone = if entry.disabled_reason.is_some() {
                 Tone::Dim
+            } else if chosen {
+                Tone::Accent
             } else {
                 Tone::Default
-            }),
-        ),
-    ])];
-    lines.extend(picker_entry_lines(
-        picker,
-        height.saturating_sub(1),
-        width,
-        theme,
-    ));
-    lines
+            };
+            let mut lines = if picker.numbered {
+                let label = format!(
+                    "{}. {}{}",
+                    offset + 1,
+                    entry.label,
+                    if states[offset].is_empty() {
+                        String::new()
+                    } else {
+                        format!(" · {}", states[offset])
+                    }
+                );
+                let mut lines = indented_words(&label, width, 2, tone, theme);
+                if let Some(line) = lines.first_mut() {
+                    line.spans[0] = Span::styled(
+                        if chosen { "❯ " } else { "  " },
+                        theme.style(if chosen { Tone::Accent } else { Tone::Dim }),
+                    );
+                }
+                lines
+            } else {
+                vec![list_row(
+                    &entry.label,
+                    &entry.description,
+                    &states[offset],
+                    chosen,
+                    name_width,
+                    width,
+                    tone,
+                    theme,
+                )]
+            };
+            if chosen {
+                let detail = if picker.numbered {
+                    let extra = entry.selected_detail();
+                    if extra.is_empty() {
+                        entry.description.clone()
+                    } else if entry.description.is_empty() {
+                        extra
+                    } else {
+                        format!("{} · {extra}", entry.description)
+                    }
+                } else {
+                    entry.selected_detail()
+                };
+                if !detail.is_empty() {
+                    let indent = if picker.numbered {
+                        4 + (offset + 1).to_string().len()
+                    } else {
+                        2
+                    };
+                    if compact {
+                        lines.push(Line::from(vec![
+                            Span::raw(" ".repeat(indent)),
+                            Span::styled(
+                                clip_words(&detail, usize::from(width).saturating_sub(indent)),
+                                theme.style(Tone::Dim),
+                            ),
+                        ]));
+                    } else {
+                        lines.extend(indented_words(&detail, width, indent, Tone::Dim, theme));
+                    }
+                }
+            }
+            lines
+        })
+        .collect::<Vec<_>>();
+    let cap = if compact {
+        COMPACT_VISIBLE_ENTRIES
+    } else {
+        indices.len()
+    };
+    let mut start = selected;
+    let mut used = groups[selected].len();
+    while start > 0
+        && selected - start + 1 < cap
+        && used.saturating_add(groups[start - 1].len()) <= height
+    {
+        start -= 1;
+        used += groups[start].len();
+    }
+    let mut lines = Vec::new();
+    let mut visible = 0;
+    for group in groups.into_iter().skip(start).take(cap) {
+        if visible > 0 && lines.len().saturating_add(group.len()) > height {
+            break;
+        }
+        visible += 1;
+        lines.extend(group);
+    }
+    lines.truncate(height);
+    EntryView {
+        lines,
+        scrolling: visible < indices.len(),
+    }
 }
 
+/// Wraps prose at whole words with a stable hanging indent, including wide glyphs.
+/// Tokens wider than a whole row use glyph boundaries so IDs and URLs remain readable.
+pub(crate) fn indented_words(
+    text: &str,
+    width: u16,
+    indent: usize,
+    tone: Tone,
+    theme: Theme,
+) -> Vec<Line<'static>> {
+    let available = width
+        .saturating_sub(u16::try_from(indent).unwrap_or(u16::MAX))
+        .max(1);
+    let mut lines = Vec::new();
+    for paragraph in text.split('\n') {
+        let mut row = String::new();
+        for word in paragraph.split_whitespace() {
+            if !row.is_empty() && row.width() + 1 + word.width() > usize::from(available) {
+                lines.push(Line::from(Span::styled(row, theme.style(tone))));
+                row = String::new();
+            }
+            if !row.is_empty() {
+                row.push(' ');
+            }
+            row.push_str(word);
+        }
+        lines.push(Line::from(Span::styled(row, theme.style(tone))));
+    }
+    let mut rows = crate::render::wrap::wrap_lines(&lines, available);
+    for row in &mut rows {
+        row.spans.insert(0, Span::raw(" ".repeat(indent)));
+    }
+    rows
+}
+
+#[cfg(test)]
 fn picker_entry_lines(
     picker: &ResourcePicker,
     height: usize,
     width: u16,
     theme: Theme,
 ) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    let indices = picker.filtered_indices();
-    if indices.is_empty() {
-        let guidance = if picker.entries.is_empty() {
-            picker.empty_guidance.clone()
-        } else {
-            "No matches · Ctrl+U clear filter".to_owned()
-        };
-        lines.push(Line::from(Span::styled(
-            format!(" {guidance}"),
-            theme.style(Tone::Warning),
-        )));
-    } else {
-        let detail = picker
-            .selected_entry()
-            .map(|entry| entry.selected_detail())
-            .unwrap_or_default();
-        let capacity = height
-            .saturating_sub(usize::from(!detail.is_empty()))
-            .max(1);
-        let selected = picker.selected.min(indices.len().saturating_sub(1));
-        let start = selected
-            .saturating_sub(capacity / 2)
-            .min(indices.len().saturating_sub(capacity));
-        let visible = indices
-            .iter()
-            .skip(start)
-            .take(capacity)
-            .map(|index| &picker.entries[*index])
-            .collect::<Vec<_>>();
-        let name_width = visible
-            .iter()
-            .map(|entry| entry.label.width())
-            .max()
-            .unwrap_or(0);
-        // Keep the state docked even when an identity or unavailable reason is
-        // too long. The complete reason remains on the selected detail line.
-        let states = visible
-            .iter()
-            .map(|entry| {
-                let current = if entry.active { "✓ current" } else { "" };
-                match &entry.disabled_reason {
-                    Some(reason) => {
-                        let prefix = if current.is_empty() {
-                            String::new()
-                        } else {
-                            format!("{current} · ")
-                        };
-                        let full = format!("{prefix}unavailable: {reason}");
-                        if 2 + name_width + 2 + full.width() <= usize::from(width) {
-                            full
-                        } else {
-                            format!("{prefix}unavailable")
-                        }
-                    }
-                    None => current.to_owned(),
-                }
-            })
-            .collect::<Vec<_>>();
-        let state_width = states.iter().map(|state| state.width()).max().unwrap_or(0);
-        let name_width = name_width
-            .min(usize::from(width).saturating_sub(4 + state_width))
-            .min(usize::from(width) / 2);
-        for (offset, entry) in visible.iter().enumerate() {
-            let filtered_index = start + offset;
-            let tone = if entry.disabled_reason.is_some() {
-                Tone::Dim
-            } else if filtered_index == selected {
-                Tone::Accent
-            } else {
-                Tone::Default
-            };
-            lines.push(list_row(
-                &entry.label,
-                &entry.description,
-                &states[offset],
-                filtered_index == selected,
-                name_width,
-                width,
-                tone,
-                theme,
-            ));
-            if filtered_index == selected && !detail.is_empty() && height > capacity {
-                lines.push(detail_line(&detail, name_width, width, theme));
-            }
-        }
-    }
-    lines
+    entry_view(picker, height, width, theme, true).lines
+}
+
+#[cfg(test)]
+fn picker_lines(
+    picker: &ResourcePicker,
+    height: usize,
+    width: u16,
+    theme: Theme,
+) -> Vec<Line<'static>> {
+    entry_view(picker, height, width, theme, false).lines
 }
 
 #[cfg(test)]
@@ -522,6 +841,204 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn render_picker(picker: &ResourcePicker, width: u16, height: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        terminal
+            .draw(|frame| picker.draw(frame, frame.area(), Theme::new().without_color()))
+            .expect("draw");
+        let buffer = terminal.backend().buffer();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn fixed_choices_confirm_digits_and_ignore_filter_input() {
+        let mut picker = ResourcePicker::choices(
+            "Method",
+            vec![
+                ResourceEntry::new("one", "One", "detail"),
+                ResourceEntry::new("two", "Two", "detail").disabled("unavailable"),
+                ResourceEntry::new("three", "Three", "detail"),
+            ],
+            "empty",
+        );
+        for character in ['a', '2', '4', '9', '0'] {
+            assert_eq!(
+                picker.on_key(key(KeyCode::Char(character))),
+                PickerOutcome::Pending
+            );
+        }
+        picker.paste("letters and digits 3");
+        assert!(picker.query.is_empty());
+        assert_eq!(picker.filtered_indices(), vec![0, 1, 2]);
+        assert_eq!(
+            picker.selected, 0,
+            "invalid and disabled digits leave selection alone"
+        );
+        assert_eq!(
+            picker.on_key(key(KeyCode::Char('3'))),
+            PickerOutcome::Selected("three".into())
+        );
+        assert_eq!(picker.selected, 2);
+        let screen = render_picker(&picker, 44, 16);
+        assert!(screen.contains("❯ 3. Three"), "{screen}");
+        assert!(!screen.contains("type to filter"), "{screen}");
+        let mut inventory = ResourcePicker::new("Inventory", picker.entries, "empty");
+        inventory.on_key(key(KeyCode::Char('3')));
+        assert_eq!(inventory.query, "3", "inventory digits remain filter text");
+    }
+
+    #[test]
+    fn standalone_title_and_footer_are_unframed_and_content_sized() {
+        let picker = ResourcePicker::choices(
+            "Choose a method",
+            vec![ResourceEntry::new("one", "First method", "selected detail")],
+            "empty",
+        );
+        for (width, height) in [(44, 16), (100, 32)] {
+            let screen = render_picker(&picker, width, height);
+            let rows = screen.lines().collect::<Vec<_>>();
+            assert!(rows[0].starts_with("  Choose a method"), "{screen}");
+            assert!(rows[1].trim().is_empty());
+            assert!(rows[2].starts_with("❯ 1. First method"));
+            assert!(rows[3].starts_with("     selected detail"));
+            for glyph in ['┌', '┐', '└', '┘', '│', '╭', '╮', '╰', '╯'] {
+                assert!(!screen.contains(glyph), "{screen}");
+            }
+            let footer = rows
+                .iter()
+                .position(|row| row.contains("enter confirm"))
+                .expect("footer");
+            assert_eq!(footer, 5, "one blank row separates the content and footer");
+            assert!(rows[footer].starts_with("  "));
+            assert!(rows[footer..].join("\n").contains("esc cancel"));
+            assert!(rows[footer..].join("\n").contains("↑↓ or 1–1 choose"));
+        }
+    }
+
+    #[test]
+    fn scroll_position_and_description_column_use_the_complete_filtered_list() {
+        let entries = (0..20)
+            .map(|index| {
+                ResourceEntry::new(
+                    index.to_string(),
+                    if index == 19 {
+                        "longer label".to_owned()
+                    } else {
+                        format!("row-{index}")
+                    },
+                    "metadata",
+                )
+            })
+            .collect();
+        let mut picker = ResourcePicker::new("Inventory", entries, "empty");
+        for compact in [false, true] {
+            let before = entry_view(&picker, 5, 80, Theme::new(), compact);
+            assert!(before.scrolling);
+            let column = before.lines[0]
+                .to_string()
+                .find("metadata")
+                .expect("description");
+            picker.selected = 19;
+            let after = entry_view(&picker, 5, 80, Theme::new(), compact);
+            let last = after
+                .lines
+                .iter()
+                .find(|line| line.to_string().contains("longer label"))
+                .expect("last entry")
+                .to_string();
+            assert_eq!(
+                last.find("metadata"),
+                Some(column),
+                "scrolling keeps columns stable"
+            );
+            let screen = render_picker(&picker, 44, 8);
+            assert!(
+                screen
+                    .lines()
+                    .next()
+                    .expect("heading")
+                    .trim_end()
+                    .ends_with("20/20"),
+                "{screen}"
+            );
+            assert!(
+                screen.contains("enter confirm") && screen.contains("esc cancel"),
+                "{screen}"
+            );
+            picker.selected = 0;
+        }
+    }
+
+    #[test]
+    fn shared_footer_prioritizes_enter_and_escape_at_44_columns() {
+        for choices in [None, Some(4)] {
+            let footer = ScreenFooter::List {
+                choices,
+                back: true,
+            };
+            let rows = footer.rows(44);
+            assert!(rows[0].starts_with("enter confirm · esc back"));
+            assert!(rows.iter().all(|row| row.width() + 2 <= 44));
+            assert!(footer.rows(100)[0].starts_with("↑↓"));
+        }
+        assert_eq!(
+            ScreenFooter::Field { back: true }.rows(44),
+            ["enter continue · esc back"]
+        );
+        assert_eq!(
+            ScreenFooter::Review {
+                back: true,
+                scroll: None
+            }
+            .rows(44),
+            ["enter confirm · esc back"]
+        );
+        assert_eq!(
+            ScreenFooter::Progress { back: true }.rows(44),
+            ["esc back · ctrl+c cancel"]
+        );
+        assert_eq!(
+            ScreenFooter::Progress { back: false }.rows(44),
+            ["esc cancel"]
+        );
+    }
+
+    #[test]
+    fn picker_distinguishes_back_from_whole_flow_cancel_and_ignores_releases() {
+        let mut picker = ResourcePicker::choices("Method", Vec::new(), "empty").with_back(true);
+        assert_eq!(
+            picker.on_event(ScreenEvent::Key(key(KeyCode::Esc))),
+            Step::Outcome(FlowOutcome::Back)
+        );
+        assert_eq!(
+            picker.on_event(ScreenEvent::Key(KeyEvent::new(
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL
+            ))),
+            Step::Outcome(FlowOutcome::Cancelled)
+        );
+        assert_eq!(
+            picker.on_key(KeyEvent::new_with_kind(
+                KeyCode::Esc,
+                KeyModifiers::NONE,
+                KeyEventKind::Release
+            )),
+            PickerOutcome::Pending
+        );
+        picker = picker.with_back(false);
+        assert_eq!(
+            picker.on_event(ScreenEvent::Key(key(KeyCode::Esc))),
+            Step::Outcome(FlowOutcome::Cancelled)
+        );
     }
 
     #[test]
@@ -643,9 +1160,9 @@ mod tests {
         );
         let empty_text = empty_lines
             .iter()
-            .flat_map(|line| line.spans.iter())
-            .map(|span| span.content.as_ref())
-            .collect::<String>();
+            .map(|line| line.to_string().trim().to_owned())
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(empty_text.contains("run smith setup add-model"));
         assert!(!empty_text.contains("No matches"));
 
@@ -664,9 +1181,9 @@ mod tests {
         );
         let filtered_text = filtered_lines
             .iter()
-            .flat_map(|line| line.spans.iter())
-            .map(|span| span.content.as_ref())
-            .collect::<String>();
+            .map(|line| line.to_string().trim().to_owned())
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(filtered_text.contains("No matches"), "{filtered_text}");
         assert!(
             filtered_text.contains("Ctrl+U clear filter"),
@@ -703,7 +1220,7 @@ mod tests {
             "run setup",
         );
 
-        let mut terminal = Terminal::new(TestBackend::new(44, 10)).expect("terminal");
+        let mut terminal = Terminal::new(TestBackend::new(44, 30)).expect("terminal");
         terminal
             .draw(|frame| {
                 draw_resource_picker(
@@ -772,11 +1289,11 @@ mod tests {
         assert!(
             rendered
                 .lines()
-                .any(|line| line.contains("broken") && line.ends_with("unavailable│")),
+                .any(|line| line.contains("broken") && line.trim_end().ends_with("unavailable")),
             "{rendered}"
         );
         assert!(!rendered.contains("missing limits"), "{rendered}");
-        assert!(rendered.contains("Enter confirm"), "{rendered}");
+        assert!(rendered.contains("enter confirm"), "{rendered}");
         assert!(rendered.contains('❯'), "{rendered}");
 
         picker.on_key(key(KeyCode::Down));
@@ -824,7 +1341,7 @@ mod tests {
             80,
             Theme::from_env().without_color().without_motion(),
         );
-        assert_eq!(lines.len(), 6, "rendering is bounded to the viewport");
+        assert!(lines.len() <= 6, "rendering is bounded to the viewport");
         let rendered = lines
             .iter()
             .map(|line| {

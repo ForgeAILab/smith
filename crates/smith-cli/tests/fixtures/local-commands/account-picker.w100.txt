@@ -501,12 +501,12 @@
 
 
 
-  Choose account · type to filter                                                                1/2
+  Choose account · type to filter
 ❯ 1  25% used                                                                              ✓ current
-     env:FIRST
+  env:FIRST
   2  75% used
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 > Ask Smith to do anything
 ────────────────────────────────────────────────────────────────────────────────────────────────────
                                                      example-model · build · <PROJECT> · unknown ctx
-  type to filter · ↑↓ choose · enter confirm · esc cancel
+  ↑↓ choose · enter confirm · esc cancel

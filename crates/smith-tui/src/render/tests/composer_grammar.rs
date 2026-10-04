@@ -259,9 +259,9 @@ fn hint_row_keeps_existing_picker_controls_at_all_widths() {
         assert_eq!(
             controls.trim(),
             if width == 44 {
-                "enter choose · esc cancel"
+                "enter confirm · esc cancel · ↑↓ choose"
             } else {
-                "type to filter · ↑↓ choose · enter confirm · esc cancel"
+                "↑↓ choose · enter confirm · esc cancel"
             }
         );
         assert!(

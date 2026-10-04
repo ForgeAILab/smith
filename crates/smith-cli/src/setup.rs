@@ -442,7 +442,7 @@ pub(crate) async fn run_surface(
                 SetupEffect::None => {}
                 SetupEffect::Cancel => return Ok(SetupOutcome::Cancelled),
                 SetupEffect::ConnectChatGpt => {
-                    let completed = crate::connection::connect_chatgpt_from_setup(
+                    let outcome = crate::connection::connect_chatgpt_from_setup(
                         context.selection.clone(),
                         context.user_dir.clone(),
                         context.inventory.models.iter().any(|model| {
@@ -451,14 +451,17 @@ pub(crate) async fn run_surface(
                         context.unconfigured,
                         &mut session,
                         no_motion,
+                        true,
                     )
                     .await
                     .context("ChatGPT setup could not complete")?;
-                    return Ok(if completed {
-                        SetupOutcome::Completed
-                    } else {
-                        SetupOutcome::Cancelled
-                    });
+                    match outcome {
+                        smith_tui::FlowOutcome::Completed(()) => {
+                            return Ok(SetupOutcome::Completed);
+                        }
+                        smith_tui::FlowOutcome::Cancelled => return Ok(SetupOutcome::Cancelled),
+                        smith_tui::FlowOutcome::Back => app.back_from_chatgpt(),
+                    }
                 }
                 SetupEffect::ResolveModelLimits { request } => {
                     // One bounded, non-inference read; the surface stays busy

@@ -1,16 +1,16 @@
+  Connect ChatGPT · experimental
 
-  ┌ Connect ChatGPT · experimental ──────┐
-  │Smith owns this OAuth login and will  │
-  │call ChatGPT directly.                │
-  │Experimental: this is not a supported │
-  │OpenAI Platform API contract.         │
-  │                                      │
-  │Open this URL:                        │
-  │https://auth.openai.com/authorize?stat│
-  │e=fixture-state                       │
-  │A browser window was requested; the   │
-  │URL remains copyable.                 │
-  │                                      │
-  └──────────────────────────────────────┘
+  Smith owns this OAuth login and will call
+  ChatGPT directly.
+  Experimental: this is not a supported
+  OpenAI Platform API contract.
 
+  Open this URL:
+  https://auth.openai.com/authorize?state=fi
+  xture-state
+  A browser window was requested; the URL
+  remains copyable.
 
+  Waiting for ChatGPT.
+
+  esc cancel

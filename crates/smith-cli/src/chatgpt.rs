@@ -7,16 +7,17 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::Rect;
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Paragraph, Wrap};
 use sha2::{Digest, Sha256};
 use smith_runtime::chatgpt::{
     BrowserAuthorization, ChatGptOAuthClient, ChatGptTokenBundle, browser_authorization_url,
 };
-use smith_tui::picker::standalone_picker_area;
-use smith_tui::theme::Theme;
-use smith_tui::{ResourceEntry, ResourcePicker, Screen, ScreenEvent, Step};
+use smith_tui::picker::{ScreenFooter, draw_inline_surface};
+use smith_tui::theme::{Theme, Tone};
+use smith_tui::{FlowOutcome, ResourceEntry, ResourcePicker, Screen, ScreenEvent, Step};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use uuid::Uuid;
@@ -46,14 +47,28 @@ pub(super) struct LoginDisplay {
 pub(super) async fn login(
     session: &mut ScreenSession,
     no_motion: bool,
-) -> Result<Option<ChatGptTokenBundle>> {
-    let Some(method) = choose_login_method(session).await? else {
-        return Ok(None);
-    };
-    let oauth = ChatGptOAuthClient::new().context("initializing Smith's ChatGPT OAuth client")?;
-    match method {
-        LoginMethod::Browser => browser_login(oauth, session, no_motion).await.map(Some),
-        LoginMethod::DeviceCode => device_login(oauth, session, no_motion).await.map(Some),
+    from_setup: bool,
+    has_previous: bool,
+) -> Result<FlowOutcome<ChatGptTokenBundle>> {
+    let mut picker = login_method_picker().with_back(has_previous);
+    loop {
+        let method = match choose_login_method(session, &mut picker).await? {
+            FlowOutcome::Completed(method) => method,
+            FlowOutcome::Back => return Ok(FlowOutcome::Back),
+            FlowOutcome::Cancelled => return Ok(FlowOutcome::Cancelled),
+        };
+        let oauth =
+            ChatGptOAuthClient::new().context("initializing Smith's ChatGPT OAuth client")?;
+        let outcome = match method {
+            LoginMethod::Browser => browser_login(oauth, session, no_motion, from_setup).await?,
+            LoginMethod::DeviceCode => device_login(oauth, session, no_motion, from_setup).await?,
+        };
+        match outcome {
+            // Dropping the raced callback/poll future closes the backend before
+            // returning to the same picker with its selected method retained.
+            FlowOutcome::Back => continue,
+            outcome => return Ok(outcome),
+        }
     }
 }
 
@@ -61,7 +76,8 @@ async fn browser_login(
     oauth: ChatGptOAuthClient,
     session: &mut ScreenSession,
     no_motion: bool,
-) -> Result<ChatGptTokenBundle> {
+    from_setup: bool,
+) -> Result<FlowOutcome<ChatGptTokenBundle>> {
     let (listener, port) = bind_callback().await?;
     let redirect_uri = format!("http://localhost:{port}/auth/callback");
     let verifier = Zeroizing::new(format!(
@@ -94,14 +110,15 @@ async fn browser_login(
             .await
             .context("exchanging the ChatGPT browser authorization")
     };
-    wait_for_login_surface(session, display, completion, no_motion).await
+    wait_for_login_surface(session, display, completion, no_motion, from_setup).await
 }
 
 async fn device_login(
     oauth: ChatGptOAuthClient,
     session: &mut ScreenSession,
     no_motion: bool,
-) -> Result<ChatGptTokenBundle> {
+    from_setup: bool,
+) -> Result<FlowOutcome<ChatGptTokenBundle>> {
     let authorization = oauth
         .request_device_code()
         .await
@@ -117,7 +134,7 @@ async fn device_login(
             .await
             .context("completing ChatGPT device-code login")
     };
-    wait_for_login_surface(session, display, completion, no_motion).await
+    wait_for_login_surface(session, display, completion, no_motion, from_setup).await
 }
 
 async fn bind_callback() -> Result<(TcpListener, u16)> {
@@ -243,7 +260,8 @@ async fn wait_for_login_surface<F>(
     display: LoginDisplay,
     completion: F,
     no_motion: bool,
-) -> Result<ChatGptTokenBundle>
+    from_setup: bool,
+) -> Result<FlowOutcome<ChatGptTokenBundle>>
 where
     F: Future<Output = Result<ChatGptTokenBundle>>,
 {
@@ -251,6 +269,7 @@ where
         display,
         frame_number: 0,
         no_motion,
+        from_setup,
     };
     match session
         .run_screen(
@@ -263,9 +282,11 @@ where
         )
         .await?
     {
-        ScreenResult::Completed(result) => result.context("ChatGPT login timed out")?,
-        ScreenResult::Outcome(()) => anyhow::bail!("ChatGPT login cancelled"),
-        ScreenResult::InputEnded => anyhow::bail!("ChatGPT login input ended"),
+        ScreenResult::Completed(result) => result
+            .context("ChatGPT login timed out")?
+            .map(FlowOutcome::Completed),
+        ScreenResult::Outcome(outcome) => Ok(outcome),
+        ScreenResult::InputEnded => Ok(FlowOutcome::Cancelled),
         ScreenResult::Effect(never) => match never {},
     }
 }
@@ -277,30 +298,39 @@ struct LoginProgress {
     // This surface historically uses the explicit flag rather than the theme's
     // environment-derived motion setting. Preserve that during the loop merge.
     no_motion: bool,
+    from_setup: bool,
 }
 
 impl Screen for LoginProgress {
-    type Outcome = ();
+    type Outcome = FlowOutcome<ChatGptTokenBundle>;
     type Effect = Infallible;
 
-    fn draw(&self, frame: &mut ratatui::Frame<'_>, area: Rect, _theme: Theme) {
+    fn draw(&self, frame: &mut ratatui::Frame<'_>, area: Rect, theme: Theme) {
         draw_login_progress_in_area(
             frame,
             area,
             &self.display,
             self.frame_number,
             self.no_motion,
+            self.from_setup,
+            theme,
         );
     }
 
     fn on_event(&mut self, event: ScreenEvent) -> Step<Self::Outcome, Self::Effect> {
         match event {
-            ScreenEvent::Key(key)
-                if key.code == KeyCode::Esc
-                    || (key.code == KeyCode::Char('c')
-                        && key.modifiers.contains(KeyModifiers::CONTROL)) =>
-            {
-                Step::Outcome(())
+            ScreenEvent::Key(key) if key.kind != KeyEventKind::Release => {
+                if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    Step::Outcome(FlowOutcome::Cancelled)
+                } else if key.code == KeyCode::Esc || key.code == KeyCode::BackTab {
+                    Step::Outcome(if self.from_setup {
+                        FlowOutcome::Back
+                    } else {
+                        FlowOutcome::Cancelled
+                    })
+                } else {
+                    Step::Pending
+                }
             }
             ScreenEvent::Tick => {
                 self.frame_number = self.frame_number.wrapping_add(1);
@@ -324,7 +354,15 @@ pub(super) fn draw_login_progress(
     no_motion: bool,
 ) {
     let area = frame.area();
-    draw_login_progress_in_area(frame, area, display, frame_number, no_motion);
+    draw_login_progress_in_area(
+        frame,
+        area,
+        display,
+        frame_number,
+        no_motion,
+        false,
+        Theme::new().without_color(),
+    );
 }
 
 fn draw_login_progress_in_area(
@@ -333,20 +371,42 @@ fn draw_login_progress_in_area(
     display: &LoginDisplay,
     frame_number: usize,
     no_motion: bool,
+    from_setup: bool,
+    theme: Theme,
 ) {
-    let area = standalone_picker_area(area, 9);
-    frame.render_widget(Clear, area);
-    let text = login_progress_lines(display, frame_number, no_motion).join("\n");
-    frame.render_widget(
-        Paragraph::new(text)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Connect ChatGPT · experimental "),
-            )
-            .wrap(Wrap { trim: false }),
+    let mut lines = login_progress_lines(display, frame_number, no_motion);
+    let waiting = lines.pop().unwrap_or_default();
+    // Reserve the waiting line independently of a long copyable authorization
+    // URL, so narrow terminals always expose progress and cancellation.
+    while lines.last().is_some_and(String::is_empty) {
+        lines.pop();
+    }
+    let text = lines.join("\n");
+    let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
+    let width = area.width.saturating_sub(2);
+    let content_rows = paragraph.line_count(width);
+    let body = draw_inline_surface(
+        frame,
         area,
+        "Connect ChatGPT · experimental",
+        content_rows + 2,
+        ScreenFooter::Progress { back: from_setup },
+        theme,
     );
+    let text_height = body.height.saturating_sub(2);
+    frame.render_widget(
+        paragraph,
+        Rect::new(body.x.saturating_add(2), body.y, width, text_height),
+    );
+    if body.height > 0 {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!("  {waiting}"),
+                theme.style(Tone::Dim),
+            ))),
+            Rect::new(body.x, body.bottom().saturating_sub(1), body.width, 1),
+        );
+    }
 }
 
 fn login_progress_lines(display: &LoginDisplay, frame: usize, no_motion: bool) -> Vec<String> {
@@ -367,13 +427,12 @@ fn login_progress_lines(display: &LoginDisplay, frame: usize, no_motion: bool) -
     let dots = if no_motion { 1 } else { frame % 3 + 1 };
     lines.push(String::new());
     lines.push(format!("Waiting for ChatGPT{}", ".".repeat(dots)));
-    lines.push("Esc or Ctrl+C cancels without saving credentials.".to_owned());
     lines
 }
 
 /// Initial picker shared by the login loop and its terminal fixtures.
 pub(super) fn login_method_picker() -> ResourcePicker {
-    ResourcePicker::new(
+    ResourcePicker::choices(
         "Connect ChatGPT · experimental",
         vec![
             ResourceEntry::new(
@@ -391,11 +450,13 @@ pub(super) fn login_method_picker() -> ResourcePicker {
     )
 }
 
-async fn choose_login_method(session: &mut ScreenSession) -> Result<Option<LoginMethod>> {
-    let mut picker = login_method_picker();
+async fn choose_login_method(
+    session: &mut ScreenSession,
+    picker: &mut ResourcePicker,
+) -> Result<FlowOutcome<LoginMethod>> {
     match session
         .run(
-            &mut picker,
+            picker,
             ScreenContext {
                 draw: Some("drawing ChatGPT login picker"),
                 input: "reading ChatGPT login picker input",
@@ -403,12 +464,15 @@ async fn choose_login_method(session: &mut ScreenSession) -> Result<Option<Login
         )
         .await?
     {
-        ScreenResult::Outcome(method) => Ok(method.and_then(|method| match method.as_str() {
-            "browser" => Some(LoginMethod::Browser),
-            "device" => Some(LoginMethod::DeviceCode),
-            _ => None,
-        })),
-        ScreenResult::InputEnded => Ok(None),
+        ScreenResult::Outcome(FlowOutcome::Completed(method)) => match method.as_str() {
+            "browser" => Ok(FlowOutcome::Completed(LoginMethod::Browser)),
+            "device" => Ok(FlowOutcome::Completed(LoginMethod::DeviceCode)),
+            _ => Ok(FlowOutcome::Cancelled),
+        },
+        ScreenResult::Outcome(FlowOutcome::Back) => Ok(FlowOutcome::Back),
+        ScreenResult::Outcome(FlowOutcome::Cancelled) | ScreenResult::InputEnded => {
+            Ok(FlowOutcome::Cancelled)
+        }
         ScreenResult::Effect(never) | ScreenResult::Completed(never) => match never {},
     }
 }
@@ -417,6 +481,112 @@ async fn choose_login_method(session: &mut ScreenSession) -> Result<Option<Login
 #[allow(clippy::wildcard_imports)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn login_progress_keeps_waiting_and_navigation_visible_at_44_by_16() {
+        for user_code in [None, Some("ABCD-1234".to_owned())] {
+            let display = LoginDisplay {
+                destination: "https://auth.openai.com/authorize?state=fixture-state".into(),
+                user_code,
+                browser_opened: true,
+            };
+            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(44, 16))
+                .expect("terminal");
+            terminal
+                .draw(|frame| {
+                    draw_login_progress_in_area(
+                        frame,
+                        frame.area(),
+                        &display,
+                        0,
+                        true,
+                        true,
+                        Theme::new().without_color(),
+                    )
+                })
+                .expect("draw");
+            let buffer = terminal.backend().buffer();
+            let screen = (0..16)
+                .map(|y| (0..44).map(|x| buffer[(x, y)].symbol()).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                screen
+                    .lines()
+                    .next()
+                    .expect("heading")
+                    .starts_with("  Connect ChatGPT · experimental"),
+                "{screen}"
+            );
+            for text in [
+                "Open this URL:",
+                "https://auth.openai.com",
+                "Waiting for ChatGPT.",
+                "esc back",
+                "ctrl+c cancel",
+            ] {
+                assert!(screen.contains(text), "{screen}");
+            }
+            if display.user_code.is_some() {
+                assert!(screen.contains("Enter code: ABCD-1234"), "{screen}");
+            }
+            assert!(!screen.contains('┌') && !screen.contains('│'), "{screen}");
+        }
+    }
+
+    #[test]
+    fn setup_login_escape_backs_out_and_ctrl_c_cancels_every_step() {
+        let mut methods = login_method_picker().with_back(true);
+        assert!(matches!(
+            methods.on_event(ScreenEvent::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Esc,
+                KeyModifiers::NONE
+            ))),
+            Step::Outcome(FlowOutcome::Back)
+        ));
+        let mut progress = LoginProgress {
+            display: LoginDisplay {
+                destination: "https://auth.openai.com".into(),
+                user_code: None,
+                browser_opened: false,
+            },
+            frame_number: 0,
+            no_motion: true,
+            from_setup: true,
+        };
+        assert!(matches!(
+            progress.on_event(ScreenEvent::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Esc,
+                KeyModifiers::NONE
+            ))),
+            Step::Outcome(FlowOutcome::Back)
+        ));
+        for from_setup in [true, false] {
+            progress.from_setup = from_setup;
+            assert!(matches!(
+                progress.on_event(ScreenEvent::Key(crossterm::event::KeyEvent::new(
+                    KeyCode::Char('c'),
+                    KeyModifiers::CONTROL
+                ))),
+                Step::Outcome(FlowOutcome::Cancelled)
+            ));
+        }
+        let mut first = login_method_picker();
+        assert!(matches!(
+            first.on_event(ScreenEvent::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Esc,
+                KeyModifiers::NONE
+            ))),
+            Step::Outcome(FlowOutcome::Cancelled)
+        ));
+        assert!(matches!(
+            methods.on_event(ScreenEvent::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL
+            ))),
+            Step::Outcome(FlowOutcome::Cancelled)
+        ));
+    }
 
     #[test]
     fn login_progress_keeps_only_public_ceremony_material() {

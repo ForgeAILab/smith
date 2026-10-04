@@ -504,9 +504,9 @@
 
 
   Choose model · type to filter
- No local model is selectable · run smith setup add-model
+  No local model is selectable · run smith setup add-model
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 > Ask Smith to do anything
 ────────────────────────────────────────────────────────────────────────────────────────────────────
                                                      example-model · build · <PROJECT> · unknown ctx
-  type to filter · ↑↓ choose · enter confirm · esc cancel
+  ↑↓ choose · enter confirm · esc cancel

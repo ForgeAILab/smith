@@ -504,9 +504,9 @@
 
 
   Choose profile · type to filter
- No profile is selectable · run smith setup
+  No profile is selectable · run smith setup
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 > Ask Smith to do anything
 ────────────────────────────────────────────────────────────────────────────────────────────────────
                                                      example-model · build · <PROJECT> · unknown ctx
-  type to filter · ↑↓ choose · enter confirm · esc cancel
+  ↑↓ choose · enter confirm · esc cancel

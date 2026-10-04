@@ -21,12 +21,12 @@ use smith_config::user_config::{
     CommittedConfigEdit, prepare_provider_credential_removal, prepare_user_config_edit,
 };
 use smith_runtime::factory::{self, AVAILABLE_ADAPTER_KINDS, HostSurface};
-use smith_tui::ResourceEntry;
 use smith_tui::setup::SetupMode;
+use smith_tui::{FlowOutcome, ResourceEntry, ResourcePicker};
 
 use crate::cli::Selection;
 use crate::config_command::prepare;
-use crate::screen_runner::ScreenSession;
+use crate::screen_runner::{ScreenContext, ScreenResult, ScreenSession};
 use crate::{chatgpt, setup};
 
 /// How `/connect` proceeds for a login-kind provider.
@@ -448,8 +448,10 @@ async fn connect_chatgpt(selection: Selection, no_color: bool, no_motion: bool) 
         false,
         &mut session,
         no_motion,
+        false,
     )
-    .await;
+    .await
+    .map(|outcome| matches!(outcome, FlowOutcome::Completed(())));
     session.finish(result, restore_context)
 }
 
@@ -463,35 +465,65 @@ pub(super) async fn connect_chatgpt_from_setup(
     make_default: bool,
     session: &mut ScreenSession,
     no_motion: bool,
-) -> Result<bool> {
-    let mode = match existing_login_references(&user_dir, CHATGPT_PROVIDER, KIND_CHATGPT_RESPONSES)
-    {
-        Some(existing) => {
-            let picked = crate::resources::pick_one_in_screen(
-                "Connect ChatGPT · already connected",
-                connect_mode_entries(existing.len()),
-                "No connection choices",
-                session,
-            )
-            .await?;
-            match picked.and_then(|choice| connect_mode_from_choice(&choice, &existing)) {
-                Some(mode) => mode,
-                None => return Ok(false),
+    from_setup: bool,
+) -> Result<FlowOutcome<()>> {
+    let existing = existing_login_references(&user_dir, CHATGPT_PROVIDER, KIND_CHATGPT_RESPONSES);
+    let mut account_picker = existing.as_ref().map(|existing| {
+        ResourcePicker::choices(
+            "Connect ChatGPT · already connected",
+            connect_mode_entries(existing.len()),
+            "No connection choices",
+        )
+        .with_back(from_setup)
+    });
+    let (mode, bundle) = loop {
+        let mode = if let (Some(existing), Some(picker)) = (&existing, &mut account_picker) {
+            match session
+                .run(
+                    picker,
+                    ScreenContext {
+                        draw: None,
+                        input: "reading a terminal event",
+                    },
+                )
+                .await?
+            {
+                ScreenResult::Outcome(FlowOutcome::Completed(choice)) => {
+                    let Some(mode) = connect_mode_from_choice(&choice, existing) else {
+                        return Ok(FlowOutcome::Cancelled);
+                    };
+                    mode
+                }
+                ScreenResult::Outcome(FlowOutcome::Back) => {
+                    return Ok(FlowOutcome::Back);
+                }
+                ScreenResult::Outcome(FlowOutcome::Cancelled) | ScreenResult::InputEnded => {
+                    return Ok(FlowOutcome::Cancelled);
+                }
+                ScreenResult::Effect(never) | ScreenResult::Completed(never) => match never {},
             }
+        } else {
+            ConnectMode::Replace
+        };
+        match chatgpt::login(
+            session,
+            no_motion,
+            from_setup,
+            from_setup || account_picker.is_some(),
+        )
+        .await?
+        {
+            FlowOutcome::Completed(bundle) => break (mode, bundle),
+            FlowOutcome::Back if account_picker.is_some() => continue,
+            FlowOutcome::Back => return Ok(FlowOutcome::Back),
+            FlowOutcome::Cancelled => return Ok(FlowOutcome::Cancelled),
         }
-        None => ConnectMode::Replace,
     };
-    let login = chatgpt::login(session, no_motion).await;
-    // Publishing and its notices historically happen on the normal screen.
-    // The screen chain is over, so restore before preserving those effects.
-    session.restore().context(if matches!(&login, Ok(None)) {
-        "restoring the terminal after ChatGPT login selection"
-    } else {
-        "restoring the terminal after ChatGPT login progress"
-    })?;
-    let Some(bundle) = login? else {
-        return Ok(false);
-    };
+    // Back and cancellation leave the shared terminal active for the owner.
+    // Only completed login reaches publication and its existing notices.
+    session
+        .restore()
+        .context("restoring the terminal after ChatGPT login progress")?;
     let secret = bundle
         .to_secret()
         .context("encoding the protected ChatGPT credential bundle")?;
@@ -594,5 +626,5 @@ pub(super) async fn connect_chatgpt_from_setup(
             CHATGPT_TERRA.model
         );
     }
-    Ok(true)
+    Ok(FlowOutcome::Completed(()))
 }

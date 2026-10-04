@@ -504,9 +504,9 @@
 
 
   Choose reasoning effort · type to filter
- Effort is not adjustable for this provider/
+  Effort is not adjustable for this…
 ────────────────────────────────────────────
 > Ask Smith to do anything
 ────────────────────────────────────────────
            example-model · build · <PROJECT>
-  enter choose · esc cancel
+  enter confirm · esc cancel · ↑↓ choose

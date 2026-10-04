@@ -21,6 +21,17 @@ pub enum ScreenEvent {
     Tick,
 }
 
+/// Keeps backing out distinct from cancellation so nested flows can resume their owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FlowOutcome<T> {
+    /// All required steps finished and the owner can apply the result.
+    Completed(T),
+    /// Return to the previous screen with its state intact.
+    Back,
+    /// Abandon the entire flow without applying a result.
+    Cancelled,
+}
+
 /// Separates completion from work the host must perform before running again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step<Outcome, Effect> {
