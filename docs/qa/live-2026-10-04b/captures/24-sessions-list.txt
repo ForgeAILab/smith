@@ -1,0 +1,32 @@
+SESSION ID                                    LAST UPDATED                TURNS  MODEL        OPENIN
+G PROMPT
+session-a65ce81e-2a23-46e0-9fc7-bdeaaa286051  2026-10-04 08:21:02 -04:00  0      ?/?          no use
+r preview
+session-2042b4df-6465-42d4-be69-180feb01a926  2026-10-04 08:18:55 -04:00  1      zai/glm-5.3  What d
+oes lib.rs define? One sentence.
+session-0fef7a4f-5625-42dd-8740-28b4f9362e24  2026-10-04 08:18:34 -04:00  1      zai/glm-5.3  Reply
+with the single word: alpha
+
+<prompt> main ····················· 08:21:04 ─╮
+❯                                                                                                ─╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

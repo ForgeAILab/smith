@@ -1,0 +1,32 @@
+  Get started
+  Type a task below and press Enter.
+
+  /model    Switch model
+  /connect  Connect or reconnect a provider
+  /help     List commands and keys
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Choose model · type to filter                                                                1/466
+❯ gpt-5.6-luna   chatgpt · 272k context
+                 limits from smith-trusted-models r5 · input 255616 · output ceiling 128k [user…
+  gpt-5.6-sol    chatgpt · 272k context
+  gpt-5.6-terra  chatgpt · 272k context
+  gpt-6-astra    chatgpt · 272k context
+  gpt-6-luna     chatgpt · 272k context
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                                            zai/glm-5.3 · code · ask
+  type to filter · ↑↓ choose · enter confirm · esc cancel

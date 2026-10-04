@@ -1,0 +1,32 @@
+
+      ┌ Smith setup ─────────────────────────────────────────────────────────────────────────┐
+      │  no agent session or provider request exists yet                                     │
+      │ filter: chatgpt                                                                      │
+      │❯ Connect ChatGPT (experimental)                                                      │
+      │    Smith OAuth and direct Responses calls; unsupported public API boundary           │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │ ↑/↓ choose · Enter confirm · Shift+Tab Back · Esc cancel                             │
+      └──────────────────────────────────────────────────────────────────────────────────────┘
+

@@ -1,0 +1,32 @@
+  Get started
+  Type a task below and press Enter.
+
+  /model    Switch model
+  /connect  Connect or reconnect a provider
+  /help     List commands and keys
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Connect provider · type to filter                                                              7/7
+  google                      AI Studio API key · native Gemini Interactions
+  openrouter                  API key
+  xai                         browser login · renewable session
+  zai                         API key                                                      ✓ current
+❯ OpenAI-compatible endpoint  OpenAI-compatible endpoint
+                              API key · any OpenAI-compatible base URL · adds a first reviewed model
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                                            zai/glm-5.3 · code · ask
+  type to filter · ↑↓ choose · enter confirm · esc cancel

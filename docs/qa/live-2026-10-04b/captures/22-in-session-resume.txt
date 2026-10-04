@@ -1,0 +1,32 @@
+  Get started
+  Type a task below and press Enter.
+
+  /model    Switch model
+  /connect  Connect or reconnect a provider
+  /help     List commands and keys
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Resume session · type to filter                                                                1/3
+❯ session-a65c…  No user preview                                                           ✓ current
+                 session-a65ce81e-2a23-46e0-9fc7-bdeaaa286051 · 0 turns · unknown provider/model ·…
+  session-2042…  What does lib.rs define? One sentence.
+  session-0fef…  Reply with the single word: alpha
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                                            zai/glm-5.3 · code · ask
+  type to filter · ↑↓ choose · enter confirm · esc cancel

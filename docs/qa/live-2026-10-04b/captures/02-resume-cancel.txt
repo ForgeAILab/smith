@@ -1,0 +1,32 @@
+~/.local/bin/smith --resume --approval ask
+<prompt> main ····················· 08:19:01 ─╮
+❯ ~/.local/bin/smith --resume --approval ask                                                     ─╯
+
+<prompt> main ················· 20s 08:19:21 ─╮
+❯                                                                                                ─╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

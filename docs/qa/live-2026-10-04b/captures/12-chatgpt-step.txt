@@ -1,0 +1,32 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┌ Connect ChatGPT · experimental ──────────────────────────────────────────────────────────────┐
+  │ filter: type to search                                                                       │
+  │❯ Browser login      Smith PKCE callback · owner-only auth.json · direct Responses calls      │
+  │  Device-code login  one-time code for callback-limited environments                          │
+  │ ↑/↓ choose · Enter confirm · Esc cancel                                                      │
+  └──────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+
+
+
+
+
