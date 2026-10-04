@@ -1145,7 +1145,7 @@ impl App {
 
     pub(super) fn on_scroll_key(&mut self, key: KeyEvent) -> Option<Action> {
         match key.code {
-            KeyCode::Home => self.scroll_up(u16::MAX),
+            KeyCode::Home => self.scroll_up(usize::MAX),
             KeyCode::End => self.follow_newest(),
             _ => {}
         }
@@ -1153,7 +1153,7 @@ impl App {
     }
 
     /// Scrolls up, which pauses following.
-    pub fn scroll_up(&mut self, lines: u16) {
+    pub fn scroll_up(&mut self, lines: usize) {
         if lines == 0 {
             return;
         }
@@ -1169,7 +1169,7 @@ impl App {
     }
 
     /// Scrolls down, resuming following at the bottom unless reading a result.
-    pub fn scroll_down(&mut self, lines: u16) {
+    pub fn scroll_down(&mut self, lines: usize) {
         if lines == 0 {
             return;
         }
@@ -1200,7 +1200,8 @@ impl App {
     ///
     /// Keeping the visible offset stable while paused prevents streaming output
     /// or a resize from pulling the reader toward the newest content.
-    pub(crate) fn sync_scroll_limit(&mut self, limit: u16) {
+    #[cfg(test)]
+    pub(crate) fn sync_scroll_limit(&mut self, limit: usize) {
         if self.following {
             self.scroll_limit = limit;
             self.scroll_back = 0;

@@ -186,7 +186,7 @@
             );
 
             app.following = false;
-            app.scroll_back = u16::MAX;
+            app.scroll_back = usize::from(u16::MAX);
             let scrolled = render_synced(&mut app, width, height, theme);
             assert!(scrolled.contains("notice 0"), "{scrolled}");
             assert_eq!(

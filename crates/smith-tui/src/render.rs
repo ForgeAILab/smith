@@ -11,4 +11,6 @@ mod reports;
 mod transcript;
 pub(crate) mod wrap;
 
-pub use layout::{MIN_HEIGHT, MIN_WIDTH, draw, draw_synced, selected_text};
+pub(crate) use transcript::TranscriptCache;
+
+pub use layout::{MIN_HEIGHT, MIN_WIDTH, SurfaceLayout, draw, draw_synced, layout, selected_text};

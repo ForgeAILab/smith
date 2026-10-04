@@ -9,6 +9,7 @@
 mod children;
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::{Duration, Instant};
 
@@ -48,7 +49,7 @@ pub(super) const PASTE_CHUNK_MIN_CHARS: usize = 1_000;
 pub(super) const MAX_PASTED_CHUNKS: usize = 50;
 
 /// Transcript lines one wheel notch scrolls.
-pub(super) const MOUSE_SCROLL_LINES: u16 = 3;
+pub(super) const MOUSE_SCROLL_LINES: usize = 3;
 
 /// One large paste stored aside so the composer stays editable.
 ///
@@ -915,6 +916,8 @@ impl LiveTurn {
 pub struct App {
     /// The transcript.
     pub transcript: Transcript,
+    /// Render-only wrapped rows; never part of conversation or input state.
+    pub(crate) transcript_cache: RefCell<crate::render::TranscriptCache>,
     /// Header status.
     pub status: Status,
     /// Whether significant local cache-miss notices are enabled.
@@ -1008,9 +1011,9 @@ pub struct App {
     /// Whether the transcript follows new output.
     pub following: bool,
     /// Lines scrolled up from the bottom when not following.
-    pub scroll_back: u16,
+    pub scroll_back: usize,
     /// Most lines the current transcript viewport can scroll.
-    pub(super) scroll_limit: u16,
+    pub(crate) scroll_limit: usize,
     /// A local result to reveal from its beginning at the next valid frame.
     /// The renderer resolves this block index using the current wrap width.
     pub(crate) scroll_to_block: Option<usize>,
@@ -1073,6 +1076,7 @@ impl App {
     pub fn new(model: impl Into<String>, project: impl Into<String>) -> Self {
         Self {
             transcript: Transcript::new(),
+            transcript_cache: RefCell::default(),
             status: Status::new(model, project),
             cache_miss_notices: false,
             composer: Composer::new(),

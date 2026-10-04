@@ -1,11 +1,12 @@
 //! Surface layout and rendering implementation.
 //!
 //! Drawing is a pure function of [`App`] plus the frame area. Nothing here
-//! mutates state or caches across frames, which is what makes resize correct by
-//! construction: every wrap is recomputed at the new width.
+//! mutates application state. Render-only cached rows are keyed by width, so
+//! resizing refreshes their wrapping before layout or drawing uses them.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
+#[cfg(test)]
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use smith_runtime::client::{PlanItemStatus, PlanSensitivity};
@@ -38,51 +39,113 @@ const MAX_VISIBLE_TODOS: usize = 5;
 
 /// Draws the whole client without changing application state.
 ///
-/// Interactive hosts should use [`draw_synced`] so scroll input is bounded by
-/// the current terminal geometry. This pure entry point remains useful for
-/// snapshots and other read-only renderers.
+/// Interactive hosts should apply [`layout()`] before drawing so scroll input
+/// is bounded by the current terminal geometry. This pure entry point remains
+/// useful for snapshots and other read-only renderers.
 pub fn draw(frame: &mut Frame<'_>, app: &App, theme: Theme) {
-    draw_surface(frame, app, theme, None);
+    draw_surface(frame, app, theme);
 }
 
-/// Draws the client and synchronizes transcript scroll bounds with the frame.
-pub fn draw_synced(frame: &mut Frame<'_>, app: &mut App, theme: Theme) {
-    let area = frame.area();
-    if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
-        draw_too_small(frame, area, theme);
-        return;
-    }
+/// Scroll state computed for the current surface geometry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SurfaceLayout {
+    transcript: Option<TranscriptScroll>,
+    approval: Option<(u16, u16)>,
+}
 
-    let transcript = transcript_rect(area, app);
-    if app.inspected_child.is_none() && app.output_after_result() {
-        app.follow_newest();
-    }
-    let lines = transcript_lines(app, theme, transcript.width);
-    let limit = visual_scroll_limit(&lines, transcript);
-    app.sync_scroll_limit(limit);
-    if matches!(app.overlay, Some(Overlay::Approval { .. })) {
-        app.approval_scroll_limit = approval_scroll_limit(area, app, theme);
-        app.approval_scroll = app.approval_scroll.min(app.approval_scroll_limit);
-    }
-    if app.inspected_child.is_none()
-        && let Some(block) = app.scroll_to_block.take()
-        && let Some(offset) = block_start_row(app, block, theme, transcript.width)
-    {
-        app.scroll_back = limit.saturating_sub(offset);
-        app.following = app.scroll_back == 0;
-        if app.following {
-            app.result_scroll_revision = None;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TranscriptScroll {
+    limit: usize,
+    back: usize,
+    following: bool,
+    to_block: Option<usize>,
+    result_revision: Option<u64>,
+}
+
+impl SurfaceLayout {
+    /// Applies the computed bounds before the application is drawn read-only.
+    pub fn apply(self, app: &mut App) {
+        if let Some(scroll) = self.transcript {
+            app.scroll_limit = scroll.limit;
+            app.scroll_back = scroll.back;
+            app.following = scroll.following;
+            app.scroll_to_block = scroll.to_block;
+            app.result_scroll_revision = scroll.result_revision;
+        }
+        if let Some((scroll, limit)) = self.approval {
+            app.approval_scroll = scroll;
+            app.approval_scroll_limit = limit;
         }
     }
-    draw_surface(frame, app, theme, Some(lines));
 }
 
-fn draw_surface(
-    frame: &mut Frame<'_>,
-    app: &App,
-    theme: Theme,
-    mut transcript_lines: Option<Vec<Line<'static>>>,
-) {
+/// Computes viewport bounds and follow/result positioning without changing App.
+pub fn layout(area: Rect, app: &App, theme: Theme) -> SurfaceLayout {
+    if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
+        return SurfaceLayout {
+            transcript: None,
+            approval: None,
+        };
+    }
+    let transcript = transcript_rect(area, app);
+    let rows = transcript_rows(app, theme, transcript.width);
+    let limit = rows.scroll_limit(transcript);
+    let newest = app.inspected_child.is_none() && app.output_after_result();
+    let mut scroll = TranscriptScroll {
+        limit,
+        back: app.scroll_back,
+        following: app.following,
+        to_block: app.scroll_to_block,
+        result_revision: app.result_scroll_revision,
+    };
+    if newest {
+        scroll.back = 0;
+        scroll.following = true;
+        scroll.to_block = None;
+        scroll.result_revision = None;
+    }
+    if scroll.following {
+        scroll.back = 0;
+    } else {
+        // Preserve the row at the top while output grows or the width changes.
+        let offset = app
+            .scroll_limit
+            .saturating_sub(scroll.back.min(app.scroll_limit));
+        scroll.back = limit.saturating_sub(offset.min(limit));
+        if limit == 0 && scroll.result_revision.is_none() {
+            scroll.following = true;
+            scroll.to_block = None;
+        } else if scroll.back == 0 && scroll.result_revision.is_none() {
+            scroll.following = true;
+        }
+    }
+    if app.inspected_child.is_none()
+        && let Some(block) = scroll.to_block.take()
+        && let Some(offset) = rows.block_start_row(block)
+    {
+        scroll.back = limit.saturating_sub(offset);
+        scroll.following = scroll.back == 0;
+        if scroll.following {
+            scroll.result_revision = None;
+        }
+    }
+    let approval = matches!(app.overlay, Some(Overlay::Approval { .. })).then(|| {
+        let limit = approval_scroll_limit(area, app, theme);
+        (app.approval_scroll.min(limit), limit)
+    });
+    SurfaceLayout {
+        transcript: Some(scroll),
+        approval,
+    }
+}
+
+/// Computes and applies layout, then draws the client read-only.
+pub fn draw_synced(frame: &mut Frame<'_>, app: &mut App, theme: Theme) {
+    layout(frame.area(), app, theme).apply(app);
+    draw(frame, app, theme);
+}
+
+fn draw_surface(frame: &mut Frame<'_>, app: &App, theme: Theme) {
     let area = frame.area();
     if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
         draw_too_small(frame, area, theme);
@@ -112,7 +175,7 @@ fn draw_surface(
         Constraint::Length(agents_rows),
     ])
     .areas(area);
-    draw_transcript(frame, transcript, app, theme, transcript_lines.take());
+    draw_transcript(frame, transcript, app, theme);
     if anchored.compact > 0 {
         match &app.overlay {
             Some(Overlay::Shortcuts) => draw_shortcuts(frame, compact, theme),

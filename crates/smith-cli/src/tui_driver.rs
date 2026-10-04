@@ -895,7 +895,8 @@ pub(super) async fn run_tui(
                             // read — a release that silently copied nothing.
                             let mut selected = None;
                             terminal.draw(|frame| {
-                                smith_tui::draw_synced(frame, &mut app, theme);
+                                smith_tui::render::layout(frame.area(), &app, theme).apply(&mut app);
+                                smith_tui::render::draw(frame, &app, theme);
                                 selected = smith_tui::selected_text(frame, &app);
                             })?;
                             dirty = false;
@@ -1257,7 +1258,10 @@ pub(super) async fn run_tui(
                 // transition) marks the frame dirty on its way in, and the
                 // tracker turns that into at most one OSC write per change.
                 let _ = window_title.refresh(&app.status);
-                terminal.draw(|frame| smith_tui::draw_synced(frame, &mut app, theme))?;
+                terminal.draw(|frame| {
+                    smith_tui::render::layout(frame.area(), &app, theme).apply(&mut app);
+                    smith_tui::render::draw(frame, &app, theme);
+                })?;
                 dirty = false;
             }
         }

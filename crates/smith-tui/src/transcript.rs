@@ -13,6 +13,7 @@
 //!   arriving mid-stream gets its own block, so the transcript stays a faithful
 //!   record of the conversation rather than a splice of unrelated output.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use agent_runtime_core::content::{ContentPart, Message, Role};
@@ -30,6 +31,8 @@ use smith_tools::{ToolCallDisplay, project_external_tool_call_display, project_t
 pub(crate) const MAX_LOCAL_RESULT_BYTES: usize = 512 * 1024;
 const MAX_LOCAL_RESULT_LINES: usize = 4_096;
 const MAX_LOCAL_RESULT_TITLE_CHARS: usize = 96;
+
+static NEXT_BLOCK_REVISION: AtomicU64 = AtomicU64::new(1);
 
 /// Display-ready shortcut restored by the host at a history boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -248,6 +251,7 @@ impl PartialEq for Block {
 #[derive(Debug, Clone, Default)]
 pub struct Transcript {
     blocks: Vec<Block>,
+    block_revisions: Vec<u64>,
     next_shell_echo: u64,
     append_revision: u64,
 }
@@ -268,9 +272,29 @@ impl Transcript {
         self.append_revision
     }
 
+    pub(crate) fn block_revision(&self, index: usize) -> u64 {
+        self.block_revisions[index]
+    }
+
+    // The only mutable borrow of a stored block also invalidates its rows.
+    // Unique revisions keep replacement transcripts and diverging clones from
+    // reusing rows left at the same position in an App's render cache.
+    fn block_mut(&mut self, index: usize) -> &mut Block {
+        self.block_revisions[index] = NEXT_BLOCK_REVISION.fetch_add(1, Ordering::Relaxed);
+        &mut self.blocks[index]
+    }
+
     fn push_block(&mut self, block: Block) {
         self.append_revision = self.append_revision.wrapping_add(1);
         self.blocks.push(block);
+        self.block_revisions.push(0);
+        self.block_mut(self.blocks.len() - 1);
+    }
+
+    fn tool_index(&self, call_id: &str) -> Option<usize> {
+        self.blocks
+            .iter()
+            .rposition(|block| matches!(block, Block::Tool { call_id: id, .. } if id == call_id))
     }
 
     /// The number of blocks.
@@ -351,8 +375,13 @@ impl Transcript {
     /// Appends assistant text, extending the open assistant block if there is
     /// one.
     pub fn push_text_delta(&mut self, delta: &str) {
-        if let Some(Block::Assistant { text, open: true }) = self.blocks.last_mut() {
-            text.push_str(delta);
+        if matches!(
+            self.blocks.last(),
+            Some(Block::Assistant { open: true, .. })
+        ) {
+            if let Block::Assistant { text, .. } = self.block_mut(self.blocks.len() - 1) {
+                text.push_str(delta);
+            }
             return;
         }
         self.close_open();
@@ -365,14 +394,12 @@ impl Transcript {
     /// Appends reasoning text, extending the open reasoning block if there is
     /// one and its redaction flag matches.
     pub fn push_reasoning_delta(&mut self, delta: &str, delta_redacted: bool) {
-        if let Some(Block::Reasoning {
-            text,
-            redacted,
-            open: true,
-        }) = self.blocks.last_mut()
-            && *redacted == delta_redacted
-        {
-            text.push_str(delta);
+        if matches!(self.blocks.last(),
+            Some(Block::Reasoning { redacted, open: true, .. }) if *redacted == delta_redacted
+        ) {
+            if let Block::Reasoning { text, .. } = self.block_mut(self.blocks.len() - 1) {
+                text.push_str(delta);
+            }
             return;
         }
         self.close_open();
@@ -478,6 +505,7 @@ impl Transcript {
             )
         }) {
             let mut call = self.blocks.remove(existing);
+            self.block_revisions.remove(existing);
             let index = index - usize::from(existing < index);
             if let (
                 Block::Tool {
@@ -489,13 +517,13 @@ impl Transcript {
                     shell_echo,
                     ..
                 },
-            ) = (&mut self.blocks[index], &mut call)
+            ) = (self.block_mut(index), &mut call)
             {
                 *user_command = command.take();
                 *shell_echo = Some(echo);
             }
-            self.blocks[index] = call;
-        } else if let Block::Tool { call_id: id, .. } = &mut self.blocks[index] {
+            *self.block_mut(index) = call;
+        } else if let Block::Tool { call_id: id, .. } = self.block_mut(index) {
             *id = call_id.to_owned();
         }
     }
@@ -517,15 +545,15 @@ impl Transcript {
         } else {
             output
         });
-        if let Some(Block::Tool {
+        let index = self.blocks.iter().position(
+            |block| matches!(block, Block::Tool { shell_echo: Some(id), .. } if *id == echo),
+        )?;
+        if let Block::Tool {
             status,
             result_preview,
             started_at,
             ..
-        }) = self
-            .blocks
-            .iter_mut()
-            .find(|block| matches!(block, Block::Tool { shell_echo: Some(id), .. } if *id == echo))
+        } = self.block_mut(index)
         {
             *status = if is_error {
                 ToolStatus::Failed.with_result_preview(output)
@@ -579,11 +607,14 @@ impl Transcript {
     /// open. A row frozen at `running 4s` would keep claiming work is in
     /// flight for a session that has ended.
     pub fn settle_running_tool_calls(&mut self, status: ToolStatus) {
-        for block in self.blocks.iter_mut().rev() {
-            if let Block::Tool {
-                status: slot @ (ToolStatus::Running | ToolStatus::WaitingForApproval),
-                ..
-            } = block
+        for index in (0..self.blocks.len()).rev() {
+            if matches!(
+                &self.blocks[index],
+                Block::Tool {
+                    status: ToolStatus::Running | ToolStatus::WaitingForApproval,
+                    ..
+                }
+            ) && let Block::Tool { status: slot, .. } = self.block_mut(index)
             {
                 *slot = status;
             }
@@ -597,7 +628,9 @@ impl Transcript {
     /// has a ceiling.
     pub fn retain_newest(&mut self, max: usize) {
         if self.blocks.len() > max {
-            self.blocks.drain(..self.blocks.len() - max);
+            let removed = self.blocks.len() - max;
+            self.blocks.drain(..removed);
+            self.block_revisions.drain(..removed);
         }
     }
 
@@ -611,17 +644,10 @@ impl Transcript {
     /// `enrichment` field this method never touches; see
     /// [`Self::enrich_tool_call`].
     pub fn set_tool_display(&mut self, call_id: &str, display: ToolCallDisplay) {
-        for block in self.blocks.iter_mut().rev() {
-            if let Block::Tool {
-                call_id: id,
-                display: slot,
-                ..
-            } = block
-                && id == call_id
-            {
-                *slot = Some(Box::new(display));
-                return;
-            }
+        if let Some(index) = self.tool_index(call_id)
+            && let Block::Tool { display: slot, .. } = self.block_mut(index)
+        {
+            *slot = Some(Box::new(display));
         }
     }
 
@@ -649,23 +675,19 @@ impl Transcript {
         call_id: &str,
         qualifiers: impl IntoIterator<Item = String>,
     ) {
-        for block in self.blocks.iter_mut().rev() {
-            if let Block::Tool {
-                call_id: id,
+        if let Some(index) = self.tool_index(call_id)
+            && let Block::Tool {
                 display,
                 enrichment,
                 ..
-            } = block
-                && id == call_id
-            {
-                let Some(current) = display.as_deref().cloned() else {
-                    return;
-                };
-                let before = current.qualifiers().len();
-                let bounded = current.with_qualifiers(qualifiers);
-                enrichment.extend(bounded.qualifiers()[before..].iter().cloned());
+            } = self.block_mut(index)
+        {
+            let Some(current) = display.as_deref().cloned() else {
                 return;
-            }
+            };
+            let before = current.qualifiers().len();
+            let bounded = current.with_qualifiers(qualifiers);
+            enrichment.extend(bounded.qualifiers()[before..].iter().cloned());
         }
     }
 
@@ -679,47 +701,40 @@ impl Transcript {
         let Some(preview) = bound_result_preview(preview.as_ref()) else {
             return;
         };
-        for block in self.blocks.iter_mut().rev() {
-            if let Block::Tool {
-                call_id: id,
+        if let Some(index) = self.tool_index(call_id)
+            && let Block::Tool {
                 result_preview: slot,
                 status,
                 ..
-            } = block
-                && id == call_id
-            {
-                *status = status.with_result_preview(&preview);
-                *slot = Some(preview);
-                return;
-            }
+            } = self.block_mut(index)
+        {
+            *status = status.with_result_preview(&preview);
+            *slot = Some(preview);
         }
     }
 
     /// Updates a tool call's status, returning whether its row exists.
     /// Unknown ids never fabricate a block for a call the transcript never saw.
     pub fn complete_tool_call(&mut self, call_id: &str, status: ToolStatus) -> bool {
-        for block in self.blocks.iter_mut().rev() {
-            if let Block::Tool {
-                call_id: id,
+        if let Some(index) = self.tool_index(call_id)
+            && let Block::Tool {
                 status: slot,
                 started_at,
                 result_preview,
                 ..
-            } = block
-                && id == call_id
-            {
-                if status == ToolStatus::Running && *slot == ToolStatus::WaitingForApproval {
-                    *started_at = Some(Instant::now());
-                } else if status == ToolStatus::WaitingForApproval {
-                    *started_at = None;
-                }
-                // A canonical completion reports a denied call as an error.
-                // Do not erase the approval decision before enrichment arrives.
-                if !(*slot == ToolStatus::Denied && status == ToolStatus::Failed) {
-                    *slot = status.with_result_preview(result_preview.as_deref().unwrap_or(""));
-                }
-                return true;
+            } = self.block_mut(index)
+        {
+            if status == ToolStatus::Running && *slot == ToolStatus::WaitingForApproval {
+                *started_at = Some(Instant::now());
+            } else if status == ToolStatus::WaitingForApproval {
+                *started_at = None;
             }
+            // A canonical completion reports a denied call as an error.
+            // Do not erase the approval decision before enrichment arrives.
+            if !(*slot == ToolStatus::Denied && status == ToolStatus::Failed) {
+                *slot = status.with_result_preview(result_preview.as_deref().unwrap_or(""));
+            }
+            return true;
         }
         false
     }
@@ -741,26 +756,26 @@ impl Transcript {
     /// A name-only fallback for callers without a stable call identity.
     /// Prepared approvals use [`Self::complete_tool_call`] with their call id.
     pub fn complete_tool_call_by_name(&mut self, name: &str, status: ToolStatus) {
-        for block in self.blocks.iter_mut().rev() {
-            if let Block::Tool {
-                name: candidate,
-                status: slot,
-                ..
-            } = block
-                && candidate == name
-                && matches!(*slot, ToolStatus::Running | ToolStatus::WaitingForApproval)
-            {
-                *slot = status;
-                return;
-            }
+        if let Some(index) = self.blocks.iter().rposition(|block| {
+            matches!(block, Block::Tool { name: candidate, status, .. }
+                if candidate == name
+                    && matches!(status, ToolStatus::Running | ToolStatus::WaitingForApproval))
+        }) && let Block::Tool { status: slot, .. } = self.block_mut(index)
+        {
+            *slot = status;
         }
     }
 
     /// Closes any block still receiving deltas. Called at turn boundaries so a
     /// later delta starts a new block instead of extending a finished reply.
     pub fn close_open(&mut self) {
-        for block in self.blocks.iter_mut().rev() {
-            if let Block::Assistant { open, .. } | Block::Reasoning { open, .. } = block {
+        for index in (0..self.blocks.len()).rev() {
+            if matches!(
+                &self.blocks[index],
+                Block::Assistant { open: true, .. } | Block::Reasoning { open: true, .. }
+            ) && let Block::Assistant { open, .. } | Block::Reasoning { open, .. } =
+                self.block_mut(index)
+            {
                 *open = false;
             }
         }
@@ -783,6 +798,7 @@ impl Transcript {
     ) {
         self.append_revision = self.append_revision.wrapping_add(1);
         self.blocks.clear();
+        self.block_revisions.clear();
         let mut shortcuts = saved
             .iter()
             .filter(|shortcut| shortcut.anchor <= history.len())
