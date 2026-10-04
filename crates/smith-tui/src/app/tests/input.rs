@@ -1,6 +1,61 @@
 // input behavior tests.
 
     #[test]
+    fn slash_draft_clears_a_refused_command_before_typing_the_next_one() {
+        let mut app = app();
+        type_text(&mut app, "/agentx");
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert_eq!(app.composer.text(), "/agentx");
+        assert!(matches!(
+            &app.overlay,
+            Some(Overlay::Palette { error: Some(error), .. })
+                if error.contains("unknown command `/agentx`")
+        ));
+
+        assert_eq!(app.on_key(ctrl('u')), None);
+        assert!(app.composer.is_empty());
+        assert!(app.overlay.is_none());
+        type_text(&mut app, "/agent");
+        assert_eq!(app.composer.text(), "/agent");
+        assert!(matches!(
+            app.overlay,
+            Some(Overlay::Palette { error: None, .. })
+        ));
+    }
+
+    #[test]
+    fn slash_draft_left_right_and_delete_edit_at_character_boundaries() {
+        let mut app = app();
+        type_text(&mut app, "/agent café");
+        for (code, cursor, text) in [
+            (KeyCode::Left, 10, "/agent café"),
+            (KeyCode::Left, 9, "/agent café"),
+            (KeyCode::Right, 10, "/agent café"),
+            (KeyCode::Delete, 10, "/agent caf"),
+        ] {
+            assert_eq!(app.on_key(key(code)), None);
+            assert_eq!(app.composer.cursor(), cursor);
+            assert_eq!(app.composer.text(), text);
+            assert!(matches!(
+                app.overlay,
+                Some(Overlay::Palette { error: None, .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn slash_draft_closes_the_palette_when_delete_removes_the_slash() {
+        let mut app = app();
+        type_text(&mut app, "/agent");
+        app.on_key(key(KeyCode::Home));
+        app.on_key(key(KeyCode::Delete));
+        assert_eq!(app.composer.text(), "agent");
+        assert!(app.overlay.is_none());
+        app.on_key(key(KeyCode::Char('x')));
+        assert_eq!(app.composer.text(), "xagent");
+    }
+
+    #[test]
     fn shortcuts_open_only_on_an_empty_draft_and_leave_no_history() {
         for modifiers in [KeyModifiers::NONE, KeyModifiers::SHIFT] {
             let mut app = app();

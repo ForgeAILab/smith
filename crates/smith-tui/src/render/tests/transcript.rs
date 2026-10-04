@@ -1,5 +1,242 @@
 // transcript behavior tests.
 
+    fn live_findings_agent_snapshot(
+        resumable: bool,
+        result: Option<&str>,
+    ) -> smith_client::agent_report::AgentSnapshot {
+        use smith_client::agent_report::{
+            AgentSnapshot, AgentSummary, ChildDurability, ChildState,
+        };
+        AgentSnapshot {
+            summary: AgentSummary {
+                child: "child-1".to_owned(),
+                durability: ChildDurability::Durable,
+                state: ChildState::Idle,
+                resumable,
+                turns_used: 1,
+                max_turns: None,
+                tokens_used: 3_100,
+            },
+            session: "child-session-1".to_owned(),
+            workspace: "read only".to_owned(),
+            incompatibility: None,
+            last_result: result.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn live_findings_agent_list_names_the_command_and_labels_compact_counts() {
+        use smith_client::agent_report::AgentReport;
+        for turns in [1, 2] {
+            let mut snapshot = live_findings_agent_snapshot(false, None);
+            snapshot.summary.turns_used = turns;
+            let mut app = App::new("model", "project");
+            app.show_local_report(LocalResult::Agent(Box::new(AgentReport::List(vec![
+                snapshot.summary,
+            ]))));
+            let rows = transcript_lines(&app, Theme::new().without_color(), 100);
+            assert_eq!(rows[0].to_string(), "/agent");
+            let text = rows
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                text.contains(if turns == 1 {
+                    "1 turn · 3.1k tokens"
+                } else {
+                    "2 turns · 3.1k tokens"
+                }),
+                "{text}"
+            );
+            assert!(!text.contains("1 turns"), "{text}");
+        }
+    }
+
+    #[test]
+    fn live_findings_inspector_states_facts_once_and_renders_result_markdown() {
+        use smith_client::agent_report::exact_resume_label;
+        for resumable in [false, true] {
+            for width in [42, 100] {
+                for theme in [Theme::new(), Theme::new().without_color()] {
+                    let snapshot = live_findings_agent_snapshot(
+                        resumable,
+                        Some("# Answer\n\n**4 entries** in `src/lib.rs` are ready for review after checking the child output and preserving the inspector's indentation on every wrapped row."),
+                    );
+                    let mut app = App::new("model", "project");
+                    app.restore_child(
+                        "child-1",
+                        crate::app::ChildState::Idle,
+                        Some(
+                            "durable · session child-session-1 · 1 turns · 3100 tokens".to_owned(),
+                        ),
+                    );
+                    app.inspect_child("child-1");
+                    app.set_inspected_detail("child-1", Some(snapshot));
+                    let rows = transcript_lines(&app, theme, width);
+                    let text = rows
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let words = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                    for fact in [
+                        "session child-session-1",
+                        "durable",
+                        "idle",
+                        "1 turn",
+                        "3.1k tokens",
+                        "read only",
+                        exact_resume_label(resumable),
+                        "continue: type a follow-up below",
+                        "result",
+                        "Answer",
+                        "4 entries",
+                        "src/lib.rs",
+                    ] {
+                        assert_eq!(words.matches(fact).count(), 1, "{fact}: {text}");
+                    }
+                    assert_eq!(
+                        words.contains("exact recovery: /agent resume child-1"),
+                        resumable,
+                        "{text}"
+                    );
+                    assert!(!text.contains("no activity"), "{text}");
+                    assert!(
+                        !text.contains("**") && !text.contains('`') && !text.contains("# Answer"),
+                        "{text}"
+                    );
+                    let result_rows = text.split_once("  result\n").expect("result label").1;
+                    assert!(!result_rows.contains('●'), "{text}");
+                    assert!(
+                        result_rows
+                            .lines()
+                            .filter(|row| !row.is_empty())
+                            .all(|row| row.starts_with("  ")),
+                        "{text}"
+                    );
+                    assert!(result_rows.lines().count() > 3, "result should wrap: {text}");
+                    assert!(rows.iter().all(|row| row.width() <= usize::from(width)));
+                    assert!(
+                        rows.iter()
+                            .flat_map(|row| &row.spans)
+                            .any(|span| span.content == "4 entries"
+                                && span.style.add_modifier.contains(Modifier::BOLD)),
+                        "result emphasis should retain Markdown styling"
+                    );
+                    if theme != Theme::new().without_color() {
+                        assert!(
+                            rows.iter()
+                                .flat_map(|row| &row.spans)
+                                .any(|span| span.content == "src/lib.rs"
+                                    && span.style.fg == theme.style(crate::theme::Tone::Code).fg)
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn live_findings_inspector_reports_no_activity_only_without_activity_or_a_result() {
+        let mut app = App::new("model", "project");
+        app.restore_child("child-1", crate::app::ChildState::Idle, None);
+        app.inspect_child("child-1");
+        for result in [None, Some("An answer.")] {
+            app.set_inspected_detail("child-1", Some(live_findings_agent_snapshot(false, result)));
+            let text = transcript_lines(&app, Theme::new(), 100)
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_eq!(
+                text.matches("no activity recorded in this session").count(),
+                usize::from(result.is_none()),
+                "{text}"
+            );
+        }
+        app.set_inspected_detail("child-1", Some(live_findings_agent_snapshot(false, None)));
+        app.apply_child(
+            "child-1",
+            &event(RuntimeEvent::ExternalText {
+                text: "Recorded activity.".to_owned(),
+            }),
+        );
+        let text = transcript_lines(&app, Theme::new(), 100)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("no activity"), "{text}");
+    }
+
+    #[test]
+    fn live_findings_capability_notices_appear_only_in_expanded_detail() {
+        use agent_runtime_core::manifest::ActivatedCapability;
+        use agent_runtime_registry::{RegistryId, RegistryRevision};
+
+        let activation = event(RuntimeEvent::CapabilitiesActivated {
+            epoch: 2,
+            activation: vec![ActivatedCapability::new(
+                RegistryId::tool("read"),
+                RegistryRevision::new("read-1"),
+            )],
+        });
+        for width in [42, 100] {
+            let mut app = App::new("model", "project");
+            app.apply(&activation);
+            assert!(transcript_lines(&app, Theme::new(), width).is_empty());
+            app.transcript.push_user("before");
+            app.apply(&activation);
+            app.transcript.push_text_delta("after");
+            app.transcript.close_open();
+            let collapsed = transcript_lines(&app, Theme::new(), width);
+            assert_eq!(
+                collapsed
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>(),
+                ["> before", "", "● after"]
+            );
+            let collapsed_screen = render(&app, width, 24, Theme::new());
+            assert!(
+                !collapsed_screen.contains("activation epoch"),
+                "{collapsed_screen}"
+            );
+
+            app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+            let expanded = transcript_lines(&app, Theme::new(), width)
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_eq!(
+                expanded
+                    .matches("capabilities · activation epoch 2:")
+                    .count(),
+                2,
+                "{expanded}"
+            );
+            let expanded_screen = render(&app, width, 24, Theme::new());
+            assert!(
+                expanded_screen.contains("activation epoch 2:"),
+                "{expanded_screen}"
+            );
+
+            app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+            assert_eq!(transcript_lines(&app, Theme::new(), width), collapsed);
+            let collapsed_screen = render(&app, width, 24, Theme::new());
+            assert!(
+                !collapsed_screen.contains("activation epoch"),
+                "{collapsed_screen}"
+            );
+            assert_eq!(
+                app.status.capabilities.activation,
+                Some((2, vec!["tool:read".to_owned()]))
+            );
+        }
+    }
+
     #[test]
     fn child_inspector_and_agents_agree_with_plain_workspace_and_resume_words() {
         use agent_runtime_core::delegation::WorkspacePolicy;
@@ -672,6 +909,41 @@
 
         app.transcript.push_notice(NoticeKind::NamedMonitor("build".to_owned()), "error[E0433]");
         assert!(render(&app, 74, 24, Theme::new()).contains("monitor:build"));
+    }
+
+    #[test]
+    fn timeline_child_snapshots_render_labelled_turn_counts_once() {
+        use smith_client::agent_report::turns_label;
+        use smith_client::timeline_report::{TimelineEntry, TimelineReport, render_plain};
+
+        for (used, maximum, expected_turns) in [
+            (1, None, "1 turn"),
+            (2, None, "2 turns"),
+            (3, Some(5), "3/5 turns"),
+        ] {
+            let report = TimelineReport::Entries(vec![TimelineEntry::ChildSnapshot {
+                child: "child-1".to_owned(),
+                session: "session-1".to_owned(),
+                durability: "durable".to_owned(),
+                state: "idle".to_owned(),
+                resumable: false,
+                turns: turns_label(used, maximum),
+            }]);
+            let expected = format!(
+                "child child-1 · session session-1 · durable · idle · no exact checkpoint · {expected_turns}"
+            );
+            assert_eq!(render_plain(&report), expected);
+
+            let mut app = App::new("model", "project");
+            app.show_local_report(LocalResult::Timeline(Box::new(report)));
+            let rendered = transcript_lines(&app, Theme::new().without_color(), 240)
+                .iter()
+                .skip(1)
+                .map(|row| row.to_string().trim_start().to_owned())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_eq!(rendered, expected);
+        }
     }
 
     #[test]

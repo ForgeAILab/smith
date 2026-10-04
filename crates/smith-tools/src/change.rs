@@ -136,6 +136,7 @@ struct State {
 pub struct ChangeRecorder {
     state: Mutex<State>,
     journal: Option<PathBuf>,
+    project_root: Option<PathBuf>,
 }
 
 impl ChangeRecorder {
@@ -161,7 +162,16 @@ impl ChangeRecorder {
         Self {
             state: Mutex::new(state),
             journal,
+            project_root: None,
         }
+    }
+
+    /// Uses project-relative paths in recovery previews, retaining absolute
+    /// paths for targets outside the project. Canonical paths still own I/O.
+    pub fn with_project_root(mut self, root: impl AsRef<Path>) -> Self {
+        let root = root.as_ref();
+        self.project_root = Some(root.canonicalize().unwrap_or_else(|_| root.to_path_buf()));
+        self
     }
 
     /// Starts a root turn.
@@ -274,9 +284,7 @@ impl ChangeRecorder {
     pub fn undo_preview(&self) -> Result<String, RuntimeError> {
         let set = self.latest().ok_or_else(|| {
             if self.has_historical_records() {
-                unavailable(
-                    "historical change records are visible but cannot be automatically undone after resume",
-                )
+                unavailable("undo is not available for turns from before this session was resumed")
             } else {
                 unavailable("no Smith turn has attributable changes")
             }
@@ -292,7 +300,7 @@ impl ChangeRecorder {
                  deltas Smith cannot attribute file by file; use /diff and /revert",
             ));
         }
-        let output = undo_preview_text(&set);
+        let output = undo_preview_text(&set, self.project_root.as_deref());
         let fingerprint = hash(Some(output.as_bytes()));
         self.persist(&JournalEntry::RecoveryRequest {
             operation: "undo",
@@ -309,7 +317,11 @@ impl ChangeRecorder {
         let fingerprint = self
             .latest()
             .filter(|set| !set.undone && set.has_exact_mutations())
-            .map(|set| hash(Some(undo_preview_text(&set).as_bytes())))
+            .map(|set| {
+                hash(Some(
+                    undo_preview_text(&set, self.project_root.as_deref()).as_bytes(),
+                ))
+            })
             .unwrap_or_else(|| "unavailable".to_owned());
         self.persist(&JournalEntry::RecoveryRequest {
             operation: "undo",
@@ -339,6 +351,7 @@ impl ChangeRecorder {
                     operation: "undo",
                     turn: set.turn,
                     outcome: "conflict",
+                    fingerprint: None,
                 });
                 return Err(unavailable(format!(
                     "undo refused: `{}` changed after Smith's turn; use /diff and /revert",
@@ -368,6 +381,7 @@ impl ChangeRecorder {
                     operation: "undo",
                     turn: set.turn,
                     outcome: "rolled_back",
+                    fingerprint: None,
                 });
                 return Err(error);
             }
@@ -379,10 +393,14 @@ impl ChangeRecorder {
             latest.undone = true;
         }
         drop(state);
+        let fingerprint = hash(Some(
+            undo_preview_text(&set, self.project_root.as_deref()).as_bytes(),
+        ));
         self.persist(&JournalEntry::Recovery {
             operation: "undo",
             turn: set.turn,
             outcome: "applied",
+            fingerprint: Some(&fingerprint),
         });
         self.record_timeline(format!("undo applied · turn {}", set.turn));
         Ok(())
@@ -399,7 +417,7 @@ impl ChangeRecorder {
                  are never reapplied automatically",
             )
         })?;
-        let output = redo_preview_text(&set, direction);
+        let output = redo_preview_text(&set, direction, self.project_root.as_deref());
         let fingerprint = hash(Some(output.as_bytes()));
         self.persist(&JournalEntry::RecoveryRequest {
             operation: "redo",
@@ -416,7 +434,9 @@ impl ChangeRecorder {
         let fingerprint = self
             .latest()
             .and_then(|set| redo_direction(&set).map(|direction| (set, direction)))
-            .map(|(set, direction)| redo_preview_text(&set, direction))
+            .map(|(set, direction)| {
+                redo_preview_text(&set, direction, self.project_root.as_deref())
+            })
             .map(|preview| hash(Some(preview.as_bytes())))
             .unwrap_or_else(|| "unavailable".to_owned());
         self.persist(&JournalEntry::RecoveryRequest {
@@ -447,6 +467,7 @@ impl ChangeRecorder {
                     operation: "redo",
                     turn: set.turn,
                     outcome: "conflict",
+                    fingerprint: None,
                 });
                 self.record_timeline(format!("redo conflict · turn {}", set.turn));
                 return Err(unavailable(format!(
@@ -489,6 +510,7 @@ impl ChangeRecorder {
                     operation: "redo",
                     turn: set.turn,
                     outcome: "rolled_back",
+                    fingerprint: None,
                 });
                 self.record_timeline(format!("redo rolled back · turn {}", set.turn));
                 return Err(error);
@@ -500,10 +522,14 @@ impl ChangeRecorder {
             latest.undone = matches!(direction, RedoDirection::ReapplyRevertedChange);
         }
         drop(state);
+        let fingerprint = hash(Some(
+            redo_preview_text(&set, direction, self.project_root.as_deref()).as_bytes(),
+        ));
         self.persist(&JournalEntry::Recovery {
             operation: "redo",
             turn: set.turn,
             outcome: "applied",
+            fingerprint: Some(&fingerprint),
         });
         self.record_timeline(format!("redo applied · turn {}", set.turn));
         Ok(())
@@ -847,43 +873,173 @@ fn hash(bytes: Option<&[u8]>) -> String {
 }
 
 fn textual_reverse(edit: &EditMutation) -> String {
-    let before = edit
-        .before
-        .as_deref()
-        .map(String::from_utf8_lossy)
-        .unwrap_or_default();
-    let after = edit
-        .after
-        .as_deref()
-        .map(String::from_utf8_lossy)
-        .unwrap_or_default();
-    let mut output = String::new();
-    for line in after.lines() {
-        output.push_str(&format!("-{line}\n"));
-    }
-    for line in before.lines() {
-        output.push_str(&format!("+{line}\n"));
-    }
-    output
+    textual_patch(edit.after.as_deref(), edit.before.as_deref())
 }
 
 fn textual_forward(edit: &EditMutation) -> String {
-    let before = edit
-        .before
-        .as_deref()
-        .map(String::from_utf8_lossy)
-        .unwrap_or_default();
-    let after = edit
-        .after
-        .as_deref()
-        .map(String::from_utf8_lossy)
-        .unwrap_or_default();
-    let mut output = String::new();
-    for line in before.lines() {
-        output.push_str(&format!("-{line}\n"));
+    textual_patch(edit.before.as_deref(), edit.after.as_deref())
+}
+
+#[derive(Clone, Copy)]
+enum PatchLine<'a> {
+    Context(&'a str),
+    Removed(&'a str),
+    Added(&'a str),
+}
+
+/// Lengths of the LCS against every prefix of `new`, in linear space.
+fn lcs_lengths(old: &[&str], new: &[&str], reverse: bool) -> Vec<usize> {
+    let mut lengths = vec![0; new.len() + 1];
+    for row in 0..old.len() {
+        let left = old[if reverse { old.len() - row - 1 } else { row }];
+        let mut diagonal = 0;
+        for column in 0..new.len() {
+            let right = new[if reverse {
+                new.len() - column - 1
+            } else {
+                column
+            }];
+            let above = lengths[column + 1];
+            lengths[column + 1] = if left == right {
+                diagonal + 1
+            } else {
+                above.max(lengths[column])
+            };
+            diagonal = above;
+        }
     }
-    for line in after.lines() {
-        output.push_str(&format!("+{line}\n"));
+    lengths
+}
+
+/// A deterministic LCS walk, trimming equal ends before each Hirschberg
+/// split. Recovery images may be megabytes, so unlike the small approval
+/// differ this never allocates a quadratic table. Ties favor removals.
+fn patch_lines<'a>(old: &[&'a str], new: &[&'a str], output: &mut Vec<PatchLine<'a>>) {
+    let prefix = old.iter().zip(new).take_while(|(a, b)| a == b).count();
+    output.extend(old[..prefix].iter().map(|line| PatchLine::Context(line)));
+    let old = &old[prefix..];
+    let new = &new[prefix..];
+    let suffix = old
+        .iter()
+        .rev()
+        .zip(new.iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let tail = &old[old.len() - suffix..];
+    let old = &old[..old.len() - suffix];
+    let new = &new[..new.len() - suffix];
+
+    if old.is_empty() {
+        output.extend(new.iter().map(|line| PatchLine::Added(line)));
+    } else if new.is_empty() {
+        output.extend(old.iter().map(|line| PatchLine::Removed(line)));
+    } else if old.len() == 1 {
+        if let Some(matched) = new.iter().position(|line| line == &old[0]) {
+            output.extend(new[..matched].iter().map(|line| PatchLine::Added(line)));
+            output.push(PatchLine::Context(old[0]));
+            output.extend(new[matched + 1..].iter().map(|line| PatchLine::Added(line)));
+        } else {
+            output.push(PatchLine::Removed(old[0]));
+            output.extend(new.iter().map(|line| PatchLine::Added(line)));
+        }
+    } else {
+        let middle = old.len() / 2;
+        let split = {
+            let left = lcs_lengths(&old[..middle], new, false);
+            let right = lcs_lengths(&old[middle..], new, true);
+            let mut split = 0;
+            let mut best = 0;
+            for column in 0..=new.len() {
+                let length = left[column] + right[new.len() - column];
+                if length > best {
+                    best = length;
+                    split = column;
+                }
+            }
+            split
+        };
+        patch_lines(&old[..middle], &new[..split], output);
+        patch_lines(&old[middle..], &new[split..], output);
+    }
+    output.extend(tail.iter().map(|line| PatchLine::Context(line)));
+}
+
+/// One source of recovery patch text for preview, cancellation and apply.
+/// Keep newline terminators in the comparison so EOF-only edits are visible.
+fn textual_patch(old: Option<&[u8]>, new: Option<&[u8]>) -> String {
+    const CONTEXT: usize = 3;
+    let old_text = old.map(String::from_utf8_lossy).unwrap_or_default();
+    let new_text = new.map(String::from_utf8_lossy).unwrap_or_default();
+    let old_lines = old_text.split_inclusive('\n').collect::<Vec<_>>();
+    let new_lines = new_text.split_inclusive('\n').collect::<Vec<_>>();
+    let mut lines = Vec::new();
+    patch_lines(&old_lines, &new_lines, &mut lines);
+
+    let mut hunks: Vec<std::ops::Range<usize>> = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        if matches!(line, PatchLine::Context(_)) {
+            continue;
+        }
+        let start = index.saturating_sub(CONTEXT);
+        let end = (index + CONTEXT + 1).min(lines.len());
+        if let Some(last) = hunks.last_mut()
+            && start <= last.end
+        {
+            last.end = end;
+        } else {
+            hunks.push(start..end);
+        }
+    }
+    // Even empty-file creation/deletion is a reviewable file operation.
+    if old.is_none() || new.is_none() {
+        hunks.clear();
+        hunks.push(0..lines.len());
+    }
+
+    let mut output = String::new();
+    let (mut old_offset, mut new_offset, mut scanned) = (0, 0, 0);
+    for hunk in hunks {
+        for line in &lines[scanned..hunk.start] {
+            old_offset += usize::from(!matches!(line, PatchLine::Added(_)));
+            new_offset += usize::from(!matches!(line, PatchLine::Removed(_)));
+        }
+        let body = &lines[hunk.clone()];
+        let old_count = body
+            .iter()
+            .filter(|line| !matches!(line, PatchLine::Added(_)))
+            .count();
+        let new_count = body
+            .iter()
+            .filter(|line| !matches!(line, PatchLine::Removed(_)))
+            .count();
+        let old_start = old_offset + usize::from(old_count > 0);
+        let new_start = new_offset + usize::from(new_count > 0);
+        let old_range = if old_count == 1 {
+            old_start.to_string()
+        } else {
+            format!("{old_start},{old_count}")
+        };
+        let new_range = if new_count == 1 {
+            new_start.to_string()
+        } else {
+            format!("{new_start},{new_count}")
+        };
+        output.push_str(&format!("@@ -{old_range} +{new_range} @@\n"));
+        for line in body {
+            let (prefix, text) = match line {
+                PatchLine::Context(text) => (' ', *text),
+                PatchLine::Removed(text) => ('-', *text),
+                PatchLine::Added(text) => ('+', *text),
+            };
+            output.push(prefix);
+            output.push_str(text);
+            if !text.ends_with('\n') {
+                output.push_str("\n\\ No newline at end of file\n");
+            }
+        }
+        old_offset += old_count;
+        new_offset += new_count;
+        scanned = hunk.end;
     }
     output
 }
@@ -907,7 +1063,7 @@ fn redo_direction(set: &TurnChangeSet) -> Option<RedoDirection> {
 ///
 /// Preview and cancellation journal a fingerprint of this exact text, so both
 /// callers must render it the same way.
-fn undo_preview_text(set: &TurnChangeSet) -> String {
+fn undo_preview_text(set: &TurnChangeSet, root: Option<&Path>) -> String {
     let mut output = format!("Smith turn {}\n", set.turn);
     if let Some(note) = ambiguous_note(set) {
         output.push_str(&note);
@@ -915,8 +1071,8 @@ fn undo_preview_text(set: &TurnChangeSet) -> String {
     for edit in set.exact_mutations() {
         output.push_str(&format!(
             "\n--- current {}\n+++ restore {}\n",
-            edit.path.display(),
-            edit.path.display()
+            preview_path(&edit.path, root).display(),
+            preview_path(&edit.path, root).display()
         ));
         output.push_str(&textual_reverse(edit));
     }
@@ -940,7 +1096,12 @@ fn ambiguous_note(set: &TurnChangeSet) -> Option<String> {
     ))
 }
 
-fn redo_preview_text(set: &TurnChangeSet, direction: RedoDirection) -> String {
+fn preview_path<'a>(path: &'a Path, root: Option<&Path>) -> &'a Path {
+    root.and_then(|root| path.strip_prefix(root).ok())
+        .unwrap_or(path)
+}
+
+fn redo_preview_text(set: &TurnChangeSet, direction: RedoDirection, root: Option<&Path>) -> String {
     let mut output = format!("Smith turn {} redo\n", set.turn);
     if let Some(note) = ambiguous_note(set) {
         output.push_str(&note);
@@ -948,8 +1109,8 @@ fn redo_preview_text(set: &TurnChangeSet, direction: RedoDirection) -> String {
     for edit in set.exact_mutations() {
         output.push_str(&format!(
             "\n--- current {}\n+++ reapply {}\n",
-            edit.path.display(),
-            edit.path.display()
+            preview_path(&edit.path, root).display(),
+            preview_path(&edit.path, root).display()
         ));
         match direction {
             RedoDirection::ReapplyUndoneTurn => output.push_str(&textual_forward(edit)),
@@ -1024,6 +1185,8 @@ enum JournalEntry<'a> {
         operation: &'a str,
         turn: u64,
         outcome: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        fingerprint: Option<&'a str>,
     },
     RecoveryRequest {
         operation: &'a str,
@@ -1369,6 +1532,190 @@ mod tests {
     }
 
     #[test]
+    fn recovery_patches_show_a_four_line_addition_with_three_context_lines() {
+        let before = (1..=20).map(|n| format!("line {n}\n")).collect::<String>();
+        let after = before.replace("line 10\n", "line 10\nnew a\nnew b\nnew c\nnew d\n");
+        let mutation = exact(
+            Path::new("file.txt"),
+            Some(before.as_bytes()),
+            after.as_bytes(),
+        );
+        let ToolMutation::Exact(edit) = mutation else {
+            unreachable!()
+        };
+
+        let forward = textual_forward(&edit);
+        assert_eq!(
+            forward,
+            "@@ -8,6 +8,10 @@\n line 8\n line 9\n line 10\n+new a\n+new b\n+new c\n+new d\n line 11\n line 12\n line 13\n"
+        );
+        assert_eq!(
+            textual_reverse(&edit),
+            "@@ -8,10 +8,6 @@\n line 8\n line 9\n line 10\n-new a\n-new b\n-new c\n-new d\n line 11\n line 12\n line 13\n"
+        );
+    }
+
+    #[test]
+    fn recovery_patches_split_distant_edits_and_merge_adjacent_context() {
+        let before = (1..=30).map(|n| format!("line {n}\n")).collect::<String>();
+        let after = before
+            .replace("line 5\n", "five\n")
+            .replace("line 25\n", "twenty five\n");
+        let patch = textual_patch(Some(before.as_bytes()), Some(after.as_bytes()));
+        assert_eq!(
+            patch
+                .lines()
+                .filter(|line| line.starts_with("@@ "))
+                .collect::<Vec<_>>(),
+            ["@@ -2,7 +2,7 @@", "@@ -22,7 +22,7 @@"]
+        );
+        assert!(patch.contains("-line 5\n+five\n"), "{patch}");
+        assert!(patch.contains("-line 25\n+twenty five\n"), "{patch}");
+        assert!(!patch.contains(" line 15\n"), "{patch}");
+
+        let nearby = before
+            .replace("line 5\n", "five\n")
+            .replace("line 10\n", "ten\n");
+        let patch = textual_patch(Some(before.as_bytes()), Some(nearby.as_bytes()));
+        assert_eq!(
+            patch.lines().filter(|line| line.starts_with("@@ ")).count(),
+            1
+        );
+
+        let shifted = before
+            .replace("line 5\n", "line 5\nextra\n")
+            .replace("line 25\n", "");
+        let patch = textual_patch(Some(before.as_bytes()), Some(shifted.as_bytes()));
+        assert_eq!(
+            patch
+                .lines()
+                .filter(|line| line.starts_with("@@ "))
+                .collect::<Vec<_>>(),
+            ["@@ -3,6 +3,7 @@", "@@ -22,7 +23,6 @@"]
+        );
+    }
+
+    #[test]
+    fn recovery_patches_show_created_and_deleted_files_as_one_complete_hunk() {
+        let text = (1..=20).map(|n| format!("line {n}\n")).collect::<String>();
+        let created = textual_patch(None, Some(text.as_bytes()));
+        let deleted = textual_patch(Some(text.as_bytes()), None);
+        assert_eq!(created.lines().next(), Some("@@ -0,0 +1,20 @@"));
+        assert_eq!(deleted.lines().next(), Some("@@ -1,20 +0,0 @@"));
+        assert_eq!(
+            created.lines().filter(|line| line.starts_with('+')).count(),
+            20
+        );
+        assert_eq!(
+            deleted.lines().filter(|line| line.starts_with('-')).count(),
+            20
+        );
+        assert_eq!(textual_patch(None, Some(b"")), "@@ -0,0 +0,0 @@\n");
+    }
+
+    #[test]
+    fn recovery_patches_omit_single_line_counts_and_keep_empty_ranges() {
+        for (old, new, expected) in [
+            (Some(&b"old\n"[..]), Some(&b"new\n"[..]), "@@ -1 +1 @@"),
+            (
+                Some(&b"old\n"[..]),
+                Some(&b"new\nextra\n"[..]),
+                "@@ -1 +1,2 @@",
+            ),
+            (
+                Some(&b"old\nextra\n"[..]),
+                Some(&b"new\n"[..]),
+                "@@ -1,2 +1 @@",
+            ),
+            (None, Some(&b"new\n"[..]), "@@ -0,0 +1 @@"),
+            (Some(&b"old\n"[..]), None, "@@ -1 +0,0 @@"),
+            (Some(&b""[..]), Some(&b"new\n"[..]), "@@ -0,0 +1 @@"),
+            (Some(&b"old\n"[..]), Some(&b""[..]), "@@ -1 +0,0 @@"),
+        ] {
+            let patch = textual_patch(old, new);
+            assert_eq!(patch.lines().next(), Some(expected), "{patch}");
+        }
+    }
+
+    #[test]
+    fn recovery_patches_keep_repeated_lines_and_eof_changes_honest() {
+        assert_eq!(
+            textual_patch(Some(b"a\nx\nx\nz\n"), Some(b"a\nx\ny\nx\nz\n")),
+            "@@ -1,4 +1,5 @@\n a\n x\n+y\n x\n z\n"
+        );
+        assert_eq!(
+            textual_patch(Some(b"a\n"), Some(b"a")),
+            "@@ -1 +1 @@\n-a\n+a\n\\ No newline at end of file\n"
+        );
+        assert!(textual_patch(Some(b"same\n"), Some(b"same\n")).is_empty());
+    }
+
+    #[test]
+    fn recovery_preview_paths_are_relative_inside_the_project_and_absolute_outside() {
+        let dir = tempfile::tempdir().expect("temp");
+        let root = dir.path().canonicalize().expect("root");
+        let path = root.join("src/lib.rs");
+        let outside = root.with_file_name("other-project").join("src/lib.rs");
+        let recorder = ChangeRecorder::new(None).with_project_root(&root);
+        recorder.start_turn();
+        recorder.record(exact(&path, Some(b"before\n"), b"after\n"));
+        recorder.record(exact(&outside, Some(b"old\n"), b"new\n"));
+        let set = recorder.finish_turn().expect("turn");
+        let undo = recorder.undo_preview().expect("undo preview");
+        let redo = redo_preview_text(&set, RedoDirection::ReapplyUndoneTurn, Some(&root));
+        for preview in [&undo, &redo] {
+            assert!(preview.contains("--- current src/lib.rs\n"), "{preview}");
+            assert!(!preview.contains(&path.display().to_string()), "{preview}");
+            assert!(
+                preview.contains(&outside.display().to_string()),
+                "{preview}"
+            );
+        }
+        assert!(undo.contains("+++ restore src/lib.rs\n"));
+        assert!(redo.contains("+++ reapply src/lib.rs\n"));
+    }
+
+    #[test]
+    fn recovery_preview_cancel_and_apply_journal_the_same_text_fingerprint() {
+        let dir = tempfile::tempdir().expect("temp");
+        let root = dir.path().canonicalize().expect("root");
+        let path = root.join("file.txt");
+        let journal = root.join("changes.jsonl");
+        std::fs::write(&path, b"after\n").expect("write");
+        let recorder = ChangeRecorder::new(Some(journal.clone())).with_project_root(&root);
+        recorder.start_turn();
+        recorder.record(exact(&path, Some(b"before\n"), b"after\n"));
+        recorder.finish_turn().expect("turn");
+        let undo = recorder.undo_preview().expect("undo preview");
+        recorder.record_undo_cancelled();
+        recorder.undo_latest().expect("undo");
+        let redo = recorder.redo_preview().expect("redo preview");
+        recorder.record_redo_cancelled();
+        recorder.redo_latest().expect("redo");
+
+        let stored = std::fs::read_to_string(journal).expect("journal");
+        let events = stored
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("record"))
+            .collect::<Vec<_>>();
+        for (operation, preview) in [("undo", undo), ("redo", redo)] {
+            assert!(preview.contains("@@ -1 +1 @@"), "{preview}");
+            let fingerprint = hash(Some(preview.as_bytes()));
+            let requests = events
+                .iter()
+                .filter(|event| event["fingerprint"].is_string() && event["operation"] == operation)
+                .collect::<Vec<_>>();
+            assert_eq!(requests.len(), 3, "{requests:?}");
+            for (request, outcome) in requests.iter().zip(["previewed", "cancelled", "applied"]) {
+                assert_eq!(request["fingerprint"], fingerprint);
+                assert_eq!(request["outcome"], outcome);
+            }
+        }
+        assert_eq!(std::fs::read(path).expect("read"), b"after\n");
+        assert!(!stored.contains("before\\n") && !stored.contains("after\\n"));
+    }
+
+    #[test]
     fn concurrent_edit_refuses_without_touching_any_path() {
         let dir = tempfile::tempdir().expect("temp");
         let first = dir.path().join("first.txt");
@@ -1612,12 +1959,9 @@ mod tests {
         .expect("journal");
         let recorder = ChangeRecorder::new(Some(journal));
         assert!(recorder.has_historical_records());
-        assert!(
-            recorder
-                .undo_preview()
-                .unwrap_err()
-                .message
-                .contains("historical")
+        assert_eq!(
+            recorder.undo_preview().unwrap_err().message,
+            "undo is not available for turns from before this session was resumed"
         );
 
         recorder.start_turn();

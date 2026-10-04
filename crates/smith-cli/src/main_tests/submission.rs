@@ -3,6 +3,50 @@ use super::*;
 // submission behavior tests.
 
 #[test]
+fn live_findings_recovered_panel_detail_omits_session_and_duplicate_counts() {
+    use smith_runtime::{ChildDurability, ChildState, ChildStatus};
+
+    for resumable in [false, true] {
+        let status = ChildStatus {
+            child: ChildId::new("child-1"),
+            parent: SessionId::new("parent"),
+            session: SessionId::new("CHILD_SESSION_MUST_NOT_APPEAR"),
+            durability: ChildDurability::Durable,
+            state: ChildState::Interrupted { resumable },
+            workspace: WorkspacePolicy::ReadOnlyView,
+            turns_used: 1,
+            max_turns: u32::MAX,
+            tokens_used: 3_100,
+            last_result: None,
+            last_artifacts: Vec::new(),
+            updated_at: Timestamp::ZERO,
+            incompatibility: None,
+            last_error: None,
+        };
+        let (state, detail) = child_summary_projection(&status);
+        assert_eq!(
+            state.label(),
+            if resumable {
+                "interrupted (resumable)"
+            } else {
+                "interrupted (not resumable)"
+            }
+        );
+        assert_eq!(
+            detail,
+            if resumable {
+                "durable · resumable"
+            } else {
+                "durable"
+            }
+        );
+        assert!(
+            !detail.contains("session") && !detail.contains("turn") && !detail.contains("tokens")
+        );
+    }
+}
+
+#[test]
 fn tool_display_enrichment_runs_at_request_and_completion_boundaries() {
     let call = agent_runtime_core::ids::ToolCallId::new("call-display");
     let requested = RuntimeEvent::ToolCallRequested {

@@ -1,15 +1,16 @@
               ┌ undo last Smith turn ────────────────────────────────────────────────┐
-              │No action is selected by default. Review the complete reverse patch.  │
-              │Smith turn 1                                                          │
+              │  No action is selected by default. Review the complete reverse       │
+              │  patch.                                                              │
+              │  Smith turn 1                                                        │
               │                                                                      │
-              │--- current <PROJECT>/tracked.txt                                     │
-              │+++ restore <PROJECT>/tracked.txt                                     │
-              │-after                                                                │
-              │+before                                                               │
+              │  --- current tracked.txt                                             │
+              │  +++ restore tracked.txt                                             │
+              │  @@ -1 +1 @@                                                         │
+              │  -after                                                              │
+              │  +before                                                             │
               │                                                                      │
-              │y apply undo   n/esc cancel                                           │
+              │  y apply undo   n/esc cancel                                         │
               └──────────────────────────────────────────────────────────────────────┘
-
 
 
 

@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-04T00:00:00Z
-updated_at: 2026-10-04T06:29:09Z
+updated_at: 2026-10-04T07:46:03Z
 ---
 
 ## Why
@@ -21,6 +21,9 @@ reviewed:
 - Approval and undo boxes print absolute paths, and undo, redo, and revert
   show whole-file patches instead of the lines that changed (L6, L7).
 - Assorted wording slips (L8).
+- Found while re-checking the fixes: the approval for starting a child agent
+  lists raw fields, including `max_turns: 4294967295` and `Warning:
+  host-defined authority` (L9).
 
 ## What Changes
 
@@ -49,6 +52,12 @@ reviewed:
   approval box's inner padding; undo after resume says `undo is not
   available for turns from before this session was resumed`; `/model` writes
   every context size in the compact form.
+
+- The child-agent approval reads like the spawn row: `Start a child agent`,
+  the task, tools and workspace in the spawn row's words, limits only when
+  set, the parent session instead of an internal target id, a worded warning
+  that the child acts with the granted tools, and `don't ask again for child
+  agents this session`.
 
 ## Impact
 

@@ -7,7 +7,9 @@
 //! meaning. Callers must credential-redact canonical arguments before passing
 //! them here.
 
-use agent_runtime_core::delegation::WorkspacePolicy;
+use agent_runtime_core::delegation::{ToolViewScope, WorkspacePolicy};
+use agent_runtime_core::security::SecurityResource;
+use agent_runtime_core::tool::PreparedToolCall;
 use serde_json::{Map, Value};
 
 const MAX_VALUE_CHARS: usize = 160;
@@ -80,6 +82,22 @@ impl ToolCallDisplay {
                     if removals == 1 { "" } else { "s" },
                 ))
             }
+            "Agent" if self.target == "spawn" => {
+                let result: Value = serde_json::from_str(output).ok()?;
+                let fields = result.as_object()?;
+                // Only the reviewed successful spawn response has this shape.
+                // Errors and future result shapes keep the raw-output fallback.
+                if fields.len() != 2
+                    || fields.get("note")?.as_str()?
+                        != "the result will be delivered when the child completes"
+                {
+                    return None;
+                }
+                let child = normalize_value(fields.get("spawned")?.as_str()?)?;
+                Some(format!(
+                    "{child} started · its result arrives when it completes"
+                ))
+            }
             _ => None,
         }
     }
@@ -115,6 +133,141 @@ impl ToolCallDisplay {
         qualifiers
             .into_iter()
             .fold(self, |built, qualifier| built.with_qualifier(qualifier))
+    }
+}
+
+/// Projects the target of Smith's workspace-bound filesystem approvals.
+/// Preparation has already stored the project root as the resource's mount
+/// and the canonical relative components as its segments. Other tools retain
+/// their absolute/opaque security-resource display in the caller.
+pub fn approval_path_display(prepared: &PreparedToolCall) -> Option<String> {
+    if !matches!(prepared.tool(), "read" | "list" | "search" | "edit") {
+        return None;
+    }
+    let SecurityResource::Filesystem { segments, .. } = prepared.resource() else {
+        return None;
+    };
+    Some(if segments.is_empty() {
+        ".".to_owned()
+    } else {
+        segments.join("/")
+    })
+}
+
+/// Reviewed decision evidence for a coordinator-prepared child operation.
+/// Numeric limits stay typed so clients can use their shared count/duration
+/// formatters without reading raw material fields themselves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DelegationApprovalDisplay {
+    /// Action title, shown once at the top of the approval.
+    pub title: &'static str,
+    /// Bounded task, tool/workspace posture, or addressed child.
+    pub lines: Vec<String>,
+    /// A finite turn ceiling; the runtime's unlimited sentinel is omitted.
+    pub turn_limit: Option<u32>,
+    /// An explicitly set total token budget.
+    pub token_limit: Option<u64>,
+    /// An explicitly set lifetime in milliseconds, rather than a prompt deadline.
+    pub time_limit_ms: Option<u64>,
+    /// The consequence of granting the reviewed delegation permission.
+    pub warning: &'static str,
+}
+
+/// Projects the material the delegation coordinator prepared, not the
+/// model-facing `agent` arguments. Unknown operations/material shapes
+/// retain the caller's ordinary approval fallback.
+pub fn project_delegation_approval_display(
+    prepared: &PreparedToolCall,
+) -> Option<DelegationApprovalDisplay> {
+    if !matches!(prepared.resource(), SecurityResource::Other { kind, .. } if kind == "child-agent")
+    {
+        return None;
+    }
+    let fields = prepared.arguments().as_object()?;
+    let mut display = DelegationApprovalDisplay {
+        title: "",
+        lines: Vec::new(),
+        turn_limit: None,
+        token_limit: None,
+        time_limit_ms: None,
+        warning: "the child acts on its own with these tools",
+    };
+    match prepared.tool() {
+        "delegation.spawn" => {
+            if fields.keys().any(|key| {
+                !matches!(
+                    key.as_str(),
+                    "task" | "tools" | "workspace" | "max_turns" | "max_tokens" | "deadline_ms"
+                )
+            }) {
+                return None;
+            }
+            let tools: ToolViewScope = serde_json::from_value(fields.get("tools")?.clone()).ok()?;
+            let workspace: WorkspacePolicy =
+                serde_json::from_value(fields.get("workspace")?.clone()).ok()?;
+            // Serde accepts extra enum fields; retain the material fallback
+            // rather than silently hiding a future authority-bearing field.
+            if serde_json::to_value(&tools).ok()? != *fields.get("tools")?
+                || serde_json::to_value(&workspace).ok()? != *fields.get("workspace")?
+            {
+                return None;
+            }
+            display.title = "Start a child agent";
+            display.lines = vec![
+                approval_task(fields)?,
+                format!("tools {}", agent_tool_scope_display(&tools)?),
+                format!("workspace {}", agent_workspace_display(&workspace)?),
+            ];
+            let turns = u32::try_from(fields.get("max_turns")?.as_u64()?).ok()?;
+            if turns == 0 {
+                return None;
+            }
+            display.turn_limit = (turns != u32::MAX).then_some(turns);
+            display.token_limit = nullable_positive_integer(fields, "max_tokens")?;
+            display.time_limit_ms = nullable_positive_integer(fields, "deadline_ms")?;
+        }
+        "delegation.follow_up" | "delegation.resume" | "delegation.stop" => {
+            let follow_up = prepared.tool() == "delegation.follow_up";
+            if fields
+                .keys()
+                .any(|key| key != "child_id" && !(follow_up && key == "task"))
+            {
+                return None;
+            }
+            let child = required_target(fields, "child_id")?;
+            display.title = match prepared.tool() {
+                "delegation.follow_up" => "Send a child agent a follow-up",
+                "delegation.resume" => "Resume a child agent",
+                _ => "Stop a child agent",
+            };
+            if follow_up {
+                display.lines.push(approval_task(fields)?);
+            }
+            display.lines.push(child);
+            if prepared.tool() == "delegation.resume" {
+                display
+                    .lines
+                    .push("continue the exact saved checkpoint".to_owned());
+            }
+            if prepared.tool() == "delegation.stop" {
+                display.warning = "stops the child's current work";
+            }
+        }
+        _ => return None,
+    }
+    Some(display)
+}
+
+fn approval_task(fields: &Map<String, Value>) -> Option<String> {
+    // The coordinator clips approval task text to 200 characters plus an
+    // ellipsis. Keep that bound while removing terminal and bidi controls.
+    normalize_value_with_limit(require_string_field(fields, "task")?, 201)
+}
+
+fn nullable_positive_integer(fields: &Map<String, Value>, key: &str) -> Option<Option<u64>> {
+    match fields.get(key) {
+        None | Some(Value::Null) => Some(None),
+        Some(value) => value.as_u64().filter(|value| *value > 0).map(Some),
     }
 }
 
@@ -430,11 +583,27 @@ fn project_agent_child_action(
 /// it is matched rather than normalized: a value outside that vocabulary is
 /// ill-typed for this field, not free text to pass through.
 fn agent_tool_scope(arguments: &Map<String, Value>) -> Option<String> {
-    match arguments.get("tools") {
-        None => Some("read only".to_owned()),
-        Some(Value::String(value)) if value == "read_only" => Some("read only".to_owned()),
-        Some(Value::String(value)) if value == "all" => Some("all".to_owned()),
-        _ => None,
+    let scope = match arguments.get("tools") {
+        None => ToolViewScope::ReadOnly,
+        Some(Value::String(value)) if value == "read_only" => ToolViewScope::ReadOnly,
+        Some(Value::String(value)) if value == "all" => ToolViewScope::All,
+        _ => return None,
+    };
+    agent_tool_scope_display(&scope)
+}
+
+/// Tool-scope words shared by spawn rows and prepared child approvals.
+fn agent_tool_scope_display(scope: &ToolViewScope) -> Option<String> {
+    match scope {
+        ToolViewScope::All => Some("all".to_owned()),
+        ToolViewScope::ReadOnly => Some("read only".to_owned()),
+        ToolViewScope::Named { names } => {
+            let names = names
+                .iter()
+                .map(|name| normalize_value(name))
+                .collect::<Option<Vec<_>>>()?;
+            normalize_value(&names.join(", "))
+        }
     }
 }
 
@@ -725,7 +894,11 @@ fn optional_non_negative_integer(arguments: &Map<String, Value>, key: &str) -> O
 }
 
 fn normalize_value(raw: &str) -> Option<String> {
-    let mut normalized = String::with_capacity(raw.len().min(MAX_VALUE_CHARS));
+    normalize_value_with_limit(raw, MAX_VALUE_CHARS)
+}
+
+fn normalize_value_with_limit(raw: &str, limit: usize) -> Option<String> {
+    let mut normalized = String::with_capacity(raw.len().min(limit));
     let mut chars = 0usize;
     let mut pending_space = false;
     let mut truncated = false;
@@ -736,7 +909,7 @@ fn normalize_value(raw: &str) -> Option<String> {
             continue;
         }
         if pending_space {
-            if chars == MAX_VALUE_CHARS {
+            if chars == limit {
                 truncated = true;
                 break;
             }
@@ -744,7 +917,7 @@ fn normalize_value(raw: &str) -> Option<String> {
             chars += 1;
             pending_space = false;
         }
-        if chars == MAX_VALUE_CHARS {
+        if chars == limit {
             truncated = true;
             break;
         }
@@ -760,7 +933,7 @@ fn normalize_value(raw: &str) -> Option<String> {
             normalized.pop();
             chars = chars.saturating_sub(1);
         }
-        if chars == MAX_VALUE_CHARS {
+        if chars == limit {
             normalized.pop();
         }
         normalized.push('…');
@@ -1173,6 +1346,218 @@ mod tests {
             invocation("agent", json!({"action": "spawn", "task": "look around"})),
             "Agent(spawn · \"look around\" · tools read only · workspace read only)"
         );
+    }
+
+    fn delegation_approval(operation: &str, material: Value) -> PreparedToolCall {
+        PreparedToolCall::new(
+            agent_runtime_core::ids::ToolCallId::new("child-approval"),
+            operation,
+            material,
+            agent_runtime_core::security::PermissionSet::single(
+                agent_runtime_registry::Permission::other("agent.delegate"),
+            ),
+            SecurityResource::other("child-agent", "session-parent"),
+            agent_runtime_core::tool::ToolEffects::new(Vec::new()),
+            agent_runtime_core::tool::ToolCallDisplay::new("Authorize child-agent operation"),
+        )
+    }
+
+    fn spawn_approval_material() -> Value {
+        json!({
+            "task": "review the change",
+            "tools": {"scope": "all"},
+            "workspace": {"policy": "shared_project"},
+            "max_turns": u32::MAX,
+            "max_tokens": null,
+            "deadline_ms": null,
+        })
+    }
+
+    #[test]
+    fn child_agent_approval_projection_reuses_spawn_words_and_preserves_identity() {
+        for (scope, workspace) in [("all", "shared"), ("read_only", "read_only")] {
+            let row = project_tool_call_display("agent", &json!({
+                "action": "spawn", "task": "review the change", "tools": scope, "workspace": workspace,
+            })).expect("spawn row");
+            let mut material = spawn_approval_material();
+            material["tools"] = json!({"scope": scope});
+            material["workspace"] = json!({"policy": if workspace == "shared" {"shared_project"} else {"read_only_view"}});
+            let prepared = delegation_approval("delegation.spawn", material);
+            let before = prepared.clone();
+            let projection =
+                project_delegation_approval_display(&prepared).expect("reviewed spawn");
+            assert_eq!(projection.title, "Start a child agent");
+            assert_eq!(&projection.lines[1..3], &row.qualifiers()[1..3]);
+            assert_eq!(projection.lines[0], "review the change");
+            assert_eq!(projection.lines.len(), 3);
+            assert_eq!(
+                (
+                    projection.turn_limit,
+                    projection.token_limit,
+                    projection.time_limit_ms
+                ),
+                (None, None, None)
+            );
+            assert_eq!(
+                prepared, before,
+                "projection must not change the immutable approval"
+            );
+        }
+    }
+
+    #[test]
+    fn child_agent_approval_projection_covers_named_tools_directory_and_isolated_workspace() {
+        let mut material = spawn_approval_material();
+        material["tools"] = json!({"scope": "named", "names": ["read", "search"]});
+        for (workspace, expected) in [
+            (
+                json!({"policy": "explicit_directory", "path": "/repo/crates"}),
+                "workspace /repo/crates",
+            ),
+            (
+                json!({"policy": "isolated_worktree"}),
+                "workspace isolated worktree",
+            ),
+        ] {
+            material["workspace"] = workspace;
+            let projection = project_delegation_approval_display(&delegation_approval(
+                "delegation.spawn",
+                material.clone(),
+            ))
+            .expect("reviewed workspace");
+            assert_eq!(projection.lines[1], "tools read, search");
+            assert_eq!(projection.lines[2], expected);
+        }
+    }
+
+    #[test]
+    fn child_agent_approval_projection_bounds_and_normalizes_task() {
+        let mut material = spawn_approval_material();
+        material["task"] = json!(format!("Review\n\u{1b}\u{202e}{}", "x".repeat(300)));
+        let projection =
+            project_delegation_approval_display(&delegation_approval("delegation.spawn", material))
+                .expect("bounded approval");
+        assert!(projection.lines[0].chars().count() <= 201);
+        assert!(projection.lines[0].ends_with('…'));
+        for line in &projection.lines {
+            assert!(
+                !line.contains(['\n', '\r', '\u{1b}', '\u{202e}']),
+                "{line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn child_agent_approval_projection_falls_back_for_unknown_or_malformed_material() {
+        assert!(
+            project_delegation_approval_display(&delegation_approval(
+                "delegation.future",
+                json!({"child_id": "child-1"})
+            ))
+            .is_none()
+        );
+        for (key, value) in [
+            ("tools", json!({"scope": "future"})),
+            ("tools", json!({"scope": "all", "future_authority": true})),
+            ("workspace", json!({"policy": "future"})),
+            (
+                "workspace",
+                json!({"policy": "shared_project", "future_authority": true}),
+            ),
+            ("max_turns", json!(0)),
+            ("max_turns", json!(u64::MAX)),
+            ("max_tokens", json!("unlimited")),
+            ("deadline_ms", json!(-1)),
+            ("task", json!(null)),
+            ("future_authority", json!(true)),
+        ] {
+            let mut material = spawn_approval_material();
+            material[key] = value;
+            assert!(
+                project_delegation_approval_display(&delegation_approval(
+                    "delegation.spawn",
+                    material
+                ))
+                .is_none(),
+                "must retain the fallback for {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_spawn_result_preview_uses_words_for_the_reviewed_success_shape() {
+        let display =
+            project_tool_call_display("agent", &json!({"action": "spawn", "task": "look around"}))
+                .expect("spawn");
+        let output = r#"{"note":"the result will be delivered when the child completes","spawned":"child-1"}"#;
+        assert_eq!(
+            display.result_summary(output).as_deref(),
+            Some("child-1 started · its result arrives when it completes")
+        );
+        let list = project_tool_call_display("agent", &json!({"action": "list"})).expect("list");
+        let result =
+            project_tool_call_display("agent", &json!({"action": "result", "child_id": "child-1"}))
+                .expect("result");
+        assert!(list.result_summary(output).is_none());
+        assert!(result.result_summary(output).is_none());
+        for output in [
+            "spawn failed",
+            r#"{"error":"spawn failed"}"#,
+            r#"{"spawned":"child-1"}"#,
+            r#"{"spawned":1,"note":"the result will be delivered when the child completes"}"#,
+            r#"{"spawned":"child-1","note":"unexpected note"}"#,
+            r#"{"spawned":"child-1","note":"the result will be delivered when the child completes","error":"failed"}"#,
+        ] {
+            assert!(display.result_summary(output).is_none(), "{output}");
+        }
+    }
+
+    #[test]
+    fn agent_spawn_result_preview_bounds_and_normalizes_the_child_name() {
+        let display =
+            project_tool_call_display("agent", &json!({"action": "spawn", "task": "look around"}))
+                .expect("spawn");
+        let output = json!({"spawned": format!("child\n{}\u{1b}", "x".repeat(200)), "note": "the result will be delivered when the child completes"}).to_string();
+        let summary = display.result_summary(&output).expect("summary");
+        assert!(
+            !summary.contains('\n') && !summary.contains('\u{1b}'),
+            "{summary:?}"
+        );
+        assert!(summary.contains('…'), "{summary}");
+    }
+
+    #[tokio::test]
+    async fn approval_paths_use_the_prepared_workspace_mount_without_changing_identity() {
+        use agent_runtime_core::tool::Tool;
+        let (dir, ctx) = crate::testing::project();
+        std::fs::create_dir_all(dir.path().join("src")).expect("src");
+        std::fs::write(dir.path().join("src/lib.rs"), "before\n").expect("file");
+        let prepared = crate::EditTool
+            .prepare(
+                json!({"path": "src/lib.rs", "old_string": "before", "new_string": "after"}),
+                &crate::testing::preparation_context(&ctx),
+            )
+            .await
+            .expect("prepared");
+        let fingerprint = prepared.fingerprint().clone();
+        let canonical = prepared.arguments()["path"].as_str().expect("path");
+        assert!(std::path::Path::new(canonical).is_absolute());
+        assert_eq!(
+            approval_path_display(&prepared).as_deref(),
+            Some("src/lib.rs")
+        );
+        assert_eq!(prepared.fingerprint(), &fingerprint);
+
+        let outside = PreparedToolCall::new(
+            prepared.call_id().clone(),
+            "external_edit",
+            prepared.arguments().clone(),
+            prepared.required_permissions().clone(),
+            SecurityResource::filesystem("/outside", vec!["file.txt".to_owned()]),
+            prepared.effects().clone(),
+            prepared.display().clone(),
+        );
+        assert!(approval_path_display(&outside).is_none());
     }
 
     #[test]

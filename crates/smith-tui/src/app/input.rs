@@ -609,17 +609,7 @@ impl App {
             }
             KeyCode::Backspace => {
                 self.composer_backspace_over_attachment();
-                if self.composer.is_empty() {
-                    self.overlay = None;
-                    return None;
-                }
-                if let Some(Overlay::Palette {
-                    selected, error, ..
-                }) = &mut self.overlay
-                {
-                    *selected = 0;
-                    *error = None;
-                }
+                self.refresh_palette_after_edit();
                 None
             }
             KeyCode::Tab | KeyCode::Down => {
@@ -715,16 +705,26 @@ impl App {
                 ) =>
             {
                 self.composer.insert(character);
-                if let Some(Overlay::Palette {
-                    selected, error, ..
-                }) = &mut self.overlay
-                {
-                    *selected = 0;
-                    *error = None;
-                }
+                self.refresh_palette_after_edit();
                 None
             }
-            _ => None,
+            _ => {
+                let action = self.on_composer_key(key);
+                self.refresh_palette_after_edit();
+                action
+            }
+        }
+    }
+
+    fn refresh_palette_after_edit(&mut self) {
+        if !self.composer.text().starts_with('/') {
+            self.overlay = None;
+        } else if let Some(Overlay::Palette {
+            selected, error, ..
+        }) = &mut self.overlay
+        {
+            *selected = 0;
+            *error = None;
         }
     }
 

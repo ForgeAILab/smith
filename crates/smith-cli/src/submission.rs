@@ -451,27 +451,13 @@ pub(super) fn tool_result_text(block: &ToolResultBlock) -> String {
     }
 }
 
-/// Renders a child's turn consumption. An unbounded child shows only what it
-/// has used: the unlimited sentinel is an implementation detail, not a number
-/// anyone should read.
-pub(crate) fn turns_label(used: u32, max: u32) -> String {
-    if max == u32::MAX {
-        used.to_string()
-    } else {
-        format!("{used}/{max}")
-    }
-}
-
 pub(super) fn child_summary_projection(status: &ChildStatus) -> (ChildState, String) {
     let summary = AgentSummary::from(status);
     let state = summary.state.into();
     let durability = summary.durability.label();
-    let mut detail = format!(
-        "{durability} · session {} · {} turns · {} tokens",
-        status.session,
-        turns_label(status.turns_used, status.max_turns),
-        status.tokens_used
-    );
+    // The panel obtains coordinator counts on redraw. Session identity belongs
+    // to the inspector; retaining either here repeats or crowds out the row.
+    let mut detail = durability.to_owned();
     if summary.resumable {
         detail.push_str(" · resumable");
     }

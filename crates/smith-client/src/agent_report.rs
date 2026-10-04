@@ -10,6 +10,8 @@ use smith_runtime::{
     ChildDurability as RuntimeChildDurability, ChildState as RuntimeChildState, ChildStatus,
 };
 
+use crate::format::compact_tokens;
+
 /// Client-owned lifecycle data, independent of its display label.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChildState {
@@ -149,9 +151,9 @@ impl AgentReport {
         match self {
             Self::Parent | Self::Inspector(_) => "agent",
             Self::Resume(AgentResumeReport::RequiresIdle) => "agent",
-            Self::Resume(AgentResumeReport::Started { .. }) => "agents",
+            Self::Resume(AgentResumeReport::Started { .. }) => "agent",
             Self::Resume(_) => "error",
-            Self::Empty | Self::Unavailable | Self::Missing(_) | Self::List(_) => "agents",
+            Self::Empty | Self::Unavailable | Self::Missing(_) | Self::List(_) => "agent",
         }
     }
 }
@@ -197,6 +199,27 @@ impl AgentSummary {
             |max| format!("{}/{max}", self.turns_used),
         )
     }
+
+    /// Labelled turn usage, with an optional finite ceiling.
+    pub fn turns_label(&self) -> String {
+        turns_label(self.turns_used, self.max_turns)
+    }
+
+    /// Coordinator-owned token usage in Smith's compact form.
+    pub fn tokens_value(&self) -> String {
+        compact_tokens(self.tokens_used)
+    }
+}
+
+/// Labelled turn usage shared by child lists, inspectors, and panel rows.
+pub fn turns_label(used: u32, maximum: Option<u32>) -> String {
+    let value = maximum.map_or_else(|| used.to_string(), |max| format!("{used}/{max}"));
+    let unit = if maximum.unwrap_or(used) == 1 {
+        "turn"
+    } else {
+        "turns"
+    };
+    format!("{value} {unit}")
 }
 
 /// The extra coordinator fields shown when one child is inspected.
@@ -347,34 +370,44 @@ pub fn render_plain(report: &AgentReport) -> String {
             .iter()
             .map(|child| {
                 format!(
-                    "{} · {} · {} · {} · {} turns · {} tokens",
+                    "{} · {} · {} · {} · {} · {} tokens",
                     child.child,
                     child.durability.label(),
                     child.state.label(),
                     exact_resume_label(child.resumable),
-                    child.turns_value(),
-                    child.tokens_used,
+                    child.turns_label(),
+                    child.tokens_value(),
                 )
             })
             .collect::<Vec<_>>()
             .join("\n"),
-        AgentReport::Inspector(child) => format!(
-            "session {} · {} · {} · {} · {} tokens · {}\n{}{}\ncontinue: type a follow-up below · exact recovery: /agent resume {}\nresult: {}",
-            child.session,
-            child.summary.durability.label(),
-            child.summary.state.label(),
-            child.summary.turns_value(),
-            child.summary.tokens_used,
-            child.workspace,
-            exact_resume_label(child.summary.resumable),
-            child
-                .incompatibility
-                .as_deref()
-                .map(|reason| format!(" · incompatible: {reason}"))
-                .unwrap_or_default(),
-            child.summary.child,
-            child.last_result.as_deref().unwrap_or("not available"),
-        ),
+        AgentReport::Inspector(child) => {
+            let mut text = format!(
+                "session {} · {} · {} · {} · {} tokens · {}\n{}{}\ncontinue: type a follow-up below",
+                child.session,
+                child.summary.durability.label(),
+                child.summary.state.label(),
+                child.summary.turns_label(),
+                child.summary.tokens_value(),
+                child.workspace,
+                exact_resume_label(child.summary.resumable),
+                child
+                    .incompatibility
+                    .as_deref()
+                    .map(|reason| format!(" · incompatible: {reason}"))
+                    .unwrap_or_default(),
+            );
+            if child.summary.resumable {
+                text.push_str(&format!(
+                    "\nexact recovery: /agent resume {}",
+                    child.summary.child
+                ));
+            }
+            if let Some(result) = &child.last_result {
+                text.push_str(&format!("\nresult\n{result}"));
+            }
+            text
+        }
         AgentReport::Resume(resume) => resume.render_value(),
     }
 }
@@ -383,6 +416,83 @@ pub fn render_plain(report: &AgentReport) -> String {
 mod tests {
     use super::*;
     use agent_runtime_core::cancel::CancelReason;
+
+    fn live_findings_snapshot(resumable: bool) -> AgentSnapshot {
+        AgentSnapshot {
+            summary: AgentSummary {
+                child: "child-1".to_owned(),
+                durability: ChildDurability::Durable,
+                state: ChildState::Idle,
+                resumable,
+                turns_used: 1,
+                max_turns: None,
+                tokens_used: 3_100,
+            },
+            session: "child-session-1".to_owned(),
+            workspace: "read only".to_owned(),
+            incompatibility: None,
+            last_result: Some("**4 entries** in `src/lib.rs`.".to_owned()),
+        }
+    }
+
+    #[test]
+    fn live_findings_agent_reports_name_the_command_and_label_compact_counts() {
+        for (used, max, expected) in [
+            (0, None, "0 turns"),
+            (1, None, "1 turn"),
+            (2, None, "2 turns"),
+            (1, Some(1), "1/1 turn"),
+            (1, Some(5), "1/5 turns"),
+        ] {
+            let mut snapshot = live_findings_snapshot(false);
+            snapshot.summary.turns_used = used;
+            snapshot.summary.max_turns = max;
+            let list = AgentReport::List(vec![snapshot.summary]);
+            assert_eq!(list.title(), "agent");
+            let plain = render_plain(&list);
+            assert!(
+                plain.contains(&format!(" · {expected} · 3.1k tokens")),
+                "{plain}"
+            );
+        }
+        for report in [
+            AgentReport::Empty,
+            AgentReport::Unavailable,
+            AgentReport::Missing("child-1".to_owned()),
+            AgentReport::Resume(AgentResumeReport::Started {
+                child: "child-1".to_owned(),
+            }),
+        ] {
+            assert_eq!(report.title(), "agent");
+        }
+    }
+
+    #[test]
+    fn live_findings_plain_inspector_states_facts_once_and_gates_exact_recovery() {
+        for resumable in [false, true] {
+            let snapshot = live_findings_snapshot(resumable);
+            let text = render_plain(&AgentReport::Inspector(snapshot));
+            for fact in [
+                "session child-session-1",
+                "durable",
+                "idle",
+                "1 turn",
+                "3.1k tokens",
+                "read only",
+                exact_resume_label(resumable),
+                "continue: type a follow-up below",
+                "result\n**4 entries** in `src/lib.rs`.",
+            ] {
+                assert_eq!(text.matches(fact).count(), 1, "{fact}: {text}");
+            }
+            assert_eq!(
+                text.contains("exact recovery: /agent resume child-1"),
+                resumable,
+                "{text}"
+            );
+            assert!(!text.contains("no activity"), "{text}");
+        }
+    }
 
     #[test]
     fn child_details_use_spawn_workspace_words_and_exact_resume_words() {

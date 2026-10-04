@@ -4,7 +4,8 @@ body:
 No action is selected by default. Review the complete forward patch.
 Smith turn 1 redo
 
---- current <PROJECT>/tracked.txt
-+++ reapply <PROJECT>/tracked.txt
+--- current tracked.txt
++++ reapply tracked.txt
+@@ -1 +1 @@
 -before
 +after

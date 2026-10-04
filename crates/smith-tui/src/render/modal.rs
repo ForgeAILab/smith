@@ -14,7 +14,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block as WidgetBlock, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block as WidgetBlock, Borders, Clear, Padding, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use super::helpers::*;
@@ -214,6 +214,7 @@ pub(super) fn security_resource_text(resource: &SecurityResource) -> String {
 
 pub(super) fn authority_warning(prepared: &PreparedToolCall) -> Option<String> {
     let permissions = prepared.required_permissions();
+    let delegation = smith_tools::display::project_delegation_approval_display(prepared);
     let mut capabilities = Vec::new();
     if permissions.contains(&Permission::ProcessSpawn) {
         capabilities.push("process execution");
@@ -245,10 +246,15 @@ pub(super) fn authority_warning(prepared: &PreparedToolCall) -> Option<String> {
     if permissions.contains(&Permission::NetHttp) {
         capabilities.push("outbound network access");
     }
-    if permissions
-        .iter()
-        .any(|permission| matches!(permission, Permission::Other(_)))
+    if let Some(display) = &delegation
+        && permissions.contains(&Permission::other("agent.delegate"))
     {
+        capabilities.push(display.warning);
+    }
+    if permissions.iter().any(|permission| {
+        matches!(permission, Permission::Other(name)
+            if delegation.is_none() || name.as_ref() != "agent.delegate")
+    }) {
         capabilities.push("host-defined authority");
     }
     (!capabilities.is_empty()).then(|| format!("authority warning: {}", capabilities.join(", ")))
@@ -491,7 +497,7 @@ struct ConfirmLayout {
 
 fn confirm_layout(area: Rect, dialog: &ConfirmDialog, theme: Theme) -> ConfirmLayout {
     let width = modal_width(area);
-    let inner = width.saturating_sub(2);
+    let inner = width.saturating_sub(2 + super::approval::HORIZONTAL_PADDING * 2);
     let warning = dialog
         .warning
         .as_ref()
@@ -581,6 +587,7 @@ pub(super) fn draw_confirm(
     } = confirm_layout(area, dialog, theme);
     let block = WidgetBlock::default()
         .borders(Borders::ALL)
+        .padding(Padding::horizontal(super::approval::HORIZONTAL_PADDING))
         .border_style(theme.style(dialog.tone))
         .title(Span::styled(
             format!(" {} ", dialog.title),

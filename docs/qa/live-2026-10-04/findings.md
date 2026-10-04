@@ -37,6 +37,12 @@ delta; fixture-covered) and setup's collision preview (fixture-covered).
 | L7 | **Undo, redo, and revert patches are whole-file**: every line of the file after the turn as `-`, then every line before it as `+`, with no hunks or context. A 4-line addition reads as 22 lines; on a real file the patch is unreviewable. | `10-undo-confirm`; `crates/smith-tools/src/change.rs` `textual_reverse` / `textual_forward` |
 | L8 | **Small wording and layout slips:** `… 1 unchanged lines`; the `a` choice reads `Yes, don't ask for \`edit\` within this target, without extra permissions, this session`; the undo box has no inner padding while the approval box does; undo after resume says `historical change records are visible but cannot be automatically undone after resume`; the spawn row's result preview is raw JSON (`{"note":"the result will be delivered when the child completes","spawned":"child-1"}`); `/model` rows mix `1048576 context` with `272k context`. | `01-resume-a`, `08-undo`, `09-approval`, `10-undo-confirm`, `11-model-switch` |
 
+Found while re-checking the fixes on the 0.3.6 release build:
+
+| # | Finding | Evidence |
+| --- | --- | --- |
+| L9 | **The child-agent approval is a raw field dump.** Its title repeats as the first line; it lists `deadline_ms: null`, `max_tokens: null`, `max_turns: 4294967295` (the unlimited sentinel), `tools.scope: all`, `workspace.policy: shared_project`, the target `child-agent:session-<ID>`, `Warning: host-defined authority`, and offers `don't ask again for \`delegation.spawn\``. | `13-spawn-approval` |
+
 Open question, not a finding yet: the exit summary prices a two-model
 session as `$0.012 exact · google/gemini-3.8-flash`, naming only the last
 model.

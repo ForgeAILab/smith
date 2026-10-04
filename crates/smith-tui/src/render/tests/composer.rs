@@ -1,6 +1,66 @@
 // composer behavior tests.
 
     #[test]
+    fn live_findings_agents_panel_labels_counts_and_omits_session_identity() {
+        use crate::app::ChildCounts;
+        use agent_runtime_core::ids::ChildId;
+        use smith_runtime::client::{ChildPhase, ChildRecoveryState};
+
+        for (used, max, expected) in [
+            (1, u32::MAX, "1 turn"),
+            (2, u32::MAX, "2 turns"),
+            (1, 1, "1/1 turn"),
+            (1, 5, "1/5 turns"),
+        ] {
+            for phase in [
+                ChildPhase::Recovered {
+                    child_session: SessionId::new("CHILD_SESSION_MUST_NOT_APPEAR"),
+                    state: ChildRecoveryState::Idle,
+                    resumable: false,
+                },
+                ChildPhase::ResumeStarted {
+                    child_session: SessionId::new("CHILD_SESSION_MUST_NOT_APPEAR"),
+                },
+                ChildPhase::Interrupted {
+                    child_session: SessionId::new("CHILD_SESSION_MUST_NOT_APPEAR"),
+                    resumable: true,
+                },
+            ] {
+                let mut app = App::new("model", "project");
+                app.apply(&event(RuntimeEvent::ChildProgress {
+                    child: ChildId::new("child-1"),
+                    phase,
+                }));
+                app.set_child_counts(std::collections::BTreeMap::from([(
+                    "child-1".to_owned(),
+                    ChildCounts {
+                        turns_used: used,
+                        max_turns: max,
+                        tokens_used: 3_100,
+                    },
+                )]));
+                let screen = render(&app, 140, 24, Theme::new().without_color());
+                let row = screen
+                    .lines()
+                    .find(|row| row.contains("○ child-1"))
+                    .expect("the child panel row");
+                assert!(row.contains("durable"), "{row}");
+                assert!(
+                    row.contains(app.children["child-1"].state.label().as_ref()),
+                    "{row}"
+                );
+                assert!(row.contains(&format!("{expected} · 3.1k tokens")), "{row}");
+                assert!(
+                    !row.contains("CHILD_SESSION_MUST_NOT_APPEAR") && !row.contains("session"),
+                    "{row}"
+                );
+                assert_eq!(row.matches("tokens").count(), 1, "{row}");
+                assert!(!row.contains("1 turns"), "{row}");
+            }
+        }
+    }
+
+    #[test]
     fn composer_rules_prompt_and_placeholder_survive_without_color_at_all_widths() {
         for width in [44, 80, 100] {
             for theme in [Theme::new(), Theme::new().without_color()] {

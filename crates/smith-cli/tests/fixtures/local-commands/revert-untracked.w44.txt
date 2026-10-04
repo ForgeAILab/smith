@@ -1,16 +1,16 @@
   ┌ revert selected change ──────────────┐
-  │No action is selected by default.     │
-  │Review the complete reverse patch.    │
-  │origin: unknown                       │
+  │  No action is selected by default.   │
+  │  Review the complete reverse patch.  │
+  │  origin: unknown                     │
   │                                      │
-  │diff --git a/untracked.txt            │
-  │b/untracked.txt                       │
-  │deleted file mode 100644              │
-  │--- a/untracked.txt                   │
-  │+++ /dev/null                         │
-  │-new file                             │
+  │  diff --git a/untracked.txt          │
+  │  b/untracked.txt                     │
+  │  deleted file mode 100644            │
+  │  --- a/untracked.txt                 │
+  │  +++ /dev/null                       │
+  │  -new file                           │
   │                                      │
-  │y apply revert   n/esc cancel         │
+  │  y apply revert   n/esc cancel       │
   └──────────────────────────────────────┘
 
 

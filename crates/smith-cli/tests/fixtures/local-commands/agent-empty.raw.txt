@@ -1,4 +1,4 @@
-title: agents
+title: agent
 state: Empty
 body:
 No child agents in this session.

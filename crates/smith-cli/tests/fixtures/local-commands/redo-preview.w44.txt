@@ -1,14 +1,15 @@
   ┌ redo last exact Smith turn ──────────┐
-  │No action is selected by default.     │
-  │Review the complete forward patch.    │
-  │Smith turn 1 redo                     │
+  │  No action is selected by default.   │
+  │  Review the complete forward patch.  │
+  │  Smith turn 1 redo                   │
   │                                      │
-  │--- current <PROJECT>/tracked.txt     │
-  │+++ reapply <PROJECT>/tracked.txt     │
-  │-before                               │
-  │+after                                │
+  │  --- current tracked.txt             │
+  │  +++ reapply tracked.txt             │
+  │  @@ -1 +1 @@                         │
+  │  -before                             │
+  │  +after                              │
   │                                      │
-  │y apply redo   n/esc cancel           │
+  │  y apply redo   n/esc cancel         │
   └──────────────────────────────────────┘
 
 

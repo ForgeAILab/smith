@@ -1,16 +1,17 @@
               ┌ revert selected change ──────────────────────────────────────────────┐
-              │No action is selected by default. Review the complete reverse patch.  │
-              │origin: Smith                                                         │
+              │  No action is selected by default. Review the complete reverse       │
+              │  patch.                                                              │
+              │  origin: Smith                                                       │
               │                                                                      │
-              │diff --git b/tracked.txt a/tracked.txt                                │
-              │index 294186e..90be1f3 100644                                         │
-              │--- b/tracked.txt                                                     │
-              │+++ a/tracked.txt                                                     │
-              │@@ -1 +1 @@                                                           │
-              │-after                                                                │
-              │+before                                                               │
+              │  diff --git b/tracked.txt a/tracked.txt                              │
+              │  index 294186e..90be1f3 100644                                       │
+              │  --- b/tracked.txt                                                   │
+              │  +++ a/tracked.txt                                                   │
+              │  @@ -1 +1 @@                                                         │
+              │  -after                                                              │
+              │  +before                                                             │
               │                                                                      │
-              │y apply revert   n/esc cancel                                         │
+              │  y apply revert   n/esc cancel                                       │
               └──────────────────────────────────────────────────────────────────────┘
 
 

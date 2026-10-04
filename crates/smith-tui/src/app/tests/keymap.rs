@@ -20,6 +20,9 @@ mod keymap {
             NamedKey::Escape => KeyCode::Esc,
             NamedKey::Up => KeyCode::Up,
             NamedKey::Down => KeyCode::Down,
+            NamedKey::Left => KeyCode::Left,
+            NamedKey::Right => KeyCode::Right,
+            NamedKey::Delete => KeyCode::Delete,
             NamedKey::Home => KeyCode::Home,
             NamedKey::End => KeyCode::End,
             NamedKey::PageUp => KeyCode::PageUp,
@@ -86,6 +89,15 @@ mod keymap {
             KeyContext::AnyComposer | KeyContext::DraftLine => {
                 app.composer.replace(DRAFT);
                 app.composer.move_to_position(1, 4);
+            }
+            KeyContext::SlashDraft => {
+                app.composer.replace(format!("/{DRAFT}"));
+                app.composer.move_to_position(1, 4);
+                app.overlay = Some(Overlay::Palette {
+                    selected: 2,
+                    error: Some("previous refusal".to_owned()),
+                    restore_on_escape: None,
+                });
             }
             KeyContext::DraftFirstLine | KeyContext::DraftLastLine => {
                 app.composer.replace(HISTORY);
@@ -177,6 +189,11 @@ mod keymap {
 
     // Keep this exhaustive: adding an effect must also add its behavioral check.
     fn observed(case: &BindingCase, before: &Before, app: &App, action: Option<&Action>) -> bool {
+        let slash = if case.context == KeyContext::SlashDraft {
+            "/"
+        } else {
+            ""
+        };
         match case.effect {
             KeyEffect::SendTask => {
                 matches!(action, Some(Action::Submit { submission, target: SubmissionTarget::WholeTurn })
@@ -315,19 +332,35 @@ mod keymap {
                             },
                         )
             }
+            KeyEffect::MoveCharacter(direction) => {
+                action.is_none()
+                    && app.composer.text() == before.text
+                    && app.composer.cursor()
+                        == match direction {
+                            Direction::Previous => before.cursor - 1,
+                            Direction::Next => before.cursor + 1,
+                        }
+            }
+            KeyEffect::DeleteCharacter => {
+                let mut expected = before.text.chars().collect::<Vec<_>>();
+                expected.remove(before.cursor);
+                action.is_none()
+                    && app.composer.text() == expected.into_iter().collect::<String>()
+                    && app.composer.cursor() == before.cursor
+            }
             KeyEffect::DeleteWordLeft => {
                 action.is_none()
-                    && app.composer.text() == "first\ntwo tail\nlast"
+                    && app.composer.text() == format!("{slash}first\ntwo tail\nlast")
                     && app.composer.cursor_position() == (1, 0)
             }
             KeyEffect::DeleteToLineStart => {
                 action.is_none()
-                    && app.composer.text() == "first\ntwo tail\nlast"
+                    && app.composer.text() == format!("{slash}first\ntwo tail\nlast")
                     && app.composer.cursor_position() == (1, 0)
             }
             KeyEffect::DeleteToLineEnd => {
                 action.is_none()
-                    && app.composer.text() == "first\none \nlast"
+                    && app.composer.text() == format!("{slash}first\none \nlast")
                     && app.composer.cursor_position() == before.position
             }
             KeyEffect::EditQueuedTurn => {
@@ -420,6 +453,7 @@ mod keymap {
                     KeyContext::AnyComposer
                     | KeyContext::EmptyDraft
                     | KeyContext::DraftLine
+                    | KeyContext::SlashDraft
                     | KeyContext::DraftFirstLine
                     | KeyContext::DraftLastLine
                     | KeyContext::DelegatedAgents
@@ -467,6 +501,22 @@ mod keymap {
                         app.scroll_back,
                         app.overlay
                     );
+                    if case.context == KeyContext::SlashDraft {
+                        assert!(app.composer.text().starts_with('/'));
+                        assert!(
+                            matches!(
+                                app.overlay,
+                                Some(Overlay::Palette {
+                                    selected: 0,
+                                    error: None,
+                                    ..
+                                })
+                            ),
+                            "{} did not refresh the palette: {:?}",
+                            binding.label,
+                            app.overlay
+                        );
+                    }
                     if let Some(approval) = approval {
                         if case.effect != KeyEffect::InterruptOrClose
                             && case.effect != KeyEffect::Quit

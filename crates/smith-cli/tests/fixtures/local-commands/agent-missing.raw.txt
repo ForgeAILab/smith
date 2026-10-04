@@ -1,4 +1,4 @@
-title: agents
+title: agent
 state: Error
 body:
 No child named `missing`.

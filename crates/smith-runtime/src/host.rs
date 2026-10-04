@@ -1060,7 +1060,9 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         .as_ref()
         .map(|paths| paths.changes(&session_id))
         .transpose()?;
-    let changes = Arc::new(smith_tools::ChangeRecorder::new(change_journal));
+    let changes = Arc::new(
+        smith_tools::ChangeRecorder::new(change_journal).with_project_root(&request.project_root),
+    );
     request.runtime.change_recorder = Some(changes.clone());
     request
         .runtime

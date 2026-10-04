@@ -1,4 +1,4 @@
-title: agents
+title: agent
 state: Error
 body:
 Child delegation is unavailable for this session.

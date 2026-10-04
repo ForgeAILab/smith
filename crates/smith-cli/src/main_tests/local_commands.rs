@@ -473,7 +473,7 @@ async fn informational_commands_append_inline_without_provider_history() {
             ("status", LocalResultState::Info),
             ("diagnostics", LocalResultState::Info),
             ("context", LocalResultState::Info),
-            ("agents", LocalResultState::Empty),
+            ("agent", LocalResultState::Empty),
             ("diff", LocalResultState::Error),
             ("skills", LocalResultState::Info),
             ("diff · unstaged", LocalResultState::Info),

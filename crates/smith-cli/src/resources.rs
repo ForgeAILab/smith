@@ -87,7 +87,7 @@ fn model_limit_details(
                 model.id(),
                 format!(
                     "ctx {} · input {} · output ceiling {} · request {}",
-                    render_optional_inventory_limit(model.context_tokens.as_ref()),
+                    render_optional_context_limit(model.context_tokens.as_ref()),
                     render_optional_inventory_limit(model.max_input_tokens.as_ref()),
                     render_optional_inventory_limit(model.max_output_tokens.as_ref()),
                     render_optional_output_budget(model.output_budget.as_ref()),
@@ -332,12 +332,12 @@ fn model_entries(
                     render_picker_limit(model.max_input_tokens.as_ref(), &limit_source),
                     render_picker_limit(model.max_output_tokens.as_ref(), &limit_source),
                     render_optional_output_budget(model.output_budget.as_ref()),
-                    render_optional_inventory_limit(model.context_tokens.as_ref()),
+                    render_optional_context_limit(model.context_tokens.as_ref()),
                 ),
             )
             .description(format!(
                 "{} · {} context", model.provider,
-                model.context_tokens.as_ref().map_or_else(|| "unknown".to_owned(), |limit| token_quantity(limit.value)),
+                model.context_tokens.as_ref().map_or_else(|| "unknown".to_owned(), |limit| context_quantity(limit.value)),
             ))
             .active(model.active);
             match model.disabled_reason {
@@ -583,13 +583,13 @@ fn append_cli_agent_models(
                     "limits from built-in · input {} · output {} [built-in] · ctx {} · {id} · agent runs its own tools",
                     token_quantity(smith_config::cli_agents::CLI_AGENT_MAX_INPUT_TOKENS),
                     token_quantity(smith_config::cli_agents::CLI_AGENT_MAX_OUTPUT_TOKENS),
-                    token_quantity(smith_config::cli_agents::CLI_AGENT_CONTEXT_TOKENS),
+                    context_quantity(smith_config::cli_agents::CLI_AGENT_CONTEXT_TOKENS),
                 ),
             )
             .description(format!(
                 "{} CLI · {} context",
                 entry.description,
-                token_quantity(smith_config::cli_agents::CLI_AGENT_CONTEXT_TOKENS)
+                context_quantity(smith_config::cli_agents::CLI_AGENT_CONTEXT_TOKENS)
             ))
             .active(active);
             models.push(match installed {
@@ -838,6 +838,19 @@ pub(super) fn render_optional_inventory_limit(limit: Option<&InventoryLimit>) ->
     limit.map_or_else(|| "unknown".to_owned(), render_inventory_limit)
 }
 
+fn render_optional_context_limit(limit: Option<&InventoryLimit>) -> String {
+    limit.map_or_else(
+        || "unknown".to_owned(),
+        |limit| {
+            format!(
+                "{} [{}]",
+                context_quantity(limit.value),
+                inventory_limit_source(&limit.origin)
+            )
+        },
+    )
+}
+
 pub(super) fn render_optional_output_budget(
     budget: Option<&smith_config::output_budget::OutputBudget>,
 ) -> String {
@@ -877,6 +890,10 @@ pub(super) fn token_quantity(tokens: u32) -> String {
     } else {
         tokens.to_string()
     }
+}
+
+fn context_quantity(tokens: u32) -> String {
+    smith_client::compact_tokens(u64::from(tokens))
 }
 
 pub(super) fn short_session_id(id: &str) -> String {

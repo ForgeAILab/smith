@@ -408,7 +408,9 @@
                 "{width}×{height}:\n{resume_screen}"
             );
             assert!(
-                resume_screen.contains("exact interrupted"),
+                modal_box_rows(&resume_screen, "resume interrupted child")
+                    .join(" ")
+                    .contains("exact interrupted"),
                 "{width}×{height}:\n{resume_screen}"
             );
         }
@@ -427,7 +429,7 @@
                 "rm -rf build",
                 "process execution",
                 "y  Yes",
-                "within this target",
+                "in this target",
             ],
         );
     }
@@ -488,6 +490,33 @@
         assert!(!warning.contains("file deletion"), "{warning}");
     }
 
+    #[test]
+    fn child_agent_approval_warning_keeps_unknown_permissions_visible() {
+        for operation in ["delegation.spawn", "broker"] {
+            let prepared = PreparedToolCall::new(
+                ToolCallId::new("authority"),
+                operation,
+                child_agent_spawn_material(),
+                [
+                    Permission::other("agent.delegate"),
+                    Permission::other("future.authority"),
+                ]
+                .into_iter()
+                .collect::<PermissionSet>(),
+                SecurityResource::other("child-agent", "session-parent"),
+                ToolEffects::new(Vec::new()),
+                ToolCallDisplay::new("Authorize an operation"),
+            );
+            let warning = authority_warning(&prepared).expect("authority warning");
+            assert!(warning.contains("host-defined authority"), "{warning}");
+            assert_eq!(
+                warning.contains("the child acts on its own with these tools"),
+                operation == "delegation.spawn",
+                "{warning}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn an_edit_approval_shows_a_diff_instead_of_raw_json() {
         let app = edit_approval(
@@ -501,7 +530,7 @@
             &screen,
             &[
                 "Edit file",
-                "/repo/src/retry.rs",
+                "src/retry.rs",
                 "1 removed · 1 added",
                 "- fn retry() {",
                 "+ fn retry(limit: u32) {",
@@ -513,6 +542,89 @@
             !screen.contains("old_string"),
             "the raw arguments must give way to the diff:\n{screen}"
         );
+    }
+
+    #[tokio::test]
+    async fn an_edit_approval_names_its_relative_path_once_and_uses_the_session_choice_copy() {
+        let app = edit_approval("before\n", "after\n").await;
+        let screen = render(&app, 120, 30, Theme::new().without_color());
+        let box_rows = modal_box_rows(&screen, "Edit file");
+        let box_text = box_rows.join(" ");
+        let words = box_text
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(box_rows.first().copied(), Some("src/retry.rs"), "{screen}");
+        assert_eq!(box_text.matches("src/retry.rs").count(), 1, "{screen}");
+        assert!(!box_text.contains("at src/retry.rs"), "{screen}");
+        assert!(!screen.contains("/repo/src/retry.rs"), "{screen}");
+        assert!(
+            words.contains("Yes, and don't ask again for `edit` in this target this session"),
+            "{screen}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_edit_approval_uses_the_singular_for_one_unchanged_line() {
+        let old = "one\ntwo\nthree\nfour\n";
+        let mut app = edit_approval(old, &old.replace("four", "FOUR")).await;
+        app.work_details = true;
+        let screen = render(&app, 120, 40, Theme::new().without_color());
+        assert!(screen.contains("… 1 unchanged line"), "{screen}");
+        assert!(!screen.contains("1 unchanged lines"), "{screen}");
+    }
+
+    #[test]
+    fn recovery_confirmations_pad_warnings_body_and_controls_like_approvals() {
+        for (width, height) in [(44, 16), (74, 24), (120, 32)] {
+            let mut app = App::new("model", "project");
+            app.confirm_undo(recovery_preview("@@ -1,1 +1,1 @@\n-before\n+after"));
+            let screen = render(&app, width, height, Theme::new().without_color());
+            for fragment in ["No action", "@@ -1,1", "y apply undo"] {
+                let row = screen
+                    .lines()
+                    .find(|row| row.contains(fragment) && row.contains('│'))
+                    .expect("modal row");
+                let start = row.find('│').expect("left border") + '│'.len_utf8();
+                assert!(row[start..].starts_with("  "), "{width}×{height}: {row}");
+                let end = row.rfind('│').expect("right border");
+                assert!(row[..end].ends_with("  "), "{width}×{height}: {row}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_agent_spawn_row_shows_the_reviewed_success_as_words() {
+        for is_error in [false, true] {
+            let mut app = App::new("model", "project");
+            app.apply(&event(RuntimeEvent::ToolCallRequested {
+                call: ToolCallId::new("spawn-call"),
+                name: "agent".to_owned(),
+                argument_keys: vec!["action".to_owned(), "task".to_owned()],
+                argument_fingerprint: agent_runtime_registry::Fingerprint::of("spawn"),
+                arguments: Some(serde_json::json!({"action": "spawn", "task": "list files"})),
+            }));
+            app.set_tool_result_preview(
+                "spawn-call",
+                r#"{"note":"the result will be delivered when the child completes","spawned":"child-1"}"#,
+            );
+            app.apply(&event(RuntimeEvent::ToolCallCompleted {
+                call: ToolCallId::new("spawn-call"),
+                name: "agent".to_owned(),
+                is_error,
+            }));
+            let screen = render(&app, 120, 20, Theme::new().without_color());
+            if is_error {
+                assert!(screen.contains("\"spawned\""), "{screen}");
+                assert!(!screen.contains("child-1 started"), "{screen}");
+            } else {
+                assert!(
+                    screen.contains("child-1 started · its result arrives when it completes"),
+                    "{screen}"
+                );
+                assert!(!screen.contains("\"spawned\""), "{screen}");
+            }
+        }
     }
 
     #[tokio::test]
@@ -570,7 +682,7 @@
         let app = edit_approval("once();\n", "twice();\n").await;
         for (width, height) in [(MIN_WIDTH, MIN_HEIGHT), (44, 12), (52, 14)] {
             let screen = render(&app, width, height, Theme::new());
-            insta_like(&screen, &["Edit file", "/repo/src/retry.rs"]);
+            insta_like(&screen, &["Edit file", "src/retry.rs"]);
             assert!(
                 screen.contains("y  Yes") && screen.contains("n  No (esc)"),
                 "{width}×{height} left the approval unanswerable:\n{screen}"
@@ -714,6 +826,230 @@
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ")
+    }
+
+    fn child_agent_spawn_material() -> serde_json::Value {
+        // The coordinator's prepared material, including its unlimited sentinel.
+        serde_json::json!({
+            "task": "Make exactly one edit in src/main.rs",
+            "tools": {"scope": "all"},
+            "workspace": {"policy": "shared_project"},
+            "max_turns": u32::MAX,
+            "max_tokens": null,
+            "deadline_ms": null,
+        })
+    }
+
+    async fn child_agent_approval_prompt(
+        operation: &str,
+        material: serde_json::Value,
+    ) -> smith_host::approval::ApprovalPrompt {
+        let (policy, mut requests) = smith_host::approval::InteractiveApproval::new(1);
+        let operation = operation.to_owned();
+        tokio::spawn(async move {
+            let request = ApprovalRequest::new(
+                PreparedToolCall::new(
+                    ToolCallId::new("child-approval"),
+                    operation,
+                    material,
+                    PermissionSet::single(Permission::other("agent.delegate")),
+                    SecurityResource::other("child-agent", "session-parent"),
+                    ToolEffects::new(Vec::new()),
+                    ToolCallDisplay::new("Authorize child-agent operation"),
+                ),
+                Deadline::never(),
+                ApprovalOrigin::new(SessionId::new("session-parent"), RequestId::new("spawn")),
+            );
+            let _ = policy.decide(&request).await;
+        });
+        requests
+            .recv()
+            .await
+            .expect("a child-agent approval prompt")
+    }
+
+    #[tokio::test]
+    async fn child_agent_spawn_approval_reads_like_the_spawn_row_at_both_widths() {
+        let mut app = App::new("gpt-5.3", "/repo");
+        app.present_approval(
+            child_agent_approval_prompt("delegation.spawn", child_agent_spawn_material()).await,
+        );
+        for width in [100, 44] {
+            let screen = render(&app, width, 32, Theme::new().without_color());
+            let words = approval_screen_words(&screen);
+            insta_like(
+                &words,
+                &[
+                    "Start a child agent",
+                    "Make exactly one edit in src/main.rs",
+                    "tools all",
+                    "workspace shared",
+                    "Warning: the child acts on its own with these tools",
+                    "y Yes",
+                    "a Yes, and don't ask again for child agents this session",
+                    "n No (esc)",
+                ],
+            );
+            assert_eq!(screen.matches("Start a child agent").count(), 1, "{screen}");
+            let rows = modal_box_rows(&screen, "Start a child agent");
+            assert_eq!(rows[0], "Make exactly one edit in src/main.rs", "{screen}");
+            assert_eq!(rows[1], "tools all", "{screen}");
+            assert_eq!(rows[2], "workspace shared", "{screen}");
+            for forbidden in [
+                "null",
+                "4294967295",
+                "deadline_ms",
+                "delegation.spawn",
+                "child-agent:session-",
+                "host-defined authority",
+                "Authorize child-agent operation",
+                "task:",
+                "turn limit",
+                "token limit",
+                "time limit",
+                "raw arguments",
+                "permissions:",
+                "profile ",
+            ] {
+                assert!(
+                    !words.contains(forbidden),
+                    "{width} columns leaked `{forbidden}`:\n{screen}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn child_agent_spawn_approval_shows_only_set_limits() {
+        let mut material = child_agent_spawn_material();
+        material["max_turns"] = serde_json::json!(3);
+        material["max_tokens"] = serde_json::json!(12_400);
+        material["deadline_ms"] = serde_json::json!(120_000);
+        let mut app = App::new("gpt-5.3", "/repo");
+        app.present_approval(child_agent_approval_prompt("delegation.spawn", material).await);
+        for width in [100, 44] {
+            let screen = render(&app, width, 32, Theme::new());
+            insta_like(
+                &approval_screen_words(&screen),
+                &["workspace shared turn limit 3 token limit 12.4k time limit 2 min"],
+            );
+            for forbidden in [
+                "max_turns",
+                "max_tokens",
+                "deadline_ms",
+                "null",
+                "delegation.spawn",
+                "profile ",
+            ] {
+                assert!(!screen.contains(forbidden), "{screen}");
+            }
+        }
+
+        let mut material = child_agent_spawn_material();
+        material["max_turns"] = serde_json::json!(3);
+        let mut app = App::new("gpt-5.3", "/repo");
+        app.present_approval(child_agent_approval_prompt("delegation.spawn", material).await);
+        let screen = render(&app, 44, 32, Theme::new());
+        insta_like(&screen, &["turn limit 3"]);
+        assert!(
+            !screen.contains("token limit") && !screen.contains("time limit"),
+            "{screen}"
+        );
+    }
+
+    #[tokio::test]
+    async fn child_agent_addressed_approvals_use_reviewed_words_without_dumping_fields() {
+        for (operation, title, material, evidence, warning) in [
+            (
+                "delegation.follow_up",
+                "Send a child agent a follow-up",
+                serde_json::json!({"child_id": "child-1", "task": "Review the next change"}),
+                "Review the next change child-1",
+                "the child acts on its own with these tools",
+            ),
+            (
+                "delegation.resume",
+                "Resume a child agent",
+                serde_json::json!({"child_id": "child-1"}),
+                "child-1 continue the exact saved checkpoint",
+                "the child acts on its own with these tools",
+            ),
+            (
+                "delegation.stop",
+                "Stop a child agent",
+                serde_json::json!({"child_id": "child-1"}),
+                "child-1",
+                "stops the child's current work",
+            ),
+        ] {
+            let mut app = App::new("gpt-5.3", "/repo");
+            app.present_approval(child_agent_approval_prompt(operation, material).await);
+            for width in [100, 44] {
+                let screen = render(&app, width, 32, Theme::new());
+                let words = approval_screen_words(&screen);
+                insta_like(
+                    &words,
+                    &[
+                        title,
+                        evidence,
+                        warning,
+                        "don't ask again for child agents this session",
+                    ],
+                );
+                assert_eq!(screen.matches(title).count(), 1, "{screen}");
+                for forbidden in [
+                    "child_id:",
+                    "task:",
+                    "child-agent:session-",
+                    "host-defined authority",
+                    operation,
+                ] {
+                    assert!(!words.contains(forbidden), "{screen}");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn child_agent_approval_raw_material_remains_available_in_details() {
+        let mut app = App::new("gpt-5.3", "/repo");
+        app.present_approval(
+            child_agent_approval_prompt("delegation.spawn", child_agent_spawn_material()).await,
+        );
+        app.work_details = true;
+        let screen = render(&app, 100, 80, Theme::new());
+        insta_like(
+            &screen,
+            &[
+                "raw arguments:",
+                "\"deadline_ms\": null",
+                "\"max_turns\": 4294967295",
+                "permissions: agent.delegate",
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn child_agent_unknown_approval_keeps_the_material_and_authority_fallback() {
+        let mut app = App::new("gpt-5.3", "/repo");
+        app.present_approval(
+            child_agent_approval_prompt(
+                "delegation.future",
+                serde_json::json!({"new_scope": "review me"}),
+            )
+            .await,
+        );
+        let screen = render(&app, 100, 32, Theme::new());
+        insta_like(
+            &approval_screen_words(&screen),
+            &[
+                "Authorize child-agent operation",
+                "new_scope: review me",
+                "at child-agent:session-parent",
+                "host-defined authority",
+                "`delegation.future`",
+            ],
+        );
     }
 
     #[tokio::test]
@@ -936,7 +1272,12 @@
         let refolded = render(&app, 44, 16, Theme::new().without_color());
         insta_like(
             &refolded,
-            &["ctrl+o to expand", "ctrl+o details", "/repo/src/retry.rs"],
+            &["ctrl+o to expand", "ctrl+o details", "src/retry.rs"],
+        );
+        assert_eq!(
+            modal_box_rows(&refolded, "Edit file").first().copied(),
+            Some("src/retry.rs"),
+            "{refolded}"
         );
         assert!(!refolded.contains("old_string"), "{refolded}");
         assert!(!refolded.contains("+ let y23"), "{refolded}");
@@ -1000,8 +1341,13 @@
         };
         let screen = render(&app, 44, 16, Theme::new().without_color());
         let words = approval_screen_words(&screen);
+        assert_eq!(
+            modal_box_rows(&screen, "Edit file").first().copied(),
+            Some("src/retry.rs"),
+            "{screen}"
+        );
         for required in [
-            "/repo/src/retry.rs",
+            "src/retry.rs",
             "60 removed · 60 added",
             "- let x0 = 0;",
             "ctrl+o to expand",

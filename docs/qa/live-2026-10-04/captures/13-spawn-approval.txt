@@ -1,0 +1,20 @@
+╭ Authorize child-agent operation ─────────────────────────────────────╮
+│  Authorize child-agent operation                                     │
+│  deadline_ms: null                                                   │
+│  max_tokens: null                                                    │
+│  max_turns: 4294967295                                               │
+│  task: Make exactly one edit in src/main.rs: on line 2, change       │
+│  println!("hello"); to println!("hello, smith"); — keeping the same  │
+│  indentation and structure. Change nothing else in this file or      │
+│  anywhere in th…                                                     │
+│  tools.scope: all                                                    │
+│  workspace.policy: shared_project                                    │
+│  at child-agent:session-<ID>         │
+│  Warning: host-defined authority                                     │
+│  Do you want to proceed?                                             │
+│    y  Yes                                                            │
+│    a  Yes, and don't ask again for `delegation.spawn` in this        │
+│  target this session                                                 │
+│    n  No (esc)                                                       │
+│  ctrl+o details                                                      │
+╰──────────────────────────────────────────────────────────────────────╯

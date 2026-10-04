@@ -17,7 +17,7 @@ use super::modal::{
 use super::wrap::wrap_lines;
 
 const DIFF_PREVIEW_LINES: usize = 4;
-const HORIZONTAL_PADDING: u16 = 2;
+pub(super) const HORIZONTAL_PADDING: u16 = 2;
 
 fn line(text: impl Into<String>, theme: Theme, tone: Tone) -> Line<'static> {
     Line::from(Span::styled(text.into(), theme.style(tone)))
@@ -44,7 +44,14 @@ fn diff_lines(
                 line(format!("{} {text}", glyph::REMOVED), theme, Tone::Danger)
             }
             Change::Added(text) => line(format!("{} {text}", glyph::ADDED), theme, Tone::Success),
-            Change::Skipped(count) => line(format!("… {count} unchanged lines"), theme, Tone::Dim),
+            Change::Skipped(count) => line(
+                format!(
+                    "… {count} unchanged line{}",
+                    if *count == 1 { "" } else { "s" }
+                ),
+                theme,
+                Tone::Dim,
+            ),
         })
         .collect();
     let hidden = review.changes.len().saturating_sub(count);
@@ -103,14 +110,16 @@ fn host_shell(prepared: &PreparedToolCall) -> bool {
         && matches!(prepared.resource(), SecurityResource::Other { kind, .. } if kind == "host-shell")
 }
 
-fn session_choice(prepared: &PreparedToolCall) -> String {
-    if host_shell(prepared) {
+fn session_choice(prepared: &PreparedToolCall, child_operation: bool) -> String {
+    if child_operation {
+        "Yes, and don't ask again for child agents this session".to_owned()
+    } else if host_shell(prepared) {
         // The shell resource binds command, cwd, mode, and timeout. It is not
         // a command-prefix allowance, even when two commands share a verb.
         "Yes, don't ask again for this exact shell action this session".to_owned()
     } else {
         format!(
-            "Yes, don't ask for `{}` within this target, without extra permissions, this session",
+            "Yes, and don't ask again for `{}` in this target this session",
             prepared.tool(),
         )
     }
@@ -126,14 +135,49 @@ fn compose(
     };
     let prepared = prompt.prepared();
     let arguments = prepared.arguments();
-    let resource = security_resource_text(prepared.resource());
-    let title = match prepared.tool() {
-        "shell" => "Bash command".to_owned(),
-        "edit" => "Edit file".to_owned(),
-        _ => prepared.display().title.clone(),
+    let delegation = smith_tools::display::project_delegation_approval_display(prepared);
+    let path = smith_tools::display::approval_path_display(prepared);
+    let resource = path
+        .clone()
+        .unwrap_or_else(|| security_resource_text(prepared.resource()));
+    let title = if let Some(display) = &delegation {
+        display.title.to_owned()
+    } else {
+        match prepared.tool() {
+            "shell" => "Bash command".to_owned(),
+            "edit" => "Edit file".to_owned(),
+            _ => prepared.display().title.clone(),
+        }
     };
     let mut body = Vec::new();
-    if prepared.tool() == "shell" {
+    if let Some(display) = &delegation {
+        body.extend(
+            display
+                .lines
+                .iter()
+                .map(|text| line(text, theme, Tone::Default)),
+        );
+        if let Some(turns) = display.turn_limit {
+            body.push(line(format!("turn limit {turns}"), theme, Tone::Dim));
+        }
+        if let Some(tokens) = display.token_limit {
+            body.push(line(
+                format!("token limit {}", smith_client::compact_tokens(tokens)),
+                theme,
+                Tone::Dim,
+            ));
+        }
+        if let Some(millis) = display.time_limit_ms {
+            let duration = if millis.is_multiple_of(60_000) {
+                format!("{} min", millis / 60_000)
+            } else if millis.is_multiple_of(1_000) {
+                format!("{} s", millis / 1_000)
+            } else {
+                format!("{millis} ms")
+            };
+            body.push(line(format!("time limit {duration}"), theme, Tone::Dim));
+        }
+    } else if prepared.tool() == "shell" {
         if let Some(command) = arguments.get("command").and_then(serde_json::Value::as_str) {
             body.extend(
                 command
@@ -145,20 +189,32 @@ fn compose(
             material_lines("", arguments, theme, &mut body);
         }
     } else {
-        body.push(line(resource.clone(), theme, Tone::Danger));
+        if path.is_some() {
+            body.push(line(resource.clone(), theme, Tone::Danger));
+        }
         if let Some(review) = review {
             body.push(line(review.summary(), theme, Tone::Dim));
             body.extend(diff_lines(review, app.work_details, preview, theme));
         } else {
-            body.push(line(prepared.display().title.clone(), theme, Tone::Heading));
-            if let Some(detail) = &prepared.display().detail {
-                body.extend(
-                    detail
-                        .split('\n')
-                        .map(|text| line(text, theme, Tone::Default)),
-                );
+            if prepared.tool() == "edit" {
+                // The fixed title names the action; the first body line names
+                // the target. Keep material edit arguments without repeating it.
+                let mut material = arguments.clone();
+                if let Some(fields) = material.as_object_mut() {
+                    fields.remove("path");
+                }
+                material_lines("", &material, theme, &mut body);
+            } else {
+                body.push(line(prepared.display().title.clone(), theme, Tone::Heading));
+                if let Some(detail) = &prepared.display().detail {
+                    body.extend(
+                        detail
+                            .split('\n')
+                            .map(|text| line(text, theme, Tone::Default)),
+                    );
+                }
+                material_lines("", arguments, theme, &mut body);
             }
-            material_lines("", arguments, theme, &mut body);
         }
     }
 
@@ -171,6 +227,8 @@ fn compose(
             .title
             .strip_prefix("Run unsandboxed host shell in ");
         format!("in {}", cwd.or(shown).unwrap_or(&resource))
+    } else if delegation.is_some() || path.is_some() {
+        String::new()
     } else {
         format!("at {resource}")
     };
@@ -199,9 +257,14 @@ fn compose(
         }
     }
     if prompt.deadline().instant().is_some() {
-        place.push_str(&format!(" · deadline {}", deadline_text(prompt.deadline())));
+        if !place.is_empty() {
+            place.push_str(" · ");
+        }
+        place.push_str(&format!("deadline {}", deadline_text(prompt.deadline())));
     }
-    body.push(line(place, theme, Tone::Dim));
+    if !place.is_empty() {
+        body.push(line(place, theme, Tone::Dim));
+    }
     if host_shell(prepared) {
         body.push(line(
             "Warning: Runs outside the sandbox with your files, environment and credentials, child processes, network, and data egress.",
@@ -225,7 +288,6 @@ fn compose(
             theme,
             Tone::Dim,
         ));
-        body.push(line(format!("target: {resource}"), theme, Tone::Dim));
         let permissions = prepared
             .required_permissions()
             .iter()
@@ -255,7 +317,7 @@ fn compose(
         line("Do you want to proceed?", theme, Tone::Heading),
         line("  y  Yes", theme, Tone::Success),
         line(
-            format!("  a  {}", session_choice(prepared)),
+            format!("  a  {}", session_choice(prepared, delegation.is_some())),
             theme,
             Tone::Warning,
         ),

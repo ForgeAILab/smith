@@ -21,6 +21,12 @@ pub enum Key {
     Up,
     /// The downward arrow.
     Down,
+    /// The leftward arrow.
+    Left,
+    /// The rightward arrow.
+    Right,
+    /// The forward delete key.
+    Delete,
     /// The home key.
     Home,
     /// The end key.
@@ -106,6 +112,8 @@ pub enum KeyContext {
     AnyComposer,
     /// A cursor within a multiline draft.
     DraftLine,
+    /// A slash-prefixed draft with the command palette open.
+    SlashDraft,
     /// The cursor is on the first draft line, with earlier input in history.
     DraftFirstLine,
     /// The cursor is on the last recalled line, with a newer draft to restore.
@@ -169,6 +177,10 @@ pub enum KeyEffect {
     LineEdge(Edge),
     /// Move by one word.
     MoveWord(Direction),
+    /// Move by one character.
+    MoveCharacter(Direction),
+    /// Delete the character at the cursor.
+    DeleteCharacter,
     /// Delete the word preceding the cursor.
     DeleteWordLeft,
     /// Delete draft text before the cursor on the current line.
@@ -252,7 +264,7 @@ use Edge::{End, Start};
 use KeyContext::{
     AnyComposer, Approval, CommandPalette, Confirm, DelegatedAgents, DraftFirstLine, DraftLastLine,
     DraftLine, EmptyDraft, EmptyIdleDraft, ForegroundShell, HistorySearch, Idle, InspectedAgent,
-    PausedOutput, QueuedTurn, ShellCommand, TokenBoundary, Working,
+    PausedOutput, QueuedTurn, ShellCommand, SlashDraft, TokenBoundary, Working,
 };
 use KeyEffect::{
     BackgroundShell, BrowseAgents, BrowseHistory, CloseHistorySearch, CompleteReferences,
@@ -360,6 +372,8 @@ pub const KEY_BINDINGS: &[KeyBinding] = &[
         cases: &[
             BindingCase::key(AnyComposer, Key::Home, None, DraftEdge(Start)),
             BindingCase::key(AnyComposer, Key::End, None, DraftEdge(End)),
+            BindingCase::key(SlashDraft, Key::Home, None, DraftEdge(Start)),
+            BindingCase::key(SlashDraft, Key::End, None, DraftEdge(End)),
             BindingCase::key(
                 KeyContext::EmptyPausedOutput,
                 Key::Home,
@@ -380,6 +394,8 @@ pub const KEY_BINDINGS: &[KeyBinding] = &[
         cases: &[
             BindingCase::key(DraftLine, Key::Char('a'), Control, LineEdge(Start)),
             BindingCase::key(DraftLine, Key::Char('e'), Control, LineEdge(End)),
+            BindingCase::key(SlashDraft, Key::Char('a'), Control, LineEdge(Start)),
+            BindingCase::key(SlashDraft, Key::Char('e'), Control, LineEdge(End)),
         ],
     },
     KeyBinding {
@@ -388,37 +404,33 @@ pub const KEY_BINDINGS: &[KeyBinding] = &[
         cases: &[
             BindingCase::key(DraftLine, Key::Char('b'), Alt, MoveWord(Previous)),
             BindingCase::key(DraftLine, Key::Char('f'), Alt, MoveWord(Next)),
+            BindingCase::key(SlashDraft, Key::Char('b'), Alt, MoveWord(Previous)),
+            BindingCase::key(SlashDraft, Key::Char('f'), Alt, MoveWord(Next)),
         ],
     },
     KeyBinding {
         label: "Ctrl+W",
         description: "Delete the word to the left",
-        cases: &[BindingCase::key(
-            DraftLine,
-            Key::Char('w'),
-            Control,
-            DeleteWordLeft,
-        )],
+        cases: &[
+            BindingCase::key(DraftLine, Key::Char('w'), Control, DeleteWordLeft),
+            BindingCase::key(SlashDraft, Key::Char('w'), Control, DeleteWordLeft),
+        ],
     },
     KeyBinding {
         label: "Ctrl+U",
         description: "Delete to line start",
-        cases: &[BindingCase::key(
-            DraftLine,
-            Key::Char('u'),
-            Control,
-            DeleteToLineStart,
-        )],
+        cases: &[
+            BindingCase::key(DraftLine, Key::Char('u'), Control, DeleteToLineStart),
+            BindingCase::key(SlashDraft, Key::Char('u'), Control, DeleteToLineStart),
+        ],
     },
     KeyBinding {
         label: "Ctrl+K",
         description: "Delete to line end",
-        cases: &[BindingCase::key(
-            DraftLine,
-            Key::Char('k'),
-            Control,
-            DeleteToLineEnd,
-        )],
+        cases: &[
+            BindingCase::key(DraftLine, Key::Char('k'), Control, DeleteToLineEnd),
+            BindingCase::key(SlashDraft, Key::Char('k'), Control, DeleteToLineEnd),
+        ],
     },
     KeyBinding {
         label: "Alt+Up",

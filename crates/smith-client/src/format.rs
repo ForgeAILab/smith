@@ -1,7 +1,7 @@
 //! Shared token and currency precision for session accounting.
 
 /// Formats a token count compactly: `847`, `12.4k`, `1.2M`.
-pub(crate) fn compact_tokens(value: u64) -> String {
+pub fn compact_tokens(value: u64) -> String {
     match value {
         0..1_000 => value.to_string(),
         1_000..1_000_000 => {
@@ -53,5 +53,7 @@ mod tests {
         assert_eq!(compact_tokens(12_000), "12k");
         assert_eq!(compact_tokens(1_250_000), "1.2M");
         assert_eq!(compact_tokens(2_000_000), "2M");
+        assert_eq!(compact_tokens(1_048_576), "1M");
+        assert_eq!(compact_tokens(272_000), "272k");
     }
 }

@@ -1397,7 +1397,7 @@
     }
 
     #[test]
-    fn capability_lifecycle_becomes_bounded_status_and_a_concise_notice() {
+    fn live_findings_capability_lifecycle_keeps_status_and_the_notice_for_detail() {
         let mut app = app();
         let snapshot = fingerprint("registry");
         let view = fingerprint("view");
@@ -1459,6 +1459,16 @@
                         && text == "activation epoch 2: tool:read, tool:search"
             )
         }));
+        assert!(
+            !app.work_details,
+            "activation must not expand transcript detail"
+        );
+        app.on_key(ctrl('o'));
+        assert!(app.work_details);
+        assert_eq!(
+            app.status.capabilities.activation,
+            Some((2, vec!["tool:read".to_owned(), "tool:search".to_owned()]))
+        );
     }
 
     #[test]

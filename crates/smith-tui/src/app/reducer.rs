@@ -838,7 +838,11 @@ impl App {
                         child.to_string(),
                         ChildSummary {
                             state: state.clone(),
-                            detail: Some(detail.clone()),
+                            detail: Some(if *resumable {
+                                "durable · resumable".to_owned()
+                            } else {
+                                "durable".to_owned()
+                            }),
                             profile,
                         },
                     );
@@ -869,7 +873,7 @@ impl App {
                         child.to_string(),
                         ChildSummary {
                             state: ChildState::Resuming,
-                            detail: Some(format!("exact checkpoint · session {child_session}")),
+                            detail: Some("durable · exact checkpoint".to_owned()),
                             profile,
                         },
                     );
@@ -897,7 +901,7 @@ impl App {
                         child.to_string(),
                         ChildSummary {
                             state: state.clone(),
-                            detail: Some(detail.clone()),
+                            detail: Some("durable".to_owned()),
                             profile,
                         },
                     );

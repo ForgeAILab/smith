@@ -837,11 +837,15 @@
             live.children[child.as_str()].state.label().as_ref(),
             "interrupted (not resumable)"
         );
+        assert_eq!(
+            live.children[child.as_str()].detail.as_deref(),
+            Some("durable")
+        );
         assert!(
-            live.children[child.as_str()]
-                .detail
-                .as_deref()
-                .is_some_and(|detail| detail.contains("durable · session"))
+            child_log(&live, child.as_str())
+                .iter()
+                .any(|line| { line.contains("durable · session child-session-9") }),
+            "session identity remains available in the child's log"
         );
     }
 

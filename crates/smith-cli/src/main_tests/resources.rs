@@ -288,6 +288,16 @@ fn model_resources_show_named_context_windows_and_the_active_choice() {
     [models."local/example-model".context_windows."256k"]
     context_tokens = 262144
     max_input_tokens = 258048
+
+    [models."local/large-model"]
+    context_tokens = 1048576
+    max_input_tokens = 1000000
+    max_output_tokens = 4096
+
+    [models."local/medium-model"]
+    context_tokens = 272000
+    max_input_tokens = 268000
+    max_output_tokens = 4096
     "#,
     )
     .expect("config");
@@ -314,7 +324,28 @@ fn model_resources_show_named_context_windows_and_the_active_choice() {
         .find(|entry| entry.id == "local/example-model")
         .expect("configured model resource");
     assert!(model.active);
-    assert_eq!(model.description, "local · 131072 context");
+    assert_eq!(model.description, "local · 131k context");
+    for (id, description) in [
+        ("local/large-model", "local · 1M context"),
+        ("local/medium-model", "local · 272k context"),
+    ] {
+        let model = resources
+            .models
+            .iter()
+            .find(|entry| entry.id == id)
+            .expect("model resource");
+        assert_eq!(model.description, description);
+        let quantity = description
+            .strip_prefix("local · ")
+            .expect("provider")
+            .strip_suffix(" context")
+            .expect("context");
+        assert!(
+            model.detail.contains(&format!("ctx {quantity} [")),
+            "{}",
+            model.detail
+        );
+    }
     assert!(
         model
             .detail

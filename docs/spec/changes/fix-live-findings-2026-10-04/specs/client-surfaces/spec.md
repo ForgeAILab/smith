@@ -43,3 +43,21 @@ expanded and in `/diagnostics`, never in the default transcript.
 - **WHEN** a turn activates tools through `registry.search`
 - **THEN** the default transcript shows no `activation epoch` line
 - **AND** Ctrl+O and `/diagnostics` still show the activated capabilities
+
+### Requirement: Child-agent approvals read like the spawn row
+
+The approval for starting a child agent SHALL name the operation, the task,
+and the child's tools and workspace in the words the spawn row uses, and
+SHALL list a turn, token, or time limit only when one is set. It MUST NOT
+print null values, the unlimited sentinel, internal field names, or internal
+target or permission identifiers.
+
+#### Scenario: Approving a write-capable child
+
+- **GIVEN** the model asks to start a child with all tools in the shared
+  workspace and no limits
+- **WHEN** the approval opens
+- **THEN** it reads as starting a child agent with the task, `tools all`,
+  and `workspace shared`
+- **AND** no `null`, `4294967295`, `deadline_ms`, `delegation.spawn`, or
+  `child-agent:session-` text appears

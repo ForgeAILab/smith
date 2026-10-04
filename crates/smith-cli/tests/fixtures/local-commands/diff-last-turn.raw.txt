@@ -3,8 +3,9 @@ state: Info
 body:
 Smith turn 1
 
---- current <PROJECT>/tracked.txt
-+++ restore <PROJECT>/tracked.txt
+--- current tracked.txt
++++ restore tracked.txt
+@@ -1 +1 @@
 -after
 +before
 

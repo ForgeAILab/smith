@@ -251,6 +251,20 @@ mod tests {
             );
         }
     }
+
+    fn modal_box_rows<'a>(screen: &'a str, title: &str) -> Vec<&'a str> {
+        screen
+            .lines()
+            .skip_while(|row| !row.contains(['╭', '┌']) || !row.contains(title))
+            .skip(1)
+            .take_while(|row| !row.contains(['╰', '└']))
+            .filter_map(|row| {
+                let (_, inside) = row.split_once('│')?;
+                let (inside, _) = inside.rsplit_once('│')?;
+                Some(inside.trim())
+            })
+            .collect()
+    }
     include!("layout.rs");
     include!("transcript.rs");
     include!("markdown.rs");

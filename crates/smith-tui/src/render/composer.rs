@@ -13,6 +13,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use smith_client::agent_report::turns_label;
 use smith_runtime::client::{PlanItemProjection, PlanItemStatus};
 use unicode_width::UnicodeWidthStr;
 
@@ -854,7 +855,7 @@ fn agent_row(
     // While a child works its detail IS the activity; once it settles, the
     // lifecycle label carries the outcome and the detail explains it.
     let mut activity = match &summary.detail {
-        Some(detail) if summary.state.is_running() => detail.clone(),
+        Some(detail) if matches!(summary.state, crate::app::ChildState::Running) => detail.clone(),
         Some(detail) => format!("{} {} {detail}", summary.state.label(), glyph::SEPARATOR),
         None => summary.state.label().into_owned(),
     };
@@ -898,13 +899,12 @@ fn agent_row(
 /// what it was handed, the same unbounded-turn convention the transcript's
 /// spawn enrichment uses.
 fn render_child_counts(counts: ChildCounts) -> String {
-    let turns = if counts.max_turns == u32::MAX {
-        counts.turns_used.to_string()
-    } else {
-        format!("{}/{}", counts.turns_used, counts.max_turns)
-    };
+    let turns = turns_label(
+        counts.turns_used,
+        (counts.max_turns != u32::MAX).then_some(counts.max_turns),
+    );
     format!(
-        "{turns} turns · {} tokens",
+        "{turns} · {} tokens",
         TokenCount::reported(counts.tokens_used).render()
     )
 }

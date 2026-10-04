@@ -216,6 +216,7 @@ impl GitChanges {
                 "-R",
                 "--no-ext-diff",
                 "--binary",
+                "--unified=3",
                 "HEAD",
                 "--",
                 path,
@@ -704,6 +705,54 @@ mod tests {
         let current = std::fs::read_to_string(dir.path().join("tracked.txt")).expect("read");
         assert!(current.contains("line 2\n"), "{current}");
         assert!(current.contains("line eleven\n"), "{current}");
+    }
+
+    #[test]
+    fn revert_previews_keep_three_context_lines_and_relative_paths_regardless_of_git_config() {
+        let dir = repository();
+        let original = (1..=30)
+            .map(|line| format!("line {line}\n"))
+            .collect::<String>();
+        std::fs::write(dir.path().join("tracked.txt"), &original).expect("original");
+        git(dir.path(), &["add", "tracked.txt"]);
+        git(dir.path(), &["commit", "-qm", "long file"]);
+        git(dir.path(), &["config", "diff.context", "20"]);
+        let changed = original
+            .replace("line 5\n", "five\n")
+            .replace("line 25\n", "twenty five\n");
+        std::fs::write(dir.path().join("tracked.txt"), changed).expect("changed");
+        let changes = GitChanges::discover(dir.path()).expect("repo");
+        let preview = changes.preview_revert("tracked.txt").expect("preview");
+        assert_eq!(
+            preview
+                .content
+                .lines()
+                .filter(|line| line.starts_with("@@ "))
+                .map(|line| line.split(" @@").next().expect("header"))
+                .collect::<Vec<_>>(),
+            ["@@ -2,7 +2,7", "@@ -22,7 +22,7"]
+        );
+        assert!(
+            preview
+                .content
+                .contains("--- b/tracked.txt\n+++ a/tracked.txt\n"),
+            "{}",
+            preview.content
+        );
+        assert!(
+            !preview.content.contains(&dir.path().display().to_string()),
+            "{}",
+            preview.content
+        );
+        let repeated = changes.preview_revert("tracked.txt").expect("same preview");
+        assert_eq!(preview.fingerprint, repeated.fingerprint);
+        changes
+            .apply_revert("tracked.txt", &preview.fingerprint, None)
+            .expect("apply");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("tracked.txt")).expect("restored"),
+            original
+        );
     }
 
     #[test]

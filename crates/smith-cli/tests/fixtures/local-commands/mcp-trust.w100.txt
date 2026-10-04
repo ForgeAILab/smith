@@ -1,20 +1,20 @@
               ┌ trust this MCP server ───────────────────────────────────────────────┐
-              │Trust MCP server docs? No action is selected by default.              │
-              │Trust permits Smith to launch this server and connect its declared    │
-              │tools.                                                                │
-              │MCP server `docs` (stdio)                                             │
-              │declared at `<PROJECT>/.smith/config.toml` key `mcp.servers.docs`     │
-              │nothing has been decided about this content                           │
+              │  Trust MCP server docs? No action is selected by default.            │
+              │  Trust permits Smith to launch this server and connect its declared  │
+              │  tools.                                                              │
+              │  MCP server `docs` (stdio)                                           │
+              │  declared at `<PROJECT>/.smith/config.toml` key `mcp.servers.docs`   │
+              │  nothing has been decided about this content                         │
               │                                                                      │
-              │command  docs-mcp                                                     │
-              │args     --stdio                                                      │
-              │env      DOCS_TOKEN ← keychain:smith/docs                             │
-              │identity <FINGERPRINT:1>                                              │
+              │  command  docs-mcp                                                   │
+              │  args     --stdio                                                    │
+              │  env      DOCS_TOKEN ← keychain:smith/docs                           │
+              │  identity <FINGERPRINT:1>                                            │
               │                                                                      │
-              │Trusting this runs the command above whenever this project is opened, │
-              │until its content changes.                                            │
+              │  Trusting this runs the command above whenever this project is       │
+              │  opened, until its content changes.                                  │
               │                                                                      │
-              │y trust and connect   n/esc leave untrusted                           │
+              │  y trust and connect   n/esc leave untrusted                         │
               └──────────────────────────────────────────────────────────────────────┘
 
 

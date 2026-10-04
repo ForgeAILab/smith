@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use agent_runtime_core::ids::ChildId;
-use smith_client::agent_report::{ChildDurability, ChildState};
+use smith_client::agent_report::{ChildDurability, ChildState, turns_label};
 use smith_client::timeline_report::{
     TimelineChildEvent, TimelineEntry, TimelinePlan, TimelineReport,
 };
@@ -43,7 +43,10 @@ pub(super) async fn report(host: &HostSession) -> TimelineReport {
                     durability: ChildDurability::from(&child.durability).label().to_owned(),
                     state: ChildState::from(&child.state).label().into_owned(),
                     resumable: child.resumable(),
-                    turns: crate::submission::turns_label(child.turns_used, child.max_turns),
+                    turns: turns_label(
+                        child.turns_used,
+                        (child.max_turns != u32::MAX).then_some(child.max_turns),
+                    ),
                 }),
         );
     }

@@ -1,11 +1,11 @@
-● child-1 · completed
+● child-1
 
-  session <CHILD_SESSION_ID:1> · durable · idle · 1/1 · 0 tokens · read only
+  session <CHILD_SESSION_ID:1> · durable · idle · 1/1 turn · 0 tokens · read only
   no exact checkpoint
-  continue: type a follow-up below · exact recovery: /agent resume child-1
-  result: child done
+  continue: type a follow-up below
+  result
+  child done
 
-  no activity recorded in this session · child done
 
 
 
