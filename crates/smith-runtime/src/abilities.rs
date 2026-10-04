@@ -25,14 +25,14 @@ use crate::advisor::ADVISOR_TOOL_NAME;
 use crate::delegation::AGENT_TOOL_NAME;
 
 /// Named readiness fact required before `ask_user` may activate.
-pub const INTERACTION_READY_CONFIG: &str = "host.interaction";
+pub(crate) const INTERACTION_READY_CONFIG: &str = "host.interaction";
 
 /// Seals one deterministic ability entry for every registered tool.
 ///
 /// Smith's product tools have built-in provenance and explicit semantic
 /// affordances. Extra injected tools remain visible, but correctly carry host
 /// provenance and conservative permission-derived affordances.
-pub fn seal_tool_abilities(
+pub(crate) fn seal_tool_abilities(
     tools: impl IntoIterator<Item = (Arc<dyn Tool>, RegistrySource)>,
 ) -> Result<SealedAbilities, NameConflict> {
     let mut registry = AbilityRegistry::new();

@@ -40,11 +40,11 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 /// Component identity and state namespace.
-pub const BUDGET_NOTICE_COMPONENT: &str = "smith.budget_notice";
+pub(crate) const BUDGET_NOTICE_COMPONENT: &str = "smith.budget_notice";
 /// State wire version.
-pub const BUDGET_NOTICE_STATE_SCHEMA_VERSION: u32 = 1;
+pub(crate) const BUDGET_NOTICE_STATE_SCHEMA_VERSION: u32 = 1;
 /// Default remaining-input threshold that arms the notice.
-pub const DEFAULT_NOTICE_THRESHOLD_TOKENS: u64 = 12_000;
+pub(crate) const DEFAULT_NOTICE_THRESHOLD_TOKENS: u64 = 12_000;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct NoticeState {
@@ -55,7 +55,7 @@ struct NoticeState {
 
 /// Observes context pressure and warns the model before the boundary.
 #[derive(Clone)]
-pub struct BudgetNoticeComponent {
+pub(crate) struct BudgetNoticeComponent {
     input_budget_tokens: u64,
     threshold_tokens: u64,
 }
@@ -72,7 +72,10 @@ impl fmt::Debug for BudgetNoticeComponent {
 
 impl BudgetNoticeComponent {
     /// Creates a component measuring against a resolved input budget.
-    pub fn new(input_budget_tokens: u64, threshold_tokens: u64) -> Result<Self, RuntimeError> {
+    pub(crate) fn new(
+        input_budget_tokens: u64,
+        threshold_tokens: u64,
+    ) -> Result<Self, RuntimeError> {
         if input_budget_tokens == 0 {
             return Err(RuntimeError::config(
                 "the budget notice needs a positive input budget to measure against",

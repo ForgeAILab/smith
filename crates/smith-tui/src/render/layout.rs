@@ -1,8 +1,8 @@
 //! Surface layout and rendering implementation.
 //!
-//! Drawing is a pure function of [`App`] plus the frame area. Nothing here
-//! mutates application state. Render-only cached rows are keyed by width, so
-//! resizing refreshes their wrapping before layout or drawing uses them.
+//! [`layout()`] computes scroll bounds and [`draw()`] renders without changing
+//! application state. [`SurfaceLayout::apply`] and [`draw_synced()`] apply those
+//! bounds to `App`. Render-only cached rows refresh their wrapping by width.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};

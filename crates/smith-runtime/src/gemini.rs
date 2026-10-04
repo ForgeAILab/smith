@@ -34,7 +34,7 @@ const CONTINUATION: &str =
     "Continue this turn from the attributed instruction at the end of your context.";
 
 /// Wraps a native Gemini provider so no request ends on a model turn.
-pub fn accept_internal_turns(provider: Arc<dyn Provider>) -> Arc<dyn Provider> {
+pub(crate) fn accept_internal_turns(provider: Arc<dyn Provider>) -> Arc<dyn Provider> {
     Arc::new(GeminiContinuationProvider { inner: provider })
 }
 

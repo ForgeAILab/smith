@@ -1,6 +1,61 @@
 // reducer behavior tests.
 
     #[test]
+    fn budget_failures_are_retained_as_transcript_notices() {
+        let mut app = app();
+        for (category, name) in [
+            (smith_runtime::client::BudgetCategory::Input, "input"),
+            (smith_runtime::client::BudgetCategory::Context, "context"),
+            (smith_runtime::client::BudgetCategory::Output, "output"),
+        ] {
+            app.apply(&event(RuntimeEvent::BudgetFailure {
+                category,
+                requested_tokens: 130_000,
+                limit_tokens: 124_000,
+            }));
+            assert!(matches!(
+                app.transcript.blocks().last(),
+                Some(Block::Notice { kind: NoticeKind::Budget, text })
+                    if text == &format!("{name} budget exceeded · 130k requested / 124k allowed")
+            ));
+        }
+        assert_eq!(app.transcript.blocks().len(), 3);
+        assert_eq!(NoticeKind::Budget.label(), "budget");
+        assert_eq!(
+            NoticeKind::Budget.persistence(),
+            smith_client::NoticePersistence::Transcript,
+        );
+    }
+
+    #[test]
+    fn rate_limit_observations_leave_the_transcript_and_status_unchanged() {
+        let mut app = app();
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        app.status.account = Some(crate::status::AccountStatus {
+            label: "keychain:smith/work".into(),
+            used_percent: Some(40.0),
+        });
+        app.transcript.push_user("keep this conversation");
+        let blocks = app.transcript.blocks().to_vec();
+        let activity = app.status.activity;
+        let account = app.status.account.clone();
+        let mut snapshot = agent_runtime_core::provider::RateLimitSnapshot::new();
+        snapshot.push(agent_runtime_core::provider::RateLimitWindow {
+            used_percent: Some(82.0),
+            ..agent_runtime_core::provider::RateLimitWindow::new("requests")
+        });
+
+        app.apply(&event(RuntimeEvent::RateLimitObservation {
+            attempt: AttemptId::new("attempt"),
+            snapshot,
+        }));
+
+        assert_eq!(app.transcript.blocks(), blocks);
+        assert_eq!(app.status.activity, activity);
+        assert_eq!(app.status.account, account);
+    }
+
+    #[test]
     fn reset_live_turn_clears_progress_and_keeps_the_conversation_and_draft() {
         let mut app = app();
         app.composer.replace("keep this draft");

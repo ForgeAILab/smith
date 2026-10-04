@@ -2,6 +2,10 @@
 
 use std::borrow::Cow;
 
+use smith_runtime::client::BudgetCategory;
+
+use crate::format::compact_tokens;
+
 /// Whether a notice records an event or only answers a keypress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoticePersistence {
@@ -45,6 +49,8 @@ pub enum NoticeKind {
     Provider,
     /// Transcript notice labelled `limit`.
     Limit,
+    /// Transcript notice labelled `budget`.
+    Budget,
     /// Transcript notice labelled `downgrade`.
     Downgrade,
     /// Transcript notice labelled `changes`.
@@ -137,6 +143,7 @@ impl NoticeKind {
             Self::Questionnaire => "questionnaire",
             Self::Provider => "provider",
             Self::Limit => "limit",
+            Self::Budget => "budget",
             Self::Downgrade => "downgrade",
             Self::Changes => "changes",
             Self::Approval => "approval",
@@ -193,4 +200,22 @@ pub struct Notice {
     pub kind: NoticeKind,
     /// Existing notice wording.
     pub text: String,
+}
+
+/// Which token budget failed, with the requested and allowed counts.
+pub fn budget_failure_text(
+    category: BudgetCategory,
+    requested_tokens: u32,
+    limit_tokens: u32,
+) -> String {
+    let category = match category {
+        BudgetCategory::Input => "input",
+        BudgetCategory::Context => "context",
+        BudgetCategory::Output => "output",
+    };
+    format!(
+        "{category} budget exceeded · {} requested / {} allowed",
+        compact_tokens(u64::from(requested_tokens)),
+        compact_tokens(u64::from(limit_tokens)),
+    )
 }

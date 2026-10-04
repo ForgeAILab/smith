@@ -48,16 +48,17 @@ use agent_runtime_core::provider::ModelId;
 use smith_config::resolve::{ResolvedModelLimits, Source};
 
 /// The source name Smith's resolved configuration contributes under.
-pub const CONFIGURED_SOURCE: &str = "smith-config";
+pub(crate) const CONFIGURED_SOURCE: &str = "smith-config";
 
 /// The source name a provider adapter's own metadata contributes under.
-pub const PROVIDER_LOCAL_SOURCE: &str = "smith-provider-local";
+pub(crate) const PROVIDER_LOCAL_SOURCE: &str = "smith-provider-local";
 
 /// The source name Smith's embedded known-good metadata contributes under.
-pub const EMBEDDED_SOURCE: &str = "smith-embedded";
+pub(crate) const EMBEDDED_SOURCE: &str = "smith-embedded";
 
 /// The source name a host-validated cache of remote metadata contributes under.
-pub const CACHED_REMOTE_SOURCE: &str = "smith-cached-remote";
+#[cfg(test)]
+pub(crate) const CACHED_REMOTE_SOURCE: &str = "smith-cached-remote";
 
 /// The fields a [`LimitContribution`] is recorded for.
 ///
@@ -75,7 +76,7 @@ const LIMIT_FIELDS: [ProfileField; 3] = [
 /// Smith configuration works at: `[models."<provider>/<model>"]` limits say
 /// nothing about another provider serving a same-named model.
 #[derive(Debug, Clone)]
-pub struct CatalogLayers {
+pub(crate) struct CatalogLayers {
     provider: String,
     model: ModelId,
     sources: Vec<Arc<dyn ModelCatalogSource>>,
@@ -84,7 +85,7 @@ pub struct CatalogLayers {
 
 impl CatalogLayers {
     /// Empty layers for `model` as served by `provider`.
-    pub fn new(provider: impl Into<String>, model: ModelId) -> Self {
+    pub(crate) fn new(provider: impl Into<String>, model: ModelId) -> Self {
         Self {
             provider: provider.into(),
             model,
@@ -101,7 +102,7 @@ impl CatalogLayers {
     /// no source at all: an empty record would make the model *known* but
     /// unusable, replacing an "unknown model" diagnostic with a vaguer one.
     #[must_use]
-    pub fn with_configured_limits(mut self, limits: &ResolvedModelLimits) -> Self {
+    pub(crate) fn with_configured_limits(mut self, limits: &ResolvedModelLimits) -> Self {
         let mut record = ModelRecord::new();
         for (field, sourced) in [
             (ProfileField::ContextTokens, limits.context_tokens.as_ref()),
@@ -130,13 +131,13 @@ impl CatalogLayers {
     /// Adds a provider-local layer: adapter introspection, or metadata the
     /// provider itself publishes locally.
     #[must_use]
-    pub fn with_provider_local(self, record: ModelRecord) -> Self {
+    pub(crate) fn with_provider_local(self, record: ModelRecord) -> Self {
         self.push(PROVIDER_LOCAL_SOURCE, CatalogSource::ProviderLocal, record)
     }
 
     /// Adds known-good metadata embedded in a Smith build.
     #[must_use]
-    pub fn with_embedded(self, record: ModelRecord) -> Self {
+    pub(crate) fn with_embedded(self, record: ModelRecord) -> Self {
         self.push(EMBEDDED_SOURCE, CatalogSource::Embedded, record)
     }
 
@@ -145,21 +146,23 @@ impl CatalogLayers {
     /// Smith ships no fetcher for this layer. The seam exists so that adding
     /// one later means adding a caller here rather than a second precedence
     /// order somewhere else.
+    #[cfg(test)]
     #[must_use]
-    pub fn with_cached_remote(self, record: ModelRecord) -> Self {
+    pub(crate) fn with_cached_remote(self, record: ModelRecord) -> Self {
         self.push(CACHED_REMOTE_SOURCE, CatalogSource::CachedRemote, record)
     }
 
     /// Adds a prepared source, for a layer Smith does not build itself.
+    #[cfg(test)]
     #[must_use]
-    pub fn with_source(mut self, source: Arc<dyn ModelCatalogSource>) -> Self {
+    pub(crate) fn with_source(mut self, source: Arc<dyn ModelCatalogSource>) -> Self {
         self.sources.push(source);
         self
     }
 
     /// Adds many prepared sources.
     #[must_use]
-    pub fn with_sources(
+    pub(crate) fn with_sources(
         mut self,
         sources: impl IntoIterator<Item = Arc<dyn ModelCatalogSource>>,
     ) -> Self {
@@ -167,29 +170,15 @@ impl CatalogLayers {
         self
     }
 
-    /// The provider these layers describe.
-    pub fn provider(&self) -> &str {
-        &self.provider
-    }
-
-    /// The model these layers describe.
-    pub fn model(&self) -> &ModelId {
-        &self.model
-    }
-
-    /// How many sources are registered.
-    pub fn len(&self) -> usize {
-        self.sources.len()
-    }
-
     /// Whether no source is registered, in which case resolution fails with an
     /// unknown-model diagnostic.
-    pub fn is_empty(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
         self.sources.is_empty()
     }
 
     /// The shared catalog these layers form.
-    pub fn catalog(&self) -> LayeredModelCatalog {
+    pub(crate) fn catalog(&self) -> LayeredModelCatalog {
         self.sources
             .iter()
             .fold(LayeredModelCatalog::new(), |catalog, source| {
@@ -198,7 +187,7 @@ impl CatalogLayers {
     }
 
     /// Resolves the profile, or explains which limit no layer supplied.
-    pub fn resolve(&self) -> Result<ProfileResolution, ModelProfileError> {
+    pub(crate) fn resolve(&self) -> Result<ProfileResolution, ModelProfileError> {
         let profile = self.catalog().resolve(&self.provider, &self.model)?;
         Ok(ProfileResolution {
             profile,

@@ -2,6 +2,68 @@
 
 use super::*;
 
+#[test]
+fn budget_and_rate_limit_events_have_typed_stream_payloads() {
+    use agent_runtime_core::provider::{RateLimitSnapshot, RateLimitWindow};
+    use smith_runtime::client::{BudgetCategory, SmithEvent, SmithEventKind};
+
+    let mut snapshot = RateLimitSnapshot::new();
+    snapshot.push(RateLimitWindow {
+        used_percent: Some(82.0),
+        remaining: Some(0),
+        ..RateLimitWindow::new("requests")
+    });
+    for (payload, expected) in [
+        (
+            SmithEventKind::BudgetFailure {
+                category: BudgetCategory::Context,
+                requested_tokens: 130_000,
+                limit_tokens: 124_000,
+            },
+            serde_json::json!({
+                "event": "budget_failure",
+                "category": "context",
+                "requested_tokens": 130_000,
+                "limit_tokens": 124_000,
+            }),
+        ),
+        (
+            SmithEventKind::RateLimitObservation {
+                attempt: AttemptId::new("attempt"),
+                snapshot: snapshot.clone(),
+            },
+            serde_json::json!({
+                "event": "rate_limit_observation",
+                "attempt": "attempt",
+                "snapshot": snapshot,
+            }),
+        ),
+    ] {
+        let event = SmithEvent::new(
+            1,
+            EventId::new("event"),
+            SessionId::new("session"),
+            Some(TurnId::new("turn")),
+            Timestamp::ZERO,
+            payload,
+        );
+        let mut stdout = Vec::new();
+        write_json(
+            &mut stdout,
+            &StreamEnvelope {
+                schema_version: OUTPUT_SCHEMA_VERSION,
+                kind: "runtime_event",
+                event: &event,
+            },
+        )
+        .expect("stream JSON");
+        let line: serde_json::Value = serde_json::from_slice(&stdout).expect("stream record");
+        assert_eq!(line["type"], "runtime_event");
+        assert_eq!(line["event"]["payload"], expected);
+        assert_ne!(line["event"]["payload"]["event"], "unknown");
+    }
+}
+
 /// A turn stopped by the provider-attempt budget reports the last
 /// attempt's error: the limit terminal carries no cause of its own, and
 /// without this the result would claim a causeless limit.

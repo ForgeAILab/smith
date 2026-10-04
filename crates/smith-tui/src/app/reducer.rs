@@ -1033,6 +1033,8 @@ impl App {
                 self.status.activity = Activity::Ended;
                 self.pending_input = PendingInputState::default();
             }
+            // Account meters read the pool, fed by PooledProvider::observe.
+            RuntimeEvent::RateLimitObservation { .. } => {}
             // Planning-lifecycle events carry diagnostics the basic TUI does not
             // surface yet; they are recorded by the session log regardless.
             _ => {}

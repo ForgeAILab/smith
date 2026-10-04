@@ -23,7 +23,7 @@ const MAX_RESPONSE_JSON_BYTES: usize = 33 * 1024 * 1024;
 const MINIMUM_CREDENTIAL_VALIDITY_MS: u64 = 30_000;
 
 /// Images API adapter sharing the active provider credential lease.
-pub struct ImagesApiBackend {
+pub(crate) struct ImagesApiBackend {
     endpoint: String,
     transport: std::sync::Arc<dyn HttpTransport>,
     target: ProviderCredentialTarget,
@@ -44,7 +44,7 @@ impl fmt::Debug for ImagesApiBackend {
 
 impl ImagesApiBackend {
     /// Builds an Images API backend for one OpenAI-authenticated provider.
-    pub fn new(
+    pub(crate) fn new(
         endpoint: impl Into<String>,
         transport: std::sync::Arc<dyn HttpTransport>,
         target: ProviderCredentialTarget,

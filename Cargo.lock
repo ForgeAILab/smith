@@ -3442,6 +3442,7 @@ dependencies = [
  "smith-config",
  "smith-host",
  "smith-tools",
+ "syn 2.0.119",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",

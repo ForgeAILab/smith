@@ -51,5 +51,6 @@ nix = { version = "0.31", default-features = false, features = ["signal"] }
 agent-runtime-mcp = { workspace = true, features = ["http"] }
 agent-runtime-testkit = { workspace = true }
 tempfile = { workspace = true }
+syn = { version = "2", features = ["full", "visit"] }
 tokio = { workspace = true }
 toml = { workspace = true }

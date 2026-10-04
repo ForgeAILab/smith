@@ -33,7 +33,7 @@ use tokio::process::Command;
 
 /// Which installed coding agent a harness drives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CliAgentKind {
+pub(crate) enum CliAgentKind {
     /// Anthropic's Claude Code CLI.
     ClaudeCode,
     /// OpenAI's Codex CLI.
@@ -42,7 +42,7 @@ pub enum CliAgentKind {
 
 impl CliAgentKind {
     /// The configuration token that selects this harness.
-    pub fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::ClaudeCode => "claude-code",
             Self::Codex => "codex",
@@ -50,7 +50,7 @@ impl CliAgentKind {
     }
 
     /// Parses a configured harness name.
-    pub fn parse(value: &str) -> Option<Self> {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
             "claude-code" => Some(Self::ClaudeCode),
             "codex" => Some(Self::Codex),
@@ -61,43 +61,38 @@ impl CliAgentKind {
 
 /// Resolved settings for one harness.
 #[derive(Debug, Clone)]
-pub struct CliAgentSettings {
+pub(crate) struct CliAgentSettings {
     /// Absolute path to the CLI, resolved without a shell.
-    pub executable: PathBuf,
+    pub(crate) executable: PathBuf,
     /// Model to request, when the owner selected one.
-    pub model: Option<String>,
+    pub(crate) model: Option<String>,
     /// Fixed non-secret arguments appended to the built argv.
-    pub args: Vec<String>,
+    pub(crate) args: Vec<String>,
     /// Working directory for the child process.
-    pub cwd: PathBuf,
+    pub(crate) cwd: PathBuf,
     /// Environment overlaid on the inherited ambient environment.
-    pub env: BTreeMap<String, String>,
+    pub(crate) env: BTreeMap<String, String>,
     /// Whether the CLI may run its own tools.
     ///
     /// Off by default. When enabled, the CLI executes reads, writes, and
     /// commands Smith never approved, never scoped to the workspace, and
     /// cannot record as tool history.
-    pub allow_own_tools: bool,
+    pub(crate) allow_own_tools: bool,
     /// Instructions appended to the CLI's own system prompt.
-    pub instructions: Option<String>,
+    pub(crate) instructions: Option<String>,
 }
 
 /// An external agent backend driving one installed CLI.
 #[derive(Debug)]
-pub struct CliAgentBackend {
+pub(crate) struct CliAgentBackend {
     kind: CliAgentKind,
     settings: CliAgentSettings,
 }
 
 impl CliAgentBackend {
     /// Builds a backend for a resolved harness.
-    pub fn new(kind: CliAgentKind, settings: CliAgentSettings) -> Self {
+    pub(crate) fn new(kind: CliAgentKind, settings: CliAgentSettings) -> Self {
         Self { kind, settings }
-    }
-
-    /// Which CLI this backend drives.
-    pub fn kind(&self) -> CliAgentKind {
-        self.kind
     }
 
     /// Builds the argv for one turn.
@@ -545,7 +540,7 @@ fn normalize_codex(value: &serde_json::Value, state: &mut TurnState) -> Vec<Exte
 /// backend per run is what keeps a child from inheriting its parent's
 /// working directory or its permission to run the CLI's own tools.
 #[derive(Debug, Clone)]
-pub struct CliAgentPlan {
+pub(crate) struct CliAgentPlan {
     kind: CliAgentKind,
     executable: PathBuf,
     model: String,
@@ -559,7 +554,7 @@ impl CliAgentPlan {
     ///
     /// `allow_own_tools` only narrows: a read-only run may withhold the CLI's
     /// own tools, but no caller can grant what the owner did not configure.
-    pub fn backend(
+    pub(crate) fn backend(
         &self,
         cwd: PathBuf,
         allow_own_tools: bool,
@@ -577,14 +572,14 @@ impl CliAgentPlan {
     }
 
     /// Stable label naming what this plan executes, for policy fingerprints.
-    pub fn label(&self) -> String {
+    pub(crate) fn label(&self) -> String {
         format!("cli:{}/{}", self.kind.as_str(), self.model)
     }
 }
 
 /// What executes a turn for one resolved configuration.
 #[derive(Debug, Clone)]
-pub enum TurnExecution {
+pub(crate) enum TurnExecution {
     /// No installed agent was selected; the resolved provider runs the turn,
     /// which leaves the composition exactly as it was before harnesses
     /// existed.
@@ -609,7 +604,7 @@ pub enum TurnExecution {
 
 impl TurnExecution {
     /// Stable label naming what executes a turn, for policy fingerprints.
-    pub fn label(&self) -> String {
+    pub(crate) fn label(&self) -> String {
         match self {
             Self::Provider => "provider".to_owned(),
             Self::InstalledAgent(plan) => plan.label(),
@@ -619,7 +614,7 @@ impl TurnExecution {
 }
 
 /// Reads what a resolved configuration says should execute its turns.
-pub fn turn_execution(config: &smith_config::resolve::ResolvedConfig) -> TurnExecution {
+pub(crate) fn turn_execution(config: &smith_config::resolve::ResolvedConfig) -> TurnExecution {
     config
         .harness
         .as_ref()

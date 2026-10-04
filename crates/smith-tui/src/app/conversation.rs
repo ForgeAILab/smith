@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use agent_runtime_core::ids::{AttemptId, RequestId};
 use smith_client::NoticeKind;
+use smith_client::notice::budget_failure_text;
 use smith_runtime::client::SmithEventKind as RuntimeEvent;
 
 use smith_tools::external_tool_result_text;
@@ -206,6 +207,15 @@ impl ConversationMut<'_> {
             RuntimeEvent::LimitReached { limit } => self
                 .transcript
                 .push_notice(NoticeKind::Limit, format!("{limit:?} reached")),
+            RuntimeEvent::BudgetFailure {
+                category,
+                requested_tokens,
+                limit_tokens,
+            } => self.transcript.push_notice(
+                NoticeKind::Budget,
+                budget_failure_text(*category, *requested_tokens, *limit_tokens),
+            ),
+            RuntimeEvent::RateLimitObservation { .. } => return false,
             _ => return false,
         }
         true

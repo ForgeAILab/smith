@@ -13,7 +13,7 @@ use agent_runtime::registry::{Fingerprint, RegistryId, RegistryRevision};
 use agent_runtime::runtime::SessionHandle;
 use agent_runtime_core::cancel::CancelReason;
 use agent_runtime_core::clock::Timestamp;
-use agent_runtime_core::content::{InternalTurnSource, UserInput};
+use agent_runtime_core::content::InternalTurnSource;
 use agent_runtime_core::delegation::WorkspacePolicy;
 use agent_runtime_core::error::RuntimeError;
 use agent_runtime_core::event::EventEnvelope as CanonicalEvent;
@@ -27,9 +27,9 @@ use agent_runtime_core::manifest::{ActivatedCapability, SegmentId, SegmentKind, 
 use agent_runtime_core::metadata::Metadata;
 use agent_runtime_core::provider::{
     CacheAvailabilityEvidence, CacheIdentity, FinishReason, ModelId, ProviderAttemptPurpose,
-    ProviderError,
+    ProviderError, RateLimitSnapshot,
 };
-use agent_runtime_core::steer::{SteerDiscardReason, SteerRejectionReason};
+use agent_runtime_core::steer::SteerDiscardReason;
 use agent_runtime_core::usage::UsageRecord;
 use futures_core::Stream;
 use futures_util::StreamExt;
@@ -37,9 +37,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub use agent_runtime_core::event::{
-    CacheOperationOutcome, CacheOperationReason, CacheState, ChildPhase, ChildRecoveryState,
-    CompactionReason, EstimationConfidence, GoalUpdateCause, LimitKind, PlanItemProjection,
-    PlanItemStatus, PlanSensitivity, TurnFinish,
+    BudgetCategory, CacheOperationOutcome, CacheOperationReason, CacheState, ChildPhase,
+    ChildRecoveryState, CompactionReason, EstimationConfidence, GoalUpdateCause, LimitKind,
+    PlanItemProjection, PlanItemStatus, PlanSensitivity, TurnFinish,
 };
 
 /// Current Smith client protocol revision.
@@ -66,8 +66,6 @@ macro_rules! smith_id {
 }
 
 smith_id!(SmithSessionId);
-smith_id!(SmithTurnId);
-smith_id!(SmithSteerId);
 smith_id!(SmithToolCallId);
 smith_id!(SmithChildId);
 smith_id!(SmithInteractionRequestId);
@@ -187,9 +185,8 @@ impl SmithEvent {
 
 /// Smith-owned presentation vocabulary.
 ///
-/// Variants not useful to presentation clients are intentionally projected to
-/// `Unknown`. This includes future canonical additions, so compatible runtime
-/// upgrades do not force unchanged clients to deserialize an upstream enum.
+/// Every pinned canonical variant is mirrored. Future payloads read from a
+/// newer journal deserialize as `Unknown` without losing their causal slot.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum SmithEventKind {
@@ -267,6 +264,11 @@ pub enum SmithEventKind {
         preserved_prefix_tokens: u32,
         invalidated_prefix_tokens: u32,
         provider_cache_supported: bool,
+    },
+    BudgetFailure {
+        category: BudgetCategory,
+        requested_tokens: u32,
+        limit_tokens: u32,
     },
     ProviderAttemptStarted {
         request: RequestId,
@@ -450,6 +452,10 @@ pub enum SmithEventKind {
         operation: Option<CacheOperationId>,
         reason: CacheOperationReason,
     },
+    RateLimitObservation {
+        attempt: AttemptId,
+        snapshot: RateLimitSnapshot,
+    },
     ProviderAttemptFinished {
         attempt: AttemptId,
         /// Zero-based position of the finished attempt, when supplied by the
@@ -546,62 +552,10 @@ impl From<serde_json::Error> for ClientProjectionError {
     }
 }
 
-/// Smith-owned input wrapper. Exact content stays private to submission and
-/// canonical runtime history; the client event stream never echoes it.
-#[derive(Clone)]
-pub struct SmithInput(UserInput);
-
-impl SmithInput {
-    /// Plain text input.
-    pub fn text(text: impl Into<String>) -> Self {
-        Self(UserInput::text(text))
-    }
-
-    /// Compatibility adapter for structured Smith host materialization.
-    pub fn from_canonical(input: UserInput) -> Self {
-        Self(input)
-    }
-
-    fn into_canonical(self) -> UserInput {
-        self.0
-    }
-}
-
-impl std::fmt::Debug for SmithInput {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_tuple("SmithInput")
-            .field(&"[redacted]")
-            .finish()
-    }
-}
-
-/// Stable receipt for one accepted whole-turn submission.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TurnReceipt {
-    /// Accepted turn identity.
-    pub turn: SmithTurnId,
-}
-
-/// Stable receipt for one accepted steering submission.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SteerReceipt {
-    pub steer: SmithSteerId,
-    pub turn: SmithTurnId,
-    pub ordinal: u64,
-}
-
-/// Owned steering rejection retaining the caller's exact input.
-#[derive(Debug)]
-pub struct SteerRejection {
-    pub reason: SteerRejectionReason,
-    pub input: SmithInput,
-}
-
 /// Smith client event stream.
 pub type SmithEventStream = Pin<Box<dyn Stream<Item = SmithEvent> + Send>>;
 
-/// Product-level session adapter over one canonical Agent Runtime session.
+/// Event adapter over one canonical Agent Runtime session.
 #[derive(Debug, Clone)]
 pub struct SmithSession {
     canonical: SessionHandle,
@@ -615,39 +569,6 @@ impl SmithSession {
     /// Stable session identity.
     pub fn id(&self) -> SmithSessionId {
         SmithSessionId::new(self.canonical.id().as_str())
-    }
-
-    /// Submits one whole turn through Agent Runtime.
-    pub fn submit(&self, input: SmithInput) -> Result<TurnReceipt, RuntimeError> {
-        let turn = self.canonical.send(input.into_canonical())?;
-        Ok(TurnReceipt {
-            turn: SmithTurnId::new(turn.id().as_str()),
-        })
-    }
-
-    /// Targets additional input to the serving turn.
-    pub fn steer(
-        &self,
-        expected_turn: Option<&SmithTurnId>,
-        input: SmithInput,
-    ) -> Result<SteerReceipt, SteerRejection> {
-        let expected_turn = expected_turn.map(|turn| TurnId::new(turn.as_str()));
-        self.canonical
-            .steer_current_turn(expected_turn.as_ref(), input.into_canonical())
-            .map(|receipt| SteerReceipt {
-                steer: SmithSteerId::new(receipt.id.as_str()),
-                turn: SmithTurnId::new(receipt.turn.as_str()),
-                ordinal: receipt.ordinal,
-            })
-            .map_err(|rejection| SteerRejection {
-                reason: rejection.reason,
-                input: SmithInput::from_canonical(rejection.input),
-            })
-    }
-
-    /// Interrupts the serving turn.
-    pub fn cancel(&self, reason: CancelReason) -> Result<(), RuntimeError> {
-        self.canonical.interrupt_current_turn(reason)
     }
 
     /// Subscribes to the Smith-owned deterministic event projection.
@@ -669,8 +590,364 @@ mod tests {
     use agent_runtime::provider::fake::FakeProvider;
     use agent_runtime::runtime::{RuntimeBuilder, StartSession};
     use agent_runtime_core::approval::AllowAll;
+    use agent_runtime_core::content::UserInput;
     use agent_runtime_core::event::RuntimeEvent;
     use agent_runtime_testkit::scenarios::fake_model_profile;
+
+    #[test]
+    fn every_runtime_event_projects_to_a_known_kind() {
+        use agent_runtime_core::content::InternalTurnSensitivity;
+        use agent_runtime_core::provider::{
+            CacheEvidenceKind, CacheEvidenceSource, PromptCacheControl, RateLimitWindow,
+        };
+        use agent_runtime_core::usage::{Provenance, UsageDelta, UsageSource};
+
+        let cache_identity = CacheIdentity::legacy(
+            Fingerprint::of("profile"),
+            "provider",
+            ModelId::new("model"),
+            Vec::new(),
+            PromptCacheControl::Implicit,
+        );
+        let mut rate_limits = RateLimitSnapshot::new();
+        rate_limits.push(RateLimitWindow {
+            used_percent: Some(82.0),
+            ..RateLimitWindow::new("requests")
+        });
+
+        macro_rules! assert_projections {
+            ($($variant:ident $({ $($field:ident: $value:expr),* $(,)? })?),* $(,)?) => {
+                let samples = [$(RuntimeEvent::$variant $({ $($field: $value),* })?),*];
+                for payload in samples {
+                    // The same list constructs samples and exhaustively matches
+                    // the runtime enum, so a new variant requires a new sample.
+                    match &payload {
+                        $(RuntimeEvent::$variant $({ $($field: _),* })? => {}),*
+                    }
+                    let canonical = CanonicalEvent::new(
+                        1,
+                        EventId::new("event"),
+                        SessionId::new("session"),
+                        Some(TurnId::new("turn")),
+                        Timestamp::ZERO,
+                        payload,
+                    );
+                    let projected = SmithEvent::project(&canonical).unwrap_or_else(|error| {
+                        panic!("{:?} failed projection: {error}", canonical.payload)
+                    });
+                    assert!(
+                        !matches!(projected.payload, SmithEventKind::Unknown),
+                        "{:?} projected to Unknown",
+                        canonical.payload,
+                    );
+                }
+            };
+        }
+
+        assert_projections!(
+            SessionStarted,
+            TurnStarted,
+            TurnSteerCommitted {
+                steer: SteerId::new("steer"),
+                ordinal: 1,
+            },
+            TurnSteerDiscarded {
+                steer: SteerId::new("steer"),
+                ordinal: 1,
+                reason: SteerDiscardReason::Cancelled,
+            },
+            InternalTurnStarted {
+                source: InternalTurnSource {
+                    kind: "goal".into(),
+                    id: "goal".into(),
+                    revision: RegistryRevision::new("v1"),
+                    sensitivity: InternalTurnSensitivity::Public,
+                    goal: None,
+                },
+            },
+            RegistrySnapshotSealed {
+                snapshot: Fingerprint::of("snapshot"),
+                entries: 1,
+            },
+            ScopedViewDerived {
+                snapshot: Fingerprint::of("snapshot"),
+                view: Fingerprint::of("view"),
+                visible_entries: 1,
+            },
+            ModelProfileResolved {
+                provider: "provider".into(),
+                model: ModelId::new("model"),
+                profile: Fingerprint::of("profile"),
+            },
+            CapabilityRetrievalPerformed {
+                resolver_revision: RegistryRevision::new("v1"),
+                index_revision: Some(RegistryRevision::new("v1")),
+                candidates: vec![RegistryId::skill("skill")],
+            },
+            CapabilitiesActivated {
+                epoch: 1,
+                activation: vec![ActivatedCapability::new(
+                    RegistryId::skill("skill"),
+                    RegistryRevision::new("v1"),
+                )],
+            },
+            ContextPlanned {
+                context: Fingerprint::of("context"),
+                cache_plan: Fingerprint::of("cache"),
+                segment_count: 1,
+                totals: BTreeMap::from([(SegmentKind::new("history"), 100)]),
+                input_tokens: 100,
+                input_budget_tokens: 1_000,
+                reserved_tokens: 100,
+                confidence: EstimationConfidence::Exact,
+                capability_overflow_tokens: None,
+            },
+            ContextCompacted {
+                context: Fingerprint::of("context"),
+                reason: CompactionReason::BudgetExceeded,
+                evicted: vec![SegmentId::new("history")],
+                summaries: Vec::new(),
+                reclaimed_tokens: 100,
+            },
+            PlanUpdated {
+                revision: 1,
+                sensitivity: PlanSensitivity::Public,
+                counts: BTreeMap::from([("pending".into(), 1)]),
+                items: Some(vec![PlanItemProjection {
+                    id: "item".into(),
+                    text: "task".into(),
+                    status: PlanItemStatus::Pending,
+                    reason: None,
+                }]),
+            },
+            GoalUpdated {
+                cause: GoalUpdateCause::Cleared,
+                sensitivity: PlanSensitivity::Public,
+                goal: None,
+            },
+            CachePlanChanged {
+                cache_plan: Fingerprint::of("cache"),
+                preserved_prefix_tokens: 100,
+                invalidated_prefix_tokens: 0,
+                provider_cache_supported: true,
+            },
+            BudgetFailure {
+                category: BudgetCategory::Context,
+                requested_tokens: 130_000,
+                limit_tokens: 124_000,
+            },
+            ProviderAttemptStarted {
+                request: RequestId::new("request"),
+                attempt: AttemptId::new("attempt"),
+                index: 0,
+                model: "model".into(),
+            },
+            TextDelta {
+                request: RequestId::new("request"),
+                attempt: AttemptId::new("attempt"),
+                text: "text".into(),
+            },
+            ReasoningDelta {
+                request: RequestId::new("request"),
+                attempt: AttemptId::new("attempt"),
+                text: "reasoning".into(),
+                redacted: false,
+            },
+            ProviderAttemptOutputCommitted {
+                request: RequestId::new("request"),
+                attempt: AttemptId::new("attempt"),
+            },
+            ProviderAttemptOutputDiscarded {
+                request: RequestId::new("request"),
+                attempt: AttemptId::new("attempt"),
+            },
+            ExternalText {
+                text: "text".into(),
+            },
+            ExternalReasoning {
+                text: "reasoning".into(),
+            },
+            ExternalSessionStarted {
+                session: "external".into(),
+            },
+            ExternalToolInvoked {
+                id: "tool".into(),
+                name: "Read".into(),
+                detail: serde_json::json!({"file_path": "README.md"}),
+            },
+            ExternalToolCompleted {
+                id: "tool".into(),
+                ok: true,
+                detail: serde_json::json!("contents"),
+            },
+            ToolCallRequested {
+                call: ToolCallId::new("call"),
+                name: "tool".into(),
+                argument_keys: vec!["key".into()],
+                argument_fingerprint: Fingerprint::of("arguments"),
+                arguments: Some(serde_json::json!({"key": "value"})),
+            },
+            InteractionRequested {
+                request: InteractionRequestId::new("interaction"),
+                call: ToolCallId::new("call"),
+                question_count: 1,
+                sensitivity: InteractionSensitivity::Public,
+            },
+            InteractionResolved {
+                request: InteractionRequestId::new("interaction"),
+                call: ToolCallId::new("call"),
+                outcome: InteractionOutcomeKind::Answered,
+            },
+            ToolCallCompleted {
+                call: ToolCallId::new("call"),
+                name: "tool".into(),
+                is_error: false,
+            },
+            Downgrade {
+                capability: "capability".into(),
+                detail: "unavailable".into(),
+            },
+            Usage {
+                record: UsageRecord {
+                    source: UsageSource::ProviderAttempt,
+                    provenance: Provenance::default(),
+                    delta: UsageDelta::new(),
+                },
+            },
+            CacheObservation {
+                request: Some(RequestId::new("request")),
+                attempt: Some(AttemptId::new("attempt")),
+                cache_plan: Some(Fingerprint::of("cache")),
+                cache_identity: Some(cache_identity.clone()),
+                read_tokens: Some(100),
+                write_tokens: Some(0),
+            },
+            CacheStateChanged {
+                request: RequestId::new("request"),
+                attempt: AttemptId::new("attempt"),
+                cache_plan: Fingerprint::of("cache"),
+                cache_identity: Some(cache_identity.clone()),
+                state: CacheState::WarmObserved,
+                expected_read_tokens: Some(100),
+                observed_read_tokens: Some(100),
+                observed_write_tokens: Some(0),
+                missed_tokens: Some(0),
+                confidence: EstimationConfidence::Exact,
+            },
+            CacheOperationPrepared {
+                operation: CacheOperationId::new("operation"),
+                request: Some(RequestId::new("request")),
+                identity: cache_identity.clone(),
+                purpose: ProviderAttemptPurpose::CacheKeepalive,
+            },
+            CacheOperationRejected {
+                operation: CacheOperationId::new("operation"),
+                request: Some(RequestId::new("request")),
+                attempt: Some(AttemptId::new("attempt")),
+                identity: cache_identity.clone(),
+                purpose: ProviderAttemptPurpose::CacheKeepalive,
+                reason: CacheOperationReason::BudgetExceeded,
+            },
+            CacheOperationStarted {
+                operation: CacheOperationId::new("operation"),
+                request: Some(RequestId::new("request")),
+                attempt: Some(AttemptId::new("attempt")),
+                identity: cache_identity.clone(),
+                purpose: ProviderAttemptPurpose::CacheKeepalive,
+            },
+            CacheOperationCompleted {
+                operation: CacheOperationId::new("operation"),
+                request: Some(RequestId::new("request")),
+                attempt: Some(AttemptId::new("attempt")),
+                identity: cache_identity.clone(),
+                purpose: ProviderAttemptPurpose::CacheKeepalive,
+                outcome: CacheOperationOutcome::Completed,
+                reason: None,
+                metrics: BTreeMap::from([("read_tokens".into(), 100)]),
+            },
+            CacheAvailabilityEvidenceRecorded {
+                evidence: CacheAvailabilityEvidence {
+                    source: CacheEvidenceSource::Stream,
+                    kind: CacheEvidenceKind::Observation,
+                    identity: cache_identity.clone(),
+                    request: Some(RequestId::new("request")),
+                    attempt: Some(AttemptId::new("attempt")),
+                    operation: None,
+                    ordering: 1,
+                    read_tokens: Some(100),
+                    write_tokens: Some(0),
+                    refresh_cause: None,
+                    guaranteed_until: None,
+                    refreshed: None,
+                    resource: None,
+                    exists: None,
+                },
+            },
+            CacheOperationSuspended {
+                request: Some(RequestId::new("request")),
+                attempt: Some(AttemptId::new("attempt")),
+                identity: cache_identity,
+                operation: Some(CacheOperationId::new("operation")),
+                reason: CacheOperationReason::CacheMiss,
+            },
+            RateLimitObservation {
+                attempt: AttemptId::new("attempt"),
+                snapshot: rate_limits,
+            },
+            ProviderAttemptFinished {
+                attempt: AttemptId::new("attempt"),
+                index: Some(0),
+                max_attempts: Some(3),
+                finish: FinishReason::Stop,
+                retryable: false,
+                error: None,
+                retry_delay_ms: None,
+            },
+            LimitReached {
+                limit: LimitKind::ProviderAttempts,
+            },
+            Error {
+                error: RuntimeError::internal("failed"),
+            },
+            TurnCompleted {
+                finish: TurnFinish::Completed,
+                visible_output: true,
+            },
+            ChildSpawned {
+                child: ChildId::new("child"),
+                workspace: WorkspacePolicy::SharedProject,
+                max_turns: 1,
+                max_tokens: Some(1_000),
+                deadline_ms: Some(1_000),
+            },
+            ChildProgress {
+                child: ChildId::new("child"),
+                phase: ChildPhase::TurnStarted,
+            },
+            ChildNeedsInput {
+                child: ChildId::new("child"),
+                child_session: SessionId::new("child-session"),
+                turn: TurnId::new("child-turn"),
+                call: ToolCallId::new("call"),
+                request: InteractionRequestId::new("interaction"),
+                question_ids: vec![QuestionId::new("question")],
+                sensitivity: InteractionSensitivity::Public,
+            },
+            ChildCompleted {
+                child: ChildId::new("child"),
+                result: "done".into(),
+            },
+            ChildStopped {
+                child: ChildId::new("child"),
+                reason: CancelReason::UserRequested,
+            },
+            ChildFailed {
+                child: ChildId::new("child"),
+                error: RuntimeError::internal("failed"),
+            },
+            SessionShutdown,
+        );
+    }
 
     #[test]
     fn canonical_projection_preserves_identity_and_known_payloads() {
@@ -859,10 +1136,14 @@ mod tests {
             (canonical, client)
         }
 
-        async fn turn(client: &SmithSession, prompt: &str) -> Vec<SmithEvent> {
+        async fn turn(
+            canonical: &SessionHandle,
+            client: &SmithSession,
+            prompt: &str,
+        ) -> Vec<SmithEvent> {
             let mut events = client.events();
-            client
-                .submit(SmithInput::text(prompt))
+            canonical
+                .send(UserInput::text(prompt))
                 .expect("accepted turn");
             let mut observed = Vec::new();
             loop {
@@ -880,7 +1161,10 @@ mod tests {
 
         let (canonical_a, client_a) = session("alpha").await;
         let (canonical_b, client_b) = session("beta").await;
-        let (events_a, events_b) = tokio::join!(turn(&client_a, "one"), turn(&client_b, "two"));
+        let (events_a, events_b) = tokio::join!(
+            turn(&canonical_a, &client_a, "one"),
+            turn(&canonical_b, &client_b, "two")
+        );
         assert_ne!(client_a.id(), client_b.id());
         assert!(
             events_a

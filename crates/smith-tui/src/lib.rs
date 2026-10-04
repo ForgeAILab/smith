@@ -11,12 +11,13 @@
 //! - [`theme`] — colors and glyphs.
 //! - [`selection`] — pointer selection, which Smith owns because enabling the
 //!   wheel takes the terminal's own selection away.
-//! - [`render`] — the pure draw function.
+//! - [`render`] — layout computation, scroll synchronization, and drawing.
 //!
-//! `App` performs no I/O and owns no runtime handle. The host loop in
-//! `smith-cli` feeds it events and performs the [`Action`](app::Action)s it
-//! returns, so the same state machine can be driven by a test with no
-//! terminal, no provider, and no clock.
+//! `App` owns presentation state, elapsed-time clocks, and approval and
+//! questionnaire replies. The host loop in `smith-cli` feeds it events and
+//! performs the returned [`Action`](app::Action)s, including runtime, filesystem,
+//! and terminal operations. State and rendering tests can run without a live
+//! terminal or provider; timing-sensitive paths still consult clocks.
 //!
 //! The visual contract these modules implement is `DESIGN.md` at the repository
 //! root; section references in the code point there.

@@ -43,9 +43,8 @@ use url::form_urlencoded;
 use zeroize::Zeroize;
 
 use crate::journal::DefaultRedactor;
-use crate::renewable::{
-    BundleRefresher, RenewableBundle, RenewableCredentialSource, wait_for_deadline,
-};
+use crate::renewable::wait_for_deadline;
+pub use crate::renewable::{BundleRefresher, RenewableBundle, RenewableCredentialSource};
 
 /// Fixed OAuth issuer used by the public Codex native client.
 pub const CHATGPT_ISSUER: &str = "https://auth.openai.com";

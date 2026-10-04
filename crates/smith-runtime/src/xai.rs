@@ -33,7 +33,7 @@ use smith_config::credential::{CredentialEnroller, CredentialRef};
 use zeroize::Zeroize;
 
 use crate::journal::DefaultRedactor;
-use crate::renewable::{BundleRefresher, RenewableBundle, RenewableCredentialSource};
+pub use crate::renewable::{BundleRefresher, RenewableBundle, RenewableCredentialSource};
 
 /// xAI's OAuth issuer.
 pub const XAI_ISSUER: &str = "https://auth.x.ai";

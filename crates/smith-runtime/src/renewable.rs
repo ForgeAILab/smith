@@ -288,7 +288,7 @@ impl<B: RenewableBundle> ProviderCredentialSource for RenewableCredentialSource<
 /// Each member's source refreshes and persists to that member's own
 /// reference, so an account that is not currently serving the session still
 /// renews — instead of going stale — whenever it is next leased.
-pub struct RenewableMemberSources<B: RenewableBundle> {
+pub(crate) struct RenewableMemberSources<B: RenewableBundle> {
     resolver: CredentialResolver,
     target: ProviderCredentialTarget,
     refresher: Arc<dyn BundleRefresher<B>>,
@@ -297,7 +297,7 @@ pub struct RenewableMemberSources<B: RenewableBundle> {
 
 impl<B: RenewableBundle> RenewableMemberSources<B> {
     /// Builds members against `resolver`, renewing them through `refresher`.
-    pub fn new(
+    pub(crate) fn new(
         resolver: CredentialResolver,
         target: ProviderCredentialTarget,
         refresher: Arc<dyn BundleRefresher<B>>,

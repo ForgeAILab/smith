@@ -130,15 +130,15 @@ use crate::advisor::{AdvisorRoute, AdvisorTool};
 use crate::authority::SmithToolAuthority;
 use crate::background_tasks::BackgroundServices;
 use crate::budget_notice::{BudgetNoticeComponent, DEFAULT_NOTICE_THRESHOLD_TOKENS};
-use crate::catalog::{CatalogLayers, ProfileResolution};
+use crate::catalog::CatalogLayers;
+pub use crate::catalog::{LimitContribution, ProfileResolution};
 use crate::chatgpt::{
     ChatGptCredentialSource, ChatGptOAuthClient, ChatGptProvider, ChatGptProviderConfig,
     ChatGptTokenBundle,
 };
 use crate::checkpoint::{BarrierCheckpointStore, CheckpointBarrier, SmithCheckpointSetup};
-use crate::command_provider::{
-    CommandAdapterConfigError, CommandJsonlAdapter, CommandProtocolProvider,
-};
+pub use crate::command_provider::CommandAdapterConfigError;
+use crate::command_provider::{CommandJsonlAdapter, CommandProtocolProvider};
 use crate::delegation::{
     AgentTool, AgentToolProfile, DelegationAuthority, DelegationWaitPolicy, SmithChildFactory,
     SmithChildRoute, SmithDelegation,
@@ -762,7 +762,7 @@ impl SmithRuntime {
     }
 
     /// Canonical active-session image history used by `generate_image`.
-    pub fn image_history(&self) -> &Arc<crate::image_history::SessionImageHistory> {
+    pub(crate) fn image_history(&self) -> &Arc<crate::image_history::SessionImageHistory> {
         &self.image_history
     }
 }

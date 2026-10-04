@@ -24,7 +24,7 @@ use smith_config::model::ReasoningOnlyBehavior;
 
 /// Applies the configured response policy without changing omitted/default
 /// behavior.
-pub fn apply_response_policy(
+pub(crate) fn apply_response_policy(
     provider: Arc<dyn Provider>,
     behavior: Option<ReasoningOnlyBehavior>,
 ) -> Arc<dyn Provider> {

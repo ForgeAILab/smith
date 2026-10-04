@@ -13,14 +13,14 @@ use smith_tools::{MAX_RECENT_IMAGE_DATA_URL_BYTES, RecentImageSource};
 /// Maps active root sessions to their canonical history without copying image
 /// data into a second cache. Resumed sessions register their restored handle.
 #[derive(Debug, Default)]
-pub struct SessionImageHistory {
+pub(crate) struct SessionImageHistory {
     sessions: Mutex<HashMap<String, SessionHandle>>,
 }
 
 impl SessionImageHistory {
     /// Registers one live or resumed session until the returned lease drops or
     /// is explicitly unregistered during host shutdown.
-    pub fn register(self: &Arc<Self>, session: SessionHandle) -> SessionImageRegistration {
+    pub(crate) fn register(self: &Arc<Self>, session: SessionHandle) -> SessionImageRegistration {
         let key = session.id().as_str().to_owned();
         self.sessions
             .lock()
@@ -68,7 +68,7 @@ impl RecentImageSource for SessionImageHistory {
 
 /// Removes one session from recent-image lookup on shutdown or drop.
 #[derive(Debug)]
-pub struct SessionImageRegistration {
+pub(crate) struct SessionImageRegistration {
     registry: Weak<SessionImageHistory>,
     key: String,
     active: AtomicBool,
@@ -76,7 +76,7 @@ pub struct SessionImageRegistration {
 
 impl SessionImageRegistration {
     /// Removes the registered history source. Safe to call more than once.
-    pub fn unregister(&self) {
+    pub(crate) fn unregister(&self) {
         if self.active.swap(false, Ordering::AcqRel)
             && let Some(registry) = self.registry.upgrade()
         {

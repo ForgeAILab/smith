@@ -35,9 +35,10 @@ in the journal. `SmithEvent` is a deterministic, redaction-preserving
 projection used by terminal, headless, replay, and future clients.
 
 Smith client protocol v1 is the current and minimum supported revision. The
-old public `SessionHandle` re-export is deprecated for one migration release;
-new embedders use `SmithSession`, `SmithInput`, Smith receipts, and
-`SmithEvent`. Unknown future payloads preserve their envelope and causal slot.
+client-facing `SmithEvent` projection is consumed by the TUI, headless output,
+and replay. In-process hosts drive sessions through the public `SessionHandle`
+re-export; `SmithSession` adapts its event stream. Unknown future payloads
+preserve their envelope and causal slot.
 
 ## Client ownership
 

@@ -11,28 +11,30 @@
 //! sessions, and a future Forge adapter — composes a runtime through this
 //! crate. Presentation may differ between hosts; runtime policy may not.
 
-pub mod abilities;
+#![deny(unreachable_pub)]
+
+pub(crate) mod abilities;
 pub mod advisor;
 pub mod artifact;
 mod authority;
 pub mod background_tasks;
-pub mod budget_notice;
+pub(crate) mod budget_notice;
 pub mod built_in_skills;
 pub mod cache_controller;
 pub mod cache_lifecycle;
-pub mod catalog;
+pub(crate) mod catalog;
 pub mod chatgpt;
 pub mod checkpoint;
-pub mod cli_agent;
+pub(crate) mod cli_agent;
 pub mod client;
-pub mod command_provider;
+pub(crate) mod command_provider;
 pub mod delegation;
 pub mod factory;
-pub mod gemini;
+pub(crate) mod gemini;
 pub mod harness;
 pub mod host;
-pub mod image_api;
-pub mod image_history;
+pub(crate) mod image_api;
+pub(crate) mod image_history;
 pub mod journal;
 pub mod mcp;
 pub mod memory;
@@ -44,8 +46,8 @@ pub mod probe;
 pub mod project_instructions;
 pub mod prompt;
 pub mod reasoning;
-pub mod renewable;
-pub mod response;
+pub(crate) mod renewable;
+pub(crate) mod response;
 pub mod resume_capsule;
 pub mod rotation;
 pub mod session;
@@ -62,7 +64,4 @@ pub use agent_runtime::delegation::{ChildDurability, ChildState, ChildStatus, Sp
 /// shared runtime. Re-exporting it here keeps production entry points on the
 /// Smith composition boundary instead of depending on the full facade
 /// directly.
-#[deprecated(
-    note = "use the SmithSession client adapter; removal is planned after protocol v1"
-)]
 pub use agent_runtime::runtime::SessionHandle;

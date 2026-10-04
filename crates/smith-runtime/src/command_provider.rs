@@ -23,9 +23,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Stable protocol name required on every probe, request, and output frame.
-pub const COMMAND_PROTOCOL: &str = "smith-command-provider";
+pub(crate) const COMMAND_PROTOCOL: &str = "smith-command-provider";
 /// Exact schema revision supported by this adapter.
-pub const COMMAND_SCHEMA_VERSION: u32 = 1;
+pub(crate) const COMMAND_SCHEMA_VERSION: u32 = 1;
 
 const MAX_MODEL_BYTES: usize = 256;
 const MAX_PROTOCOL_NAME_BYTES: usize = 256;
@@ -37,23 +37,18 @@ const MAX_IMPLEMENTATION_BYTES: usize = 64;
 
 /// A Smith-owned adapter for one exact configured model.
 #[derive(Clone)]
-pub struct CommandJsonlAdapter {
+pub(crate) struct CommandJsonlAdapter {
     model: String,
 }
 
 impl CommandJsonlAdapter {
     /// Creates the adapter without touching the configured process.
-    pub fn new(model: impl Into<String>) -> Result<Self, CommandAdapterConfigError> {
+    pub(crate) fn new(model: impl Into<String>) -> Result<Self, CommandAdapterConfigError> {
         let model = model.into();
         if model.is_empty() || model.len() > MAX_MODEL_BYTES || model.contains('\0') {
             return Err(CommandAdapterConfigError::InvalidModel);
         }
         Ok(Self { model })
-    }
-
-    /// Constructs the trait object consumed by [`agent_runtime::provider`].
-    pub fn shared(self) -> Arc<dyn CommandAdapter> {
-        Arc::new(self)
     }
 }
 
@@ -83,13 +78,13 @@ pub enum CommandAdapterConfigError {
 /// provider declares cache unsupported. It is not provider cache behavior and
 /// is never serialized here. Synthetic cache purposes remain untouched and
 /// are rejected by the adapter before process I/O.
-pub struct CommandProtocolProvider {
+pub(crate) struct CommandProtocolProvider {
     inner: Arc<CommandProvider>,
 }
 
 impl CommandProtocolProvider {
     /// Wraps the already-probed process provider.
-    pub fn new(inner: Arc<CommandProvider>) -> Self {
+    pub(crate) fn new(inner: Arc<CommandProvider>) -> Self {
         Self { inner }
     }
 }
@@ -538,7 +533,7 @@ fn validate_tool_field(value: &str, field: &str) -> Result<(), ProviderError> {
 
 /// Attempt-local strict JSONL decoder.
 #[derive(Default)]
-pub struct CommandJsonlDecoder {
+pub(crate) struct CommandJsonlDecoder {
     terminal: bool,
     usage_seen: bool,
     text_seen: bool,
