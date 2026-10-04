@@ -183,7 +183,8 @@ pub fn render_plain(report: &TimelineReport) -> String {
                 resumable,
                 turns,
             } => format!(
-                "child {child} · session {session} · {durability} · {state} · resumable {resumable} · {turns} turns",
+                "child {child} · session {session} · {durability} · {state} · {} · {turns} turns",
+                crate::agent_report::exact_resume_label(*resumable),
             ),
             TimelineEntry::Recovery { number, detail } => {
                 format!("recovery recovery-{number} · {detail}")

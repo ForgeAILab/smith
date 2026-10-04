@@ -4,6 +4,7 @@
 //! Secret input stays in a private masked buffer and crosses the effect
 //! boundary only as Agent Runtime's redaction-safe [`Secret`] wrapper.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -477,8 +478,17 @@ pub struct SetupApp {
     /// Provenance of automatically resolved limits, shown in review.
     limits_source: Option<String>,
     collision_preview: Option<String>,
+    review_scroll: Cell<ReviewScroll>,
     allow_collisions: bool,
     destination: String,
+}
+
+/// Wrapped-row viewport refreshed by drawing, including after a resize.
+#[derive(Debug, Clone, Copy, Default)]
+struct ReviewScroll {
+    offset: usize,
+    limit: usize,
+    page: usize,
 }
 
 impl fmt::Debug for SetupApp {
@@ -545,6 +555,7 @@ impl SetupApp {
             busy_note: None,
             limits_source: None,
             collision_preview: None,
+            review_scroll: Cell::new(ReviewScroll::default()),
             allow_collisions: false,
             destination: "~/.smith/config.toml".into(),
         };
@@ -655,6 +666,7 @@ impl SetupApp {
     /// Returns setup to an actionable step with a bounded external error.
     pub fn fail(&mut self, message: impl Into<String>, authentication: bool) {
         self.error = Some(bound(message.into(), 1_024));
+        self.review_scroll.set(ReviewScroll::default());
         self.step = if authentication {
             Step::CredentialMethod
         } else {
@@ -667,6 +679,7 @@ impl SetupApp {
     /// confirmation before replacing differing existing leaves.
     pub fn review_collisions(&mut self, preview: impl Into<String>) {
         self.collision_preview = Some(bound(preview.into(), 8_192));
+        self.review_scroll.set(ReviewScroll::default());
         self.allow_collisions = true;
         self.error = Some(
             "Existing values differ. Review the additional lines, then press Enter again to replace only those values."
@@ -800,6 +813,24 @@ impl SetupApp {
             self.back();
             return SetupEffect::None;
         }
+        if self.step == Step::Review
+            && matches!(
+                key.code,
+                KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown
+            )
+        {
+            let mut scroll = self.review_scroll.get();
+            let page = scroll.page.max(1);
+            scroll.offset = match key.code {
+                KeyCode::Up => scroll.offset.saturating_sub(1),
+                KeyCode::Down => scroll.offset.saturating_add(1).min(scroll.limit),
+                KeyCode::PageUp => scroll.offset.saturating_sub(page),
+                KeyCode::PageDown => scroll.offset.saturating_add(page).min(scroll.limit),
+                _ => unreachable!("review scrolling keys were checked above"),
+            };
+            self.review_scroll.set(scroll);
+            return SetupEffect::None;
+        }
         self.error = None;
 
         if let Some(picker) = &mut self.picker {
@@ -881,6 +912,7 @@ impl SetupApp {
             self.history.push(self.step);
         }
         self.step = step;
+        self.review_scroll.set(ReviewScroll::default());
         self.input.clear();
         self.error = None;
         if step != Step::Review {
@@ -893,6 +925,7 @@ impl SetupApp {
     fn back(&mut self) {
         if let Some(step) = self.history.pop() {
             self.step = step;
+            self.review_scroll.set(ReviewScroll::default());
             self.input = match step {
                 Step::ProviderName => self.provider.clone(),
                 Step::Endpoint => self.endpoint.clone(),
@@ -1501,10 +1534,42 @@ pub fn draw_setup(frame: &mut Frame<'_>, app: &SetupApp, theme: Theme) {
             theme.style(Tone::Danger),
         )));
     }
-    frame.render_widget(
-        Paragraph::new(crate::render::wrap::wrap_lines(&lines, body.width)),
-        body,
-    );
+    let rows = crate::render::wrap::wrap_lines(&lines, body.width);
+    if app.step == Step::Review {
+        let overflow = rows.len() > usize::from(body.height);
+        let (viewport, hint) = if overflow {
+            let [viewport, hint] =
+                Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(body);
+            (viewport, Some(hint))
+        } else {
+            (body, None)
+        };
+        let page = usize::from(viewport.height);
+        let limit = rows.len().saturating_sub(page);
+        let offset = app.review_scroll.get().offset.min(limit);
+        app.review_scroll.set(ReviewScroll {
+            offset,
+            limit,
+            page,
+        });
+        frame.render_widget(
+            Paragraph::new(rows.into_iter().skip(offset).take(page).collect::<Vec<_>>()),
+            viewport,
+        );
+        if let Some(hint) = hint {
+            frame.render_widget(
+                Paragraph::new(format!(
+                    "↑↓/PgUp/PgDn review · {}/{}",
+                    offset + 1,
+                    limit + 1,
+                ))
+                .style(theme.style(Tone::Dim)),
+                hint,
+            );
+        }
+    } else {
+        frame.render_widget(Paragraph::new(rows), body);
+    }
     let footer_text = if inner.width < 60 {
         if app.step == Step::Review {
             " Enter confirm · Back: Shift+Tab\n Esc Cancel"
@@ -2219,6 +2284,105 @@ mod tests {
         }
         app.on_key(key(KeyCode::Enter));
         app
+    }
+
+    #[test]
+    fn setup_review_scrolls_to_the_last_wrapped_row_with_fixed_footer_keys() {
+        for (width, height) in [(44, 16), (80, 24)] {
+            for collisions in [false, true] {
+                for down in [KeyCode::Down, KeyCode::PageDown] {
+                    let mut app = glm_environment_review();
+                    if collisions {
+                        let mut preview = (0..60)
+                            .map(|line| format!("merge line {line}: replace reviewed value"))
+                            .collect::<Vec<_>>();
+                        preview.push("merge-final".to_owned());
+                        app.review_collisions(preview.join("\n"));
+                    } else {
+                        app = app.with_destination(format!(
+                            "/tmp/{}/config.toml",
+                            "reviewed-directory/".repeat(30),
+                        ));
+                    }
+                    let initial = render_setup(&app, width, height);
+                    let initial_scroll = app.review_scroll.get();
+                    assert!(initial_scroll.limit > 0, "{initial}");
+                    assert!(initial.contains("↑↓/PgUp/PgDn review · 1/"), "{initial}");
+                    let error = app.error.clone();
+                    app.on_key(key(down));
+                    let expected = if down == KeyCode::Down {
+                        1
+                    } else {
+                        initial_scroll.page
+                    };
+                    assert_eq!(
+                        app.review_scroll.get().offset,
+                        expected.min(initial_scroll.limit)
+                    );
+                    for _ in 0..initial_scroll.limit {
+                        let buffer =
+                            render_setup_buffer(&app, width, height, Theme::new().without_color());
+                        let rows = setup_body_rows(&buffer);
+                        let footer = rows[rows.len() - 2..].join("\n");
+                        assert!(footer.contains("Enter confirm"), "{footer}");
+                        assert!(footer.contains("Shift+Tab"), "{footer}");
+                        assert!(footer.contains("Esc Cancel"), "{footer}");
+                        app.on_key(key(down));
+                    }
+                    let last = render_setup(&app, width, height);
+                    let scroll = app.review_scroll.get();
+                    assert_eq!(scroll.offset, scroll.limit);
+                    assert_eq!(app.error, error, "scrolling must preserve merge warnings");
+                    assert!(last.contains("pending action:"), "{last}");
+                    assert!(last.contains("local preflight"), "{last}");
+                    if collisions {
+                        assert!(last.contains("merge-final"), "{last}");
+                        assert!(last.contains("only those values."), "{last}");
+                    }
+                    assert!(last.contains(&format!("{}/{}", scroll.limit + 1, scroll.limit + 1)));
+                    app.on_key(key(KeyCode::PageUp));
+                    assert_eq!(
+                        app.review_scroll.get().offset,
+                        scroll.limit.saturating_sub(scroll.page)
+                    );
+                    let offset = app.review_scroll.get().offset;
+                    app.on_key(key(KeyCode::Up));
+                    assert_eq!(app.review_scroll.get().offset, offset.saturating_sub(1));
+                    for _ in 0..scroll.limit {
+                        app.on_key(key(KeyCode::PageUp));
+                    }
+                    assert_eq!(app.review_scroll.get().offset, 0);
+                    assert!(render_setup(&app, width, height).contains("Review the complete"));
+                    assert!(matches!(
+                        app.on_key(key(KeyCode::Enter)),
+                        SetupEffect::Submit { allow_collisions, .. } if allow_collisions == collisions
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn setup_review_scroll_clamps_on_resize_and_resets_after_back_or_new_preview() {
+        let mut app = glm_environment_review();
+        app.review_collisions("merge line\n".repeat(60));
+        render_setup(&app, 44, 16);
+        for _ in 0..100 {
+            app.on_key(key(KeyCode::PageDown));
+        }
+        let narrow = app.review_scroll.get();
+        render_setup(&app, 80, 24);
+        let wide = app.review_scroll.get();
+        assert!(wide.limit < narrow.limit);
+        assert_eq!(wide.offset, wide.limit);
+        app.review_collisions("replacement preview");
+        assert_eq!(app.review_scroll.get().offset, 0);
+        render_setup(&app, 44, 16);
+        app.on_key(key(KeyCode::Down));
+        app.on_key(key(KeyCode::BackTab));
+        assert_eq!(app.review_scroll.get().offset, 0);
+        assert!(app.collision_preview.is_none());
+        assert!(matches!(app.on_key(key(KeyCode::Esc)), SetupEffect::Cancel));
     }
 
     #[test]

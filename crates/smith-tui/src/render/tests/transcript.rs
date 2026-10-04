@@ -1,6 +1,96 @@
 // transcript behavior tests.
 
     #[test]
+    fn child_inspector_and_agents_agree_with_plain_workspace_and_resume_words() {
+        use agent_runtime_core::delegation::WorkspacePolicy;
+        use agent_runtime_core::ids::ChildId;
+        use smith_client::agent_report::{AgentReport, AgentSnapshot, render_plain};
+        use smith_runtime::{ChildDurability, ChildState, ChildStatus};
+
+        for (workspace, expected_workspace) in [
+            (WorkspacePolicy::SharedProject, "shared"),
+            (
+                WorkspacePolicy::ExplicitDirectory {
+                    path: "/repo/child".to_owned(),
+                },
+                "/repo/child",
+            ),
+            (WorkspacePolicy::IsolatedWorktree, "isolated worktree"),
+            (WorkspacePolicy::ReadOnlyView, "read only"),
+        ] {
+            for (resumable, expected_resume) in [
+                (true, "exact resume available"),
+                (false, "no exact checkpoint"),
+            ] {
+                let status = ChildStatus {
+                    child: ChildId::new("child"),
+                    parent: SessionId::new("parent"),
+                    session: SessionId::new("session"),
+                    durability: ChildDurability::Durable,
+                    state: ChildState::Interrupted { resumable },
+                    workspace: workspace.clone(),
+                    turns_used: 1,
+                    max_turns: 5,
+                    tokens_used: 2,
+                    last_result: None,
+                    last_artifacts: Vec::new(),
+                    updated_at: Timestamp(0),
+                    incompatibility: None,
+                    last_error: None,
+                };
+                let snapshot = AgentSnapshot::from(&status);
+                assert_eq!(snapshot.workspace, expected_workspace);
+                for theme in [Theme::new(), Theme::new().without_color()] {
+                    let mut app = App::new("model", "project");
+                    app.apply(&event(RuntimeEvent::ChildSpawned {
+                        child: status.child.clone(),
+                        workspace: workspace.clone(),
+                        max_turns: 5,
+                        max_tokens: None,
+                        deadline_ms: None,
+                    }));
+                    app.inspect_child("child");
+                    app.set_inspected_detail("child", Some(snapshot.clone()));
+                    let inspector = transcript_lines(&app, theme, 240)
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>();
+                    let plain = render_plain(&AgentReport::Inspector(snapshot.clone()));
+                    let card = plain
+                        .lines()
+                        .map(|line| format!("  {line}"))
+                        .collect::<Vec<_>>();
+                    assert!(
+                        inspector
+                            .windows(card.len())
+                            .any(|rows| rows == card.as_slice())
+                    );
+                    assert!(inspector.iter().any(|line| line.trim() == expected_resume));
+
+                    for report in [
+                        AgentReport::Inspector(snapshot.clone()),
+                        AgentReport::List(vec![snapshot.summary.clone()]),
+                    ] {
+                        let plain = render_plain(&report);
+                        let mut app = App::new("model", "project");
+                        app.show_local_report(LocalResult::Agent(Box::new(report)));
+                        let rows = transcript_lines(&app, theme, 240);
+                        let rendered = rows
+                            .iter()
+                            .skip(1)
+                            .map(|row| row.to_string().trim_start().to_owned())
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        assert_eq!(rendered, plain);
+                        assert!(!rendered.contains("resumable true"));
+                        assert!(!rendered.contains("resumable false"));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn a_success_summary_belongs_to_its_turn_and_disappears_after_any_later_block() {
         for (width, height) in [(44, 16), (80, 24), (100, 32)] {
             for append in 0..5 {

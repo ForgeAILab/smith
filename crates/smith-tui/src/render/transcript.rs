@@ -13,7 +13,9 @@ use crate::app::App;
 use crate::status::{Activity, render_elapsed};
 use crate::theme::{Theme, Tone, glyph};
 use crate::transcript::{Block, LocalResult, ToolStatus};
-use smith_client::agent_report::{AgentReport, AgentResumeReport, AgentSnapshot};
+use smith_client::agent_report::{
+    AgentReport, AgentResumeReport, AgentSnapshot, exact_resume_label,
+};
 use smith_client::commands::getting_started_commands;
 use smith_client::context_report::{ContextCategoryKind, ContextCompaction, ContextReport};
 use smith_client::diagnostics_report::{DiagnosticsReport, DiagnosticsRow};
@@ -211,7 +213,7 @@ pub(super) fn transcript_rows(app: &App, theme: Theme, width: u16) -> Transcript
         if cache.prefix[block_count] > 0 {
             tail.push(Line::default());
         }
-        tail.extend(render_assistant_lines(&text, theme, width));
+        tail.extend(render_assistant_lines(&text, theme, width, true));
     }
     append_turn_summary(&mut tail, cache.prefix[block_count] > 0, app, theme);
     TranscriptRows {
@@ -351,7 +353,7 @@ fn conversation_lines(
     if !lines.is_empty() {
         lines.push(Line::default());
     }
-    lines.extend(render_assistant_lines(&text, theme, width));
+    lines.extend(render_assistant_lines(&text, theme, width, true));
     lines
 }
 
@@ -410,8 +412,8 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16, expanded: bool) -> Ve
                     ]));
                 }
             }
-            Block::Assistant { text, .. } => {
-                lines.extend(render_assistant_lines(text, theme, width));
+            Block::Assistant { text, open } => {
+                lines.extend(render_assistant_lines(text, theme, width, *open));
             }
             Block::Reasoning { .. } => {}
             Block::Tool {
@@ -664,7 +666,7 @@ fn child_lines(app: &App, child: &str, theme: Theme, width: u16) -> Vec<Line<'st
         .child_elapsed(child)
         .map(|elapsed| format!(" \u{b7} {}", render_elapsed(elapsed)))
         .unwrap_or_default();
-    let mut lines = vec![
+    let mut lines = hanging_lines(
         Line::from(vec![
             Span::styled(
                 format!("{} ", glyph::AGENT_CURRENT),
@@ -679,10 +681,12 @@ fn child_lines(app: &App, child: &str, theme: Theme, width: u16) -> Vec<Line<'st
                 theme.style(summary.map_or(Tone::Dim, |summary| summary.state.tone())),
             ),
         ]),
-        Line::default(),
-    ];
+        width,
+        2,
+    );
+    lines.push(Line::default());
     if let Some(detail) = app.inspected_detail() {
-        lines.extend(render_agent_inspector(detail, theme));
+        lines.extend(render_agent_inspector(detail, width, theme));
         lines.push(Line::default());
     }
 
@@ -691,16 +695,17 @@ fn child_lines(app: &App, child: &str, theme: Theme, width: u16) -> Vec<Line<'st
     if blocks.is_empty() && speculative.is_none() {
         // A child restored from a durable record has a state but no live
         // history in this process. Saying so beats an empty pane.
-        lines.push(Line::from(Span::styled(
-            format!(
-                "  no activity recorded in this session{}",
+        lines.extend(reports::text(
+            &format!(
+                "no activity recorded in this session{}",
                 summary
                     .and_then(|summary| summary.detail.as_deref())
                     .map(|detail| format!(" \u{b7} {detail}"))
                     .unwrap_or_default()
             ),
+            width,
             theme.style(Tone::Dim),
-        )));
+        ));
         return lines;
     }
     // A child answers by streaming, like any agent. Its uncommitted text draws
@@ -1262,6 +1267,7 @@ fn render_agent_report(report: &AgentReport, width: u16, theme: Theme) -> Vec<Li
                     theme.style(Tone::Danger),
                 ))
             })
+            .flat_map(|line| hanging_lines(line, width, 2))
             .collect();
     }
 
@@ -1288,38 +1294,33 @@ fn render_agent_report(report: &AgentReport, width: u16, theme: Theme) -> Vec<Li
             width,
             theme.style(Tone::Danger),
         )),
-        AgentReport::Parent => lines.extend(wrap_context_line(
-            Line::from(Span::styled(
-                AgentReport::PARENT_MESSAGE,
-                theme.style(Tone::Default),
-            )),
-            usize::from(width).max(1),
+        AgentReport::Parent => lines.extend(reports::text(
+            AgentReport::PARENT_MESSAGE,
+            width,
+            theme.style(Tone::Default),
         )),
         AgentReport::List(children) => {
             for child in children {
                 let content = format!(
-                    "{} · {} · {} · resumable {} · {} turns · {} tokens",
+                    "{} · {} · {} · {} · {} turns · {} tokens",
                     child.child,
                     child.durability.label(),
                     child.state.label(),
-                    child.resumable,
+                    exact_resume_label(child.resumable),
                     child.turns_value(),
                     child.tokens_used,
                 );
-                lines.extend(wrap_context_line(
-                    Line::from(Span::styled(content, theme.style(Tone::Default))),
-                    usize::from(width).max(1),
-                ));
+                lines.extend(reports::text(&content, width, theme.style(Tone::Default)));
             }
         }
-        AgentReport::Inspector(child) => lines.extend(render_agent_inspector(child, theme)),
+        AgentReport::Inspector(child) => lines.extend(render_agent_inspector(child, width, theme)),
         AgentReport::Resume(_) => {}
     }
     lines
 }
 
-/// Inspector fields keep the existing indentation and paragraph word wrapping.
-fn render_agent_inspector(child: &AgentSnapshot, theme: Theme) -> Vec<Line<'static>> {
+/// Inspector fields word-wrap with indentation on every continuation row.
+fn render_agent_inspector(child: &AgentSnapshot, width: u16, theme: Theme) -> Vec<Line<'static>> {
     [
         format!(
             "session {} · {} · {} · {} · {} tokens · {}",
@@ -1331,8 +1332,8 @@ fn render_agent_inspector(child: &AgentSnapshot, theme: Theme) -> Vec<Line<'stat
             child.workspace,
         ),
         format!(
-            "resumable {}{}",
-            child.summary.resumable,
+            "{}{}",
+            exact_resume_label(child.summary.resumable),
             child
                 .incompatibility
                 .as_deref()
@@ -1349,12 +1350,7 @@ fn render_agent_inspector(child: &AgentSnapshot, theme: Theme) -> Vec<Line<'stat
         ),
     ]
     .into_iter()
-    .flat_map(|content| {
-        content
-            .lines()
-            .map(|raw| Line::from(Span::styled(format!("  {raw}"), theme.style(Tone::Dim))))
-            .collect::<Vec<_>>()
-    })
+    .flat_map(|content| reports::text(&content, width, theme.style(Tone::Dim)))
     .collect()
 }
 
@@ -1707,7 +1703,8 @@ fn render_timeline_report(report: &TimelineReport, width: u16, theme: Theme) -> 
                 resumable,
                 turns,
             } => format!(
-                "child {child} · session {session} · {durability} · {state} · resumable {resumable} · {turns} turns",
+                "child {child} · session {session} · {durability} · {state} · {} · {turns} turns",
+                exact_resume_label(*resumable),
             ),
             TimelineEntry::Recovery { number, detail } => {
                 format!("recovery recovery-{number} · {detail}")

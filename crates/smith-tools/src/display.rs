@@ -7,6 +7,7 @@
 //! meaning. Callers must credential-redact canonical arguments before passing
 //! them here.
 
+use agent_runtime_core::delegation::WorkspacePolicy;
 use serde_json::{Map, Value};
 
 const MAX_VALUE_CHARS: usize = 160;
@@ -440,19 +441,33 @@ fn agent_tool_scope(arguments: &Map<String, Value>) -> Option<String> {
 /// `workspace` is either one of two fixed labels or a `{"directory": {"path":
 /// …}}` object; a value outside that shape is ill-typed for this field.
 fn agent_workspace(arguments: &Map<String, Value>) -> Option<String> {
-    match arguments.get("workspace") {
-        None => Some("read only".to_owned()),
-        Some(Value::String(value)) if value == "shared" => Some("shared".to_owned()),
-        Some(Value::String(value)) if value == "read_only" => Some("read only".to_owned()),
+    let workspace = match arguments.get("workspace") {
+        None => WorkspacePolicy::ReadOnlyView,
+        Some(Value::String(value)) if value == "shared" => WorkspacePolicy::SharedProject,
+        Some(Value::String(value)) if value == "read_only" => WorkspacePolicy::ReadOnlyView,
         Some(Value::Object(object)) => {
             let path = object
                 .get("directory")?
                 .as_object()?
                 .get("path")?
                 .as_str()?;
-            normalize_value(path)
+            WorkspacePolicy::ExplicitDirectory {
+                path: path.to_owned(),
+            }
         }
-        _ => None,
+        _ => return None,
+    };
+    agent_workspace_display(&workspace)
+}
+
+/// Workspace words shared by reviewed spawn rows and child details.
+/// Directory paths use the same bounds and control normalization as tool inputs.
+pub fn agent_workspace_display(workspace: &WorkspacePolicy) -> Option<String> {
+    match workspace {
+        WorkspacePolicy::SharedProject => Some("shared".to_owned()),
+        WorkspacePolicy::ExplicitDirectory { path } => normalize_value(path),
+        WorkspacePolicy::IsolatedWorktree => Some("isolated worktree".to_owned()),
+        WorkspacePolicy::ReadOnlyView => Some("read only".to_owned()),
     }
 }
 

@@ -206,7 +206,7 @@ pub struct AgentSnapshot {
     pub summary: AgentSummary,
     /// Child session identity.
     pub session: String,
-    /// Existing debug-formatted workspace policy.
+    /// Workspace in the reviewed spawn row's words.
     pub workspace: String,
     /// Exact-resume incompatibility, if present.
     pub incompatibility: Option<String>,
@@ -219,7 +219,8 @@ impl From<&ChildStatus> for AgentSnapshot {
         Self {
             summary: AgentSummary::from(status),
             session: status.session.to_string(),
-            workspace: format!("{:?}", status.workspace),
+            workspace: smith_runtime::delegation::agent_workspace_display(&status.workspace)
+                .unwrap_or_else(|| "directory unknown".to_owned()),
             incompatibility: status.incompatibility.clone(),
             last_result: status.last_result.clone(),
         }
@@ -325,6 +326,15 @@ impl AgentResumeReport {
     }
 }
 
+/// Shared human-readable exact-checkpoint availability for child surfaces.
+pub fn exact_resume_label(resumable: bool) -> &'static str {
+    if resumable {
+        "exact resume available"
+    } else {
+        "no exact checkpoint"
+    }
+}
+
 /// Renders the transcript or inspector body for the plain-text capture surface.
 /// No terminal libraries or title/label parsing are involved.
 pub fn render_plain(report: &AgentReport) -> String {
@@ -337,11 +347,11 @@ pub fn render_plain(report: &AgentReport) -> String {
             .iter()
             .map(|child| {
                 format!(
-                    "{} · {} · {} · resumable {} · {} turns · {} tokens",
+                    "{} · {} · {} · {} · {} turns · {} tokens",
                     child.child,
                     child.durability.label(),
                     child.state.label(),
-                    child.resumable,
+                    exact_resume_label(child.resumable),
                     child.turns_value(),
                     child.tokens_used,
                 )
@@ -349,14 +359,14 @@ pub fn render_plain(report: &AgentReport) -> String {
             .collect::<Vec<_>>()
             .join("\n"),
         AgentReport::Inspector(child) => format!(
-            "session {} · {} · {} · {} · {} tokens · {}\nresumable {}{}\ncontinue: type a follow-up below · exact recovery: /agent resume {}\nresult: {}",
+            "session {} · {} · {} · {} · {} tokens · {}\n{}{}\ncontinue: type a follow-up below · exact recovery: /agent resume {}\nresult: {}",
             child.session,
             child.summary.durability.label(),
             child.summary.state.label(),
             child.summary.turns_value(),
             child.summary.tokens_used,
             child.workspace,
-            child.summary.resumable,
+            exact_resume_label(child.summary.resumable),
             child
                 .incompatibility
                 .as_deref()
@@ -373,6 +383,64 @@ pub fn render_plain(report: &AgentReport) -> String {
 mod tests {
     use super::*;
     use agent_runtime_core::cancel::CancelReason;
+
+    #[test]
+    fn child_details_use_spawn_workspace_words_and_exact_resume_words() {
+        use agent_runtime_core::clock::Timestamp;
+        use agent_runtime_core::delegation::WorkspacePolicy;
+        use agent_runtime_core::ids::{ChildId, SessionId};
+
+        for (workspace, expected_workspace) in [
+            (WorkspacePolicy::SharedProject, "shared"),
+            (
+                WorkspacePolicy::ExplicitDirectory {
+                    path: "/repo/child".to_owned(),
+                },
+                "/repo/child",
+            ),
+            (WorkspacePolicy::IsolatedWorktree, "isolated worktree"),
+            (WorkspacePolicy::ReadOnlyView, "read only"),
+        ] {
+            for (resumable, expected_resume) in [
+                (true, "exact resume available"),
+                (false, "no exact checkpoint"),
+            ] {
+                let status = ChildStatus {
+                    child: ChildId::new("child"),
+                    parent: SessionId::new("parent"),
+                    session: SessionId::new("session"),
+                    durability: RuntimeChildDurability::Durable,
+                    state: RuntimeChildState::Interrupted { resumable },
+                    workspace: workspace.clone(),
+                    turns_used: 1,
+                    max_turns: 5,
+                    tokens_used: 2,
+                    last_result: None,
+                    last_artifacts: Vec::new(),
+                    updated_at: Timestamp(0),
+                    incompatibility: None,
+                    last_error: None,
+                };
+                let snapshot = AgentSnapshot::from(&status);
+                assert_eq!(snapshot.workspace, expected_workspace);
+                let inspector = render_plain(&AgentReport::Inspector(snapshot.clone()));
+                assert!(
+                    inspector
+                        .lines()
+                        .next()
+                        .unwrap()
+                        .ends_with(expected_workspace)
+                );
+                assert_eq!(inspector.lines().nth(1), Some(expected_resume));
+                let list = render_plain(&AgentReport::List(vec![snapshot.summary]));
+                assert!(list.contains(&format!(" · {expected_resume} · ")), "{list}");
+                for rendered in [&inspector, &list] {
+                    assert!(!rendered.contains("resumable true"), "{rendered}");
+                    assert!(!rendered.contains("resumable false"), "{rendered}");
+                }
+            }
+        }
+    }
 
     #[test]
     fn child_labels_are_readable_and_preserve_host_reason_text() {
@@ -460,7 +528,7 @@ mod tests {
                     tokens_used: 2,
                 },
                 session: "session".to_owned(),
-                workspace: "ReadOnlyView".to_owned(),
+                workspace: "read only".to_owned(),
                 incompatibility: None,
                 last_result: None,
             };

@@ -89,6 +89,9 @@ pub use self::delegation_parking::{
 /// The model-facing delegation tool's name — Smith product policy.
 pub const AGENT_TOOL_NAME: &str = "agent";
 
+/// Reviewed workspace wording exposed to clients through the runtime boundary.
+pub use smith_tools::display::agent_workspace_display;
+
 /// The limits a spawned child runs under: none. Smith deliberately spawns
 /// children unbounded — the coordinator's concurrency cap is the only brake.
 /// `ChildLimits::max_turns` is a required count in the shared runtime, so

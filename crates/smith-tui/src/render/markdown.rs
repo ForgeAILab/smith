@@ -8,7 +8,12 @@ use crate::theme::{Theme, Tone, glyph};
 
 use super::wrap::wrap_lines;
 
-pub(super) fn render_assistant_lines(text: &str, theme: Theme, width: u16) -> Vec<Line<'static>> {
+pub(super) fn render_assistant_lines(
+    text: &str,
+    theme: Theme,
+    width: u16,
+    streaming: bool,
+) -> Vec<Line<'static>> {
     let mut renderer = Markdown {
         theme,
         width: width.saturating_sub(2).max(1),
@@ -126,6 +131,11 @@ pub(super) fn render_assistant_lines(text: &str, theme: Theme, width: u16) -> Ve
                     break;
                 }
                 let Some(cells) = table_cells(row.body) else {
+                    // The opening pipe can arrive before its first cell.
+                    // Keep that unfinished final row in the receiving table.
+                    if streaming && index + 1 == source.len() && row.body.trim() == "|" {
+                        index += 1;
+                    }
                     break;
                 };
                 if cells.len() > headers.len() {
@@ -134,7 +144,18 @@ pub(super) fn render_assistant_lines(text: &str, theme: Theme, width: u16) -> Ve
                 records.push(cells);
                 index += 1;
             }
-            renderer.table(&headers, &records, &prefix, &continuation);
+            if streaming && index == source.len() {
+                // Measure only the header while rows arrive: a later, wider
+                // cell must not change any row the reader already sees.
+                renderer.table_header(&headers, &prefix, &continuation);
+                renderer.push(
+                    vec![Span::styled("receiving table…", theme.style(Tone::Dim))],
+                    &continuation,
+                    &continuation,
+                );
+            } else {
+                renderer.table(&headers, &records, &prefix, &continuation);
+            }
         } else if horizontal_rule(body) {
             let length = usize::from(renderer.width)
                 .saturating_sub(prefix.width())
@@ -173,6 +194,22 @@ struct Markdown {
 }
 
 impl Markdown {
+    fn table_header(&mut self, headers: &[String], first: &str, continuation: &str) {
+        let mut spans = Vec::new();
+        for (index, header) in headers.iter().enumerate() {
+            if index > 0 {
+                spans.push(Span::styled(" │ ", self.theme.style(Tone::Dim)));
+            }
+            spans.extend(inline(
+                header,
+                self.theme.style(Tone::Heading),
+                self.theme,
+                0,
+            ));
+        }
+        self.push(spans, first, continuation);
+    }
+
     fn push(&mut self, spans: Vec<Span<'static>>, first: &str, continuation: &str) {
         // Even deeply nested input leaves room for a whole wide glyph. The
         // normal terminal minimum is 40, but source indentation is unbounded.

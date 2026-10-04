@@ -113,7 +113,96 @@ const MARKDOWN_CASES: &[(&str, &str)] = &[
 ];
 
 fn markdown_rows(text: &str, width: u16, theme: Theme) -> Vec<Line<'static>> {
-    super::super::markdown::render_assistant_lines(text, theme, width)
+    super::super::markdown::render_assistant_lines(text, theme, width, false)
+}
+
+#[test]
+fn streaming_trailing_table_keeps_its_header_and_earlier_rows_stable() {
+    let prefix = "Earlier **paragraph**.\n\n| Name | State |\n| --- | --- |";
+    for width in [44, 80, 100] {
+        for theme in [Theme::new(), Theme::new().without_color()] {
+            let receiving =
+                super::super::markdown::render_assistant_lines(prefix, theme, width, true);
+            assert_eq!(
+                receiving
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>(),
+                [
+                    "● Earlier paragraph.",
+                    "  ",
+                    "  Name │ State",
+                    "  receiving table…"
+                ]
+            );
+            let placeholder = receiving.last().unwrap();
+            assert!(
+                placeholder
+                    .spans
+                    .iter()
+                    .all(|span| span.style.add_modifier.contains(Modifier::DIM))
+            );
+            for appended in [
+                "\n| Retry | ready |",
+                "\n| Retry | ready |\n|",
+                "\n| Retry | ready |\n|   ",
+                "\n| Retry | ready |\n| Later row is much wider than the headers | waiting |",
+                "\n| Retry | ready |\n| Later row is much wider than the headers | waiting |\n| Partial",
+            ] {
+                let text = format!("{prefix}{appended}");
+                let rows =
+                    super::super::markdown::render_assistant_lines(&text, theme, width, true);
+                assert_eq!(rows, receiving, "rows arriving at {width}: {text}");
+                assert!(rows.iter().all(|row| row.width() <= usize::from(width)));
+            }
+            let complete = format!("{prefix}\n| Retry | ready |\n| Cancel | waiting |");
+            let committed = markdown_rows(&complete, width, theme);
+            assert_eq!(committed.len(), 6);
+            assert!(
+                committed
+                    .iter()
+                    .any(|row| row.to_string().contains("Retry"))
+            );
+            assert!(
+                committed
+                    .iter()
+                    .any(|row| row.to_string().contains("Cancel"))
+            );
+            assert!(
+                !committed
+                    .iter()
+                    .any(|row| row.to_string().contains("receiving table"))
+            );
+            let followed = format!("{complete}\n\nFollowing paragraph.");
+            assert_eq!(
+                super::super::markdown::render_assistant_lines(&followed, theme, width, true),
+                markdown_rows(&followed, width, theme),
+            );
+        }
+    }
+}
+
+#[test]
+fn streaming_only_defers_the_trailing_table_and_preserves_its_container() {
+    let complete = "| Name | State |\n| --- | --- |\n| Retry | ready |\n\nFollowing paragraph.\n\n";
+    let trailing = "> | Child | Status |\n> | --- | --- |\n> | child-1 | running |";
+    for width in [44, 80, 100] {
+        let theme = Theme::new();
+        let rows = super::super::markdown::render_assistant_lines(
+            &format!("{complete}{trailing}"),
+            theme,
+            width,
+            true,
+        );
+        assert!(rows.starts_with(&markdown_rows(complete, width, theme)));
+        let text = rows.iter().map(ToString::to_string).collect::<Vec<_>>();
+        assert_eq!(
+            text[text.len() - 2..],
+            ["  │ Child │ Status", "  │ receiving table…"]
+        );
+        assert!(text.iter().any(|row| row.contains("Retry")));
+        assert!(!text.iter().any(|row| row.contains("child-1")));
+    }
 }
 
 #[test]
@@ -557,12 +646,20 @@ fn assistant_markdown_appends_after_hard_newlines_without_rewrapping_completed_p
 #[test]
 fn assistant_markdown_matches_stream_commit_journal_and_history_at_each_width_and_theme() {
     for (name, text) in MARKDOWN_CASES {
+        // These equality checks cover completed constructs. Trailing tables
+        // intentionally differ while streaming and have dedicated tests.
+        let completed = format!("{text}\n\nAfter the table.");
+        let text = if name.contains("table") {
+            completed.as_str()
+        } else {
+            *text
+        };
         let events = [
             event(RuntimeEvent::TurnStarted),
             event(RuntimeEvent::TextDelta {
                 request: RequestId::new("markdown-request"),
                 attempt: AttemptId::new("markdown-attempt"),
-                text: (*text).to_owned(),
+                text: text.to_owned(),
             }),
             event(RuntimeEvent::ProviderAttemptOutputCommitted {
                 request: RequestId::new("markdown-request"),
@@ -588,7 +685,7 @@ fn assistant_markdown_matches_stream_commit_journal_and_history_at_each_width_an
         history
             .transcript
             .replace_from_history(&[Message::assistant(vec![ContentPart::Text {
-                text: (*text).to_owned(),
+                text: text.to_owned(),
             }])]);
         for width in [44, 80, 100] {
             let mut colored_text = None;
@@ -674,13 +771,19 @@ fn assistant_markdown_matches_stream_commit_journal_and_history_at_each_width_an
 #[test]
 fn child_markdown_uses_the_same_renderer_before_and_after_commit() {
     for (name, text) in MARKDOWN_CASES {
+        let completed = format!("{text}\n\nAfter the table.");
+        let text = if name.contains("table") {
+            completed.as_str()
+        } else {
+            *text
+        };
         let mut app = App::new("m", "p");
         app.apply_child(
             "child-a",
             &event(RuntimeEvent::TextDelta {
                 request: RequestId::new("child-request"),
                 attempt: AttemptId::new("child-attempt"),
-                text: (*text).to_owned(),
+                text: text.to_owned(),
             }),
         );
         app.inspect_child("child-a");
@@ -706,7 +809,7 @@ fn child_markdown_uses_the_same_renderer_before_and_after_commit() {
                 transcript_lines(&app, theme, width),
                 "{name}: child commit at {width}"
             );
-            let root = super::super::markdown::render_assistant_lines(text, theme, width);
+            let root = super::super::markdown::render_assistant_lines(text, theme, width, true);
             assert!(live.ends_with(&root), "{name}: child shares root Markdown");
         }
     }

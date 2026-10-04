@@ -1,6 +1,6 @@
 /agents
-child-1 · durable · idle · resumable false ·
- 1/1 turns · 0 tokens
+  child-1 · durable · idle · no exact
+  checkpoint · 1/1 turns · 0 tokens
 
 
 

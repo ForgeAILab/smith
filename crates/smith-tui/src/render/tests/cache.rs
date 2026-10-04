@@ -18,6 +18,72 @@ const STATUSES: [ToolStatus; 6] = [
     ToolStatus::Unreported,
 ];
 
+#[test]
+fn streaming_table_cache_replaces_the_placeholder_when_the_block_closes() {
+    let table = "| Name | State |\n| --- | --- |\n| Retry | ready |\n| Cancel | waiting |";
+    for width in [44, 80, 100] {
+        for theme in [Theme::new(), Theme::new().without_color()] {
+            let mut app = App::new("model", "project");
+            app.transcript.push_text_delta(table);
+            let open_revision = app.transcript.block_revision(0);
+            let receiving = transcript_rows(&app, theme, width).window(0, 100);
+            assert_eq!(receiving.len(), 2);
+            assert_eq!(receiving[1].to_string(), "  receiving table…");
+            let renders = app.transcript_cache.borrow().renders;
+            app.transcript.close_open();
+            assert_ne!(app.transcript.block_revision(0), open_revision);
+            let full = transcript_rows(&app, theme, width).window(0, 100);
+            assert_eq!(app.transcript_cache.borrow().renders, renders + 1);
+            assert_eq!(
+                full,
+                wrap_lines(&render_assistant_lines(table, theme, width, false), width)
+            );
+            assert!(full.iter().any(|row| row.to_string().contains("Retry")));
+            assert!(full.iter().any(|row| row.to_string().contains("Cancel")));
+            assert_matches_uncached(&app, theme, width);
+        }
+    }
+}
+
+#[test]
+fn streaming_table_speculative_and_open_paths_render_in_full_after_a_paragraph() {
+    let table = "| Name | State |\n| --- | --- |\n| Retry | ready |";
+    for width in [44, 80, 100] {
+        let theme = Theme::new().without_color();
+        for open_prefix in [false, true] {
+            let mut app = App::new("model", "project");
+            if open_prefix {
+                app.transcript.push_text_delta("Earlier paragraph.\n\n");
+            }
+            app.apply(&event(SmithEventKind::TextDelta {
+                request: RequestId::new("r"),
+                attempt: AttemptId::new("a"),
+                text: table.to_owned(),
+            }));
+            assert_matches_uncached(&app, theme, width);
+            let receiving = transcript_rows(&app, theme, width).window(0, 100);
+            assert_eq!(receiving.last().unwrap().to_string(), "  receiving table…");
+            app.apply(&event(SmithEventKind::ProviderAttemptOutputCommitted {
+                request: RequestId::new("r"),
+                attempt: AttemptId::new("a"),
+            }));
+            assert_eq!(
+                transcript_rows(&app, theme, width).window(0, 100),
+                receiving
+            );
+            app.transcript.push_text_delta("\n\nFollowing paragraph.");
+            assert_matches_uncached(&app, theme, width);
+            let full = transcript_rows(&app, theme, width).window(0, 100);
+            assert!(full.iter().any(|row| row.to_string().contains("Retry")));
+            assert!(
+                !full
+                    .iter()
+                    .any(|row| row.to_string().contains("receiving table"))
+            );
+        }
+    }
+}
+
 fn event(payload: SmithEventKind) -> SmithEvent {
     SmithEvent::new(
         0,
