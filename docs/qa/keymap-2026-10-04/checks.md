@@ -17,3 +17,9 @@
   end-of-loop quit check keep their order. The longest handler is 105
   lines.
 - `../grammar-2026-10-03/final_checks.py`: 67/67.
+
+## Cache, 0.3.4 against 0.3.5
+
+`../grammar-2026-10-03/cache_ab.py` ([results](cache-ab.json)). All three
+providers matched turn for turn within normal provider variance (xAI turn 2:
+2,496 and 2,432 cached tokens). No miss or re-billed tokens on any turn.
