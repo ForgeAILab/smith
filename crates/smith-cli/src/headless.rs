@@ -13,6 +13,7 @@ use smith_runtime::rotation::SharedPool;
 use crate::cli::OutputFormat;
 
 mod background;
+mod fold;
 mod output;
 mod run_flow;
 

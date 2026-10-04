@@ -1,12 +1,9 @@
 //! Headless turn event consumption and terminal stream output.
 
-use std::collections::BTreeSet;
 use std::io::Write;
 use std::time::Duration;
 
 use agent_runtime_core::content::{Role, UserInput};
-use agent_runtime_core::goal::GoalStatus;
-use agent_runtime_core::interaction::InteractionOutcomeKind;
 use agent_runtime_core::usage::UsageDelta;
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
@@ -19,12 +16,12 @@ use smith_runtime::client::{SmithEventKind as RuntimeEvent, TurnFinish};
 use smith_runtime::host::HostSession;
 
 use super::background::apply_background_exit_policy;
+use super::fold::HeadlessFold;
 use super::output::{
-    ActivationOutput, CacheControllerEnvelope, CacheOutput, LifecycleOutput, ReasoningOutput,
-    ResultEnvelope, ResultStatus, StreamEnvelope, SyntheticUsageOutput, UsageOutput,
-    UsageProvenance, account_output, activation_output, approval_diagnostic, child_session_outputs,
-    is_synthetic_usage, outcome, plan_output, recovery_output, terminal_error, write_json,
-    write_text, write_text_projection,
+    CacheControllerEnvelope, CacheOutput, LifecycleOutput, ReasoningOutput, ResultEnvelope,
+    ResultStatus, StreamEnvelope, SyntheticUsageOutput, UsageOutput, UsageProvenance,
+    account_output, activation_output, approval_diagnostic, child_session_outputs, outcome,
+    recovery_output, terminal_error, write_json, write_text, write_text_projection,
 };
 use super::{HeadlessBrokers, INTERACTION_REQUIRED_EXIT, OUTPUT_SCHEMA_VERSION, Outcome};
 use crate::cli::OutputFormat;
@@ -72,204 +69,10 @@ pub(super) async fn run_with_io(
         }
     };
     let turn_id = turn.id().clone();
-    let mut finish = None;
-    let mut turn_usage = UsageDelta::new();
-    let mut cache: Option<CacheOutput> = None;
-    let mut last_error = None;
-    let mut last_attempt_error = None;
-    let mut last_sequence = None;
-    let mut sequence_error = None;
-    let mut pending_interaction: Option<InteractionRequired> = None;
-    let mut event_interaction_required: Option<InteractionRequired> = None;
-    let mut lifecycle = LifecycleOutput {
-        activation: initial_activation,
-        ..LifecycleOutput::default()
-    };
-    let mut goal_continuation_turns = 0_u32;
-    let mut active_goal_turns = BTreeSet::new();
-    let mut active_child_completion_turns = BTreeSet::new();
-    let mut pending_child_completion_delivery = false;
+    let mut fold = HeadlessFold::new(turn_id.clone(), cache_projection, initial_activation);
 
     while let Some(event) = events.next().await {
-        cache_projection.apply(&event);
-        observe_sequence(&mut last_sequence, event.seq, &mut sequence_error);
-        if matches!(
-            &event.payload,
-            RuntimeEvent::InternalTurnStarted { source } if source.kind == "goal"
-        ) {
-            goal_continuation_turns = goal_continuation_turns.saturating_add(1);
-            if let Some(turn) = &event.turn {
-                active_goal_turns.insert(turn.as_str().to_owned());
-            }
-        }
-        if matches!(
-            &event.payload,
-            RuntimeEvent::InternalTurnStarted { source }
-                if source.kind == "delegation.child-completion"
-        ) {
-            pending_child_completion_delivery = false;
-            if let Some(turn) = &event.turn {
-                active_child_completion_turns.insert(turn.as_str().to_owned());
-            }
-        }
-        if matches!(
-            &event.payload,
-            RuntimeEvent::ChildCompleted { .. } | RuntimeEvent::ChildNeedsInput { .. }
-        ) {
-            pending_child_completion_delivery = true;
-        }
-        let belongs_to_turn = event.turn.as_ref() == Some(&turn_id);
-        let belongs_to_goal_turn = event
-            .turn
-            .as_ref()
-            .is_some_and(|turn| active_goal_turns.contains(turn.as_str()));
-        if belongs_to_turn {
-            match &event.payload {
-                RuntimeEvent::Usage { record } if !is_synthetic_usage(record) => {
-                    turn_usage.merge(&record.delta)
-                }
-                RuntimeEvent::CachePlanChanged {
-                    preserved_prefix_tokens,
-                    invalidated_prefix_tokens,
-                    provider_cache_supported,
-                    ..
-                } => {
-                    cache = Some(CacheOutput {
-                        provider_cache_supported: *provider_cache_supported,
-                        preserved_prefix_tokens: *preserved_prefix_tokens,
-                        invalidated_prefix_tokens: *invalidated_prefix_tokens,
-                        state: None,
-                        cache_identity: None,
-                        expected_read_tokens: None,
-                        observed_read_tokens: None,
-                        observed_write_tokens: None,
-                        missed_tokens: None,
-                        confidence: None,
-                        cache_read_percent: None,
-                        miss_count: None,
-                        rebilled_tokens: None,
-                        idle_minutes: None,
-                        extra_cost_micro_usd: None,
-                        lifecycle: None,
-                        controller: None,
-                        notice: None,
-                    });
-                }
-                RuntimeEvent::Error { error } => last_error = Some(error.to_string()),
-                // An attempt that ended in an error reports its own cause
-                // even when the retry loop then spends the attempt budget
-                // without a terminal error event; it is the only account of
-                // why a `limit_reached` turn produced nothing.
-                RuntimeEvent::ProviderAttemptFinished {
-                    error: Some(error), ..
-                } => last_attempt_error = Some(error.to_string()),
-                RuntimeEvent::ProviderAttemptOutputCommitted { .. } => {
-                    lifecycle.attempts_committed = lifecycle.attempts_committed.saturating_add(1);
-                }
-                RuntimeEvent::ProviderAttemptOutputDiscarded { .. } => {
-                    lifecycle.attempts_discarded = lifecycle.attempts_discarded.saturating_add(1);
-                }
-                RuntimeEvent::CapabilitiesActivated { epoch, activation } => {
-                    lifecycle.activation = Some(ActivationOutput {
-                        epoch: u64::from(*epoch),
-                        capabilities: activation
-                            .iter()
-                            .map(|capability| capability.id.to_string())
-                            .collect(),
-                    });
-                }
-                RuntimeEvent::PlanUpdated {
-                    revision,
-                    sensitivity,
-                    counts,
-                    items,
-                } => {
-                    lifecycle.plan = Some(plan_output(
-                        *revision,
-                        *sensitivity,
-                        counts.clone(),
-                        items.clone(),
-                    ));
-                }
-                RuntimeEvent::TurnCompleted {
-                    finish: completed, ..
-                } => {
-                    if let TurnFinish::NeedsInput { request } = completed {
-                        let required = pending_interaction
-                            .take()
-                            .filter(|pending| pending.request_id == request.as_str())
-                            .unwrap_or_else(|| InteractionRequired {
-                                request_id: request.as_str().to_owned(),
-                                question_count: 0,
-                            });
-                        event_interaction_required.get_or_insert(required);
-                    }
-                    finish = Some(completed.clone());
-                }
-                RuntimeEvent::InteractionRequested {
-                    request,
-                    question_count,
-                    ..
-                } => {
-                    pending_interaction = Some(InteractionRequired {
-                        request_id: request.as_str().to_owned(),
-                        question_count: usize::from(*question_count),
-                    });
-                }
-                RuntimeEvent::InteractionResolved {
-                    request,
-                    outcome: InteractionOutcomeKind::Unavailable,
-                    ..
-                } => {
-                    if let Some(required) = pending_interaction.take()
-                        && required.request_id == request.as_str()
-                    {
-                        event_interaction_required.get_or_insert(required);
-                    }
-                }
-                _ => {}
-            }
-        }
-        if belongs_to_goal_turn {
-            match &event.payload {
-                RuntimeEvent::Error { error } => last_error = Some(error.to_string()),
-                RuntimeEvent::InteractionRequested {
-                    request,
-                    question_count,
-                    ..
-                } => {
-                    pending_interaction = Some(InteractionRequired {
-                        request_id: request.as_str().to_owned(),
-                        question_count: usize::from(*question_count),
-                    });
-                }
-                RuntimeEvent::InteractionResolved {
-                    request,
-                    outcome: InteractionOutcomeKind::Unavailable,
-                    ..
-                } => {
-                    if let Some(required) = pending_interaction.take()
-                        && required.request_id == request.as_str()
-                    {
-                        event_interaction_required.get_or_insert(required);
-                    }
-                }
-                RuntimeEvent::TurnCompleted {
-                    finish: TurnFinish::NeedsInput { request },
-                    ..
-                } => {
-                    let required = pending_interaction
-                        .take()
-                        .filter(|pending| pending.request_id == request.as_str())
-                        .unwrap_or_else(|| InteractionRequired {
-                            request_id: request.as_str().to_owned(),
-                            question_count: 0,
-                        });
-                    event_interaction_required.get_or_insert(required);
-                }
-                _ => {}
-            }
-        }
+        fold.apply(&event);
 
         if format == OutputFormat::StreamJson
             && let Err(error) = write_json(
@@ -284,63 +87,30 @@ pub(super) async fn run_with_io(
             let _ = host.shutdown().await;
             return Err(error);
         }
-        if belongs_to_goal_turn
-            && matches!(&event.payload, RuntimeEvent::TurnCompleted { .. })
-            && let Some(turn) = &event.turn
-        {
-            active_goal_turns.remove(turn.as_str());
-        }
-        if matches!(&event.payload, RuntimeEvent::TurnCompleted { .. })
-            && let Some(turn) = &event.turn
-        {
-            active_child_completion_turns.remove(turn.as_str());
-        }
-        if finish
-            .as_ref()
-            .is_some_and(|finish| !finish_waits_for_required_follow_up(finish))
-        {
+        if fold.exit(|| host.goal(), || has_required_child_work(host)) {
             break;
-        }
-        if finish.is_some() {
-            match host.goal() {
-                Ok(Some(goal)) if goal.status == GoalStatus::Active => {}
-                Ok(_)
-                    if active_goal_turns.is_empty()
-                        && active_child_completion_turns.is_empty()
-                        && !pending_child_completion_delivery
-                        && !has_required_child_work(host) =>
-                {
-                    break;
-                }
-                Ok(_) => {}
-                Err(error) => {
-                    sequence_error.get_or_insert_with(|| {
-                        format!("persistent goal state became unavailable: {error}")
-                    });
-                    break;
-                }
-            }
         }
     }
 
-    let stream_error = finish
+    let stream_error = fold
+        .finish
         .is_none()
         .then(|| "the runtime event stream ended before the turn completed".to_owned());
 
-    lifecycle.children = child_session_outputs(host);
-    lifecycle.parent_state = host
+    fold.lifecycle.children = child_session_outputs(host);
+    fold.lifecycle.parent_state = host
         .delegation_parking()
         .map(|snapshot| snapshot.state.as_str());
 
     let final_goal = match host.goal() {
         Ok(goal) => goal,
         Err(error) => {
-            sequence_error
+            fold.sequence_error
                 .get_or_insert_with(|| format!("persistent goal state unavailable: {error}"));
             None
         }
     };
-    let goal_continuation_turns = final_goal.as_ref().map(|_| goal_continuation_turns);
+    let goal_continuation_turns = final_goal.as_ref().map(|_| fold.goal_continuation_turns);
 
     let (background_exit_error, background_exit_output) =
         apply_background_exit_policy(host.background_tasks(), session.id(), background_exit).await;
@@ -354,7 +124,7 @@ pub(super) async fn run_with_io(
         while let Ok(Some(event)) =
             tokio::time::timeout(Duration::from_millis(100), events.next()).await
         {
-            observe_sequence(&mut last_sequence, event.seq, &mut sequence_error);
+            observe_sequence(&mut fold.last_sequence, event.seq, &mut fold.sequence_error);
             let terminal = matches!(event.payload, RuntimeEvent::SessionShutdown);
             write_json(
                 stdout,
@@ -400,29 +170,33 @@ pub(super) async fn run_with_io(
         .unwrap_or_default();
     let session_usage = snapshot.usage.total();
     let synthetic_cache = SyntheticUsageOutput::from_records(snapshot.usage.records());
-    if let Some(summary) = cache_projection.completed_turn(turn_id.as_str()) {
+    if let Some(summary) = fold.cache_projection.completed_turn(turn_id.as_str()) {
         let summary = cache_price
-            .map(|price| cache_projection.with_price(summary, price))
+            .map(|price| fold.cache_projection.with_price(summary, price))
             .unwrap_or_else(|| summary.clone());
-        cache = Some(CacheOutput::from_summary(&summary, cache));
+        fold.cache = Some(CacheOutput::from_summary(&summary, fold.cache));
     }
-    let cache_lifecycle = cache_projection.lifecycle().clone();
+    let cache_lifecycle = fold.cache_projection.lifecycle().clone();
     if cache_lifecycle != CacheLifecycleSummary::default() {
-        cache = Some(CacheOutput::from_lifecycle(cache_lifecycle, cache));
+        fold.cache = Some(CacheOutput::from_lifecycle(cache_lifecycle, fold.cache));
     }
     if let Some(controller) = cache_controller {
-        cache = Some(CacheOutput::from_controller(controller, cache));
+        fold.cache = Some(CacheOutput::from_controller(controller, fold.cache));
     }
     let approval_required = approval.and_then(HeadlessApproval::required);
     let interaction_required = interaction
         .and_then(HeadlessInteraction::required)
-        .or(event_interaction_required);
-    let lifecycle_error = shutdown_error.or(stream_error).or(sequence_error);
-    let error = background_exit_error
-        .or(lifecycle_error)
-        .or_else(|| terminal_error(finish.as_ref(), last_error, last_attempt_error));
+        .or(fold.event_interaction_required);
+    let lifecycle_error = shutdown_error.or(stream_error).or(fold.sequence_error);
+    let error = background_exit_error.or(lifecycle_error).or_else(|| {
+        terminal_error(
+            fold.finish.as_ref(),
+            fold.last_error,
+            fold.last_attempt_error,
+        )
+    });
     let (status, exit_code) = outcome(
-        finish.as_ref(),
+        fold.finish.as_ref(),
         final_goal.as_ref(),
         approval_required.as_ref(),
         interaction_required.as_ref(),
@@ -439,13 +213,13 @@ pub(super) async fn run_with_io(
         model: host.runtime().policy().model.as_str().to_owned(),
         output: output.clone(),
         usage: UsageOutput {
-            current_turn_provenance: UsageProvenance::of(&turn_usage),
+            current_turn_provenance: UsageProvenance::of(&fold.turn_usage),
             session_provenance: UsageProvenance::of(&session_usage),
-            current_turn: turn_usage,
+            current_turn: fold.turn_usage,
             session: session_usage,
             synthetic_cache,
         },
-        lifecycle,
+        lifecycle: fold.lifecycle,
         goal: final_goal,
         goal_continuation_turns,
         artifacts,
@@ -455,7 +229,7 @@ pub(super) async fn run_with_io(
         recovery: recovery_output(host),
         background_exit: background_exit_output,
         reasoning: Some(ReasoningOutput::of(&host.runtime().policy().reasoning)),
-        cache,
+        cache: fold.cache,
         resume_capsule,
         error: error.clone(),
     };

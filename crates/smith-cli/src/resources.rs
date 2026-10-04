@@ -9,7 +9,10 @@ use crossterm::event::{Event as TermEvent, EventStream};
 use futures_util::StreamExt;
 use ignore::WalkBuilder;
 use ratatui::layout::Rect;
-use smith_config::inventory::{InventoryLimit, ModelLimitOrigin, SelectionInventory};
+use smith_config::inventory::{
+    InventoryLimit, ModelInventoryEntry, ModelLimitOrigin, ProfileInventoryEntry,
+    ProviderInventoryEntry, SelectionInventory,
+};
 use smith_config::model::ProfileUse;
 use smith_config::resolve::ResolvedAgent;
 use smith_runtime::factory::AVAILABLE_ADAPTER_KINDS;
@@ -38,8 +41,46 @@ pub(super) fn runtime_resources(
     credential_pool: Option<&SharedPool>,
     harness: Option<&smith_config::resolve::ResolvedHarness>,
 ) -> RuntimeResources {
-    let model_limits = inventory
-        .models
+    let model_limits = model_limit_details(&inventory.models);
+    let profile_inventory = inventory.profiles;
+    let profiles = profile_entries(&profile_inventory);
+    let mut connections = connection_entries(&inventory.providers);
+    let disconnections = disconnection_entries(&inventory.providers);
+    append_connectable_connections(&mut connections);
+    let providers = provider_entries(inventory.providers);
+    let models = model_entries(inventory.models, context_window);
+    let session_entries = session_resource_entries(sessions, Some(current_session));
+    let files = workspace_file_entries(project, 4_096);
+    let child_agents = child_agent_entries(&profile_inventory, agents, &model_limits);
+    let main_profiles = main_profile_entries(agents, &profile_inventory);
+
+    let thinking = thinking_entries(reasoning);
+    let efforts = effort_entries(reasoning);
+    let models = append_cli_agent_models(models, harness);
+
+    RuntimeResources {
+        models,
+        providers,
+        connections,
+        disconnections,
+        profiles,
+        context_windows: context_window_entries(context_windows, context_window),
+        context_window: context_window.map(str::to_owned),
+        sessions: session_entries,
+        files,
+        child_agents,
+        main_profiles,
+        thinking,
+        efforts,
+        accounts: account_entries(credential_pool),
+        current_session: Some(current_session.to_owned()),
+    }
+}
+
+fn model_limit_details(
+    models: &[ModelInventoryEntry],
+) -> std::collections::BTreeMap<String, String> {
+    models
         .iter()
         .map(|model| {
             (
@@ -53,9 +94,11 @@ pub(super) fn runtime_resources(
                 ),
             )
         })
-        .collect::<std::collections::BTreeMap<_, _>>();
-    let profile_inventory = inventory.profiles;
-    let profiles = profile_inventory
+        .collect::<std::collections::BTreeMap<_, _>>()
+}
+
+fn profile_entries(profile_inventory: &[ProfileInventoryEntry]) -> Vec<ResourceEntry> {
+    profile_inventory
         .iter()
         .filter(|profile| profile.uses.contains(&ProfileUse::Main))
         .map(|profile| {
@@ -98,9 +141,11 @@ pub(super) fn runtime_resources(
                 entry.disabled("profile does not resolve to a usable provider/model pair")
             }
         })
-        .collect();
-    let mut connections = inventory
-        .providers
+        .collect()
+}
+
+fn connection_entries(provider_inventory: &[ProviderInventoryEntry]) -> Vec<ResourceEntry> {
+    provider_inventory
         .iter()
         .map(|provider| {
             let authentication = if provider.kind.as_deref()
@@ -139,9 +184,11 @@ pub(super) fn runtime_resources(
                 entry.disabled("configure an available adapter and at least one model first")
             }
         })
-        .collect::<Vec<_>>();
-    let disconnections = inventory
-        .providers
+        .collect::<Vec<_>>()
+}
+
+fn disconnection_entries(provider_inventory: &[ProviderInventoryEntry]) -> Vec<ResourceEntry> {
+    provider_inventory
         .iter()
         .map(|provider| {
             ResourceEntry::new(
@@ -155,7 +202,10 @@ pub(super) fn runtime_resources(
             .description(provider.kind.as_deref().unwrap_or("unknown adapter"))
             .active(provider.active)
         })
-        .collect::<Vec<_>>();
+        .collect::<Vec<_>>()
+}
+
+fn append_connectable_connections(connections: &mut Vec<ResourceEntry>) {
     for descriptor in smith_config::setup::connectable_provider_descriptors(AVAILABLE_ADAPTER_KINDS)
     {
         if !connections.iter().any(|entry| entry.id == descriptor.id) {
@@ -168,8 +218,10 @@ pub(super) fn runtime_resources(
             );
         }
     }
-    let providers = inventory
-        .providers
+}
+
+fn provider_entries(provider_inventory: Vec<ProviderInventoryEntry>) -> Vec<ResourceEntry> {
+    provider_inventory
         .into_iter()
         .map(|provider| {
             let kind = provider.kind.as_deref().unwrap_or("missing adapter kind");
@@ -199,9 +251,14 @@ pub(super) fn runtime_resources(
                 entry.disabled("adapter unavailable or no model with enforceable limits")
             }
         })
-        .collect::<Vec<_>>();
-    let models = inventory
-        .models
+        .collect::<Vec<_>>()
+}
+
+fn model_entries(
+    model_inventory: Vec<ModelInventoryEntry>,
+    context_window: Option<&str>,
+) -> Vec<ResourceEntry> {
+    model_inventory
         .into_iter()
         // Installed coding agents are rendered once, through the curated
         // `cli/<kind>/<model>` rows below that carry the PATH check and the
@@ -289,10 +346,15 @@ pub(super) fn runtime_resources(
                 None => entry.disabled("model is not locally selectable"),
             }
         })
-        .collect::<Vec<_>>();
-    let session_entries = session_resource_entries(sessions, Some(current_session));
-    let files = workspace_file_entries(project, 4_096);
-    let child_agents = profile_inventory
+        .collect::<Vec<_>>()
+}
+
+fn child_agent_entries(
+    profile_inventory: &[ProfileInventoryEntry],
+    agents: &ResolvedAgent,
+    model_limits: &std::collections::BTreeMap<String, String>,
+) -> Vec<ResourceEntry> {
+    profile_inventory
         .iter()
         .filter(|profile| profile.uses.contains(&ProfileUse::Child))
         .map(|profile| {
@@ -351,8 +413,14 @@ pub(super) fn runtime_resources(
                 entry.disabled("child profile does not resolve a usable provider/model pair")
             }
         })
-        .collect();
-    let main_profiles = agents
+        .collect()
+}
+
+fn main_profile_entries(
+    agents: &ResolvedAgent,
+    profile_inventory: &[ProfileInventoryEntry],
+) -> Vec<ResourceEntry> {
+    agents
         .profile_order
         .value
         .iter()
@@ -381,9 +449,13 @@ pub(super) fn runtime_resources(
                 .active(agents.profile.name == *name),
             )
         })
-        .collect();
+        .collect()
+}
 
-    let capability_reason = || match reasoning.support {
+fn reasoning_capability_reason(
+    reasoning: &smith_runtime::reasoning::ReasoningRuntimePolicy,
+) -> String {
+    match reasoning.support {
         ReasoningSupport::Unsupported => {
             "this model does not advertise reasoning support".to_owned()
         }
@@ -394,7 +466,13 @@ pub(super) fn runtime_resources(
             "the active binding has no explicit switch; {}",
             reasoning.capability_source
         ),
-    };
+    }
+}
+
+fn thinking_entries(
+    reasoning: &smith_runtime::reasoning::ReasoningRuntimePolicy,
+) -> Vec<ResourceEntry> {
+    let capability_reason = || reasoning_capability_reason(reasoning);
     let mut thinking = vec![
         ResourceEntry::new(
             "default",
@@ -444,7 +522,13 @@ pub(super) fn runtime_resources(
         }
         smith_runtime::reasoning::ReasoningSwitch::Unavailable => off.disabled(capability_reason()),
     });
+    thinking
+}
 
+fn effort_entries(
+    reasoning: &smith_runtime::reasoning::ReasoningRuntimePolicy,
+) -> Vec<ResourceEntry> {
+    let capability_reason = || reasoning_capability_reason(reasoning);
     let mut efforts = vec![
         ResourceEntry::new(
             "default",
@@ -467,13 +551,19 @@ pub(super) fn runtime_resources(
                 .disabled(capability_reason()),
         );
     }
+    efforts
+}
 
-    // Installed coding agents appear alongside provider models, under their
-    // own `cli/<agent>/<model>` namespace, and in the same row shape: the
-    // model name, short agent description, then selected bookkeeping detail.
-    // They are listed whether or not the CLI is installed -- a row
-    // that says the program is missing is how someone discovers the
-    // capability exists at all.
+// Installed coding agents appear alongside provider models, under their
+// own `cli/<agent>/<model>` namespace, and in the same row shape: the
+// model name, short agent description, then selected bookkeeping detail.
+// They are listed whether or not the CLI is installed -- a row
+// that says the program is missing is how someone discovers the
+// capability exists at all.
+fn append_cli_agent_models(
+    models: Vec<ResourceEntry>,
+    harness: Option<&smith_config::resolve::ResolvedHarness>,
+) -> Vec<ResourceEntry> {
     let mut models = models;
     let active_cli_model = harness.map(|harness| {
         smith_config::cli_agents::cli_model_id(&harness.kind.value, &harness.model.value)
@@ -508,34 +598,24 @@ pub(super) fn runtime_resources(
             });
         }
     }
+    models
+}
 
-    RuntimeResources {
-        models,
-        providers,
-        connections,
-        disconnections,
-        profiles,
-        context_windows: context_windows
-            .iter()
-            .map(|name| {
-                ResourceEntry::new(
-                    name.clone(),
-                    name.clone(),
-                    "select this model context window",
-                )
-                .active(context_window == Some(name.as_str()))
-            })
-            .collect(),
-        context_window: context_window.map(str::to_owned),
-        sessions: session_entries,
-        files,
-        child_agents,
-        main_profiles,
-        thinking,
-        efforts,
-        accounts: account_entries(credential_pool),
-        current_session: Some(current_session.to_owned()),
-    }
+fn context_window_entries(
+    context_windows: &[String],
+    context_window: Option<&str>,
+) -> Vec<ResourceEntry> {
+    context_windows
+        .iter()
+        .map(|name| {
+            ResourceEntry::new(
+                name.clone(),
+                name.clone(),
+                "select this model context window",
+            )
+            .active(context_window == Some(name.as_str()))
+        })
+        .collect()
 }
 
 /// The active account, as the footer shows it.
