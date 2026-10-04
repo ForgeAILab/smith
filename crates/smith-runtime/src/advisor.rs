@@ -813,6 +813,7 @@ mod tests {
                     text: "PRIVATE_REASONING".to_owned(),
                     redacted: false,
                     signature: None,
+                    producer: None,
                 },
             ]),
             Message::tool_result(ToolResultBlock {
