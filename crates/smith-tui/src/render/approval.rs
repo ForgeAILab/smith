@@ -195,26 +195,24 @@ fn compose(
         if let Some(review) = review {
             body.push(line(review.summary(), theme, Tone::Dim));
             body.extend(diff_lines(review, app.work_details, preview, theme));
-        } else {
-            if prepared.tool() == "edit" {
-                // The fixed title names the action; the first body line names
-                // the target. Keep material edit arguments without repeating it.
-                let mut material = arguments.clone();
-                if let Some(fields) = material.as_object_mut() {
-                    fields.remove("path");
-                }
-                material_lines("", &material, theme, &mut body);
-            } else {
-                body.push(line(prepared.display().title.clone(), theme, Tone::Heading));
-                if let Some(detail) = &prepared.display().detail {
-                    body.extend(
-                        detail
-                            .split('\n')
-                            .map(|text| line(text, theme, Tone::Default)),
-                    );
-                }
-                material_lines("", arguments, theme, &mut body);
+        } else if prepared.tool() == "edit" {
+            // The fixed title names the action; the first body line names
+            // the target. Keep material edit arguments without repeating it.
+            let mut material = arguments.clone();
+            if let Some(fields) = material.as_object_mut() {
+                fields.remove("path");
             }
+            material_lines("", &material, theme, &mut body);
+        } else {
+            body.push(line(prepared.display().title.clone(), theme, Tone::Heading));
+            if let Some(detail) = &prepared.display().detail {
+                body.extend(
+                    detail
+                        .split('\n')
+                        .map(|text| line(text, theme, Tone::Default)),
+                );
+            }
+            material_lines("", arguments, theme, &mut body);
         }
     }
 
