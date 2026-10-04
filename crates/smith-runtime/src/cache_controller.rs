@@ -26,7 +26,7 @@ use agent_runtime_core::provider::{
     ProviderAttemptPurpose, ProviderCacheContract, RateLimitSnapshot,
 };
 use agent_runtime_core::usage::{CounterKind, UsageDelta};
-use futures_util::StreamExt;
+use futures_util::{FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use smith_config::model::CacheMaintenanceMode as ConfigMaintenanceMode;
 use smith_config::resolve::{ResolvedCachePolicy, SyntheticCacheSpendAuthority};
@@ -649,17 +649,13 @@ async fn run_controller(
         if reconcile_parking(&state, parking_snapshot.as_ref(), clock.now()) {
             persist_boundary = true;
         }
-        if persist_boundary
-            && capsule.is_some()
-            && !cancel.is_cancelled()
-            && session.persist().await.is_err()
-        {
-            state
-                .lock()
-                .expect("cache controller state poisoned")
-                .snapshot
-                .last_error = Some("capsule_persist_failed".to_owned());
-        }
+        persist_capsule_boundary(
+            &session,
+            &state,
+            capsule.as_deref(),
+            persist_boundary && !cancel.is_cancelled(),
+        )
+        .await;
         if cancel.is_cancelled() {
             break;
         }
@@ -773,9 +769,41 @@ async fn run_controller(
                 .last_error = Some(error);
         }
     }
+    if cancel.is_cancelled() {
+        // Freeze the tail so a live producer cannot keep extending shutdown.
+        // Only poll immediately ready events; bypass cooperative receive
+        // yielding, which can hide a queued tail.
+        let drain_until = session.snapshot().identity.event_seq;
+        let mut _persist_boundary = false;
+        while let Some(Some(envelope)) = tokio::task::unconstrained(events.next()).now_or_never() {
+            if envelope.seq >= drain_until {
+                break;
+            }
+            _persist_boundary |= reduce_event(&state, capsule.as_deref(), &changes, &envelope);
+        }
+        // HostSession::shutdown saves Runtime's in-memory capsule after this
+        // worker exits. Leave accumulated persist boundaries to that final
+        // save so storage awaits cannot consume the bounded drain before all
+        // immediately available events below the cut-off are reduced.
+    }
     let mut state = state.lock().expect("cache controller state poisoned");
     state.shutting_down = true;
     state.snapshot.scheduled_for = None;
+}
+
+async fn persist_capsule_boundary(
+    session: &SessionHandle,
+    state: &Arc<Mutex<ControllerState>>,
+    capsule: Option<&ResumeCapsuleSlot>,
+    persist_boundary: bool,
+) {
+    if persist_boundary && capsule.is_some() && session.persist().await.is_err() {
+        state
+            .lock()
+            .expect("cache controller state poisoned")
+            .snapshot
+            .last_error = Some("capsule_persist_failed".to_owned());
+    }
 }
 
 fn reconcile_parking(

@@ -149,6 +149,93 @@ fn shutdown_and_optional_projection_share_one_atomic_admission_order() {
     assert!(!current.optional_projection_in_flight);
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn shutdown_drains_queued_goal_updates() {
+    use agent_runtime::harness::GoalComponent;
+    use agent_runtime::provider::fake::FakeProvider;
+    use agent_runtime::runtime::{RuntimeBuilder, StartSession};
+    use agent_runtime_core::goal::GoalCommand;
+    use agent_runtime_core::provider::ModelId;
+    use agent_runtime_testkit::ManualClock;
+
+    let clock = ManualClock::shared(0);
+    let runtime = RuntimeBuilder::new(ModelId::new("fake"))
+        .model_profile(agent_runtime_testkit::scenarios::fake_model_profile())
+        .provider(Arc::new(FakeProvider::text_reply("unused")))
+        .clock(clock.clone())
+        .build()
+        .expect("runtime builds");
+    let session = runtime
+        .start_session(StartSession::new())
+        .await
+        .expect("session starts");
+    let capsule = Arc::new(ResumeCapsuleSlot::new(session.id().clone(), clock.now()));
+    let state = Arc::new(Mutex::new(ControllerState::default()));
+    let cancel = Cancellation::new();
+    let mut worker = Box::pin(run_controller(
+        session.clone(),
+        test_config(CacheMaintenancePolicy::default()),
+        clock,
+        None,
+        Some(capsule.clone()),
+        None,
+        Arc::new(ChangeRecorder::new(None)),
+        state.clone(),
+        cancel.clone(),
+    ));
+    // Establish the subscription synchronously, then leave the worker parked
+    // until shutdown has cancelled it. No scheduler timing is involved.
+    assert!(worker.as_mut().now_or_never().is_none());
+    let controller = CacheLifecycleController {
+        state,
+        cancel,
+        task: Mutex::new(Some(tokio::spawn(worker))),
+    };
+    let component = GoalComponent::public();
+    let mut goal = session
+        .control_goal(
+            &component,
+            GoalCommand::Create {
+                objective: "Drain queued goal updates".to_owned(),
+                token_budget: None,
+            },
+        )
+        .now_or_never()
+        .expect("ephemeral goal control does not yield")
+        .expect("goal is created")
+        .goal
+        .expect("goal projection");
+    for generation in 2..=5 {
+        goal = session
+            .control_goal(
+                &component,
+                GoalCommand::Edit {
+                    id: goal.id.clone(),
+                    generation: goal.generation,
+                    objective: format!("Queued goal generation {generation}"),
+                },
+            )
+            .now_or_never()
+            .expect("ephemeral goal control does not yield")
+            .expect("goal is edited")
+            .goal
+            .expect("goal projection");
+    }
+    let last_sequence = session.snapshot().identity.event_seq - 1;
+    assert!(capsule.snapshot().exact_state.goal.is_none());
+
+    controller.shutdown().await;
+
+    let projected = capsule.snapshot();
+    assert_eq!(projected.exact_state.goal.as_ref().unwrap().generation, 5);
+    assert_eq!(
+        projected.exact_state.goal.as_ref().unwrap().goal_id,
+        Some(goal.id.to_string())
+    );
+    assert_eq!(projected.exact_state.watermark, last_sequence);
+    assert_eq!(controller.snapshot().scheduled_for, None);
+}
+
 #[test]
 fn idle_admission_is_once_only_and_retires_old_lease_before_io() {
     let identity = test_identity();
