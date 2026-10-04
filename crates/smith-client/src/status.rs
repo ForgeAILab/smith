@@ -296,6 +296,11 @@ pub struct BindingUsage {
     pub model: String,
     /// Disjoint counters retained independently of the session rollup.
     pub totals: BTreeMap<CounterKind, u64>,
+    /// Synthetic counters retain the binding active at reporting time, so a
+    /// later model selection cannot reprice cache maintenance. The session's
+    /// synthetic rollups remain separate and unchanged. Idle compaction is
+    /// retained only in those rollups because its summary model may differ.
+    pub synthetic_by_purpose: BTreeMap<ProviderAttemptPurpose, BTreeMap<CounterKind, u64>>,
     /// Whether all counters in this bucket were provider-reported.
     pub reported: bool,
     /// Frozen catalog reference; absence never borrows another binding's rates.
@@ -313,6 +318,7 @@ impl BindingUsage {
             provider,
             model: model.into(),
             totals: BTreeMap::new(),
+            synthetic_by_purpose: BTreeMap::new(),
             reported: true,
             price,
         }
@@ -325,6 +331,22 @@ impl BindingUsage {
             let total = self.totals.entry(kind).or_default();
             *total = total.saturating_add(value);
         }
+    }
+
+    /// Synthetic-only buckets must survive switches and freeze their rates.
+    fn has_usage(&self) -> bool {
+        !self.totals.is_empty() || !self.synthetic_by_purpose.is_empty()
+    }
+
+    /// Idle compaction can use a separate summary model, so its counters
+    /// never use this binding's root-model rates.
+    fn cost_totals(&self) -> impl Iterator<Item = (&CounterKind, &u64)> {
+        self.totals.iter().chain(
+            self.synthetic_by_purpose
+                .iter()
+                .filter(|(purpose, _)| **purpose != ProviderAttemptPurpose::IdleCompaction)
+                .flat_map(|(_, totals)| totals.iter()),
+        )
     }
 
     fn name(&self) -> String {
@@ -400,7 +422,6 @@ impl SessionUsage {
         active
             .filter(|_| retained.is_some())
             .or(retained)
-            .or_else(|| active.filter(|_| !self.synthetic_totals.is_empty()))
             .or_else(|| {
                 self.advisor_price
                     .as_ref()
@@ -444,6 +465,9 @@ impl SessionUsage {
     /// Replaces the synthetic bucket from Runtime's final canonical usage
     /// ledger. Interactive exit uses this after shutdown so an attempt that
     /// completed or cancelled during the drain is counted exactly once.
+    /// Live binding attribution is retained because these durable records do
+    /// not identify the serving model; newly recovered, unattributed counters
+    /// remain unpriced rather than borrowing the last model's rates.
     pub fn reconcile_synthetic_records(&mut self, records: &[UsageRecord]) {
         self.synthetic_totals.clear();
         self.synthetic_by_purpose.clear();
@@ -694,14 +718,14 @@ impl PriceReference {
     pub fn render_sources(&self, usage: &SessionUsage) -> String {
         let mut shares: Vec<(String, Option<u128>)> = Vec::new();
         for binding in &usage.bindings {
-            if binding.totals.is_empty() {
+            if binding.cost_totals().next().is_none() {
                 continue;
             }
             let name = binding.name();
             let amount = binding.price.as_ref().map(|price| {
                 let mut amount = 0;
                 let mut all_priced = true;
-                for (kind, tokens) in &binding.totals {
+                for (kind, tokens) in binding.cost_totals() {
                     accumulate_price(*kind, *tokens, &price.table, &mut amount, &mut all_priced);
                 }
                 amount
@@ -779,7 +803,8 @@ pub struct SessionCost {
 }
 
 impl SessionCost {
-    /// Prices each attributed root/child bucket at its frozen reference.
+    /// Prices each attributed root/child bucket, including same-model
+    /// synthetic work, at its frozen reference.
     /// The supplied reference preserves the legacy single-binding API for
     /// callers that construct rollups without attribution.
     ///
@@ -803,11 +828,11 @@ impl SessionCost {
         } else {
             all_reported = true;
             for binding in &usage.bindings {
-                if binding.totals.is_empty() {
+                if binding.cost_totals().next().is_none() {
                     continue;
                 }
                 all_reported &= binding.reported;
-                for (kind, tokens) in &binding.totals {
+                for (kind, tokens) in binding.cost_totals() {
                     if let Some(price) = &binding.price {
                         accumulate_price(
                             *kind,
@@ -822,12 +847,9 @@ impl SessionCost {
                 }
             }
         }
-        // Keepalive, handoff, and explicit-resource work use the active
-        // provider/model identity and can use this exact price reference.
-        // Idle compaction may use an independently supplied summary model;
-        // UsageRecord does not carry that model's price table, so its cost
-        // remains unpriced rather than being silently billed at the parent
-        // model's rate.
+        // Attributed synthetic counters were priced with their binding above.
+        // Only legacy rollup-only callers use the supplied reference. Idle
+        // compaction may use a separate summary model and stays unpriced.
         if usage.synthetic_by_purpose.is_empty() && !usage.synthetic_totals.is_empty() {
             all_priced = false;
         }
@@ -839,13 +861,25 @@ impl SessionCost {
                 continue;
             }
             for (kind, tokens) in totals {
-                accumulate_price(
-                    *kind,
-                    *tokens,
-                    &price.table,
-                    &mut micro_usd,
-                    &mut all_priced,
-                );
+                if usage.bindings.is_empty() {
+                    accumulate_price(
+                        *kind,
+                        *tokens,
+                        &price.table,
+                        &mut micro_usd,
+                        &mut all_priced,
+                    );
+                } else {
+                    let attributed = usage
+                        .bindings
+                        .iter()
+                        .filter_map(|binding| binding.synthetic_by_purpose.get(purpose))
+                        .filter_map(|totals| totals.get(kind))
+                        .fold(0_u64, |total, tokens| total.saturating_add(*tokens));
+                    if *tokens > attributed {
+                        all_priced = false;
+                    }
+                }
             }
         }
         for (kind, tokens) in &usage.advisor_totals {
@@ -1095,12 +1129,22 @@ impl Status {
 
     /// Accounts provider usage under a typed synthetic purpose. This updates
     /// provider/session spend only: context and ordinary turn counts remain
-    /// untouched.
+    /// untouched. A separate per-binding copy preserves the rates active when
+    /// the counters arrived without changing the existing synthetic rollups.
     pub fn record_synthetic_usage(&mut self, purpose: ProviderAttemptPurpose, delta: &UsageDelta) {
         if !purpose.is_synthetic_cache() || delta.is_empty() {
             return;
         }
         self.usage_reported = true;
+        if purpose != ProviderAttemptPurpose::IdleCompaction
+            && let Some(binding) = &mut self.active_binding
+        {
+            let totals = binding.synthetic_by_purpose.entry(purpose).or_default();
+            for (kind, value) in delta.iter() {
+                let total = totals.entry(kind).or_default();
+                *total = total.saturating_add(value);
+            }
+        }
         let purpose_totals = self.synthetic_by_purpose.entry(purpose).or_default();
         for kind in [
             CounterKind::InputUncached,
@@ -1129,7 +1173,7 @@ impl Status {
                 .bindings
                 .iter()
                 .chain(self.active_binding.iter())
-                .filter(|binding| !binding.totals.is_empty())
+                .filter(|binding| binding.has_usage())
                 .cloned()
                 .collect(),
             turns: self.turns,
@@ -1173,10 +1217,11 @@ impl Status {
     /// substituted from another model, provider, or a hard-coded default.
     pub fn set_price(&mut self, price: Option<PriceReference>) {
         if let Some(binding) = &mut self.active_binding {
-            if binding.totals.is_empty() {
+            if !binding.has_usage() {
                 binding.price = price.clone();
             }
         } else if self.totals.is_empty()
+            && self.synthetic_totals.is_empty()
             && let Some(price) = &price
         {
             self.active_binding = Some(BindingUsage::new(
@@ -1329,7 +1374,7 @@ impl Status {
     /// [`Self::set_price`] right after switching.
     pub fn switch_model(&mut self, provider: Option<String>, model: impl Into<String>) {
         if let Some(binding) = self.active_binding.take()
-            && !binding.totals.is_empty()
+            && binding.has_usage()
         {
             self.bindings.push(binding);
         }
@@ -1631,6 +1676,172 @@ mod tests {
         let idle_cost = SessionCost::compute(&idle, &price);
         assert_eq!(idle_cost.micro_usd, 0);
         assert_eq!(idle_cost.label, CostLabel::Estimated);
+    }
+
+    #[test]
+    fn synthetic_bindings_keep_their_prices_across_switches_and_reconciliation() {
+        use agent_runtime_core::usage::Provenance;
+
+        for purpose in [
+            ProviderAttemptPurpose::CacheKeepalive,
+            ProviderAttemptPurpose::CacheHandoffCheckpoint,
+        ] {
+            let mut status = bound_status("zai", "glm-5.3", 0);
+            status.set_price(Some(PriceReference {
+                provider: "zai".into(),
+                model: "glm-5.3".into(),
+                ..priced(0, 0, 2_000_000, 0)
+            }));
+            let glm = UsageRecord {
+                source: UsageSource::ProviderAttempt,
+                provenance: Provenance {
+                    attempt_purpose: Some(purpose),
+                    ..Provenance::default()
+                },
+                delta: UsageDelta::new().with(CounterKind::InputCached, 11_000),
+            };
+            status.record_usage_record(&glm);
+            status.switch_model(Some("google".into()), "gemini-3.8-flash");
+            status.set_price(Some(PriceReference {
+                provider: "google".into(),
+                model: "gemini-3.8-flash".into(),
+                ..priced(0, 0, 1_000_000, 0)
+            }));
+            let gemini = UsageRecord {
+                delta: UsageDelta::new().with(CounterKind::InputCached, 12_000),
+                ..glm.clone()
+            };
+            status.record_usage_record(&gemini);
+            let mut usage = status.session_usage();
+            assert_eq!(usage.turns, 0);
+            assert_eq!(usage.total_tokens(), 0);
+            assert_eq!(usage.merged_total_tokens(), 23_000);
+            assert_eq!(usage.synthetic_totals[&CounterKind::InputCached], 23_000);
+            assert_eq!(
+                usage.synthetic_by_purpose[&purpose][&CounterKind::InputCached],
+                23_000
+            );
+            assert_eq!(usage.bindings.len(), 2);
+            assert_eq!(
+                usage.bindings[0].synthetic_by_purpose[&purpose][&CounterKind::InputCached],
+                11_000
+            );
+            assert_eq!(
+                usage.bindings[1].synthetic_by_purpose[&purpose][&CounterKind::InputCached],
+                12_000
+            );
+            let price = status.price().expect("current price");
+            let expected = SessionCost {
+                micro_usd: 34_000,
+                label: CostLabel::Exact,
+            };
+            assert_eq!(SessionCost::compute(&usage, price), expected);
+            assert_eq!(
+                price.render_sources(&usage),
+                "zai/glm-5.3 $0.022 · google/gemini-3.8-flash $0.012"
+            );
+            usage.reconcile_synthetic_records(&[glm, gemini]);
+            assert_eq!(usage, status.session_usage());
+            assert_eq!(SessionCost::compute(&usage, price), expected);
+
+            let mut rebuilt = bound_status("google", "gemini-3.8-flash", 0);
+            rebuilt.record_synthetic_usage(
+                purpose,
+                &UsageDelta::new().with(CounterKind::InputCached, 23_000),
+            );
+            rebuilt.retain_usage_bindings(&usage);
+            assert_eq!(rebuilt.session_usage().bindings, usage.bindings);
+            assert_eq!(
+                SessionCost::compute(&rebuilt.session_usage(), price),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn unpriced_keepalive_is_estimated_and_never_borrows_the_last_bindings_rate() {
+        let mut status = bound_status("openai", "gpt-5.3", 2_000_000);
+        status.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 1_000_000));
+        status.switch_model(Some("custom".into()), "unpriced");
+        status.record_synthetic_usage(
+            ProviderAttemptPurpose::CacheKeepalive,
+            &UsageDelta::new().with(CounterKind::InputCached, 9_000_000),
+        );
+        status.switch_model(Some("google".into()), "unused");
+        status.set_price(Some(PriceReference {
+            provider: "google".into(),
+            model: "unused".into(),
+            ..priced(0, 0, 10_000_000, 0)
+        }));
+        let usage = status.session_usage();
+        let price = usage.cost_price(status.price()).expect("retained price");
+        assert_eq!(
+            SessionCost::compute(&usage, price),
+            SessionCost {
+                micro_usd: 2_000_000,
+                label: CostLabel::Estimated,
+            }
+        );
+        assert_eq!(
+            price.render_sources(&usage),
+            "openai/gpt-5.3 $2.000 · price unknown for custom/unpriced"
+        );
+
+        let mut unpriced = Status::new("unpriced", "project");
+        unpriced.switch_model(Some("custom".into()), "unpriced");
+        unpriced.record_synthetic_usage(
+            ProviderAttemptPurpose::CacheKeepalive,
+            &UsageDelta::new().with(CounterKind::InputCached, 80),
+        );
+        unpriced.switch_model(Some("openai".into()), "gpt-5.3");
+        unpriced.set_price(Some(priced(1_000_000, 1_000_000, 1_000_000, 1_000_000)));
+        assert!(
+            unpriced
+                .session_usage()
+                .cost_price(unpriced.price())
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn single_binding_synthetic_cost_and_sources_match_the_legacy_rollups() {
+        let price = priced(1_000_000, 1_000_000, 1_000_000, 1_000_000);
+        let mut status = bound_status("openai", "gpt-5.3", 0);
+        status.set_price(Some(price.clone()));
+        status.record_synthetic_usage(
+            ProviderAttemptPurpose::CacheKeepalive,
+            &UsageDelta::new().with(CounterKind::InputCached, 80),
+        );
+        let usage = status.session_usage();
+        let mut legacy = usage.clone();
+        legacy.bindings.clear();
+        let cost = SessionCost::compute(&usage, &price);
+        assert_eq!(cost.micro_usd, 80);
+        assert_eq!(cost.label, CostLabel::Exact);
+        assert_eq!(cost, SessionCost::compute(&legacy, &price));
+        assert_eq!(price.render_sources(&usage), price.render_sources(&legacy));
+        assert_eq!(usage.render(), legacy.render());
+
+        status.record_synthetic_usage(
+            ProviderAttemptPurpose::IdleCompaction,
+            &UsageDelta::new().with(CounterKind::InputUncached, 100),
+        );
+        let usage = status.session_usage();
+        let mut legacy = usage.clone();
+        legacy.bindings.clear();
+        let cost = SessionCost::compute(&usage, &price);
+        assert_eq!(cost.micro_usd, 80);
+        assert_eq!(cost.label, CostLabel::Estimated);
+        assert_eq!(cost, SessionCost::compute(&legacy, &price));
+        assert_eq!(price.render_sources(&usage), price.render_sources(&legacy));
+        assert_eq!(usage.render(), legacy.render());
+
+        // Synthetic-only usage freezes the bucket just as a root turn does.
+        status.set_price(Some(priced(5_000_000, 5_000_000, 5_000_000, 5_000_000)));
+        assert_eq!(
+            SessionCost::compute(&status.session_usage(), status.price().expect("new price")),
+            cost
+        );
     }
 
     #[test]

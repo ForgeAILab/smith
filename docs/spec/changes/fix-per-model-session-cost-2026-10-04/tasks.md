@@ -17,7 +17,7 @@ as a pricing bug in `docs/qa/live-2026-10-04b/findings.md`. Approved 2026-10-04 
   children are unpriced.
 - [x] 1.3 `SessionCost::compute` sums each binding at its own price;
   unpriced bindings are left out, downgrade the label, and are named.
-- [ ] 1.4 Synthetic cache counters (keepalive, handoff) are priced by the
+- [x] 1.4 Synthetic cache counters (keepalive, handoff) are priced by the
   binding active when they were reported, not the last one; found in
   review.
 
