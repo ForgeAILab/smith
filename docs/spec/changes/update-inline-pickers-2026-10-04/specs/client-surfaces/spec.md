@@ -113,7 +113,7 @@ tool arguments/results, or secret material.
 
 - **GIVEN** the current project has several compatible saved sessions
 - **WHEN** `/resume` or `smith --resume` opens the picker
-- **THEN** entries are ordered newest-first, each led by its first prompt,
+- **THEN** entries are ordered newest-first, each led by its latest prompt,
   for example `What does lib.rs define?   2 min ago · 1 turn · zai/glm-5.3`
 - **AND** every session can be reached by scrolling, with a position count
   when the list is longer than the screen

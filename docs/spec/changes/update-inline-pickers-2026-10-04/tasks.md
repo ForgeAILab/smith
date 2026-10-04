@@ -45,16 +45,17 @@ Findings R1–R4, S1–S6, C1, C2, M1 from
 - [ ] 4.2 Setup wording: welcome line, real credential entry names, no
   untypeable commands or internal terms, plain review with compact sizes and
   `~` paths, `Setup cancelled · nothing was written` (S1–S4, S6).
-- [ ] 4.3 `/connect` runs inside the session: inline flow slot in `App`,
-  effects performed by `TuiLoop` off the render path, rebuild that keeps the
-  screen, results as notices instead of `println!` (C1).
+- [ ] 4.3 `/connect` runs inside the session: an embedded `ScreenSession`
+  draws the retained `App` with the connection screen above the composer
+  (design revised 2026-10-04, see design.md), rebuild that keeps the screen,
+  results as notices instead of `println!` (C1).
 - [ ] 4.4 xAI device login gets a progress screen like ChatGPT's (code, URL,
   waiting, esc cancels) instead of `println!` lines, so it shows inside a
   session and standalone.
 
 ## 5. Sessions
 
-- [ ] 5.1 Session rows: first prompt, relative age, `1 turn`, model; id only
+- [ ] 5.1 Session rows: latest prompt, relative age, `1 turn`, model; id only
   in the selected detail (R3).
 - [ ] 5.2 Sessions without a user message: omitted from both pickers and the
   terminal table of `smith sessions list`; no `resume with …` line on exit;

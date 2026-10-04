@@ -44,7 +44,7 @@ no frame, a title line, a left-aligned list from the top-left, one footer.
   connection happens off-screen, as `/model` does today. Messages a
   connection prints today while the screen is suspended become notices.
 - **Session rows read as sessions.** `smith --resume` and `/resume` rows lead
-  with the first prompt, then `2 min ago · 1 turn · zai/glm-5.3`; the session
+  with the latest prompt, then `2 min ago · 1 turn · zai/glm-5.3`; the session
   id appears only on the selected row's detail. Sessions with no user message
   are not offered by either picker or the terminal table of
   `smith sessions list` (the piped form is unchanged), and the exit report

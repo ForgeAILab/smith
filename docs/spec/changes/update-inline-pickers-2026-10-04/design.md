@@ -49,14 +49,20 @@ loop around them and their frames.
   perform and feed back. Every standalone flow uses it; a flow that moves
   from setup into ChatGPT login stays in the same runner, so Esc returns to
   setup.
-- **Embedded in the session.** `App` gets one inline-flow slot that holds a
-  screen and draws it in the picker pane above the composer, growing up to
-  the transcript height for review text. `TuiLoop` performs the flow's
-  effects (credential enrollment, config write, preflight, OAuth wait) on its
-  own task and feeds results back, so the transcript and identity footer stay
-  live. A completed connection ends the TUI loop with a rebuild request that
-  keeps the screen, as `/model` does; nothing is printed to the normal
-  screen.
+- **Embedded in the session.** `/connect` is idle-only, so nothing in the
+  session needs processing while it runs. The TUI loop still exits with
+  `InteractiveExit::Connect`, but instead of suspending the terminal the
+  connection runs on an embedded `ScreenSession` that keeps the session's
+  terminal and draws the retained `App` (transcript, composer, hint row)
+  every frame, with the connection screen in the pane above the composer,
+  growing up to the transcript height for review text. The flow's effects
+  run where they run today. Its results become notices on the retained
+  `App`, and the host rebuild that follows keeps the screen, as `/model`
+  does; nothing is printed to the normal screen.
+  - Alternative considered: running the flow inside `TuiLoop` with effects
+    on a task. Rejected for this change: it duplicates the effect handling
+    the standalone flows already have, for no visible difference while the
+    session is idle.
 - **Alternate screen stays.** Standalone screens keep the alternate screen
   because the session that follows uses it; they draw from row 0, column 0
   with the same two-column gutter as the session, sized to content.
@@ -69,9 +75,10 @@ loop around them and their frames.
   resource picker` keeps the transcript in view). Standalone screens show as
   many rows as fit, and every list shows `n/total` when it scrolls.
 - **Empty sessions.** A session is offered for resume only if its snapshot
-  holds a user message. The filter reads the listing metadata's user preview,
-  not the turn count, so a session whose first prompt failed before any
-  provider usage is still offered.
+  holds a user message. A session is hidden only when its listing metadata
+  has no user preview and a turn count of 0, so a session whose prompt failed
+  before any provider usage, or whose image-only prompt completed, is still
+  offered. Snapshots without listing metadata are always offered.
 - **Fixtures first.** Before the loops change, terminal fixtures record the
   five standalone screens at 44x16 and 100x32 in their current form; the
   runner merge must leave them byte-identical. The presentation change then
