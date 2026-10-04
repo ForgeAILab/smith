@@ -176,15 +176,133 @@ fn session_update_timestamps_are_human_readable() {
         .to_offset(time::UtcOffset::UTC);
     assert_eq!(
         format_session_updated_at(Timestamp(1_699_999_877_000), time::UtcOffset::UTC, now,),
-        "2 minutes ago"
+        "2 min ago"
     );
     assert_eq!(
         format_session_updated_at(Timestamp(1_699_989_195_000), time::UtcOffset::UTC, now,),
-        "3 hours ago"
+        "3 h ago"
     );
     assert_eq!(
         format_session_updated_at(Timestamp(1_699_900_000_000), time::UtcOffset::UTC, now),
-        "2023-11-13 18:26:40 +00:00"
+        "yesterday"
+    );
+}
+
+#[test]
+fn session_update_age_covers_each_bucket_with_a_fixed_clock() {
+    let now = time::OffsetDateTime::from_unix_timestamp(1_700_000_000).expect("fixed clock");
+    for (seconds, expected) in [
+        (0, "just now"),
+        (59, "just now"),
+        (60, "1 min ago"),
+        (120, "2 min ago"),
+        (3_599, "59 min ago"),
+        (3_600, "1 h ago"),
+        (7_200, "2 h ago"),
+        (86_399, "23 h ago"),
+        (86_400, "yesterday"),
+        (172_799, "yesterday"),
+        (172_800, "2 days ago"),
+        (604_799, "6 days ago"),
+        (604_800, "2023-11-07"),
+    ] {
+        let updated = now - time::Duration::seconds(seconds);
+        let timestamp =
+            Timestamp(u64::try_from(updated.unix_timestamp()).expect("timestamp") * 1_000);
+        assert_eq!(
+            format_session_updated_at(timestamp, time::UtcOffset::UTC, now),
+            expected,
+            "age {seconds}s"
+        );
+    }
+    assert_eq!(
+        format_session_updated_at(Timestamp(1_700_000_060_000), time::UtcOffset::UTC, now),
+        "just now"
+    );
+    assert_eq!(
+        format_session_updated_at(Timestamp(u64::MAX), time::UtcOffset::UTC, now),
+        "unknown"
+    );
+}
+
+#[test]
+fn older_session_age_uses_the_local_date_instead_of_utc() {
+    let updated = time::Date::from_calendar_date(2026, time::Month::September, 28)
+        .expect("date")
+        .midnight()
+        .assume_utc();
+    let now = updated + time::Duration::days(8);
+    let timestamp = Timestamp(u64::try_from(updated.unix_timestamp()).expect("timestamp") * 1_000);
+    let offset = time::UtcOffset::from_hms(-4, 0, 0).expect("local offset");
+    assert_eq!(
+        format_session_updated_at(timestamp, offset, now),
+        "2026-09-27"
+    );
+}
+
+#[tokio::test]
+async fn exit_resume_hint_uses_user_history_even_when_the_provider_fails_before_usage() {
+    use agent_runtime::provider::fake::{FakeProvider, ScriptedStream};
+    use agent_runtime_core::provider::{
+        Capabilities, ProviderError, ProviderErrorKind, ProviderStreamEvent,
+    };
+
+    let home = tempfile::tempdir().expect("home");
+    let project = tempfile::tempdir().expect("project");
+    std::fs::create_dir_all(project.path().join(".smith")).expect("config directory");
+    std::fs::write(
+        project.path().join(".smith/config.toml"),
+        LOCAL_COMMAND_CONFIG,
+    )
+    .expect("config");
+    let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+        .expect("resolution")
+        .config;
+    let provider = Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        vec![ScriptedStream::new(vec![ProviderStreamEvent::Error {
+            error: ProviderError::new(ProviderErrorKind::Server, "failed before usage"),
+        }])],
+    ));
+    let runtime = RuntimeRequest {
+        provider: Some(provider.clone()),
+        workspace: Some(Arc::new(
+            ProjectWorkspace::new(project.path()).expect("workspace"),
+        )),
+        approval: Some(Arc::new(agent_runtime_core::approval::DenyAll)),
+        ..RuntimeRequest::new(config, HostSurface::Terminal)
+    };
+    let host = smith_runtime::host::start(
+        HostSessionRequest::new(runtime, project.path())
+            .checkpoint_keys(Arc::new(TestCheckpointKeys)),
+    )
+    .await
+    .expect("host");
+    host.set_goal_continuation_enabled(false);
+    assert!(host.paths().is_some(), "persistent session");
+    assert_eq!(session_resume_hint(&host), None);
+
+    let submitted = host
+        .session()
+        .send(UserInput::text("fix the failing build"))
+        .expect("user admission");
+    submitted.completed().await;
+    assert!(!provider.requests().is_empty(), "provider was reached");
+    assert_eq!(
+        session_resume_hint(&host),
+        Some(format!(
+            "resume with smith --resume {}",
+            host.session().id()
+        ))
+    );
+    host.shutdown().await.expect("shutdown");
+    assert_eq!(
+        session_resume_hint(&host),
+        Some(format!(
+            "resume with smith --resume {}",
+            host.session().id()
+        ))
     );
 }
 

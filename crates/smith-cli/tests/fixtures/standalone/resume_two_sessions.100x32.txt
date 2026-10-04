@@ -1,8 +1,8 @@
   Resume session · type to filter
 
-❯ session-2042…  What does lib.rs define? One sentence.
-  session-2042b4df-6465-42d4-be69-180feb01a926 · 1 turns · zai/glm-5.3 · updated 2 minutes ago
-  session-5382…  Reply with the single word: alpha
+❯ What does lib.rs define? One sentence.  2 min ago · 1 turn · zai/glm-5.3
+  session-2042b4df-6465-42d4-be69-180feb01a926
+  Reply with the single word: alpha       4 min ago · 1 turn · zai/glm-5.3
 
   ↑↓ choose · enter confirm · esc cancel
 

@@ -287,16 +287,18 @@ expect {
     eof { exit 125 }
 }
 send -- "\033\[B\033\[B\033\[B\r"
+# Ratatui skips the unchanged t shared with Authentication, splitting Environment.
 expect {
-    -exact "Environment variable" {}
+    -re {Environ.*variable} {}
     timeout { exit 124 }
     eof { exit 125 }
 }
 send -- "ZAI_API_KEY"
 after 150
 send -- "\033"
+# Ratatui skips Authentication's unchanged t shared with Environment; Keychain is hidden.
 expect {
-    -exact "Authentication" {}
+    -re {Authentic.*ion} {}
     timeout { exit 124 }
     eof { exit 125 }
 }
@@ -317,7 +319,12 @@ expect {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(screen.contains("TERMINAL_RESTORED"), "{screen}");
-    assert!(screen.contains("Environment variable"), "{screen}");
+    assert!(
+        screen
+            .find("Environ")
+            .is_some_and(|start| screen[start + "Environ".len()..].contains("variable")),
+        "{screen}"
+    );
     assert!(
         !fixture.home.path().join(".smith").exists(),
         "authentication cancellation committed user state"
@@ -347,8 +354,9 @@ expect {{
     eof {{ exit 125 }}
 }}
 send -- "\033"
+# Quick is written contiguously after either list, avoiding skipped unchanged cells.
 expect {{
-    -exact "Quick start with GLM" {{}}
+    -exact "Quick" {{}}
     timeout {{ exit 124 }}
     eof {{ exit 125 }}
 }}
@@ -926,7 +934,6 @@ fn bare_resume_uses_the_pre_host_picker_then_resumes_the_selected_session() {
     let result: serde_json::Value =
         serde_json::from_slice(&seeded.stdout).expect("seed result JSON");
     let session = result["session_id"].as_str().expect("session ID");
-    let short = session.chars().take(12).collect::<String>();
 
     let interaction = r#"
 expect {
@@ -956,7 +963,80 @@ expect {
         "screen: {screen}\nstderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(screen.contains(&short), "{screen}");
+    assert!(
+        screen.contains(&format!("resume with smith --resume {session}")),
+        "{screen}"
+    );
     assert!(screen.contains("resume picker seed"), "{screen}");
     assert!(screen.contains("TERMINAL_RESTORED"), "{screen}");
+}
+
+#[test]
+fn quitting_without_a_user_message_omits_the_resume_hint() {
+    let fixture = Fixture::new();
+    fixture.configure_fake();
+    let interaction = r#"
+expect {
+    -exact "Ask Smith to do anything" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+send -- "/quit\r"
+expect {
+    -exact "TERMINAL_RESTORED" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+"#;
+    let Some(output) = fixture.run_expect("--no-color --no-motion", interaction) else {
+        return;
+    };
+    let screen = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "screen: {screen}\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(screen.contains("TERMINAL_RESTORED"), "{screen}");
+    assert!(!screen.contains("resume with smith --resume"), "{screen}");
+
+    let listed = fixture.run_headless(&["sessions", "list"]);
+    assert!(listed.status.success());
+    let listing = String::from_utf8_lossy(&listed.stdout);
+    let rows = listing.lines().collect::<Vec<_>>();
+    assert_eq!(
+        rows.len(),
+        1,
+        "piped listing must keep the empty session: {listing}"
+    );
+    assert!(rows[0].ends_with("\t0\t?/?\tno user preview"), "{listing}");
+
+    let empty_resume = r#"
+expect {
+    -exact "exits" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+send -- "\033"
+expect {
+    -exact "TERMINAL_RESTORED" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+"#;
+    let output = fixture
+        .run_expect("--resume --no-color --no-motion", empty_resume)
+        .expect("expect was available for the first invocation");
+    let screen = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{screen}");
+    assert!(screen.contains("sessions"), "{screen}");
+    assert!(screen.contains("resume"), "{screen}");
+    assert!(screen.contains("exits"), "{screen}");
+    assert!(!screen.contains("Ask Smith to do anything"), "{screen}");
+    let after_cancel = fixture.run_headless(&["sessions", "list"]);
+    assert!(after_cancel.status.success());
+    assert_eq!(
+        after_cancel.stdout, listed.stdout,
+        "cancel created a session"
+    );
 }

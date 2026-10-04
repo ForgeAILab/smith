@@ -357,6 +357,15 @@ pub struct SessionListing {
     pub user_preview: Option<String>,
 }
 
+impl SessionListing {
+    /// Keeps legacy listings available when metadata cannot prove emptiness.
+    /// A preview preserves failed prompts with no completed turns; completed
+    /// turns preserve image-only prompts whose preview has no text.
+    pub fn should_offer_resume(&self) -> bool {
+        self.turn_count != Some(0) || self.user_preview.is_some()
+    }
+}
+
 /// The persisted form of a snapshot: an explicit version plus the
 /// host-prepared runtime payload.
 #[derive(Debug, Serialize, Deserialize)]

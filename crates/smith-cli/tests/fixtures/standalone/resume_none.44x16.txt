@@ -1,7 +1,7 @@
   Resume session · type to filter
 
-  Nothing to resume for this project · Esc
-  to start without resuming
+  No sessions to resume in this project ·
+  esc exits
 
   enter confirm · esc cancel · ↑↓ choose
 

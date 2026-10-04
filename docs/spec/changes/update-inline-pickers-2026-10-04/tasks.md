@@ -29,10 +29,10 @@ Findings R1–R4, S1–S6, C1, C2, M1 from
 
 ## 3. One chooser component
 
-- [ ] 3.1 Inline list in `smith-tui`: title, rows, footer, no frame; label
+- [x] 3.1 Inline list in `smith-tui`: title, rows, footer, no frame; label
   column over the whole list; `n/total` when scrolling; numbered fixed lists
   with digit choice; filtered inventories; one footer vocabulary.
-- [ ] 3.2 Standalone screens draw from the top-left, sized to content; the
+- [x] 3.2 Standalone screens draw from the top-left, sized to content; the
   centered boxes and `standalone_picker_area` go.
 - [ ] 3.3 In-session pickers use the same component; `/model` opens on the
   current model; compact detail line (M1); `/connect` custom endpoint
@@ -40,7 +40,7 @@ Findings R1–R4, S1–S6, C1, C2, M1 from
 
 ## 4. Flows
 
-- [ ] 4.1 Esc goes back one step, cancels on the first; Ctrl+C cancels the
+- [x] 4.1 Esc goes back one step, cancels on the first; Ctrl+C cancels the
   flow; ChatGPT login is a setup step when reached from setup (S5).
 - [ ] 4.2 Setup wording: welcome line, real credential entry names, no
   untypeable commands or internal terms, plain review with compact sizes and
@@ -55,12 +55,12 @@ Findings R1–R4, S1–S6, C1, C2, M1 from
 
 ## 5. Sessions
 
-- [ ] 5.1 Session rows: latest prompt, relative age, `1 turn`, model; id only
+- [x] 5.1 Session rows: latest prompt, relative age, `1 turn`, model; id only
   in the selected detail (R3).
-- [ ] 5.2 Sessions without a user message: omitted from both pickers and the
+- [x] 5.2 Sessions without a user message: omitted from both pickers and the
   terminal table of `smith sessions list`; no `resume with …` line on exit;
   piped output unchanged (R4).
-- [ ] 5.3 `smith --resume` empty state says `esc exits` (R2); every session
+- [x] 5.3 `smith --resume` empty state says `esc exits` (R2); every session
   reachable by scrolling (R1).
 
 ## 6. Verification
