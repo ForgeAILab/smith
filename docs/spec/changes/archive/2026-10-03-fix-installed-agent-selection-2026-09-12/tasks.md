@@ -1,3 +1,9 @@
+---
+created_at: 2026-10-04T03:48:59Z
+updated_at: 2026-10-04T03:48:59Z
+completed_at: 2026-10-04T03:48:59Z
+---
+
 # Tasks: Fix installed coding-agent selection and honest candidate previews
 
 ## 1. Inventory enumerates installed agents (smith-config)

@@ -1,7 +1,7 @@
 # configuration Specification
 
 ## Purpose
-TBD - created by archiving change add-smith-agent-harness. Update Purpose after archive.
+Layered, explainable configuration: profiles, providers, models, limits, and how a resolved run configuration is derived and explained.
 ## Requirements
 ### Requirement: Layered explainable configuration
 
@@ -272,9 +272,15 @@ every launch and MUST NOT rely on an independent onboarding-complete flag.
 
 Provider choices exposed by setup SHALL map to Smith-owned descriptors whose
 adapter kind is present in the pinned Agent Runtime. A selected model MUST
-resolve all enforceable limits from explicit input or a versioned trusted
-catalog; setup MUST NOT guess limits or route an unavailable adapter through a
-different provider family.
+resolve its context window from one explicit input, a provider-advertised
+OpenAI-compatible `/models` listing read during interactive setup, or a
+versioned trusted catalog; setup MUST NOT finish for a model whose total
+context remains unknown, and MUST NOT route an unavailable adapter through a
+different provider family. Automatically resolved values are prefilled for
+review with their source named, never silently committed. When a source does
+not publish narrower ceilings, or the context was entered manually, maximum
+input and output are derived without additional prompts (input = context,
+output = the automatic percentage rule).
 
 #### Scenario: Catalog-backed model is selected
 
@@ -298,12 +304,52 @@ different provider family.
   reasoning-only completion as visible assistant text without disabling GLM
   thinking
 
-#### Scenario: Unknown custom model is selected
+#### Scenario: The endpoint advertises limits for the entered model
 
-- **GIVEN** the custom model is absent from every trusted catalog source
+- **GIVEN** the user enters a model ID in the add-provider or add-model flow
+- **AND** the endpoint's `GET /models` listing carries limit fields for that
+  ID
+- **WHEN** the listing resolves within the bounded probe
+- **THEN** setup prefills the advertised limits and names the endpoint listing
+  as their source in review
+- **AND** no inference request is sent and nothing is written before the
+  reviewed commit
+
+#### Scenario: A same-name trusted catalog entry pre-fills limits
+
+- **GIVEN** the endpoint publishes no limits but the entered model ID matches
+  a trusted catalog entry exactly, case-insensitively, by final path segment,
+  or by a final segment whose `.`, `_`, and `-` separators differ
+- **WHEN** resolution runs
+- **THEN** setup prefills that entry's limits and names the catalog match in
+  review
+- **AND** the user can still edit the context window before committing
+
+#### Scenario: A gateway rewrites a version separator
+
+- **GIVEN** a gateway advertises model `claude-fable-5-1` without limit fields
+- **AND** the trusted catalog contains `anthropic/claude-fable-5.1` with
+  complete limits
+- **WHEN** setup falls back from the endpoint listing to the catalog
+- **THEN** the two IDs match without prompting for the context window
+- **AND** setup does not drop the `1` version component or match
+  `claude-fable-5`
+
+#### Scenario: Derived ceilings complete a partial resolution
+
+- **GIVEN** resolution produced a context window without published input or
+  output ceilings
+- **WHEN** the values are prefilled
+- **THEN** maximum input defaults to the context window and maximum output to
+  the automatic percentage rule, labeled as derived in review
+
+#### Scenario: Unknown custom model resolves nothing
+
+- **GIVEN** the custom model is absent from every trusted catalog source and
+  the endpoint advertises nothing for it
 - **WHEN** the user tries to continue from model setup
-- **THEN** Smith requires explicit context, maximum-input, and maximum-output
-  limits
+- **THEN** Smith requires only the explicit context window and derives the
+  maximum-input and maximum-output limits without showing separate fields
 - **AND** it cannot finish setup while any enforceable limit is absent or
   invalid
 
@@ -564,7 +610,9 @@ precedence over catalog metadata, and every winning catalog field MUST identify
 its catalog revision and retrieval provenance. A catalog entry MAY carry an
 optional per-counter price in USD per million tokens; an entry whose price
 block is absent, incomplete, or ill-typed MUST remain a valid selectable model
-record with no price rather than a rejected or partially-priced one.
+record with no price rather than a rejected or partially-priced one. A model's
+published maximum output MUST remain a ceiling rather than becoming Smith's
+implicit per-request output budget.
 
 #### Scenario: Complete catalog limits are normalized
 
@@ -573,9 +621,10 @@ record with no price rather than a rejected or partially-priced one.
 - **AND** its optional separate input limit is absent
 - **WHEN** Smith normalizes the model record
 - **THEN** `context_tokens` is the published context limit
-- **AND** `max_output_tokens` is the published output limit
+- **AND** the model profile's `max_output_tokens` is the published output
+  ceiling
 - **AND** `max_input_tokens` is the published total context limit
-- **AND** runtime context policy still holds back declared output and reasoning
+- **AND** runtime context policy holds back the effective output and reasoning
   reserves before admitting input
 
 #### Scenario: Separate input limit is published
@@ -628,15 +677,25 @@ record with no price rather than a rejected or partially-priced one.
 - **AND** Smith falls back to the embedded seed and schedules a refresh, as it
   does for any stale revision
 
-#### Scenario: Effective reserves leave no input budget
+#### Scenario: Published output ceiling equals context
+
+- **GIVEN** a valid catalog text/tool model publishes a 500,000-token context
+  and a 500,000-token maximum output ceiling
+- **AND** no explicit request output limit or context output reserve is selected
+- **WHEN** Smith prepares runtime choices
+- **THEN** it derives a 32,768-token automatic request output budget and default
+  output reserve
+- **AND** the model remains selectable without a local model override
+- **AND** the published 500,000-token ceiling and provenance remain unchanged
+
+#### Scenario: Explicit reserves leave no input budget
 
 - **GIVEN** a catalog model has internally valid published limits
-- **BUT** the effective Smith output and reasoning reserves equal or exceed its
-  context window
+- **BUT** an explicit Smith output or reasoning reserve equals or exceeds its
+  context window when combined
 - **WHEN** Smith prepares runtime choices
 - **THEN** the model is visible but disabled with a local reserve diagnostic
-- **AND** Smith does not lower the published output ceiling or configured
-  reserve to make it selectable
+- **AND** Smith does not clamp the explicit values to make it selectable
 
 #### Scenario: Explicit limit overrides catalog metadata
 
@@ -1499,3 +1558,141 @@ overridden source.
 - **GIVEN** `advisor = "missing/model"` and no provider named `missing`
 - **WHEN** configuration loads
 - **THEN** Smith reports an unknown provider at the `advisor` key
+
+### Requirement: Fixed skill directory layout
+
+Smith SHALL read skills from `skills/<name>/SKILL.md` beneath the user state
+root and beneath the project's `.smith/` directory, with the containing
+directory's name as the skill's name. The layout MUST be fixed rather than
+configurable, and Smith MUST NOT create either directory.
+
+#### Scenario: Author adds a user skill
+
+- **GIVEN** the user creates `skills/rust-review/SKILL.md` under the user state
+  root with a `description` in its frontmatter
+- **WHEN** Smith next starts in any project
+- **THEN** the skill is available in that session
+
+#### Scenario: Layout is not configurable
+
+- **GIVEN** configuration that attempts to relocate the skills directory
+- **WHEN** configuration is resolved
+- **THEN** the setting is not recognized
+- **AND** discovery still reads the fixed locations
+
+### Requirement: Project skills are hash-bound executable trust
+
+Smith's project-trust model SHALL cover project-supplied skill instructions as
+a distinct kind of executable authority, decided per file content and persisted
+alongside the existing kinds. Recording a decision MUST show the artifact's
+project-relative path and content identity before it is recorded.
+
+#### Scenario: Decision binds path and content together
+
+- **GIVEN** a decision recorded for a project skill
+- **WHEN** the same content appears at a different project path, or different
+  content appears at the same path
+- **THEN** the earlier decision does not authorize it
+
+#### Scenario: Existing trust files remain readable
+
+- **GIVEN** a persisted trust file written before skills were trustable
+- **WHEN** Smith reads it
+- **THEN** existing decisions load unchanged
+- **AND** project skills are undecided rather than approved
+
+### Requirement: Installed coding agents enumerate without model declarations
+
+The selection inventory SHALL enumerate an installed coding-agent model id
+(`cli/<kind>/<model>`) referenced by any profile using Smith's built-in
+bookkeeping limits when no explicit, trusted, or catalog limit exists. The
+enumerated entry MUST remain provider-qualified exactly as the profile
+declares it, its limits MUST carry provenance identifying them as built-in
+bookkeeping rather than advertised capability, and an explicit
+`[models."provider/cli/<kind>/<model>"]` table MUST override the built-ins.
+A profile that resolves MUST NOT be reported as failing to resolve to a
+usable provider/model pair merely because it selects an installed agent.
+
+#### Scenario: Profile selects an installed agent with no declaration
+
+- **GIVEN** a profile declares `provider = "google"` and
+  `model = "cli/claude-code/sonnet"` with no `[models]` entry for that pair
+- **WHEN** Smith builds the selection inventory
+- **THEN** the pair is enumerated with built-in bookkeeping limits
+- **AND** the profile is selectable, not marked unavailable
+
+#### Scenario: Explicit limits override built-in bookkeeping
+
+- **GIVEN** the same profile and an explicit
+  `[models."google/cli/claude-code/sonnet"]` table
+- **WHEN** Smith builds the selection inventory
+- **THEN** the explicit limits win and retain configured provenance
+- **AND** the built-in values are not merged in alongside them
+
+### Requirement: Candidate previews derive per-candidate output budgets
+
+The selection inventory SHALL derive a previewed candidate's automatic
+budget from that candidate's own limits. When it previews a provider/model
+candidate other than the active one, request-output and reserve values whose
+provenance is scoped to the active profile MUST NOT be applied to that
+candidate. Explicit values from layers that persist across a model switch
+(user-global configuration, environment variables, command-line flags, and
+session overrides) MUST still apply, and a candidate whose ceiling such a
+persistent value exceeds MUST remain non-selectable with a bounded reason.
+The effective budget of the active candidate MUST NOT change because other
+candidates were previewed.
+
+#### Scenario: Active profile request does not disable smaller-ceiling candidates
+
+- **GIVEN** the active profile configures `max_output_tokens = 32768`
+- **AND** another candidate's output ceiling is 32,000
+- **WHEN** Smith previews that candidate in the inventory
+- **THEN** the candidate is selectable
+- **AND** its preview budget is its own automatic value bounded by 32,000
+
+#### Scenario: Persistent explicit request still conflicts honestly
+
+- **GIVEN** a user-global configuration layer sets
+  `max_output_tokens = 40000`
+- **AND** a candidate's output ceiling is 32,000
+- **WHEN** Smith previews that candidate
+- **THEN** the candidate is non-selectable with a bounded reason naming the
+  request and the ceiling
+- **AND** the explicit value is not clamped
+
+#### Scenario: Active candidate budget is unaffected by previews
+
+- **GIVEN** the active model resolves an effective request of 32,768 tokens
+- **WHEN** Smith previews other candidates in the same inventory
+- **THEN** the active model's effective request remains 32,768 with its
+  configured reserve
+
+### Requirement: Source-explainable child-agent wait policy
+
+The resolved child-agent wait policy SHALL expose
+`profiles.<name>.child_agents.wait_default_timeout_ms` and
+`profiles.<name>.child_agents.wait_max_timeout_ms`. The accepted ranges SHALL
+be `0..=300_000` and `1..=300_000` milliseconds respectively, with built-in
+defaults of 300,000 milliseconds for both values. The default SHALL NOT exceed
+the maximum. A zero default is an immediate status check when explicitly
+configured; omitted `agent.wait.timeout_ms` uses the resolved default
+foreground boundary.
+
+The five-minute boundary limits only how long the parent model/tool call waits
+in the foreground. It MUST NOT grant a child lifetime, token, cancellation, or
+provider limit, and a timeout MUST leave the child running in the background.
+
+#### Scenario: Default wait policy is five minutes
+
+- **GIVEN** a profile omits both child-agent wait settings
+- **WHEN** Smith resolves the profile
+- **THEN** the default and maximum are each 300,000 milliseconds
+- **AND** the values retain built-in provenance
+
+#### Scenario: Repository narrows the foreground wait
+
+- **GIVEN** a profile sets `wait_max_timeout_ms = 10000` and a compatible
+  default
+- **WHEN** Smith resolves the profile
+- **THEN** the configured value wins for the foreground wait only
+- **AND** it cannot stop or expire a child when the wait ends

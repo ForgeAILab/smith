@@ -1,7 +1,7 @@
 # forge-integration Specification
 
 ## Purpose
-TBD - created by archiving change add-smith-agent-harness. Update Purpose after archive.
+How Smith embeds in Forge as an in-process runtime with a one-way dependency and the same semantics as other hosts.
 ## Requirements
 ### Requirement: Embeddable in-process runtime
 

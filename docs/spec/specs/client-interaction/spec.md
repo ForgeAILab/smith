@@ -1,7 +1,7 @@
 # client-interaction Specification
 
 ## Purpose
-TBD - created by archiving change integrate-stable-session-harness. Update Purpose after archive.
+How the interactive client reduces runtime events into a transcript and handles input, interruption, approvals, questionnaires, steering, and confirmations.
 ## Requirements
 ### Requirement: Attempt-aware transcript reduction
 

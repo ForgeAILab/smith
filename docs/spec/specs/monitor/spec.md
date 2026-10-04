@@ -1,7 +1,7 @@
 # monitor Specification
 
 ## Purpose
-TBD - created by archiving change add-smith-agent-harness. Update Purpose after archive.
+Monitors that watch one command or WebSocket source and deliver its events to the session within a lifecycle.
 ## Requirements
 ### Requirement: Exactly one monitor source
 

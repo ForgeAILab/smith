@@ -1,7 +1,7 @@
 # tool-execution Specification
 
 ## Purpose
-TBD - created by archiving change add-smith-agent-harness. Update Purpose after archive.
+How tools run: preparation, authorization, workspace policy, shell and background execution, and result bounds.
 ## Requirements
 ### Requirement: Minimal built-in coding tools
 

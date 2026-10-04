@@ -30,11 +30,11 @@ usable provider/model pair merely because it selects an installed agent.
 
 ### Requirement: Candidate previews derive per-candidate output budgets
 
-When the selection inventory previews a provider/model candidate other than
-the active one, request-output and reserve values whose provenance is scoped
-to the active profile MUST NOT be applied to that candidate; the preview
-SHALL derive the candidate's automatic budget from the candidate's own
-limits. Explicit values from layers that persist across a model switch
+The selection inventory SHALL derive a previewed candidate's automatic
+budget from that candidate's own limits. When it previews a provider/model
+candidate other than the active one, request-output and reserve values whose
+provenance is scoped to the active profile MUST NOT be applied to that
+candidate. Explicit values from layers that persist across a model switch
 (user-global configuration, environment variables, command-line flags, and
 session overrides) MUST still apply, and a candidate whose ceiling such a
 persistent value exceeds MUST remain non-selectable with a bounded reason.

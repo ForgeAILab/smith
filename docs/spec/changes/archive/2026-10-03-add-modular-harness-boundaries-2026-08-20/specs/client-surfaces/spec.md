@@ -2,11 +2,11 @@
 
 ### Requirement: Versioned Smith client protocol
 
-TUI, headless, GPUI, Forge, and other presentation clients SHALL drive sessions
-through Smith-owned versioned session commands, receipts, IDs, and event
-projections. Clients MUST NOT depend on the concrete Agent Runtime session
-handle or event enum, while canonical persistence and execution MUST remain on
-Agent Runtime behind the Smith adapter.
+TUI, headless, and other presentation clients SHALL observe sessions through
+Smith-owned, versioned, redaction-preserving event projections with stable
+Smith IDs, and MUST NOT depend on the concrete Agent Runtime event enum.
+In-process hosts drive sessions through the Agent Runtime session handle;
+canonical persistence and execution MUST remain on Agent Runtime.
 
 #### Scenario: Agent Runtime adds an event variant
 

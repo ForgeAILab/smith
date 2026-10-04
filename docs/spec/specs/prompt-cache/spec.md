@@ -1,7 +1,7 @@
 # prompt-cache Specification
 
 ## Purpose
-TBD - created by archiving change add-smith-agent-harness. Update Purpose after archive.
+How Smith plans, observes, reports, and maintains provider prompt caching with exact cache identities and evidence-based status.
 ## Requirements
 ### Requirement: Provider-declared cache capability
 

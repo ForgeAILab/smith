@@ -1,7 +1,7 @@
 # advisor Specification
 
 ## Purpose
-TBD - created by archiving change add-advisor-tool. Update Purpose after archive.
+How the main model consults a stronger advisor model through a model-facing tool, what the advisor sees, and how its advice and usage are reported.
 ## Requirements
 ### Requirement: Advisor tool
 

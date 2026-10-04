@@ -1,7 +1,7 @@
 # client-surfaces Specification
 
 ## Purpose
-TBD - created by archiving change add-smith-agent-harness. Update Purpose after archive.
+What each Smith surface shows — the interactive TUI, headless output, informational results, setup, and composer — and how it is laid out.
 ## Requirements
 ### Requirement: Basic interactive TUI
 
@@ -450,6 +450,25 @@ changing the default profile/model.
 - **THEN** the flow skips provider creation and collects a model plus its
   enforceable limit provenance
 - **AND** lets the user choose whether to make it the default
+
+#### Scenario: Limits resolve automatically after the model is entered
+
+- **GIVEN** the user has entered the model ID in either flow
+- **WHEN** the endpoint's model listing or a same-name trusted catalog entry
+  supplies a context window
+- **THEN** numeric limit entry is skipped and the resolved values and source
+  are shown in review
+- **AND** the resolution probe sends no inference request and stays within its
+  bounded time and size
+
+#### Scenario: Resolution fails or finds nothing
+
+- **GIVEN** the endpoint is unreachable, lists nothing for the model, and no
+  catalog name matches
+- **WHEN** the bounded resolution attempt ends
+- **THEN** the flow asks only for the total context window and derives the
+  input and output ceilings without showing more numeric fields
+- **AND** the failed attempt is not an error the user must dismiss
 
 ### Requirement: Pre-runtime setup boundary
 
@@ -1153,8 +1172,11 @@ exactly the glyphs beneath it.
 
 Smith SHALL provide `/connect [PROVIDER]` as an idle-only local command that
 selects a provider and one of its supported authentication methods. The
-connection ceremony MUST NOT send an inference request, and durable changes
-MUST use the reviewed user-scope credential transaction.
+picker SHALL include a generic OpenAI-compatible entry that runs the same
+reviewed add-provider ceremony as `smith setup add-provider`, so endpoints
+without a built-in flow are connectable in-session. The connection ceremony
+MUST NOT send an inference request, and durable changes MUST use the reviewed
+user-scope credential transaction.
 
 #### Scenario: Connect OpenRouter from the provider picker
 
@@ -1165,6 +1187,17 @@ MUST use the reviewed user-scope credential transaction.
 - **AND** records the standard OpenRouter provider endpoint without requiring
   the user to type it
 - **AND** sends no inference request during connection
+
+#### Scenario: Connect a custom OpenAI-compatible endpoint
+
+- **GIVEN** the user submits `/connect` while the session is idle
+- **WHEN** they select the OpenAI-compatible entry and complete the add-provider
+  ceremony (distinct provider name, endpoint, authentication, and first usable
+  model with enforceable limits) through the secret-free review
+- **THEN** Smith adds the provider through the same reviewed user-config
+  transaction as `smith setup add-provider`
+- **AND** sends no inference request during connection
+- **AND** the new provider/model becomes selectable after the session rebuild
 
 #### Scenario: Reconnect an existing provider
 
@@ -2134,3 +2167,208 @@ drawing SHALL read the application without changing it.
 - **GIVEN** an application state after layout was applied
 - **WHEN** it is drawn twice
 - **THEN** both frames are identical and the state is unchanged
+
+### Requirement: Model output budget visibility
+
+Smith's model-selection surfaces SHALL distinguish a model's advertised output
+ceiling from the effective request output budget. The picker MUST identify an
+automatically derived budget without presenting it as catalog metadata or a
+user-authored override.
+
+#### Scenario: Automatic budget makes a catalog model selectable
+
+- **GIVEN** a catalog model advertises equal 500,000-token context and output
+  ceilings
+- **AND** Smith derives a 32,768-token automatic request budget
+- **WHEN** the user filters `/model` to that entry
+- **THEN** the row is selectable and shows both the 500,000-token ceiling and
+  32,768-token automatic request budget
+- **AND** it does not tell the user to add a local model-limit override
+
+#### Scenario: Configured budget is distinguishable
+
+- **GIVEN** an explicit profile or session value supplies the effective request
+  output budget
+- **WHEN** Smith renders model details or a reserve diagnostic
+- **THEN** it labels the value as configured rather than automatic
+- **AND** keeps catalog provenance attached only to the advertised ceiling
+
+### Requirement: Starting-work orientation
+Smith SHALL show a compact local guide in an empty transcript and SHALL make
+help readable from the beginning of the newly requested result. The guide
+SHALL use existing commands and SHALL not become canonical history.
+
+#### Scenario: New configured session
+- **WHEN** a configured session has no transcript content and is idle
+- **THEN** Smith shows how to submit a task, choose a model, connect a provider,
+  and discover commands using the existing terminal design tokens
+- **AND** the guide disappears when transcript content or active work exists
+
+#### Scenario: Open help after existing conversation
+- **WHEN** the user invokes `/help` or the empty-composer `?` shortcut
+- **THEN** the viewport begins at the new help result when it exceeds the
+  available height, retaining the complete registry and keyboard reference
+- **AND** scrolling and subsequent ordinary conversation remain functional
+
+### Requirement: Predictable command-menu activation
+Smith SHALL resolve the highlighted completion when the input names no exact
+command and SHALL retain exact command arguments and host safeguards.
+
+#### Scenario: Choose from the unfiltered menu
+- **WHEN** the user types `/`, highlights `/status`, and presses Enter
+- **THEN** Smith runs the local status command without requiring its name
+- **AND** the menu shows at most five command rows, scrolling its selected
+  window without covering the conversation
+
+#### Scenario: Search by intent
+- **WHEN** the user searches `switch` and no command name starts with that term
+- **THEN** matching registered command descriptions are offered
+- **AND** Tab completes without execution and Enter activates the selection
+
+#### Scenario: Explicit arguments remain authoritative
+- **WHEN** input is `/model local/example-model` or a recognized command with
+  invalid arguments
+- **THEN** the original command parser processes those exact arguments
+- **AND** invalid arguments are not silently discarded to activate another row
+
+### Requirement: Actionable picker state
+Smith SHALL distinguish empty inventory from unmatched search and SHALL show
+selection availability before optional descriptive metadata.
+
+#### Scenario: Filter has no matches
+- **GIVEN** a resource inventory contains entries
+- **WHEN** its filter matches none
+- **THEN** Smith says there are no matches and offers a filter-clearing action
+- **AND** Ctrl+U clears the query without selecting or applying a resource
+
+#### Scenario: State survives long metadata
+- **WHEN** a current or unavailable resource has long capability metadata
+- **THEN** its state label precedes that metadata at normal and narrow widths
+- **AND** unavailable resources remain non-selectable
+
+#### Scenario: Narrow picker controls
+- **WHEN** a resource picker is open at 44 columns
+- **THEN** Enter/choose and Escape/cancel remain visible using shortened hints
+- **AND** optional filter guidance yields before those essential actions
+
+### Requirement: Setup correction retains non-secret values
+Smith SHALL restore previously entered provider names, endpoints, and model IDs
+when the user navigates backward to those fields. Changing a reviewed value
+SHALL still invalidate any pending collision approval and require review again.
+
+#### Scenario: Correct an endpoint after choosing authentication
+- **WHEN** the user uses Shift+Tab to return to the endpoint or provider field
+- **THEN** the existing non-secret value is available for editing
+- **AND** no configuration is written until the updated review is confirmed
+
+### Requirement: Skill visibility and trust command
+
+Smith SHALL provide a built-in command that lists every skill in the session's
+bounded index grouped by source layer, showing each skill's name, description,
+and whether it can activate. The command MUST state the reason a skill cannot
+activate, MUST show which entries a higher layer shadowed, MUST report every
+skill-discovery problem, and MUST offer a way to grant trust to a workspace
+skill awaiting confirmation.
+
+#### Scenario: Inspect the catalog
+
+- **GIVEN** a session with built-in skills, a user skill, and a workspace skill
+- **WHEN** the user runs the skills command
+- **THEN** each skill is listed under its source layer with its description
+- **AND** each entry states whether it can activate
+
+#### Scenario: A workspace skill is withheld
+
+- **GIVEN** a project skill nobody has approved
+- **WHEN** the user runs the skills command
+- **THEN** the entry states that it needs approval
+- **AND** names the command that would grant it
+
+#### Scenario: A skill file could not be used
+
+- **GIVEN** a skill directory whose `SKILL.md` is malformed
+- **WHEN** the user runs the skills command
+- **THEN** the problem is listed with the skill's name and the reason
+- **AND** the remaining skills are still listed
+
+#### Scenario: A higher layer shadows a name
+
+- **GIVEN** a user skill and a built-in skill with the same name
+- **WHEN** the user runs the skills command
+- **THEN** both entries are shown
+- **AND** the display identifies which one activates
+
+#### Scenario: Grant trust from the command
+
+- **GIVEN** a workspace skill awaiting confirmation
+- **WHEN** the user grants trust through the command
+- **THEN** Smith displays the skill's project-relative path and content
+  identity before recording the decision
+- **AND** the skill becomes activatable in the same session without the user
+  restarting Smith
+
+#### Scenario: Newly trusted skill joins at a safe boundary
+
+- **GIVEN** the user granted trust to a workspace skill
+- **WHEN** a turn is in progress
+- **THEN** the catalog is not exchanged until the session is idle
+- **AND** the session keeps its identity and transcript when it is
+
+### Requirement: Installed agents render once in selection surfaces
+
+Model and profile selection surfaces SHALL present installed coding agents
+through the curated `cli/<kind>/<model>` namespace exactly once per agent
+model, including the local installation check, even when the selection
+inventory also enumerates a provider-qualified pair referencing the same
+agent. A profile selecting an installed agent MUST appear selectable without
+requiring any `[models]` declaration.
+
+#### Scenario: Model picker shows one row per installed-agent model
+
+- **GIVEN** a profile references `google/cli/claude-code/sonnet`
+- **AND** the inventory enumerates the provider-qualified pair
+- **WHEN** the user opens the model picker
+- **THEN** `cli/claude-code/sonnet` appears exactly once from the curated
+  namespace with its built-in limit labeling
+- **AND** no duplicate provider-qualified row for the same agent model is
+  shown
+
+#### Scenario: Profile picker no longer marks installed-agent profiles unavailable
+
+- **GIVEN** profiles `cc` and `cx` select `cli/claude-code/sonnet` and
+  `cli/codex/gpt-6-astra` with no `[models]` declarations
+- **WHEN** the user opens the profile picker
+- **THEN** both profiles are selectable with their resolved provider/model
+  pair
+- **AND** neither is disabled with a profile-does-not-resolve reason
+
+### Requirement: Versioned Smith client protocol
+
+TUI, headless, and other presentation clients SHALL observe sessions through
+Smith-owned, versioned, redaction-preserving event projections with stable
+Smith IDs, and MUST NOT depend on the concrete Agent Runtime event enum.
+In-process hosts drive sessions through the Agent Runtime session handle;
+canonical persistence and execution MUST remain on Agent Runtime.
+
+#### Scenario: Agent Runtime adds an event variant
+
+- **GIVEN** a compatible Agent Runtime revision adds a canonical event
+- **WHEN** Smith updates its adapter
+- **THEN** Smith explicitly maps, bounds, or intentionally omits that event
+- **AND** unchanged clients continue to consume their supported Smith protocol
+  version
+
+#### Scenario: TUI and GPUI observe one session
+
+- **GIVEN** two Smith clients subscribe to the same composed session
+- **WHEN** a turn streams text, prepares a tool, requests approval, and finishes
+- **THEN** both receive causally ordered Smith events with stable Smith IDs
+- **AND** neither client receives a direct runtime handle or mutable runtime
+  internals
+
+#### Scenario: Session is resumed from canonical state
+
+- **GIVEN** Smith resumes Agent Runtime canonical events and snapshots
+- **WHEN** a client subscribes after reconstruction
+- **THEN** Smith rebuilds the same bounded client projection
+- **AND** no Smith client event is treated as an independent canonical journal

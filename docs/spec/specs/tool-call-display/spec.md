@@ -1,7 +1,7 @@
 # tool-call-display Specification
 
 ## Purpose
-TBD - created by archiving change add-redaction-safe-tool-summaries. Update Purpose after archive.
+How tool calls are labelled, summarised, redacted, and shown live and on replay.
 ## Requirements
 ### Requirement: Redaction-safe tool invocation summaries
 

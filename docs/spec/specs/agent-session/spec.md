@@ -1,7 +1,7 @@
 # agent-session Specification
 
 ## Purpose
-TBD - created by archiving change add-smith-agent-harness. Update Purpose after archive.
+The canonical direct agent loop and append-only sessions Smith runs on Agent Runtime, including the safe-boundary inbox and reconciliation of ephemeral work.
 ## Requirements
 ### Requirement: Shared canonical direct agent loop
 

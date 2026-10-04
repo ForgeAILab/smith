@@ -1,22 +1,26 @@
 # runtime-integration Specification
 
 ## Purpose
-TBD - created by archiving change add-smith-agent-harness. Update Purpose after archive.
+How Smith composes and drives Agent Runtime as its canonical mechanism, and how runtime events reach Smith's clients.
 ## Requirements
 ### Requirement: Shared runtime is the canonical mechanism
 
 Smith SHALL use the versioned `agent-runtime` facade as the sole owner of model
 and context planning, provider normalization, the provider/tool loop, tool
-execution, cancellation, runtime events, usage accounting, and registry
-mechanism. Smith MUST NOT maintain a parallel implementation or public contract
-for those behaviors.
+execution, cancellation, canonical runtime events, usage accounting, and
+registry mechanism. Smith MUST NOT maintain a parallel implementation of those
+behaviors. Smith SHALL expose a versioned product-level session and event
+projection to presentation clients, but that projection MUST adapt the shared
+mechanism and MUST NOT become a second execution loop, journal, or source of
+canonical state.
 
 #### Scenario: Smith executes a configured turn
 
 - **GIVEN** Smith has resolved product configuration and host policy
 - **WHEN** it starts a session and sends user input
 - **THEN** the turn executes through `agent-runtime::Runtime`
-- **AND** the TUI and persistence layers consume shared messages and events
+- **AND** canonical persistence consumes shared runtime events
+- **AND** presentation clients consume the versioned Smith projection
 
 #### Scenario: Shared mechanism needs a new capability
 
@@ -613,3 +617,29 @@ Parking MUST NOT be represented by a synthetic canonical assistant message.
 - **THEN** the attempt carries a synthetic cache purpose rather than a parked
   continuation purpose
 - **AND** parking alone is not reported as the provider-work cause
+
+### Requirement: Immutable resolved harness composition
+
+Smith SHALL resolve declarative harness input into one immutable,
+provenance-bearing `ResolvedHarness` before runtime construction. The record
+MUST include identity, provider/model, modules, trust, contributions, requested
+and granted capabilities, approval, persistence, context, and delegation
+policy; the public composition root MUST accept the resolved record rather than
+re-resolving raw files, environment values, or mutable host options.
+
+#### Scenario: Two hosts resolve identical input
+
+- **GIVEN** TUI and headless hosts receive equivalent declarations and host
+  services
+- **WHEN** each resolves its harness
+- **THEN** their `ResolvedHarness` policy records compare equivalent
+- **AND** both pass through the same public factory
+
+#### Scenario: Module contribution exceeds its grant
+
+- **GIVEN** a module declares a tool that requires network authority
+- **AND** the host grants the module no network capability
+- **WHEN** Smith resolves the harness
+- **THEN** resolution refuses or disables that contribution before runtime
+  construction
+- **AND** the declaration itself grants no authority

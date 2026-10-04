@@ -1,7 +1,7 @@
 # child-agents Specification
 
 ## Purpose
-TBD - created by archiving change add-smith-agent-harness. Update Purpose after archive.
+The one-level child agent hierarchy: how a parent specifies, spawns, manages, and receives reports from child agents.
 ## Requirements
 ### Requirement: One-level agent hierarchy
 
@@ -83,49 +83,46 @@ stable child ID and return structured lifecycle or error results.
 The `agent.wait` operation SHALL accept an optional `timeout_ms`. Its resolved
 configuration paths SHALL be
 `profiles.<name>.child_agents.wait_default_timeout_ms` and
-`profiles.<name>.child_agents.wait_max_timeout_ms`. The default range is
-`0..=300_000` milliseconds, the maximum range is `1..=300_000`, and their
-built-in defaults are 300,000 milliseconds respectively. The resolved default
+`profiles.<name>.child_agents.wait_max_timeout_ms`. The default and maximum
+ranges SHALL be `0..=300_000` and `1..=300_000` milliseconds respectively, and
+the built-in values SHALL both be 300,000 milliseconds. The resolved default
 MUST NOT exceed the resolved maximum. A requested timeout of zero SHALL be an
-immediate status check; a requested timeout above the resolved maximum SHALL
-be rejected before waiting. A timeout before terminal child delivery SHALL
-return a successful structured `running` result with `timed_out = true`, MUST
-release the parent tool call, and MUST leave the child running so it can finish
-in the background. The model-facing description SHALL state that terminal
+immediate status check; a requested timeout above the resolved maximum SHALL be
+rejected before waiting.
+
+When a foreground wait expires before terminal child delivery, `agent.wait`
+SHALL return a successful structured `running` result with a timeout marker and
+MUST release the parent tool call. This is a soft foreground boundary only: the
+child MUST remain active, its lifecycle and exact state MUST be unchanged, and
+its terminal outcome MUST remain must-deliver for automatic delivery at the
+next safe boundary. The model-facing description SHALL state that terminal
 outcomes are delivered automatically and that a timed-out wait does not stop
 the child.
 
-#### Scenario: Follow up with an idle child
+#### Scenario: Foreground wait expires without stopping the child
 
-- **GIVEN** a child completed one response but remains available
-- **WHEN** the root sends a follow-up task
-- **THEN** the child resumes under its existing limits and workspace
-- **AND** the new activity remains attributed to the same child ID
+- **GIVEN** the root waits for a child that remains active
+- **AND** the foreground wait reaches its configured five-minute boundary
+- **WHEN** no terminal child outcome is available
+- **THEN** `agent.wait` returns a successful `running` result marked as timed out
+- **AND** the parent tool call is released for normal completion or new work
+- **AND** the child continues running with its original lifecycle and limits
 
-#### Scenario: Stop a running child
+#### Scenario: Child completes during the foreground wait
 
-- **GIVEN** a child is executing a cancellable tool
-- **WHEN** the root stops that child
-- **THEN** cancellation reaches the tool and provider stream
-- **AND** the parent receives one terminal stopped result
+- **GIVEN** the root waits for a child that completes before the boundary
+- **WHEN** the wait observes the terminal state
+- **THEN** `agent.wait` returns the terminal/idle child status without a timeout
+  marker
+- **AND** the result remains eligible for the existing automatic completion
+  delivery path
 
-#### Scenario: Child exceeds the foreground wait timeout
+#### Scenario: Explicit shorter wait remains available
 
-- **GIVEN** the parent calls `agent.wait` with the five-minute default timeout
-- **AND** the child remains active
-- **WHEN** the foreground timeout expires
-- **THEN** the tool returns `status = "running"` with `timed_out = true`
-- **AND** the parent may complete or continue normally
-- **AND** the child remains active in the background and its terminal outcome
-  remains must-deliver
-
-#### Scenario: Requested timeout exceeds the host maximum
-
-- **GIVEN** the model requests a timeout above the resolved maximum
-- **WHEN** Smith prepares the wait operation
-- **THEN** it rejects the value according to the documented shared contract
-  before waiting
-- **AND** it cannot extend the parent tool call beyond the host maximum
+- **GIVEN** the root requests a valid `timeout_ms` shorter than five minutes
+- **WHEN** the child remains active until that duration expires
+- **THEN** Smith returns the same successful running/timeout projection
+- **AND** the child remains active rather than being stopped
 
 ### Requirement: Safe parent reporting
 

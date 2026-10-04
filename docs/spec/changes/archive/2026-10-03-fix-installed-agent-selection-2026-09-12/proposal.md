@@ -1,3 +1,8 @@
+---
+created_at: 2026-10-04T03:48:59Z
+updated_at: 2026-10-04T03:48:59Z
+---
+
 # Proposal: Fix installed coding-agent selection and honest candidate previews
 
 ## Why

@@ -1,7 +1,7 @@
 # change-review Specification
 
 ## Purpose
-TBD - created by archiving change update-smith-interaction-model. Update Purpose after archive.
+How Smith inspects, attributes, reviews, undoes, redoes, and reverts the file changes its turns make.
 ## Requirements
 ### Requirement: Git-aware change inspection
 

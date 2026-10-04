@@ -1,7 +1,7 @@
 # goal-lifecycle Specification
 
 ## Purpose
-TBD - created by archiving change add-persistent-session-goals. Update Purpose after archive.
+Persistent session goals: creation, model goal tools, continuation, usage and budget accounting, and completion.
 ## Requirements
 ### Requirement: One explicit persisted goal per eligible session
 

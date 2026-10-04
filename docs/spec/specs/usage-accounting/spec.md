@@ -1,7 +1,7 @@
 # usage-accounting Specification
 
 ## Purpose
-TBD - created by archiving change add-smith-agent-harness. Update Purpose after archive.
+How token usage, cost, and cache evidence are recorded, attributed, and reported.
 ## Requirements
 ### Requirement: Disjoint usage counters
 

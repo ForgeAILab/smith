@@ -1,6 +1,6 @@
 ---
 created_at: 2026-08-20T22:13:02Z
-updated_at: 2026-08-21T01:33:37Z
+updated_at: 2026-10-04T03:49:13Z
 completed_at: 2026-08-21T01:33:37Z
 ---
 
@@ -47,7 +47,9 @@ completed_at: 2026-08-21T01:33:37Z
 ## 3. Smith Client Protocol
 
 - [x] 3.1 Add versioned Smith-owned input, receipt, ID, lifecycle, usage,
-  approval, interaction, tool, child, and terminal event types.
+  approval, interaction, tool, child, and terminal event types. The input
+  and receipt half had no caller and was removed by `refactor-client-protocol`
+  (2026-10-03); the event projection remains.
 - [x] 3.2 Implement one adapter from Agent Runtime canonical events and
   `SessionHandle` operations to `SmithSession` and `SmithEvent`; preserve causal
   ordering, attribution, redaction, and bounded payload references.

@@ -1,7 +1,7 @@
 # code-organization Specification
 
 ## Purpose
-TBD - created by archiving change refactor-large-rust-modules. Update Purpose after archive.
+Ownership and boundary rules for Smith's crates and modules, and how those boundaries are checked.
 ## Requirements
 ### Requirement: Large Rust modules have stable responsibility boundaries
 
