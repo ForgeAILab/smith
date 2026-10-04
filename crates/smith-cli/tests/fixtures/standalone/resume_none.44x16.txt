@@ -5,7 +5,7 @@
 
   ┌ Resume session ──────────────────────┐
   │ filter: type to search               │
-  │ Nothing to resume for this project · │
+  │ No sessions to resume in this project│
   │ ↑/↓ choose · Enter confirm           │
   │ Esc cancel                           │
   └──────────────────────────────────────┘

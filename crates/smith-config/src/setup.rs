@@ -522,7 +522,7 @@ const DESCRIPTORS: &[ProviderSetupDescriptor] = &[
         connection: Some(ProviderConnectionDescriptor {
             order: 1,
             label: "ChatGPT (experimental)",
-            description: "Smith OAuth · direct ChatGPT Responses · unsupported public API boundary",
+            description: "Sign in with your ChatGPT account · experimental",
             flow: ProviderConnectFlow::ChatGptOAuth,
             catalog_provider: None,
         }),
@@ -533,7 +533,7 @@ const DESCRIPTORS: &[ProviderSetupDescriptor] = &[
             reasoning: None,
         },
         label: "Connect ChatGPT (experimental)",
-        description: "Smith OAuth and direct Responses calls; unsupported public API boundary",
+        description: "Sign in with your ChatGPT account · experimental",
         provider: Some(CHATGPT_PROVIDER),
         profile: None,
         adapter: KIND_CHATGPT_RESPONSES,
@@ -561,7 +561,7 @@ const DESCRIPTORS: &[ProviderSetupDescriptor] = &[
             reasoning: None,
         },
         label: "Connect xAI Grok",
-        description: "Browser login with `/connect xai`, or an API key; catalog-backed Grok limits",
+        description: "xAI sign-in or API key · catalog-backed Grok limits",
         provider: Some(XAI_PROVIDER),
         profile: Some(XAI_PROFILE),
         adapter: KIND_OPENAI_RESPONSES,
@@ -651,6 +651,30 @@ pub fn trusted_models() -> impl Iterator<Item = &'static TrustedModelRecord> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_descriptions_use_plain_account_and_key_wording() {
+        for descriptor in DESCRIPTORS {
+            for description in std::iter::once(descriptor.description).chain(
+                descriptor
+                    .connection
+                    .map(|connection| connection.description),
+            ) {
+                for internal in [
+                    "/connect",
+                    "OAuth",
+                    "public API boundary",
+                    "direct Responses",
+                ] {
+                    assert!(
+                        !description.contains(internal),
+                        "{}: {description}",
+                        descriptor.id
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn connectable_descriptors_have_a_ceremony_and_stable_order() {
@@ -790,7 +814,10 @@ mod tests {
         assert_eq!(descriptor.endpoint, Some(CHATGPT_ENDPOINT));
         assert_eq!(descriptor.adapter, KIND_CHATGPT_RESPONSES);
         assert!(descriptor.credentials.is_empty());
-        assert!(descriptor.description.contains("unsupported"));
+        assert_eq!(
+            descriptor.description,
+            "Sign in with your ChatGPT account · experimental"
+        );
         assert_eq!(
             descriptor.models,
             &[

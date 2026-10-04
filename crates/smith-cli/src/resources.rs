@@ -698,6 +698,8 @@ pub(super) fn session_resource_entries(
 
 /// Builds the same resume entries with caller-supplied update-time formatting.
 /// Fixtures fix the clock and offset without changing the production formatter.
+/// Filtering here keeps startup and in-session pickers on the same eligibility
+/// rule without excluding legacy sessions whose metadata is unknown.
 pub(super) fn session_resource_entries_with_updated(
     sessions: Vec<SessionListing>,
     current: Option<&str>,
@@ -705,6 +707,7 @@ pub(super) fn session_resource_entries_with_updated(
 ) -> Vec<ResourceEntry> {
     sessions
         .into_iter()
+        .filter(SessionListing::should_offer_resume)
         .map(|session| {
             let id = session.id.as_str().to_owned();
             let active = current.is_some_and(|session| id == session);
@@ -712,25 +715,19 @@ pub(super) fn session_resource_entries_with_updated(
                 .user_preview
                 .as_deref()
                 .map(|preview| bounded_text(preview, 64))
-                .unwrap_or_else(|| "No user preview".to_owned());
+                .unwrap_or_else(|| "unknown prompt".to_owned());
             let turns = session.turn_count.map_or_else(
                 || "unknown turns".to_owned(),
-                |count| format!("{count} turns"),
+                |count| format!("{count} turn{}", if count == 1 { "" } else { "s" }),
             );
-            let pair = match (session.provider.as_deref(), session.model.as_deref()) {
-                (Some(provider), Some(model)) => format!("{provider}/{model}"),
-                _ => "unknown provider/model".to_owned(),
-            };
+            let provider = session.provider.as_deref().unwrap_or("unknown");
+            let model = session.model.as_deref().unwrap_or("unknown");
             let updated = session
                 .updated
-                .map_or_else(|| "unknown update".to_owned(), &format_updated);
-            let entry = ResourceEntry::new(
-                &id,
-                short_session_id(&id),
-                format!("{id} · {turns} · {pair} · updated {updated} · {preview}"),
-            )
-            .description(session.user_preview.as_deref().unwrap_or("No user preview"))
-            .active(active);
+                .map_or_else(|| "unknown".to_owned(), &format_updated);
+            let entry = ResourceEntry::new(&id, preview, &id)
+                .description(format!("{updated} · {turns} · {provider}/{model}"))
+                .active(active);
             if session.schema_version == SNAPSHOT_SCHEMA_VERSION {
                 entry
             } else {
@@ -753,6 +750,8 @@ pub(super) fn format_session_updated(timestamp: Timestamp) -> String {
     format_session_updated_at(timestamp, offset, now.to_offset(now_offset))
 }
 
+/// Uses elapsed age for recent sessions and a local date for older ones, so
+/// deterministic fixtures can cover every bucket without a wall-clock read.
 pub(super) fn format_session_updated_at(
     timestamp: Timestamp,
     offset: time::UtcOffset,
@@ -762,44 +761,31 @@ pub(super) fn format_session_updated_at(
     let Ok(instant) =
         time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(millis) * 1_000_000)
     else {
-        return "invalid timestamp".to_owned();
+        return "unknown".to_owned();
     };
     let instant = instant.to_offset(offset);
-    if instant <= now && instant.date() == now.date() {
-        let seconds = (now - instant).whole_seconds();
-        if seconds < 60 {
-            return "just now".to_owned();
-        }
-        let minutes = seconds / 60;
-        if minutes < 60 {
-            return format!(
-                "{minutes} minute{} ago",
-                if minutes == 1 { "" } else { "s" }
-            );
-        }
-        let hours = minutes / 60;
-        return format!("{hours} hour{} ago", if hours == 1 { "" } else { "s" });
+    let seconds = (now - instant).whole_seconds().max(0);
+    if seconds < 60 {
+        return "just now".to_owned();
+    }
+    if seconds < 3_600 {
+        return format!("{} min ago", seconds / 60);
+    }
+    if seconds < 86_400 {
+        return format!("{} h ago", seconds / 3_600);
+    }
+    let days = seconds / 86_400;
+    if days == 1 {
+        return "yesterday".to_owned();
+    }
+    if days < 7 {
+        return format!("{days} days ago");
     }
     format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02} {}",
+        "{:04}-{:02}-{:02}",
         instant.year(),
         u8::from(instant.month()),
         instant.day(),
-        instant.hour(),
-        instant.minute(),
-        instant.second(),
-        format_session_offset(instant.offset()),
-    )
-}
-
-pub(super) fn format_session_offset(offset: time::UtcOffset) -> String {
-    let seconds = offset.whole_seconds();
-    let absolute = seconds.unsigned_abs();
-    format!(
-        "{}{hours:02}:{minutes:02}",
-        if seconds < 0 { "-" } else { "+" },
-        hours = absolute / 3_600,
-        minutes = absolute % 3_600 / 60,
     )
 }
 
@@ -900,10 +886,6 @@ fn context_quantity(tokens: u32) -> String {
     smith_client::compact_tokens(u64::from(tokens))
 }
 
-pub(super) fn short_session_id(id: &str) -> String {
-    bounded_text(id, 12)
-}
-
 pub(super) fn bounded_text(text: &str, max_chars: usize) -> String {
     let mut chars = text.chars();
     let head = chars.by_ref().take(max_chars).collect::<String>();
@@ -930,7 +912,7 @@ pub(super) async fn choose_resume_session(
     let result = pick_one_in_screen(
         "Resume session",
         entries,
-        "Nothing to resume for this project · Esc to start without resuming",
+        "No sessions to resume in this project · esc exits",
         &mut session,
     )
     .await;
@@ -996,7 +978,8 @@ pub(super) async fn list_sessions(selection: &Selection) -> Result<()> {
 
 /// Formats terminal columns or the plugin's unchanged tab-separated rows.
 /// The caller supplies local timestamp rendering so this function needs no
-/// terminal or time-zone lookup of its own.
+/// terminal or time-zone lookup of its own. Empty sessions are hidden only in
+/// the terminal table because pipes must keep the complete plugin inventory.
 pub(super) fn format_session_list(
     sessions: &[SessionListing],
     terminal: bool,
@@ -1016,6 +999,9 @@ pub(super) fn format_session_list(
         );
     }
     for session in sessions {
+        if terminal && !session.should_offer_resume() {
+            continue;
+        }
         let updated = session.updated.map_or_else(
             || {
                 if terminal {

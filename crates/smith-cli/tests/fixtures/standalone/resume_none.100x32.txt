@@ -13,7 +13,7 @@
 
   ┌ Resume session ──────────────────────────────────────────────────────────────────────────────┐
   │ filter: type to search                                                                       │
-  │ Nothing to resume for this project · Esc to start without resuming                           │
+  │ No sessions to resume in this project · esc exits                                            │
   │                                                                                              │
   │ ↑/↓ choose · Enter confirm · Esc cancel                                                      │
   └──────────────────────────────────────────────────────────────────────────────────────────────┘

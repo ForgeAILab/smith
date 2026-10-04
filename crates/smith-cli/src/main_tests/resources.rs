@@ -73,24 +73,154 @@ fn session_list_fixture() -> Vec<SessionListing> {
 }
 
 #[test]
-fn resume_picker_keeps_identity_and_preview_separate_from_selected_metadata() {
-    let entries =
-        crate::resources::session_resource_entries(session_list_fixture(), Some("session-short"));
+fn resume_picker_leads_with_prompt_and_keeps_identity_in_selected_detail() {
+    let entries = crate::resources::session_resource_entries_with_updated(
+        session_list_fixture(),
+        Some("session-short"),
+        |_| "2 min ago".to_owned(),
+    );
     assert_eq!(entries[0].id, "session-short");
-    assert_eq!(entries[0].description, "explain main.rs");
-    assert!(!entries[0].label.contains("explain main.rs"));
+    assert_eq!(entries[0].label, "explain main.rs");
+    assert_eq!(
+        entries[0].description,
+        "2 min ago · 2 turns · local/example-model"
+    );
+    assert_eq!(entries[0].detail, "session-short");
+    assert!(!entries[0].description.contains("session-short"));
     assert!(entries[0].active);
-    assert!(
-        entries[0]
-            .detail
-            .contains("session-short · 2 turns · local/example-model")
+    assert_eq!(entries[1].label, "unknown prompt");
+    assert_eq!(
+        entries[1].description,
+        "unknown · unknown turns · unknown/unknown"
     );
-    assert!(
-        entries[1]
-            .detail
-            .contains("unknown turns · unknown provider/model")
+    assert_eq!(entries[1].detail, "session-longer-identity");
+    assert_eq!(
+        entries[1].disabled_reason,
+        Some(format!(
+            "snapshot schema {} is unsupported by this build (expects {})",
+            SNAPSHOT_SCHEMA_VERSION + 1,
+            SNAPSHOT_SCHEMA_VERSION
+        ))
     );
-    assert!(entries[1].disabled_reason.is_some());
+}
+
+#[test]
+fn resume_picker_bounds_unicode_prompts_and_inflects_turns() {
+    let mut sessions = session_list_fixture();
+    sessions.truncate(1);
+    sessions[0].user_preview = Some("é".repeat(65));
+    sessions[0].turn_count = Some(1);
+    sessions[0].model = None;
+    let entries = crate::resources::session_resource_entries_with_updated(sessions, None, |_| {
+        "just now".to_owned()
+    });
+    assert_eq!(entries[0].label, format!("{}…", "é".repeat(64)));
+    assert_eq!(entries[0].description, "just now · 1 turn · local/unknown");
+    assert_eq!(entries[0].detail, "session-short");
+}
+
+#[test]
+fn resume_picker_keeps_legacy_sessions_selectable_with_unknown_metadata() {
+    let mut sessions = session_list_fixture();
+    let mut legacy = sessions.remove(1);
+    legacy.schema_version = SNAPSHOT_SCHEMA_VERSION;
+    let entries =
+        crate::resources::session_resource_entries_with_updated(vec![legacy], None, |_| {
+            panic!("legacy listing has no timestamp")
+        });
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].label, "unknown prompt");
+    assert_eq!(
+        entries[0].description,
+        "unknown · unknown turns · unknown/unknown"
+    );
+    assert_eq!(entries[0].detail, "session-longer-identity");
+    assert_eq!(entries[0].disabled_reason, None);
+}
+
+fn session_visibility_fixture() -> Vec<SessionListing> {
+    let mut sessions = session_list_fixture();
+    let empty = SessionListing {
+        id: SessionId::new("session-empty"),
+        turn_count: Some(0),
+        provider: None,
+        model: None,
+        user_preview: None,
+        ..sessions[0].clone()
+    };
+    sessions.push(empty.clone());
+    sessions.push(SessionListing {
+        id: SessionId::new("session-failed-prompt"),
+        user_preview: Some("please fix the build".to_owned()),
+        ..empty.clone()
+    });
+    sessions.push(SessionListing {
+        id: SessionId::new("session-image-only"),
+        turn_count: Some(1),
+        ..empty
+    });
+    sessions
+}
+
+#[test]
+fn both_resume_entry_sources_hide_only_known_empty_sessions() {
+    for current in [None, Some("session-failed-prompt")] {
+        let entries =
+            crate::resources::session_resource_entries(session_visibility_fixture(), current);
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "session-short",
+                "session-longer-identity",
+                "session-failed-prompt",
+                "session-image-only",
+            ]
+        );
+        assert_eq!(entries[2].label, "please fix the build");
+        assert!(entries[2].description.contains(" · 0 turns · "));
+        assert_eq!(entries[2].active, current.is_some());
+        assert_eq!(entries[3].label, "unknown prompt");
+        assert!(entries[3].description.contains(" · 1 turn · "));
+    }
+}
+
+#[test]
+fn terminal_session_table_hides_empty_sessions_but_keeps_failed_and_image_prompts() {
+    let sessions = session_visibility_fixture();
+    let listing = format_session_list(&sessions, true, |_| "date".to_owned());
+    assert_eq!(listing.lines().count(), 5, "{listing}");
+    assert!(!listing.contains("session-empty"), "{listing}");
+    for id in [
+        "session-short",
+        "session-longer-identity",
+        "session-failed-prompt",
+        "session-image-only",
+    ] {
+        assert!(listing.contains(id), "{listing}");
+    }
+    assert!(listing.contains("please fix the build"), "{listing}");
+
+    let empty = &sessions[2..3];
+    assert_eq!(
+        format_session_list(empty, true, |_| panic!("hidden rows have no timestamp")),
+        format_session_list(&[], true, |_| unreachable!())
+    );
+}
+
+#[test]
+fn piped_session_table_keeps_empty_sessions_byte_for_byte() {
+    let listing = format_session_list(&session_visibility_fixture(), false, |_| unreachable!());
+    assert_eq!(
+        listing,
+        "session-short\t1790935135329ms\t2\tlocal/example-model\texplain main.rs\n\
+         session-longer-identity\tunknown-version\t?\t?/?\tno user preview\n\
+         session-empty\t1790935135329ms\t0\t?/?\tno user preview\n\
+         session-failed-prompt\t1790935135329ms\t0\t?/?\tplease fix the build\n\
+         session-image-only\t1790935135329ms\t1\t?/?\tno user preview\n"
+    );
 }
 
 #[test]
@@ -501,8 +631,9 @@ fn catalog_inventory_becomes_searchable_resource_metadata_with_disabled_reasons(
     );
     assert!(resources.connections.iter().any(|entry| {
         entry.id == "chatgpt"
-            && entry.detail.contains("Smith OAuth")
-            && entry.detail.contains("direct ChatGPT Responses")
+            && entry
+                .detail
+                .contains("Sign in with your ChatGPT account · experimental")
             && !entry.active
     }));
     assert!(resources.connections.iter().any(|entry| {

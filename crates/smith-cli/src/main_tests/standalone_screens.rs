@@ -69,7 +69,7 @@ fn resume_picker(sessions: Vec<SessionListing>) -> ResourcePicker {
     ResourcePicker::new(
         "Resume session",
         entries,
-        "Nothing to resume for this project · Esc to start without resuming",
+        "No sessions to resume in this project · esc exits",
     )
 }
 

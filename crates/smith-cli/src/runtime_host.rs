@@ -486,11 +486,10 @@ fn report_session_usage(
             crate::local_command::render_cache_controller_summary(&controller)
         );
     }
-    // Printed even for a session that spent nothing: an empty session is
-    // exactly the one a user is most likely to want to pick back up, and the
-    // id is not recoverable from anywhere else on screen.
-    if host.paths().is_some() {
-        println!("resume with smith --resume {session}");
+    // An untouched session has no work to resume. Canonical user history,
+    // rather than spend, preserves the hint for prompts that failed early.
+    if let Some(line) = session_resume_hint(host) {
+        println!("{line}");
     }
 
     if usage.is_empty() {
@@ -512,6 +511,24 @@ fn report_session_usage(
             &record,
         );
     }
+}
+
+/// Checks canonical user history because neither usage nor a text preview can
+/// establish whether failed or image-only prompts were submitted.
+pub(super) fn session_resume_hint(host: &HostSession) -> Option<String> {
+    if host.paths().is_none()
+        || !host
+            .session()
+            .history()
+            .iter()
+            .any(|message| message.role == agent_runtime_core::content::Role::User)
+    {
+        return None;
+    }
+    Some(format!(
+        "resume with smith --resume {}",
+        host.session().id()
+    ))
 }
 
 pub(super) async fn run_interactive_command(args: RunArgs) -> Result<u8> {
