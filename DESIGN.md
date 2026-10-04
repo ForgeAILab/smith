@@ -93,8 +93,10 @@ transcript. Cancelling a picker that a command opened leaves the composer
 empty. Any compact picker temporarily replaces the todo pane, but only a
 resource picker adds a footer control row. Slash completion relies on the
 established keyboard contract and keeps the one-row identity footer. Closing a
-picker restores the unchanged todo projection. Modal overlays are reserved for
-consequential interaction:
+picker restores the unchanged todo projection. Choosers are never modal: every
+one, in a session or before it, is the same inline list (see *Setup before the
+coding surface* and the resource-picker grammar). Modal overlays are reserved
+for consequential interaction:
 approval, provider-spend confirmation, agent-originated questionnaires,
 undo/revert confirmation, and exit confirmation. They are centered, max 72
 columns wide and 60% of height, and drawn over the transcript. Read-only
@@ -131,26 +133,36 @@ constructed. Partial or malformed configuration is an error, not an excuse to
 replace user state. Non-interactive and machine-output launches never open
 setup.
 
-Setup is a keyboard-first sequence inside one frame, titled `Smith setup`
-once: action, provider, authentication, model, automatic limit discovery,
-response compatibility, default selection, and review. Each step presents one
-choice or field. Each listed entry has a name line and a wrapped dim description
-line; footer keys remain visible throughout. For a custom model Smith first
+Setup is a keyboard-first sequence drawn like Claude Code's own pre-session
+screens: no frame and no centering, starting at the top-left with a title row
+(`Smith setup · <step>`), then the step's one choice or field, then one dim
+footer, sized to the content. The steps are action, provider, authentication,
+model, automatic limit discovery, response compatibility, default selection,
+and review. The first step welcomes the user and says nothing is sent to a
+provider until setup finishes. Fixed choice lists are numbered and accept
+their digit; the selected entry shows its wrapped dim description beneath it.
+Footer keys remain visible throughout and use the session's lowercase hint
+words (`↑↓ choose · enter confirm · esc back`). For a custom model Smith first
 checks the endpoint's bounded model listing, then the trusted catalog. Only
 when neither source knows the model window does setup ask for one numeric
 value: the total context window. Smith derives the input ceiling from that
 window and the output ceiling from its automatic request-budget rule; it does
-not present separate input/output token fields. The review names every
-non-secret value and its provenance, the exact user-config destination, and
-the pending local preflight. API-key text is rendered only as masking glyphs.
+not present separate input/output token fields. The review is one labelled row
+per fact — provider and endpoint, credential reference, model with compact
+limits and their provenance, default, and what confirming writes (the
+user-config destination, `~`-relative, then the local connection check) —
+with no internal terms. API-key text is rendered only as masking glyphs.
 Every listed entry starts its flow; an entry that cannot proceed says why.
 Labels and review text are derived from the values that will be written.
-`Shift+Tab` goes back with the previous non-secret provider name, endpoint,
-and model available for editing. Returning to a field invalidates any pending
-collision approval so changed values pass through review again. Secret input
-is never restored. `Esc` cancels without writes; a denied credential
-service returns to authentication with the environment-reference option still
-available.
+`Esc` (or `Shift+Tab`) goes back one step with the previous non-secret
+provider name, endpoint, and model available for editing and the previous
+choice re-selected. Returning to a field invalidates any pending collision
+approval so changed values pass through review again. Secret input is never
+restored. `Esc` on the first step and `Ctrl+C` on any step cancel without
+writes and print `Setup cancelled · nothing was written`. ChatGPT sign-in
+chosen in setup is a setup step, so `Esc` returns to setup. A denied
+credential service returns to authentication with the environment-reference
+option still available.
 
 Publication is transactional. Smith enrolls the reviewed credential, writes a
 same-directory atomic user-config edit, then exercises the shared runtime
@@ -158,6 +170,16 @@ factory's derivation-only preflight. Failure restores the exact prior config
 bytes and prior credential. Preflight sends no provider request and constructs
 no session state. Only a successful automatic first-run continues into the
 ordinary coding surface; explicit `smith setup` commands exit after success.
+
+`/connect` runs the same steps inside a session. The transcript, composer, and
+hint row stay drawn; the connection's steps, titled for the connection
+(`Connect OpenRouter`), never `Smith setup`, appear in the pane above the
+composer and grow up to the transcript height for review text. `Esc` on the
+first step returns to the untouched composer and `Ctrl+C` cancels the flow
+without quitting Smith. Results, including `/disconnect`'s, become transcript
+notices after the host rebuild; nothing is printed behind the session.
+ChatGPT and xAI sign-in show the same progress step: the URL, a one-time code
+when there is one, a waiting line, and `esc cancel`.
 
 ## 3. Type and glyphs
 
@@ -659,7 +681,11 @@ estimated.
 
 Omitted selector arguments open the same reusable resource-picker grammar:
 type to filter bounded local metadata, `Up`/`Down` to move, `Enter` to choose,
-and `Esc` to restore the untouched composer draft. Rows use two aligned columns:
+and `Esc` to restore the untouched composer draft. Inventories filter on typing
+and are not numbered; only fixed choice lists of at most nine entries are
+numbered. A picker opens on the current entry (`/model` on the active model),
+and label columns are measured over the whole list so scrolling never moves
+them. Rows use two aligned columns:
 name, then one short dim description, with state at the right edge. Names and
 state remain visible at 44 columns; descriptions yield at a word boundary with
 `…`. Active choices read `✓ current`; incompatible or incomplete entries remain
@@ -734,11 +760,16 @@ provider/model rebuild retains the snapshot that made the selected row
 available.
 
 The pre-host `smith --resume` picker uses the same rows before constructing a
-host. Saved-session metadata includes full identity, recency, turn count,
-provider/model, and a bounded preview. Older compatible snapshots remain
-selectable with unknown fields labelled `unknown`; newer incompatible schemas
-remain visible but disabled. Bare `--resume` is interactive-only, while an
-explicit session ID works unchanged in terminal and headless modes.
+host, drawn from the top-left. Each session row leads with its latest prompt,
+then `2 min ago · 1 turn · zai/glm-5.3`; the full session ID appears only on
+the selected row's detail. A session with no user message is not offered by
+either resume picker, the terminal table of `smith sessions list`, or the exit
+report's `resume with …` line; the piped listing keeps every row. Older
+compatible snapshots remain selectable with unknown fields labelled `unknown`;
+newer incompatible schemas remain visible but disabled. `Esc` in
+`smith --resume` exits without starting a session, and its empty state says
+so. Bare `--resume` is interactive-only, while an explicit session ID works
+unchanged in terminal and headless modes.
 
 ### Change views and confirmation
 

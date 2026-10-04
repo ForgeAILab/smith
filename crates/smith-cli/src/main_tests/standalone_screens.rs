@@ -71,6 +71,7 @@ fn resume_picker(sessions: Vec<SessionListing>) -> ResourcePicker {
         entries,
         "No sessions to resume in this project · esc exits",
     )
+    .with_empty_guidance_keys()
 }
 
 fn resume_sessions() -> Vec<SessionListing> {

@@ -80,7 +80,7 @@ be typed on that screen, and MUST NOT use internal terms (`PKCE`, `auth.json`,
 - **GIVEN** setup reviews a model with a 1,000,000-token context and a
   131,072-token output ceiling from the trusted catalog
 - **WHEN** the review renders
-- **THEN** the limits read `1M context · 128k output · trusted catalog`
+- **THEN** the limits read `1M context · 131k output · trusted catalog`
   followed by its revision
 - **AND** a destination under the home directory is written with `~`
 - **AND** the last row says that confirming writes that file and then checks

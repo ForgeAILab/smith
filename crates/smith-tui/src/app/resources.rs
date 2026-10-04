@@ -102,6 +102,13 @@ impl App {
         if let Some(query) = initial_query {
             picker.query = query.to_owned();
         }
+        if target == ResourceTarget::Model {
+            picker.selected = picker
+                .filtered_indices()
+                .iter()
+                .position(|index| picker.entries[*index].active)
+                .unwrap_or(0);
+        }
         self.open_overlay(Overlay::ResourcePicker {
             picker,
             target,

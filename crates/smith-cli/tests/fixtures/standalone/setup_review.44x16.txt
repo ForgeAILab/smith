@@ -1,16 +1,16 @@
-  Smith setup · Review
+  Smith setup · Review · nothing is written
 
-  Review the complete non-secret setup
-  change:
-
-  action: Quick start with GLM
-  provider: zai (openai-compatible)
-  endpoint:
-  https://api.z.ai/api/coding/paas/v4
-  credential: env:ZAI_API_KEY
-  model: glm-5.2
-  limits: context 1000000 · max input
-  1000000 · max output 131072 (trusted
+  Provider     zai · https://api.z.ai/api/co
+               ding/paas/v4
+  API key      env:ZAI_API_KEY
+  Model        glm-5.2 · 1M context · 1M
+               input · 131k output · trusted
+               catalog v5
+  Requests     32.7k output · 32.7k reserved
+  GLM replies  an answer sent only as
+               reasoning is shown as the
+               reply; thinking stays on
+  Default      profile glm
 
   enter confirm · esc back
-  ↑↓/PgUp/PgDn review · 1/11
+  ↑↓/PgUp/PgDn review · 1/4

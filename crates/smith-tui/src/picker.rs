@@ -13,7 +13,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use crate::render::lists::{clip_words, list_row};
+use crate::render::lists::{clip_name, clip_words, list_row};
 use crate::screen::{FlowOutcome, Screen, ScreenEvent, Step};
 use crate::theme::{Theme, Tone};
 
@@ -110,6 +110,8 @@ pub struct ResourcePicker {
     pub selected: usize,
     /// Guidance shown when the local inventory is empty.
     pub empty_guidance: String,
+    // The owner explicitly supplies controls in the empty guidance.
+    empty_guidance_names_keys: bool,
     // Fixed choices cannot accidentally consume letters as a filter.
     numbered: bool,
     // The owning flow supplies whether Escape has a previous step.
@@ -142,6 +144,7 @@ impl ResourcePicker {
             entries,
             selected: 0,
             empty_guidance: empty_guidance.into(),
+            empty_guidance_names_keys: false,
             numbered: false,
             back: false,
         }
@@ -168,8 +171,24 @@ impl ResourcePicker {
         self
     }
 
+    /// Omits empty-list controls when the guidance already names its keys.
+    #[must_use]
+    pub fn with_empty_guidance_keys(mut self) -> Self {
+        self.empty_guidance_names_keys = true;
+        self
+    }
+
     /// Supplies shared control wording to hosts whose footer is outside the list.
     pub fn footer(&self) -> ScreenFooter {
+        if self.entries.is_empty() && self.empty_guidance_names_keys {
+            return ScreenFooter::None;
+        }
+        if self.filtered_indices().is_empty() {
+            return ScreenFooter::Empty {
+                filtered: !self.entries.is_empty(),
+                back: self.back,
+            };
+        }
         ScreenFooter::List {
             choices: self.numbered.then_some(self.entries.len().min(9)),
             back: self.back,
@@ -323,6 +342,15 @@ impl Screen for ResourcePicker {
 /// Shared lowercase controls keep every screen's navigation vocabulary consistent.
 #[derive(Debug, Clone, Copy)]
 pub enum ScreenFooter {
+    /// The body guidance already supplies all relevant controls.
+    None,
+    /// Empty lists expose only actions that can recover or leave the screen.
+    Empty {
+        /// A nonempty inventory can recover by clearing its filter.
+        filtered: bool,
+        /// Whether the owner can resume an earlier step.
+        back: bool,
+    },
     /// Numbered choices advertise digits; inventories advertise arrow selection.
     List {
         /// Digit range advertised only for fixed choices.
@@ -358,6 +386,15 @@ impl ScreenFooter {
     fn segments(self) -> Vec<String> {
         let escape = |back| if back { "esc back" } else { "esc cancel" }.to_owned();
         match self {
+            Self::None => Vec::new(),
+            Self::Empty { filtered, back } => {
+                let mut segments = Vec::new();
+                if filtered {
+                    segments.push("ctrl+u clear filter".into());
+                }
+                segments.push(escape(back));
+                segments
+            }
             Self::List { choices, back } => vec![
                 choices.filter(|count| *count > 0).map_or_else(
                     || "↑↓ choose".to_owned(),
@@ -478,8 +515,7 @@ pub(crate) fn draw_picker_with_context(
     error: Option<&str>,
     theme: Theme,
 ) {
-    let mut prefix = Vec::new();
-    let mut suffix = note
+    let mut prefix = note
         .map(|note| indented_words(note, area.width, 2, Tone::Dim, theme))
         .unwrap_or_default();
     if let Some(error) = error {
@@ -492,21 +528,24 @@ pub(crate) fn draw_picker_with_context(
         ));
     }
     let all = entry_view(picker, usize::MAX, area.width, theme, false);
-    let body = draw_inline_surface(
+    let mut body = draw_inline_surface(
         frame,
         area,
         title,
-        prefix.len() + all.lines.len() + suffix.len(),
+        (prefix.len() + all.lines.len()).saturating_sub(usize::from(note.is_some())),
         picker.footer(),
         theme,
     );
+    // The intro occupies the title's usual blank row so it precedes choices
+    // even when it wraps; other picker screens keep their existing spacing.
+    if note.is_some() && area.height > 1 {
+        body.y = body.y.saturating_sub(1);
+        body.height = body.height.saturating_add(1);
+    }
     let prefix_rows = prefix.len().min(usize::from(body.height).saturating_sub(1));
-    let suffix_rows = suffix
-        .len()
-        .min(usize::from(body.height).saturating_sub(prefix_rows + 1));
     let view = entry_view(
         picker,
-        usize::from(body.height).saturating_sub(prefix_rows + suffix_rows),
+        usize::from(body.height).saturating_sub(prefix_rows),
         area.width,
         theme,
         false,
@@ -514,8 +553,6 @@ pub(crate) fn draw_picker_with_context(
     draw_picker_heading(frame, area, picker, title, view.scrolling, theme);
     prefix.truncate(prefix_rows);
     prefix.extend(view.lines);
-    suffix.truncate(suffix_rows);
-    prefix.extend(suffix);
     frame.render_widget(Paragraph::new(prefix), body);
 }
 
@@ -733,11 +770,15 @@ fn entry_view(
                     } else {
                         2
                     };
-                    if compact {
+                    if !detail.chars().any(char::is_whitespace) || compact {
                         lines.push(Line::from(vec![
                             Span::raw(" ".repeat(indent)),
                             Span::styled(
-                                clip_words(&detail, usize::from(width).saturating_sub(indent)),
+                                if detail.chars().any(char::is_whitespace) {
+                                    clip_words(&detail, usize::from(width).saturating_sub(indent))
+                                } else {
+                                    clip_name(&detail, usize::from(width).saturating_sub(indent))
+                                },
                                 theme.style(Tone::Dim),
                             ),
                         ]));
@@ -838,6 +879,99 @@ mod tests {
     use super::*;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+
+    #[test]
+    fn empty_resume_guidance_replaces_the_footer_but_filters_keep_recovery_keys() {
+        let mut picker = ResourcePicker::new(
+            "Resume session",
+            Vec::new(),
+            "No sessions to resume in this project · esc exits",
+        )
+        .with_empty_guidance_keys();
+        for width in [44, 80, 100] {
+            assert!(picker.footer().rows(width).is_empty());
+            let rendered = render_picker(&picker, width, 16);
+            assert!(rendered.contains("esc exits"), "{rendered}");
+            assert!(!rendered.contains("esc cancel"), "{rendered}");
+            assert!(!rendered.contains("enter confirm"), "{rendered}");
+            assert!(!rendered.contains("↑↓ choose"), "{rendered}");
+            let rows = rendered.lines().collect::<Vec<_>>();
+            let guidance_end = rows
+                .iter()
+                .position(|row| row.contains("esc exits"))
+                .expect("empty resume guidance");
+            assert!(
+                rows[guidance_end + 1..]
+                    .iter()
+                    .all(|row| row.trim().is_empty()),
+                "empty resume must have no footer row: {rendered}"
+            );
+        }
+        assert_eq!(picker.on_key(key(KeyCode::Esc)), PickerOutcome::Cancelled);
+        picker
+            .entries
+            .push(ResourceEntry::new("session", "Prompt", "session-id"));
+        assert!(
+            picker
+                .footer()
+                .rows(80)
+                .join(" · ")
+                .contains("enter confirm")
+        );
+        picker.query = "no matches".into();
+        for width in [44, 100] {
+            assert_eq!(
+                picker.footer().rows(width).join(" · "),
+                "ctrl+u clear filter · esc cancel"
+            );
+            let rendered = render_picker(&picker, width, 16);
+            assert!(!rendered.contains("enter confirm"), "{rendered}");
+            assert!(!rendered.contains("↑↓ choose"), "{rendered}");
+        }
+    }
+
+    #[test]
+    fn empty_session_pickers_keep_the_cancel_hint_without_an_explicit_flag() {
+        let picker = ResourcePicker::new(
+            "Resume session",
+            Vec::new(),
+            "No sessions to resume · esc cancel",
+        );
+        for width in [44, 80] {
+            assert_eq!(picker.footer().hint(width), "esc cancel");
+        }
+    }
+
+    #[test]
+    fn selected_session_id_stays_on_one_row_at_44_columns() {
+        for id in [
+            "session-6465-42d4-be69-180feb01a926",
+            "session-2042b4df-6465-42d4-be69-180feb01a926",
+            "会話-2042b4df-6465-42d4-be69-180feb01a926-too-long",
+        ] {
+            let picker = ResourcePicker::new(
+                "Resume session",
+                vec![
+                    ResourceEntry::new(id, "Explain lib.rs", id).description("2 min ago · 1 turn"),
+                ],
+                "empty",
+            );
+            let rows = picker_lines(&picker, 10, 44, Theme::new());
+            assert_eq!(rows.len(), 2, "{rows:?}");
+            let detail = rows[1].to_string();
+            if id.width() <= 42 {
+                assert_eq!(detail, format!("  {id}"));
+            } else {
+                assert!(detail.starts_with("  "), "{detail}");
+                assert!(detail.ends_with('…'), "{detail}");
+                assert!(
+                    id.starts_with(detail.trim_start().trim_end_matches('…')),
+                    "{detail}"
+                );
+                assert!(detail.width() <= 44, "{detail}");
+            }
+        }
+    }
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)

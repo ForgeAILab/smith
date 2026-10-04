@@ -70,6 +70,19 @@ max_input_tokens = 124000
 max_output_tokens = 4096
 "#;
 
+#[test]
+fn setup_outcome_prints_cancel_once_and_completion_is_silent() {
+    let mut output = Vec::new();
+    crate::print_setup_outcome(crate::setup::SetupOutcome::Completed, &mut output).expect("output");
+    assert!(output.is_empty());
+    crate::print_setup_outcome(crate::setup::SetupOutcome::Cancelled, &mut output).expect("output");
+    crate::print_setup_outcome(crate::setup::SetupOutcome::Completed, &mut output).expect("output");
+    assert_eq!(
+        String::from_utf8(output).expect("text"),
+        "Setup cancelled · nothing was written\n"
+    );
+}
+
 fn git(project: &std::path::Path, arguments: &[&str]) {
     let output = std::process::Command::new("git")
         .args(arguments)

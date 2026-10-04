@@ -89,7 +89,8 @@ async fn execute(command: Command) -> Result<u8> {
             Ok(0)
         }
         Command::Setup(args) => {
-            setup::run_explicit(args).await?;
+            let outcome = setup::run_explicit(args).await?;
+            print_setup_outcome(outcome, &mut std::io::stdout().lock())?;
             Ok(0)
         }
         Command::Run(args) => run_command(args).await,
@@ -113,7 +114,13 @@ async fn run_command(mut args: RunArgs) -> Result<u8> {
             match setup::run_first_run(args.selection.clone(), args.no_color, args.no_motion)
                 .await?
             {
-                setup::SetupOutcome::Cancelled => return Ok(0),
+                setup::SetupOutcome::Cancelled => {
+                    print_setup_outcome(
+                        setup::SetupOutcome::Cancelled,
+                        &mut std::io::stdout().lock(),
+                    )?;
+                    return Ok(0);
+                }
                 setup::SetupOutcome::Completed => {}
             }
             None
@@ -189,6 +196,17 @@ async fn run_command(mut args: RunArgs) -> Result<u8> {
         }
         None => run_interactive_command(args).await,
     }
+}
+
+/// Reports cancellation only after standalone callers have restored the terminal.
+fn print_setup_outcome(
+    outcome: setup::SetupOutcome,
+    output: &mut impl std::io::Write,
+) -> std::io::Result<()> {
+    if outcome == setup::SetupOutcome::Cancelled {
+        writeln!(output, "Setup cancelled · nothing was written")?;
+    }
+    Ok(())
 }
 
 fn is_interactive_terminal() -> bool {

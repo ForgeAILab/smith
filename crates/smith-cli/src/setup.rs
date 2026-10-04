@@ -1610,7 +1610,9 @@ mod tests {
             smith_config::setup::TRUSTED_MODEL_CATALOG_REVISION
         );
         assert!(
-            review.contains(&format!("model: {}", data.model)),
+            review
+                .lines()
+                .any(|line| line.starts_with("Model") && line.contains(&data.model)),
             "{review}"
         );
         assert!(

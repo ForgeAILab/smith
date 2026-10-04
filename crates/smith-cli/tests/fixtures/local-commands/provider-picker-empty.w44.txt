@@ -509,4 +509,4 @@
 > Ask Smith to do anything
 ────────────────────────────────────────────
            example-model · build · <PROJECT>
-  enter confirm · esc cancel · ↑↓ choose
+  esc cancel

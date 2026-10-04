@@ -64,11 +64,11 @@ no frame, a title line, a left-aligned list from the top-left, one footer.
   completes. Descriptions name real values (`keychain:smith/zai`, not
   `<provider>`), name no command that cannot be typed there, and drop
   internal terms (`PKCE`, `auth.json`, `public API boundary`). Review is a
-  labelled list with compact sizes (`1M context`, `128k output`), the
+  labelled list with compact sizes (`1M context`, `131k output`), the
   destination as `~/.smith/config.toml`, and `Writes … then checks the
   connection` instead of `pending action` (S1–S4, S6).
 - **Picker rows.** `/model` opens on the current model; its detail line
-  reads `1M context · 128k output · trusted catalog r5` with compact numbers;
+  reads `1M context · 131k output · trusted catalog r5` with compact numbers;
   `/connect` gives the custom endpoint a description of its own; the label
   column width is computed over the whole list so scrolling does not reflow
   rows (C2, M1).

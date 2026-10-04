@@ -471,7 +471,14 @@ fn model_resources_show_named_context_windows_and_the_active_choice() {
             .strip_suffix(" context")
             .expect("context");
         assert!(
-            model.detail.contains(&format!("ctx {quantity} [")),
+            model.detail.starts_with(&format!("{quantity} context · ")),
+            "{}",
+            model.detail
+        );
+        assert!(
+            model.detail.contains(&format!(
+                "4k output ceiling · request 4k automatic · {id} · project config"
+            )),
             "{}",
             model.detail
         );
@@ -607,14 +614,42 @@ fn catalog_inventory_becomes_searchable_resource_metadata_with_disabled_reasons(
     assert!(!current.description.contains("output ceiling"));
     assert!(!current.description.contains("automatic"));
     assert!(current.detail.contains("tools"), "{}", current.detail);
-    assert!(current.detail.contains("advertised"), "{}", current.detail);
+    assert!(
+        current.detail.contains(&format!(" · {} · ", current.id)),
+        "{}",
+        current.detail
+    );
+    assert!(
+        current
+            .detail
+            .contains("models.dev/openrouter advertised · rev "),
+        "{}",
+        current.detail
+    );
+    assert_eq!(
+        current.detail.matches("models.dev").count(),
+        1,
+        "{}",
+        current.detail
+    );
+    assert_eq!(
+        current.detail.matches("advertised").count(),
+        1,
+        "{}",
+        current.detail
+    );
+    assert!(
+        current.detail.contains(" old · profiles router"),
+        "{}",
+        current.detail
+    );
     assert!(
         current.detail.contains("output ceiling"),
         "{}",
         current.detail
     );
     assert!(
-        current.detail.contains("request 32768 [automatic]"),
+        current.detail.contains("request 32.7k automatic"),
         "{}",
         current.detail
     );
@@ -761,12 +796,12 @@ fn grok_shaped_catalog_limits_are_selectable_unless_an_explicit_reserve_conflict
         .expect("the Grok-shaped model is listed");
     assert!(entry.disabled_reason.is_none(), "{}", entry.detail);
     assert!(
-        entry.detail.contains("output ceiling 500k"),
+        entry.detail.contains("500k output ceiling"),
         "{}",
         entry.detail
     );
     assert!(
-        entry.detail.contains("request 32768 [automatic]"),
+        entry.detail.contains("request 32.7k automatic"),
         "{}",
         entry.detail
     );

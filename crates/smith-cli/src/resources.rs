@@ -145,15 +145,13 @@ fn connection_entries(provider_inventory: &[ProviderInventoryEntry]) -> Vec<Reso
             let authentication = if provider.kind.as_deref()
                 == Some(smith_config::model::KIND_CHATGPT_RESPONSES)
             {
-                "Smith OAuth · experimental direct Responses"
+                "ChatGPT sign-in · experimental"
             } else if provider.kind.as_deref()
                 == Some(smith_config::model::KIND_GEMINI_INTERACTIONS)
             {
-                "AI Studio API key · native Gemini Interactions"
+                "Gemini API key"
             } else if provider.kind.as_deref() == Some(smith_config::model::KIND_XAI_RESPONSES) {
-                "browser login · renewable session"
-            } else if provider.kind.as_deref() == Some(smith_config::model::KIND_OPENAI_RESPONSES) {
-                "API key · stateless Responses"
+                "xAI sign-in"
             } else {
                 "API key"
             };
@@ -206,9 +204,14 @@ fn append_connectable_connections(connections: &mut Vec<ResourceEntry>) {
             let connection = descriptor
                 .connection
                 .expect("a connectable descriptor has a ceremony");
+            let description = if descriptor.id == "openai-compatible" {
+                "any OpenAI-compatible endpoint · API key"
+            } else {
+                connection.description
+            };
             connections.push(
                 ResourceEntry::new(descriptor.id, connection.label, connection.description)
-                    .description(connection.label),
+                    .description(description),
             );
         }
     }
@@ -313,20 +316,31 @@ fn model_entries(
             } else {
                 String::new()
             };
-            let advertised = if model.catalog_provider.is_some() { "advertised " } else { "" };
             let limit_source = model.context_tokens.as_ref().map_or_else(
-                || "unknown".to_owned(), |limit| inventory_limit_source(&limit.origin),
+                || "unknown source".to_owned(),
+                |limit| picker_limit_source(&limit.origin),
             );
+            let source_detail = if provenance.is_empty() {
+                format!(" · {limit_source}")
+            } else {
+                String::new()
+            };
             let entry = ResourceEntry::new(
                 id.clone(),
                 model.label,
                 format!(
-                    "{advertised}limits from {} · input {} · output ceiling {} · request {} · ctx {} · {id}{capabilities}{provenance}{profiles}{window_detail}",
-                    limit_source,
+                    "{} context · {} input · {} output ceiling · request {} · {id}{source_detail}{capabilities}{provenance}{profiles}{window_detail}",
+                    render_picker_limit(model.context_tokens.as_ref(), &limit_source),
                     render_picker_limit(model.max_input_tokens.as_ref(), &limit_source),
                     render_picker_limit(model.max_output_tokens.as_ref(), &limit_source),
-                    render_optional_output_budget(model.output_budget.as_ref()),
-                    render_optional_context_limit(model.context_tokens.as_ref()),
+                    model.output_budget.as_ref().map_or_else(
+                        || "unknown".to_owned(),
+                        |budget| format!(
+                            "{} {}",
+                            context_quantity(budget.request_tokens),
+                            budget.request_origin.label()
+                        ),
+                    ),
                 ),
             )
             .description(format!(
@@ -815,13 +829,22 @@ fn render_picker_limit(limit: Option<&InventoryLimit>, source: &str) -> String {
     limit.map_or_else(
         || "unknown".to_owned(),
         |limit| {
-            if inventory_limit_source(&limit.origin) == source {
-                token_quantity(limit.value)
+            let origin = picker_limit_source(&limit.origin);
+            if origin == source {
+                context_quantity(limit.value)
             } else {
-                render_inventory_limit(limit)
+                format!("{} [{origin}]", context_quantity(limit.value))
             }
         },
     )
+}
+
+/// Names the reviewed catalog without exposing its internal package name in a picker.
+fn picker_limit_source(origin: &ModelLimitOrigin) -> String {
+    match origin {
+        ModelLimitOrigin::Trusted { revision, .. } => format!("trusted catalog r{revision}"),
+        _ => inventory_limit_source(origin),
+    }
 }
 
 pub(super) fn render_optional_inventory_limit(limit: Option<&InventoryLimit>) -> String {
@@ -909,13 +932,13 @@ pub(super) async fn choose_resume_session(
     let entries = session_resource_entries(sessions, None);
     let mut session =
         ScreenSession::enter(no_color, no_motion).context("entering the resume picker")?;
-    let result = pick_one_in_screen(
+    let mut picker = ResourcePicker::new(
         "Resume session",
         entries,
         "No sessions to resume in this project · esc exits",
-        &mut session,
     )
-    .await;
+    .with_empty_guidance_keys();
+    let result = run_picker_in_screen(&mut picker, &mut session).await;
     session.finish(result, "restoring the terminal")
 }
 
@@ -1096,4 +1119,116 @@ fn program_on_path(program: &str) -> bool {
             .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
             .unwrap_or(false)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{append_connectable_connections, connection_entries, model_entries};
+    use smith_config::inventory::{
+        InventoryLimit, ModelInventoryEntry, ModelLimitOrigin, ProviderInventoryEntry,
+    };
+
+    #[test]
+    fn model_detail_compacts_every_limit_and_keeps_provenance_off_the_row() {
+        let limit = |value| {
+            Some(InventoryLimit {
+                value,
+                origin: ModelLimitOrigin::Trusted {
+                    catalog: "smith-trusted-models".into(),
+                    revision: 5,
+                },
+            })
+        };
+        let mut model = ModelInventoryEntry {
+            provider: "zai".into(),
+            model: "glm-5.3".into(),
+            label: "GLM-5.3".into(),
+            context_tokens: limit(1_000_000),
+            max_input_tokens: limit(255_616),
+            max_output_tokens: limit(131_072),
+            output_budget: Some(
+                smith_config::output_budget::resolve_output_budget(
+                    1_000_000,
+                    131_072,
+                    Some(32_768),
+                    Some(32_768),
+                    0,
+                )
+                .expect("budget"),
+            ),
+            context_windows: Vec::new(),
+            tool_call: Some(true),
+            reasoning: Some(true),
+            structured_output: Some(false),
+            catalog_provider: None,
+            catalog_revision: None,
+            catalog_retrieved_at_ms: None,
+            profiles: vec!["glm".into()],
+            selectable: true,
+            disabled_reason: None,
+            active: true,
+        };
+        let entries = model_entries(vec![model.clone()], None);
+        assert_eq!(
+            entries[0].detail,
+            "1M context · 255.6k input · 131k output ceiling · request 32.7k configured · zai/glm-5.3 · trusted catalog r5 · tools+reasoning · profiles glm"
+        );
+        for raw in [
+            "1000000",
+            "255616",
+            "131072",
+            "32768",
+            "limits from",
+            "smith-trusted-models",
+        ] {
+            assert!(!entries[0].detail.contains(raw), "{}", entries[0].detail);
+        }
+        assert!(!entries[0].description.contains("trusted catalog"));
+        assert!(entries[0].active);
+        model.max_input_tokens.as_mut().expect("input").origin = ModelLimitOrigin::BuiltIn;
+        let mixed = model_entries(vec![model], None);
+        assert!(mixed[0].detail.contains("255.6k [built-in] input"));
+        assert!(mixed[0].detail.contains("trusted catalog r5"));
+    }
+
+    #[test]
+    fn connection_rows_name_plain_authentication_and_a_distinct_custom_description() {
+        for (kind, description) in [
+            (
+                smith_config::model::KIND_CHATGPT_RESPONSES,
+                "ChatGPT sign-in · experimental",
+            ),
+            (
+                smith_config::model::KIND_GEMINI_INTERACTIONS,
+                "Gemini API key",
+            ),
+            (smith_config::model::KIND_XAI_RESPONSES, "xAI sign-in"),
+            (smith_config::model::KIND_OPENAI_RESPONSES, "API key"),
+            (smith_config::model::KIND_OPENAI_COMPATIBLE, "API key"),
+        ] {
+            let provider = ProviderInventoryEntry {
+                name: "provider".into(),
+                kind: Some(kind.into()),
+                adapter_available: true,
+                selectable: true,
+                model_count: 1,
+                active: false,
+                source: None,
+            };
+            assert_eq!(connection_entries(&[provider])[0].description, description);
+        }
+        let mut entries = Vec::new();
+        append_connectable_connections(&mut entries);
+        let custom = entries
+            .iter()
+            .find(|entry| entry.id == "openai-compatible")
+            .expect("custom endpoint");
+        assert_eq!(
+            custom.description,
+            "any OpenAI-compatible endpoint · API key"
+        );
+        for entry in entries {
+            assert_ne!(entry.label, entry.description);
+        }
+    }
 }

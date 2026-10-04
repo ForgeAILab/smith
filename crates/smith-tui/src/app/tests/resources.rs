@@ -325,6 +325,43 @@
     }
 
     #[test]
+    fn model_picker_opens_on_the_active_model_in_a_long_inventory() {
+        let mut app = app();
+        app.resources.models = (0..466)
+            .map(|index| {
+                ResourceEntry::new(
+                    format!("zai/model-{index}"),
+                    format!("Model {index}"),
+                    "1M context",
+                )
+                .active(index == 462)
+            })
+            .collect();
+        app.resources.models[462].id = "zai/glm-5.3".into();
+        type_text(&mut app, "/model");
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        let Some(Overlay::ResourcePicker { picker, .. }) = &app.overlay else {
+            panic!("model picker");
+        };
+        assert_eq!(picker.selected, 462);
+        assert_eq!(
+            picker.selected_entry().expect("active model").id,
+            "zai/glm-5.3"
+        );
+        app.on_key(key(KeyCode::Esc));
+        app.composer.clear();
+        for entry in &mut app.resources.models {
+            entry.active = false;
+        }
+        type_text(&mut app, "/model");
+        app.on_key(key(KeyCode::Enter));
+        let Some(Overlay::ResourcePicker { picker, .. }) = &app.overlay else {
+            panic!("model picker");
+        };
+        assert_eq!(picker.selected, 0);
+    }
+
+    #[test]
     fn ambiguous_unqualified_model_opens_qualified_choices_without_applying_one() {
         let mut app = app();
         app.resources.providers.extend([

@@ -63,6 +63,12 @@ loop around them and their frames.
     on a task. Rejected for this change: it duplicates the effect handling
     the standalone flows already have, for no visible difference while the
     session is idle.
+- **Each step paints whole.** ratatui writes only the cells that changed, so
+  when a flow moves to a new step, text that shares a character with the
+  previous step at the same column reaches the terminal in pieces. The runner
+  repaints the whole screen when a screen reports a new step (a step key on
+  `Screen`), so every step is written out in full. It costs one full redraw
+  per step change; found while the PTY tests broke on every wording change.
 - **Alternate screen stays.** Standalone screens keep the alternate screen
   because the session that follows uses it; they draw from row 0, column 0
   with the same two-column gutter as the session, sized to content.

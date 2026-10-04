@@ -34,7 +34,7 @@ Findings R1–R4, S1–S6, C1, C2, M1 from
   with digit choice; filtered inventories; one footer vocabulary.
 - [x] 3.2 Standalone screens draw from the top-left, sized to content; the
   centered boxes and `standalone_picker_area` go.
-- [ ] 3.3 In-session pickers use the same component; `/model` opens on the
+- [x] 3.3 In-session pickers use the same component; `/model` opens on the
   current model; compact detail line (M1); `/connect` custom endpoint
   description (C2).
 
@@ -42,7 +42,7 @@ Findings R1–R4, S1–S6, C1, C2, M1 from
 
 - [x] 4.1 Esc goes back one step, cancels on the first; Ctrl+C cancels the
   flow; ChatGPT login is a setup step when reached from setup (S5).
-- [ ] 4.2 Setup wording: welcome line, real credential entry names, no
+- [x] 4.2 Setup wording: welcome line, real credential entry names, no
   untypeable commands or internal terms, plain review with compact sizes and
   `~` paths, `Setup cancelled · nothing was written` (S1–S4, S6).
 - [ ] 4.3 `/connect` runs inside the session: an embedded `ScreenSession`
@@ -52,6 +52,9 @@ Findings R1–R4, S1–S6, C1, C2, M1 from
 - [ ] 4.4 xAI device login gets a progress screen like ChatGPT's (code, URL,
   waiting, esc cancels) instead of `println!` lines, so it shows inside a
   session and standalone.
+- [ ] 4.5 Screens repaint whole on a step change (step key on `Screen`,
+  repaint in `ScreenSession`, standalone and embedded); the PTY waits go back
+  to the phrases users see. Found in review.
 
 ## 5. Sessions
 
@@ -68,7 +71,7 @@ Findings R1–R4, S1–S6, C1, C2, M1 from
 - [ ] 6.1 Unit tests for each screen value and the chooser component;
   fixtures re-recorded and reviewed; fmt, strict Clippy (including the Rust
   1.88 toolchain), workspace tests with `--no-fail-fast`, `cargo deny`.
-- [ ] 6.2 `DESIGN.md` updated: choosers are inline lists; centered modals
+- [x] 6.2 `DESIGN.md` updated: choosers are inline lists; centered modals
   remain only for approvals and confirmations.
 - [ ] 6.3 Repeat the live pass's steps on the release build, using the
   environment-variable credential method so review can be confirmed without

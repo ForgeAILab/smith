@@ -244,31 +244,42 @@ fn finish(mut child: Child) -> Output {
 
 #[test]
 fn cancelling_setup_restores_the_terminal_and_writes_nothing() {
-    let fixture = Fixture::new();
-    let Some(mut child) = fixture.spawn("setup --no-color --no-motion") else {
-        return;
-    };
-    thread::sleep(Duration::from_millis(800));
-    child
-        .stdin
-        .take()
-        .expect("setup input")
-        .write_all(b"\x1b")
-        .expect("cancel key");
-    let output = finish(child);
-    let screen = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        output.status.success(),
-        "screen: {screen}\nstderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(screen.contains("Smith setup"), "{screen}");
-    assert!(screen.contains("TERMINAL_RESTORED"), "{screen}");
-    assert!(!screen.contains("TERMINAL_DAMAGED"), "{screen}");
-    assert!(
-        !fixture.home.path().join(".smith").exists(),
-        "cancelled setup wrote user state"
-    );
+    for args in ["--no-color --no-motion", "setup --no-color --no-motion"] {
+        let fixture = Fixture::new();
+        let Some(mut child) = fixture.spawn(args) else {
+            return;
+        };
+        thread::sleep(Duration::from_millis(800));
+        child
+            .stdin
+            .take()
+            .expect("setup input")
+            .write_all(b"\x1b")
+            .expect("cancel key");
+        let output = finish(child);
+        let screen = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "screen: {screen}\nstderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(screen.contains("Smith setup"), "{screen}");
+        assert!(screen.contains("TERMINAL_RESTORED"), "{screen}");
+        assert!(!screen.contains("TERMINAL_DAMAGED"), "{screen}");
+        let message = "Setup cancelled · nothing was written";
+        assert_eq!(screen.matches(message).count(), 1, "{screen}");
+        assert!(
+            screen
+                .find("\x1b[?1049l")
+                .expect("alternate screen restored")
+                < screen.find(message).expect("cancel report"),
+            "{screen}"
+        );
+        assert!(
+            !fixture.home.path().join(".smith").exists(),
+            "cancelled setup wrote user state"
+        );
+    }
 }
 
 #[test]
@@ -438,6 +449,10 @@ expect {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(screen.contains("zai/glm-5.2"), "{screen}");
+    assert!(
+        !screen.contains("Setup cancelled · nothing was written"),
+        "{screen}"
+    );
     assert!(screen.contains("TERMINAL_RESTORED"), "{screen}");
     let config = std::fs::read_to_string(fixture.home.path().join(".smith/config.toml"))
         .expect("committed GLM config");

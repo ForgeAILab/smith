@@ -1,13 +1,13 @@
   Connect ChatGPT · experimental
 
-  Smith owns this OAuth login and will call ChatGPT directly.
-  Experimental: this is not a supported OpenAI Platform API contract.
+  Sign in to ChatGPT in your browser.
+  Experimental: ChatGPT sign-in is not an official API for Smith.
 
   Open this URL:
   https://auth.openai.com/authorize?state=fixture-state
   A browser window was requested; the URL remains copyable.
 
-  Waiting for ChatGPT.
+  Waiting for ChatGPT…
 
   esc cancel
 

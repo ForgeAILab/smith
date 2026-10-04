@@ -411,8 +411,8 @@ fn draw_login_progress_in_area(
 
 fn login_progress_lines(display: &LoginDisplay, frame: usize, no_motion: bool) -> Vec<String> {
     let mut lines = vec![
-        "Smith owns this OAuth login and will call ChatGPT directly.".to_owned(),
-        "Experimental: this is not a supported OpenAI Platform API contract.".to_owned(),
+        "Sign in to ChatGPT in your browser.".to_owned(),
+        "Experimental: ChatGPT sign-in is not an official API for Smith.".to_owned(),
         String::new(),
         "Open this URL:".to_owned(),
         display.destination.clone(),
@@ -424,9 +424,13 @@ fn login_progress_lines(display: &LoginDisplay, frame: usize, no_motion: bool) -
     } else {
         lines.push("Copy the URL; the browser could not be opened automatically.".to_owned());
     }
-    let dots = if no_motion { 1 } else { frame % 3 + 1 };
+    let dots = if no_motion {
+        "…".to_owned()
+    } else {
+        ".".repeat(frame % 3 + 1)
+    };
     lines.push(String::new());
-    lines.push(format!("Waiting for ChatGPT{}", ".".repeat(dots)));
+    lines.push(format!("Waiting for ChatGPT{dots}"));
     lines
 }
 
@@ -435,15 +439,11 @@ pub(super) fn login_method_picker() -> ResourcePicker {
     ResourcePicker::choices(
         "Connect ChatGPT · experimental",
         vec![
-            ResourceEntry::new(
-                "browser",
-                "Browser login",
-                "Smith PKCE callback · owner-only auth.json · direct Responses calls",
-            ),
+            ResourceEntry::new("browser", "Browser login", "sign in in your browser"),
             ResourceEntry::new(
                 "device",
                 "Device-code login",
-                "one-time code for callback-limited environments",
+                "enter a one-time code on any device",
             ),
         ],
         "No supported ChatGPT login method",
@@ -521,7 +521,7 @@ mod tests {
             for text in [
                 "Open this URL:",
                 "https://auth.openai.com",
-                "Waiting for ChatGPT.",
+                "Waiting for ChatGPT…",
                 "esc back",
                 "ctrl+c cancel",
             ] {
@@ -601,7 +601,27 @@ mod tests {
         )
         .join("\n");
         assert!(rendered.contains("ABCD-1234"));
-        assert!(rendered.contains("Smith owns"));
+        assert!(rendered.contains("Sign in to ChatGPT in your browser."));
+        assert!(
+            rendered.contains("Experimental: ChatGPT sign-in is not an official API for Smith.")
+        );
+        assert!(rendered.contains("Waiting for ChatGPT…"));
+        let methods = login_method_picker();
+        assert_eq!(methods.entries[0].description, "sign in in your browser");
+        assert_eq!(
+            methods.entries[1].description,
+            "enter a one-time code on any device"
+        );
+        let methods = methods
+            .entries
+            .iter()
+            .map(|entry| format!("{} {}", entry.description, entry.detail))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for internal in ["PKCE", "auth.json", "public API boundary", "OAuth"] {
+            assert!(!rendered.contains(internal), "{rendered}");
+            assert!(!methods.contains(internal), "{methods}");
+        }
         assert!(!rendered.contains("access-token-canary"));
     }
 

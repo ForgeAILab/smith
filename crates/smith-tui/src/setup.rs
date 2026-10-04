@@ -7,6 +7,7 @@
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fmt;
+use std::path::Path;
 
 use agent_runtime_core::store::Secret;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -14,6 +15,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use smith_client::compact_tokens;
 
 use crate::picker::{
     PickerOutcome, ResourceEntry, ResourcePicker, ScreenFooter, draw_inline_surface,
@@ -694,113 +696,222 @@ impl SetupApp {
         self.configure_picker();
     }
 
-    /// Non-secret review lines.
+    /// Labels reviewed facts so color is never needed to distinguish what is written.
     pub fn review_lines(&self) -> Vec<String> {
-        let mut lines = match self.action {
+        let rows = self.review_rows();
+        let label_width = rows.iter().map(|(label, _)| label.len()).max().unwrap_or(0);
+        rows.into_iter()
+            .map(|(label, value)| format!("{label:label_width$}  {value}"))
+            .collect()
+    }
+
+    fn review_rows(&self) -> Vec<(&'static str, String)> {
+        let mut rows = match self.action {
             Some(SetupAction::QuickGlm) => vec![
-                self.key_review
-                    .as_ref()
-                    .expect("a quick key flow supplies review text")
-                    .action
-                    .clone(),
-                self.key_review
-                    .as_ref()
-                    .expect("a quick key flow supplies review text")
-                    .provider
-                    .clone(),
-                format!("endpoint: {}", self.quick_start.endpoint),
-                format!(
-                    "credential: {}",
-                    self.credential_reference(&self.quick_start.provider)
+                (
+                    "Provider",
+                    format!(
+                        "{} · {}",
+                        self.quick_start.provider, self.quick_start.endpoint
+                    ),
                 ),
-                format!("model: {}", self.quick_start.model),
-                format!(
-                    "limits: context {} · max input {} · max output {} (trusted catalog v{})",
-                    self.quick_start.limits.context_tokens,
-                    self.quick_start.limits.max_input_tokens,
-                    self.quick_start.limits.max_output_tokens,
-                    self.quick_start.catalog_revision,
+                (
+                    "API key",
+                    self.credential_reference(&self.quick_start.provider),
                 ),
-                format!(
-                    "request output: {} · output reserve: {}",
-                    self.quick_start.request_output_tokens, self.quick_start.output_reserve
+                (
+                    "Model",
+                    format!(
+                        "{} · {} · trusted catalog v{}",
+                        self.quick_start.model,
+                        compact_limits(self.quick_start.limits),
+                        self.quick_start.catalog_revision,
+                    ),
                 ),
-                "response: reasoning-only success becomes visible text; thinking stays enabled"
-                    .into(),
-                format!("default profile: {}", self.quick_start.profile),
+                (
+                    "Requests",
+                    format!(
+                        "{} output · {} reserved",
+                        compact_tokens(u64::from(self.quick_start.request_output_tokens)),
+                        compact_tokens(u64::from(self.quick_start.output_reserve)),
+                    ),
+                ),
+                (
+                    "GLM replies",
+                    "an answer sent only as reasoning is shown as the reply; thinking stays on"
+                        .into(),
+                ),
+                ("Default", format!("profile {}", self.quick_start.profile)),
             ],
             Some(SetupAction::QuickXai | SetupAction::QuickGoogle) => {
                 let review = self
                     .key_review
                     .as_ref()
                     .expect("a quick key flow supplies review text");
-                let mut lines = vec![
-                    review.action.clone(),
-                    review.provider.clone(),
-                    review.endpoint.clone(),
-                    format!("credential: {}", self.credential_reference(&self.provider)),
-                    format!("model: {}/{}", self.provider, self.model),
-                    format!(
-                        "limits: context {} · max input {} · max output {} (Models.dev frozen catalog)",
-                        self.context_tokens.unwrap_or_default(),
-                        self.max_input_tokens.unwrap_or_default(),
-                        self.max_output_tokens.unwrap_or_default()
+                let mut rows = vec![
+                    ("Action", review_value(&review.action).to_owned()),
+                    ("Provider", format!("{} · {}", self.provider, self.endpoint)),
+                    (
+                        "Connection",
+                        if self.action == Some(SetupAction::QuickGoogle) {
+                            "Gemini API"
+                        } else {
+                            "xAI API"
+                        }
+                        .into(),
                     ),
-                    "request/output reserve: derived from the selected catalog model".into(),
+                    ("API key", self.credential_reference(&self.provider)),
+                    (
+                        "Model",
+                        format!(
+                            "{}/{} · {} · Models.dev frozen catalog",
+                            self.provider,
+                            self.model,
+                            compact_limits(SetupModelLimits {
+                                context_tokens: self.context_tokens.unwrap_or_default(),
+                                max_input_tokens: self.max_input_tokens.unwrap_or_default(),
+                                max_output_tokens: self.max_output_tokens.unwrap_or_default(),
+                            })
+                        ),
+                    ),
+                    (
+                        "Requests",
+                        "output and reserve derived from the selected catalog model".into(),
+                    ),
                 ];
                 if let Some(reasoning) = &review.reasoning {
-                    lines.push(reasoning.clone());
+                    rows.push(("Thinking", review_value(reasoning).to_owned()));
                 }
-                lines.push(review.profile.clone());
-                lines
+                rows.push((
+                    "Default",
+                    format!("profile {}", review_value(&review.profile)),
+                ));
+                rows
             }
             Some(SetupAction::AddProvider) => vec![
-                self.review_action.clone(),
-                format!("kind: {}", self.adapter),
-                format!("provider: {}", self.provider),
-                format!("endpoint: {}", self.endpoint),
-                format!("credential: {}", self.credential_reference(&self.provider)),
-                format!("model: {}/{}", self.provider, self.model),
-                self.limits_review(),
-                format!(
-                    "response: {}",
-                    if self.reasoning_only_text {
-                        "reasoning-only success becomes visible text"
-                    } else {
-                        "preserve provider classifications"
-                    }
+                ("Action", review_value(&self.review_action).to_owned()),
+                (
+                    "Connection",
+                    match self.adapter.as_str() {
+                        "anthropic-messages" => "Anthropic Messages API".into(),
+                        "openai-compatible" => "OpenAI-compatible API".into(),
+                        _ => self.adapter.clone(),
+                    },
                 ),
-                format!("make default: {}", yes_no(self.make_default)),
+                ("Provider", format!("{} · {}", self.provider, self.endpoint)),
+                ("API key", self.credential_reference(&self.provider)),
+                (
+                    "Model",
+                    format!(
+                        "{}/{} · {}",
+                        self.provider,
+                        self.model,
+                        self.limits_review()
+                    ),
+                ),
+                (
+                    "Replies",
+                    if self.reasoning_only_text {
+                        "an answer sent only as reasoning is shown as the reply".into()
+                    } else {
+                        "keep the provider's answer and thinking separate".into()
+                    },
+                ),
+                (
+                    "Default",
+                    if self.make_default {
+                        "use this model"
+                    } else {
+                        "keep current selection"
+                    }
+                    .into(),
+                ),
             ],
             Some(SetupAction::AddModel) => vec![
-                "action: Add model".into(),
-                format!("provider: {}", self.provider),
-                format!("model: {}/{}", self.provider, self.model),
-                self.limits_review(),
-                format!("make default: {}", yes_no(self.make_default)),
+                ("Action", "Add model".into()),
+                ("Provider", self.provider.clone()),
+                (
+                    "Model",
+                    format!(
+                        "{}/{} · {}",
+                        self.provider,
+                        self.model,
+                        self.limits_review()
+                    ),
+                ),
+                (
+                    "Default",
+                    if self.make_default {
+                        "use this model"
+                    } else {
+                        "keep current selection"
+                    }
+                    .into(),
+                ),
             ],
             Some(SetupAction::ChangeDefault) => vec![
-                "action: Change default model".into(),
-                format!("provider/model: {}/{}", self.provider, self.model),
+                ("Action", "Change default model".into()),
+                ("Default", format!("{}/{}", self.provider, self.model)),
             ],
             Some(SetupAction::ChangeCredential) => vec![
-                "action: Change provider credential".into(),
-                format!("provider: {}", self.provider),
-                format!("credential: {}", self.credential_reference(&self.provider)),
+                ("Action", "Change provider credential".into()),
+                ("Provider", self.provider.clone()),
+                ("API key", self.credential_reference(&self.provider)),
             ],
-            None => vec!["Choose a setup action.".into()],
+            None => vec![("Action", "Choose how to connect a model.".into())],
         };
         if self.credential_method == Some(CredentialMethod::Config) {
-            lines.push("warning: plaintext at rest; same-user processes can read this key".into());
-            lines.push("warning: backups may retain this key after rotation".into());
+            rows.push((
+                "Warning",
+                "plaintext at rest; same-user processes can read this key".into(),
+            ));
+            rows.push(("Backups", "may retain this key after rotation".into()));
         }
         if let Some(preview) = &self.collision_preview {
-            lines.push("configuration merge preview:".into());
-            lines.extend(preview.lines().map(|line| format!("  {line}")));
+            rows.push(("Changes", "existing values to replace:".into()));
+            rows.extend(preview.lines().map(|line| ("", line.to_owned())));
         }
-        lines.push(format!("destination: {}", self.destination));
-        lines.push("pending action: write user config, then run local preflight".into());
-        lines
+        let home = std::env::var_os("HOME");
+        let destination = review_destination(&self.destination, home.as_deref().map(Path::new));
+        rows.push((
+            "Writes",
+            format!("{destination}, then checks the connection"),
+        ));
+        rows
+    }
+
+    fn wrapped_review_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let rows = self.review_rows();
+        let label_width = rows.iter().map(|(label, _)| label.len()).max().unwrap_or(0);
+        let indent = label_width + 4;
+        let value_width = width
+            .saturating_sub(u16::try_from(indent).unwrap_or(u16::MAX))
+            .max(1);
+        rows.into_iter()
+            .flat_map(|(label, value)| {
+                // Collision previews retain their existing full-row wrapping.
+                if label.is_empty() {
+                    let mut lines = crate::render::wrap::wrap_lines(
+                        &[Line::from(format!("{label:label_width$}  {value}"))],
+                        width.saturating_sub(2),
+                    );
+                    for line in &mut lines {
+                        line.spans.insert(0, Span::raw("  "));
+                    }
+                    return lines;
+                }
+                let mut lines = crate::render::wrap::wrap_lines(&[Line::from(value)], value_width);
+                for (index, line) in lines.iter_mut().enumerate() {
+                    let prefix = if index == 0 {
+                        format!("  {label:label_width$}  ")
+                    } else {
+                        " ".repeat(indent)
+                    };
+                    line.spans.insert(0, Span::raw(prefix));
+                }
+                lines
+            })
+            .collect()
     }
 
     /// Reduces one setup key.
@@ -998,7 +1109,7 @@ impl SetupApp {
             Step::ProviderChoice => Some(ResourcePicker::new(
                 "Choose provider",
                 self.provider_entries.clone(),
-                "No configured provider · run smith setup add-provider",
+                "No configured provider · go back to add one",
             )),
             Step::CredentialMethod => Some(ResourcePicker::choices(
                 "Authentication",
@@ -1011,7 +1122,7 @@ impl SetupApp {
                     ResourceEntry::new(
                         "existing-keychain",
                         "Use existing secure entry",
-                        "keychain:smith/<provider>",
+                        format!("keychain:smith/{}", self.provider),
                     ),
                     ResourceEntry::new(
                         "config",
@@ -1029,7 +1140,7 @@ impl SetupApp {
             Step::ModelChoice => Some(ResourcePicker::new(
                 "Choose default model",
                 self.model_entries.clone(),
-                "No selectable model · run smith setup add-model",
+                "No selectable model · go back to add one",
             )),
             Step::ResponseBehavior => Some(ResourcePicker::choices(
                 "Response compatibility",
@@ -1435,11 +1546,13 @@ impl SetupApp {
 
     fn limits_review(&self) -> String {
         format!(
-            "limits: context {} · max input {} · max output {} ({})",
-            self.context_tokens.unwrap_or_default(),
-            self.max_input_tokens.unwrap_or_default(),
-            self.max_output_tokens.unwrap_or_default(),
-            self.limits_source.as_deref().unwrap_or("entered manually")
+            "{} ({})",
+            compact_limits(SetupModelLimits {
+                context_tokens: self.context_tokens.unwrap_or_default(),
+                max_input_tokens: self.max_input_tokens.unwrap_or_default(),
+                max_output_tokens: self.max_output_tokens.unwrap_or_default(),
+            }),
+            self.limits_source.as_deref().unwrap_or("explicit limits")
         )
     }
 
@@ -1534,7 +1647,7 @@ fn draw_setup_in_area(frame: &mut Frame<'_>, area: Rect, app: &SetupApp, theme: 
     let back = !app.history.is_empty();
     if let Some(picker) = &app.picker {
         let title = if app.step == Step::Action {
-            "Smith setup".to_owned()
+            "Smith setup · Welcome · choose how to connect a model".to_owned()
         } else {
             format!("Smith setup · {}", picker.title)
         };
@@ -1543,7 +1656,8 @@ fn draw_setup_in_area(frame: &mut Frame<'_>, area: Rect, app: &SetupApp, theme: 
             area,
             picker,
             &title,
-            (app.step == Step::Action).then_some("no agent session or provider request exists yet"),
+            (app.step == Step::Action)
+                .then_some("Nothing is sent to a provider until setup finishes."),
             app.error.as_deref(),
             theme,
         );
@@ -1551,35 +1665,24 @@ fn draw_setup_in_area(frame: &mut Frame<'_>, area: Rect, app: &SetupApp, theme: 
     }
     let mut lines = Vec::new();
     let heading = match app.step {
-        Step::Review => "Review",
+        Step::Review => "Review · nothing is written until you confirm",
         Step::Busy => "Applying setup",
         _ => app.prompt().0,
     };
     match app.step {
         Step::Review | Step::Busy => {
-            lines.extend(indented_words(
-                if app.step == Step::Busy {
+            if app.step == Step::Busy {
+                lines.extend(indented_words(
                     app.busy_note()
-                        .unwrap_or("Applying reviewed setup and running local preflight…")
-                } else {
-                    "Review the complete non-secret setup change:"
-                },
-                area.width,
-                2,
-                Tone::Accent,
-                theme,
-            ));
-            lines.push(Line::default());
-            let review = app
-                .review_lines()
-                .into_iter()
-                .map(Line::from)
-                .collect::<Vec<_>>();
-            let mut review = crate::render::wrap::wrap_lines(&review, area.width.saturating_sub(2));
-            for line in &mut review {
-                line.spans.insert(0, Span::raw("  "));
+                        .unwrap_or("Writing your choices and checking the connection…"),
+                    area.width,
+                    2,
+                    Tone::Accent,
+                    theme,
+                ));
+                lines.push(Line::default());
             }
-            lines.extend(review);
+            lines.extend(app.wrapped_review_lines(area.width));
         }
         _ => {
             let (_, help, masked) = app.prompt();
@@ -1691,8 +1794,34 @@ fn positive_u32(value: &str) -> Result<u32, String> {
         .ok_or_else(|| "Enter a positive whole token count.".to_owned())
 }
 
-fn yes_no(value: bool) -> &'static str {
-    if value { "yes" } else { "no" }
+/// Uses the same token precision as model pickers so setup and runtime agree.
+fn compact_limits(limits: SetupModelLimits) -> String {
+    format!(
+        "{} context · {} input · {} output",
+        compact_tokens(u64::from(limits.context_tokens)),
+        compact_tokens(u64::from(limits.max_input_tokens)),
+        compact_tokens(u64::from(limits.max_output_tokens)),
+    )
+}
+
+/// Removes old label prefixes from supplied facts before applying aligned labels.
+fn review_value(line: &str) -> &str {
+    line.split_once(": ").map_or(line, |(_, value)| value)
+}
+
+/// Shortens only home descendants, keeping sibling names and outside paths accurate.
+fn review_destination(destination: &str, home: Option<&Path>) -> String {
+    let path = Path::new(destination);
+    if let Some(home) = home.filter(|home| !home.as_os_str().is_empty())
+        && let Ok(relative) = path.strip_prefix(home)
+    {
+        return if relative.as_os_str().is_empty() {
+            "~".into()
+        } else {
+            format!("~/{}", relative.display())
+        };
+    }
+    destination.to_owned()
 }
 
 fn bound(mut value: String, limit: usize) -> String {
@@ -2166,11 +2295,13 @@ mod tests {
         for text in [
             "No matches",
             "Ctrl+U clear filter",
-            "enter confirm",
+            "ctrl+u clear filter",
             "esc cancel",
         ] {
             assert!(missing.contains(text), "{missing}");
         }
+        assert!(!missing.contains("enter confirm"), "{missing}");
+        assert!(!missing.contains("↑↓ choose"), "{missing}");
         let empty = render_setup(
             &setup_app(SetupMode::FirstRun, Vec::new(), Vec::new())
                 .with_provider_actions(Vec::new()),
@@ -2225,6 +2356,217 @@ mod tests {
     }
 
     #[test]
+    fn setup_welcome_and_intro_precede_the_list_at_every_width() {
+        let app = setup_app(SetupMode::FirstRun, Vec::new(), Vec::new());
+        for width in [20, 44, 100] {
+            let rendered = render_setup(&app, width, 24);
+            let rows = rendered.lines().collect::<Vec<_>>();
+            assert!(rows[0].starts_with("  Smith setup"), "{rendered}");
+            assert!(rows[1].starts_with("  Nothing"), "{rendered}");
+            let choice = rows
+                .iter()
+                .position(|row| row.starts_with("❯ "))
+                .expect("first choice");
+            let intro = rows[1..choice]
+                .iter()
+                .map(|row| row.trim())
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert_eq!(intro, "Nothing is sent to a provider until setup finishes.");
+            assert!(!rendered.contains("Shift+Tab"), "{rendered}");
+            assert!(!rendered.contains("no agent session"), "{rendered}");
+            let plain = render_setup_buffer(&app, width, 24, Theme::new().without_color());
+            assert!(
+                plain[(2, 1)]
+                    .modifier
+                    .contains(ratatui::style::Modifier::DIM)
+            );
+        }
+        assert!(
+            render_setup(&app, 100, 24)
+                .contains("Smith setup · Welcome · choose how to connect a model")
+        );
+    }
+
+    #[test]
+    fn credential_methods_name_the_provider_and_field_help_starts_at_the_gutter() {
+        let mut app = setup_app(SetupMode::FirstRun, Vec::new(), Vec::new());
+        choose(&mut app, "glm");
+        choose(&mut app, "existing-keychain");
+        app.on_key(key(KeyCode::Esc));
+        let rendered = render_setup(&app, 100, 24);
+        assert!(rendered.contains("keychain:smith/zai"), "{rendered}");
+        assert!(!rendered.contains("<provider>"), "{rendered}");
+        choose(&mut app, "keychain");
+        let rendered = render_setup(&app, 44, 16);
+        let rows = rendered.lines().collect::<Vec<_>>();
+        assert!(rows[2].starts_with("  Stored"), "{rendered}");
+        assert!(rows[3].starts_with("  "), "{rendered}");
+        assert!(
+            !rows[3].trim().is_empty(),
+            "help wraps at the gutter: {rendered}"
+        );
+    }
+
+    #[test]
+    fn review_labels_align_and_keep_compact_limits_and_all_reviewed_facts() {
+        let mut app = glm_environment_review();
+        let home = std::env::var_os("HOME").expect("test HOME");
+        app = app.with_destination(
+            Path::new(&home)
+                .join(".smith/config.toml")
+                .to_string_lossy(),
+        );
+        let rows = app.review_lines();
+        let labels = [
+            "Provider",
+            "API key",
+            "Model",
+            "Requests",
+            "GLM replies",
+            "Default",
+            "Writes",
+        ];
+        assert_eq!(rows.len(), labels.len());
+        for (row, label) in rows.iter().zip(labels) {
+            assert_eq!(&row[..13], format!("{label:11}  "));
+        }
+        assert_eq!(
+            rows[0],
+            "Provider     zai · https://api.z.ai/api/coding/paas/v4"
+        );
+        assert_eq!(rows[1], "API key      env:ZAI_API_KEY");
+        assert_eq!(
+            rows[2],
+            "Model        glm-5.2 · 1M context · 1M input · 131k output · trusted catalog v5"
+        );
+        assert_eq!(rows[3], "Requests     32.7k output · 32.7k reserved");
+        assert!(rows[4].ends_with(
+            "an answer sent only as reasoning is shown as the reply; thinking stays on"
+        ));
+        assert_eq!(rows[5], "Default      profile glm");
+        assert_eq!(
+            rows[6],
+            "Writes       ~/.smith/config.toml, then checks the connection"
+        );
+        let text = rows.join("\n");
+        for old in [
+            "1000000",
+            "131072",
+            "32768",
+            "pending action",
+            "local preflight",
+        ] {
+            assert!(!text.contains(old), "{text}");
+        }
+        assert_eq!(
+            review_destination(
+                "/tmp/injected-home/.smith/config.toml",
+                Some(Path::new("/tmp/injected-home"))
+            ),
+            "~/.smith/config.toml"
+        );
+        assert_eq!(
+            review_destination(
+                "/tmp/injected-home-other/config.toml",
+                Some(Path::new("/tmp/injected-home"))
+            ),
+            "/tmp/injected-home-other/config.toml"
+        );
+        assert_eq!(
+            review_destination("~/.smith/config.toml", None),
+            "~/.smith/config.toml"
+        );
+        let rendered = render_setup(&app, 100, 32);
+        assert!(
+            rendered.contains("Review · nothing is written until you confirm"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("Review your choices"), "{rendered}");
+    }
+
+    #[test]
+    fn setup_review_values_hang_indent_and_wrap_words_at_44_and_80_columns() {
+        let destination = format!("/tmp/{}config.toml", "reviewed-directory/".repeat(12));
+        let app = glm_environment_review().with_destination(destination.clone());
+        let labels = [
+            "Provider",
+            "API key",
+            "Model",
+            "Requests",
+            "GLM replies",
+            "Default",
+            "Writes",
+        ];
+        let value_column = 15;
+        for width in [44, 80] {
+            let rendered = render_setup(&app, width, 64);
+            let rows = rendered.lines().collect::<Vec<_>>();
+            assert!(!rendered.contains("Review your choices"), "{rendered}");
+            assert!(rows[2].starts_with("  Provider"), "{rendered}");
+            let starts = labels
+                .iter()
+                .map(|label| {
+                    rows.iter()
+                        .position(|row| row.starts_with(&format!("  {label:11}  ")))
+                        .expect("labelled review row")
+                })
+                .collect::<Vec<_>>();
+            for (index, start) in starts.iter().copied().enumerate() {
+                let end = starts.get(index + 1).copied().unwrap_or(rows.len());
+                for row in rows[start + 1..end]
+                    .iter()
+                    .take_while(|row| !row.trim().is_empty())
+                {
+                    assert!(row.starts_with(&" ".repeat(value_column)), "{rendered}");
+                    assert!(!row[value_column..].starts_with(' '), "{rendered}");
+                }
+            }
+            let model_rows = &rows[starts[2]..starts[3]];
+            assert!(model_rows.len() > 1, "{rendered}");
+            assert_eq!(
+                model_rows
+                    .iter()
+                    .map(|row| row[value_column..].trim_end())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                "glm-5.2 · 1M context · 1M input · 131k output · trusted catalog v5",
+                "{rendered}"
+            );
+            if width == 80 {
+                assert_eq!(model_rows.last().expect("model continuation").trim(), "v5");
+            }
+            let value_width = usize::from(width) - value_column;
+            for chunk in 0..3 {
+                let row = rows[starts[6] + chunk];
+                assert_eq!(
+                    &row[value_column..],
+                    &destination[chunk * value_width..(chunk + 1) * value_width],
+                    "long path must use the full value width: {rendered}"
+                );
+            }
+            let writes = rows[starts[6]..]
+                .iter()
+                .take_while(|row| !row.trim().is_empty())
+                .map(|row| row[value_column..].trim_end())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                writes
+                    .concat()
+                    .split_once(',')
+                    .expect("destination comma")
+                    .0,
+                destination,
+                "long path must retain every character: {rendered}"
+            );
+            assert!(
+                writes.join(" ").contains("then checks the connection"),
+                "{rendered}"
+            );
+        }
+    }
+
+    #[test]
     fn setup_review_scrolls_to_the_last_wrapped_row_with_fixed_footer_keys() {
         for (width, height) in [(44, 16), (80, 24)] {
             for collisions in [false, true] {
@@ -2239,7 +2581,7 @@ mod tests {
                     } else {
                         app = app.with_destination(format!(
                             "/tmp/{}/config.toml",
-                            "reviewed-directory/".repeat(30),
+                            "reviewed-directory/".repeat(90),
                         ));
                     }
                     let initial = render_setup(&app, width, height);
@@ -2270,8 +2612,13 @@ mod tests {
                     let scroll = app.review_scroll.get();
                     assert_eq!(scroll.offset, scroll.limit);
                     assert_eq!(app.error, error, "scrolling must preserve merge warnings");
-                    assert!(last.contains("pending action:"), "{last}");
-                    assert!(last.contains("local preflight"), "{last}");
+                    assert!(
+                        last.split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                            .contains("then checks the connection"),
+                        "{last}"
+                    );
                     if collisions {
                         assert!(last.contains("merge-final"), "{last}");
                         assert!(last.contains("only those values."), "{last}");
@@ -2289,7 +2636,11 @@ mod tests {
                         app.on_key(key(KeyCode::PageUp));
                     }
                     assert_eq!(app.review_scroll.get().offset, 0);
-                    assert!(render_setup(&app, width, height).contains("Review the complete"));
+                    let top = render_setup(&app, width, height);
+                    assert!(
+                        top.lines().any(|row| row.starts_with("  Provider")),
+                        "{top}"
+                    );
                     assert!(matches!(
                         app.on_key(key(KeyCode::Enter)),
                         SetupEffect::Submit { allow_collisions, .. } if allow_collisions == collisions
@@ -2332,7 +2683,7 @@ mod tests {
         let review = app.review_lines().join("\n");
         assert!(review.contains("glm-5.2"));
         assert!(review.contains("env:ZAI_API_KEY"));
-        assert!(review.contains("reasoning-only"));
+        assert!(review.contains("an answer sent only as reasoning is shown as the reply"));
         assert!(matches!(
             app.on_key(key(KeyCode::Enter)),
             SetupEffect::Submit {
@@ -2370,9 +2721,9 @@ mod tests {
         for value in [
             "glm-reviewed",
             "trusted catalog v99",
-            "context 123456",
-            "request output: 4000",
-            "output reserve: 5000",
+            "123.4k context",
+            "4k output",
+            "5k reserved",
         ] {
             assert!(review.contains(value), "missing {value}: {review}");
         }
@@ -2412,7 +2763,11 @@ mod tests {
             assert_eq!(app.step, Step::DefaultChoice);
             choose(&mut app, "yes");
             let review = app.review_lines().join("\n");
-            assert!(review.contains("kind: anthropic-messages"), "{review}");
+            assert!(
+                review.lines().any(|line| line.starts_with("Connection")
+                    && line.contains("Anthropic Messages API")),
+                "{review}"
+            );
             assert!(review.contains("https://api.anthropic.com/v1"), "{review}");
             assert!(review.contains("anthropic/claude-reviewed"), "{review}");
             assert!(!review.contains("sk-anthropic-test-only"), "{review}");
@@ -2573,7 +2928,8 @@ mod tests {
         choose(&mut app, "yes");
         assert_eq!(app.step, Step::Review);
         let review = app.review_lines().join("\n");
-        assert!(review.contains("native gemini-interactions"));
+        assert!(review.contains("Gemini API"));
+        assert!(review.contains(&app.endpoint), "{review}");
         assert!(review.contains("Models.dev frozen catalog"));
         assert!(!review.contains("API base URL"));
         assert!(matches!(
@@ -2629,7 +2985,7 @@ mod tests {
         assert!(review.contains("api_key = [redacted]"), "{review}");
         assert!(review.contains("plaintext at rest"), "{review}");
         assert!(review.contains("same-user processes"), "{review}");
-        assert!(review.contains("backups"), "{review}");
+        assert!(review.contains("Backups"), "{review}");
         assert!(!review.contains(secret), "{review}");
         assert!(!format!("{app:?}").contains(secret));
 
@@ -2920,14 +3276,14 @@ mod tests {
         let app = glm_environment_review();
         let rendered = render_setup(&app, 110, 34);
         for expected in [
-            "provider: zai",
+            "Provider     zai",
             "api.z.ai/api/coding/paas/v4",
             "env:ZAI_API_KEY",
             "glm-5.2",
-            "context 1000000",
+            "1M context",
             "trusted catalog v5",
             "/tmp/smith-home/.smith/config.toml",
-            "pending action:",
+            "Writes",
             "enter confirm",
             "esc back",
         ] {

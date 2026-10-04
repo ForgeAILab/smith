@@ -3,7 +3,7 @@
   No sessions to resume in this project ·
   esc exits
 
-  enter confirm · esc cancel · ↑↓ choose
+
 
 
 

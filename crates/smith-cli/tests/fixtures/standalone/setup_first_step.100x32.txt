@@ -1,5 +1,5 @@
-  Smith setup
-
+  Smith setup · Welcome · choose how to connect a model
+  Nothing is sent to a provider until setup finishes.
 ❯ 1. Quick start with GLM
      Z.AI Coding Plan endpoint with trusted GLM-5.2 limits
   2. Connect OpenRouter
@@ -8,9 +8,9 @@
   5. Connect ChatGPT (experimental)
   6. Connect xAI Grok
   7. Connect Google Gemini
-  no agent session or provider request exists yet
 
   ↑↓ or 1–7 choose · enter confirm · esc cancel
+
 
 
 

@@ -29,8 +29,8 @@ pub(crate) fn clip_words(text: &str, budget: usize) -> String {
     kept
 }
 
-/// Identities have no word boundaries; keep their leading cells and an ellipsis.
-fn clip_name(name: &str, budget: usize) -> String {
+/// Keeps identity prefixes readable without splitting selected IDs across rows.
+pub(crate) fn clip_name(name: &str, budget: usize) -> String {
     if name.width() <= budget {
         return name.to_owned();
     }
