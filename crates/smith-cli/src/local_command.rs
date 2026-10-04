@@ -135,7 +135,7 @@ pub(super) fn render_status_cost(
     if usage.is_empty() {
         return "nothing spent yet".to_owned();
     }
-    let Some(price) = price else {
+    let Some(price) = usage.cost_price(price) else {
         let (provider, model) = binding;
         return format!("unknown · no price reference for {provider}/{model}");
     };

@@ -333,6 +333,7 @@ async fn seed_host_state(
 ) {
     let policy = host.runtime().policy();
     let snapshot = host.snapshot();
+    let previous_usage = app.status.session_usage();
     app.status = smith_tui::status::Status::new(policy.model.as_str(), project_label(project));
     app.set_cache_miss_notices(presentation.cache_miss_notices);
     app.status
@@ -424,22 +425,30 @@ async fn seed_host_state(
     // intentionally not suitable for seeding the TUI: synthetic cache work
     // (keepalives, handoffs, idle summaries, …) is part of that total but
     // must stay out of ordinary turn/context accounting.
-    restore_usage_records(&mut app.status, snapshot.usage.records());
-    if let Some(previous) = snapshot.manifests.last().map(|entry| &entry.manifest.model)
-        && (previous.provider != policy.provider_name || previous.model != policy.model)
-    {
-        // The aggregate snapshot usage belongs to the prior provider/model.
-        // Keep its magnitude for context, but stop presenting it as a current
-        // provider report and clear cache evidence.
-        app.status
-            .switch_model(Some(policy.provider_name.clone()), policy.model.as_str());
-        // `switch_model` just cleared the price along with the cache
-        // evidence, but this branch's target is the same active `policy`
-        // already resolved above — the prior *snapshot's* model, not this
-        // session's — so the price is re-resolved rather than left cleared.
-        app.status
-            .set_price(resolve_price(policy, &resources.catalog));
-    }
+    restore_usage_with_bindings(
+        &mut app.status,
+        snapshot.usage.records(),
+        snapshot.manifests.iter().map(|entry| {
+            let model = &entry.manifest.model;
+            (model.provider.as_str(), model.model.as_str())
+        }),
+        |provider, model| {
+            if provider == policy.provider_name && model == policy.model.as_str() {
+                resolve_price(policy, &resources.catalog)
+            } else {
+                let catalog_provider = resources
+                    .inventory
+                    .models
+                    .iter()
+                    .find(|entry| entry.provider == provider && entry.model == model)
+                    .and_then(|entry| entry.catalog_provider.as_deref());
+                resolve_catalog_price(provider, model, catalog_provider, &resources.catalog)
+            }
+        },
+    );
+    // In-process rebinds still know each turn's binding. A process resume has
+    // only identity-free records, so it retains the manifest-based fallback.
+    app.status.retain_usage_bindings(&previous_usage);
     if let Ok(events) = host.client_timeline_events().await {
         app.status.replay_cache_events(events);
     }
@@ -479,6 +488,8 @@ pub(super) async fn run_interactive(
     } = requests;
     let InteractiveResources {
         agents,
+        catalog,
+        inventory,
         credential_pool,
         mcp,
         skills,
@@ -503,6 +514,8 @@ pub(super) async fn run_interactive(
             accounts,
             credential_pool,
             agents: &agents,
+            catalog: &catalog,
+            inventory: &inventory,
             theme,
             mcp,
             skills,
@@ -543,6 +556,38 @@ fn restore_usage_records(status: &mut smith_client::status::Status, records: &[U
     }
 }
 
+/// Identity-free restored records may use a price only when every activation
+/// names the same binding; otherwise their attribution stays explicitly unknown.
+fn restore_usage_with_bindings<'a>(
+    status: &mut smith_client::status::Status,
+    records: &[UsageRecord],
+    manifests: impl IntoIterator<Item = (&'a str, &'a str)>,
+    price_for: impl FnOnce(&str, &str) -> Option<smith_client::status::PriceReference>,
+) {
+    if records.is_empty() {
+        return;
+    }
+    let provider = status.provider.clone();
+    let model = status.model.clone();
+    let price = status.price().cloned();
+    let bindings = manifests
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    if bindings.len() == 1
+        && let Some((provider, model)) = bindings.iter().next()
+    {
+        status.switch_model(Some((*provider).to_owned()), *model);
+        status.set_price(price_for(provider, model));
+    } else {
+        status.switch_model(None, "earlier models");
+    }
+    restore_usage_records(status, records);
+    if status.provider != provider || status.model != model {
+        status.switch_model(provider, model);
+        status.set_price(price);
+    }
+}
+
 /// Resolves the active model's catalog price, using **exactly** the binding
 /// the runtime factory itself resolves models against — this mirrors
 /// `crates/smith-runtime/src/factory.rs`'s `prepare_factory_inputs` catalog
@@ -558,17 +603,56 @@ pub(super) fn resolve_price(
     policy: &RuntimePolicy,
     catalog: &smith_config::catalog::CatalogSnapshot,
 ) -> Option<smith_client::status::PriceReference> {
-    let cost = smith_config::catalog::catalog_provider_for(
+    let catalog_provider = smith_config::catalog::catalog_provider_for(
         &policy.provider_kind,
         policy.endpoint.as_deref(),
-    )
-    .and_then(|provider| catalog.provider(provider))
-    .and_then(|provider| provider.models.get(policy.model.as_str()))
-    .and_then(|model| model.cost.as_ref())?;
-    Some(smith_client::status::PriceReference::from_catalog(
-        policy.provider_name.clone(),
+    );
+    resolve_catalog_price(
+        &policy.provider_name,
         policy.model.as_str(),
-        cost,
+        catalog_provider,
+        catalog,
+    )
+}
+
+fn resolve_catalog_price(
+    provider: &str,
+    model: &str,
+    catalog_provider: Option<&str>,
+    catalog: &smith_config::catalog::CatalogSnapshot,
+) -> Option<smith_client::status::PriceReference> {
+    let cost = catalog_provider
+        .and_then(|provider| catalog.provider(provider))
+        .and_then(|provider| provider.models.get(model))
+        .and_then(|model| model.cost.as_ref())?;
+    Some(smith_client::status::PriceReference::from_catalog(
+        provider, model, cost,
+    ))
+}
+
+fn resolve_child_usage_binding(
+    profile: &str,
+    inventory: &SelectionInventory,
+    catalog: &smith_config::catalog::CatalogSnapshot,
+) -> Option<smith_client::status::BindingUsage> {
+    // The inventory is frozen with this host's config/catalog. Its catalog
+    // provider already encodes the exact adapter/endpoint pairing, including
+    // local aliases; rereading config at spawn could disagree with the runtime.
+    let profile = inventory.profiles.iter().find(|entry| {
+        entry.name == profile && entry.uses.contains(&smith_config::model::ProfileUse::Child)
+    })?;
+    let provider = profile.provider.as_deref()?;
+    let model = profile.model.as_deref()?;
+    let catalog_provider = inventory
+        .models
+        .iter()
+        .find(|entry| entry.provider == provider && entry.model == model)
+        .and_then(|entry| entry.catalog_provider.as_deref());
+    let price = resolve_catalog_price(provider, model, catalog_provider, catalog);
+    Some(smith_client::status::BindingUsage::new(
+        Some(provider.to_owned()),
+        model,
+        price,
     ))
 }
 
@@ -623,6 +707,8 @@ pub(super) struct TuiRunInputs<'a> {
     accounts: ActiveAccounts,
     credential_pool: Option<SharedPool>,
     agents: &'a ResolvedAgent,
+    catalog: &'a smith_config::catalog::CatalogSnapshot,
+    inventory: &'a SelectionInventory,
     theme: Theme,
     mcp: Option<Arc<crate::mcp::McpContext>>,
     skills: Arc<crate::skills::SkillContext>,
@@ -637,6 +723,8 @@ struct TuiLoop<'a> {
     accounts: ActiveAccounts,
     credential_pool: Option<SharedPool>,
     agents: &'a ResolvedAgent,
+    catalog: &'a smith_config::catalog::CatalogSnapshot,
+    inventory: &'a SelectionInventory,
     theme: Theme,
     mcp: Option<Arc<crate::mcp::McpContext>>,
     skills: Arc<crate::skills::SkillContext>,
@@ -751,6 +839,8 @@ impl<'a> TuiLoop<'a> {
             accounts,
             credential_pool,
             agents,
+            catalog,
+            inventory,
             theme,
             mcp,
             skills,
@@ -801,6 +891,8 @@ impl<'a> TuiLoop<'a> {
             accounts,
             credential_pool,
             agents,
+            catalog,
+            inventory,
             theme,
             mcp,
             skills,
@@ -1247,8 +1339,19 @@ impl<'a> TuiLoop<'a> {
                     // is bound to a new execution with a new stream,
                     // and the task watching the old one ended with it.
                     match &envelope.payload {
-                        RuntimeEvent::ChildSpawned { child, .. }
-                        | RuntimeEvent::ChildProgress {
+                        RuntimeEvent::ChildSpawned { child, .. } => {
+                            let binding =
+                                self.app.child_profile(child.as_str()).and_then(|profile| {
+                                    resolve_child_usage_binding(
+                                        profile,
+                                        self.inventory,
+                                        self.catalog,
+                                    )
+                                });
+                            self.app.set_child_usage_binding(child.as_str(), binding);
+                            subscribe_to_child(self.host, child, self.child_tx.clone());
+                        }
+                        RuntimeEvent::ChildProgress {
                             child,
                             phase: ChildPhase::ResumeStarted { .. },
                         } => subscribe_to_child(self.host, child, self.child_tx.clone()),
@@ -1647,7 +1750,165 @@ mod tests {
         CounterKind, Provenance, UsageDelta, UsageRecord, UsageSource,
     };
 
-    use super::restore_usage_records;
+    use super::{restore_usage_records, restore_usage_with_bindings};
+
+    fn price(provider: &str, model: &str) -> smith_client::status::PriceReference {
+        smith_client::status::PriceReference {
+            provider: provider.to_owned(),
+            model: model.to_owned(),
+            table: smith_client::status::PriceTable {
+                input: Some(2_000_000),
+                output: None,
+                cache_read: None,
+                cache_write: None,
+            },
+        }
+    }
+
+    fn root_record(tokens: u64) -> UsageRecord {
+        UsageRecord {
+            source: UsageSource::ProviderAttempt,
+            provenance: Provenance::default(),
+            delta: UsageDelta::new().with(CounterKind::InputUncached, tokens),
+        }
+    }
+
+    #[test]
+    fn restored_usage_uses_the_single_manifest_binding_even_after_a_switch() {
+        let mut status = smith_client::status::Status::new("current", "project");
+        status.switch_model(Some("google".into()), "current");
+        status.set_price(Some(price("google", "current")));
+        restore_usage_with_bindings(
+            &mut status,
+            &[root_record(1_000_000)],
+            [("zai", "glm-5.3"), ("zai", "glm-5.3")],
+            |provider, model| Some(price(provider, model)),
+        );
+        let usage = status.session_usage();
+        assert_eq!(status.provider.as_deref(), Some("google"));
+        assert_eq!(status.model, "current");
+        assert_eq!(usage.total_tokens(), 1_000_000);
+        assert_eq!(usage.bindings[0].provider.as_deref(), Some("zai"));
+        assert_eq!(usage.bindings[0].model, "glm-5.3");
+        let retained = usage.cost_price(status.price()).expect("restored price");
+        let cost = smith_client::status::SessionCost::compute(&usage, retained);
+        assert_eq!(cost.micro_usd, 2_000_000);
+        assert_eq!(cost.label, smith_client::status::CostLabel::Exact);
+        assert_eq!(retained.render_sources(&usage), "zai/glm-5.3");
+    }
+
+    #[test]
+    fn restored_usage_with_several_bindings_stays_unpriced_and_named() {
+        let mut status = smith_client::status::Status::new("current", "project");
+        status.switch_model(Some("google".into()), "current");
+        status.set_price(Some(price("google", "current")));
+        restore_usage_with_bindings(
+            &mut status,
+            &[root_record(9_000_000)],
+            [("zai", "glm-5.3"), ("google", "current")],
+            |_, _| panic!("ambiguous records must not request a price"),
+        );
+        assert!(status.session_usage().cost_price(status.price()).is_none());
+        status.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 1_000_000));
+        let usage = status.session_usage();
+        let current = usage
+            .cost_price(status.price())
+            .expect("new usage has a price");
+        let cost = smith_client::status::SessionCost::compute(&usage, current);
+        assert_eq!(cost.micro_usd, 2_000_000);
+        assert_eq!(cost.label, smith_client::status::CostLabel::Estimated);
+        assert_eq!(
+            current.render_sources(&usage),
+            "price unknown for earlier models · google/current $2.000"
+        );
+    }
+
+    #[test]
+    fn restored_usage_without_manifests_has_no_invented_binding() {
+        let mut status = smith_client::status::Status::new("current", "project");
+        status.switch_model(Some("google".into()), "current");
+        status.set_price(Some(price("google", "current")));
+        restore_usage_with_bindings(&mut status, &[root_record(100)], [], |_, _| {
+            panic!("missing manifests must not request a price")
+        });
+        let usage = status.session_usage();
+        assert!(usage.cost_price(status.price()).is_none());
+        assert_eq!(usage.bindings[0].model, "earlier models");
+        assert!(usage.bindings[0].price.is_none());
+    }
+
+    #[test]
+    fn child_profile_resolution_keeps_catalog_endpoint_identity_and_unknowns() {
+        use smith_config::inventory::{
+            ModelInventoryEntry, ProfileInventoryEntry, SelectionInventory,
+        };
+        use smith_config::model::{AgentPosture, ProfileUse};
+        let mut inventory = SelectionInventory {
+            profiles: vec![ProfileInventoryEntry {
+                name: "child".into(),
+                provider: Some("child-alias".into()),
+                model: Some("child-model".into()),
+                posture: AgentPosture::Build,
+                description: None,
+                uses: vec![ProfileUse::Child],
+                revision: "revision".into(),
+                legacy: false,
+                selectable: true,
+                active: false,
+                source: None,
+            }],
+            models: vec![ModelInventoryEntry {
+                provider: "child-alias".into(),
+                model: "child-model".into(),
+                label: "child model".into(),
+                context_tokens: None,
+                max_input_tokens: None,
+                max_output_tokens: None,
+                output_budget: None,
+                context_windows: Vec::new(),
+                tool_call: None,
+                reasoning: None,
+                structured_output: None,
+                catalog_provider: Some("google".into()),
+                catalog_revision: None,
+                catalog_retrieved_at_ms: None,
+                profiles: vec!["child".into()],
+                selectable: true,
+                disabled_reason: None,
+                active: false,
+            }],
+            ..SelectionInventory::default()
+        };
+        let catalog: smith_config::catalog::CatalogSnapshot = serde_json::from_value(serde_json::json!({
+            "schema_revision": smith_config::catalog::CATALOG_SCHEMA_REVISION,
+            "source_url": "fixture", "source_digest": "fixture", "content_digest": "fixture",
+            "source_revision": "revision", "retrieved_at_ms": 0,
+            "providers": { "google": {
+                "id": "google", "name": "Google", "models": { "child-model": {
+                    "id": "child-model", "name": "child model", "tool_call": true,
+                    "reasoning": false, "structured_output": false,
+                    "cost": { "input": 3_000_000, "output": null, "cache_read": null, "cache_write": null }
+                }}
+            }}
+        })).expect("catalog fixture");
+        let binding =
+            super::resolve_child_usage_binding("child", &inventory, &catalog).expect("binding");
+        assert_eq!(binding.provider.as_deref(), Some("child-alias"));
+        assert_eq!(binding.model, "child-model");
+        let price = binding.price.expect("child price");
+        assert_eq!(price.provider, "child-alias");
+        assert_eq!(price.table.input, Some(3_000_000));
+        assert!(super::resolve_child_usage_binding("missing", &inventory, &catalog).is_none());
+        inventory.models[0].catalog_provider = None;
+        let binding = super::resolve_child_usage_binding("child", &inventory, &catalog)
+            .expect("known custom binding");
+        assert!(
+            binding.price.is_none(),
+            "no rates borrowed from a matching model name"
+        );
+        inventory.profiles[0].model = None;
+        assert!(super::resolve_child_usage_binding("child", &inventory, &catalog).is_none());
+    }
 
     #[test]
     fn restored_synthetic_usage_stays_out_of_ordinary_turn_totals() {

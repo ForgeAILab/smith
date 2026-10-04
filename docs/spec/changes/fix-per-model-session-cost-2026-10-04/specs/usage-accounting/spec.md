@@ -51,6 +51,17 @@ or budget decisions, and MUST NOT reach the model.
 - **AND** the line names the unpriced binding as `price unknown for
   <provider>/<model>`
 
+#### Scenario: Usage restored on resume
+
+- **GIVEN** a resumed session whose snapshot restores usage records, which
+  carry no model identity
+- **WHEN** Smith prices the session
+- **THEN** the restored counters are priced by the binding the snapshot's
+  activation manifests name, when they name exactly one
+- **AND** when they name several, the restored counters are unpriced, the
+  figure is labelled estimated, and the line says `price unknown for earlier
+  models`
+
 #### Scenario: An estimated counter downgrades the label
 
 - **GIVEN** any contributing counter is tokenizer-estimated,

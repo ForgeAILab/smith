@@ -286,6 +286,55 @@ pub fn render_terminal_elapsed(duration: Duration) -> String {
     }
 }
 
+/// Counters tied to the binding that produced them, so later model selections
+/// cannot change their rates or measurement confidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BindingUsage {
+    /// Absent when the host could not resolve a serving provider.
+    pub provider: Option<String>,
+    /// Model identity, or a bounded explanation such as `earlier models`.
+    pub model: String,
+    /// Disjoint counters retained independently of the session rollup.
+    pub totals: BTreeMap<CounterKind, u64>,
+    /// Whether all counters in this bucket were provider-reported.
+    pub reported: bool,
+    /// Frozen catalog reference; absence never borrows another binding's rates.
+    pub price: Option<PriceReference>,
+}
+
+impl BindingUsage {
+    /// Starts a bucket before usage arrives, preserving an unresolved identity.
+    pub fn new(
+        provider: Option<String>,
+        model: impl Into<String>,
+        price: Option<PriceReference>,
+    ) -> Self {
+        Self {
+            provider,
+            model: model.into(),
+            totals: BTreeMap::new(),
+            reported: true,
+            price,
+        }
+    }
+
+    /// Accumulates counters without allowing a later report to erase estimates.
+    pub fn record(&mut self, delta: &UsageDelta, reported: bool) {
+        self.reported &= reported;
+        for (kind, value) in delta.iter() {
+            let total = self.totals.entry(kind).or_default();
+            *total = total.saturating_add(value);
+        }
+    }
+
+    fn name(&self) -> String {
+        self.provider.as_ref().map_or_else(
+            || self.model.clone(),
+            |provider| format!("{provider}/{}", self.model),
+        )
+    }
+}
+
 /// What one session spent, with no conversation content in it.
 ///
 /// The counters are the provider's own disjoint categories rather than a single
@@ -294,6 +343,8 @@ pub fn render_terminal_elapsed(duration: Duration) -> String {
 /// doing its job.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SessionUsage {
+    /// Presentation-only attribution alongside unchanged root/child rollups.
+    pub bindings: Vec<BindingUsage>,
     /// Turns that produced provider usage.
     pub turns: u32,
     /// Whether any counter came from the provider rather than an estimate.
@@ -333,6 +384,30 @@ pub struct SessionUsage {
 }
 
 impl SessionUsage {
+    /// Finds a retained price even when the last root binding is unpriced.
+    /// Legacy callers without binding buckets keep their supplied reference.
+    pub fn cost_price<'a>(
+        &'a self,
+        active: Option<&'a PriceReference>,
+    ) -> Option<&'a PriceReference> {
+        if self.bindings.is_empty() {
+            return active;
+        }
+        let retained = self
+            .bindings
+            .iter()
+            .find_map(|binding| binding.price.as_ref());
+        active
+            .filter(|_| retained.is_some())
+            .or(retained)
+            .or_else(|| active.filter(|_| !self.synthetic_totals.is_empty()))
+            .or_else(|| {
+                self.advisor_price
+                    .as_ref()
+                    .filter(|_| !self.advisor_totals.is_empty())
+            })
+    }
+
     /// Whether anything at all was observed, including a delegated-only
     /// session that never accumulated any root usage of its own.
     pub fn is_empty(&self) -> bool {
@@ -584,7 +659,7 @@ fn price_for(table: &PriceTable, kind: CounterKind) -> Option<u64> {
     }
 }
 
-/// The catalog price one session is billed against, and who it names.
+/// One binding's catalog price, retained with the counters it produced.
 ///
 /// Resolved once by `crates/smith-cli` at startup (and on a provider/model
 /// change) and stored on [`Status`], so `/status` and the exit report price
@@ -617,7 +692,45 @@ impl PriceReference {
 
     /// Names every model reference contributing to the displayed session cost.
     pub fn render_sources(&self, usage: &SessionUsage) -> String {
-        let mut sources = format!("{}/{}", self.provider, self.model);
+        let mut shares: Vec<(String, Option<u128>)> = Vec::new();
+        for binding in &usage.bindings {
+            if binding.totals.is_empty() {
+                continue;
+            }
+            let name = binding.name();
+            let amount = binding.price.as_ref().map(|price| {
+                let mut amount = 0;
+                let mut all_priced = true;
+                for (kind, tokens) in &binding.totals {
+                    accumulate_price(*kind, *tokens, &price.table, &mut amount, &mut all_priced);
+                }
+                amount
+            });
+            if let Some((_, total)) = shares
+                .iter_mut()
+                .find(|(source, total)| *source == name && total.is_some() == amount.is_some())
+            {
+                if let (Some(total), Some(amount)) = (total, amount) {
+                    *total += amount;
+                }
+            } else {
+                shares.push((name, amount));
+            }
+        }
+        let multiple = shares.len() > 1;
+        let mut sources = if shares.is_empty() {
+            format!("{}/{}", self.provider, self.model)
+        } else {
+            shares
+                .into_iter()
+                .map(|(name, amount)| match amount {
+                    Some(amount) if multiple => format!("{name} {}", format_usd(amount)),
+                    Some(_) => name,
+                    None => format!("price unknown for {name}"),
+                })
+                .collect::<Vec<_>>()
+                .join(" · ")
+        };
         if !usage.advisor_totals.is_empty() {
             match &usage.advisor_price {
                 Some(advisor) => sources.push_str(&format!(
@@ -666,16 +779,9 @@ pub struct SessionCost {
 }
 
 impl SessionCost {
-    /// Prices `usage` — root and delegated totals alike — against `price`,
-    /// using the identical per-counter reference for both.
-    ///
-    /// Delegated tokens are priced by the root's own reference even though a
-    /// child may have run a different model, per `usage-accounting`'s
-    /// "Delegated counters keep their categories": "the delegated totals are
-    /// priced by the same per-counter reference the root totals are."
-    /// Pricing each child by its own model would need a price reference per
-    /// child rather than the one binding this session resolved, which is a
-    /// larger feature this task does not add.
+    /// Prices each attributed root/child bucket at its frozen reference.
+    /// The supplied reference preserves the legacy single-binding API for
+    /// callers that construct rollups without attribution.
     ///
     /// Uses a `u128` intermediate for the multiply so a long session's token
     /// counts cannot overflow the arithmetic before the division back down
@@ -683,17 +789,38 @@ impl SessionCost {
     pub fn compute(usage: &SessionUsage, price: &PriceReference) -> Self {
         let mut micro_usd: u128 = 0;
         let mut all_priced = true;
-        for (kind, tokens) in usage.totals.iter().chain(usage.delegated_totals.iter()) {
-            if *tokens == 0 {
-                continue;
+        let mut all_reported = usage.reported;
+        if usage.bindings.is_empty() {
+            for (kind, tokens) in usage.totals.iter().chain(usage.delegated_totals.iter()) {
+                accumulate_price(
+                    *kind,
+                    *tokens,
+                    &price.table,
+                    &mut micro_usd,
+                    &mut all_priced,
+                );
             }
-            accumulate_price(
-                *kind,
-                *tokens,
-                &price.table,
-                &mut micro_usd,
-                &mut all_priced,
-            );
+        } else {
+            all_reported = true;
+            for binding in &usage.bindings {
+                if binding.totals.is_empty() {
+                    continue;
+                }
+                all_reported &= binding.reported;
+                for (kind, tokens) in &binding.totals {
+                    if let Some(price) = &binding.price {
+                        accumulate_price(
+                            *kind,
+                            *tokens,
+                            &price.table,
+                            &mut micro_usd,
+                            &mut all_priced,
+                        );
+                    } else if *tokens > 0 {
+                        all_priced = false;
+                    }
+                }
+            }
         }
         // Keepalive, handoff, and explicit-resource work use the active
         // provider/model identity and can use this exact price reference.
@@ -734,12 +861,9 @@ impl SessionCost {
                 all_priced = false;
             }
         }
-        // `usage.reported` is the provider-reported signal for the whole
-        // session (`SessionUsage`'s own doc: "Whether any counter came from
-        // the provider rather than an estimate"); an unpriced contributing
-        // counter downgrades the label independently, per
-        // `usage-accounting`'s "An estimated counter downgrades the label".
-        let label = if usage.reported && all_priced {
+        // A later provider report cannot upgrade an earlier bucket's
+        // estimates. Unpriced counters downgrade the label independently.
+        let label = if all_reported && all_priced {
             CostLabel::Exact
         } else {
             CostLabel::Estimated
@@ -813,6 +937,11 @@ pub struct Status {
     /// Per-counter session totals, kept separately from the cumulative input
     /// figure the header shows so an exit report can name each counter.
     totals: BTreeMap<CounterKind, u64>,
+    /// Closed root buckets retain the prices installed before their turns.
+    bindings: Vec<BindingUsage>,
+    /// Explicit host attribution; legacy rollup-only callers supply a price
+    /// directly to SessionCost and keep their existing accessor behavior.
+    active_binding: Option<BindingUsage>,
     /// Provider-reported cache-maintenance counters, excluded from ordinary
     /// root turns while retained in whole-session spend.
     synthetic_totals: BTreeMap<CounterKind, u64>,
@@ -849,6 +978,8 @@ impl Status {
             goal: None,
             usage_reported: false,
             totals: BTreeMap::new(),
+            bindings: Vec::new(),
+            active_binding: None,
             synthetic_totals: BTreeMap::new(),
             synthetic_by_purpose: BTreeMap::new(),
             advisor_totals: BTreeMap::new(),
@@ -909,6 +1040,9 @@ impl Status {
         self.usage_reported = true;
         self.context = TokenCount::reported(self.context.value.saturating_add(input));
         self.turns = self.turns.saturating_add(1);
+        if let Some(binding) = &mut self.active_binding {
+            binding.record(delta, true);
+        }
         for kind in [
             CounterKind::InputUncached,
             CounterKind::InputCached,
@@ -940,6 +1074,14 @@ impl Status {
             return;
         }
         self.record_usage(&record.delta);
+        if record.delta.input_tokens() > 0
+            && let Some(binding) = &mut self.active_binding
+        {
+            binding.reported &= matches!(
+                record.source,
+                UsageSource::ProviderAttempt | UsageSource::ExternalAgent
+            );
+        }
     }
 
     /// Reconciles advisor counters after a terminal event, including reported
@@ -983,6 +1125,13 @@ impl Status {
     /// delegated fields this leaves at their empty default.
     pub fn session_usage(&self) -> SessionUsage {
         SessionUsage {
+            bindings: self
+                .bindings
+                .iter()
+                .chain(self.active_binding.iter())
+                .filter(|binding| !binding.totals.is_empty())
+                .cloned()
+                .collect(),
             turns: self.turns,
             reported: self.usage_reported,
             totals: self.totals.clone(),
@@ -999,7 +1148,21 @@ impl Status {
         }
     }
 
-    /// Resolves the price this session bills against.
+    /// Keeps live binding attribution across host rebuilds only when the
+    /// durable root rollup agrees, avoiding duplicate or invented usage.
+    pub fn retain_usage_bindings(&mut self, previous: &SessionUsage) {
+        if !previous.bindings.is_empty() && previous.totals == self.totals {
+            self.bindings = previous.bindings.clone();
+            self.active_binding = Some(BindingUsage::new(
+                self.provider.clone(),
+                &self.model,
+                self.price.clone(),
+            ));
+        }
+    }
+
+    /// Installs the active binding's reference before counters arrive, so
+    /// closed buckets keep the rates they originally used.
     ///
     /// `Status` has no catalog access of its own: `crates/smith-cli` looks
     /// up the catalog entry using the exact binding the runtime factory
@@ -1009,6 +1172,19 @@ impl Status {
     /// catalog carries no price entry for the active model — never a price
     /// substituted from another model, provider, or a hard-coded default.
     pub fn set_price(&mut self, price: Option<PriceReference>) {
+        if let Some(binding) = &mut self.active_binding {
+            if binding.totals.is_empty() {
+                binding.price = price.clone();
+            }
+        } else if self.totals.is_empty()
+            && let Some(price) = &price
+        {
+            self.active_binding = Some(BindingUsage::new(
+                Some(price.provider.clone()),
+                &price.model,
+                Some(price.clone()),
+            ));
+        }
         self.price = price;
     }
 
@@ -1143,16 +1319,23 @@ impl Status {
     ///
     /// The old provider's cache does not transfer and its token accounting does
     /// not describe the new one, so context drops back to estimated and cache
-    /// evidence is cleared rather than carried over. The resolved price is
-    /// cleared for the same reason: it described the old binding, this
+    /// evidence is cleared rather than carried over. The old counter bucket
+    /// closes with its price intact. The active price is cleared because it
+    /// described the old binding, this
     /// method has no catalog access to re-resolve one for the new binding,
     /// and a stale price would misprice the session exactly as badly as a
     /// stale cache figure would misreport it. The caller that does have
     /// catalog access (`crates/smith-cli`, at startup) calls
     /// [`Self::set_price`] right after switching.
     pub fn switch_model(&mut self, provider: Option<String>, model: impl Into<String>) {
+        if let Some(binding) = self.active_binding.take()
+            && !binding.totals.is_empty()
+        {
+            self.bindings.push(binding);
+        }
         self.provider = provider;
         self.model = model.into();
+        self.active_binding = Some(BindingUsage::new(self.provider.clone(), &self.model, None));
         self.context_window = None;
         self.cache_read = None;
         self.cache_projection.suspend();
@@ -1807,5 +1990,106 @@ mod tests {
             status.price().is_none(),
             "the old provider's price does not describe the new binding"
         );
+    }
+
+    fn bound_status(provider: &str, model: &str, input_rate: u64) -> Status {
+        let mut status = Status::new(model, "project");
+        status.switch_model(Some(provider.to_owned()), model);
+        status.set_price(Some(PriceReference {
+            provider: provider.to_owned(),
+            model: model.to_owned(),
+            ..priced(input_rate, 0, 0, 0)
+        }));
+        status
+    }
+
+    #[test]
+    fn root_bindings_keep_their_prices_across_switches_and_rebuilds() {
+        let mut status = bound_status("zai", "glm-5.3", 2_000_000);
+        status.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 11_000));
+        status.switch_model(Some("google".into()), "gemini-3.8-flash");
+        status.set_price(Some(PriceReference {
+            provider: "google".into(),
+            model: "gemini-3.8-flash".into(),
+            ..priced(1_000_000, 0, 0, 0)
+        }));
+        status.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 12_000));
+        let usage = status.session_usage();
+        assert_eq!(usage.total_tokens(), 23_000);
+        assert_eq!(usage.bindings.len(), 2);
+        let price = status.price().expect("current price");
+        let cost = SessionCost::compute(&usage, price);
+        assert_eq!(cost.micro_usd, 34_000);
+        assert_eq!(cost.label, CostLabel::Exact);
+        assert_eq!(
+            price.render_sources(&usage),
+            "zai/glm-5.3 $0.022 · google/gemini-3.8-flash $0.012"
+        );
+
+        let mut rebuilt = bound_status("google", "gemini-3.8-flash", 1_000_000);
+        rebuilt.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 23_000));
+        rebuilt.retain_usage_bindings(&usage);
+        assert_eq!(rebuilt.session_usage().bindings, usage.bindings);
+        assert_eq!(SessionCost::compute(&rebuilt.session_usage(), price), cost);
+        // A rebuild whose durable rollup differs must not invent live counters.
+        rebuilt.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 1));
+        let before = rebuilt.session_usage();
+        rebuilt.retain_usage_bindings(&usage);
+        assert_eq!(rebuilt.session_usage(), before);
+    }
+
+    #[test]
+    fn an_unpriced_root_binding_is_named_and_never_borrows_a_rate() {
+        let mut status = bound_status("openai", "gpt-5.3", 2_000_000);
+        status.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 1_000_000));
+        status.switch_model(Some("custom".into()), "unpriced");
+        status.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 9_000_000));
+        let usage = status.session_usage();
+        let price = usage
+            .cost_price(status.price())
+            .expect("retained root price");
+        let cost = SessionCost::compute(&usage, price);
+        assert_eq!(cost.micro_usd, 2_000_000);
+        assert_eq!(cost.label, CostLabel::Estimated);
+        assert_eq!(
+            price.render_sources(&usage),
+            "openai/gpt-5.3 $2.000 · price unknown for custom/unpriced"
+        );
+    }
+
+    #[test]
+    fn binding_confidence_survives_a_new_models_provider_report() {
+        use agent_runtime_core::usage::Provenance;
+        let mut status = bound_status("openai", "gpt-5.3", 2_000_000);
+        status.record_usage_record(&UsageRecord {
+            source: UsageSource::ToolLoop,
+            provenance: Provenance::default(),
+            delta: UsageDelta::new().with(CounterKind::InputUncached, 1_000),
+        });
+        status.switch_model(Some("google".into()), "gemini-3.8-flash");
+        status.set_price(Some(PriceReference {
+            provider: "google".into(),
+            model: "gemini-3.8-flash".into(),
+            ..priced(1_000_000, 0, 0, 0)
+        }));
+        status.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 1_000));
+        let usage = status.session_usage();
+        assert!(!usage.bindings[0].reported);
+        assert!(usage.bindings[1].reported);
+        assert_eq!(
+            SessionCost::compute(&usage, status.price().expect("price")).label,
+            CostLabel::Estimated
+        );
+    }
+
+    #[test]
+    fn switching_without_new_counters_keeps_the_previous_bill_exact() {
+        let mut status = bound_status("openai", "gpt-5.3", 2_000_000);
+        status.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 1_000_000));
+        status.switch_model(Some("custom".into()), "unused");
+        let usage = status.session_usage();
+        let price = usage.cost_price(None).expect("previous price");
+        assert_eq!(SessionCost::compute(&usage, price).label, CostLabel::Exact);
+        assert_eq!(price.render_sources(&usage), "openai/gpt-5.3");
     }
 }

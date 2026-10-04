@@ -425,7 +425,7 @@ pub(super) async fn start_host(
 }
 
 /// The exit report's cost line, or `None` when the catalog carries no price
-/// entry for the active model.
+/// entry for any contributing binding.
 ///
 /// Per `usage-accounting`'s "A model the catalog does not price": the exit
 /// report prints the token lines and no cost line at all in that case — a
@@ -438,7 +438,7 @@ fn render_exit_cost_line(
     usage: &smith_client::status::SessionUsage,
     price: Option<&smith_client::status::PriceReference>,
 ) -> Option<String> {
-    let price = price?;
+    let price = usage.cost_price(price)?;
     let cost = smith_client::status::SessionCost::compute(usage, price);
     Some(format!(
         "{} {} · {}",
@@ -456,10 +456,9 @@ fn render_exit_cost_line(
 ///
 /// `price` is the identical reference `/status` priced against during the
 /// session (see `Status::set_price`), not a fresh catalog lookup performed
-/// here — and it is `None` whenever the catalog carries no price entry for
-/// the active model. Per `usage-accounting`'s "A model the catalog does not
-/// price", that case prints the token lines and no cost line at all: never a
-/// price substituted from another model, provider, or a hard-coded default.
+/// here. Earlier root and child references travel with `usage`, so an
+/// unpriced last model cannot hide their spend. When no contributing binding
+/// has a price, the report prints token lines without a cost line.
 /// Cost never reaches [`smith_client::usage_log::SessionUsageRecord`] below —
 /// it is presentation only, printed and discarded, and carries no field
 /// there for a price to leak into.
@@ -841,5 +840,138 @@ mod tests {
         // default.
         let usage = usage(true, &[(CounterKind::InputUncached, 1_000_000)]);
         assert_eq!(render_exit_cost_line(&usage, None), None);
+    }
+
+    #[test]
+    fn binding_cost_lines_match_status_and_keep_single_binding_bytes() {
+        let mut status = smith_client::status::Status::new("gpt-5.3", "project");
+        status.switch_model(Some("openai".into()), "gpt-5.3");
+        status.set_price(Some(price()));
+        status.record_usage(
+            &agent_runtime_core::usage::UsageDelta::new()
+                .with(CounterKind::InputUncached, 1_000_000),
+        );
+        let usage = status.session_usage();
+        assert_eq!(
+            render_exit_cost_line(&usage, status.price()).as_deref(),
+            Some("$2.000 exact · openai/gpt-5.3")
+        );
+        assert_eq!(
+            crate::local_command::render_status_cost(&usage, status.price(), ("openai", "gpt-5.3")),
+            "$2.000 exact · openai/gpt-5.3"
+        );
+        let mut estimated = usage.clone();
+        estimated.bindings[0].reported = false;
+        assert_eq!(
+            render_exit_cost_line(&estimated, status.price()).as_deref(),
+            Some("~$2.000 estimated · openai/gpt-5.3")
+        );
+        assert_eq!(
+            crate::local_command::render_status_cost(
+                &estimated,
+                status.price(),
+                ("openai", "gpt-5.3")
+            ),
+            "~$2.000 estimated · openai/gpt-5.3"
+        );
+        let mut advisor = usage;
+        advisor
+            .advisor_totals
+            .insert(CounterKind::InputUncached, 1_000_000);
+        advisor.advisor_price = Some(PriceReference {
+            provider: "advisor".into(),
+            model: "reviewer".into(),
+            ..price()
+        });
+        assert_eq!(
+            render_exit_cost_line(&advisor, status.price()).as_deref(),
+            Some("$4.000 exact · openai/gpt-5.3 · advisor advisor/reviewer")
+        );
+        assert_eq!(
+            crate::local_command::render_status_cost(
+                &advisor,
+                status.price(),
+                ("openai", "gpt-5.3")
+            ),
+            "$4.000 exact · openai/gpt-5.3 · advisor advisor/reviewer"
+        );
+        advisor.advisor_price = None;
+        assert_eq!(
+            render_exit_cost_line(&advisor, status.price()).as_deref(),
+            Some("~$2.000 estimated · openai/gpt-5.3 · advisor price unknown")
+        );
+        assert_eq!(
+            crate::local_command::render_status_cost(
+                &advisor,
+                status.price(),
+                ("openai", "gpt-5.3")
+            ),
+            "~$2.000 estimated · openai/gpt-5.3 · advisor price unknown"
+        );
+    }
+
+    #[test]
+    fn cost_lines_show_each_binding_even_when_the_last_root_price_is_unknown() {
+        use agent_runtime_core::usage::UsageDelta;
+        use smith_client::status::{BindingUsage, Status};
+        let mut status = Status::new("glm-5.3", "project");
+        status.switch_model(Some("zai".into()), "glm-5.3");
+        status.set_price(Some(PriceReference {
+            provider: "zai".into(),
+            model: "glm-5.3".into(),
+            ..price()
+        }));
+        status.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 11_000));
+        status.switch_model(Some("google".into()), "gemini-3.8-flash");
+        status.set_price(Some(PriceReference {
+            provider: "google".into(),
+            model: "gemini-3.8-flash".into(),
+            table: PriceTable {
+                input: Some(1_000_000),
+                ..price().table
+            },
+        }));
+        status.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 12_000));
+        let usage = status.session_usage();
+        let expected = "$0.034 exact · zai/glm-5.3 $0.022 · google/gemini-3.8-flash $0.012";
+        assert_eq!(
+            render_exit_cost_line(&usage, status.price()).as_deref(),
+            Some(expected)
+        );
+        assert_eq!(
+            crate::local_command::render_status_cost(
+                &usage,
+                status.price(),
+                ("google", "gemini-3.8-flash")
+            ),
+            expected
+        );
+
+        status.switch_model(Some("custom".into()), "model");
+        status.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 999_999));
+        let usage = status.session_usage();
+        let expected = "~$0.034 estimated · zai/glm-5.3 $0.022 · google/gemini-3.8-flash $0.012 · price unknown for custom/model";
+        assert_eq!(
+            render_exit_cost_line(&usage, None).as_deref(),
+            Some(expected)
+        );
+        assert_eq!(
+            crate::local_command::render_status_cost(&usage, None, ("custom", "model")),
+            expected
+        );
+
+        let unknown = SessionUsage {
+            bindings: vec![BindingUsage {
+                totals: BTreeMap::from([(CounterKind::InputUncached, 10)]),
+                ..BindingUsage::new(Some("custom".into()), "model", None)
+            }],
+            totals: BTreeMap::from([(CounterKind::InputUncached, 10)]),
+            ..SessionUsage::default()
+        };
+        assert_eq!(render_exit_cost_line(&unknown, Some(&price())), None);
+        assert_eq!(
+            crate::local_command::render_status_cost(&unknown, Some(&price()), ("custom", "model")),
+            "unknown · no price reference for custom/model"
+        );
     }
 }

@@ -3,7 +3,7 @@
 use super::*;
 use crate::status::SessionUsage;
 use crate::transcript::{Block, safe_tool_name};
-use agent_runtime_core::usage::UsageDelta;
+use agent_runtime_core::usage::{UsageDelta, UsageSource};
 use smith_runtime::client::SmithEventKind as RuntimeEvent;
 
 impl App {
@@ -400,7 +400,14 @@ impl App {
                 {
                     self.status.record_synthetic_usage(purpose, &record.delta);
                 } else {
-                    self.record_delegated_usage(child, &record.delta);
+                    self.record_delegated_usage(
+                        child,
+                        &record.delta,
+                        matches!(
+                            record.source,
+                            UsageSource::ProviderAttempt | UsageSource::ExternalAgent
+                        ),
+                    );
                 }
             }
             _ => {}
@@ -421,11 +428,17 @@ impl App {
     /// output-only record says nothing about context consumption, so — like
     /// the root path — it contributes no counters and does not mark the
     /// child a contributor on its own.
-    fn record_delegated_usage(&mut self, child: &str, delta: &UsageDelta) {
+    fn record_delegated_usage(&mut self, child: &str, delta: &UsageDelta, reported: bool) {
         if delta.input_tokens() == 0 {
             return;
         }
         self.delegated_contributors.insert(child.to_owned());
+        self.child_usage_bindings
+            .entry(child.to_owned())
+            .or_insert_with(|| {
+                smith_client::status::BindingUsage::new(None, format!("child {child}"), None)
+            })
+            .record(delta, reported);
         for kind in [
             CounterKind::InputUncached,
             CounterKind::InputCached,
@@ -450,7 +463,36 @@ impl App {
         usage.delegated_totals = self.delegated_usage.clone();
         usage.delegated_contributors =
             u32::try_from(self.delegated_contributors.len()).unwrap_or(u32::MAX);
+        usage.bindings.extend(
+            self.child_usage_bindings
+                .values()
+                .filter(|binding| !binding.totals.is_empty())
+                .cloned(),
+        );
         usage
+    }
+
+    /// Carries the reducer's spawn profile to the host's price resolver.
+    pub fn child_profile(&self, child: &str) -> Option<&str> {
+        self.children
+            .get(child)
+            .and_then(|summary| summary.profile.as_deref())
+    }
+
+    /// Freezes the child's own binding before its event stream is consumed.
+    /// A repeated spawn/resume cannot reprice already observed counters.
+    pub fn set_child_usage_binding(
+        &mut self,
+        child: &str,
+        binding: Option<smith_client::status::BindingUsage>,
+    ) {
+        self.child_usage_bindings
+            .entry(child.to_owned())
+            .or_insert_with(|| {
+                binding.unwrap_or_else(|| {
+                    smith_client::status::BindingUsage::new(None, format!("child {child}"), None)
+                })
+            });
     }
 
     /// The profile a lifecycle transition that replaces a child's whole
@@ -497,5 +539,128 @@ impl App {
             call_id: call_id.to_owned(),
             profile,
         });
+    }
+}
+
+#[cfg(test)]
+mod usage_binding_tests {
+    use super::*;
+    use agent_runtime_core::usage::{Provenance, UsageRecord};
+    use smith_client::status::{BindingUsage, CostLabel, PriceReference, PriceTable, SessionCost};
+
+    fn price(provider: &str, model: &str, input: u64) -> PriceReference {
+        PriceReference {
+            provider: provider.to_owned(),
+            model: model.to_owned(),
+            table: PriceTable {
+                input: Some(input),
+                output: None,
+                cache_read: None,
+                cache_write: None,
+            },
+        }
+    }
+
+    fn child_usage(app: &mut App, child: &str, tokens: u64) {
+        let envelope = EventEnvelope::new(
+            1,
+            agent_runtime_core::ids::EventId::new("usage"),
+            agent_runtime_core::ids::SessionId::new(child),
+            None,
+            agent_runtime_core::clock::Timestamp::ZERO,
+            RuntimeEvent::Usage {
+                record: UsageRecord {
+                    source: UsageSource::ProviderAttempt,
+                    provenance: Provenance::default(),
+                    delta: UsageDelta::new().with(CounterKind::InputUncached, tokens),
+                },
+            },
+        );
+        app.apply_child(child, &envelope);
+    }
+
+    #[test]
+    fn a_child_uses_its_own_price_and_keeps_root_counters_separate() {
+        let mut app = App::new("glm-5.3", "project");
+        let root = price("zai", "glm-5.3", 2_000_000);
+        app.status.switch_model(Some("zai".into()), "glm-5.3");
+        app.status.set_price(Some(root.clone()));
+        app.status
+            .record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 1_000));
+        app.set_child_usage_binding(
+            "child-1",
+            Some(BindingUsage::new(
+                Some("chatgpt".into()),
+                "gpt-6.1-sol",
+                Some(price("chatgpt", "gpt-6.1-sol", 10_000_000)),
+            )),
+        );
+        child_usage(&mut app, "child-1", 2_000);
+        // A later host observation cannot replace a running child's rates.
+        app.set_child_usage_binding("child-1", None);
+        child_usage(&mut app, "child-1", 1_000);
+        let usage = app.session_usage();
+        assert_eq!(usage.total_tokens(), 1_000);
+        assert_eq!(usage.delegated_totals[&CounterKind::InputUncached], 3_000);
+        assert_eq!(usage.delegated_contributors, 1);
+        let cost = SessionCost::compute(&usage, &root);
+        assert_eq!(cost.micro_usd, 32_000);
+        assert_eq!(cost.label, CostLabel::Exact);
+        assert_eq!(
+            root.render_sources(&usage),
+            "zai/glm-5.3 $0.002 · chatgpt/gpt-6.1-sol $0.030"
+        );
+    }
+
+    #[test]
+    fn an_unresolved_child_stays_unpriced_and_is_named() {
+        let mut app = App::new("glm-5.3", "project");
+        let root = price("zai", "glm-5.3", 2_000_000);
+        app.status.switch_model(Some("zai".into()), "glm-5.3");
+        app.status.set_price(Some(root.clone()));
+        app.status
+            .record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 1_000));
+        app.set_child_usage_binding("unresolved", None);
+        child_usage(&mut app, "unresolved", 100_000);
+        let usage = app.session_usage();
+        let cost = SessionCost::compute(&usage, &root);
+        assert_eq!(cost.micro_usd, 2_000);
+        assert_eq!(cost.label, CostLabel::Estimated);
+        assert_eq!(
+            root.render_sources(&usage),
+            "zai/glm-5.3 $0.002 · price unknown for child unresolved"
+        );
+        let mut app = App::new("unused", "project");
+        child_usage(&mut app, "unresolved", 100);
+        assert!(app.session_usage().cost_price(None).is_none());
+    }
+
+    #[test]
+    fn a_known_child_without_catalog_rates_is_named_without_root_rates() {
+        let mut app = App::new("glm-5.3", "project");
+        let root = price("zai", "glm-5.3", 2_000_000);
+        app.status.switch_model(Some("zai".into()), "glm-5.3");
+        app.status.set_price(Some(root.clone()));
+        app.status
+            .record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 1_000));
+        app.set_child_usage_binding(
+            "child",
+            Some(BindingUsage::new(
+                Some("chatgpt".into()),
+                "gpt-6.1-sol",
+                None,
+            )),
+        );
+        child_usage(&mut app, "child", 100_000);
+        let usage = app.session_usage();
+        assert_eq!(SessionCost::compute(&usage, &root).micro_usd, 2_000);
+        assert_eq!(
+            SessionCost::compute(&usage, &root).label,
+            CostLabel::Estimated
+        );
+        assert_eq!(
+            root.render_sources(&usage),
+            "zai/glm-5.3 $0.002 · price unknown for chatgpt/gpt-6.1-sol"
+        );
     }
 }

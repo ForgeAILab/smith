@@ -20,7 +20,8 @@ use crate::status::{SessionUsage, counter_label};
 
 /// Record wire version.
 ///
-/// Bumped to 4 for separately attributed synthetic cache usage. Version 3
+/// Bumped to 5 to retain each root/child binding across model switches.
+/// Version 4 added separately attributed synthetic cache usage. Version 3
 /// added cache miss diagnostics: `cache_miss_count` and
 /// `cache_rebilled_tokens` are optional so an older record means "no cache
 /// evidence", never a verified zero. Version 2 added delegated usage:
@@ -28,10 +29,21 @@ use crate::status::{SessionUsage, counter_label};
 /// `delegated_contributors` are new fields. Both carry `#[serde(default)]`
 /// so [`read_all`] stays tolerant of version-1 lines, which simply have no
 /// delegated usage to report.
-pub const USAGE_RECORD_SCHEMA_VERSION: u32 = 4;
+pub const USAGE_RECORD_SCHEMA_VERSION: u32 = 5;
+
+/// Durable binding attribution without catalog prices or conversation content.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BindingUsageRecord {
+    /// Absent for usage whose serving binding could not be resolved.
+    pub provider: Option<String>,
+    /// Serving model or the explanation for an unresolved binding.
+    pub model: String,
+    /// Disjoint counters keyed by the same labels as the root rollup.
+    pub totals: std::collections::BTreeMap<String, u64>,
+}
 
 /// One session's bounded usage record.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SessionUsageRecord {
     /// Wire schema version.
     pub schema_version: u32,
@@ -49,6 +61,9 @@ pub struct SessionUsageRecord {
     pub reported: bool,
     /// Per-counter totals, keyed by stable counter label.
     pub totals: std::collections::BTreeMap<String, u64>,
+    /// Binding counters survive changes to the top-level, last-root identity.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bindings: Vec<BindingUsageRecord>,
     /// Provider counters from synthetic cache operations, excluded from root
     /// and delegated turn usage while retained in session spend.
     #[serde(default)]
@@ -82,6 +97,69 @@ pub struct SessionUsageRecord {
     pub cache_rebilled_tokens: Option<u64>,
 }
 
+// A wire mirror lets every reader path migrate old lines, including callers
+// using serde directly, without changing the public record's field access.
+#[derive(Deserialize)]
+struct SessionUsageRecordWire {
+    schema_version: u32,
+    session: String,
+    provider: Option<String>,
+    model: String,
+    agent: String,
+    turns: u32,
+    reported: bool,
+    totals: std::collections::BTreeMap<String, u64>,
+    #[serde(default)]
+    bindings: Vec<BindingUsageRecord>,
+    #[serde(default)]
+    synthetic_totals: std::collections::BTreeMap<String, u64>,
+    #[serde(default)]
+    synthetic_by_purpose:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, u64>>,
+    #[serde(default)]
+    advisor_totals: std::collections::BTreeMap<String, u64>,
+    compactions: u32,
+    reclaimed_tokens: u64,
+    #[serde(default)]
+    delegated_totals: std::collections::BTreeMap<String, u64>,
+    #[serde(default)]
+    delegated_contributors: u32,
+    #[serde(default)]
+    cache_miss_count: Option<u32>,
+    #[serde(default)]
+    cache_rebilled_tokens: Option<u64>,
+}
+
+impl<'de> Deserialize<'de> for SessionUsageRecord {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = SessionUsageRecordWire::deserialize(deserializer)?;
+        let mut record = Self {
+            schema_version: wire.schema_version,
+            session: wire.session,
+            provider: wire.provider,
+            model: wire.model,
+            agent: wire.agent,
+            turns: wire.turns,
+            reported: wire.reported,
+            totals: wire.totals,
+            bindings: wire.bindings,
+            synthetic_totals: wire.synthetic_totals,
+            synthetic_by_purpose: wire.synthetic_by_purpose,
+            advisor_totals: wire.advisor_totals,
+            compactions: wire.compactions,
+            reclaimed_tokens: wire.reclaimed_tokens,
+            delegated_totals: wire.delegated_totals,
+            delegated_contributors: wire.delegated_contributors,
+            cache_miss_count: wire.cache_miss_count,
+            cache_rebilled_tokens: wire.cache_rebilled_tokens,
+        };
+        if (1..=4).contains(&record.schema_version) && record.bindings.is_empty() {
+            record.attribute_legacy_totals();
+        }
+        Ok(record)
+    }
+}
+
 impl SessionUsageRecord {
     /// Builds a record from an observed session.
     pub fn new(
@@ -91,7 +169,7 @@ impl SessionUsageRecord {
         agent: impl Into<String>,
         usage: &SessionUsage,
     ) -> Self {
-        Self {
+        let mut record = Self {
             schema_version: USAGE_RECORD_SCHEMA_VERSION,
             session: session.into(),
             provider,
@@ -104,6 +182,7 @@ impl SessionUsageRecord {
                 .iter()
                 .map(|(kind, value)| (counter_label(*kind).to_owned(), *value))
                 .collect(),
+            bindings: Vec::new(),
             synthetic_totals: usage
                 .synthetic_totals
                 .iter()
@@ -138,6 +217,45 @@ impl SessionUsageRecord {
             cache_miss_count: (usage.cache_miss_count > 0).then_some(usage.cache_miss_count),
             cache_rebilled_tokens: (usage.cache_rebilled_tokens > 0)
                 .then_some(usage.cache_rebilled_tokens),
+        };
+        for binding in &usage.bindings {
+            if binding.totals.is_empty() {
+                continue;
+            }
+            let totals = binding
+                .totals
+                .iter()
+                .map(|(kind, value)| (counter_label(*kind).to_owned(), *value));
+            if let Some(existing) = record
+                .bindings
+                .iter_mut()
+                .find(|entry| entry.provider == binding.provider && entry.model == binding.model)
+            {
+                for (kind, value) in totals {
+                    let total = existing.totals.entry(kind).or_default();
+                    *total = total.saturating_add(value);
+                }
+            } else {
+                record.bindings.push(BindingUsageRecord {
+                    provider: binding.provider.clone(),
+                    model: binding.model.clone(),
+                    totals: totals.collect(),
+                });
+            }
+        }
+        if record.bindings.is_empty() {
+            record.attribute_legacy_totals();
+        }
+        record
+    }
+
+    fn attribute_legacy_totals(&mut self) {
+        if !self.totals.is_empty() {
+            self.bindings.push(BindingUsageRecord {
+                provider: self.provider.clone(),
+                model: self.model.clone(),
+                totals: self.totals.clone(),
+            });
         }
     }
 }
@@ -237,7 +355,7 @@ mod tests {
             &usage,
         );
 
-        assert_eq!(record.schema_version, 4);
+        assert_eq!(record.schema_version, 5);
         assert_eq!(record.totals["cached"], 90_000);
         assert_eq!(record.synthetic_totals["cached"], 80_000);
         assert_eq!(
@@ -365,6 +483,7 @@ mod tests {
             advisor_price: None,
             cache_miss_count: 0,
             cache_rebilled_tokens: 0,
+            bindings: Vec::new(),
         };
         // The merged line names no turn count. A child's turns live with the
         // delegation coordinator, so the only one available here is the
@@ -401,6 +520,7 @@ mod tests {
             advisor_price: None,
             cache_miss_count: 0,
             cache_rebilled_tokens: 0,
+            bindings: Vec::new(),
         };
         let rendered = usage.render().expect("a summary");
         assert_eq!(
@@ -506,5 +626,60 @@ mod tests {
         assert_eq!(all[0].delegated_contributors, 1);
         assert_eq!(all[0].cache_miss_count, None);
         assert_eq!(all[0].cache_rebilled_tokens, None);
+    }
+
+    #[test]
+    fn a_version_four_record_attributes_totals_to_its_top_level_binding() {
+        let legacy = serde_json::json!({
+            "schema_version": 4, "session": "old", "provider": "zai",
+            "model": "glm-5.3", "agent": "build", "turns": 1,
+            "reported": true, "totals": { "input": 11_000, "output": 200 },
+            "compactions": 0, "reclaimed_tokens": 0,
+            "delegated_totals": { "input": 500 }, "delegated_contributors": 1
+        });
+        let record: SessionUsageRecord = serde_json::from_value(legacy.clone()).expect("version 4");
+        assert_eq!(record.bindings.len(), 1);
+        assert_eq!(record.bindings[0].provider.as_deref(), Some("zai"));
+        assert_eq!(record.bindings[0].model, "glm-5.3");
+        assert_eq!(record.bindings[0].totals, record.totals);
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = default_path(dir.path());
+        std::fs::write(&path, format!("{legacy}\n")).expect("legacy log");
+        assert_eq!(read_all(&path), vec![record]);
+    }
+
+    #[test]
+    fn version_five_keeps_binding_counters_and_last_root_identity_without_prices() {
+        use crate::status::{BindingUsage, Status};
+        use agent_runtime_core::usage::UsageDelta;
+        let mut status = Status::new("glm-5.3", "project");
+        status.switch_model(Some("zai".into()), "glm-5.3");
+        status.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 11_000));
+        status.switch_model(Some("google".into()), "gemini-3.8-flash");
+        status.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 12_000));
+        let mut usage = status.session_usage();
+        let mut child = BindingUsage::new(Some("chatgpt".into()), "gpt-6.1-sol", None);
+        child.record(&UsageDelta::new().with(CounterKind::Output, 300), true);
+        usage.bindings.push(child);
+        usage.delegated_totals.insert(CounterKind::Output, 300);
+        usage.delegated_contributors = 1;
+        let record = SessionUsageRecord::new(
+            "session",
+            status.provider.clone(),
+            &status.model,
+            "build",
+            &usage,
+        );
+        assert_eq!(record.schema_version, 5);
+        assert_eq!(record.provider.as_deref(), Some("google"));
+        assert_eq!(record.model, "gemini-3.8-flash");
+        assert_eq!(record.bindings.len(), 3);
+        assert_eq!(record.bindings[0].totals["input"], 11_000);
+        assert_eq!(record.bindings[1].totals["input"], 12_000);
+        assert_eq!(record.bindings[2].totals["output"], 300);
+        let encoded = serde_json::to_string(&record).expect("encode");
+        assert!(!encoded.contains("price"));
+        let decoded: SessionUsageRecord = serde_json::from_str(&encoded).expect("decode");
+        assert_eq!(decoded, record);
     }
 }
