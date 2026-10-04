@@ -34,4 +34,4 @@ remove-or-finish decision is recorded in proposal.md.
 - [x] 3.1 `cargo fmt --all -- --check`, strict Clippy, workspace tests;
   local-command fixtures and headless fixtures unchanged except the two new
   typed event kinds where a fixture contains them.
-- [ ] 3.2 `final_checks.py` passes; release cache comparison against 0.3.3.
+- [x] 3.2 `final_checks.py` passes; release cache comparison against 0.3.3.
