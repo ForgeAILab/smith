@@ -377,6 +377,8 @@ mod tests {
     include!("prompts.rs");
     include!("confirmations.rs");
     include!("interaction_defects.rs");
+    include!("key_ordering.rs");
+    include!("keymap.rs");
     include!("resources.rs");
     include!("child_lifecycle.rs");
     include!("rotation.rs");

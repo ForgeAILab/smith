@@ -628,506 +628,84 @@ pub(super) struct TuiRunInputs<'a> {
     skills: Arc<crate::skills::SkillContext>,
 }
 
+struct TuiLoop<'a> {
+    app: App,
+    host: &'a HostSession,
+    project: &'a std::path::Path,
+    approvals: Option<ApprovalRequests>,
+    rotations: Option<RotationRequests>,
+    accounts: ActiveAccounts,
+    credential_pool: Option<SharedPool>,
+    agents: &'a ResolvedAgent,
+    theme: Theme,
+    mcp: Option<Arc<crate::mcp::McpContext>>,
+    skills: Arc<crate::skills::SkillContext>,
+    session: &'a smith_runtime::SessionHandle,
+    events: smith_runtime::client::SmithEventStream,
+    keys: EventStream,
+    spinner: tokio::time::Interval,
+    frame: tokio::time::Interval,
+    local_tx: tokio::sync::mpsc::UnboundedSender<LocalOutcome>,
+    local_rx: tokio::sync::mpsc::UnboundedReceiver<LocalOutcome>,
+    local_shell_approvals: LocalShellApprovals,
+    shell_shortcuts: ShellShortcuts,
+    child_tx: tokio::sync::mpsc::UnboundedSender<(ChildId, EventEnvelope)>,
+    child_rx: tokio::sync::mpsc::UnboundedReceiver<(ChildId, EventEnvelope)>,
+    mcp_changes: Option<tokio::sync::watch::Receiver<u64>>,
+    composed_remote_tools: usize,
+    remote_tools_pending: bool,
+    trusted_skill_pending: bool,
+    last_change_turn: Option<u64>,
+    interactions: interaction::InteractionSurface,
+    dirty: bool,
+    window_title: smith_tui::terminal_title::TerminalTitleState,
+}
+
 pub(super) async fn run_tui(
     terminal: &mut terminal::Terminal,
-    mut app: App,
+    app: App,
     inputs: TuiRunInputs<'_>,
 ) -> Result<(InteractiveExit, App)> {
-    let TuiRunInputs {
-        host,
-        project,
-        mut approvals,
-        interactions,
-        mut rotations,
-        mut accounts,
-        credential_pool,
-        agents,
-        theme,
-        mcp,
-        skills,
-    } = inputs;
-    let session = host.session();
-    let mut events = host.client().events();
-    let mut keys = EventStream::new();
-    let mut spinner = tokio::time::interval(SPINNER_TICK);
-    let mut frame = tokio::time::interval(FRAME);
-    let (local_tx, mut local_rx) = tokio::sync::mpsc::unbounded_channel();
-    let local_shell_approvals = LocalShellApprovals::default();
-    let mut shell_shortcuts = ShellShortcuts::default();
-    // One forwarding task per live child funnels every child's own stream into
-    // this loop, so a child's events are folded by the same single-threaded
-    // reducer the root's are and can never interleave mid-fold.
-    let (child_tx, mut child_rx) =
-        tokio::sync::mpsc::unbounded_channel::<(ChildId, EventEnvelope)>();
-    let mut mcp_changes = mcp.as_ref().map(|context| context.supervisor().subscribe());
-    // What the runtime was composed with. A rebuild is worth its cost only
-    // when a server has actually contributed something new since.
-    let composed_remote_tools = mcp
-        .as_ref()
-        .map_or(0, |context| context.supervisor().tools().len());
-    let mut remote_tools_pending = false;
-    // A newly trusted project skill is only in the trust file until the
-    // catalog is resolved again, and the catalog is resolved at composition.
-    let mut trusted_skill_pending = false;
-    let mut last_change_turn = host.changes().latest().map(|set| set.turn);
-    let mut interactions = interaction::InteractionSurface::new(
-        interactions,
-        host.restored_interaction()
-            .map(|restored| restored.request_id().as_str().to_owned()),
-    );
-    let mut dirty = true;
-    // The terminal window title follows the same state the header does, but
-    // is written outside the frame: it is one OSC sequence per *change*, not
-    // per draw. Guarded and deduped inside the tracker, so a non-terminal
-    // stdout (or an unchanged title) costs nothing.
-    let mut window_title = smith_tui::terminal_title::TerminalTitleState::new();
-    // One failed write costs a stale title, not the session.
-    let _ = window_title.refresh(&app.status);
-
+    let mut tui = TuiLoop::new(app, inputs);
     let exit = loop {
         tokio::select! {
             // Keyboard first: a provider flood must not starve cancellation.
             biased;
 
-            Some(key) = keys.next() => {
-                match key.context("reading a terminal event")? {
-                    // `Ctrl+V` is the explicit "attach from clipboard" chord:
-                    // terminals deliver ordinary pastes as bracketed text, but
-                    // an image on the clipboard can only be fetched by asking
-                    // the platform directly.
-                    TermEvent::Key(key)
-                        if key.kind != KeyEventKind::Release
-                            && key.code == KeyCode::Char('v')
-                            && key.modifiers.contains(KeyModifiers::CONTROL) =>
-                    {
-                        attach_from_clipboard(&mut app);
-                        dirty = true;
-                    }
-                    TermEvent::Key(key) => {
-                        match app.on_key(key) {
-                            Some(Action::Submit { submission, target }) => {
-                                host.set_goal_continuation_enabled(false);
-                                dispatch_prepared_with_materialization(
-                                    &mut app,
-                                    session,
-                                    project,
-                                    submission,
-                                    target,
-                                )
-                                .await;
-                            }
-                            Some(Action::RunShell { command }) => {
-                                let echo = app.transcript.latest_shell_echo().expect("submitted shell echo");
-                                shell_shortcuts.dispatched(host, echo);
-                                let identity = start_local_shell(
-                                    echo,
-                                    session.clone(),
-                                    command,
-                                    host.runtime().policy().turn_time_limit_ms.unwrap_or(600_000),
-                                    local_shell_approvals.clone(),
-                                    local_tx.clone(),
-                                ).await;
-                                match identity {
-                                    Some(LocalShellIdentity::Turn(turn)) => app.track_shell_shortcut(turn, echo),
-                                    Some(LocalShellIdentity::Call(call)) => app.transcript.bind_shell_shortcut(echo, call.as_str()),
-                                    None => {},
-                                }
-                            }
-                            Some(Action::Interrupt) => {
-                                if let Err(error) = session
-                                    .interrupt_current_turn(CancelReason::UserRequested)
-                                {
-                                    app.transcript.push_error(format!(
-                                        "turn interruption failed: {error}"
-                                    ));
-                                }
-                            }
-                            Some(Action::BackgroundShell) => {
-                                // Kept distinct from `Action::Interrupt`: this
-                                // never kills the group, it only asks the
-                                // registry to adopt whatever foreground call
-                                // is currently running, if any.
-                                if host
-                                    .background_tasks()
-                                    .trigger_manual_backgrounding(session.id())
-                                {
-                                    app.transcript.push_notice(
-                                        NoticeKind::Background,
-                                        "command moved to the background",
-                                    );
-                                } else {
-                                    app.push_notice(
-                                        NoticeKind::BackgroundUnavailable,
-                                        "no foreground shell command is running",
-                                    );
-                                }
-                            }
-                            Some(Action::Quit) => break InteractiveExit::Quit(
-                                Box::new(app.session_usage()),
-                                app.status.price().cloned(),
-                                app.status.cache_summary().map(Box::new),
-                            ),
-                            // An account switch is live pool state, so it is
-                            // applied here rather than by tearing the session
-                            // down and rebuilding it around a new selection.
-                            Some(Action::Reconfigure(command)) => match command {
-                                SessionControl::Account(position) => {
-                                    match switch_account(
-                                        credential_pool.as_ref(),
-                                        &mut accounts,
-                                        position,
-                                    )
-                                    .await
-                                    {
-                                        Some(notice) => {
-                                            app.transcript.push_notice(NoticeKind::Account, notice);
-                                            app.set_accounts(account_entries(
-                                                credential_pool.as_ref(),
-                                            ));
-                                            app.status.account =
-                                                account_status(credential_pool.as_ref());
-                                        }
-                                        None => app
-                                            .push_notice(NoticeKind::AccountUnchanged, "already using that account"),
-                                    }
-                                }
-                                command => {
-                                    if let Some(exit) = reconfigure_exit(&mut app, command) {
-                                        break exit;
-                                    }
-                                }
-                            },
-                            Some(Action::Command(command)) => {
-                                handle_local_command(
-                                    &mut app,
-                                    host,
-                                    project,
-                                    mcp.as_deref(),
-                                    &skills,
-                                    command,
-                                )
-                                .await;
-                            }
-                            Some(Action::TrustMcpServer { server }) => {
-                                app.show_local_report(
-                                    smith_client::local_result::LocalResult::Mcp(Box::new(
-                                        local_command::mcp::trust(mcp.as_deref(), &server),
-                                    )),
-                                );
-                            }
-                            Some(Action::TrustSkill { skill: name }) => {
-                                let report = local_command::skills::trust(&skills, &name);
-                                if matches!(
-                                    &report,
-                                    smith_client::skills_report::SkillsReport::Trusted { .. }
-                                ) {
-                                    trusted_skill_pending = true;
-                                }
-                                app.show_local_report(
-                                    smith_client::local_result::LocalResult::Skills(Box::new(report)),
-                                );
-                            }
-                            Some(Action::ApplyUndo) => {
-                                app.transcript.push_local(LocalResult::Recovery(Box::new(
-                                    local_command::recovery::undo(host),
-                                )));
-                            }
-                            Some(Action::CancelUndo) => {
-                                host.changes().record_undo_cancelled();
-                                app.transcript.push_local(LocalResult::Recovery(Box::new(
-                                    RecoveryReport::Cancelled(RecoveryAction::Undo),
-                                )));
-                            }
-                            Some(Action::ApplyRedo) => {
-                                app.transcript.push_local(LocalResult::Recovery(Box::new(
-                                    local_command::recovery::redo(host),
-                                )));
-                            }
-                            Some(Action::CancelRedo) => {
-                                host.changes().record_redo_cancelled();
-                                app.transcript.push_local(LocalResult::Recovery(Box::new(
-                                    RecoveryReport::Cancelled(RecoveryAction::Redo),
-                                )));
-                            }
-                            Some(Action::ApplyRevert { scope, fingerprint }) => {
-                                app.transcript.push_local(LocalResult::Recovery(Box::new(
-                                    local_command::recovery::revert(host, project, scope, &fingerprint),
-                                )));
-                            }
-                            Some(Action::CancelRevert { scope, fingerprint }) => {
-                                host.changes().record_revert_event(
-                                    &scope,
-                                    &fingerprint,
-                                    "cancelled",
-                                );
-                                app.transcript.push_local(LocalResult::Recovery(Box::new(
-                                    RecoveryReport::Cancelled(RecoveryAction::Revert),
-                                )));
-                            }
-                            Some(Action::StartReview { scope }) => {
-                                start_review(host, project, scope, local_tx.clone());
-                            }
-                            Some(Action::StartAgent { preset, task }) => {
-                                start_agent(host, agents, preset, task, local_tx.clone());
-                            }
-                            Some(Action::FollowUpAgent { child_id, task }) => {
-                                follow_up_agent(host, child_id, task, local_tx.clone());
-                            }
-                            Some(Action::ResumeAgent { child_id }) => {
-                                resume_agent(host, child_id, local_tx.clone());
-                            }
-                            None => {}
-                        }
-                        dirty = true;
-                    }
-                    TermEvent::Paste(text) => {
-                        app.on_paste(&text);
-                        dirty = true;
-                    }
-                    TermEvent::Mouse(mouse) => match app.on_mouse(mouse) {
-                        MouseOutcome::Ignored => {}
-                        MouseOutcome::Redraw => dirty = true,
-                        MouseOutcome::CopySelection => {
-                            // Drawn here rather than deferred to the frame
-                            // tick: the selected text exists only in the frame
-                            // buffer, and a runtime event arriving in between
-                            // would clear the selection before it could be
-                            // read — a release that silently copied nothing.
-                            let mut selected = None;
-                            terminal.draw(|frame| {
-                                smith_tui::render::layout(frame.area(), &app, theme).apply(&mut app);
-                                smith_tui::render::draw(frame, &app, theme);
-                                selected = smith_tui::selected_text(frame, &app);
-                            })?;
-                            dirty = false;
-                            // A drag across blank space yields nothing, and
-                            // clobbering the clipboard with an empty string
-                            // would lose whatever the user had there.
-                            if let Some(text) = selected {
-                                copy_selection_to_clipboard(&mut app, &text);
-                            }
-                        }
-                    },
-                    TermEvent::Resize(_, _) => dirty = true,
-                    _ => {}
+            Some(key) = tui.keys.next() => {
+                if let Some(exit) = tui.on_terminal_event(terminal, key).await? {
+                    break exit;
                 }
             }
 
-            prompt = next_approval(&mut approvals) => {
-                match prompt {
-                    Some(prompt) => {
-                        if let Some(prompt) = local_shell_approvals.resolve(prompt) {
-                            app.present_approval(prompt);
-                            dirty = true;
-                        }
-                    }
-                    None => approvals = None,
+            prompt = next_approval(&mut tui.approvals) => {
+                tui.on_approval(prompt);
+            }
+
+            offer = next_rotation(&mut tui.rotations) => {
+                tui.on_rotation(offer);
+            }
+
+            notice = tui.interactions.next_notice() => {
+                tui.on_interaction_notice(notice);
+            }
+
+            envelope = tui.events.next() => {
+                if let Some(exit) = tui.on_runtime_event(envelope).await {
+                    break exit;
                 }
             }
 
-            offer = next_rotation(&mut rotations) => {
-                match offer {
-                    Some(prompt) => {
-                        app.present_rotation(prompt);
-                        dirty = true;
-                    }
-                    None => rotations = None,
-                }
+            child_event = tui.child_rx.recv() => {
+                tui.on_child_event(child_event);
             }
 
-            notice = interactions.next_notice() => {
-                match notice {
-                    Some(notice) => {
-                        interactions.apply_notice(&mut app, notice);
-                        dirty = true;
-                    }
-                    None => interactions.close_receiver(),
-                }
-            }
-
-            envelope = events.next() => {
-                match envelope {
-                    Some(envelope) => {
-                        // The live queue is normally this one envelope. When
-                        // applying it reveals a broadcast lag gap, the missing
-                        // range is replayed out of the canonical journal ahead
-                        // of it, so control events (turn terminals, queued-
-                        // input releases) still fold in order instead of
-                        // wedging the UI on a state change it never saw.
-                        let mut pending = VecDeque::from([(envelope, false)]);
-                        while let Some((envelope, recovered)) = pending.pop_front() {
-                            let tool_call = tool_call_for_display(&envelope.payload);
-                            let completed_tool = matches!(
-                                envelope.payload,
-                                RuntimeEvent::ToolCallCompleted { .. }
-                            );
-                            let turn_completed = matches!(
-                                envelope.payload,
-                                RuntimeEvent::TurnCompleted { .. }
-                            );
-                            if recovered {
-                                app.apply_recovered(&envelope);
-                            } else {
-                                app.apply(&envelope);
-                                if let Some(gap) = app.take_stream_gap() {
-                                    // The envelope was parked, not applied.
-                                    // Queue the journal's copy of the missing
-                                    // range first, then retry the parked
-                                    // envelope on the honest replay path.
-                                    match host
-                                        .client_events_between(
-                                            gap.first_missing,
-                                            gap.last_missing,
-                                        )
-                                        .await
-                                    {
-                                        Ok(events) => {
-                                            if !events.is_empty() {
-                                                // Accumulated, not shown yet: a
-                                                // broadcast overrun produces a
-                                                // run of these gaps back to
-                                                // back, and `App` collapses the
-                                                // whole run into one line once
-                                                // it sees a contiguous event
-                                                // again.
-                                                app.note_recovered_events(events.len());
-                                            }
-                                            pending.push_front((gap.deferred, true));
-                                            for event in events.into_iter().rev() {
-                                                pending.push_front((event, true));
-                                            }
-                                        }
-                                        Err(error) => {
-                                            app.transcript.push_error(format!(
-                                                "replaying skipped events {}–{} from the \
-                                                 session journal failed: {error}",
-                                                gap.first_missing, gap.last_missing
-                                            ));
-                                            pending.push_front((gap.deferred, true));
-                                        }
-                                    }
-                                    continue;
-                                }
-                            }
-                            if turn_completed && host.runtime().advisor_route().is_some() {
-                                app.status.reconcile_advisor_records(host.snapshot().usage.records());
-                            }
-                            if turn_completed
-                                && let Some(set) = host.changes().latest()
-                                && last_change_turn != Some(set.turn)
-                                && !set.undone
-                                && let Some(notice) = change_notice(&set)
-                            {
-                                last_change_turn = Some(set.turn);
-                                app.transcript.push_notice(NoticeKind::Changes, notice);
-                            }
-                            if let Some(submission) = app.take_ready_submission() {
-                                dispatch_prepared_with_materialization(
-                                    &mut app,
-                                    session,
-                                    project,
-                                    submission,
-                                    SubmissionTarget::WholeTurn,
-                                )
-                                .await;
-                            }
-                            if let Some(call) = tool_call {
-                                if let Some(display) = host.tool_call_display(&call) {
-                                    // Only at request time: the same call id
-                                    // is resolved again at completion, and
-                                    // this queue must see a spawn exactly
-                                    // once or `ChildSpawned` would enrich the
-                                    // wrong row. This is the root's own
-                                    // event stream — the child-events branch
-                                    // below never reaches this call, which is
-                                    // how the pending-spawn queue stays
-                                    // root-only.
-                                    if !completed_tool {
-                                        app.note_pending_spawn(call.as_str(), &display);
-                                    }
-                                    app.set_tool_display(call.as_str(), display);
-                                }
-                                if completed_tool
-                                    && let Some(text) = host.tool_result_text(&call)
-                                {
-                                    app.set_tool_result_preview(call.as_str(), text);
-                                }
-                            }
-                            // A child is a full runtime session. The parent
-                            // stream says one started; its own stream says
-                            // what it is doing, and that is what the
-                            // inspector draws.
-                            //
-                            // A resume is a second start: the durable record
-                            // is bound to a new execution with a new stream,
-                            // and the task watching the old one ended with it.
-                            match &envelope.payload {
-                                RuntimeEvent::ChildSpawned { child, .. }
-                                | RuntimeEvent::ChildProgress {
-                                    child,
-                                    phase: ChildPhase::ResumeStarted { .. },
-                                } => subscribe_to_child(host, child, child_tx.clone()),
-                                _ => {}
-                            }
-                        }
-                        dirty = true;
-                    }
-                        None => break InteractiveExit::Quit(
-                            Box::new(app.session_usage()),
-                            app.status.price().cloned(),
-                            app.status.cache_summary().map(Box::new),
-                        ),
-                }
-            }
-
-            child_event = child_rx.recv() => {
-                if let Some((child, envelope)) = child_event {
-                    app.apply_child(child.as_str(), &envelope);
-                    // The child's events withhold argument values and result
-                    // text exactly as the root's do. Both are resolved the
-                    // same way: by call id, against that agent's canonical
-                    // history, redacted by the host.
-                    if let Some(call) = tool_call_for_display(&envelope.payload) {
-                        if let Some(display) = host.child_tool_call_display(&child, &call) {
-                            app.set_child_tool_display(child.as_str(), call.as_str(), display);
-                        }
-                        if matches!(envelope.payload, RuntimeEvent::ToolCallCompleted { .. })
-                            && let Some(text) = host.child_tool_result_text(&child, &call)
-                        {
-                            app.set_child_tool_result_preview(
-                                child.as_str(),
-                                call.as_str(),
-                                text,
-                            );
-                        }
-                    }
-                    dirty = true;
-                }
-            }
-
-            outcome = local_rx.recv() => {
-                if let Some(outcome) = outcome {
-                    match outcome {
-                        LocalOutcome::Agent(report) => {
-                            app.transcript.push_local(smith_client::local_result::LocalResult::Agent(report));
-                        }
-                        LocalOutcome::Review(report) => {
-                            app.transcript.push_local(smith_client::local_result::LocalResult::Review(report));
-                        }
-                        LocalOutcome::Notice { kind, text } => {
-                            app.transcript.push_notice(kind, text);
-                        }
-                        LocalOutcome::Error(text) => app.transcript.push_error(text),
-                        LocalOutcome::Shell { echo, call, content, is_error } => {
-                            shell_shortcuts.finish(host, &mut app, echo, call.as_ref().map(|call| call.as_str()), &content, is_error);
-                        }
-                    }
-                    dirty = true;
-                }
+            outcome = tui.local_rx.recv() => {
+                tui.on_local_result(outcome);
             }
 
             () = async {
-                match &mut mcp_changes {
+                match &mut tui.mcp_changes {
                     Some(receiver) => {
                         let _ = receiver.changed().await;
                     }
@@ -1136,144 +714,21 @@ pub(super) async fn run_tui(
                     None => std::future::pending().await,
                 }
             } => {
-                if let Some(context) = &mcp {
-                    let supervisor = context.supervisor();
-                    let reports = supervisor.reports();
-                    app.status.mcp = smith_tui::McpStatus {
-                        connecting: reports
-                            .iter()
-                            .filter(|report| !report.state.is_settled())
-                            .count(),
-                        failed: reports
-                            .iter()
-                            .filter(|report| matches!(
-                                report.state,
-                                smith_runtime::mcp::McpState::Failed { .. }
-                            ))
-                            .count(),
-                    };
-                    remote_tools_pending = supervisor.tools().len() != composed_remote_tools;
-                    dirty = true;
-                }
+                tui.on_mcp_change();
             }
-            _ = spinner.tick() => {
-                let exit_hint_expired = app.expire_ctrl_c_exit_hint();
-                // Rows retire while the session is idle — that is the whole
-                // point of them retiring — so this cannot ride on `tick`,
-                // which only advances while there is work to animate.
-                let rows_retired = app.expire_child_rows();
-                let busy = app.is_busy();
-                if busy {
-                    app.tick();
-                }
-                if exit_hint_expired
-                    || rows_retired
-                    || (busy && (theme.uses_motion() || app.tick.is_multiple_of(10)))
-                {
-                    dirty = true;
-                }
+            _ = tui.spinner.tick() => {
+                tui.on_spinner();
             }
 
-            _ = frame.tick(), if dirty || remote_tools_pending || trusted_skill_pending => {
-                // A newly connected server's tools and a newly trusted skill
-                // both join at the next idle boundary, never mid-turn:
-                // swapping the ability set underneath a running turn is what
-                // the epoch rules exist to prevent.
-                if (remote_tools_pending || trusted_skill_pending)
-                    && !app.is_busy()
-                    && !app.has_pending_input()
-                    && !app.has_pending_prompt()
-                    && app.overlay.is_none()
-                {
-                    break InteractiveExit::CapabilitiesChanged;
+            _ = tui.frame.tick(), if tui.dirty || tui.remote_tools_pending || tui.trusted_skill_pending => {
+                if let Some(exit) = tui.on_frame(terminal).await? {
+                    break exit;
                 }
-                // Re-read on the way to the screen rather than at each site
-                // that could change it: the pool also moves on its own — a
-                // rotation the runtime performed, a snapshot that arrived
-                // mid-turn — and a footer refreshed only on manual switches
-                // would keep naming an account the session had already left.
-                if credential_pool.is_some() {
-                    app.status.account = account_status(credential_pool.as_ref());
-                    app.set_accounts(account_entries(credential_pool.as_ref()));
-                    // Rotation happens inside the runtime, which cannot reach
-                    // user-scope state, so the account it moved to is
-                    // remembered here. `remember` reports whether anything
-                    // changed, so this writes on a switch and not on a frame.
-                    remember_active_account(credential_pool.as_ref(), &mut accounts).await;
-                }
-                // Same cadence as the account refresh above: the TUI never
-                // reaches the registry itself, so this poll-on-redraw is the
-                // only path by which a task's start or terminal state
-                // reaches operational status and the exit-confirm gate.
-                app.set_running_tasks(
-                    host.background_tasks()
-                        .running_tasks(session.id())
-                        .into_iter()
-                        .map(|task| RunningTaskSummary {
-                            task_id: task.task_id,
-                            command_hint: compact_command_hint(&task.command),
-                        })
-                        .collect(),
-                );
-                // Same reason, for the open child inspector and the
-                // delegated-work panel: turns, tokens, and lifecycle live in
-                // the coordinator, which the TUI cannot reach. A child
-                // selected by arrow key gets the same card as one opened by
-                // `/agent <id>`, and it stays current while the child works
-                // — and every visible child's panel row gets the
-                // coordinator's own turn/token counts on the same cadence,
-                // per `usage-accounting`'s "Counts come from the
-                // coordinator": Smith computes none of this itself.
-                if let Some(coordinator) = host
-                    .runtime()
-                    .delegation()
-                    .and_then(|delegation| delegation.coordinator())
-                {
-                    let statuses = coordinator.list();
-                    if let Some(inspected) = app.inspected_child.clone() {
-                        let card = statuses
-                            .iter()
-                            .find(|status| status.child.as_str() == inspected)
-                            .map(AgentSnapshot::from);
-                        app.set_inspected_detail(&inspected, card);
-                    }
-                    app.set_child_counts(
-                        statuses
-                            .iter()
-                            .map(|status| {
-                                (
-                                    status.child.to_string(),
-                                    smith_tui::app::ChildCounts {
-                                        turns_used: status.turns_used,
-                                        max_turns: status.max_turns,
-                                        tokens_used: status.tokens_used,
-                                    },
-                                )
-                            })
-                            .collect(),
-                    );
-                }
-                // The title rides the redraw cadence: every input that can
-                // change it (model switch, project label, activity
-                // transition) marks the frame dirty on its way in, and the
-                // tracker turns that into at most one OSC write per change.
-                let _ = window_title.refresh(&app.status);
-                terminal.draw(|frame| {
-                    smith_tui::render::layout(frame.area(), &app, theme).apply(&mut app);
-                    smith_tui::render::draw(frame, &app, theme);
-                })?;
-                dirty = false;
             }
         }
 
-        interactions.drain_answers(&mut app);
-        host.set_goal_continuation_enabled(!app.should_defer_goal_continuation());
-        if app.should_quit {
-            break InteractiveExit::Quit(
-                Box::new(app.session_usage()),
-                app.status.price().cloned(),
-                app.status.cache_summary().map(Box::new),
-            );
+        if let Some(exit) = tui.after_event() {
+            break exit;
         }
     };
     // A normal exit clears the title exactly once, ahead of a new host's
@@ -1281,8 +736,785 @@ pub(super) async fn run_tui(
     // this and leaves the last title standing until the shell's own prompt hook
     // reasserts its title on the next prompt -- that same hook is why
     // restoring a remembered pre-session title is deliberately not attempted.
-    let _ = window_title.clear();
-    Ok((exit, app))
+    let _ = tui.window_title.clear();
+    Ok((exit, tui.app))
+}
+
+impl<'a> TuiLoop<'a> {
+    fn new(app: App, inputs: TuiRunInputs<'a>) -> Self {
+        let TuiRunInputs {
+            host,
+            project,
+            approvals,
+            interactions,
+            rotations,
+            accounts,
+            credential_pool,
+            agents,
+            theme,
+            mcp,
+            skills,
+        } = inputs;
+        let session = host.session();
+        let events = host.client().events();
+        let keys = EventStream::new();
+        let spinner = tokio::time::interval(SPINNER_TICK);
+        let frame = tokio::time::interval(FRAME);
+        let (local_tx, local_rx) = tokio::sync::mpsc::unbounded_channel();
+        let local_shell_approvals = LocalShellApprovals::default();
+        let shell_shortcuts = ShellShortcuts::default();
+        // One forwarding task per live child funnels every child's own stream into
+        // this loop, so a child's events are folded by the same single-threaded
+        // reducer the root's are and can never interleave mid-fold.
+        let (child_tx, child_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(ChildId, EventEnvelope)>();
+        let mcp_changes = mcp.as_ref().map(|context| context.supervisor().subscribe());
+        // What the runtime was composed with. A rebuild is worth its cost only
+        // when a server has actually contributed something new since.
+        let composed_remote_tools = mcp
+            .as_ref()
+            .map_or(0, |context| context.supervisor().tools().len());
+        let remote_tools_pending = false;
+        // A newly trusted project skill is only in the trust file until the
+        // catalog is resolved again, and the catalog is resolved at composition.
+        let trusted_skill_pending = false;
+        let last_change_turn = host.changes().latest().map(|set| set.turn);
+        let interactions = interaction::InteractionSurface::new(
+            interactions,
+            host.restored_interaction()
+                .map(|restored| restored.request_id().as_str().to_owned()),
+        );
+        let dirty = true;
+        // The terminal window title follows the same state the header does, but
+        // is written outside the frame: it is one OSC sequence per *change*, not
+        // per draw. Guarded and deduped inside the tracker, so a non-terminal
+        // stdout (or an unchanged title) costs nothing.
+        let mut window_title = smith_tui::terminal_title::TerminalTitleState::new();
+        // One failed write costs a stale title, not the session.
+        let _ = window_title.refresh(&app.status);
+        Self {
+            app,
+            host,
+            project,
+            approvals,
+            rotations,
+            accounts,
+            credential_pool,
+            agents,
+            theme,
+            mcp,
+            skills,
+            session,
+            events,
+            keys,
+            spinner,
+            frame,
+            local_tx,
+            local_rx,
+            local_shell_approvals,
+            shell_shortcuts,
+            child_tx,
+            child_rx,
+            mcp_changes,
+            composed_remote_tools,
+            remote_tools_pending,
+            trusted_skill_pending,
+            last_change_turn,
+            interactions,
+            dirty,
+            window_title,
+        }
+    }
+
+    async fn on_terminal_event(
+        &mut self,
+        terminal: &mut terminal::Terminal,
+        key: std::io::Result<TermEvent>,
+    ) -> Result<Option<InteractiveExit>> {
+        match key.context("reading a terminal event")? {
+            // `Ctrl+V` is the explicit "attach from clipboard" chord:
+            // terminals deliver ordinary pastes as bracketed text, but
+            // an image on the clipboard can only be fetched by asking
+            // the platform directly.
+            TermEvent::Key(key)
+                if key.kind != KeyEventKind::Release
+                    && key.code == KeyCode::Char('v')
+                    && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                attach_from_clipboard(&mut self.app);
+                self.dirty = true;
+            }
+            TermEvent::Key(key) => {
+                if let Some(action) = self.app.on_key(key)
+                    && let Some(exit) = self.on_action(action).await
+                {
+                    return Ok(Some(exit));
+                }
+                self.dirty = true;
+            }
+            TermEvent::Paste(text) => {
+                self.app.on_paste(&text);
+                self.dirty = true;
+            }
+            TermEvent::Mouse(mouse) => match self.app.on_mouse(mouse) {
+                MouseOutcome::Ignored => {}
+                MouseOutcome::Redraw => self.dirty = true,
+                MouseOutcome::CopySelection => {
+                    // Drawn here rather than deferred to the frame
+                    // tick: the selected text exists only in the frame
+                    // buffer, and a runtime event arriving in between
+                    // would clear the selection before it could be
+                    // read — a release that silently copied nothing.
+                    let mut selected = None;
+                    terminal.draw(|frame| {
+                        smith_tui::render::layout(frame.area(), &self.app, self.theme)
+                            .apply(&mut self.app);
+                        smith_tui::render::draw(frame, &self.app, self.theme);
+                        selected = smith_tui::selected_text(frame, &self.app);
+                    })?;
+                    self.dirty = false;
+                    // A drag across blank space yields nothing, and
+                    // clobbering the clipboard with an empty string
+                    // would lose whatever the user had there.
+                    if let Some(text) = selected {
+                        copy_selection_to_clipboard(&mut self.app, &text);
+                    }
+                }
+            },
+            TermEvent::Resize(_, _) => self.dirty = true,
+            _ => {}
+        }
+        Ok(None)
+    }
+
+    async fn on_action(&mut self, action: Action) -> Option<InteractiveExit> {
+        match action {
+            Action::Submit { submission, target } => self.on_submit(submission, target).await,
+            Action::RunShell { command } => self.on_run_shell(command).await,
+            Action::Interrupt => self.on_interrupt(),
+            Action::BackgroundShell => self.on_background_shell(),
+            Action::Quit => return Some(self.on_quit()),
+            // An account switch is live pool state, so it is
+            // applied here rather than by tearing the session
+            // down and rebuilding it around a new selection.
+            Action::Reconfigure(command) => return self.on_reconfigure(command).await,
+            Action::Command(command) => self.on_command(command).await,
+            Action::TrustMcpServer { server } => self.on_trust_mcp_server(server),
+            Action::TrustSkill { skill: name } => self.on_trust_skill(name),
+            Action::ApplyUndo => self.on_apply_undo(),
+            Action::CancelUndo => self.on_cancel_undo(),
+            Action::ApplyRedo => self.on_apply_redo(),
+            Action::CancelRedo => self.on_cancel_redo(),
+            Action::ApplyRevert { scope, fingerprint } => self.on_apply_revert(scope, fingerprint),
+            Action::CancelRevert { scope, fingerprint } => {
+                self.on_cancel_revert(scope, fingerprint)
+            }
+            Action::StartReview { scope } => self.on_start_review(scope),
+            Action::StartAgent { preset, task } => self.on_start_agent(preset, task),
+            Action::FollowUpAgent { child_id, task } => self.on_follow_up_agent(child_id, task),
+            Action::ResumeAgent { child_id } => self.on_resume_agent(child_id),
+        }
+        None
+    }
+
+    async fn on_submit(
+        &mut self,
+        submission: smith_tui::app::PreparedSubmission,
+        target: SubmissionTarget,
+    ) {
+        self.host.set_goal_continuation_enabled(false);
+        dispatch_prepared_with_materialization(
+            &mut self.app,
+            self.session,
+            self.project,
+            submission,
+            target,
+        )
+        .await;
+    }
+
+    async fn on_run_shell(&mut self, command: String) {
+        let echo = self
+            .app
+            .transcript
+            .latest_shell_echo()
+            .expect("submitted shell echo");
+        self.shell_shortcuts.dispatched(self.host, echo);
+        let identity = start_local_shell(
+            echo,
+            self.session.clone(),
+            command,
+            self.host
+                .runtime()
+                .policy()
+                .turn_time_limit_ms
+                .unwrap_or(600_000),
+            self.local_shell_approvals.clone(),
+            self.local_tx.clone(),
+        )
+        .await;
+        match identity {
+            Some(LocalShellIdentity::Turn(turn)) => self.app.track_shell_shortcut(turn, echo),
+            Some(LocalShellIdentity::Call(call)) => {
+                self.app.transcript.bind_shell_shortcut(echo, call.as_str())
+            }
+            None => {}
+        }
+    }
+
+    fn on_interrupt(&mut self) {
+        if let Err(error) = self
+            .session
+            .interrupt_current_turn(CancelReason::UserRequested)
+        {
+            self.app
+                .transcript
+                .push_error(format!("turn interruption failed: {error}"));
+        }
+    }
+
+    fn on_background_shell(&mut self) {
+        // Kept distinct from `Action::Interrupt`: this
+        // never kills the group, it only asks the
+        // registry to adopt whatever foreground call
+        // is currently running, if any.
+        if self
+            .host
+            .background_tasks()
+            .trigger_manual_backgrounding(self.session.id())
+        {
+            self.app
+                .transcript
+                .push_notice(NoticeKind::Background, "command moved to the background");
+        } else {
+            self.app.push_notice(
+                NoticeKind::BackgroundUnavailable,
+                "no foreground shell command is running",
+            );
+        }
+    }
+
+    fn on_quit(&self) -> InteractiveExit {
+        InteractiveExit::Quit(
+            Box::new(self.app.session_usage()),
+            self.app.status.price().cloned(),
+            self.app.status.cache_summary().map(Box::new),
+        )
+    }
+
+    async fn on_reconfigure(&mut self, command: SessionControl) -> Option<InteractiveExit> {
+        match command {
+            SessionControl::Account(position) => {
+                match switch_account(self.credential_pool.as_ref(), &mut self.accounts, position)
+                    .await
+                {
+                    Some(notice) => {
+                        self.app.transcript.push_notice(NoticeKind::Account, notice);
+                        self.app
+                            .set_accounts(account_entries(self.credential_pool.as_ref()));
+                        self.app.status.account = account_status(self.credential_pool.as_ref());
+                    }
+                    None => self
+                        .app
+                        .push_notice(NoticeKind::AccountUnchanged, "already using that account"),
+                }
+            }
+            command => {
+                if let Some(exit) = reconfigure_exit(&mut self.app, command) {
+                    return Some(exit);
+                }
+            }
+        }
+        None
+    }
+
+    async fn on_command(&mut self, command: smith_client::commands::HostCommand) {
+        handle_local_command(
+            &mut self.app,
+            self.host,
+            self.project,
+            self.mcp.as_deref(),
+            &self.skills,
+            command,
+        )
+        .await;
+    }
+
+    fn on_trust_mcp_server(&mut self, server: String) {
+        self.app
+            .show_local_report(smith_client::local_result::LocalResult::Mcp(Box::new(
+                local_command::mcp::trust(self.mcp.as_deref(), &server),
+            )));
+    }
+
+    fn on_trust_skill(&mut self, name: String) {
+        let report = local_command::skills::trust(&self.skills, &name);
+        if matches!(
+            &report,
+            smith_client::skills_report::SkillsReport::Trusted { .. }
+        ) {
+            self.trusted_skill_pending = true;
+        }
+        self.app
+            .show_local_report(smith_client::local_result::LocalResult::Skills(Box::new(
+                report,
+            )));
+    }
+
+    fn on_apply_undo(&mut self) {
+        self.app
+            .transcript
+            .push_local(LocalResult::Recovery(Box::new(
+                local_command::recovery::undo(self.host),
+            )));
+    }
+
+    fn on_cancel_undo(&mut self) {
+        self.host.changes().record_undo_cancelled();
+        self.app
+            .transcript
+            .push_local(LocalResult::Recovery(Box::new(RecoveryReport::Cancelled(
+                RecoveryAction::Undo,
+            ))));
+    }
+
+    fn on_apply_redo(&mut self) {
+        self.app
+            .transcript
+            .push_local(LocalResult::Recovery(Box::new(
+                local_command::recovery::redo(self.host),
+            )));
+    }
+
+    fn on_cancel_redo(&mut self) {
+        self.host.changes().record_redo_cancelled();
+        self.app
+            .transcript
+            .push_local(LocalResult::Recovery(Box::new(RecoveryReport::Cancelled(
+                RecoveryAction::Redo,
+            ))));
+    }
+
+    fn on_apply_revert(&mut self, scope: String, fingerprint: String) {
+        self.app
+            .transcript
+            .push_local(LocalResult::Recovery(Box::new(
+                local_command::recovery::revert(self.host, self.project, scope, &fingerprint),
+            )));
+    }
+
+    fn on_cancel_revert(&mut self, scope: String, fingerprint: String) {
+        self.host
+            .changes()
+            .record_revert_event(&scope, &fingerprint, "cancelled");
+        self.app
+            .transcript
+            .push_local(LocalResult::Recovery(Box::new(RecoveryReport::Cancelled(
+                RecoveryAction::Revert,
+            ))));
+    }
+
+    fn on_start_review(&mut self, scope: String) {
+        start_review(self.host, self.project, scope, self.local_tx.clone());
+    }
+
+    fn on_start_agent(&mut self, preset: String, task: String) {
+        start_agent(self.host, self.agents, preset, task, self.local_tx.clone());
+    }
+
+    fn on_follow_up_agent(&mut self, child_id: String, task: String) {
+        follow_up_agent(self.host, child_id, task, self.local_tx.clone());
+    }
+
+    fn on_resume_agent(&mut self, child_id: String) {
+        resume_agent(self.host, child_id, self.local_tx.clone());
+    }
+
+    fn on_approval(&mut self, prompt: Option<ApprovalPrompt>) {
+        match prompt {
+            Some(prompt) => {
+                if let Some(prompt) = self.local_shell_approvals.resolve(prompt) {
+                    self.app.present_approval(prompt);
+                    self.dirty = true;
+                }
+            }
+            None => self.approvals = None,
+        }
+    }
+
+    fn on_rotation(&mut self, offer: Option<RotationPrompt>) {
+        match offer {
+            Some(prompt) => {
+                self.app.present_rotation(prompt);
+                self.dirty = true;
+            }
+            None => self.rotations = None,
+        }
+    }
+
+    fn on_interaction_notice(&mut self, notice: Option<smith_host::InteractionNotice>) {
+        match notice {
+            Some(notice) => {
+                self.interactions.apply_notice(&mut self.app, notice);
+                self.dirty = true;
+            }
+            None => self.interactions.close_receiver(),
+        }
+    }
+
+    async fn on_runtime_event(
+        &mut self,
+        envelope: Option<EventEnvelope>,
+    ) -> Option<InteractiveExit> {
+        match envelope {
+            Some(envelope) => {
+                // The live queue is normally this one envelope. When
+                // applying it reveals a broadcast lag gap, the missing
+                // range is replayed out of the canonical journal ahead
+                // of it, so control events (turn terminals, queued-
+                // input releases) still fold in order instead of
+                // wedging the UI on a state change it never saw.
+                let mut pending = VecDeque::from([(envelope, false)]);
+                while let Some((envelope, recovered)) = pending.pop_front() {
+                    let tool_call = tool_call_for_display(&envelope.payload);
+                    let completed_tool =
+                        matches!(envelope.payload, RuntimeEvent::ToolCallCompleted { .. });
+                    let turn_completed =
+                        matches!(envelope.payload, RuntimeEvent::TurnCompleted { .. });
+                    if recovered {
+                        self.app.apply_recovered(&envelope);
+                    } else {
+                        self.app.apply(&envelope);
+                        if let Some(gap) = self.app.take_stream_gap() {
+                            // The envelope was parked, not applied.
+                            // Queue the journal's copy of the missing
+                            // range first, then retry the parked
+                            // envelope on the honest replay path.
+                            self.recover_stream_gap(gap, &mut pending).await;
+                            continue;
+                        }
+                    }
+                    if turn_completed && self.host.runtime().advisor_route().is_some() {
+                        self.app
+                            .status
+                            .reconcile_advisor_records(self.host.snapshot().usage.records());
+                    }
+                    if turn_completed
+                        && let Some(set) = self.host.changes().latest()
+                        && self.last_change_turn != Some(set.turn)
+                        && !set.undone
+                        && let Some(notice) = change_notice(&set)
+                    {
+                        self.last_change_turn = Some(set.turn);
+                        self.app.transcript.push_notice(NoticeKind::Changes, notice);
+                    }
+                    if let Some(submission) = self.app.take_ready_submission() {
+                        dispatch_prepared_with_materialization(
+                            &mut self.app,
+                            self.session,
+                            self.project,
+                            submission,
+                            SubmissionTarget::WholeTurn,
+                        )
+                        .await;
+                    }
+                    if let Some(call) = tool_call {
+                        if let Some(display) = self.host.tool_call_display(&call) {
+                            // Only at request time: the same call id
+                            // is resolved again at completion, and
+                            // this queue must see a spawn exactly
+                            // once or `ChildSpawned` would enrich the
+                            // wrong row. This is the root's own
+                            // event stream — the child-events branch
+                            // below never reaches this call, which is
+                            // how the pending-spawn queue stays
+                            // root-only.
+                            if !completed_tool {
+                                self.app.note_pending_spawn(call.as_str(), &display);
+                            }
+                            self.app.set_tool_display(call.as_str(), display);
+                        }
+                        if completed_tool && let Some(text) = self.host.tool_result_text(&call) {
+                            self.app.set_tool_result_preview(call.as_str(), text);
+                        }
+                    }
+                    // A child is a full runtime session. The parent
+                    // stream says one started; its own stream says
+                    // what it is doing, and that is what the
+                    // inspector draws.
+                    //
+                    // A resume is a second start: the durable record
+                    // is bound to a new execution with a new stream,
+                    // and the task watching the old one ended with it.
+                    match &envelope.payload {
+                        RuntimeEvent::ChildSpawned { child, .. }
+                        | RuntimeEvent::ChildProgress {
+                            child,
+                            phase: ChildPhase::ResumeStarted { .. },
+                        } => subscribe_to_child(self.host, child, self.child_tx.clone()),
+                        _ => {}
+                    }
+                }
+                self.dirty = true;
+            }
+            None => {
+                return Some(InteractiveExit::Quit(
+                    Box::new(self.app.session_usage()),
+                    self.app.status.price().cloned(),
+                    self.app.status.cache_summary().map(Box::new),
+                ));
+            }
+        }
+        None
+    }
+
+    async fn recover_stream_gap(
+        &mut self,
+        gap: smith_tui::app::StreamGap,
+        pending: &mut VecDeque<(EventEnvelope, bool)>,
+    ) {
+        match self
+            .host
+            .client_events_between(gap.first_missing, gap.last_missing)
+            .await
+        {
+            Ok(events) => {
+                if !events.is_empty() {
+                    // Accumulated, not shown yet: a
+                    // broadcast overrun produces a
+                    // run of these gaps back to
+                    // back, and `App` collapses the
+                    // whole run into one line once
+                    // it sees a contiguous event
+                    // again.
+                    self.app.note_recovered_events(events.len());
+                }
+                pending.push_front((gap.deferred, true));
+                for event in events.into_iter().rev() {
+                    pending.push_front((event, true));
+                }
+            }
+            Err(error) => {
+                self.app.transcript.push_error(format!(
+                    "replaying skipped events {}–{} from the \
+                                                 session journal failed: {error}",
+                    gap.first_missing, gap.last_missing
+                ));
+                pending.push_front((gap.deferred, true));
+            }
+        }
+    }
+
+    fn on_child_event(&mut self, child_event: Option<(ChildId, EventEnvelope)>) {
+        if let Some((child, envelope)) = child_event {
+            self.app.apply_child(child.as_str(), &envelope);
+            // The child's events withhold argument values and result
+            // text exactly as the root's do. Both are resolved the
+            // same way: by call id, against that agent's canonical
+            // history, redacted by the host.
+            if let Some(call) = tool_call_for_display(&envelope.payload) {
+                if let Some(display) = self.host.child_tool_call_display(&child, &call) {
+                    self.app
+                        .set_child_tool_display(child.as_str(), call.as_str(), display);
+                }
+                if matches!(envelope.payload, RuntimeEvent::ToolCallCompleted { .. })
+                    && let Some(text) = self.host.child_tool_result_text(&child, &call)
+                {
+                    self.app
+                        .set_child_tool_result_preview(child.as_str(), call.as_str(), text);
+                }
+            }
+            self.dirty = true;
+        }
+    }
+
+    fn on_local_result(&mut self, outcome: Option<LocalOutcome>) {
+        if let Some(outcome) = outcome {
+            match outcome {
+                LocalOutcome::Agent(report) => {
+                    self.app
+                        .transcript
+                        .push_local(smith_client::local_result::LocalResult::Agent(report));
+                }
+                LocalOutcome::Review(report) => {
+                    self.app
+                        .transcript
+                        .push_local(smith_client::local_result::LocalResult::Review(report));
+                }
+                LocalOutcome::Notice { kind, text } => {
+                    self.app.transcript.push_notice(kind, text);
+                }
+                LocalOutcome::Error(text) => self.app.transcript.push_error(text),
+                LocalOutcome::Shell {
+                    echo,
+                    call,
+                    content,
+                    is_error,
+                } => {
+                    self.shell_shortcuts.finish(
+                        self.host,
+                        &mut self.app,
+                        echo,
+                        call.as_ref().map(|call| call.as_str()),
+                        &content,
+                        is_error,
+                    );
+                }
+            }
+            self.dirty = true;
+        }
+    }
+
+    fn on_mcp_change(&mut self) {
+        if let Some(context) = &self.mcp {
+            let supervisor = context.supervisor();
+            let reports = supervisor.reports();
+            self.app.status.mcp = smith_tui::McpStatus {
+                connecting: reports
+                    .iter()
+                    .filter(|report| !report.state.is_settled())
+                    .count(),
+                failed: reports
+                    .iter()
+                    .filter(|report| {
+                        matches!(report.state, smith_runtime::mcp::McpState::Failed { .. })
+                    })
+                    .count(),
+            };
+            self.remote_tools_pending = supervisor.tools().len() != self.composed_remote_tools;
+            self.dirty = true;
+        }
+    }
+
+    fn on_spinner(&mut self) {
+        let exit_hint_expired = self.app.expire_ctrl_c_exit_hint();
+        // Rows retire while the session is idle — that is the whole
+        // point of them retiring — so this cannot ride on `tick`,
+        // which only advances while there is work to animate.
+        let rows_retired = self.app.expire_child_rows();
+        let busy = self.app.is_busy();
+        if busy {
+            self.app.tick();
+        }
+        if exit_hint_expired
+            || rows_retired
+            || (busy && (self.theme.uses_motion() || self.app.tick.is_multiple_of(10)))
+        {
+            self.dirty = true;
+        }
+    }
+
+    async fn on_frame(
+        &mut self,
+        terminal: &mut terminal::Terminal,
+    ) -> Result<Option<InteractiveExit>> {
+        // A newly connected server's tools and a newly trusted skill
+        // both join at the next idle boundary, never mid-turn:
+        // swapping the ability set underneath a running turn is what
+        // the epoch rules exist to prevent.
+        if (self.remote_tools_pending || self.trusted_skill_pending)
+            && !self.app.is_busy()
+            && !self.app.has_pending_input()
+            && !self.app.has_pending_prompt()
+            && self.app.overlay.is_none()
+        {
+            return Ok(Some(InteractiveExit::CapabilitiesChanged));
+        }
+        // Re-read on the way to the screen rather than at each site
+        // that could change it: the pool also moves on its own — a
+        // rotation the runtime performed, a snapshot that arrived
+        // mid-turn — and a footer refreshed only on manual switches
+        // would keep naming an account the session had already left.
+        if self.credential_pool.is_some() {
+            self.app.status.account = account_status(self.credential_pool.as_ref());
+            self.app
+                .set_accounts(account_entries(self.credential_pool.as_ref()));
+            // Rotation happens inside the runtime, which cannot reach
+            // user-scope state, so the account it moved to is
+            // remembered here. `remember` reports whether anything
+            // changed, so this writes on a switch and not on a frame.
+            remember_active_account(self.credential_pool.as_ref(), &mut self.accounts).await;
+        }
+        // Same cadence as the account refresh above: the TUI never
+        // reaches the registry itself, so this poll-on-redraw is the
+        // only path by which a task's start or terminal state
+        // reaches operational status and the exit-confirm gate.
+        self.app.set_running_tasks(
+            self.host
+                .background_tasks()
+                .running_tasks(self.session.id())
+                .into_iter()
+                .map(|task| RunningTaskSummary {
+                    task_id: task.task_id,
+                    command_hint: compact_command_hint(&task.command),
+                })
+                .collect(),
+        );
+        // Same reason, for the open child inspector and the
+        // delegated-work panel: turns, tokens, and lifecycle live in
+        // the coordinator, which the TUI cannot reach. A child
+        // selected by arrow key gets the same card as one opened by
+        // `/agent <id>`, and it stays current while the child works
+        // — and every visible child's panel row gets the
+        // coordinator's own turn/token counts on the same cadence,
+        // per `usage-accounting`'s "Counts come from the
+        // coordinator": Smith computes none of this itself.
+        if let Some(coordinator) = self
+            .host
+            .runtime()
+            .delegation()
+            .and_then(|delegation| delegation.coordinator())
+        {
+            let statuses = coordinator.list();
+            if let Some(inspected) = self.app.inspected_child.clone() {
+                let card = statuses
+                    .iter()
+                    .find(|status| status.child.as_str() == inspected)
+                    .map(AgentSnapshot::from);
+                self.app.set_inspected_detail(&inspected, card);
+            }
+            self.app.set_child_counts(
+                statuses
+                    .iter()
+                    .map(|status| {
+                        (
+                            status.child.to_string(),
+                            smith_tui::app::ChildCounts {
+                                turns_used: status.turns_used,
+                                max_turns: status.max_turns,
+                                tokens_used: status.tokens_used,
+                            },
+                        )
+                    })
+                    .collect(),
+            );
+        }
+        // The title rides the redraw cadence: every input that can
+        // change it (model switch, project label, activity
+        // transition) marks the frame dirty on its way in, and the
+        // tracker turns that into at most one OSC write per change.
+        let _ = self.window_title.refresh(&self.app.status);
+        terminal.draw(|frame| {
+            smith_tui::render::layout(frame.area(), &self.app, self.theme).apply(&mut self.app);
+            smith_tui::render::draw(frame, &self.app, self.theme);
+        })?;
+        self.dirty = false;
+        Ok(None)
+    }
+
+    fn after_event(&mut self) -> Option<InteractiveExit> {
+        self.interactions.drain_answers(&mut self.app);
+        self.host
+            .set_goal_continuation_enabled(!self.app.should_defer_goal_continuation());
+        if self.app.should_quit {
+            return Some(InteractiveExit::Quit(
+                Box::new(self.app.session_usage()),
+                self.app.status.price().cloned(),
+                self.app.status.cache_summary().map(Box::new),
+            ));
+        }
+        None
+    }
 }
 
 /// Defence behind command validation: no host-owned work may cross a rebuild.

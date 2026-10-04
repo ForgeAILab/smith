@@ -774,49 +774,13 @@ pub fn help() -> HelpReport {
 
 /// The shared key table for `/help` and the ephemeral shortcuts panel.
 pub fn help_keys() -> Vec<HelpKey> {
-    [
-        ("Enter", "Send a task"),
-        ("Enter while working", "Send now"),
-        ("Tab while working", "Queue for after this turn"),
-        ("Tab when idle", "Next profile (empty draft)"),
-        ("Shift+Tab when idle", "Previous profile (empty draft)"),
-        ("Ctrl+O", "Expand or fold detail"),
-        ("Esc", "Interrupt or close"),
-        ("Shift+Enter or Alt+Enter", "Insert a newline"),
-        ("\\ then Enter", "Replace the backslash with a newline"),
-        (
-            "Up / Down",
-            "Move between draft lines; browse history and delegated agents from the first or last line",
-        ),
-        (
-            "Home / End",
-            "Go to draft start or end; when empty, go to oldest or newest output",
-        ),
-        ("Ctrl+A / Ctrl+E", "Go to line start or end"),
-        ("Alt+B / Alt+F", "Move one word left or right"),
-        ("Ctrl+W", "Delete the word to the left"),
-        ("Ctrl+U", "Delete to line start"),
-        ("Ctrl+K", "Delete to line end"),
-        ("Alt+Up", "Edit the newest queued task"),
-        ("Ctrl+B", "Move a running shell command to the background"),
-        ("Ctrl+P", "Open the command palette"),
-        ("? on an empty draft", "Show shortcuts"),
-        ("PageUp / PageDown", "Scroll the transcript"),
-        ("Mouse wheel", "Scroll the transcript"),
-        ("Ctrl+L", "Follow the newest output"),
-        ("Ctrl+R", "Search input history; Enter restores, Esc closes"),
-        ("Ctrl+C", "Save the draft in history and clear it"),
-        ("Ctrl+C twice", "Exit (press twice within one second)"),
-        ("@", "Complete files and agents; @@ sends a literal @"),
-        ("!", "Run a local shell command; !! sends a literal !"),
-        ("//", "Send text with a leading slash"),
-    ]
-    .into_iter()
-    .map(|(key, description)| HelpKey {
-        key: key.to_owned(),
-        description: description.to_owned(),
-    })
-    .collect()
+    crate::keymap::KEY_BINDINGS
+        .iter()
+        .map(|binding| HelpKey {
+            key: binding.label.to_owned(),
+            description: binding.description.to_owned(),
+        })
+        .collect()
 }
 
 fn help_command(command: &CommandSpec) -> HelpCommand {

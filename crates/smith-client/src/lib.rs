@@ -13,6 +13,7 @@ pub mod diff_report;
 mod format;
 pub mod goal_report;
 pub mod help_report;
+pub mod keymap;
 pub mod local_result;
 pub mod mcp_report;
 pub mod message_report;
