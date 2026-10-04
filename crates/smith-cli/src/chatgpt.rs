@@ -32,10 +32,10 @@ enum LoginMethod {
 }
 
 #[derive(Debug, Clone)]
-struct LoginDisplay {
-    destination: String,
-    user_code: Option<String>,
-    browser_opened: bool,
+pub(super) struct LoginDisplay {
+    pub(super) destination: String,
+    pub(super) user_code: Option<String>,
+    pub(super) browser_opened: bool,
 }
 
 /// Runs Smith's experimental direct ChatGPT login and returns a token bundle
@@ -273,7 +273,7 @@ where
     result
 }
 
-fn draw_login_progress(
+pub(super) fn draw_login_progress(
     frame: &mut ratatui::Frame<'_>,
     display: &LoginDisplay,
     frame_number: usize,
@@ -316,8 +316,9 @@ fn login_progress_lines(display: &LoginDisplay, frame: usize, no_motion: bool) -
     lines
 }
 
-async fn choose_login_method(no_color: bool, no_motion: bool) -> Result<Option<LoginMethod>> {
-    let mut picker = ResourcePicker::new(
+/// Initial picker shared by the login loop and its terminal fixtures.
+pub(super) fn login_method_picker() -> ResourcePicker {
+    ResourcePicker::new(
         "Connect ChatGPT · experimental",
         vec![
             ResourceEntry::new(
@@ -332,7 +333,11 @@ async fn choose_login_method(no_color: bool, no_motion: bool) -> Result<Option<L
             ),
         ],
         "No supported ChatGPT login method",
-    );
+    )
+}
+
+async fn choose_login_method(no_color: bool, no_motion: bool) -> Result<Option<LoginMethod>> {
+    let mut picker = login_method_picker();
     let mut theme = Theme::from_env();
     if no_color {
         theme = theme.without_color();

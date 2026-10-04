@@ -116,6 +116,8 @@ mod resources;
 #[allow(clippy::wildcard_imports)]
 mod skills;
 #[cfg(test)]
+mod standalone_screens;
+#[cfg(test)]
 #[allow(clippy::wildcard_imports)]
 mod submission;
 

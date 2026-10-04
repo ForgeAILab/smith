@@ -1,0 +1,16 @@
+
+
+
+
+
+  ┌ Resume session ──────────────────────┐
+  │ filter: type to search               │
+  │ Nothing to resume for this project · │
+  │ ↑/↓ choose · Enter confirm           │
+  │ Esc cancel                           │
+  └──────────────────────────────────────┘
+
+
+
+
+

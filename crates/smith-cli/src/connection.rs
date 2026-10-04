@@ -71,22 +71,7 @@ async fn choose_connect_mode(
     let accounts = existing.len();
     let picked = crate::resources::pick_one(
         &format!("Connect {display} · already connected"),
-        vec![
-            ResourceEntry::new(
-                "add",
-                "Add another account",
-                "usage-aware pool · /account switches between them",
-            ),
-            ResourceEntry::new(
-                "replace",
-                "Replace the stored login",
-                if accounts > 1 {
-                    "sign in again as a single account, discarding the pool"
-                } else {
-                    "sign in again"
-                },
-            ),
-        ],
+        connect_mode_entries(accounts),
         "No connection choices",
         no_color,
         no_motion,
@@ -99,6 +84,26 @@ async fn choose_connect_mode(
         "replace" => Some(ConnectMode::Replace),
         _ => None,
     }))
+}
+
+/// Picker entries shared by the account-choice loop and its terminal fixtures.
+pub(super) fn connect_mode_entries(accounts: usize) -> Vec<ResourceEntry> {
+    vec![
+        ResourceEntry::new(
+            "add",
+            "Add another account",
+            "usage-aware pool · /account switches between them",
+        ),
+        ResourceEntry::new(
+            "replace",
+            "Replace the stored login",
+            if accounts > 1 {
+                "sign in again as a single account, discarding the pool"
+            } else {
+                "sign in again"
+            },
+        ),
+    ]
 }
 
 /// The first free numbered auth-file entry (`chatgpt` → `chatgpt-2`, …).

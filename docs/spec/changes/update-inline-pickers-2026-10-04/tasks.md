@@ -10,7 +10,7 @@ Findings R1–R4, S1–S6, C1, C2, M1 from
 
 ## 1. Fixtures first
 
-- [ ] 1.1 Terminal fixtures for `smith --resume` (two sessions, none), first-run
+- [x] 1.1 Terminal fixtures for `smith --resume` (two sessions, none), first-run
   setup (first step, credential methods, key field, review), ChatGPT login
   method, ChatGPT account choice, and login progress at 44x16 and 100x32,
   recorded from the current build.

@@ -1,0 +1,16 @@
+
+ ┌ Smith setup ───────────────────────────┐
+ │Review the complete non-secret setup    │
+ │change:                                 │
+ │                                        │
+ │  action: Quick start with GLM          │
+ │  provider: zai (openai-compatible)     │
+ │  endpoint:                             │
+ │https://api.z.ai/api/coding/paas/v4     │
+ │  credential: env:ZAI_API_KEY           │
+ │  model: glm-5.2                        │
+ │↑↓/PgUp/PgDn review · 1/14              │
+ │ Enter confirm · Back: Shift+Tab        │
+ │ Esc Cancel                             │
+ └────────────────────────────────────────┘
+

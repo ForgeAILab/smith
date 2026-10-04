@@ -699,6 +699,16 @@ pub(super) fn session_resource_entries(
     sessions: Vec<SessionListing>,
     current: Option<&str>,
 ) -> Vec<ResourceEntry> {
+    session_resource_entries_with_updated(sessions, current, format_session_updated)
+}
+
+/// Builds the same resume entries with caller-supplied update-time formatting.
+/// Fixtures fix the clock and offset without changing the production formatter.
+pub(super) fn session_resource_entries_with_updated(
+    sessions: Vec<SessionListing>,
+    current: Option<&str>,
+    format_updated: impl Fn(Timestamp) -> String,
+) -> Vec<ResourceEntry> {
     sessions
         .into_iter()
         .map(|session| {
@@ -719,7 +729,7 @@ pub(super) fn session_resource_entries(
             };
             let updated = session
                 .updated
-                .map_or_else(|| "unknown update".to_owned(), format_session_updated);
+                .map_or_else(|| "unknown update".to_owned(), &format_updated);
             let entry = ResourceEntry::new(
                 &id,
                 short_session_id(&id),

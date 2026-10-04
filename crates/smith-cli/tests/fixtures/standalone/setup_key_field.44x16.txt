@@ -1,0 +1,16 @@
+
+ ┌ Smith setup ───────────────────────────┐
+ │API key                                 │
+ │Stored only in the platform credential  │
+ │service                                 │
+ │                                        │
+ │› •••••••                               │
+ │                                        │
+ │                                        │
+ │                                        │
+ │                                        │
+ │                                        │
+ │ Enter continue · Back: Shift+Tab       │
+ │ Esc Cancel                             │
+ └────────────────────────────────────────┘
+

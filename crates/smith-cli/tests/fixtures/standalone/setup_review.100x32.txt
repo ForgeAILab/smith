@@ -1,0 +1,32 @@
+
+      ┌ Smith setup ─────────────────────────────────────────────────────────────────────────┐
+      │Review the complete non-secret setup change:                                          │
+      │                                                                                      │
+      │  action: Quick start with GLM                                                        │
+      │  provider: zai (openai-compatible)                                                   │
+      │  endpoint: https://api.z.ai/api/coding/paas/v4                                       │
+      │  credential: env:ZAI_API_KEY                                                         │
+      │  model: glm-5.2                                                                      │
+      │  limits: context 1000000 · max input 1000000 · max output 131072 (trusted catalog v5)│
+      │  request output: 32768 · output reserve: 32768                                       │
+      │  response: reasoning-only success becomes visible text; thinking stays enabled       │
+      │  default profile: glm                                                                │
+      │  destination: /tmp/smith-home/.smith/config.toml                                     │
+      │  pending action: write user config, then run local preflight                         │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │                                                                                      │
+      │ Enter confirm · Shift+Tab Back · Esc Cancel                                          │
+      │                                                                                      │
+      └──────────────────────────────────────────────────────────────────────────────────────┘
+

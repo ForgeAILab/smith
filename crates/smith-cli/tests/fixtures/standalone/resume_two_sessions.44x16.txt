@@ -1,0 +1,16 @@
+
+
+
+
+
+  ┌ Resume session ──────────────────────┐
+  │ filter: type to search               │
+  │❯ session-2042…  What does lib.rs…    │
+  │ ↑/↓ choose · Enter confirm           │
+  │ Esc cancel                           │
+  └──────────────────────────────────────┘
+
+
+
+
+

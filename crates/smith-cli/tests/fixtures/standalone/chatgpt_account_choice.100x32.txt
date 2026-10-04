@@ -1,0 +1,32 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┌ Connect ChatGPT · already connected ─────────────────────────────────────────────────────────┐
+  │ filter: type to search                                                                       │
+  │❯ Add another account       usage-aware pool · /account switches between them                 │
+  │  Replace the stored login  sign in again                                                     │
+  │ ↑/↓ choose · Enter confirm · Esc cancel                                                      │
+  └──────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+
+
+
+
+

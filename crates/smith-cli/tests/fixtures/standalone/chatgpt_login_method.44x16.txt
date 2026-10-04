@@ -1,0 +1,16 @@
+
+
+
+
+
+  ┌ Connect ChatGPT · experimental ──────┐
+  │ filter: type to search               │
+  │❯ Browser login  Smith PKCE callback… │
+  │ ↑/↓ choose · Enter confirm           │
+  │ Esc cancel                           │
+  └──────────────────────────────────────┘
+
+
+
+
+

@@ -553,7 +553,7 @@ fn catalog_model_entries(
     Ok((entries, limits_by_model))
 }
 
-fn setup_prompts() -> SetupPrompts {
+pub(super) fn setup_prompts() -> SetupPrompts {
     SetupPrompts {
         provider_name_help: SETUP_PROVIDER_NAME_HELP.to_owned(),
         endpoint_help: setup_endpoint_help(),
@@ -573,7 +573,7 @@ fn provider_action_entries() -> Vec<SetupEntry> {
         .collect()
 }
 
-fn setup_action_entries(mode: &SetupMode) -> Vec<SetupEntry> {
+pub(super) fn setup_action_entries(mode: &SetupMode) -> Vec<SetupEntry> {
     let mut entries = provider_action_entries();
     if matches!(mode, SetupMode::Menu) {
         entries.push(SetupEntry {
@@ -649,7 +649,7 @@ pub(super) fn provider_setup_flow(
     }
 }
 
-fn glm_quick_start() -> SetupQuickStart {
+pub(super) fn glm_quick_start() -> SetupQuickStart {
     let descriptor = provider_descriptors(AVAILABLE_ADAPTER_KINDS)
         .into_iter()
         .find(|descriptor| descriptor.flow == ProviderSetupFlow::QuickKey(QuickKeySetup::Glm))
