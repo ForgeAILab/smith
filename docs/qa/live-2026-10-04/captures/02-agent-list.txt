@@ -1,0 +1,10 @@
+
+/agents
+  child-1 · durable · idle · no exact checkpoint · 1 turns · 3055 tokens
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts                                                           zai/glm-5.3 · code · ask
+
+  ● main
+  ○ child-1  idle · durable · session child-session-d2898599-de93-46ce-a22c-6003d3d64075 · 1 turns …

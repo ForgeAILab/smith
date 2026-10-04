@@ -1,0 +1,8 @@
+  Neptune │ 8     │ Ice giant   │ Strongest winds
+
+> Without tools, write a 300-word paragraph about the history of the Rust programming language.
+✻ Working… (2s · esc to interrupt)
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> /model
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  /model requires an idle turn; draft preserved                             zai/glm-5.3 · code · ask

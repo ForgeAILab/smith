@@ -1,0 +1,32 @@
+$0.012 exact · google/gemini-3.8-flash
+prompt cache: 0% of input read from cache · 0 cached tokens (last turn)
+resume with smith --resume session-38da34f3-1ba3-4957-8952-c29636fb306e
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Pane is dead (status 0, Sun Oct  4 02:27:13 2026)
