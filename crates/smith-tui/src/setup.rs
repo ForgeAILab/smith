@@ -17,6 +17,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::picker::{PickerOutcome, ResourceEntry, ResourcePicker};
+use crate::screen::{Screen, ScreenEvent, Step as ScreenStep};
 use crate::theme::{Theme, Tone};
 
 /// Why setup was entered.
@@ -343,7 +344,7 @@ pub enum SetupEffect {
     None,
     /// Exit successfully without writing or starting a session.
     Cancel,
-    /// Restore the terminal and hand off to Smith's ChatGPT OAuth connection.
+    /// Hand off to Smith's ChatGPT OAuth connection using the host's screen runner.
     ConnectChatGpt,
     /// Run the bounded automatic limit resolution and feed it back through
     /// [`SetupApp::apply_resolved_limits`].
@@ -1463,9 +1464,37 @@ impl SetupApp {
     }
 }
 
+impl Screen for SetupApp {
+    type Outcome = ();
+    type Effect = SetupEffect;
+
+    fn draw(&self, frame: &mut Frame<'_>, area: Rect, theme: Theme) {
+        draw_setup_in_area(frame, area, self, theme);
+    }
+
+    fn on_event(&mut self, event: ScreenEvent) -> ScreenStep<Self::Outcome, Self::Effect> {
+        match event {
+            ScreenEvent::Key(key) => match self.on_key(key) {
+                SetupEffect::None => ScreenStep::Pending,
+                SetupEffect::Cancel => ScreenStep::Outcome(()),
+                effect => ScreenStep::Effect(effect),
+            },
+            ScreenEvent::Paste(text) => {
+                self.on_paste(&text);
+                ScreenStep::Pending
+            }
+            ScreenEvent::Resize(_, _) | ScreenEvent::Tick => ScreenStep::Pending,
+        }
+    }
+}
+
 /// Draws the complete setup surface.
 pub fn draw_setup(frame: &mut Frame<'_>, app: &SetupApp, theme: Theme) {
     let area = frame.area();
+    app.draw(frame, area, theme);
+}
+
+fn draw_setup_in_area(frame: &mut Frame<'_>, area: Rect, app: &SetupApp, theme: Theme) {
     frame.render_widget(Clear, area);
     let outer = centered(area, 88, 30);
     let block = Block::default()

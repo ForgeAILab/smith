@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use syn::punctuated::Punctuated;
 use syn::visit::{self, Visit};
@@ -152,6 +152,39 @@ fn production_smith_cli_has_no_glob_imports() {
             );
         }
     });
+}
+
+#[test]
+fn smith_cli_event_streams_belong_only_to_the_screen_runner_and_session_loop() {
+    let directory = workspace_root().join("crates/smith-cli/src");
+    let allowed = BTreeSet::from([
+        PathBuf::from("screen_runner.rs"),
+        PathBuf::from("tui_driver.rs"),
+    ]);
+    let mut owners = BTreeSet::new();
+    visit_rust(&directory, &mut |path, source| {
+        let count = source.matches("EventStream::new").count();
+        if count == 0 {
+            return;
+        }
+        let relative = path.strip_prefix(&directory).expect("CLI source");
+        assert!(
+            allowed.contains(relative),
+            "{} creates an event stream outside the two terminal owners",
+            path.display(),
+        );
+        assert_eq!(
+            count,
+            1,
+            "{} must own exactly one event stream",
+            path.display(),
+        );
+        owners.insert(relative.to_path_buf());
+    });
+    assert_eq!(
+        owners, allowed,
+        "both terminal owners must create their event stream"
+    );
 }
 
 // Outside consumers were audited across other crates, integration tests, and

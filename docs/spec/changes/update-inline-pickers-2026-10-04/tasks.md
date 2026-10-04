@@ -17,14 +17,14 @@ Findings R1–R4, S1–S6, C1, C2, M1 from
 
 ## 2. One runner
 
-- [ ] 2.1 A screen value in `smith-tui` (`draw`, `on_event` → outcome or
+- [x] 2.1 A screen value in `smith-tui` (`draw`, `on_event` → outcome or
   effect, optional tick); `ResourcePicker`, `SetupApp`, and login progress
   implement it.
-- [ ] 2.2 One `run_screen` in `smith-cli` owning terminal, events, ticks,
+- [x] 2.2 One `run_screen` in `smith-cli` owning terminal, events, ticks,
   theme, and an optional raced future; `choose_resume_session`, `pick_one`,
   `choose_login_method`, `wait_for_login_surface`, and setup move onto it.
   The section 1 fixtures stay byte-identical.
-- [ ] 2.3 Structure test: only the runner and the session loop create an
+- [x] 2.3 Structure test: only the runner and the session loop create an
   `EventStream`.
 
 ## 3. One chooser component

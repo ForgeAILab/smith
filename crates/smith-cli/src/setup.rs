@@ -11,8 +11,6 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chacha20poly1305::aead::Generate;
-use crossterm::event::{Event as TermEvent, EventStream};
-use futures_util::StreamExt;
 use smith_config::credential::{
     CredentialEnroller, CredentialEnrollmentError, CredentialRef, EnrollmentReceipt,
     setup_environment_reference, setup_keychain_reference,
@@ -39,13 +37,12 @@ use smith_tui::picker::ResourceEntry;
 use smith_tui::setup::{
     ResolveModelLimits, ResolvedModelLimits, SetupApp, SetupCredential, SetupEffect, SetupEntry,
     SetupFlow, SetupKeyReview, SetupMode, SetupModelLimits, SetupPrompts, SetupProviderKind,
-    SetupQuickKey, SetupQuickStart, SetupSubmission, draw_setup,
+    SetupQuickKey, SetupQuickStart, SetupSubmission,
 };
-use smith_tui::theme::Theme;
 use zeroize::Zeroizing;
 
 use crate::cli::{Selection, SetupAction, SetupArgs};
-use crate::terminal;
+use crate::screen_runner::{ScreenContext, ScreenResult, ScreenSession};
 
 /// Result of running a setup surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -422,38 +419,29 @@ pub(crate) async fn run_surface(
     )
     .with_catalog_model_limits(catalog_model_limits)
     .with_destination(context.user_dir.join("config.toml").display().to_string());
-    let mut terminal = terminal::enter().context("entering guided setup")?;
-    let mut theme = Theme::from_env();
-    if no_color {
-        theme = theme.without_color();
-    }
-    if no_motion {
-        theme = theme.without_motion();
-    }
-    let mut events = EventStream::new();
-
-    loop {
-        terminal
-            .draw(|frame| draw_setup(frame, &app, theme))
-            .context("drawing guided setup")?;
-        let Some(event) = events.next().await else {
-            terminal.restore().context("restoring the terminal")?;
-            return Ok(SetupOutcome::Cancelled);
-        };
-        match event.context("reading a guided-setup terminal event")? {
-            TermEvent::Key(key) => match app.on_key(key) {
-                SetupEffect::None => {}
-                SetupEffect::Cancel => {
-                    terminal.restore().context("restoring the terminal")?;
+    let mut session = ScreenSession::enter(no_color, no_motion).context("entering guided setup")?;
+    let result = async {
+        loop {
+            let effect = match session
+                .run(
+                    &mut app,
+                    ScreenContext {
+                        draw: Some("drawing guided setup"),
+                        input: "reading a guided-setup terminal event",
+                    },
+                )
+                .await?
+            {
+                ScreenResult::Outcome(()) | ScreenResult::InputEnded => {
                     return Ok(SetupOutcome::Cancelled);
                 }
+                ScreenResult::Effect(effect) => effect,
+                ScreenResult::Completed(never) => match never {},
+            };
+            match effect {
+                SetupEffect::None => {}
+                SetupEffect::Cancel => return Ok(SetupOutcome::Cancelled),
                 SetupEffect::ConnectChatGpt => {
-                    // Only one event reader and terminal guard may own the
-                    // handoff. OAuth enters its own existing login surface.
-                    drop(events);
-                    terminal
-                        .restore()
-                        .context("restoring the terminal for ChatGPT sign-in")?;
                     let completed = crate::connection::connect_chatgpt_from_setup(
                         context.selection.clone(),
                         context.user_dir.clone(),
@@ -461,7 +449,7 @@ pub(crate) async fn run_surface(
                             model.provider == CHATGPT_PROVIDER && model.model == CHATGPT_TERRA.model
                         }),
                         context.unconfigured,
-                        no_color,
+                        &mut session,
                         no_motion,
                     )
                     .await
@@ -475,8 +463,8 @@ pub(crate) async fn run_surface(
                 SetupEffect::ResolveModelLimits { request } => {
                     // One bounded, non-inference read; the surface stays busy
                     // and key-blind until the result lands.
-                    terminal
-                        .draw(|frame| draw_setup(frame, &app, theme))
+                    session
+                        .draw(&app)
                         .context("drawing setup limit resolution")?;
                     let resolved = resolve_model_limits(&context, &request).await;
                     app.apply_resolved_limits(resolved);
@@ -485,14 +473,9 @@ pub(crate) async fn run_surface(
                     submission,
                     allow_collisions,
                 } => {
-                    terminal
-                        .draw(|frame| draw_setup(frame, &app, theme))
-                        .context("drawing setup preflight")?;
+                    session.draw(&app).context("drawing setup preflight")?;
                     match apply_submission(&context, submission, allow_collisions).await {
-                        ApplyOutcome::Completed => {
-                            terminal.restore().context("restoring the terminal")?;
-                            return Ok(SetupOutcome::Completed);
-                        }
+                        ApplyOutcome::Completed => return Ok(SetupOutcome::Completed),
                         ApplyOutcome::Collision(preview) => app.review_collisions(preview),
                         ApplyOutcome::Failed {
                             message,
@@ -500,12 +483,11 @@ pub(crate) async fn run_surface(
                         } => app.fail(message, authentication),
                     }
                 }
-            },
-            TermEvent::Paste(text) => app.on_paste(&text),
-            TermEvent::Resize(_, _) => {}
-            _ => {}
+            }
         }
     }
+    .await;
+    session.finish(result, "restoring the terminal")
 }
 
 fn catalog_model_entries(

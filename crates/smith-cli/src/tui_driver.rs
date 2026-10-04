@@ -495,13 +495,8 @@ pub(super) async fn run_interactive(
         skills,
         ..
     } = resources;
-    let mut theme = Theme::from_env();
-    if presentation.no_color {
-        theme = theme.without_color();
-    }
-    if presentation.no_motion {
-        theme = theme.without_motion();
-    }
+    let theme =
+        crate::screen_runner::theme_from_flags(presentation.no_color, presentation.no_motion);
     let mut run_result = run_tui(
         terminal,
         app,

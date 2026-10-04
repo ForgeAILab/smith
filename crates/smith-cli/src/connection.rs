@@ -26,6 +26,7 @@ use smith_tui::setup::SetupMode;
 
 use crate::cli::Selection;
 use crate::config_command::prepare;
+use crate::screen_runner::ScreenSession;
 use crate::{chatgpt, setup};
 
 /// How `/connect` proceeds for a login-kind provider.
@@ -77,13 +78,17 @@ async fn choose_connect_mode(
         no_motion,
     )
     .await?;
-    Ok(picked.and_then(|choice| match choice.as_str() {
+    Ok(picked.and_then(|choice| connect_mode_from_choice(&choice, existing)))
+}
+
+fn connect_mode_from_choice(choice: &str, existing: &[String]) -> Option<ConnectMode> {
+    match choice {
         "add" => Some(ConnectMode::Add {
             existing: existing.to_vec(),
         }),
         "replace" => Some(ConnectMode::Replace),
         _ => None,
-    }))
+    }
 }
 
 /// Picker entries shared by the account-choice loop and its terminal fixtures.
@@ -420,38 +425,71 @@ async fn connect_chatgpt(selection: Selection, no_color: bool, no_motion: bool) 
         .iter()
         .any(|model| model.provider == CHATGPT_PROVIDER && model.model == CHATGPT_TERRA.model);
     let user_dir = before.resolution.layout.user_dir.clone();
-    connect_chatgpt_from_setup(
+    // Keep the original entry/restore error wording for whichever picker starts
+    // the chain; setup already supplies its own entered terminal.
+    let (enter_context, restore_context) =
+        if existing_login_references(&user_dir, CHATGPT_PROVIDER, KIND_CHATGPT_RESPONSES).is_some()
+        {
+            (
+                "entering the Connect ChatGPT · already connected picker",
+                "restoring the terminal after the Connect ChatGPT · already connected picker",
+            )
+        } else {
+            (
+                "entering ChatGPT login picker",
+                "restoring the terminal after ChatGPT login selection",
+            )
+        };
+    let mut session = ScreenSession::enter(no_color, no_motion).context(enter_context)?;
+    let result = connect_chatgpt_from_setup(
         selection,
         user_dir,
         model_configured,
         false,
-        no_color,
+        &mut session,
         no_motion,
     )
-    .await
+    .await;
+    session.finish(result, restore_context)
 }
 
 /// Runs the existing ChatGPT connection ceremony from a reviewed setup context.
-/// An empty install also receives a default profile in the same transaction.
+/// An empty install also receives a default profile in the same transaction;
+/// the shared runner keeps the setup-to-login handoff under one terminal guard.
 pub(super) async fn connect_chatgpt_from_setup(
     selection: Selection,
     user_dir: std::path::PathBuf,
     model_configured: bool,
     make_default: bool,
-    no_color: bool,
+    session: &mut ScreenSession,
     no_motion: bool,
 ) -> Result<bool> {
     let mode = match existing_login_references(&user_dir, CHATGPT_PROVIDER, KIND_CHATGPT_RESPONSES)
     {
         Some(existing) => {
-            match choose_connect_mode("ChatGPT", &existing, no_color, no_motion).await? {
+            let picked = crate::resources::pick_one_in_screen(
+                "Connect ChatGPT · already connected",
+                connect_mode_entries(existing.len()),
+                "No connection choices",
+                session,
+            )
+            .await?;
+            match picked.and_then(|choice| connect_mode_from_choice(&choice, &existing)) {
                 Some(mode) => mode,
                 None => return Ok(false),
             }
         }
         None => ConnectMode::Replace,
     };
-    let Some(bundle) = chatgpt::login(no_color, no_motion).await? else {
+    let login = chatgpt::login(session, no_motion).await;
+    // Publishing and its notices historically happen on the normal screen.
+    // The screen chain is over, so restore before preserving those effects.
+    session.restore().context(if matches!(&login, Ok(None)) {
+        "restoring the terminal after ChatGPT login selection"
+    } else {
+        "restoring the terminal after ChatGPT login progress"
+    })?;
+    let Some(bundle) = login? else {
         return Ok(false);
     };
     let secret = bundle

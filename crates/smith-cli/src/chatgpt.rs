@@ -1,26 +1,29 @@
 //! Smith-owned ChatGPT browser and device-code login surfaces.
 
+use std::convert::Infallible;
 use std::future::Future;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use crossterm::event::{Event as TermEvent, EventStream, KeyCode, KeyModifiers};
-use futures_util::StreamExt;
+use crossterm::event::{KeyCode, KeyModifiers};
+use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use sha2::{Digest, Sha256};
 use smith_runtime::chatgpt::{
     BrowserAuthorization, ChatGptOAuthClient, ChatGptTokenBundle, browser_authorization_url,
 };
+use smith_tui::picker::standalone_picker_area;
 use smith_tui::theme::Theme;
-use smith_tui::{PickerOutcome, ResourceEntry, ResourcePicker, draw_resource_picker};
+use smith_tui::{ResourceEntry, ResourcePicker, Screen, ScreenEvent, Step};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::browser::open_browser;
+use crate::screen_runner::{ScreenContext, ScreenResult, ScreenSession};
 
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MAX_CALLBACK_BYTES: usize = 8 * 1024;
@@ -40,18 +43,25 @@ pub(super) struct LoginDisplay {
 
 /// Runs Smith's experimental direct ChatGPT login and returns a token bundle
 /// only after the complete ceremony succeeds.
-pub(super) async fn login(no_color: bool, no_motion: bool) -> Result<Option<ChatGptTokenBundle>> {
-    let Some(method) = choose_login_method(no_color, no_motion).await? else {
+pub(super) async fn login(
+    session: &mut ScreenSession,
+    no_motion: bool,
+) -> Result<Option<ChatGptTokenBundle>> {
+    let Some(method) = choose_login_method(session).await? else {
         return Ok(None);
     };
     let oauth = ChatGptOAuthClient::new().context("initializing Smith's ChatGPT OAuth client")?;
     match method {
-        LoginMethod::Browser => browser_login(oauth, no_motion).await.map(Some),
-        LoginMethod::DeviceCode => device_login(oauth, no_motion).await.map(Some),
+        LoginMethod::Browser => browser_login(oauth, session, no_motion).await.map(Some),
+        LoginMethod::DeviceCode => device_login(oauth, session, no_motion).await.map(Some),
     }
 }
 
-async fn browser_login(oauth: ChatGptOAuthClient, no_motion: bool) -> Result<ChatGptTokenBundle> {
+async fn browser_login(
+    oauth: ChatGptOAuthClient,
+    session: &mut ScreenSession,
+    no_motion: bool,
+) -> Result<ChatGptTokenBundle> {
     let (listener, port) = bind_callback().await?;
     let redirect_uri = format!("http://localhost:{port}/auth/callback");
     let verifier = Zeroizing::new(format!(
@@ -84,10 +94,14 @@ async fn browser_login(oauth: ChatGptOAuthClient, no_motion: bool) -> Result<Cha
             .await
             .context("exchanging the ChatGPT browser authorization")
     };
-    wait_for_login_surface(display, completion, no_motion).await
+    wait_for_login_surface(session, display, completion, no_motion).await
 }
 
-async fn device_login(oauth: ChatGptOAuthClient, no_motion: bool) -> Result<ChatGptTokenBundle> {
+async fn device_login(
+    oauth: ChatGptOAuthClient,
+    session: &mut ScreenSession,
+    no_motion: bool,
+) -> Result<ChatGptTokenBundle> {
     let authorization = oauth
         .request_device_code()
         .await
@@ -103,7 +117,7 @@ async fn device_login(oauth: ChatGptOAuthClient, no_motion: bool) -> Result<Chat
             .await
             .context("completing ChatGPT device-code login")
     };
-    wait_for_login_surface(display, completion, no_motion).await
+    wait_for_login_surface(session, display, completion, no_motion).await
 }
 
 async fn bind_callback() -> Result<(TcpListener, u16)> {
@@ -225,6 +239,7 @@ async fn respond(stream: &mut TcpStream, status: u16, body: &str) {
 }
 
 async fn wait_for_login_surface<F>(
+    session: &mut ScreenSession,
     display: LoginDisplay,
     completion: F,
     no_motion: bool,
@@ -232,54 +247,94 @@ async fn wait_for_login_surface<F>(
 where
     F: Future<Output = Result<ChatGptTokenBundle>>,
 {
-    let mut terminal = crate::terminal::enter().context("entering ChatGPT login progress")?;
-    let mut events = EventStream::new();
-    let mut tick = tokio::time::interval(Duration::from_millis(250));
-    let result = {
-        let completion = tokio::time::timeout(LOGIN_TIMEOUT, completion);
-        tokio::pin!(completion);
-        let mut frame_number = 0_usize;
-        loop {
-            terminal
-                .draw(|frame| draw_login_progress(frame, &display, frame_number, no_motion))
-                .context("drawing ChatGPT login progress")?;
-            tokio::select! {
-                result = &mut completion => {
-                    break result
-                        .context("ChatGPT login timed out")?;
-                }
-                event = events.next() => {
-                    let Some(event) = event else {
-                        anyhow::bail!("ChatGPT login input ended");
-                    };
-                    match event.context("reading ChatGPT login progress input")? {
-                        TermEvent::Key(key)
-                            if key.code == KeyCode::Esc
-                                || (key.code == KeyCode::Char('c')
-                                    && key.modifiers.contains(KeyModifiers::CONTROL)) =>
-                        {
-                            anyhow::bail!("ChatGPT login cancelled");
-                        }
-                        _ => {}
-                    }
-                }
-                _ = tick.tick() => frame_number = frame_number.wrapping_add(1),
-            }
-        }
+    let mut progress = LoginProgress {
+        display,
+        frame_number: 0,
+        no_motion,
     };
-    terminal
-        .restore()
-        .context("restoring the terminal after ChatGPT login progress")?;
-    result
+    match session
+        .run_screen(
+            &mut progress,
+            Some(tokio::time::timeout(LOGIN_TIMEOUT, completion)),
+            ScreenContext {
+                draw: Some("drawing ChatGPT login progress"),
+                input: "reading ChatGPT login progress input",
+            },
+        )
+        .await?
+    {
+        ScreenResult::Completed(result) => result.context("ChatGPT login timed out")?,
+        ScreenResult::Outcome(()) => anyhow::bail!("ChatGPT login cancelled"),
+        ScreenResult::InputEnded => anyhow::bail!("ChatGPT login input ended"),
+        ScreenResult::Effect(never) => match never {},
+    }
 }
 
+/// Presentation-only OAuth wait state; the runner owns the completion future.
+struct LoginProgress {
+    display: LoginDisplay,
+    frame_number: usize,
+    // This surface historically uses the explicit flag rather than the theme's
+    // environment-derived motion setting. Preserve that during the loop merge.
+    no_motion: bool,
+}
+
+impl Screen for LoginProgress {
+    type Outcome = ();
+    type Effect = Infallible;
+
+    fn draw(&self, frame: &mut ratatui::Frame<'_>, area: Rect, _theme: Theme) {
+        draw_login_progress_in_area(
+            frame,
+            area,
+            &self.display,
+            self.frame_number,
+            self.no_motion,
+        );
+    }
+
+    fn on_event(&mut self, event: ScreenEvent) -> Step<Self::Outcome, Self::Effect> {
+        match event {
+            ScreenEvent::Key(key)
+                if key.code == KeyCode::Esc
+                    || (key.code == KeyCode::Char('c')
+                        && key.modifiers.contains(KeyModifiers::CONTROL)) =>
+            {
+                Step::Outcome(())
+            }
+            ScreenEvent::Tick => {
+                self.frame_number = self.frame_number.wrapping_add(1);
+                Step::Pending
+            }
+            _ => Step::Pending,
+        }
+    }
+
+    fn tick_interval(&self) -> Option<Duration> {
+        Some(Duration::from_millis(250))
+    }
+}
+
+#[cfg(test)]
+/// Keeps fixture recordings on the production progress renderer without a terminal runner.
 pub(super) fn draw_login_progress(
     frame: &mut ratatui::Frame<'_>,
     display: &LoginDisplay,
     frame_number: usize,
     no_motion: bool,
 ) {
-    let area = crate::resources::standalone_picker_area(frame.area(), 9);
+    let area = frame.area();
+    draw_login_progress_in_area(frame, area, display, frame_number, no_motion);
+}
+
+fn draw_login_progress_in_area(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    display: &LoginDisplay,
+    frame_number: usize,
+    no_motion: bool,
+) {
+    let area = standalone_picker_area(area, 9);
     frame.render_widget(Clear, area);
     let text = login_progress_lines(display, frame_number, no_motion).join("\n");
     frame.render_widget(
@@ -336,54 +391,26 @@ pub(super) fn login_method_picker() -> ResourcePicker {
     )
 }
 
-async fn choose_login_method(no_color: bool, no_motion: bool) -> Result<Option<LoginMethod>> {
+async fn choose_login_method(session: &mut ScreenSession) -> Result<Option<LoginMethod>> {
     let mut picker = login_method_picker();
-    let mut theme = Theme::from_env();
-    if no_color {
-        theme = theme.without_color();
+    match session
+        .run(
+            &mut picker,
+            ScreenContext {
+                draw: Some("drawing ChatGPT login picker"),
+                input: "reading ChatGPT login picker input",
+            },
+        )
+        .await?
+    {
+        ScreenResult::Outcome(method) => Ok(method.and_then(|method| match method.as_str() {
+            "browser" => Some(LoginMethod::Browser),
+            "device" => Some(LoginMethod::DeviceCode),
+            _ => None,
+        })),
+        ScreenResult::InputEnded => Ok(None),
+        ScreenResult::Effect(never) | ScreenResult::Completed(never) => match never {},
     }
-    if no_motion {
-        theme = theme.without_motion();
-    }
-    let mut terminal = crate::terminal::enter().context("entering ChatGPT login picker")?;
-    let mut events = EventStream::new();
-    let result = async {
-        loop {
-            terminal
-                .draw(|frame| {
-                    let area = crate::resources::standalone_picker_area(
-                        frame.area(),
-                        picker.entries.len(),
-                    );
-                    draw_resource_picker(frame, area, &picker, theme);
-                })
-                .context("drawing ChatGPT login picker")?;
-            let Some(event) = events.next().await else {
-                return Ok(None);
-            };
-            match event.context("reading ChatGPT login picker input")? {
-                TermEvent::Key(key) => match picker.on_key(key) {
-                    PickerOutcome::Pending => {}
-                    PickerOutcome::Cancelled => return Ok(None),
-                    PickerOutcome::Selected(method) => {
-                        return Ok(match method.as_str() {
-                            "browser" => Some(LoginMethod::Browser),
-                            "device" => Some(LoginMethod::DeviceCode),
-                            _ => None,
-                        });
-                    }
-                },
-                TermEvent::Paste(text) => picker.paste(&text),
-                TermEvent::Resize(_, _) => {}
-                _ => {}
-            }
-        }
-    }
-    .await;
-    terminal
-        .restore()
-        .context("restoring the terminal after ChatGPT login selection")?;
-    result
 }
 
 #[cfg(test)]

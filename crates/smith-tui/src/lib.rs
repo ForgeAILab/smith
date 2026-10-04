@@ -30,6 +30,7 @@ pub mod picker;
 pub mod questionnaire;
 pub mod references;
 pub mod render;
+pub mod screen;
 pub mod selection;
 pub mod setup;
 pub mod status;
@@ -65,6 +66,7 @@ pub use references::{
     ComposerReference, MAX_COMPOSER_REFERENCES, ParsedReferences, parse_references,
 };
 pub use render::{draw, draw_synced, selected_text};
+pub use screen::{Screen, ScreenEvent, Step};
 pub use setup::{
     ResolveModelLimits, ResolvedModelLimits, SetupApp, SetupCredential, SetupEffect, SetupMode,
     SetupModelLimits, SetupSubmission, draw_setup,

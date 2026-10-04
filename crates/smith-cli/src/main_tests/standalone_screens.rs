@@ -11,7 +11,7 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, CellWidth};
 use ratatui::{Frame, Terminal};
 use smith_runtime::session::{SNAPSHOT_SCHEMA_VERSION, SessionListing};
-use smith_tui::picker::draw_resource_picker;
+use smith_tui::picker::{draw_resource_picker, standalone_picker_area};
 use smith_tui::setup::{SetupApp, SetupEffect, SetupMode, draw_setup};
 use smith_tui::{ResourcePicker, Theme};
 
@@ -54,7 +54,7 @@ fn fixture_screen(buffer: &Buffer) -> String {
 
 fn fixture_picker(screen: &str, picker: &ResourcePicker) {
     fixture_screens(screen, |frame, theme| {
-        let area = resources::standalone_picker_area(frame.area(), picker.entries.len());
+        let area = standalone_picker_area(frame.area(), picker.entries.len());
         draw_resource_picker(frame, area, picker, theme);
     });
 }

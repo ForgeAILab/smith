@@ -19,6 +19,7 @@ mod logging;
 mod mcp;
 mod resources;
 mod runtime_host;
+mod screen_runner;
 mod setup;
 mod skills;
 mod submission;

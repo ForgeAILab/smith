@@ -5,10 +5,7 @@ use std::io::IsTerminal;
 use agent_runtime_core::clock::Timestamp;
 use agent_runtime_core::provider::ReasoningSupport;
 use anyhow::{Context, Result};
-use crossterm::event::{Event as TermEvent, EventStream};
-use futures_util::StreamExt;
 use ignore::WalkBuilder;
-use ratatui::layout::Rect;
 use smith_config::inventory::{
     InventoryLimit, ModelInventoryEntry, ModelLimitOrigin, ProfileInventoryEntry,
     ProviderInventoryEntry, SelectionInventory,
@@ -19,14 +16,11 @@ use smith_runtime::factory::AVAILABLE_ADAPTER_KINDS;
 use smith_runtime::rotation::SharedPool;
 use smith_runtime::session::{SNAPSHOT_SCHEMA_VERSION, SessionListing};
 use smith_tui::app::LEGACY_AGENT_PROFILE_PREFIX;
-use smith_tui::theme::Theme;
-use smith_tui::{
-    PickerOutcome, ResourceEntry, ResourcePicker, RuntimeResources, draw_resource_picker,
-};
+use smith_tui::{ResourceEntry, ResourcePicker, RuntimeResources};
 
 use crate::cli::Selection;
 use crate::config_command::prepare;
-use crate::terminal;
+use crate::screen_runner::{ScreenContext, ScreenResult, ScreenSession};
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn runtime_resources(
@@ -931,50 +925,16 @@ pub(super) async fn choose_resume_session(
         .map_err(|error| anyhow::anyhow!("{error}"))
         .context("listing project sessions")?;
     let entries = session_resource_entries(sessions, None);
-    let mut picker = ResourcePicker::new(
+    let mut session =
+        ScreenSession::enter(no_color, no_motion).context("entering the resume picker")?;
+    let result = pick_one_in_screen(
         "Resume session",
         entries,
         "Nothing to resume for this project · Esc to start without resuming",
-    );
-    let mut theme = Theme::from_env();
-    if no_color {
-        theme = theme.without_color();
-    }
-    if no_motion {
-        theme = theme.without_motion();
-    }
-
-    let mut terminal = terminal::enter().context("entering the resume picker")?;
-    let mut events = EventStream::new();
-    let result = async {
-        terminal.draw(|frame| {
-            let area = standalone_picker_area(frame.area(), picker.entries.len());
-            draw_resource_picker(frame, area, &picker, theme);
-        })?;
-        loop {
-            let Some(event) = events.next().await else {
-                return Ok(None);
-            };
-            match event.context("reading a terminal event")? {
-                TermEvent::Key(key) => match picker.on_key(key) {
-                    PickerOutcome::Pending => {}
-                    PickerOutcome::Cancelled => return Ok(None),
-                    PickerOutcome::Selected(session) => return Ok(Some(session)),
-                },
-                TermEvent::Paste(text) => picker.paste(&text),
-                TermEvent::Resize(_, _) => {}
-                _ => continue,
-            }
-            terminal.draw(|frame| {
-                let area = standalone_picker_area(frame.area(), picker.entries.len());
-                draw_resource_picker(frame, area, &picker, theme);
-            })?;
-        }
-    }
+        &mut session,
+    )
     .await;
-    let restore = terminal.restore().context("restoring the terminal");
-    restore?;
-    result
+    session.finish(result, "restoring the terminal")
 }
 
 /// Runs one standalone picker to a selection, cancellation, or input end.
@@ -987,58 +947,37 @@ pub(super) async fn pick_one(
     no_color: bool,
     no_motion: bool,
 ) -> Result<Option<String>> {
-    let mut picker = ResourcePicker::new(title, entries, empty_hint);
-    let mut theme = Theme::from_env();
-    if no_color {
-        theme = theme.without_color();
-    }
-    if no_motion {
-        theme = theme.without_motion();
-    }
-    let mut terminal = terminal::enter().with_context(|| format!("entering the {title} picker"))?;
-    let mut events = EventStream::new();
-    let result = async {
-        loop {
-            terminal.draw(|frame| {
-                let area = standalone_picker_area(frame.area(), picker.entries.len());
-                draw_resource_picker(frame, area, &picker, theme);
-            })?;
-            let Some(event) = events.next().await else {
-                return Ok(None);
-            };
-            match event.context("reading a terminal event")? {
-                TermEvent::Key(key) => match picker.on_key(key) {
-                    PickerOutcome::Pending => {}
-                    PickerOutcome::Cancelled => return Ok(None),
-                    PickerOutcome::Selected(id) => return Ok(Some(id)),
-                },
-                TermEvent::Paste(text) => picker.paste(&text),
-                TermEvent::Resize(_, _) => {}
-                _ => {}
-            }
-        }
-    }
-    .await;
-    terminal
-        .restore()
-        .with_context(|| format!("restoring the terminal after the {title} picker"))?;
-    result
+    let mut session = ScreenSession::enter(no_color, no_motion)
+        .with_context(|| format!("entering the {title} picker"))?;
+    let result = pick_one_in_screen(title, entries, empty_hint, &mut session).await;
+    session.finish(
+        result,
+        &format!("restoring the terminal after the {title} picker"),
+    )
 }
 
-pub(super) fn standalone_picker_area(area: Rect, entry_count: usize) -> Rect {
-    if area.width < 24 || area.height < 8 {
-        return area;
+/// Reuses the active terminal when account choice leads into another screen.
+pub(super) async fn pick_one_in_screen(
+    title: &str,
+    entries: Vec<ResourceEntry>,
+    empty_hint: &str,
+    session: &mut ScreenSession,
+) -> Result<Option<String>> {
+    let mut picker = ResourcePicker::new(title, entries, empty_hint);
+    match session
+        .run(
+            &mut picker,
+            ScreenContext {
+                draw: None,
+                input: "reading a terminal event",
+            },
+        )
+        .await?
+    {
+        ScreenResult::Outcome(selected) => Ok(selected),
+        ScreenResult::InputEnded => Ok(None),
+        ScreenResult::Effect(never) | ScreenResult::Completed(never) => match never {},
     }
-    let width = area.width.saturating_sub(4).min(100);
-    let height = u16::try_from(entry_count.saturating_add(4))
-        .unwrap_or(u16::MAX)
-        .clamp(6, area.height.saturating_sub(2));
-    Rect::new(
-        area.x + area.width.saturating_sub(width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    )
 }
 
 pub(super) async fn list_sessions(selection: &Selection) -> Result<()> {

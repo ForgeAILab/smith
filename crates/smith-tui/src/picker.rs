@@ -4,6 +4,8 @@
 //! contain bounded local display metadata only; filtering never touches model
 //! history or a provider.
 
+use std::convert::Infallible;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -12,6 +14,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::render::lists::{clip_words, detail_line, list_row};
+use crate::screen::{Screen, ScreenEvent, Step};
 use crate::theme::{Theme, Tone};
 
 /// Maximum number of resource matches shown beside the composer.
@@ -229,6 +232,52 @@ impl ResourcePicker {
         self.query.push_str(&cleaned);
         self.selected = 0;
     }
+}
+
+impl Screen for ResourcePicker {
+    type Outcome = Option<String>;
+    type Effect = Infallible;
+
+    fn draw(&self, frame: &mut Frame<'_>, area: Rect, theme: Theme) {
+        draw_resource_picker(
+            frame,
+            standalone_picker_area(area, self.entries.len()),
+            self,
+            theme,
+        );
+    }
+
+    fn on_event(&mut self, event: ScreenEvent) -> Step<Self::Outcome, Self::Effect> {
+        match event {
+            ScreenEvent::Key(key) => match self.on_key(key) {
+                PickerOutcome::Pending => Step::Pending,
+                PickerOutcome::Cancelled => Step::Outcome(None),
+                PickerOutcome::Selected(id) => Step::Outcome(Some(id)),
+            },
+            ScreenEvent::Paste(text) => {
+                self.paste(&text);
+                Step::Pending
+            }
+            ScreenEvent::Resize(_, _) | ScreenEvent::Tick => Step::Pending,
+        }
+    }
+}
+
+/// Keeps the standalone box geometry shared by screens and their recorded fixtures.
+pub fn standalone_picker_area(area: Rect, entry_count: usize) -> Rect {
+    if area.width < 24 || area.height < 8 {
+        return area;
+    }
+    let width = area.width.saturating_sub(4).min(100);
+    let height = u16::try_from(entry_count.saturating_add(4))
+        .unwrap_or(u16::MAX)
+        .clamp(6, area.height.saturating_sub(2));
+    Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    )
 }
 
 /// Draws a bordered picker within `area`.
