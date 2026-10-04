@@ -36,6 +36,11 @@ as a pricing bug in `docs/qa/live-2026-10-04b/findings.md`. Approved 2026-10-04 
   cost tests unchanged.
 - [ ] 3.2 fmt, strict Clippy (including Rust 1.88), workspace tests with
   `--no-fail-fast`, `cargo deny`; fixtures reviewed.
-- [ ] 3.3 Live: GLM then `/model` to Gemini, one turn each; the exit line
+- [x] 3.3 Live: GLM then `/model` to Gemini, one turn each; the exit line
   names both with their shares and the shares match each model's catalog
   rates.
+
+  Live 2026-10-04 on a release build of c5b9026: exit line
+  `$0.000875 exact · zai/glm-5.3 $0.000 · google/gemini-3.8-flash $0.000875`
+  (the Z.AI Coding Plan prices every counter at 0); usage log v5 lists both
+  bindings.
