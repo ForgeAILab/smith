@@ -131,7 +131,7 @@ async fn denied_call_keeps_its_reason_after_completion_without_a_duplicate_notic
             result_preview: Some(reason), ..
         } if reason == "approval declined: the user declined"));
         assert!(!app.transcript.blocks().iter().any(|block| matches!(
-            block, Block::Notice { source, .. } if source == "approval"
+            block, Block::Notice { kind: source, .. } if source.label() == "approval"
         )));
 
         app.apply(&event(tool_completed("c1", "shell", true)));
@@ -167,7 +167,7 @@ async fn denial_without_the_matching_tool_row_keeps_its_notice() {
         Some(ToolStatus::Running)
     );
     assert!(app.transcript.blocks().iter().any(|block| matches!(
-        block, Block::Notice { source, text } if source == "approval" && text == "shell denied"
+        block, Block::Notice { kind: source, text } if source.label() == "approval" && text == "shell denied"
     )));
 }
 
@@ -224,8 +224,8 @@ async fn typing_through_an_approval_preserves_the_draft_and_requires_a_quiet_win
     assert_eq!(app.composer.text(), "can you ");
     assert!(!app.transcript.blocks().iter().any(|block| matches!(
         block,
-        Block::Notice { source, text }
-            if source == "approval" && text.contains("for the session")
+        Block::Notice { kind: source, text }
+            if source.label() == "approval" && text.contains("for the session")
     )));
 }
 
@@ -267,8 +267,8 @@ async fn every_approval_decision_targets_only_the_visible_prompt_after_its_quiet
             .filter(|block| {
                 matches!(
                     block,
-                    Block::Notice { source, text }
-                        if source == "approval" && text.contains("for the session")
+                    Block::Notice { kind: source, text }
+                        if source.label() == "approval" && text.contains("for the session")
                 )
             })
             .count();
@@ -342,12 +342,16 @@ fn recovery_and_trust_confirmations_ignore_typing_until_the_quiet_boundary() {
 }
 
 #[tokio::test]
-async fn restoring_an_approval_after_exit_requires_a_new_quiet_window() {
+async fn an_approval_queued_after_exit_requires_a_new_quiet_window() {
     let mut app = app();
     let clock = prompt_clock(&mut app);
     app.present_approval(prompt("shell").await);
     clock.advance(500);
     assert_eq!(app.request_exit(), None);
+    app.on_key(key(KeyCode::Char('n')));
+    assert!(matches!(&app.overlay, Some(Overlay::Confirm(dialog)) if dialog.title == "exit"));
+    app.present_approval(prompt("shell").await);
+    clock.advance(500);
     app.on_key(key(KeyCode::Char('n')));
     assert_eq!(app.on_key(key(KeyCode::Char('a'))), None);
     assert!(matches!(app.overlay, Some(Overlay::Approval { .. })));
@@ -421,11 +425,11 @@ async fn rotation_controls_ignore_typing_until_the_offer_has_a_quiet_window() {
 
         clock.advance(499);
         assert_eq!(app.on_key(key(code)), None);
-        assert!(matches!(app.overlay, Some(Overlay::RotationConfirm { .. })));
+        assert!(matches!(app.overlay, Some(Overlay::Confirm(_))));
         assert!(!pending.is_finished());
         clock.advance(499);
         assert_eq!(app.on_key(key(KeyCode::Char('a'))), None);
-        assert!(matches!(app.overlay, Some(Overlay::RotationConfirm { .. })));
+        assert!(matches!(app.overlay, Some(Overlay::Confirm(_))));
 
         clock.advance(500);
         app.on_key(key(code));

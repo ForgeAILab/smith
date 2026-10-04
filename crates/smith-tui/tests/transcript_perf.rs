@@ -1,5 +1,6 @@
 //! Baseline-compatible timing of public transcript drawing while text streams.
 
+use smith_client::NoticeKind;
 use std::time::Instant;
 
 use ratatui::Terminal;
@@ -31,7 +32,7 @@ fn streaming_transcript_mean_frame_time() {
             }
             3 => app
                 .transcript
-                .push_notice("monitor", format!("Finished check {index}")),
+                .push_notice(NoticeKind::Monitor, format!("Finished check {index}")),
             4 => app
                 .transcript
                 .push_error("A bounded check failed; retry is available."),

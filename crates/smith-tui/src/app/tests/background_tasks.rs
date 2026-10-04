@@ -46,9 +46,10 @@
 
         type_text(&mut app, "/quit");
         assert_eq!(app.on_key(key(KeyCode::Enter)), None);
-        assert!(matches!(app.overlay, Some(Overlay::ExitConfirm { .. })));
+        assert!(matches!(app.overlay, Some(Overlay::Confirm(_))));
         assert!(!app.should_quit);
 
+        elapse_prompt_guard(&mut app);
         assert_eq!(app.on_key(key(KeyCode::Char('n'))), None);
         assert!(app.overlay.is_none());
         assert!(!app.should_quit);

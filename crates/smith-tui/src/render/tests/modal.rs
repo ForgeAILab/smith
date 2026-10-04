@@ -123,7 +123,7 @@
                 .active(index == 0)
             })
             .collect();
-        app.overlay = Some(Overlay::ResourcePicker {
+        app.open_overlay(Overlay::ResourcePicker {
             picker: crate::picker::ResourcePicker::new("Choose model", entries, "run setup"),
             target: crate::app::ResourceTarget::Model,
             restore_on_escape: "/model".into(),
@@ -373,11 +373,15 @@
     fn child_follow_up_and_resume_confirmations_are_clear_without_color_at_supported_sizes() {
         for (width, height) in [(44, 16), (74, 20), (120, 28)] {
             let mut follow_up = App::new("glm-5.2", "~/work/api");
-            follow_up.overlay = Some(Overlay::AgentFollowUpConfirm {
-                child_id: "child-1".to_owned(),
-                task: "check the parser".to_owned(),
-                content: "child: child-1\noperation: new follow-up turn\ncontinuity: reuse prior child history\nprovider spend: yes".to_owned(),
-            });
+            follow_up.open_overlay(Overlay::Confirm(crate::app::ConfirmDialog::new(
+                "existing child follow-up", Tone::Accent,
+                "child: child-1\noperation: new follow-up turn\ncontinuity: reuse prior child history\nprovider spend: yes\n".lines().map(str::to_owned).collect(),
+                "start follow-up and spend provider tokens",
+                crate::app::ConfirmOutcome::Action(crate::app::Action::FollowUpAgent {
+                    child_id: "child-1".to_owned(), task: "check the parser".to_owned(),
+                }),
+                crate::app::ConfirmOutcome::Dismiss,
+            )));
             let follow_up_screen = render(&follow_up, width, height, Theme::new().without_color());
             assert!(
                 follow_up_screen.contains("existing child follow-up"),
@@ -389,10 +393,15 @@
             );
 
             let mut resume = App::new("glm-5.2", "~/work/api");
-            resume.overlay = Some(Overlay::AgentResumeConfirm {
-                child_id: "child-1".to_owned(),
-                content: "child: child-1\noperation: continue exact interrupted checkpoint\nturn slot consumed: no\nside effects: committed work is not replayed".to_owned(),
-            });
+            resume.open_overlay(Overlay::Confirm(crate::app::ConfirmDialog::new(
+                "resume interrupted child", Tone::Accent,
+                "child: child-1\noperation: continue exact interrupted checkpoint\nturn slot consumed: no\nside effects: committed work is not replayed\n".lines().map(str::to_owned).collect(),
+                "resume exact checkpoint",
+                crate::app::ConfirmOutcome::Action(crate::app::Action::ResumeAgent {
+                    child_id: "child-1".to_owned(),
+                }),
+                crate::app::ConfirmOutcome::Dismiss,
+            )));
             let resume_screen = render(&resume, width, height, Theme::new().without_color());
             assert!(
                 resume_screen.contains("resume interrupted child"),

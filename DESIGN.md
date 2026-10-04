@@ -305,6 +305,21 @@ when the terminal is narrow. `?` on an empty draft opens a shortcuts panel in
 the anchored pane; any key closes it. The panel is not a transcript entry and
 never contacts the provider.
 
+Feedback that answers the user's own keypress and changes nothing — a
+command refused because a turn is running, an already-current selection, an
+empty clipboard — replaces the left hints until the next key. It is not a
+transcript entry. Everything the runtime, a provider, a child, a monitor, or
+a recovery reports stays an attributed transcript notice.
+
+Prompts that need an answer — approvals, questionnaires, and confirmations —
+are never replaced by another overlay. They queue in arrival order, and
+answering one opens the next. A picker, the palette, history search, or the
+shortcuts panel closes when a prompt arrives and cannot open over one. Every
+confirmation (undo, redo, revert, trust, review, child invocation, account
+switch, quit) uses one box: title, an optional warning, a body that scrolls
+to its end with the arrow and page keys, `y` to accept, and `n` or Esc to
+cancel. Enter chooses neither.
+
 Smith enables button and drag reporting (`1000`/`1002`, SGR-encoded) and owns
 pointer selection itself. This is forced: mouse reporting is terminal-wide and
 all-or-nothing on the button, so asking for wheel notches also takes away the

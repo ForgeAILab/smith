@@ -5,6 +5,7 @@ use agent_runtime_core::ids::{AttemptId, EventId, RequestId, SessionId, ToolCall
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use smith_client::NoticeKind;
 use smith_client::message_report::MessageReport;
 use smith_runtime::client::{SmithEvent, SmithEventKind, TurnFinish};
 
@@ -35,13 +36,15 @@ fn local_result(index: usize) -> LocalResult {
     }))
 }
 
-fn mixed_app(seed: usize) -> App {
+fn mixed_app() -> App {
     let mut app = App::new("model", "project");
     let mut history = Vec::new();
-    for index in 0..120 {
+    // One turn per status spans several screens while retaining Markdown,
+    // wide characters, reasoning, tools, previews, local results, and notices.
+    for index in 0..STATUSES.len() {
         history.push(Message::user(format!(
             "Question {index}: {}",
-            "界 retry policy ".repeat(1 + (index + seed) % 5)
+            "界 retry policy ".repeat(1 + index % 5)
         )));
         history.push(Message::assistant(vec![
             ContentPart::text(format!("## Answer {index}\n\n**Strong** text, *emphasis*, `code`, and [a link](https://example.com).\n\n- first item\n- second item\n\n```rust\nlet value = {index};\n```\n\n| Key | Value |\n| --- | --- |\n| retry | bounded |")),
@@ -61,7 +64,7 @@ fn mixed_app(seed: usize) -> App {
     // History leaves running calls without local clocks, making the generated
     // property independent of a second ticking between reference and cache.
     app.transcript.replace_from_history(&history);
-    for index in 0..120 {
+    for (index, status) in STATUSES.into_iter().enumerate() {
         let call = format!("call-{index}");
         let display = smith_tools::project_tool_call_display(
             "read",
@@ -69,8 +72,7 @@ fn mixed_app(seed: usize) -> App {
         )
         .expect("read display");
         app.transcript.set_tool_display(&call, display);
-        app.transcript
-            .complete_tool_call(&call, STATUSES[(index + seed) % STATUSES.len()]);
+        app.transcript.complete_tool_call(&call, status);
         app.transcript.set_tool_result_preview(
             &call,
             format!(
@@ -80,7 +82,7 @@ fn mixed_app(seed: usize) -> App {
         );
         app.transcript.push_local(local_result(index));
         app.transcript
-            .push_notice("monitor", format!("Notice {index}\ncontinued"));
+            .push_notice(NoticeKind::Monitor, format!("Notice {index}\ncontinued"));
     }
     for name in ["write_todos", "registry.search", "agent"] {
         let call = format!("suppressed-{name}");
@@ -99,7 +101,7 @@ fn mixed_app(seed: usize) -> App {
         .finish_shell_shortcut(echo, None, false, "one\ntwo\nthree\nfour\nfive\nsix");
     app.transcript.push_user("");
     app.transcript.push_error("");
-    app.transcript.push_notice("turn", "");
+    app.transcript.push_notice(NoticeKind::Turn, "");
     app.transcript.push_text_delta("An open **streaming");
     app
 }
@@ -173,149 +175,157 @@ fn assert_matches_uncached(app: &App, theme: Theme, width: u16) {
     }
 }
 
-fn check_configs(app: &mut App) {
-    // First check the last configuration from the previous mutation, so a
-    // resize or fold mismatch cannot mask a missing block revision bump.
-    app.work_details = true;
-    assert_matches_uncached(app, Theme::new().without_color(), 100);
+#[test]
+fn cached_transcript_matches_full_render_after_mutations() {
     for width in [44, 80, 100] {
         for expanded in [false, true] {
-            app.work_details = expanded;
             for theme in [Theme::new(), Theme::new().without_color()] {
-                assert_matches_uncached(app, theme, width);
+                check_mutations(width, expanded, theme);
             }
         }
     }
 }
 
-#[test]
-fn cached_transcript_matches_full_render_after_mutations() {
-    for seed in 0..4 {
-        let mut app = mixed_app(seed);
-        check_configs(&mut app);
-        for delta in [
-            " answer**\n\n",
-            "```rust\n",
-            "let retry = true;\n",
-            "```\n\nFinished.",
-        ] {
-            app.transcript.push_text_delta(delta);
-            check_configs(&mut app);
-        }
-        app.transcript
-            .push_notice("monitor", "Arrived during streaming");
-        check_configs(&mut app);
-        app.transcript.push_text_delta("A new assistant boundary.");
-        check_configs(&mut app);
-        app.transcript.push_reasoning_delta("hidden", false);
-        check_configs(&mut app);
-        app.transcript.push_reasoning_delta(" continuation", false);
-        check_configs(&mut app);
-        app.transcript
-            .push_reasoning_delta("redacted boundary", true);
-        check_configs(&mut app);
-        let call = format!("call-{}", (STATUSES.len() - seed) % STATUSES.len());
-        for status in STATUSES {
-            app.transcript.complete_tool_call(&call, status);
-            check_configs(&mut app);
-            app.transcript
-                .set_tool_result_preview(&call, "updated\npreview\nwith\nfive\nlines");
-            check_configs(&mut app);
-        }
-        app.transcript.set_tool_display(
-            "call-1",
-            smith_tools::project_tool_call_display(
-                "read",
-                &serde_json::json!({"path": "changed.rs"}),
-            )
-            .expect("read display"),
-        );
-        check_configs(&mut app);
-        app.transcript
-            .enrich_tool_call("call-1", ["host-confirmed".to_owned()]);
-        check_configs(&mut app);
-        app.transcript
-            .complete_tool_call("suppressed-write_todos", ToolStatus::Failed);
-        check_configs(&mut app);
-        app.transcript
-            .complete_tool_call("suppressed-write_todos", ToolStatus::Ok);
-        check_configs(&mut app);
-        app.transcript
-            .complete_tool_call_by_name("read", ToolStatus::Failed);
-        check_configs(&mut app);
-        app.transcript
-            .settle_running_tool_calls(ToolStatus::Unreported);
-        check_configs(&mut app);
-        app.transcript.push_external_tool_call(
-            "external",
-            "Read",
-            &serde_json::json!({"path": "external.rs"}),
-        );
-        app.transcript
-            .complete_tool_call("external", ToolStatus::Ok);
-        check_configs(&mut app);
-        let echo = app.transcript.push_shell_shortcut("echo exact identity");
-        app.transcript
-            .finish_shell_shortcut(echo, None, false, "first result");
-        check_configs(&mut app);
-        app.transcript.bind_shell_shortcut(echo, "new-shell");
-        check_configs(&mut app);
-        app.transcript
-            .finish_shell_shortcut(echo, Some("new-shell"), true, "updated result");
-        check_configs(&mut app);
-        let echo = app.transcript.push_shell_shortcut("echo merged identity");
-        app.transcript
-            .finish_shell_shortcut(echo, None, false, "echo result");
-        app.transcript
-            .push_tool_call("merged-shell", "shell", None, &[]);
-        app.transcript
-            .complete_tool_call("merged-shell", ToolStatus::Ok);
-        app.transcript
-            .set_tool_result_preview("merged-shell", "runtime result");
-        check_configs(&mut app);
-        app.transcript.bind_shell_shortcut(echo, "merged-shell");
-        check_configs(&mut app);
-        app.transcript
-            .finish_shell_shortcut(echo, Some("merged-shell"), true, "late result");
-        check_configs(&mut app);
-        app.transcript.push_local(local_result(seed));
-        check_configs(&mut app);
-        app.transcript.retain_newest(50);
-        check_configs(&mut app);
-        app.apply(&event(SmithEventKind::TurnStarted));
-        app.transcript.push_text_delta("Committed **body");
-        app.apply(&event(SmithEventKind::TextDelta {
-            request: RequestId::new("r"),
-            attempt: AttemptId::new("a"),
-            text: " plus speculative tail**".to_owned(),
-        }));
-        check_configs(&mut app);
-        app.apply(&event(SmithEventKind::ProviderAttemptOutputCommitted {
-            request: RequestId::new("r"),
-            attempt: AttemptId::new("a"),
-        }));
-        check_configs(&mut app);
-        app.apply(&event(SmithEventKind::TurnCompleted {
-            finish: TurnFinish::Completed,
-            visible_output: true,
-        }));
-        check_configs(&mut app);
-        for text in ["First replacement", "Same-size replacement", ""] {
-            app.transcript.replace_from_history_with_shell_shortcuts(
-                &[Message::user(text)],
-                &[crate::transcript::RestoredShellShortcut {
-                    anchor: 1,
-                    call: None,
-                    command: "saved echo".to_owned(),
-                    is_error: false,
-                    result: Some("saved result".to_owned()),
-                }],
-            );
-            check_configs(&mut app);
-        }
-        app.transcript.replace_from_history(&[]);
-        check_configs(&mut app);
+fn check_mutations(width: u16, expanded: bool, theme: Theme) {
+    let mut app = mixed_app();
+    app.work_details = expanded;
+    // Keep this configuration warm across mutations: changing the cache
+    // key before checking would hide a missing block revision bump.
+    let check = |app: &App| assert_matches_uncached(app, theme, width);
+    check(&app);
+    assert!(
+        transcript_rows(&app, theme, width).scroll_limit(Rect::new(0, 0, width, 17)) >= 34,
+        "mixed fixture must span at least three screens"
+    );
+    app.transcript.push_text_delta(" answer**\n\n");
+    check(&app);
+    app.transcript.push_text_delta("```rust\n");
+    check(&app);
+    app.transcript.push_text_delta("let retry = true;\n");
+    app.transcript.push_text_delta("```\n\nFinished.");
+    check(&app);
+    app.transcript
+        .push_notice(NoticeKind::Monitor, "Arrived during streaming");
+    check(&app);
+    app.transcript.push_text_delta("A new assistant boundary.");
+    check(&app);
+    app.transcript.push_reasoning_delta("hidden", false);
+    check(&app);
+    app.transcript.push_reasoning_delta(" continuation", false);
+    check(&app);
+    app.transcript
+        .push_reasoning_delta("redacted boundary", true);
+    check(&app);
+    // Leave call-0 running so name-based completion and settling below
+    // still mutate real blocks after all statuses have been exercised.
+    let call = "call-2";
+    for status in STATUSES {
+        app.transcript.complete_tool_call(call, status);
+        check(&app);
     }
+    for preview in ["updated\npreview\nwith\nfive\nlines", "short preview"] {
+        app.transcript.set_tool_result_preview(call, preview);
+        check(&app);
+    }
+    app.transcript.set_tool_display(
+        "call-1",
+        smith_tools::project_tool_call_display("read", &serde_json::json!({"path": "changed.rs"}))
+            .expect("read display"),
+    );
+    check(&app);
+    app.transcript
+        .enrich_tool_call("call-1", ["host-confirmed".to_owned()]);
+    check(&app);
+    app.transcript
+        .complete_tool_call("suppressed-write_todos", ToolStatus::Failed);
+    check(&app);
+    app.transcript
+        .complete_tool_call("suppressed-write_todos", ToolStatus::Ok);
+    check(&app);
+    app.transcript
+        .complete_tool_call_by_name("read", ToolStatus::Failed);
+    check(&app);
+    app.transcript
+        .settle_running_tool_calls(ToolStatus::Unreported);
+    check(&app);
+    app.transcript.push_external_tool_call(
+        "external",
+        "Read",
+        &serde_json::json!({"path": "external.rs"}),
+    );
+    app.transcript
+        .complete_tool_call("external", ToolStatus::Ok);
+    check(&app);
+    let echo = app.transcript.push_shell_shortcut("echo exact identity");
+    app.transcript
+        .finish_shell_shortcut(echo, None, false, "first result");
+    check(&app);
+    app.transcript.bind_shell_shortcut(echo, "new-shell");
+    check(&app);
+    app.transcript
+        .finish_shell_shortcut(echo, Some("new-shell"), true, "updated result");
+    check(&app);
+    let echo = app.transcript.push_shell_shortcut("echo merged identity");
+    app.transcript
+        .finish_shell_shortcut(echo, None, false, "echo result");
+    app.transcript
+        .push_tool_call("merged-shell", "shell", None, &[]);
+    app.transcript
+        .complete_tool_call("merged-shell", ToolStatus::Ok);
+    app.transcript
+        .set_tool_result_preview("merged-shell", "runtime result");
+    check(&app);
+    app.transcript.bind_shell_shortcut(echo, "merged-shell");
+    check(&app);
+    app.transcript
+        .finish_shell_shortcut(echo, Some("merged-shell"), true, "late result");
+    check(&app);
+    app.transcript.push_local(local_result(STATUSES.len()));
+    check(&app);
+    // Resize and toggle expansion on the same populated cache, then
+    // return to the original key before the remaining mutations.
+    for resized in [100, 44, 80, width] {
+        assert_matches_uncached(&app, theme, resized);
+    }
+    app.work_details = !expanded;
+    check(&app);
+    app.work_details = expanded;
+    check(&app);
+    app.transcript.retain_newest(12);
+    check(&app);
+    app.apply(&event(SmithEventKind::TurnStarted));
+    app.transcript.push_text_delta("Committed **body");
+    app.apply(&event(SmithEventKind::TextDelta {
+        request: RequestId::new("r"),
+        attempt: AttemptId::new("a"),
+        text: " plus speculative tail**".to_owned(),
+    }));
+    check(&app);
+    app.apply(&event(SmithEventKind::ProviderAttemptOutputCommitted {
+        request: RequestId::new("r"),
+        attempt: AttemptId::new("a"),
+    }));
+    check(&app);
+    app.apply(&event(SmithEventKind::TurnCompleted {
+        finish: TurnFinish::Completed,
+        visible_output: true,
+    }));
+    check(&app);
+    for text in ["First replacement", "Same-size replacement", ""] {
+        app.transcript.replace_from_history_with_shell_shortcuts(
+            &[Message::user(text)],
+            &[crate::transcript::RestoredShellShortcut {
+                anchor: 1,
+                call: None,
+                command: "saved echo".to_owned(),
+                is_error: false,
+                result: Some("saved result".to_owned()),
+            }],
+        );
+        check(&app);
+    }
+    app.transcript.replace_from_history(&[]);
+    check(&app);
 }
 
 #[test]
@@ -323,7 +333,7 @@ fn unchanged_blocks_are_reused_while_the_open_block_streams() {
     let mut app = App::new("model", "project");
     for index in 0..1_000 {
         app.transcript
-            .push_notice("monitor", format!("Block {index}"));
+            .push_notice(NoticeKind::Monitor, format!("Block {index}"));
     }
     app.transcript.push_text_delta("Streaming answer");
     let theme = Theme::new().without_motion();
@@ -406,7 +416,7 @@ fn repeated_draws_leave_application_state_unchanged() {
     let mut app = App::new("model", "project");
     for index in 0..20 {
         app.transcript
-            .push_notice("monitor", format!("Block {index}"));
+            .push_notice(NoticeKind::Monitor, format!("Block {index}"));
     }
     app.show_local_report(LocalResult::Help(Box::new(smith_client::commands::help())));
     let theme = Theme::new().without_motion();

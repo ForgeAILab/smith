@@ -40,8 +40,8 @@ pub mod transcript;
 pub use smith_client::{cache, commands, time_display, usage_log};
 
 pub use app::{
-    Action, App, MouseOutcome, Overlay, PendingInputPreview, PreparedSubmission, ResourceTarget,
-    RuntimeResources, SubmissionTarget,
+    Action, App, ConfirmDialog, ConfirmOutcome, MouseOutcome, Overlay, PendingInputPreview,
+    PreparedSubmission, ResourceTarget, RuntimeResources, SubmissionTarget,
 };
 pub use cache::{
     CacheLifecycleSummary, CacheOperationDisposition, CacheOperationSummary, CachePrice,

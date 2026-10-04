@@ -5,6 +5,7 @@ use std::time::Instant;
 use crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
+use smith_client::NoticeKind;
 use smith_host::approval::PromptScope;
 
 use crate::commands;
@@ -105,6 +106,7 @@ impl App {
         if key.kind == KeyEventKind::Release {
             return None;
         }
+        self.clear_feedback();
 
         let closing_shortcuts = matches!(self.overlay, Some(Overlay::Shortcuts));
         if closing_shortcuts {
@@ -119,15 +121,7 @@ impl App {
 
         let ignore_prompt_key = matches!(
             self.overlay,
-            Some(
-                Overlay::Approval { .. }
-                    | Overlay::RotationConfirm { .. }
-                    | Overlay::UndoConfirm { .. }
-                    | Overlay::RedoConfirm { .. }
-                    | Overlay::RevertConfirm { .. }
-                    | Overlay::McpTrustConfirm { .. }
-                    | Overlay::SkillTrustConfirm { .. }
-            )
+            Some(Overlay::Approval { .. } | Overlay::Confirm(_))
         ) && self.prompt_input_guard.ignore_key();
 
         // Ctrl+C is checked before overlays: two consecutive presses must
@@ -170,6 +164,9 @@ impl App {
             self.selection = None;
             return None;
         }
+        if matches!(self.overlay, Some(Overlay::Confirm(_))) {
+            return self.on_confirm_key(key, ignore_prompt_key);
+        }
         if ignore_prompt_key {
             return None;
         }
@@ -182,170 +179,7 @@ impl App {
                 return self.on_resource_picker_key(key);
             }
             Some(Overlay::HistorySearch { .. }) => return self.on_history_search_key(key),
-            Some(Overlay::RotationConfirm { .. }) => {
-                return match key.code {
-                    // The first eligible member is what `y` takes, which is
-                    // pool order: the account the user listed next.
-                    KeyCode::Char('y') => self.answer_rotation(Some(0)),
-                    KeyCode::Char('n') | KeyCode::Esc => self.answer_rotation(None),
-                    // A pool wider than two accounts is chosen by the number
-                    // the modal printed beside each one.
-                    KeyCode::Char(digit @ '1'..='9') => {
-                        let listed = digit.to_digit(10).unwrap_or(0) as usize;
-                        self.select_offered_account(listed)
-                    }
-                    _ => None,
-                };
-            }
-            Some(Overlay::UndoConfirm { .. }) => {
-                return match key.code {
-                    KeyCode::Char('y') => {
-                        self.overlay = None;
-                        Some(Action::ApplyUndo)
-                    }
-                    KeyCode::Char('n') | KeyCode::Esc => {
-                        self.overlay = None;
-                        Some(Action::CancelUndo)
-                    }
-                    _ => None,
-                };
-            }
-            Some(Overlay::RedoConfirm { .. }) => {
-                return match key.code {
-                    KeyCode::Char('y') => {
-                        self.overlay = None;
-                        Some(Action::ApplyRedo)
-                    }
-                    KeyCode::Char('n') | KeyCode::Esc => {
-                        self.overlay = None;
-                        Some(Action::CancelRedo)
-                    }
-                    _ => None,
-                };
-            }
-            Some(Overlay::RevertConfirm { report }) => {
-                return match key.code {
-                    KeyCode::Char('y') => {
-                        let action = Action::ApplyRevert {
-                            scope: report.scope.clone(),
-                            fingerprint: report.fingerprint.clone(),
-                        };
-                        self.overlay = None;
-                        Some(action)
-                    }
-                    KeyCode::Char('n') | KeyCode::Esc => {
-                        let action = Action::CancelRevert {
-                            scope: report.scope.clone(),
-                            fingerprint: report.fingerprint.clone(),
-                        };
-                        self.overlay = None;
-                        Some(action)
-                    }
-                    _ => None,
-                };
-            }
-            Some(Overlay::McpTrustConfirm { server, .. }) => {
-                return match key.code {
-                    KeyCode::Char('y') => {
-                        let action = Action::TrustMcpServer {
-                            server: server.clone(),
-                        };
-                        self.overlay = None;
-                        Some(action)
-                    }
-                    KeyCode::Char('n') | KeyCode::Esc => {
-                        self.overlay = None;
-                        None
-                    }
-                    _ => None,
-                };
-            }
-            Some(Overlay::SkillTrustConfirm { skill, .. }) => {
-                return match key.code {
-                    KeyCode::Char('y') => {
-                        let action = Action::TrustSkill {
-                            skill: skill.clone(),
-                        };
-                        self.overlay = None;
-                        Some(action)
-                    }
-                    KeyCode::Char('n') | KeyCode::Esc => {
-                        self.overlay = None;
-                        None
-                    }
-                    _ => None,
-                };
-            }
-            Some(Overlay::ReviewConfirm { report }) => {
-                return match key.code {
-                    KeyCode::Char('y') => {
-                        let action = Action::StartReview {
-                            scope: report.scope.clone(),
-                        };
-                        self.overlay = None;
-                        Some(action)
-                    }
-                    KeyCode::Char('n') | KeyCode::Esc => {
-                        self.overlay = None;
-                        None
-                    }
-                    _ => None,
-                };
-            }
-            Some(Overlay::AgentConfirm { preset, task, .. }) => {
-                return match key.code {
-                    KeyCode::Char('y') => {
-                        let action = Action::StartAgent {
-                            preset: preset.clone(),
-                            task: task.clone(),
-                        };
-                        self.overlay = None;
-                        self.composer.clear();
-                        Some(action)
-                    }
-                    KeyCode::Char('n') | KeyCode::Esc => {
-                        self.overlay = None;
-                        None
-                    }
-                    _ => None,
-                };
-            }
-            Some(Overlay::AgentFollowUpConfirm { child_id, task, .. }) => {
-                return match key.code {
-                    KeyCode::Char('y') => {
-                        let action = Action::FollowUpAgent {
-                            child_id: child_id.clone(),
-                            task: task.clone(),
-                        };
-                        self.overlay = None;
-                        self.composer.clear();
-                        Some(action)
-                    }
-                    KeyCode::Char('n') | KeyCode::Esc => {
-                        self.overlay = None;
-                        None
-                    }
-                    _ => None,
-                };
-            }
-            Some(Overlay::AgentResumeConfirm { child_id, .. }) => {
-                return match key.code {
-                    KeyCode::Char('y') => {
-                        let action = Action::ResumeAgent {
-                            child_id: child_id.clone(),
-                        };
-                        self.overlay = None;
-                        self.composer.clear();
-                        Some(action)
-                    }
-                    KeyCode::Char('n') | KeyCode::Esc => {
-                        self.overlay = None;
-                        None
-                    }
-                    _ => None,
-                };
-            }
-            Some(Overlay::ExitConfirm { .. }) => return self.on_exit_confirm_key(key),
+            Some(Overlay::Confirm(_)) => unreachable!("confirmations are handled above"),
             Some(Overlay::Shortcuts) | None => {}
         }
 
@@ -369,7 +203,7 @@ impl App {
                 if !self.composer.text().starts_with('/') {
                     self.composer.replace("/");
                 }
-                self.overlay = Some(Overlay::Palette {
+                self.open_overlay(Overlay::Palette {
                     selected: 0,
                     error: None,
                     restore_on_escape: Some(original),
@@ -395,7 +229,7 @@ impl App {
                     && (modifiers == KeyModifiers::NONE || modifiers == KeyModifiers::SHIFT) =>
             {
                 self.selection = None;
-                self.overlay = Some(Overlay::Shortcuts);
+                self.open_overlay(Overlay::Shortcuts);
                 None
             }
             (KeyCode::Esc, _) => self.on_escape(),
@@ -438,23 +272,91 @@ impl App {
         }
     }
 
-    /// Answers a rotation offer.
-    ///
-    /// `offered` is an index into the offer's eligible list, or `None` to
-    /// stay. Either way the prompt is consumed here: leaving it in the overlay
-    /// would keep the runtime blocked on an answer already given.
-    pub(super) fn answer_rotation(&mut self, offered: Option<usize>) -> Option<Action> {
-        let Some(Overlay::RotationConfirm { prompt, .. }) = self.overlay.take() else {
+    pub(super) fn on_confirm_key(&mut self, key: KeyEvent, ignore_key: bool) -> Option<Action> {
+        let Some(Overlay::Confirm(dialog)) = &mut self.overlay else {
             return None;
         };
+        match key.code {
+            KeyCode::Up => dialog.scroll = dialog.scroll.saturating_sub(1),
+            KeyCode::Down => {
+                dialog.scroll = dialog.scroll.saturating_add(1).min(dialog.scroll_limit)
+            }
+            KeyCode::PageUp => dialog.scroll = dialog.scroll.saturating_sub(10),
+            KeyCode::PageDown => {
+                dialog.scroll = dialog.scroll.saturating_add(10).min(dialog.scroll_limit)
+            }
+            _ => {
+                if ignore_key {
+                    return None;
+                }
+                let (accept, offered) = match key.code {
+                    KeyCode::Char('y') => (true, Some(0)),
+                    KeyCode::Char('n') | KeyCode::Esc => (false, None),
+                    // Retain the account numbers already printed by rotation.
+                    KeyCode::Char(digit @ '1'..='9') if dialog.rotation.is_some() => {
+                        let position = digit.to_digit(10)? as usize - 1;
+                        let index = dialog
+                            .rotation
+                            .as_ref()?
+                            .request()
+                            .eligible
+                            .iter()
+                            .position(|member| member.position == position)?;
+                        (true, Some(index))
+                    }
+                    _ => return None,
+                };
+                let Some(Overlay::Confirm(dialog)) = self.overlay.take() else {
+                    return None;
+                };
+                let outcome = if accept {
+                    *dialog.accept
+                } else {
+                    *dialog.cancel
+                };
+                return match outcome {
+                    ConfirmOutcome::Action(action) => {
+                        match &action {
+                            Action::Quit => {
+                                self.cancel_pending_prompts();
+                                self.should_quit = true;
+                            }
+                            Action::StartAgent { .. }
+                            | Action::FollowUpAgent { .. }
+                            | Action::ResumeAgent { .. } => {
+                                self.composer.clear();
+                            }
+                            _ => {}
+                        }
+                        Some(action)
+                    }
+                    ConfirmOutcome::Dismiss => None,
+                    ConfirmOutcome::SwitchAccount | ConfirmOutcome::StayAccount => {
+                        if let Some(prompt) = dialog.rotation {
+                            self.answer_rotation(*prompt, if accept { offered } else { None });
+                        }
+                        None
+                    }
+                };
+            }
+        }
+        self.selection = None;
+        None
+    }
+
+    /// Consumes the owned responder and records the account decision.
+    fn answer_rotation(
+        &mut self,
+        prompt: smith_host::rotation::RotationPrompt,
+        offered: Option<usize>,
+    ) {
         let request = prompt.request().clone();
         let outgoing = request.outgoing.label.clone();
-
         match offered.and_then(|index| request.eligible.get(index)) {
             Some(member) => {
                 let notice = crate::accounts::switch_notice(&outgoing, &member.label, false);
                 prompt.switch_to(member.position);
-                self.transcript.push_notice("account", &notice);
+                self.transcript.push_notice(NoticeKind::Account, &notice);
             }
             None => {
                 let notice = crate::accounts::declined_notice(
@@ -462,30 +364,10 @@ impl App {
                     request.outgoing_resets_at_ms,
                     crate::accounts::now_ms(),
                 );
-                // Dropping would decline too, but saying so explicitly keeps
-                // the refusal a decision rather than an accident.
                 prompt.decline();
-                self.transcript.push_notice("account", &notice);
+                self.transcript.push_notice(NoticeKind::Account, &notice);
             }
         }
-        None
-    }
-
-    /// Selects the account the modal printed as `listed` (1-based).
-    ///
-    /// An out-of-range number is ignored rather than treated as a refusal: a
-    /// mistyped digit must not spend the turn.
-    pub(super) fn select_offered_account(&mut self, listed: usize) -> Option<Action> {
-        let Some(Overlay::RotationConfirm { prompt, .. }) = &self.overlay else {
-            return None;
-        };
-        let position = listed.checked_sub(1)?;
-        let index = prompt
-            .request()
-            .eligible
-            .iter()
-            .position(|member| member.position == position)?;
-        self.answer_rotation(Some(index))
     }
 
     pub(super) fn on_ctrl_c(&mut self) -> Option<Action> {
@@ -501,26 +383,33 @@ impl App {
         }
 
         self.last_ctrl_c = Some(now);
-        match self.overlay.take() {
-            Some(Overlay::Palette {
-                restore_on_escape, ..
-            }) => {
-                if let Some(original) = restore_on_escape {
-                    self.composer.replace(original);
-                }
+        if matches!(
+            self.overlay,
+            Some(
+                Overlay::Palette { .. }
+                    | Overlay::ResourcePicker { .. }
+                    | Overlay::HistorySearch { .. }
+            )
+        ) {
+            match self.overlay.take() {
+                Some(Overlay::Palette {
+                    restore_on_escape: Some(original),
+                    ..
+                })
+                | Some(Overlay::ResourcePicker {
+                    restore_on_escape: original,
+                    ..
+                })
+                | Some(Overlay::HistorySearch { original, .. }) => self.composer.replace(original),
+                _ => {}
             }
-            Some(Overlay::ResourcePicker {
-                restore_on_escape, ..
-            }) => self.composer.replace(restore_on_escape),
-            Some(Overlay::HistorySearch { original, .. }) => self.composer.replace(original),
-            other => self.overlay = other,
         }
         self.composer.stash_for_recall();
         None
     }
 
     pub(super) fn open_history_search(&mut self) {
-        self.overlay = Some(Overlay::HistorySearch {
+        self.open_overlay(Overlay::HistorySearch {
             original: self.composer.text().to_owned(),
             query: String::new(),
             selected: None,
@@ -593,48 +482,71 @@ impl App {
             return Some(Action::Quit);
         }
 
-        let (approval, questionnaire) = match self.overlay.take() {
-            Some(Overlay::Approval { prompt, review }) => (Some((prompt, review)), None),
-            Some(Overlay::Questionnaire { state }) => (None, Some(state)),
-            _ => (None, None),
-        };
-        self.overlay = Some(Overlay::ExitConfirm {
-            approval,
-            questionnaire,
-        });
+        let mut body = vec![String::new()];
+        if self.is_busy() {
+            body.push("· a turn is still running".to_owned());
+        }
+        if self.pending_approval_count() > 0 {
+            body.push("· an approval is pending".to_owned());
+        }
+        if self.pending_questionnaire_count() > 0 {
+            body.push("· a questionnaire is pending".to_owned());
+        }
+        if !self.running_tasks.is_empty() {
+            let ids = self
+                .running_tasks
+                .iter()
+                .map(|task| task.task_id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            body.push(format!(
+                "· {} background {} running: {ids}",
+                self.running_tasks.len(),
+                if self.running_tasks.len() == 1 {
+                    "task"
+                } else {
+                    "tasks"
+                }
+            ));
+        }
+        let mut dialog = ConfirmDialog::new(
+            "exit",
+            crate::theme::Tone::Warning,
+            body,
+            "quit",
+            ConfirmOutcome::Action(Action::Quit),
+            ConfirmOutcome::Dismiss,
+        );
+        dialog.warning = Some((
+            "quit with work in progress?".to_owned(),
+            crate::theme::Tone::Heading,
+        ));
+        dialog.accept_tone = crate::theme::Tone::Danger;
+        dialog.cancel_key = "n";
+        dialog.cancel_label = "keep working".to_owned();
+        dialog.hint = "y quit · n keep working".to_owned();
+        self.open_overlay(Overlay::Confirm(dialog));
         None
     }
 
     pub(super) fn cancel_pending_prompts(&mut self) {
-        self.overlay = match self.overlay.take() {
-            Some(Overlay::Approval { prompt, .. }) => {
-                prompt.cancel();
-                None
-            }
-            Some(Overlay::Questionnaire { state }) => {
-                self.resolve_questionnaire(state, QuestionnaireResolution::Cancelled);
-                None
-            }
-            Some(Overlay::ExitConfirm {
-                approval,
-                questionnaire,
-            }) => {
-                if let Some((prompt, _)) = approval {
-                    prompt.cancel();
-                }
-                if let Some(state) = questionnaire {
+        if self.overlay.as_ref().is_some_and(Overlay::is_prompt) {
+            match self.overlay.take() {
+                Some(Overlay::Approval { prompt, .. }) => prompt.cancel(),
+                Some(Overlay::Questionnaire { state }) => {
                     self.resolve_questionnaire(state, QuestionnaireResolution::Cancelled);
                 }
-                None
+                Some(Overlay::Confirm(_)) => {}
+                _ => unreachable!("only prompts are cancelled"),
             }
-            other => other,
-        };
+        }
         while let Some(prompt) = self.pending_prompts.pop_front() {
             match prompt {
                 PendingPrompt::Approval(prompt, _) => prompt.cancel(),
                 PendingPrompt::Questionnaire(state) => {
                     self.resolve_questionnaire(state, QuestionnaireResolution::Cancelled);
                 }
+                PendingPrompt::Confirm(_) => {}
             }
         }
     }
@@ -681,36 +593,6 @@ impl App {
             self.present_next_prompt();
         }
         None
-    }
-
-    pub(super) fn on_exit_confirm_key(&mut self, key: KeyEvent) -> Option<Action> {
-        match key.code {
-            KeyCode::Char('y') => {
-                self.cancel_pending_prompts();
-                self.should_quit = true;
-                Some(Action::Quit)
-            }
-            KeyCode::Char('n') | KeyCode::Esc => {
-                let (approval, questionnaire) = match self.overlay.take() {
-                    Some(Overlay::ExitConfirm {
-                        approval,
-                        questionnaire,
-                    }) => (approval, questionnaire),
-                    _ => (None, None),
-                };
-                self.overlay = match (approval, questionnaire) {
-                    (Some((prompt, review)), None) => {
-                        self.prompt_input_guard.start();
-                        Some(Overlay::Approval { prompt, review })
-                    }
-                    (None, Some(state)) => Some(Overlay::Questionnaire { state }),
-                    _ => None,
-                };
-                self.present_next_prompt();
-                None
-            }
-            _ => None,
-        }
     }
 
     pub(super) fn on_palette_key(&mut self, key: KeyEvent) -> Option<Action> {
@@ -1025,13 +907,19 @@ impl App {
                             None => self.status.model.clone(),
                         };
                         self.composer.record_current();
-                        self.overlay = Some(Overlay::AgentFollowUpConfirm {
-                            child_id: agent.clone(),
-                            task: self.expand_pasted(task),
-                            content: format!(
-                                "child: {agent}\noperation: new follow-up turn\ncontinuity: reuse prior child history and cumulative limits\nprovider/model: {model}\nprovider spend: yes\ncheckpoint replay: no"
-                            ),
-                        });
+                        let content = format!(
+                            "child: {agent}\noperation: new follow-up turn\ncontinuity: reuse prior child history and cumulative limits\nprovider/model: {model}\nprovider spend: yes\ncheckpoint replay: no"
+                        );
+                        self.confirm_child(
+                            "existing child follow-up",
+                            "start follow-up and spend provider tokens",
+                            "y start follow-up turn · n/esc cancel",
+                            content,
+                            Action::FollowUpAgent {
+                                child_id: agent.clone(),
+                                task: self.expand_pasted(task),
+                            },
+                        );
                         return None;
                     }
                     let profile_detail = self
@@ -1041,13 +929,19 @@ impl App {
                         .find(|entry| entry.id.strip_prefix("agent:") == Some(agent.as_str()))
                         .map_or("read-only child profile", |entry| entry.detail.as_str());
                     self.composer.record_current();
-                    self.overlay = Some(Overlay::AgentConfirm {
-                        preset: agent.clone(),
-                        task: self.expand_pasted(task),
-                        content: format!(
-                            "profile: {agent}\nconfiguration: {profile_detail}\nworkspace: read-only\nturn limit: 1\nprovider spend: yes\nresult: bounded child summary"
-                        ),
-                    });
+                    let content = format!(
+                        "profile: {agent}\nconfiguration: {profile_detail}\nworkspace: read-only\nturn limit: 1\nprovider spend: yes\nresult: bounded child summary"
+                    );
+                    self.confirm_child(
+                        "read-only child agent",
+                        "start child and spend provider tokens",
+                        "y start read-only child · n/esc cancel",
+                        content,
+                        Action::StartAgent {
+                            preset: agent.clone(),
+                            task: self.expand_pasted(task),
+                        },
+                    );
                     return None;
                 }
                 unreachable!("ordinary input without a child reference was prepared above")
@@ -1112,7 +1006,7 @@ impl App {
                 }
                 self.composer.insert(ch);
                 if self.composer.text().starts_with('/') {
-                    self.overlay = Some(Overlay::Palette {
+                    self.open_overlay(Overlay::Palette {
                         selected: 0,
                         error: None,
                         restore_on_escape: None,

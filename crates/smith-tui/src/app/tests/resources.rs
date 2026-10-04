@@ -393,8 +393,8 @@
         }));
 
         match &app.transcript.blocks()[0] {
-            Block::Notice { source, text } => {
-                assert_eq!(source, "provider");
+            Block::Notice { kind: source, text } => {
+                assert_eq!(source.label(), "provider");
                 assert!(text.contains("not transferable"), "{text}");
             }
             other => panic!("expected a provider notice, got {other:?}"),
@@ -510,9 +510,7 @@
         assert_eq!(app.on_key(key(KeyCode::Enter)), None);
         assert!(app.overlay.is_none());
         assert_eq!(app.composer.text(), "/eff");
-        assert!(app.transcript.blocks().iter().any(|block| {
-            matches!(block, Block::Notice { text, .. } if text.contains("requires an idle turn"))
-        }));
+        assert_feedback_hint(&app, "/effort requires an idle turn; draft preserved");
     }
 
     #[test]
@@ -633,4 +631,64 @@
                 .any(|block| matches!(block, Block::User { text } if text == "keep drafting")),
             "a local result must not turn the draft into provider input"
         );
+    }
+
+    #[test]
+    fn busy_goal_changes_are_feedback_and_preserve_the_command() {
+        for command in [
+            "/goal finish the task",
+            "/goal edit revised objective",
+            "/goal budget 100",
+            "/goal resume",
+            "/goal clear",
+        ] {
+            let mut app = app();
+            app.apply(&event(RuntimeEvent::TurnStarted));
+            app.composer.replace(command);
+            assert_eq!(app.on_key(key(KeyCode::Enter)), None, "{command}");
+            assert_eq!(app.composer.text(), command);
+            assert!(app.is_busy());
+            assert!(app.transcript.is_empty());
+            assert_feedback_hint(
+                &app,
+                "this goal change requires an idle turn; command preserved",
+            );
+        }
+    }
+
+    #[test]
+    fn unchanged_session_and_account_selections_are_feedback() {
+        let mut app = app();
+        app.resources.current_session = Some("session-7".to_owned());
+        app.composer.replace("/resume session-7");
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert_feedback_hint(&app, "already in the selected session");
+        assert!(app.transcript.is_empty());
+        assert_eq!(app.resources.current_session.as_deref(), Some("session-7"));
+
+        app.set_accounts(vec![
+            ResourceEntry::new("0", "account 1", "active").active(true),
+        ]);
+        app.composer.replace("/account 1");
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert_feedback_hint(&app, "already using that account");
+        assert!(app.transcript.is_empty());
+        assert!(app.resources.accounts[0].active);
+        app.on_key(key(KeyCode::Left));
+        assert!(app.feedback_notice().is_none());
+    }
+
+    #[test]
+    fn busy_child_resume_is_feedback_and_preserves_the_draft() {
+        let mut app = app();
+        app.apply(&event(RuntimeEvent::TurnStarted));
+        app.composer.replace("/agent resume child-1");
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert_eq!(app.composer.text(), "/agent resume child-1");
+        assert!(app.is_busy());
+        assert_feedback_hint(
+            &app,
+            "exact child resume requires an idle root turn; draft preserved",
+        );
+        assert!(app.transcript.is_empty());
     }

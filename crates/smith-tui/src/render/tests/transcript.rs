@@ -24,7 +24,7 @@
                 assert_eq!(app.transcript.len(), 1);
                 match append {
                     0 => app.show_local_report(LocalResult::Status(Box::new(status_report()))),
-                    1 => app.transcript.push_notice("monitor", "later notice"),
+                    1 => app.transcript.push_notice(NoticeKind::Monitor, "later notice"),
                     2 => app.transcript.push_user("another turn"),
                     3 => app
                         .transcript
@@ -150,7 +150,7 @@
         );
 
         app.transcript
-            .push_notice("monitor", "a background event arrived");
+            .push_notice(NoticeKind::Monitor, "a background event arrived");
         app.transcript.push_text_delta("The actual visible answer.");
         app.apply(&event(RuntimeEvent::TurnCompleted {
             finish: TurnFinish::Completed,
@@ -427,7 +427,7 @@
     fn a_multiline_notice_renders_every_line() {
         let mut app = App::new("gpt-5.3", "~/work/api");
         app.transcript.push_notice(
-            "help",
+            NoticeKind::Help,
             "/help — list available commands\n/quit — exit Smith",
         );
         let screen = render(&app, 74, 16, Theme::new());
@@ -580,7 +580,7 @@
         let mut app = conversation();
         assert!(!render(&app, 74, 24, Theme::new()).contains("monitor:build"));
 
-        app.transcript.push_notice("monitor:build", "error[E0433]");
+        app.transcript.push_notice(NoticeKind::NamedMonitor("build".to_owned()), "error[E0433]");
         assert!(render(&app, 74, 24, Theme::new()).contains("monitor:build"));
     }
 
@@ -748,7 +748,7 @@
                 RecoveryReport::Applied(_) | RecoveryReport::Cancelled(_) => {
                     legacy
                         .transcript
-                        .push_notice(report.action().name(), content);
+                        .push_notice(report.action().notice_kind(), content);
                 }
                 _ => legacy.transcript.push_error(content),
             }
@@ -848,7 +848,7 @@
                         ReviewStartReport::Started { .. } | ReviewStartReport::Queued { .. }
                     )
             ) {
-                legacy.transcript.push_notice("review", content);
+                legacy.transcript.push_notice(NoticeKind::Review, content);
             } else {
                 legacy.transcript.push_error(content);
             }

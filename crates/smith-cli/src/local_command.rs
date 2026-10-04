@@ -356,8 +356,8 @@ pub(super) enum LocalOutcome {
     Agent(Box<AgentReport>),
     Review(Box<ReviewReport>),
     Notice {
-        /// The transcript block label for child lifecycle notices.
-        source: &'static str,
+        /// The typed transcript notice for child lifecycle updates.
+        kind: smith_client::NoticeKind,
         text: String,
     },
     Error(String),

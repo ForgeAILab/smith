@@ -451,7 +451,7 @@ pub(super) fn overlay_hint(app: &App) -> Option<String> {
     match &app.overlay {
         Some(Overlay::Shortcuts) => None,
         Some(Overlay::Approval { .. }) => {
-            let waiting = app.pending_approval_count().saturating_sub(1);
+            let waiting = app.queued_prompt_count();
             Some(if waiting == 0 {
                 "y allow once · a allow this target · n deny".to_owned()
             } else {
@@ -459,7 +459,7 @@ pub(super) fn overlay_hint(app: &App) -> Option<String> {
             })
         }
         Some(Overlay::Questionnaire { state }) => {
-            let queued = app.pending_questionnaire_count().saturating_sub(1);
+            let queued = app.queued_prompt_count();
             let answer = if state.question().choices.is_empty() {
                 "type answer".to_owned()
             } else if state.question().allows_free_form {
@@ -480,33 +480,11 @@ pub(super) fn overlay_hint(app: &App) -> Option<String> {
         Some(Overlay::HistorySearch { .. }) => {
             Some("ctrl+r older · enter use · esc cancel".to_owned())
         }
-        Some(Overlay::UndoConfirm { .. }) => Some("y apply undo · n/esc cancel".to_owned()),
-        Some(Overlay::RedoConfirm { .. }) => Some("y apply redo · n/esc cancel".to_owned()),
-        Some(Overlay::RevertConfirm { .. }) => Some("y apply revert · n/esc cancel".to_owned()),
-        Some(Overlay::ReviewConfirm { .. }) => Some("y start review · n/esc cancel".to_owned()),
-        Some(Overlay::McpTrustConfirm { .. }) => {
-            Some("y trust and connect · n/esc leave untrusted".to_owned())
-        }
-        Some(Overlay::SkillTrustConfirm { .. }) => {
-            Some("y trust and activate · n/esc leave withheld".to_owned())
-        }
-        Some(Overlay::RotationConfirm { prompt, .. }) => {
-            Some(if prompt.request().eligible.len() > 1 {
-                "y switch and resend · 1-9 choose account · n/esc stay".to_owned()
-            } else {
-                "y switch and resend · n/esc stay".to_owned()
-            })
-        }
-        Some(Overlay::AgentConfirm { .. }) => {
-            Some("y start read-only child · n/esc cancel".to_owned())
-        }
-        Some(Overlay::AgentFollowUpConfirm { .. }) => {
-            Some("y start follow-up turn · n/esc cancel".to_owned())
-        }
-        Some(Overlay::AgentResumeConfirm { .. }) => {
-            Some("y resume exact checkpoint · n/esc cancel".to_owned())
-        }
-        Some(Overlay::ExitConfirm { .. }) => Some("y quit · n keep working".to_owned()),
+        Some(Overlay::Confirm(dialog)) => Some(if app.queued_prompt_count() == 0 {
+            dialog.hint.clone()
+        } else {
+            format!("{} · {} queued", dialog.hint, app.queued_prompt_count())
+        }),
         // The inspector is a read-only view, not an overlay, but it owns the
         // same keys the identity footer would otherwise explain: while it is
         // open, the hint row says how to leave it and how to reply to the
@@ -519,6 +497,19 @@ pub(super) fn overlay_hint(app: &App) -> Option<String> {
 }
 
 pub(super) fn draw_hint(frame: &mut Frame<'_>, area: Rect, app: &App, theme: Theme) {
+    if let Some(notice) = app.feedback_notice() {
+        // Feedback replaces the left hints, retaining the current identity.
+        let hint = notice.text.replace(['\r', '\n'], " ");
+        if has_stacked_control_hint(app) && area.height > 1 {
+            let [identity, controls] =
+                Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
+            draw_identity_footer(frame, identity, app, theme);
+            draw_control_hint(frame, controls, &clip_hint_words(hint, area.width), theme);
+        } else {
+            draw_identity_footer_with_hint(frame, area, app, theme, hint);
+        }
+        return;
+    }
     if let Some(hint) = overlay_hint(app) {
         // `draw_control_hint` intentionally keeps each hint span atomic so a
         // footer can drop optional segments without splitting their style.
@@ -546,6 +537,29 @@ pub(super) fn draw_hint(frame: &mut Frame<'_>, area: Rect, app: &App, theme: The
     draw_identity_footer(frame, area, app, theme);
 }
 
+fn clip_hint_words(text: String, width: u16) -> String {
+    let budget = usize::from(width).saturating_sub(2);
+    if text.width() <= budget {
+        return text;
+    }
+    // Only clip once identity has yielded the entire row, and keep words whole.
+    let mut hint = String::new();
+    for word in text.split_whitespace() {
+        let gap = usize::from(!hint.is_empty());
+        if hint.width() + gap + word.width() + glyph::ELIDED.width() > budget {
+            break;
+        }
+        if !hint.is_empty() {
+            hint.push(' ');
+        }
+        hint.push_str(word);
+    }
+    if budget > 0 {
+        hint.push_str(glyph::ELIDED);
+    }
+    hint
+}
+
 pub(super) fn draw_control_hint(frame: &mut Frame<'_>, area: Rect, hint: &str, theme: Theme) {
     frame.render_widget(
         Paragraph::new(Line::from(truncate(
@@ -571,6 +585,16 @@ pub(super) fn draw_identity_footer(frame: &mut Frame<'_>, area: Rect, app: &App,
         return;
     }
 
+    draw_identity_footer_with_hint(frame, area, app, theme, composer_hint(app, area.width));
+}
+
+fn draw_identity_footer_with_hint(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &App,
+    theme: Theme,
+    hint: String,
+) {
     // An installed CLI agent's id already names what runs the turn, and the
     // resolved provider only supplies model identity and limits -- nothing is
     // called through it. Prefixing it would read as though the turn went to
@@ -681,7 +705,6 @@ pub(super) fn draw_identity_footer(frame: &mut Frame<'_>, area: Rect, app: &App,
             ),
         );
     }
-    let hint = composer_hint(app, area.width);
     let left_width = hint.width().saturating_add(2);
     let gap = usize::from(!hint.is_empty()) * 2;
     let budget = usize::from(area.width).saturating_sub(left_width + gap);
@@ -689,6 +712,8 @@ pub(super) fn draw_identity_footer(frame: &mut Frame<'_>, area: Rect, app: &App,
     // Even a model that cannot fit yields to actionable keys at 44 columns.
     let identity = truncate(identity, u16::try_from(budget).unwrap_or(u16::MAX));
     let identity_width: usize = identity.iter().map(|span| span.content.width()).sum();
+    let hint = clip_hint_words(hint, area.width);
+    let left_width = hint.width().saturating_add(2);
     let padding = usize::from(area.width).saturating_sub(left_width + identity_width);
     let mut spans = vec![Span::raw("  "), Span::styled(hint, theme.style(Tone::Dim))];
     spans.push(Span::raw(" ".repeat(padding)));

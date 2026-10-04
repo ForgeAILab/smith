@@ -26,6 +26,7 @@ use smith_client::message_report::MessageReport;
 use smith_client::recovery_report::RecoveryReport;
 use smith_client::review_report::{ReviewReport, ReviewStartReport};
 use smith_client::shell_report::ShellOutput;
+use smith_client::{NoticeKind, NoticePersistence};
 use smith_tools::{ToolCallDisplay, project_external_tool_call_display, project_tool_call_display};
 
 pub(crate) const MAX_LOCAL_RESULT_BYTES: usize = 512 * 1024;
@@ -165,8 +166,8 @@ pub enum Block {
     /// A background notification, or a runtime notice such as a provider
     /// change.
     Notice {
-        /// The source, e.g. a monitor name or `provider`.
-        source: String,
+        /// Fixes the source label and transcript persistence.
+        kind: NoticeKind,
         /// The notice text.
         text: String,
     },
@@ -231,16 +232,9 @@ impl PartialEq for Block {
                     && e1 == e2
             }
             (Self::Error { message: m1 }, Self::Error { message: m2 }) => m1 == m2,
-            (
-                Self::Notice {
-                    source: s1,
-                    text: t1,
-                },
-                Self::Notice {
-                    source: s2,
-                    text: t2,
-                },
-            ) => s1 == s2 && t1 == t2,
+            (Self::Notice { kind: s1, text: t1 }, Self::Notice { kind: s2, text: t2 }) => {
+                s1 == s2 && t1 == t2
+            }
             (Self::Local(r1), Self::Local(r2)) => r1 == r2,
             _ => false,
         }
@@ -313,10 +307,14 @@ impl Transcript {
         self.push_block(Block::User { text: text.into() });
     }
 
-    /// Appends a notice, which never merges with adjacent blocks.
-    pub fn push_notice(&mut self, source: impl Into<String>, text: impl Into<String>) {
+    /// Appends a transcript notice, which never merges with adjacent blocks.
+    /// Keypress feedback belongs to `App` and cannot enter the transcript.
+    pub fn push_notice(&mut self, kind: NoticeKind, text: impl Into<String>) {
+        if kind.persistence() == NoticePersistence::Feedback {
+            return;
+        }
         self.push_block(Block::Notice {
-            source: source.into(),
+            kind,
             text: text.into(),
         });
     }
@@ -1149,10 +1147,25 @@ mod tests {
     }
 
     #[test]
+    fn a_feedback_kind_cannot_record_a_block_or_split_a_streaming_reply() {
+        let mut transcript = Transcript::new();
+        transcript.push_text_delta("still");
+        transcript.push_notice(NoticeKind::Clipboard, "nothing to attach");
+        transcript.push_text_delta(" streaming");
+        assert!(
+            matches!(transcript.blocks(), [Block::Assistant { text, open: true }]
+            if text == "still streaming")
+        );
+    }
+
+    #[test]
     fn a_notice_never_splices_into_a_streaming_reply() {
         let mut transcript = Transcript::new();
         transcript.push_text_delta("analyzing");
-        transcript.push_notice("monitor:build", "error[E0433]: failed to resolve");
+        transcript.push_notice(
+            NoticeKind::NamedMonitor("build".to_owned()),
+            "error[E0433]: failed to resolve",
+        );
         transcript.push_text_delta(" the failure");
 
         // The notice stands alone, and the reply resumes in a fresh block
@@ -1539,7 +1552,7 @@ mod tests {
         ];
 
         let mut transcript = Transcript::new();
-        transcript.push_notice("stale", "dropped on replay");
+        transcript.push_notice(NoticeKind::Stale, "dropped on replay");
         transcript.push_local(LocalResult::Message(Box::new(MessageReport::Notice {
             title: "status".to_owned(),
             message: "model: old".to_owned(),

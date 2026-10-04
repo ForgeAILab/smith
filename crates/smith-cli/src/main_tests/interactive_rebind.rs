@@ -3,6 +3,7 @@ use agent_runtime::provider::fake::{FakeProvider, ScriptedStream, usage_event};
 use agent_runtime_core::clock::Deadline;
 use agent_runtime_core::ids::{AttemptId, EventId, RequestId};
 use agent_runtime_core::provider::{Capabilities, FinishReason, ProviderStreamEvent};
+use smith_client::NoticeKind;
 use smith_client::commands::SessionControl;
 use smith_config::resolve::Overrides;
 use smith_tui::app::{ChildState, Overlay};
@@ -192,8 +193,8 @@ fn event(payload: RuntimeEvent) -> EventEnvelope {
 
 fn assert_notice(app: &App, source: &str, expected: &str) {
     assert!(
-        matches!(app.transcript.blocks().last(), Some(Block::Notice { source: actual, text })
-            if actual == source && text == expected),
+        matches!(app.transcript.blocks().last(), Some(Block::Notice { kind: actual, text })
+            if actual.label() == source && text == expected),
         "{:?}",
         app.transcript.blocks().last(),
     );
@@ -231,7 +232,7 @@ async fn model_rebind_keeps_blocks_folding_scroll_composer_and_history() {
     .await;
     previous.app.following = false;
     previous.app.scroll_back = 7;
-    previous.app.overlay = Some(Overlay::Shortcuts);
+    previous.app.open_overlay(Overlay::Shortcuts);
     let blocks = format!("{:?}", previous.app.transcript.blocks());
     let count = previous.app.transcript.len();
     let session = host.session().id().clone();
@@ -319,7 +320,7 @@ async fn tab_profile_rebind_keeps_transcript_and_scroll() {
     previous
         .app
         .transcript
-        .push_notice("local", "keep this result");
+        .push_notice(NoticeKind::Local, "keep this result");
     previous.app.following = false;
     previous.app.scroll_back = 3;
     let Some(Action::Reconfigure(SessionControl::Reconfigure(command))) = previous
@@ -366,7 +367,10 @@ async fn resume_other_session_replaces_transcript_and_keeps_history() {
     Box::pin(host.shutdown()).await.expect("shutdown");
     let (host, resources) = Box::pin(fixture.start(None, Overrides::default())).await;
     let mut previous = Box::pin(fixture.app(&host, &resources, None, None)).await;
-    previous.app.transcript.push_notice("local", "old screen");
+    previous
+        .app
+        .transcript
+        .push_notice(NoticeKind::Local, "old screen");
     previous.app.composer.replace("recall across sessions");
     previous.app.composer.record_current();
     let mut selection = Selection::default();
@@ -399,7 +403,10 @@ async fn new_session_clears_transcript_and_keeps_recallable_pastes() {
     let fixture = Fixture::new();
     let (host, resources) = Box::pin(fixture.start(None, Overrides::default())).await;
     let mut previous = Box::pin(fixture.app(&host, &resources, None, None)).await;
-    previous.app.transcript.push_notice("local", "old screen");
+    previous
+        .app
+        .transcript
+        .push_notice(NoticeKind::Local, "old screen");
     previous.app.on_paste("first line\nsecond line\nthird line");
     let recalled = previous.app.composer.text().to_owned();
     previous.app.composer.record_current();
@@ -470,7 +477,10 @@ async fn reasoning_and_context_rebind_notices_describe_only_changed_values() {
     let fixture = Fixture::new();
     let (host, resources) = Box::pin(fixture.start(None, Overrides::default())).await;
     let mut previous = Box::pin(fixture.app(&host, &resources, None, None)).await;
-    previous.app.transcript.push_notice("local", "kept screen");
+    previous
+        .app
+        .transcript
+        .push_notice(NoticeKind::Local, "kept screen");
     let session = host.session().id().clone();
     Box::pin(host.shutdown()).await.expect("shutdown");
     let (host, resources) = Box::pin(fixture.start(
@@ -485,8 +495,8 @@ async fn reasoning_and_context_rebind_notices_describe_only_changed_values() {
     let rebound = Box::pin(fixture.app(&host, &resources, Some(previous), None)).await;
     assert_eq!(rebound.app.transcript.len(), 3);
     assert!(
-        matches!(&rebound.app.transcript.blocks()[1], Block::Notice { source, text }
-        if source == "reasoning" && text.starts_with("thinking on · effort high ·"))
+        matches!(&rebound.app.transcript.blocks()[1], Block::Notice { kind: source, text }
+        if source.label() == "reasoning" && text.starts_with("thinking on · effort high ·"))
     );
     assert_notice(&rebound.app, "context", "window changed · 128k → 256k");
     assert_eq!(rebound.app.status.context_window.as_deref(), Some("256k"));
@@ -517,16 +527,32 @@ fn reconfigure_is_refused_while_busy_or_a_prompt_is_pending() {
     assert!(reconfigure_exit(&mut app, command()).is_none());
     assert!(app.is_busy(), "the existing turn keeps running");
     assert_eq!(app.composer.text(), "draft");
-    assert_notice(
-        &app,
-        "smith",
-        "/model requires an idle turn; draft preserved",
-    );
+    let assert_refused = |app: &App| {
+        assert_eq!(
+            app.feedback_notice().map(|notice| notice.text.as_str()),
+            Some("/model requires an idle turn; draft preserved"),
+        );
+        assert!(app.transcript.is_empty());
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 20))
+            .expect("test terminal");
+        terminal
+            .draw(|frame| smith_tui::render::draw(frame, app, smith_tui::Theme::new()))
+            .expect("frame");
+        let buffer = terminal.backend().buffer();
+        let hint = (0..100)
+            .map(|x| buffer[(x, 19)].symbol())
+            .collect::<String>();
+        assert!(
+            hint.contains("/model requires an idle turn; draft preserved"),
+            "{hint}"
+        );
+    };
+    assert_refused(&app);
     app.reset_live_turn();
-    app.overlay = Some(Overlay::Shortcuts);
-    app.present_questionnaire(
+    app.open_overlay(Overlay::Shortcuts);
+    let questionnaire = |id| {
         QuestionnaireForm::new(
-            "pending-question",
+            id,
             vec![QuestionnaireQuestion::new(
                 "choice",
                 "Choice",
@@ -535,15 +561,38 @@ fn reconfigure_is_refused_while_busy_or_a_prompt_is_pending() {
             )],
             Deadline::never(),
         )
-        .expect("questionnaire"),
-    );
+        .expect("questionnaire")
+    };
+    app.present_questionnaire(questionnaire("visible-question"));
     assert!(
-        app.has_pending_prompt(),
-        "a queued prompt also blocks the driver"
+        matches!(&app.overlay, Some(Overlay::Questionnaire { state })
+        if state.form().request_id == "visible-question")
     );
+    assert_eq!(app.queued_prompt_count(), 0);
     assert!(reconfigure_exit(&mut app, command()).is_none());
-    assert!(matches!(app.overlay, Some(Overlay::Shortcuts)));
-    assert_eq!(app.pending_questionnaire_count(), 1);
+    assert_refused(&app);
+    assert!(
+        matches!(&app.overlay, Some(Overlay::Questionnaire { state })
+        if state.form().request_id == "visible-question")
+    );
+    app.present_questionnaire(questionnaire("queued-question"));
+    assert!(app.has_pending_prompt());
+    assert_eq!(app.queued_prompt_count(), 1);
+    assert!(reconfigure_exit(&mut app, command()).is_none());
+    assert_refused(&app);
+    assert!(
+        matches!(&app.overlay, Some(Overlay::Questionnaire { state })
+        if state.form().request_id == "visible-question")
+    );
+    assert_eq!(app.queued_prompt_count(), 1);
+    assert_eq!(app.pending_questionnaire_count(), 2);
+    assert_eq!(app.composer.text(), "draft");
+    app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(
+        matches!(&app.overlay, Some(Overlay::Questionnaire { state })
+        if state.form().request_id == "queued-question")
+    );
+    assert_eq!(app.queued_prompt_count(), 0);
     let mut idle = App::new("example-model", "project");
     assert!(matches!(
         reconfigure_exit(&mut idle, command()),

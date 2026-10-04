@@ -1,6 +1,8 @@
-title: skills trust
+title: trust this project skill
 state: Confirmation
 body:
+Trust project skill deploy? No action is selected by default.
+Trust permits Smith to activate this skill's project instructions.
 skill `deploy`
   .smith/skills/deploy/SKILL.md
   content 08c4830bb8d0ee9a145b20c6781f2278ed9588beaf471d54cbe3e7f2dd094613

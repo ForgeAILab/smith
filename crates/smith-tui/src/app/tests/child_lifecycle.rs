@@ -5,8 +5,9 @@
         let mut app = agent_first_app();
         app.composer.replace("@review inspect the diff");
         assert_eq!(app.on_key(key(KeyCode::Enter)), None);
-        assert!(matches!(&app.overlay, Some(Overlay::AgentConfirm { .. })));
+        assert!(matches!(&app.overlay, Some(Overlay::Confirm(_))));
 
+        elapse_prompt_guard(&mut app);
         app.on_key(key(KeyCode::Char('n')));
         assert!(app.overlay.is_none());
         app.composer.clear();
@@ -39,15 +40,17 @@
         assert_eq!(app.on_key(key(KeyCode::Enter)), None);
         assert!(matches!(
             app.overlay,
-            Some(Overlay::AgentConfirm { ref preset, ref task, ref content })
-                if preset == "review"
-                    && task == "inspect the diff"
-                    && content.contains("zai/glm-5.2")
-                    && content.contains("read-only")
-                    && content.contains("provider spend: yes")
+            Some(Overlay::Confirm(ref dialog))
+                if dialog.accept.as_ref() == &ConfirmOutcome::Action(Action::StartAgent {
+                    preset: "review".to_owned(), task: "inspect the diff".to_owned(),
+                })
+                    && dialog.body.join("\n").contains("zai/glm-5.2")
+                    && dialog.body.join("\n").contains("read-only")
+                    && dialog.body.join("\n").contains("provider spend: yes")
         ));
         assert_eq!(app.on_key(key(KeyCode::Enter)), None);
-        assert!(matches!(app.overlay, Some(Overlay::AgentConfirm { .. })));
+        assert!(matches!(app.overlay, Some(Overlay::Confirm(_))));
+        elapse_prompt_guard(&mut app);
         assert_eq!(
             app.on_key(key(KeyCode::Char('y'))),
             Some(Action::StartAgent {
@@ -91,16 +94,15 @@
         assert_eq!(app.on_key(key(KeyCode::Enter)), None);
         assert!(matches!(
             app.overlay,
-            Some(Overlay::AgentFollowUpConfirm {
-                ref child_id,
-                ref task,
-                ref content,
-            }) if child_id == "child-1"
-                && task == "check the parser edge case"
-                && content.contains("new follow-up turn")
-                && content.contains("reuse prior child history")
+            Some(Overlay::Confirm(ref dialog))
+                if dialog.accept.as_ref() == &ConfirmOutcome::Action(Action::FollowUpAgent {
+                    child_id: "child-1".to_owned(), task: "check the parser edge case".to_owned(),
+                })
+                && dialog.body.join("\n").contains("new follow-up turn")
+                && dialog.body.join("\n").contains("reuse prior child history")
         ));
         assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        elapse_prompt_guard(&mut app);
         assert_eq!(
             app.on_key(key(KeyCode::Char('y'))),
             Some(Action::FollowUpAgent {
@@ -123,12 +125,13 @@
         assert_eq!(app.on_key(key(KeyCode::Enter)), None);
         assert!(matches!(
             app.overlay,
-            Some(Overlay::AgentResumeConfirm { ref child_id, ref content })
-                if child_id == "child-2"
-                    && content.contains("exact interrupted checkpoint")
-                    && content.contains("turn slot consumed: no")
+            Some(Overlay::Confirm(ref dialog))
+                if dialog.accept.as_ref() == &ConfirmOutcome::Action(Action::ResumeAgent { child_id: "child-2".to_owned() })
+                    && dialog.body.join("\n").contains("exact interrupted checkpoint")
+                    && dialog.body.join("\n").contains("turn slot consumed: no")
         ));
         assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        elapse_prompt_guard(&mut app);
         assert_eq!(
             app.on_key(key(KeyCode::Char('y'))),
             Some(Action::ResumeAgent {
@@ -152,7 +155,8 @@
         assert_eq!(app.on_key(key(KeyCode::Enter)), None);
         assert!(matches!(
             app.overlay,
-            Some(Overlay::AgentResumeConfirm { ref child_id, .. }) if child_id == "child-live"
+            Some(Overlay::Confirm(ref dialog))
+                if dialog.accept.as_ref() == &ConfirmOutcome::Action(Action::ResumeAgent { child_id: "child-live".to_owned() })
         ));
     }
 
@@ -405,7 +409,7 @@
             .blocks()
             .iter()
             .filter_map(|block| match block {
-                Block::Notice { source, text } if source == "sub-agent" => Some(text.clone()),
+                Block::Notice { kind: source, text } if source.label() == "sub-agent" => Some(text.clone()),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -681,9 +685,12 @@
         assert_eq!(app.on_key(key(KeyCode::Enter)), None);
         assert!(matches!(
             app.overlay,
-            Some(Overlay::AgentFollowUpConfirm { ref child_id, ref task, .. })
-                if child_id == "child-1" && task == "check that edge case"
+            Some(Overlay::Confirm(ref dialog))
+                if dialog.accept.as_ref() == &ConfirmOutcome::Action(Action::FollowUpAgent {
+                    child_id: "child-1".to_owned(), task: "check that edge case".to_owned(),
+                })
         ));
+        elapse_prompt_guard(&mut app);
         assert_eq!(
             app.on_key(key(KeyCode::Char('y'))),
             Some(Action::FollowUpAgent {
@@ -875,8 +882,8 @@
         assert!(app.transcript.blocks().iter().any(|block| {
             matches!(
                 block,
-                Block::Notice { source, text }
-                    if source == "sub-agent"
+                Block::Notice { kind: source, text }
+                    if source.label() == "sub-agent"
                         && text.contains("child-request")
                         && text.contains("2 questions")
             )

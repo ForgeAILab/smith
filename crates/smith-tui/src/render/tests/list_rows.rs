@@ -262,7 +262,7 @@ fn picker_columns_dock_states_and_show_only_the_selected_provenance() {
             Theme::new().without_color().without_motion(),
         ] {
             let mut app = App::new("model", "~/project");
-            app.overlay = Some(Overlay::ResourcePicker {
+            app.open_overlay(Overlay::ResourcePicker {
                 picker: ResourcePicker::new("Choose model", entries.clone(), "run setup"),
                 target: crate::app::ResourceTarget::Model,
                 restore_on_escape: "/model".to_owned(),
@@ -315,7 +315,7 @@ fn picker_columns_dock_states_and_show_only_the_selected_provenance() {
 fn picker_state_survives_long_identity_and_unavailable_reason_at_44_columns() {
     use crate::picker::{ResourceEntry, ResourcePicker};
     let mut app = App::new("model", "~/project");
-    app.overlay = Some(Overlay::ResourcePicker {
+    app.open_overlay(Overlay::ResourcePicker {
         picker: ResourcePicker::new(
             "Choose model",
             vec![

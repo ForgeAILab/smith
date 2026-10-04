@@ -52,9 +52,10 @@ async fn the_modal_states_the_cache_cost_before_the_user_agrees() {
     let prompt = requests.recv().await.expect("an offer");
     app.present_rotation(prompt);
 
-    let Some(Overlay::RotationConfirm { content, .. }) = &app.overlay else {
+    let Some(Overlay::Confirm(dialog)) = &app.overlay else {
         panic!("the offer must own the surface it is asking about");
     };
+    let content = dialog.body.join("\n");
     assert!(content.contains("keychain:smith/personal is spent"));
     assert!(content.contains("without the provider's prompt cache"));
     // No credential value ever reaches the surface.
@@ -150,7 +151,7 @@ async fn a_number_naming_no_offered_account_is_ignored() {
     elapse_prompt_guard(&mut app);
     app.on_key(key(KeyCode::Char('9')));
     assert!(
-        matches!(app.overlay, Some(Overlay::RotationConfirm { .. })),
+        matches!(app.overlay, Some(Overlay::Confirm(_))),
         "an unoffered number leaves the question open"
     );
 

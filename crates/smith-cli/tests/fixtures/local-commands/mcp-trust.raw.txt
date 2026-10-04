@@ -1,6 +1,8 @@
-title: mcp trust
+title: trust this MCP server
 state: Confirmation
 body:
+Trust MCP server docs? No action is selected by default.
+Trust permits Smith to launch this server and connect its declared tools.
 MCP server `docs` (stdio)
 declared at `<PROJECT>/.smith/config.toml` key `mcp.servers.docs`
 nothing has been decided about this content

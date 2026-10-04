@@ -865,103 +865,53 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                 raw.push_str(&format!("title: error\nstate: Error\nbody:\n{message}\n"));
                 view.transcript.push_error(normalizer.normalize(message));
             }
-            Block::Notice { source, text } => {
-                raw.push_str(&format!("title: {source}\nstate: Notice\nbody:\n{text}\n"));
+            Block::Notice { kind: source, text } => {
+                raw.push_str(&format!(
+                    "title: {}\nstate: Notice\nbody:\n{text}\n",
+                    source.label()
+                ));
                 view.transcript
-                    .push_notice(normalizer.normalize(source), normalizer.normalize(text));
+                    .push_notice(source.clone(), normalizer.normalize(text));
             }
             _ => panic!("unexpected local fixture block: {block:?}"),
         }
     }
     use smith_tui::Overlay;
-    let overlay = match &app.overlay {
-        Some(Overlay::UndoConfirm { report }) => {
-            use smith_client::recovery_report::RecoveryReport;
-
-            let report = RecoveryReport::UndoConfirmation((**report).clone());
-            let content = smith_client::recovery_report::render_plain(&report);
+    match &app.overlay {
+        Some(Overlay::Confirm(dialog)) => {
+            let mut lines = Vec::new();
+            if let Some((warning, _)) = &dialog.warning {
+                lines.push(warning.clone());
+            }
+            lines.extend(dialog.body.clone());
             raw.push_str(&format!(
-                "title: undo\nstate: Confirmation\nbody:\n{content}\n"
+                "title: {}\nstate: Confirmation\nbody:\n{}\n",
+                dialog.title,
+                lines.join("\n"),
             ));
-            let RecoveryReport::UndoConfirmation(preview) =
-                fixture_recovery_view(&report, normalizer)
-            else {
-                panic!("expected an undo confirmation");
-            };
-            view.overlay = Some(Overlay::UndoConfirm {
-                report: Box::new(preview),
-            });
-            None
+            let mut normalized = smith_tui::app::ConfirmDialog::new(
+                &normalizer.normalize(&dialog.title),
+                dialog.tone,
+                dialog
+                    .body
+                    .iter()
+                    .map(|line| normalizer.normalize(line))
+                    .collect(),
+                &dialog.accept_label,
+                (*dialog.accept).clone(),
+                (*dialog.cancel).clone(),
+            );
+            normalized.warning = dialog
+                .warning
+                .as_ref()
+                .map(|(line, tone)| (normalizer.normalize(line), *tone));
+            normalized.accept_tone = dialog.accept_tone;
+            normalized.cancel_key = dialog.cancel_key;
+            normalized.cancel_label = dialog.cancel_label.clone();
+            normalized.hint = dialog.hint.clone();
+            normalized.scroll = dialog.scroll;
+            view.open_overlay(Overlay::Confirm(normalized));
         }
-        Some(Overlay::RedoConfirm { report }) => {
-            use smith_client::recovery_report::RecoveryReport;
-
-            let report = RecoveryReport::RedoConfirmation((**report).clone());
-            let content = smith_client::recovery_report::render_plain(&report);
-            raw.push_str(&format!(
-                "title: redo\nstate: Confirmation\nbody:\n{content}\n"
-            ));
-            let RecoveryReport::RedoConfirmation(preview) =
-                fixture_recovery_view(&report, normalizer)
-            else {
-                panic!("expected a redo confirmation");
-            };
-            view.overlay = Some(Overlay::RedoConfirm {
-                report: Box::new(preview),
-            });
-            None
-        }
-        Some(Overlay::RevertConfirm { report }) => {
-            use smith_client::recovery_report::RecoveryReport;
-
-            let report = RecoveryReport::RevertConfirmation((**report).clone());
-            let content = smith_client::recovery_report::render_plain(&report);
-            raw.push_str(&format!(
-                "title: revert\nstate: Confirmation\nbody:\n{content}\n"
-            ));
-            let RecoveryReport::RevertConfirmation(preview) =
-                fixture_recovery_view(&report, normalizer)
-            else {
-                panic!("expected a revert confirmation");
-            };
-            view.overlay = Some(Overlay::RevertConfirm {
-                report: Box::new(preview),
-            });
-            None
-        }
-        Some(Overlay::ReviewConfirm { report }) => {
-            use smith_client::review_report::ReviewReport;
-
-            let report = ReviewReport::Confirmation((**report).clone());
-            let content = smith_client::review_report::render_plain(&report);
-            raw.push_str(&format!(
-                "title: review\nstate: Confirmation\nbody:\n{content}\n"
-            ));
-            let ReviewReport::Confirmation(preview) = fixture_review_view(&report, normalizer)
-            else {
-                panic!("expected a review confirmation");
-            };
-            view.overlay = Some(Overlay::ReviewConfirm {
-                report: Box::new(preview),
-            });
-            None
-        }
-        Some(Overlay::McpTrustConfirm { server, content }) => Some((
-            "mcp trust",
-            content,
-            Overlay::McpTrustConfirm {
-                server: server.clone(),
-                content: normalizer.normalize(content),
-            },
-        )),
-        Some(Overlay::SkillTrustConfirm { skill, content }) => Some((
-            "skills trust",
-            content,
-            Overlay::SkillTrustConfirm {
-                skill: skill.clone(),
-                content: normalizer.normalize(content),
-            },
-        )),
         Some(Overlay::ResourcePicker {
             picker,
             target,
@@ -977,21 +927,22 @@ fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer)
                     entry.id, entry.label, entry.detail, entry.active, entry.disabled_reason
                 ));
             }
-            view.overlay = Some(Overlay::ResourcePicker {
+            view.open_overlay(Overlay::ResourcePicker {
                 picker: picker.clone(),
                 target: *target,
                 restore_on_escape: restore_on_escape.clone(),
             });
-            None
         }
-        None => None,
+        None => {}
         other => panic!("unexpected local fixture overlay: {other:?}"),
-    };
-    if let Some((title, content, overlay)) = overlay {
+    }
+    if let Some(notice) = app.feedback_notice() {
         raw.push_str(&format!(
-            "title: {title}\nstate: Confirmation\nbody:\n{content}\n"
+            "title: {}\nstate: Feedback\nbody:\n{}\n",
+            notice.kind.label(),
+            notice.text,
         ));
-        view.overlay = Some(overlay);
+        view.push_notice(notice.kind.clone(), normalizer.normalize(&notice.text));
     }
     assert!(!raw.is_empty(), "command produced no captured local result");
     (normalizer.normalize(&raw), view)
@@ -2253,4 +2204,29 @@ async fn fixtures_local_ephemeral() {
     ]))
     .await;
     Box::pin(fixture.shutdown()).await;
+}
+
+#[test]
+fn fixture_feedback_capture_keeps_the_kind_and_hint_placement() {
+    let mut app = App::new("model", "project");
+    app.push_notice(
+        smith_client::NoticeKind::AccountUnchanged,
+        "already using that account",
+    );
+    let (raw, view) = fixture_raw_and_view(&app, &mut fixture_support::Normalizer::default());
+    assert_eq!(
+        raw,
+        "title: account\nstate: Feedback\nbody:\nalready using that account\n"
+    );
+    assert!(view.transcript.is_empty());
+    assert_eq!(view.feedback_notice(), app.feedback_notice());
+    let screen = fixture_screen(&view, 100);
+    assert!(
+        screen
+            .lines()
+            .last()
+            .unwrap()
+            .contains("already using that account"),
+        "{screen}"
+    );
 }

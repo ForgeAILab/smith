@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use agent_runtime_core::clock::Timestamp;
 use agent_runtime_core::ids::TurnId;
 use agent_runtime_core::provider::FinishReason;
+use smith_client::NoticeKind;
 use smith_runtime::client::{
     ChildPhase, ChildRecoveryState, PlanSensitivity, SmithEvent as EventEnvelope,
     SmithEventKind as RuntimeEvent, TurnFinish,
@@ -65,7 +66,7 @@ impl App {
                 started: false,
             });
             self.transcript.push_notice(
-                "provider",
+                NoticeKind::Provider,
                 format!("retrying {next_attempt}/{max_attempts} in {delay}ms: {cause}"),
             );
             return;
@@ -86,8 +87,10 @@ impl App {
         // Legacy events have no authoritative schedule. Keep the old bounded
         // diagnostic for compatibility, but never synthesize x/x or a delay.
         if retryable && exact_position.is_none() && !matches!(finish, FinishReason::Cancelled) {
-            self.transcript
-                .push_notice("provider", format!("attempt failed, retrying: {cause}"));
+            self.transcript.push_notice(
+                NoticeKind::Provider,
+                format!("attempt failed, retrying: {cause}"),
+            );
         }
     }
 
@@ -280,7 +283,7 @@ impl App {
     fn flush_gap_notices(&mut self) {
         if self.pending_recovered_events > 0 {
             self.transcript.push_notice(
-                "stream",
+                NoticeKind::Stream,
                 format!(
                     "live stream lagged; recovered {} skipped event(s) from the session journal",
                     self.pending_recovered_events
@@ -290,7 +293,7 @@ impl App {
         }
         if let Some((first, last)) = self.pending_lost_range.take() {
             self.transcript.push_notice(
-                "stream",
+                NoticeKind::Stream,
                 format!(
                     "live event stream sequence {first} through {last} is permanently gone — \
                      the session journal does not have it either, so the displayed history is \
@@ -405,7 +408,7 @@ impl App {
                 if changed {
                     if had_provider {
                         self.transcript.push_notice(
-                            "provider",
+                            NoticeKind::Provider,
                             format!("changed to {provider}/{model} · prior cache not transferable"),
                         );
                     }
@@ -446,7 +449,7 @@ impl App {
                     .collect::<Vec<_>>();
                 self.status.record_activation(*epoch, capabilities.clone());
                 self.transcript.push_notice(
-                    "capabilities",
+                    NoticeKind::Capabilities,
                     if capabilities.is_empty() {
                         format!("activation epoch {epoch} has no optional capabilities")
                     } else {
@@ -577,7 +580,7 @@ impl App {
             } => {
                 self.status.record_compaction(*reclaimed_tokens);
                 self.transcript.push_notice(
-                    "context",
+                    NoticeKind::Context,
                     format!(
                         "compacted context · reclaimed {reclaimed_tokens} tokens · \
                          {} evicted · {} summaries",
@@ -667,13 +670,13 @@ impl App {
                     && self.last_cache_notice_turn.as_deref() != Some(turn.as_str())
                     && let Some(notice) = self.status.cache_notice()
                 {
-                    self.transcript.push_notice("cache", notice);
+                    self.transcript.push_notice(NoticeKind::Cache, notice);
                     self.last_cache_notice_turn = Some(turn);
                 }
                 match finish {
                     TurnFinish::Cancelled { reason } => {
                         self.transcript.push_notice(
-                            "turn",
+                            NoticeKind::Turn,
                             elapsed.map_or_else(
                                 || format!("Interrupted ({reason:?})"),
                                 |elapsed| {
@@ -687,7 +690,7 @@ impl App {
                     }
                     TurnFinish::LimitReached { limit } => {
                         self.transcript.push_notice(
-                            "turn",
+                            NoticeKind::Turn,
                             elapsed.map_or_else(
                                 || format!("Stopped at the {limit:?} limit"),
                                 |elapsed| {
@@ -701,7 +704,7 @@ impl App {
                     }
                     TurnFinish::NeedsInput { request } => {
                         self.transcript.push_notice(
-                            "turn",
+                            NoticeKind::Turn,
                             elapsed.map_or_else(
                                 || format!("Waiting for parent input · request {request}"),
                                 |elapsed| {
@@ -724,7 +727,7 @@ impl App {
                     }
                     TurnFinish::Failed => {
                         self.transcript.push_notice(
-                            "turn",
+                            NoticeKind::Turn,
                             elapsed.map_or_else(
                                 || "Failed".to_owned(),
                                 |elapsed| format!("Failed after {}", render_elapsed(elapsed)),
@@ -780,7 +783,7 @@ impl App {
                         describe_workspace(workspace)
                     )
                 };
-                self.push_child_notice(child.as_str(), "started", terms.clone());
+                self.push_child_notice(child.as_str(), NoticeKind::Started, terms.clone());
                 // The reviewed spawn row is now the one place a spawn is
                 // announced in the transcript — see `child-agents`'s "Safe
                 // parent reporting": "A spawn SHALL announce itself exactly
@@ -847,7 +850,7 @@ impl App {
                     // once. The panel lists them; the transcript stays quiet.
                     self.push_child_notice(
                         child.as_str(),
-                        "recovered",
+                        NoticeKind::Recovered,
                         format!("{} · {detail}", state.label()),
                     );
                 }
@@ -858,7 +861,7 @@ impl App {
                     self.run_child_clock(child.as_str());
                     // A turn boundary, drawn as the root timeline draws its
                     // own: quiet punctuation, not a sourced notice row.
-                    self.push_child_notice(child.as_str(), "turn", "running");
+                    self.push_child_notice(child.as_str(), NoticeKind::Turn, "running");
                 }
                 ChildPhase::ResumeStarted { child_session } => {
                     let profile = self.carried_child_profile(child.as_str());
@@ -873,11 +876,11 @@ impl App {
                     self.run_child_clock(child.as_str());
                     self.push_child_notice(
                         child.as_str(),
-                        "resuming",
+                        NoticeKind::Resuming,
                         format!("exact checkpoint · session {child_session}"),
                     );
                     self.transcript.push_notice(
-                        "sub-agent",
+                        NoticeKind::SubAgent,
                         format!("{child} is resuming its exact checkpoint"),
                     );
                 }
@@ -902,11 +905,13 @@ impl App {
                     self.settle_child_tool_calls(child.as_str());
                     self.push_child_notice(
                         child.as_str(),
-                        "interrupted",
+                        NoticeKind::Interrupted,
                         format!("{} · {detail}", state.label()),
                     );
-                    self.transcript
-                        .push_notice("sub-agent", format!("{child} {} · {detail}", state.label()));
+                    self.transcript.push_notice(
+                        NoticeKind::SubAgent,
+                        format!("{child} {} · {detail}", state.label()),
+                    );
                 }
                 // The completed/stopped notice that follows says everything a
                 // bare "finished a turn" would.
@@ -938,11 +943,13 @@ impl App {
                         profile,
                     },
                 );
-                self.push_child_notice(child.as_str(), "needs input", detail.clone());
+                self.push_child_notice(child.as_str(), NoticeKind::NeedsInput, detail.clone());
                 // A blocked child is waiting on the user, not working: this
                 // one is an ask, not progress, so it stays in the transcript.
-                self.transcript
-                    .push_notice("sub-agent", format!("{child} needs input · {detail}"));
+                self.transcript.push_notice(
+                    NoticeKind::SubAgent,
+                    format!("{child} needs input · {detail}"),
+                );
             }
             RuntimeEvent::ChildCompleted { child, result } => {
                 let mut summary: String = result.chars().take(200).collect();
@@ -968,8 +975,10 @@ impl App {
                 // actually read, so it keeps the answer whole, as the prose
                 // it is.
                 self.push_child_answer(child.as_str(), result);
-                self.transcript
-                    .push_notice("sub-agent", format!("{child} completed: {summary}"));
+                self.transcript.push_notice(
+                    NoticeKind::SubAgent,
+                    format!("{child} completed: {summary}"),
+                );
                 self.arm_child_dismissal(child.as_str());
             }
             RuntimeEvent::ChildStopped { child, reason } => {
@@ -985,9 +994,13 @@ impl App {
                 );
                 self.settle_child_clock(child.as_str());
                 self.settle_child_tool_calls(child.as_str());
-                self.push_child_notice(child.as_str(), "stopped", state.label().into_owned());
+                self.push_child_notice(
+                    child.as_str(),
+                    NoticeKind::Stopped,
+                    state.label().into_owned(),
+                );
                 self.transcript
-                    .push_notice("sub-agent", format!("{child} {}", state.label()));
+                    .push_notice(NoticeKind::SubAgent, format!("{child} {}", state.label()));
             }
             RuntimeEvent::ChildFailed { child, error } => {
                 let profile = self.carried_child_profile(child.as_str());

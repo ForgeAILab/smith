@@ -485,9 +485,7 @@
     fn image_attachment_is_refused_while_a_modal_owns_the_screen() {
         let mut app = app();
         assert!(app.can_attach_image());
-        app.overlay = Some(Overlay::UndoConfirm {
-            report: Box::new(recovery_preview("preview")),
-        });
+        app.confirm_undo(recovery_preview("preview"));
         assert!(!app.can_attach_image());
     }
 
@@ -501,15 +499,7 @@
         assert_eq!(app.on_key(key(KeyCode::Enter)), None);
         assert_eq!(app.composer.text(), "/model next");
         assert!(app.overlay.is_none());
-        assert!(
-            app.transcript.blocks().iter().any(|block| {
-                matches!(
-                    block, Block::Notice { text, .. }
-                    if text.contains("requires an idle turn") && text.contains("draft preserved")
-                )
-            }),
-            "the rejected switch was invisible"
-        );
+        assert_feedback_hint(&app, "/model requires an idle turn; draft preserved");
     }
 
     #[test]

@@ -518,7 +518,7 @@ fn informational_long_results_open_at_the_top_and_next_blocks_resume_following()
             assert_ne!(screen, scrolled);
             assert!(!app.following);
             app.transcript
-                .push_notice("monitor", "Fresh appended block");
+                .push_notice(NoticeKind::Monitor, "Fresh appended block");
             let preview = render(&app, width, height, theme);
             assert!(preview.contains("Fresh appended block"), "{preview}");
             let screen = render_synced(&mut app, width, height, theme);

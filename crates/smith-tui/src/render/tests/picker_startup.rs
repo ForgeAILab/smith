@@ -5,7 +5,7 @@ use crate::{App, Overlay, ResourceEntry, ResourcePicker, ResourceTarget, Theme};
 #[test]
 fn narrow_resource_picker_hint_keeps_choose_and_cancel_controls() {
     let mut app = App::new("gpt-5.3", "~/work/api");
-    app.overlay = Some(Overlay::ResourcePicker {
+    app.open_overlay(Overlay::ResourcePicker {
         picker: ResourcePicker::new(
             "Choose model",
             vec![ResourceEntry::new(

@@ -28,12 +28,6 @@ pub const MIN_WIDTH: u16 = 40;
 /// See [`MIN_WIDTH`].
 pub const MIN_HEIGHT: u16 = 10;
 
-/// The most body lines a modal builds before the height budget takes over.
-///
-/// A pathological argument blob would otherwise cost a `Line` per JSON line on
-/// every frame, and no terminal is tall enough to show them.
-pub(super) const MAX_BODY_LINES: usize = 128;
-
 /// Maximum public todo items kept immediately above the composer.
 const MAX_VISIBLE_TODOS: usize = 5;
 
@@ -51,6 +45,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App, theme: Theme) {
 pub struct SurfaceLayout {
     transcript: Option<TranscriptScroll>,
     approval: Option<(u16, u16)>,
+    confirm: Option<(usize, usize)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,6 +71,12 @@ impl SurfaceLayout {
             app.approval_scroll = scroll;
             app.approval_scroll_limit = limit;
         }
+        if let Some((scroll, limit)) = self.confirm
+            && let Some(Overlay::Confirm(dialog)) = &mut app.overlay
+        {
+            dialog.scroll = scroll;
+            dialog.scroll_limit = limit;
+        }
     }
 }
 
@@ -85,6 +86,7 @@ pub fn layout(area: Rect, app: &App, theme: Theme) -> SurfaceLayout {
         return SurfaceLayout {
             transcript: None,
             approval: None,
+            confirm: None,
         };
     }
     let transcript = transcript_rect(area, app);
@@ -133,9 +135,17 @@ pub fn layout(area: Rect, app: &App, theme: Theme) -> SurfaceLayout {
         let limit = approval_scroll_limit(area, app, theme);
         (app.approval_scroll.min(limit), limit)
     });
+    let confirm = match &app.overlay {
+        Some(Overlay::Confirm(dialog)) => {
+            let limit = confirm_scroll_limit(area, dialog, theme);
+            Some((dialog.scroll.min(limit), limit))
+        }
+        _ => None,
+    };
     SurfaceLayout {
         transcript: Some(scroll),
         approval,
+        confirm,
     }
 }
 
@@ -217,77 +227,7 @@ fn draw_surface(frame: &mut Frame<'_>, app: &App, theme: Theme) {
             | Overlay::HistorySearch { .. }
             | Overlay::Shortcuts,
         ) => {}
-        Some(Overlay::UndoConfirm { report }) => {
-            draw_recovery_confirm(
-                frame,
-                area,
-                "undo last Smith turn",
-                "apply undo",
-                render_recovery_patch(&report.patch),
-                theme,
-            );
-        }
-        Some(Overlay::RedoConfirm { report }) => {
-            draw_redo_confirm(frame, area, report, theme);
-        }
-        Some(Overlay::RevertConfirm { report }) => {
-            draw_recovery_confirm(
-                frame,
-                area,
-                "revert selected change",
-                "apply revert",
-                render_revert_preview(report),
-                theme,
-            );
-        }
-        Some(Overlay::ReviewConfirm { report }) => {
-            draw_review_confirm(frame, area, report, theme);
-        }
-        Some(Overlay::McpTrustConfirm { server, content }) => {
-            draw_mcp_trust_confirm(frame, area, server, content, theme);
-        }
-        Some(Overlay::SkillTrustConfirm { skill, content }) => {
-            draw_skill_trust_confirm(frame, area, skill, content, theme);
-        }
-        Some(Overlay::RotationConfirm { content, .. }) => {
-            draw_rotation_confirm(frame, area, content, theme);
-        }
-        Some(Overlay::AgentConfirm { content, .. }) => {
-            draw_agent_confirm(frame, area, content, theme);
-        }
-        Some(Overlay::AgentFollowUpConfirm { content, .. }) => {
-            draw_child_continuation_confirm(
-                frame,
-                area,
-                "existing child follow-up",
-                " start follow-up and spend provider tokens   ",
-                content,
-                theme,
-            );
-        }
-        Some(Overlay::AgentResumeConfirm { content, .. }) => {
-            draw_child_continuation_confirm(
-                frame,
-                area,
-                "resume interrupted child",
-                " resume exact checkpoint   ",
-                content,
-                theme,
-            );
-        }
-        Some(Overlay::ExitConfirm {
-            approval,
-            questionnaire,
-        }) => {
-            draw_exit_confirm(
-                frame,
-                area,
-                app,
-                approval.is_some(),
-                questionnaire.is_some(),
-                theme,
-            );
-        }
+        Some(Overlay::Confirm(dialog)) => draw_confirm(frame, area, dialog, theme),
         None => {}
     }
 

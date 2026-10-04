@@ -1,9 +1,10 @@
-//! Approval and questionnaire ownership, ordering, and expiry.
+//! Prompt ownership, ordering, and expiry.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
 
 use agent_runtime_core::clock::{Clock, SystemClock, Timestamp};
+use smith_client::NoticeKind;
 use smith_host::approval::{ApprovalPrompt, PromptScope};
 
 use crate::diff::EditReview;
@@ -49,19 +50,74 @@ impl PromptInputGuard {
 }
 
 impl App {
-    /// Shows a rotation offer as a modal the user answers.
-    ///
-    /// Rendered eagerly rather than queued behind other prompts: the runtime
-    /// is blocked on the answer, and the offer's whole value is that the user
-    /// decides before the turn is resent uncached.
+    /// Opens through the shared prompt queue and transient-overlay policy.
+    /// Returns false when a transient request cannot take focus.
+    pub fn open_overlay(&mut self, overlay: Overlay) -> bool {
+        let prompt = match overlay {
+            Overlay::Approval { prompt, review } => PendingPrompt::Approval(prompt, review),
+            Overlay::Questionnaire { state } => PendingPrompt::Questionnaire(state),
+            Overlay::Confirm(dialog) => PendingPrompt::Confirm(dialog),
+            transient => {
+                if self.overlay.as_ref().is_some_and(Overlay::is_prompt)
+                    || !self.pending_prompts.is_empty()
+                {
+                    self.push_notice(
+                        NoticeKind::OverlayBlocked,
+                        "answer the pending prompt before opening another panel",
+                    );
+                    return false;
+                }
+                self.overlay = Some(transient);
+                return true;
+            }
+        };
+        self.pending_prompts.push_back(prompt);
+        if self.overlay.as_ref().is_some_and(Overlay::is_prompt) {
+            return true;
+        }
+        let Some(prompt) = self.pending_prompts.pop_front() else {
+            return true;
+        };
+        let overlay = match prompt {
+            PendingPrompt::Approval(prompt, review) => {
+                self.prompt_input_guard.start();
+                self.approval_scroll = 0;
+                self.approval_scroll_limit = 0;
+                Overlay::Approval { prompt, review }
+            }
+            PendingPrompt::Questionnaire(state) => Overlay::Questionnaire { state },
+            PendingPrompt::Confirm(dialog) => {
+                self.prompt_input_guard.start();
+                Overlay::Confirm(dialog)
+            }
+        };
+        self.overlay = Some(overlay);
+        true
+    }
+
+    /// Shows a rotation offer without replacing an earlier prompt.
     pub fn present_rotation(&mut self, prompt: smith_host::rotation::RotationPrompt) {
         let content =
             crate::accounts::rotation_prompt_body(prompt.request(), crate::accounts::now_ms());
-        self.overlay = Some(Overlay::RotationConfirm {
-            prompt: Box::new(prompt),
-            content,
-        });
-        self.prompt_input_guard.start();
+        let body = content.lines().map(str::to_owned).collect();
+        let mut dialog = ConfirmDialog::new(
+            "switch provider account",
+            crate::theme::Tone::Warning,
+            body,
+            "switch account and resend",
+            ConfirmOutcome::SwitchAccount,
+            ConfirmOutcome::StayAccount,
+        );
+        dialog.accept_tone = crate::theme::Tone::Accent;
+        dialog.cancel_label = "stay".to_owned();
+        dialog.hint = if prompt.request().eligible.len() > 1 {
+            "y switch and resend · 1-9 choose account · n/esc stay"
+        } else {
+            "y switch and resend · n/esc stay"
+        }
+        .to_owned();
+        dialog.rotation = Some(Box::new(prompt));
+        self.open_overlay(Overlay::Confirm(dialog));
     }
 
     /// Presents an approval request.
@@ -71,7 +127,7 @@ impl App {
         if prompt.deadline().is_expired(&SystemClock) {
             prompt.time_out();
             self.transcript.push_notice(
-                "approval",
+                NoticeKind::Approval,
                 "approval timed out before it could be presented",
             );
             return;
@@ -81,12 +137,10 @@ impl App {
             ToolStatus::WaitingForApproval,
         );
         let review = EditReview::from_call(prompt.tool(), prompt.prepared().arguments());
-        let approval = PendingPrompt::Approval(Box::new(prompt), review);
-        if self.overlay.is_none() {
-            self.show_prompt(approval);
-        } else {
-            self.pending_prompts.push_back(approval);
-        }
+        self.open_overlay(Overlay::Approval {
+            prompt: Box::new(prompt),
+            review,
+        });
     }
 
     /// Presents one authority-free questionnaire.
@@ -96,17 +150,14 @@ impl App {
             self.questionnaire_resolutions
                 .push_back((request_id, QuestionnaireResolution::TimedOut));
             self.transcript.push_notice(
-                "questionnaire",
+                NoticeKind::Questionnaire,
                 "question timed out before it could be presented",
             );
             return;
         }
-        let prompt = PendingPrompt::Questionnaire(QuestionnaireState::new(form));
-        if self.overlay.is_none() {
-            self.show_prompt(prompt);
-        } else {
-            self.pending_prompts.push_back(prompt);
-        }
+        self.open_overlay(Overlay::Questionnaire {
+            state: QuestionnaireState::new(form),
+        });
     }
 
     /// Removes a runtime-closed questionnaire without manufacturing a second
@@ -117,17 +168,11 @@ impl App {
     /// was dropped. The host adapter projects that close here so a visible or
     /// queued overlay cannot outlive the owning turn.
     pub fn dismiss_questionnaire(&mut self, request_id: &str) {
-        self.overlay = match self.overlay.take() {
-            Some(Overlay::Questionnaire { state }) if state.form().request_id == request_id => None,
-            Some(Overlay::ExitConfirm {
-                approval,
-                questionnaire: Some(state),
-            }) if state.form().request_id == request_id => Some(Overlay::ExitConfirm {
-                approval,
-                questionnaire: None,
-            }),
-            other => other,
-        };
+        if matches!(&self.overlay, Some(Overlay::Questionnaire { state })
+            if state.form().request_id == request_id)
+        {
+            self.overlay = None;
+        }
         self.pending_prompts.retain(|prompt| {
             !matches!(
                 prompt,
@@ -138,87 +183,46 @@ impl App {
         self.present_next_prompt();
     }
 
-    pub(super) fn show_prompt(&mut self, prompt: PendingPrompt) {
-        if matches!(prompt, PendingPrompt::Approval(..)) {
-            self.prompt_input_guard.start();
-            self.approval_scroll = 0;
-            self.approval_scroll_limit = 0;
-        }
-        self.overlay = Some(match prompt {
-            PendingPrompt::Approval(prompt, review) => Overlay::Approval { prompt, review },
-            PendingPrompt::Questionnaire(state) => Overlay::Questionnaire { state },
-        });
-    }
-
     pub(super) fn present_next_prompt(&mut self) {
-        if self.overlay.is_some() {
+        if self.overlay.as_ref().is_some_and(Overlay::is_prompt) {
             return;
         }
         if let Some(prompt) = self.pending_prompts.pop_front() {
-            self.show_prompt(prompt);
+            let overlay = match prompt {
+                PendingPrompt::Approval(prompt, review) => Overlay::Approval { prompt, review },
+                PendingPrompt::Questionnaire(state) => Overlay::Questionnaire { state },
+                PendingPrompt::Confirm(dialog) => Overlay::Confirm(dialog),
+            };
+            // Keep the tail queued while the already-oldest prompt opens.
+            let tail = std::mem::take(&mut self.pending_prompts);
+            self.open_overlay(overlay);
+            self.pending_prompts = tail;
         }
     }
 
     pub(super) fn expire_prompts(&mut self) {
         let mut expired_approvals = 0_usize;
         let mut expired_questions = 0_usize;
-        self.overlay = match self.overlay.take() {
-            Some(Overlay::Approval { prompt, review }) => {
-                if prompt.deadline().is_expired(&SystemClock) {
-                    prompt.time_out();
-                    expired_approvals += 1;
-                    None
-                } else {
-                    Some(Overlay::Approval { prompt, review })
-                }
-            }
+        let expired = match &self.overlay {
+            Some(Overlay::Approval { prompt, .. }) => prompt.deadline().is_expired(&SystemClock),
             Some(Overlay::Questionnaire { state }) => {
-                if state.form().deadline.is_expired(&SystemClock) {
-                    self.resolve_questionnaire(state, QuestionnaireResolution::TimedOut);
-                    expired_questions += 1;
-                    None
-                } else {
-                    Some(Overlay::Questionnaire { state })
-                }
+                state.form().deadline.is_expired(&SystemClock)
             }
-            Some(Overlay::ExitConfirm {
-                approval: Some((prompt, review)),
-                questionnaire,
-            }) => {
-                if prompt.deadline().is_expired(&SystemClock) {
+            _ => false,
+        };
+        if expired {
+            match self.overlay.take() {
+                Some(Overlay::Approval { prompt, .. }) => {
                     prompt.time_out();
                     expired_approvals += 1;
-                    Some(Overlay::ExitConfirm {
-                        approval: None,
-                        questionnaire,
-                    })
-                } else {
-                    Some(Overlay::ExitConfirm {
-                        approval: Some((prompt, review)),
-                        questionnaire,
-                    })
                 }
-            }
-            Some(Overlay::ExitConfirm {
-                approval,
-                questionnaire: Some(state),
-            }) => {
-                if state.form().deadline.is_expired(&SystemClock) {
+                Some(Overlay::Questionnaire { state }) => {
                     self.resolve_questionnaire(state, QuestionnaireResolution::TimedOut);
                     expired_questions += 1;
-                    Some(Overlay::ExitConfirm {
-                        approval,
-                        questionnaire: None,
-                    })
-                } else {
-                    Some(Overlay::ExitConfirm {
-                        approval,
-                        questionnaire: Some(state),
-                    })
                 }
+                _ => unreachable!("only runtime prompts expire"),
             }
-            other => other,
-        };
+        }
 
         let mut waiting = VecDeque::with_capacity(self.pending_prompts.len());
         while let Some(prompt) = self.pending_prompts.pop_front() {
@@ -239,19 +243,20 @@ impl App {
                         waiting.push_back(PendingPrompt::Questionnaire(state));
                     }
                 }
+                PendingPrompt::Confirm(dialog) => waiting.push_back(PendingPrompt::Confirm(dialog)),
             }
         }
         self.pending_prompts = waiting;
 
         if expired_approvals > 0 {
             self.transcript.push_notice(
-                "approval",
+                NoticeKind::Approval,
                 format!("timed out {expired_approvals} pending approval request(s)"),
             );
         }
         if expired_questions > 0 {
             self.transcript.push_notice(
-                "questionnaire",
+                NoticeKind::Questionnaire,
                 format!("timed out {expired_questions} pending question request(s)"),
             );
         }
@@ -262,10 +267,6 @@ impl App {
         let matches = |prompt: &ApprovalPrompt| prompt.prepared().call_id().as_str() == call_id;
         let visible = match &self.overlay {
             Some(Overlay::Approval { prompt, .. }) => matches(prompt),
-            Some(Overlay::ExitConfirm {
-                approval: Some((prompt, _)),
-                ..
-            }) => matches(prompt),
             _ => false,
         };
         visible
@@ -297,7 +298,7 @@ impl App {
                 prompt.allow(scope);
                 if scope == PromptScope::Session {
                     self.transcript.push_notice(
-                        "approval",
+                        NoticeKind::Approval,
                         format!("{tool} allowed for this target for the session"),
                     );
                 }
@@ -309,7 +310,7 @@ impl App {
                         .set_tool_result_preview(&call_id, "approval declined: the user declined");
                 } else {
                     self.transcript
-                        .push_notice("approval", format!("{tool} denied"));
+                        .push_notice(NoticeKind::Approval, format!("{tool} denied"));
                 }
             }
         }
@@ -330,6 +331,7 @@ impl App {
         };
         self.questionnaire_resolutions
             .push_back((request_id, resolution));
-        self.transcript.push_notice("questionnaire", notice);
+        self.transcript
+            .push_notice(NoticeKind::Questionnaire, notice);
     }
 }

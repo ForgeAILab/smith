@@ -14,6 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use agent_runtime_core::ids::{AttemptId, RequestId};
+use smith_client::NoticeKind;
 use smith_runtime::client::SmithEventKind as RuntimeEvent;
 
 use smith_tools::external_tool_result_text;
@@ -201,10 +202,10 @@ impl ConversationMut<'_> {
             RuntimeEvent::ProviderAttemptFinished { .. } => {}
             RuntimeEvent::Downgrade { capability, detail } => self
                 .transcript
-                .push_notice("downgrade", format!("{capability}: {detail}")),
+                .push_notice(NoticeKind::Downgrade, format!("{capability}: {detail}")),
             RuntimeEvent::LimitReached { limit } => self
                 .transcript
-                .push_notice("limit", format!("{limit:?} reached")),
+                .push_notice(NoticeKind::Limit, format!("{limit:?} reached")),
             _ => return false,
         }
         true
@@ -273,7 +274,7 @@ impl ConversationMut<'_> {
             }
         } else if !output.chunks.is_empty() {
             self.transcript.push_notice(
-                "retry",
+                NoticeKind::Retry,
                 format!("discarded speculative output from provider attempt {attempt}"),
             );
         }
@@ -287,7 +288,7 @@ impl ConversationMut<'_> {
         self.speculative.attempts.clear();
         self.speculative.order.clear();
         self.transcript.push_notice(
-            "integrity",
+            NoticeKind::Integrity,
             format!(
                 "discarded {orphaned} unterminated speculative provider attempt(s) at {boundary}"
             ),

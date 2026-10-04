@@ -1,4 +1,4 @@
-title: review
+title: read-only review
 state: Confirmation
 body:
 scope: diff · tracked.txt
@@ -13,4 +13,3 @@ index 90be1f3..294186e 100644
 @@ -1 +1 @@
 -before
 +after
-

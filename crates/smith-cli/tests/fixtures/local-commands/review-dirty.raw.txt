@@ -1,4 +1,4 @@
-title: review
+title: read-only review
 state: Confirmation
 body:
 scope: diff · all uncommitted
@@ -18,4 +18,3 @@ new file mode 100644
 --- /dev/null
 +++ b/untracked.txt
 +new file
-

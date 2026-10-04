@@ -65,7 +65,7 @@
             .blocks()
             .iter()
             .filter_map(|block| match block {
-                Block::Notice { source, text } if source == "provider" => Some(text.clone()),
+                Block::Notice { kind: source, text } if source.label() == "provider" => Some(text.clone()),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -104,7 +104,7 @@
                 .blocks()
                 .iter()
                 .filter_map(|block| match block {
-                    Block::Notice { source, text } if source == "provider" => Some(text.clone()),
+                    Block::Notice { kind: source, text } if source.label() == "provider" => Some(text.clone()),
                     _ => None,
                 })
                 .count(),
@@ -214,7 +214,7 @@
             .blocks()
             .iter()
             .find_map(|block| match block {
-                Block::Notice { source, text } if source == "provider" => Some(text.as_str()),
+                Block::Notice { kind: source, text } if source.label() == "provider" => Some(text.as_str()),
                 _ => None,
             })
             .expect("legacy provider diagnostic");
@@ -325,7 +325,7 @@
             !app.transcript
                 .blocks()
                 .iter()
-                .any(|block| matches!(block, Block::Notice { source, .. } if source == "work"))
+                .any(|block| matches!(block, Block::Notice { kind: source, .. } if source.label() == "work"))
         );
         assert_eq!(app.status.context.render(), "12.4k");
         assert_eq!(app.status.activity, Activity::Idle);
@@ -437,7 +437,7 @@
         ));
         assert_eq!(app.visible_turn_summary(), Some("Worked for <1ms"));
 
-        app.transcript.push_notice("monitor", "a later block");
+        app.transcript.push_notice(NoticeKind::Monitor, "a later block");
         assert_eq!(app.visible_turn_summary(), None);
         app.apply(&event(RuntimeEvent::TurnStarted));
         assert_eq!(app.turn_summary, None);
@@ -448,7 +448,7 @@
         }));
         assert_eq!(app.visible_turn_summary(), None);
         assert!(matches!(app.transcript.blocks().last(),
-            Some(Block::Notice { source, text }) if source == "turn" && text.starts_with("Failed after 12s")
+            Some(Block::Notice { kind: source, text }) if source.label() == "turn" && text.starts_with("Failed after 12s")
         ));
     }
 
@@ -658,8 +658,8 @@
         assert!(
             app.transcript.blocks().iter().any(|block| matches!(
                 block,
-                Block::Notice { source, text }
-                    if source == "stream" && text.contains("sequence 5 through 6")
+                Block::Notice { kind: source, text }
+                    if source.label() == "stream" && text.contains("sequence 5 through 6")
             )),
             "{:?}",
             app.transcript.blocks()
@@ -722,7 +722,7 @@
             .transcript
             .blocks()
             .iter()
-            .filter(|block| matches!(block, Block::Notice { source, .. } if source == "stream"))
+            .filter(|block| matches!(block, Block::Notice { kind: source, .. } if source.label() == "stream"))
             .count();
         assert_eq!(
             stream_notices,
@@ -733,8 +733,8 @@
         assert!(
             app.transcript.blocks().iter().any(|block| matches!(
                 block,
-                Block::Notice { source, text }
-                    if source == "stream" && text.contains("sequence 2 through 9")
+                Block::Notice { kind: source, text }
+                    if source.label() == "stream" && text.contains("sequence 2 through 9")
             )),
             "the merged notice must span the whole run: {:?}",
             app.transcript.blocks()
@@ -769,7 +769,7 @@
             .blocks()
             .iter()
             .filter_map(|block| match block {
-                Block::Notice { source, text } if source == "stream" => Some(text.clone()),
+                Block::Notice { kind: source, text } if source.label() == "stream" => Some(text.clone()),
                 _ => None,
             })
             .collect();
@@ -875,8 +875,8 @@
         )));
         assert!(app.transcript.blocks().iter().any(|block| matches!(
             block,
-            Block::Notice { source, text }
-                if source == "retry" && text.contains("attempt-failed")
+            Block::Notice { kind: source, text }
+                if source.label() == "retry" && text.contains("attempt-failed")
         )));
         assert!(app.transcript.blocks().iter().any(|block| matches!(
             block,
@@ -1308,7 +1308,7 @@
             .blocks()
             .iter()
             .filter_map(|block| match block {
-                Block::Notice { source, text } if source == "cache" => Some(text.clone()),
+                Block::Notice { kind: source, text } if source.label() == "cache" => Some(text.clone()),
                 _ => None,
             })
             .collect();
@@ -1335,8 +1335,8 @@
         assert_eq!(app.speculative_attempt_count(), 0);
         assert!(app.transcript.blocks().iter().any(|block| matches!(
             block,
-            Block::Notice { source, text }
-                if source == "integrity" && text.contains("unterminated")
+            Block::Notice { kind: source, text }
+                if source.label() == "integrity" && text.contains("unterminated")
         )));
         assert!(!format!("{:?}", app.transcript.blocks()).contains("orphaned draft"));
     }
@@ -1399,8 +1399,8 @@
         assert!(app.transcript.blocks().iter().any(|block| {
             matches!(
                 block,
-                Block::Notice { source, text }
-                    if source == "capabilities"
+                Block::Notice { kind: source, text }
+                    if source.label() == "capabilities"
                         && text == "activation epoch 2: tool:read, tool:search"
             )
         }));
@@ -1453,7 +1453,7 @@
                 .transcript
                 .blocks()
                 .iter()
-                .any(|block| matches!(block, Block::Notice { source, .. } if source == "plan")),
+                .any(|block| matches!(block, Block::Notice { kind: source, .. } if source.label() == "plan")),
             "plan updates must replace one work row instead of appending notices"
         );
     }
@@ -1703,7 +1703,7 @@
                     result_preview.clone().unwrap_or_else(|| "-".to_owned()),
                     enrichment.join(" ")
                 ),
-                Block::Notice { source, text } => format!("{source} · {text}"),
+                Block::Notice { kind: source, text } => format!("{} · {text}", source.label()),
                 other => format!("{other:?}"),
             })
             .collect();

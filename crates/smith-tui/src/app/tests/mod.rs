@@ -72,7 +72,7 @@ mod tests {
         app.child_blocks(child)
             .iter()
             .map(|block| match block {
-                Block::Notice { source, text } => format!("{source} · {text}"),
+                Block::Notice { kind: source, text } => format!("{} · {text}", source.label()),
                 Block::Tool { name, status, .. } => format!("{} {name}", status.label()),
                 Block::Assistant { text, .. } => format!("completed: {text}"),
                 Block::Error { message } => format!("failed: {message}"),
@@ -124,6 +124,27 @@ mod tests {
             ..RuntimeResources::default()
         });
         app
+    }
+
+    fn assert_feedback_hint(app: &App, expected: &str) {
+        assert_eq!(
+            app.feedback_notice().map(|notice| notice.text.as_str()),
+            Some(expected),
+        );
+        assert!(!app.transcript.blocks().iter().any(|block| {
+            matches!(block, Block::Notice { text, .. } if text == expected)
+        }));
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(160, 40))
+                .expect("test terminal");
+        terminal
+            .draw(|frame| crate::render::draw(frame, app, crate::theme::Theme::new()))
+            .expect("frame");
+        let buffer = terminal.backend().buffer();
+        let hint = (0..160)
+            .map(|x| buffer[(x, 39)].symbol())
+            .collect::<String>();
+        assert!(hint.contains(expected), "{hint}");
     }
 
     fn expect_whole_submission(action: Option<Action>) -> PreparedSubmission {
@@ -354,6 +375,7 @@ mod tests {
     include!("pending_input.rs");
     include!("input.rs");
     include!("prompts.rs");
+    include!("confirmations.rs");
     include!("interaction_defects.rs");
     include!("resources.rs");
     include!("child_lifecycle.rs");

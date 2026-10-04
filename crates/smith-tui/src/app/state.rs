@@ -19,8 +19,8 @@ use agent_runtime_core::ids::{AttemptId, RequestId, TurnId};
 use agent_runtime_core::steer::SteerReceipt;
 use agent_runtime_core::usage::CounterKind;
 use smith_client::agent_report::{AgentSnapshot, ChildState as ReportChildState};
-use smith_client::recovery_report::{RecoveryPreview, RestoreReport, RevertPreview};
-use smith_client::review_report::ReviewPreview;
+use smith_client::recovery_report::RestoreReport;
+use smith_client::{Notice, NoticeKind, NoticePersistence};
 use smith_host::approval::ApprovalPrompt;
 use smith_host::rotation::RotationPrompt;
 use smith_runtime::client::{PlanItemProjection, PlanSensitivity, SmithEvent as EventEnvelope};
@@ -404,101 +404,100 @@ pub enum Overlay {
         /// Exact selected history entry, ready to restore into the composer.
         matched: Option<String>,
     },
-    /// Exact reverse patch awaiting a no-default confirmation.
-    UndoConfirm {
-        /// Classified reverse patch, including the original turn notes.
-        report: Box<RecoveryPreview>,
-    },
-    /// Exact forward patch awaiting a no-default confirmation.
-    RedoConfirm {
-        /// Classified forward patch, including the original turn notes.
-        report: Box<RecoveryPreview>,
-    },
-    /// Selective revert awaiting a no-default confirmation.
-    RevertConfirm {
-        /// Selected scope, stale-preview fingerprint, attribution, and patch.
-        report: Box<RevertPreview>,
-    },
-    /// A declared MCP server awaiting execution confirmation.
-    ///
-    /// The content shows the resolved command, its arguments, the names of the
-    /// environment it would be given, and the content identity the decision is
-    /// recorded against — everything the user is actually deciding about, and
-    /// no value they must not be shown.
-    McpTrustConfirm {
-        /// The declared server name.
-        server: String,
-        /// The rendered invocation and its content identity.
-        content: String,
-    },
-    /// A project skill awaiting activation confirmation.
-    ///
-    /// The content shows where the body lives and the content identity the
-    /// decision is recorded against — never the body itself. Text the project
-    /// wrote cannot be the argument for trusting text the project wrote.
-    SkillTrustConfirm {
-        /// The project skill's name.
-        skill: String,
-        /// The rendered path and content identity.
-        content: String,
-    },
-    /// Provider-backed read-only review awaiting explicit confirmation.
-    ReviewConfirm {
-        /// Exact review scope and classified patch, before provider spend.
-        report: Box<ReviewPreview>,
-    },
-    /// Explicit child invocation awaiting provider-spend confirmation.
-    AgentConfirm {
-        /// Registered preset identity.
-        preset: String,
-        /// Exact bounded task.
-        task: String,
-        /// Inherited model, limits, and posture summary.
-        content: String,
-    },
-    /// Existing-child follow-up awaiting provider-spend confirmation.
-    AgentFollowUpConfirm {
-        /// Stable child identity.
-        child_id: String,
-        /// Exact bounded follow-up task.
-        task: String,
-        /// Continuity, scope, and spend summary.
-        content: String,
-    },
-    /// Exact interrupted-checkpoint continuation awaiting confirmation.
-    AgentResumeConfirm {
-        /// Stable child identity.
-        child_id: String,
-        /// Recovery and spend summary.
-        content: String,
-    },
-    /// A spent account is offering to move to another pool member.
-    ///
-    /// Boxed like the approval prompt, and for the same reason: dropping it
-    /// without answering must decline rather than switch, so the channel is
-    /// owned by the overlay.
-    RotationConfirm {
-        /// The offer, and the channel to answer it on.
-        prompt: Box<RotationPrompt>,
-        /// The rendered body, including the prompt-cache cost.
-        content: String,
-    },
-    /// Exit was requested while work is live.
-    ExitConfirm {
-        /// An approval hidden by the confirmation and restored if the user
-        /// cancels exit.
-        approval: Option<(Box<ApprovalPrompt>, Option<EditReview>)>,
-        /// A questionnaire hidden by the confirmation and restored if the
-        /// user cancels exit.
-        questionnaire: Option<QuestionnaireState>,
-    },
+    /// A consequential decision with no default answer.
+    Confirm(ConfirmDialog),
 }
 
-/// A runtime-originated prompt waiting behind the visible overlay.
+impl Overlay {
+    pub(super) fn is_prompt(&self) -> bool {
+        matches!(
+            self,
+            Self::Approval { .. } | Self::Questionnaire { .. } | Self::Confirm(_)
+        )
+    }
+}
+
+/// Presentation and outcomes for one no-default confirmation.
+#[derive(Debug)]
+pub struct ConfirmDialog {
+    /// The modal title.
+    pub title: String,
+    /// Border tone.
+    pub tone: Tone,
+    /// Fixed introductory line, with its existing presentation tone.
+    pub warning: Option<(String, Tone)>,
+    /// Complete body, wrapped and scrolled by the renderer.
+    pub body: Vec<String>,
+    /// Existing accept label.
+    pub accept_label: String,
+    /// Existing accept-key tone.
+    pub accept_tone: Tone,
+    /// Existing cancellation wording.
+    pub cancel_label: String,
+    /// Existing cancellation key label.
+    pub cancel_key: &'static str,
+    /// Existing compact footer wording.
+    pub hint: String,
+    /// Outcome consumed on acceptance, boxed to keep the overlay compact.
+    pub accept: Box<ConfirmOutcome>,
+    /// Outcome consumed on cancellation.
+    pub cancel: Box<ConfirmOutcome>,
+    /// Wrapped body offset.
+    pub scroll: usize,
+    /// Current viewport bound.
+    pub scroll_limit: usize,
+    /// Rotation owns its responder until either outcome consumes it.
+    pub(crate) rotation: Option<Box<RotationPrompt>>,
+}
+
+impl ConfirmDialog {
+    /// Builds a confirmation with ordinary cancel controls and no responder.
+    pub fn new(
+        title: &str,
+        tone: Tone,
+        body: Vec<String>,
+        accept_label: &str,
+        accept: ConfirmOutcome,
+        cancel: ConfirmOutcome,
+    ) -> Self {
+        Self {
+            title: title.to_owned(),
+            tone,
+            warning: None,
+            body,
+            accept_label: accept_label.to_owned(),
+            accept_tone: tone,
+            cancel_label: "cancel".to_owned(),
+            cancel_key: "n/esc",
+            hint: format!("y {accept_label} · n/esc cancel"),
+            accept: Box::new(accept),
+            cancel: Box::new(cancel),
+            scroll: 0,
+            scroll_limit: 0,
+            rotation: None,
+        }
+    }
+}
+
+/// A host action or a decision resolved entirely within the terminal client.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfirmOutcome {
+    /// Return this action to the host.
+    Action(Action),
+    /// Close without a host action.
+    Dismiss,
+    /// Answer the owned rotation responder with its first eligible account.
+    SwitchAccount,
+    /// Decline the owned rotation responder.
+    StayAccount,
+}
+
+/// A prompt waiting behind the visible overlay, in cross-type arrival order.
 #[derive(Debug)]
 pub(super) enum PendingPrompt {
     Approval(Box<ApprovalPrompt>, Option<EditReview>),
     Questionnaire(QuestionnaireState),
+    Confirm(ConfirmDialog),
 }
 
 /// A root spawn call awaiting the child identity `ChildSpawned` will report.
@@ -916,6 +915,8 @@ impl LiveTurn {
 pub struct App {
     /// The transcript.
     pub transcript: Transcript,
+    /// Keypress feedback, retained only until the next keypress.
+    pub(super) feedback: Option<Notice>,
     /// Render-only wrapped rows; never part of conversation or input state.
     pub(crate) transcript_cache: RefCell<crate::render::TranscriptCache>,
     /// Header status.
@@ -1076,6 +1077,7 @@ impl App {
     pub fn new(model: impl Into<String>, project: impl Into<String>) -> Self {
         Self {
             transcript: Transcript::new(),
+            feedback: None,
             transcript_cache: RefCell::default(),
             status: Status::new(model, project),
             cache_miss_notices: false,
@@ -1129,6 +1131,29 @@ impl App {
             pending_input: PendingInputState::default(),
             last_cache_notice_turn: None,
         }
+    }
+
+    /// Routes a notice to the place fixed by its kind.
+    pub fn push_notice(&mut self, kind: NoticeKind, text: impl Into<String>) {
+        match kind.persistence() {
+            NoticePersistence::Transcript => self.transcript.push_notice(kind, text),
+            NoticePersistence::Feedback => {
+                self.feedback = Some(Notice {
+                    kind,
+                    text: text.into(),
+                });
+            }
+        }
+    }
+
+    /// The feedback currently replacing the hint row.
+    pub fn feedback_notice(&self) -> Option<&Notice> {
+        self.feedback.as_ref()
+    }
+
+    /// Clears feedback when the host handles a key outside `on_key`.
+    pub fn clear_feedback(&mut self) {
+        self.feedback = None;
     }
 
     /// Returns root turn identity, work, provider progress, and clocks to idle.
@@ -1201,7 +1226,10 @@ impl App {
     pub fn has_pending_prompt(&self) -> bool {
         self.pending_approval_count() > 0
             || self.pending_questionnaire_count() > 0
-            || matches!(self.overlay, Some(Overlay::RotationConfirm { .. }))
+            || matches!(&self.overlay, Some(Overlay::Confirm(dialog)) if dialog.rotation.is_some())
+            || self.pending_prompts.iter().any(|prompt| {
+                matches!(prompt, PendingPrompt::Confirm(dialog) if dialog.rotation.is_some())
+            })
     }
 
     /// Enables or disables the layered `cache.miss_notices` presentation
@@ -1223,7 +1251,7 @@ impl App {
             && self.last_cache_notice_turn.as_deref() != Some(summary.turn.as_str())
         {
             self.transcript
-                .push_notice("cache", summary.render_notice());
+                .push_notice(NoticeKind::Cache, summary.render_notice());
             self.last_cache_notice_turn = Some(summary.turn);
         }
     }
@@ -1330,31 +1358,17 @@ impl App {
             || self.has_pending_input()
             || !self.pending_prompts.is_empty()
             || !self.running_tasks.is_empty()
-            || matches!(
-                self.overlay,
-                Some(Overlay::Approval { .. })
-                    | Some(Overlay::Questionnaire { .. })
-                    | Some(Overlay::ExitConfirm {
-                        approval: Some(_),
-                        ..
-                    })
-                    | Some(Overlay::ExitConfirm {
-                        questionnaire: Some(_),
-                        ..
-                    })
-            )
+            || self.overlay.as_ref().is_some_and(Overlay::is_prompt)
+    }
+
+    /// Number of prompts waiting behind the visible one.
+    pub fn queued_prompt_count(&self) -> usize {
+        self.pending_prompts.len()
     }
 
     /// Number of approval prompts still awaiting one decision each.
     pub fn pending_approval_count(&self) -> usize {
-        let visible = usize::from(matches!(
-            self.overlay,
-            Some(Overlay::Approval { .. })
-                | Some(Overlay::ExitConfirm {
-                    approval: Some(_),
-                    ..
-                })
-        ));
+        let visible = usize::from(matches!(self.overlay, Some(Overlay::Approval { .. })));
         visible.saturating_add(
             self.pending_prompts
                 .iter()
@@ -1365,14 +1379,7 @@ impl App {
 
     /// Number of questionnaire requests awaiting one terminal answer each.
     pub fn pending_questionnaire_count(&self) -> usize {
-        let visible = usize::from(matches!(
-            self.overlay,
-            Some(Overlay::Questionnaire { .. })
-                | Some(Overlay::ExitConfirm {
-                    questionnaire: Some(_),
-                    ..
-                })
-        ));
+        let visible = usize::from(matches!(self.overlay, Some(Overlay::Questionnaire { .. })));
         visible.saturating_add(
             self.pending_prompts
                 .iter()
@@ -1496,7 +1503,7 @@ impl App {
             tasks: interrupted_tasks,
         };
         if let Some(text) = smith_client::recovery_report::render_restore_plain(&report) {
-            self.transcript.push_notice(report.source(), text);
+            self.transcript.push_notice(report.notice_kind(), text);
         }
     }
 

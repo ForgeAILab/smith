@@ -9,6 +9,7 @@ use agent_runtime_core::usage::{CounterKind, UsageRecord};
 use anyhow::{Context, Result};
 use crossterm::event::{Event as TermEvent, EventStream, KeyCode, KeyEventKind, KeyModifiers};
 use futures_util::StreamExt;
+use smith_client::NoticeKind;
 use smith_client::agent_report::AgentSnapshot;
 use smith_client::commands::{SelectionCommand, SessionControl};
 use smith_client::local_result::LocalResult;
@@ -227,7 +228,7 @@ async fn seed_app(
     seed_host_state(host, &mut app, project, resources, presentation).await;
     if policy.reasoning.has_override() {
         app.transcript.push_notice(
-            "reasoning",
+            NoticeKind::Reasoning,
             format!(
                 "thinking {} · effort {} · {} · applies to the next turn",
                 policy.reasoning.effective_state(),
@@ -237,13 +238,13 @@ async fn seed_app(
         );
     }
     if let Some(notice) = presentation.reasoning_notice.as_ref() {
-        app.transcript.push_notice("reasoning", notice);
+        app.transcript.push_notice(NoticeKind::Reasoning, notice);
     }
     if let Some(previous) = snapshot.manifests.last().map(|entry| &entry.manifest.model)
         && (previous.provider != policy.provider_name || previous.model != policy.model)
     {
         app.transcript.push_notice(
-            "provider",
+            NoticeKind::Provider,
             format!(
                 "changed · {}/{} → {}/{} · prior cache not transferable",
                 previous.provider, previous.model, policy.provider_name, policy.model
@@ -268,7 +269,7 @@ async fn rebind_app(
     let policy = host.runtime().policy();
     if previous.provider != policy.provider_name || previous.model != policy.model.as_str() {
         app.transcript.push_notice(
-            "provider",
+            NoticeKind::Provider,
             format!(
                 "changed · {}/{} → {}/{} · prior cache not transferable",
                 previous.provider, previous.model, policy.provider_name, policy.model
@@ -276,14 +277,14 @@ async fn rebind_app(
         );
     }
     if let Some(notice) = presentation.reasoning_notice.as_ref() {
-        app.transcript.push_notice("reasoning", notice);
+        app.transcript.push_notice(NoticeKind::Reasoning, notice);
     } else if previous.reasoning.effective_state() != policy.reasoning.effective_state()
         || previous.reasoning.effective_effort() != policy.reasoning.effective_effort()
         || previous.reasoning.selected_enabled != policy.reasoning.selected_enabled
         || previous.reasoning.selected_effort != policy.reasoning.selected_effort
     {
         app.transcript.push_notice(
-            "reasoning",
+            NoticeKind::Reasoning,
             format!(
                 "thinking {} · effort {} · {} · applies to the next turn",
                 policy.reasoning.effective_state(),
@@ -294,7 +295,7 @@ async fn rebind_app(
     }
     if previous.context_window != policy.context_window {
         app.transcript.push_notice(
-            "context",
+            NoticeKind::Context,
             format!(
                 "window changed · {} → {}",
                 previous
@@ -307,7 +308,7 @@ async fn rebind_app(
     }
     if previous.profile != policy.agent_profile {
         app.transcript.push_notice(
-            "profile",
+            NoticeKind::Profile,
             format!("changed · {} → {}", previous.profile, policy.agent_profile),
         );
     }
@@ -403,7 +404,7 @@ async fn seed_host_state(
             turn: turn.to_string(),
         };
         if let Some(text) = smith_client::recovery_report::render_restore_plain(&report) {
-            app.transcript.push_notice(report.source(), text);
+            app.transcript.push_notice(report.notice_kind(), text);
         }
     }
     if let Some(interruption) = host.recovered_ephemeral_work() {
@@ -751,12 +752,12 @@ pub(super) async fn run_tui(
                                     .trigger_manual_backgrounding(session.id())
                                 {
                                     app.transcript.push_notice(
-                                        "background",
+                                        NoticeKind::Background,
                                         "command moved to the background",
                                     );
                                 } else {
-                                    app.transcript.push_notice(
-                                        "background",
+                                    app.push_notice(
+                                        NoticeKind::BackgroundUnavailable,
                                         "no foreground shell command is running",
                                     );
                                 }
@@ -779,7 +780,7 @@ pub(super) async fn run_tui(
                                     .await
                                     {
                                         Some(notice) => {
-                                            app.transcript.push_notice("account", notice);
+                                            app.transcript.push_notice(NoticeKind::Account, notice);
                                             app.set_accounts(account_entries(
                                                 credential_pool.as_ref(),
                                             ));
@@ -787,8 +788,7 @@ pub(super) async fn run_tui(
                                                 account_status(credential_pool.as_ref());
                                         }
                                         None => app
-                                            .transcript
-                                            .push_notice("account", "already using that account"),
+                                            .push_notice(NoticeKind::AccountUnchanged, "already using that account"),
                                     }
                                 }
                                 command => {
@@ -1019,7 +1019,7 @@ pub(super) async fn run_tui(
                                 && let Some(notice) = change_notice(&set)
                             {
                                 last_change_turn = Some(set.turn);
-                                app.transcript.push_notice("changes", notice);
+                                app.transcript.push_notice(NoticeKind::Changes, notice);
                             }
                             if let Some(submission) = app.take_ready_submission() {
                                 dispatch_prepared_with_materialization(
@@ -1114,8 +1114,8 @@ pub(super) async fn run_tui(
                         LocalOutcome::Review(report) => {
                             app.transcript.push_local(smith_client::local_result::LocalResult::Review(report));
                         }
-                        LocalOutcome::Notice { source, text } => {
-                            app.transcript.push_notice(source, text);
+                        LocalOutcome::Notice { kind, text } => {
+                            app.transcript.push_notice(kind, text);
                         }
                         LocalOutcome::Error(text) => app.transcript.push_error(text),
                         LocalOutcome::Shell { echo, call, content, is_error } => {
@@ -1303,8 +1303,8 @@ pub(super) fn reconfigure_exit(app: &mut App, command: SessionControl) -> Option
         SessionControl::Account(_) => return None,
     };
     if app.is_busy() || app.has_pending_input() || app.has_pending_prompt() {
-        app.transcript.push_notice(
-            "smith",
+        app.push_notice(
+            NoticeKind::CommandRefused,
             format!("/{name} requires an idle turn; draft preserved"),
         );
         return None;

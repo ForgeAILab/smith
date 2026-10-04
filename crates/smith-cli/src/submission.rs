@@ -11,6 +11,7 @@ use agent_runtime_core::provider::ModelId;
 use agent_runtime_core::steer::SteerRejectionReason;
 use agent_runtime_core::workspace::Workspace;
 use anyhow::Result;
+use smith_client::NoticeKind;
 use smith_client::agent_report::{AgentReport, AgentResumeReport, AgentSummary};
 use smith_client::review_report::{ReviewReport, ReviewStartReport};
 use smith_config::resolve::ResolvedAgent;
@@ -188,7 +189,13 @@ pub(super) enum ClipboardContent {
 /// paste path (covering terminals whose `Ctrl+V` never reaches bracketed
 /// paste); an unreadable clipboard reports instead of failing silently.
 pub(super) fn attach_from_clipboard(app: &mut App) {
-    match read_clipboard() {
+    apply_clipboard_content(app, read_clipboard());
+}
+
+/// Applies one clipboard keypress result without platform I/O.
+pub(super) fn apply_clipboard_content(app: &mut App, content: Result<ClipboardContent, String>) {
+    app.clear_feedback();
+    match content {
         Ok(ClipboardContent::Image {
             data_uri,
             width,
@@ -196,13 +203,18 @@ pub(super) fn attach_from_clipboard(app: &mut App) {
         }) => {
             if app.can_attach_image() {
                 app.attach_image(data_uri, width, height);
+            } else {
+                app.push_notice(
+                    NoticeKind::Clipboard,
+                    "close the current panel before attaching an image",
+                );
             }
         }
         Ok(ClipboardContent::Text(text)) => app.on_paste(&text),
         Ok(ClipboardContent::Empty) => {
-            app.transcript.push_notice("clipboard", "nothing to attach");
+            app.push_notice(NoticeKind::Clipboard, "nothing to attach");
         }
-        Err(error) => app.transcript.push_error(error),
+        Err(error) => app.push_notice(NoticeKind::Clipboard, error),
     }
 }
 
@@ -526,11 +538,11 @@ pub(super) fn start_agent(
             .await;
         let message = match outcome {
             Ok(SpawnOutcome::Spawned { child, .. }) => LocalOutcome::Notice {
-                source: "agents",
+                kind: NoticeKind::Agents,
                 text: format!("{preset} child {child} started"),
             },
             Ok(SpawnOutcome::Queued { child }) => LocalOutcome::Notice {
-                source: "agents",
+                kind: NoticeKind::Agents,
                 text: format!("{preset} child {child} queued"),
             },
             Ok(SpawnOutcome::AtCapacity { running, limit }) => LocalOutcome::Error(format!(
@@ -565,7 +577,7 @@ pub(super) fn follow_up_agent(
         let child = agent_runtime_core::ids::ChildId::new(child_id);
         let message = match coordinator.follow_up(&child, UserInput::text(task)).await {
             Ok(()) => LocalOutcome::Notice {
-                source: "agents",
+                kind: NoticeKind::Agents,
                 text: format!("{child} follow-up started · same child session and prior history"),
             },
             Err(error) => LocalOutcome::Error(format!(

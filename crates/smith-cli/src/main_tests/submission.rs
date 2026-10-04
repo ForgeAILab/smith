@@ -89,3 +89,55 @@ async fn prepared_file_attachment_reads_exactly_without_provider_spend() {
         .expect_err("workspace escape must fail locally");
     assert!(error.contains("was not sent"), "{error}");
 }
+
+#[test]
+fn clipboard_no_ops_are_hint_feedback_and_a_successful_keypress_clears_it() {
+    let mut app = App::new("model", "project");
+    for (content, expected) in [
+        (Ok(ClipboardContent::Empty), "nothing to attach"),
+        (
+            Err("clipboard unavailable".to_owned()),
+            "clipboard unavailable",
+        ),
+    ] {
+        apply_clipboard_content(&mut app, content);
+        assert_eq!(app.feedback_notice().unwrap().text, expected);
+        assert!(app.transcript.is_empty());
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 20))
+            .expect("test terminal");
+        terminal
+            .draw(|frame| smith_tui::render::draw(frame, &app, smith_tui::Theme::new()))
+            .expect("frame");
+        let buffer = terminal.backend().buffer();
+        let hint = (0..100)
+            .map(|x| buffer[(x, 19)].symbol())
+            .collect::<String>();
+        assert!(hint.contains(expected), "{hint}");
+    }
+    apply_clipboard_content(
+        &mut app,
+        Ok(ClipboardContent::Text("pasted draft".to_owned())),
+    );
+    assert!(app.feedback_notice().is_none());
+    assert_eq!(app.composer.text(), "pasted draft");
+    assert!(app.transcript.is_empty());
+
+    app.open_overlay(smith_tui::Overlay::Shortcuts);
+    apply_clipboard_content(
+        &mut app,
+        Ok(ClipboardContent::Image {
+            data_uri: "data:image/png;base64,unused".to_owned(),
+            width: 1,
+            height: 1,
+        }),
+    );
+    assert_eq!(
+        app.feedback_notice().unwrap().text,
+        "close the current panel before attaching an image"
+    );
+    assert_eq!(app.composer.text(), "pasted draft");
+    assert!(matches!(app.overlay, Some(smith_tui::Overlay::Shortcuts)));
+    assert!(app.transcript.is_empty());
+    app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.feedback_notice().is_none());
+}

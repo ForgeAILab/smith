@@ -160,7 +160,7 @@
 
             for index in 0..40 {
                 app.transcript
-                    .push_notice("monitor", format!("notice {index}"));
+                    .push_notice(NoticeKind::Monitor, format!("notice {index}"));
             }
             app.composer.replace("keep this draft");
             let appended = render_synced(&mut app, width, height, theme);
@@ -1479,4 +1479,142 @@
             "the cursor left the wrapped text:\n{}",
             rows.join("\n")
         );
+    }
+
+    #[test]
+    fn feedback_keeps_right_identity_at_100_and_44_columns() {
+        for width in [100, 44] {
+            for theme in [Theme::new(), Theme::new().without_color()] {
+                let mut app = App::new("example-model", "<PROJECT>");
+                app.status.approval_mode = Some("ask".to_owned());
+                app.push_notice(NoticeKind::AccountUnchanged, "already using that account");
+
+                let screen = render(&app, width, 20, theme);
+                let footer = screen.lines().last().unwrap();
+                let left = "  already using that account";
+                let identity = if width == 100 {
+                    "example-model · build · ask · <PROJECT> · unknown ctx"
+                } else {
+                    "example-model"
+                };
+                assert_eq!(
+                    footer,
+                    format!(
+                        "{left}{}{identity}",
+                        " ".repeat(usize::from(width) - left.width() - identity.width())
+                    ),
+                    "{screen}"
+                );
+                assert!(!footer.contains("? for shortcuts"), "{screen}");
+                assert!(app.transcript.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn feedback_yields_identity_before_clipping_whole_words() {
+        for width in [100, 44] {
+            for theme in [Theme::new(), Theme::new().without_color()] {
+                let mut app = App::new("example-model", "<PROJECT>");
+                let message = if width == 100 {
+                    "the account is already active; continue typing while keeping the current selection unchanged"
+                } else {
+                    "account selection unchanged; keep typing"
+                };
+                app.push_notice(NoticeKind::AccountUnchanged, message);
+                let screen = render(&app, width, 20, theme);
+                assert_eq!(
+                    screen.lines().last().unwrap(),
+                    format!("  {message}"),
+                    "{screen}"
+                );
+
+                // Keep wide glyphs in the prefix and omit an oversized word whole.
+                // Identity must not reclaim the space freed by clipping.
+                app.push_notice(
+                    NoticeKind::AccountUnchanged,
+                    format!("keep 当前账号 selection {}", "x".repeat(100)),
+                );
+                let screen = render(&app, width, 20, theme);
+                assert_eq!(
+                    screen.lines().last().unwrap(),
+                    "  keep 当前账号 selection…",
+                    "{screen}"
+                );
+
+                if width == 44 {
+                    app.push_notice(
+                        NoticeKind::AccountUnchanged,
+                        "account selection unchanged; keep typing another message",
+                    );
+                    let screen = render(&app, width, 20, theme);
+                    assert_eq!(
+                        screen.lines().last().unwrap(),
+                        "  account selection unchanged; keep typing…",
+                        "{screen}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn refused_command_feedback_replaces_left_hints_until_the_next_keypress() {
+        for theme in [Theme::new(), Theme::new().without_color()] {
+            let mut app = App::new("model", "project");
+            app.apply(&event(RuntimeEvent::TurnStarted));
+            app.composer.replace("/model");
+            app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            let message = "/model requires an idle turn; draft preserved";
+            assert!(app.transcript.is_empty());
+            assert_eq!(app.composer.text(), "/model");
+            let screen = render(&app, 100, 20, theme);
+            assert!(screen.lines().last().unwrap().contains(message), "{screen}");
+            assert!(
+                screen
+                    .lines()
+                    .last()
+                    .unwrap()
+                    .ends_with("model · build · project · unknown ctx"),
+                "{screen}"
+            );
+            assert_eq!(screen.matches(message).count(), 1, "{screen}");
+
+            // Release events and unrelated runtime reports are not keypresses.
+            let mut release = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+            release.kind = crossterm::event::KeyEventKind::Release;
+            app.on_key(release);
+            app.apply(&event(RuntimeEvent::ProviderAttemptFinished {
+                attempt: AttemptId::new("retry"),
+                index: Some(0),
+                max_attempts: Some(3),
+                finish: agent_runtime_core::provider::FinishReason::Error,
+                retryable: true,
+                error: None,
+                retry_delay_ms: Some(200),
+            }));
+            assert_eq!(app.feedback_notice().unwrap().text, message);
+            let screen = render(&app, 100, 20, theme);
+            assert!(screen.lines().last().unwrap().contains(message), "{screen}");
+            assert!(
+                screen.contains("provider · retrying 2/3 in 200ms: provider attempt failed"),
+                "{screen}"
+            );
+            assert!(
+                matches!(app.transcript.blocks(), [crate::transcript::Block::Notice {
+                kind: NoticeKind::Provider, text,
+            }] if text == "retrying 2/3 in 200ms: provider attempt failed")
+            );
+
+            // Even a navigation key clears feedback and restores normal hints.
+            app.on_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+            assert!(app.feedback_notice().is_none());
+            let screen = render(&app, 100, 20, theme);
+            assert!(!screen.contains(message), "{screen}");
+            assert!(
+                screen.contains("provider · retrying 2/3 in 200ms: provider attempt failed"),
+                "{screen}"
+            );
+            assert_eq!(app.transcript.len(), 1);
+        }
     }

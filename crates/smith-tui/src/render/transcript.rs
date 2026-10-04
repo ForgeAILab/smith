@@ -497,7 +497,7 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16, expanded: bool) -> Ve
             }
             // Turn boundaries read as quiet punctuation — "Worked for 5s" —
             // not as a sourced notice row.
-            Block::Notice { source, text } if source == "turn" => {
+            Block::Notice { kind: source, text } if source.label() == "turn" => {
                 for raw in text.lines() {
                     lines.push(Line::from(Span::styled(
                         format!("  {raw}"),
@@ -505,12 +505,12 @@ fn block_lines(blocks: &[Block], theme: Theme, width: u16, expanded: bool) -> Ve
                     )));
                 }
             }
-            Block::Notice { source, text } => {
+            Block::Notice { kind: source, text } => {
                 for (index, raw) in text.lines().enumerate() {
                     if index == 0 {
                         lines.push(Line::from(vec![
                             Span::styled(format!("{} ", glyph::NOTICE), theme.style(Tone::Dim)),
-                            Span::styled(source.clone(), theme.style(Tone::Heading)),
+                            Span::styled(source.label().into_owned(), theme.style(Tone::Heading)),
                             Span::styled(" · ", theme.style(Tone::Dim)),
                             Span::styled(raw.to_owned(), theme.style(Tone::Default)),
                         ]));
@@ -1082,7 +1082,7 @@ fn render_diff_report(report: &DiffReport, width: u16, theme: Theme) -> Vec<Line
 }
 
 /// Keeps the confirmation's existing unstyled patch presentation. The modal
-/// owns wrapping and its row cap; no heading or source prefix selects a style.
+/// owns wrapping and scrolling; no heading or source prefix selects a style.
 pub(super) fn render_review_preview(report: &ReviewPreview) -> Vec<Line<'static>> {
     let mut lines = format!("scope: {}\n", report.title)
         .lines()

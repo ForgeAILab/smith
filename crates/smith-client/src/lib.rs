@@ -16,6 +16,8 @@ pub mod help_report;
 pub mod local_result;
 pub mod mcp_report;
 pub mod message_report;
+pub mod notice;
+pub use notice::{Notice, NoticeKind, NoticePersistence};
 pub mod recovery_report;
 pub mod review_report;
 pub mod shell_report;

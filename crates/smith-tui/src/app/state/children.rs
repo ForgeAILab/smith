@@ -321,11 +321,11 @@ impl App {
     pub(in crate::app) fn push_child_notice(
         &mut self,
         child: &str,
-        source: &str,
+        kind: smith_client::NoticeKind,
         text: impl Into<String>,
     ) {
         let conversation = self.child_conversation_mut(child);
-        conversation.transcript.push_notice(source, text);
+        conversation.transcript.push_notice(kind, text);
         conversation.transcript.retain_newest(MAX_CHILD_BLOCKS);
     }
 

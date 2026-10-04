@@ -1,10 +1,10 @@
-title: undo
+title: undo last Smith turn
 state: Confirmation
 body:
+No action is selected by default. Review the complete reverse patch.
 Smith turn 1
 
 --- current <PROJECT>/tracked.txt
 +++ restore <PROJECT>/tracked.txt
 -after
 +before
-

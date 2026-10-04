@@ -2,7 +2,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::app::App;
+use crate::app::{App, ConfirmDialog};
 use crate::commands;
 use crate::questionnaire::{QuestionnaireFocus, QuestionnaireState};
 use crate::theme::{Theme, Tone, glyph};
@@ -15,14 +15,12 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block as WidgetBlock, Borders, Clear, Paragraph};
-use smith_client::recovery_report::RecoveryPreview;
-use smith_client::review_report::ReviewPreview;
 use unicode_width::UnicodeWidthStr;
 
 use super::helpers::*;
 use super::layout::*;
 use super::lists::{detail_line, list_row};
-use super::transcript::*;
+use super::transcript::rendered_rows;
 
 /// Command completion keeps the transcript visible by reserving at most five
 /// choices for the selected window, plus its optional argument detail line.
@@ -482,268 +480,141 @@ pub(super) fn draw_history_search(
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-pub(super) fn draw_recovery_confirm(
-    frame: &mut Frame<'_>,
+struct ConfirmLayout {
     area: Rect,
-    title: &str,
-    action: &str,
-    content: Vec<Line<'static>>,
-    theme: Theme,
-) {
-    let mut lines = vec![Line::from(Span::styled(
-        "No action is selected by default. Review the complete reverse patch.",
-        theme.style(Tone::Warning),
-    ))];
-    lines.extend(content.into_iter().take(MAX_BODY_LINES.saturating_sub(2)));
-    lines.push(Line::from(vec![
-        Span::styled("y", theme.style(Tone::Danger)),
-        Span::styled(format!(" {action}   "), theme.style(Tone::Dim)),
-        Span::styled("n/esc", theme.style(Tone::Success)),
-        Span::styled(" cancel", theme.style(Tone::Dim)),
-    ]));
-    draw_modal(frame, area, title, lines, theme, Tone::Warning);
+    warning: Vec<Line<'static>>,
+    body: Vec<Line<'static>>,
+    foot: Vec<Line<'static>>,
+    body_height: u16,
+    scroll_limit: usize,
 }
 
-pub(super) fn draw_redo_confirm(
+fn confirm_layout(area: Rect, dialog: &ConfirmDialog, theme: Theme) -> ConfirmLayout {
+    let width = modal_width(area);
+    let inner = width.saturating_sub(2);
+    let warning = dialog
+        .warning
+        .as_ref()
+        .map_or_else(Vec::new, |(text, tone)| {
+            super::wrap::wrap_lines(
+                &[Line::from(Span::styled(text.clone(), theme.style(*tone)))],
+                inner,
+            )
+        });
+    let body = dialog
+        .body
+        .iter()
+        .cloned()
+        .map(Line::from)
+        .collect::<Vec<_>>();
+    let body = super::wrap::wrap_lines(&body, inner);
+    let controls = Line::from(vec![
+        Span::styled("y", theme.style(dialog.accept_tone)),
+        Span::styled(
+            format!(" {}   ", dialog.accept_label),
+            theme.style(Tone::Dim),
+        ),
+        Span::styled(dialog.cancel_key, theme.style(Tone::Success)),
+        Span::styled(format!(" {}", dialog.cancel_label), theme.style(Tone::Dim)),
+    ]);
+    let mut foot = super::wrap::wrap_lines(&[controls], inner);
+    let wanted = warning.len() + body.len() + foot.len() + usize::from(!body.is_empty()) + 2;
+    // Like approvals, the height ceiling yields enough room for the fixed
+    // warning, decision keys, and one body row on short terminals.
+    let minimum = warning.len() + foot.len() + usize::from(!body.is_empty()) + 2;
+    let mut height = wanted
+        .min(usize::from(modal_max_height(area)).max(minimum))
+        .min(usize::from(area.height));
+    let mut room = height.saturating_sub(2 + warning.len() + foot.len());
+    // The separator belongs to the fixed footer, never the scrollable body.
+    // On short terminals it yields to the last visible body row.
+    let mut separator = usize::from(!body.is_empty() && room > 1);
+    room = room.saturating_sub(separator);
+    if body.len() > room {
+        height = height.max(minimum + 1).min(usize::from(area.height));
+        room = height.saturating_sub(3 + warning.len() + foot.len());
+        separator = usize::from(!body.is_empty() && room > 1);
+        room = room.saturating_sub(separator);
+        let limit = body.len().saturating_sub(room);
+        foot.push(Line::from(Span::styled(
+            format!("↑↓ review · {}/{}", dialog.scroll.min(limit) + 1, limit + 1),
+            theme.style(Tone::Dim),
+        )));
+    }
+    if separator > 0 {
+        foot.insert(0, Line::default());
+    }
+    let scroll_limit = body.len().saturating_sub(room);
+    let height = u16::try_from(height).unwrap_or(u16::MAX);
+    ConfirmLayout {
+        area: Rect::new(
+            area.x + area.width.saturating_sub(width) / 2,
+            area.y + area.height.saturating_sub(height) / 2,
+            width,
+            height,
+        ),
+        warning,
+        body,
+        foot,
+        body_height: u16::try_from(room).unwrap_or(u16::MAX),
+        scroll_limit,
+    }
+}
+
+pub(super) fn confirm_scroll_limit(area: Rect, dialog: &ConfirmDialog, theme: Theme) -> usize {
+    confirm_layout(area, dialog, theme).scroll_limit
+}
+
+pub(super) fn draw_confirm(
     frame: &mut Frame<'_>,
     area: Rect,
-    report: &RecoveryPreview,
+    dialog: &ConfirmDialog,
     theme: Theme,
 ) {
-    let mut lines = vec![Line::from(Span::styled(
-        "No action is selected by default. Review the complete forward patch.",
-        theme.style(Tone::Warning),
-    ))];
-    lines.extend(
-        render_recovery_patch(&report.patch)
-            .into_iter()
-            .take(MAX_BODY_LINES.saturating_sub(2)),
-    );
-    lines.push(Line::from(vec![
-        Span::styled("y", theme.style(Tone::Danger)),
-        Span::styled(" apply redo   ", theme.style(Tone::Dim)),
-        Span::styled("n/esc", theme.style(Tone::Success)),
-        Span::styled(" cancel", theme.style(Tone::Dim)),
-    ]));
-    draw_modal(
-        frame,
+    let ConfirmLayout {
         area,
-        "redo last exact Smith turn",
-        lines,
-        theme,
-        Tone::Warning,
+        warning,
+        body,
+        foot,
+        body_height,
+        scroll_limit,
+    } = confirm_layout(area, dialog, theme);
+    let block = WidgetBlock::default()
+        .borders(Borders::ALL)
+        .border_style(theme.style(dialog.tone))
+        .title(Span::styled(
+            format!(" {} ", dialog.title),
+            Style::default().add_modifier(Modifier::BOLD),
+        ));
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    let warning_height = u16::try_from(warning.len())
+        .unwrap_or(u16::MAX)
+        .min(inner.height);
+    frame.render_widget(
+        Paragraph::new(warning),
+        Rect::new(inner.x, inner.y, inner.width, warning_height),
     );
-}
-
-pub(super) fn draw_mcp_trust_confirm(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    server: &str,
-    content: &str,
-    theme: Theme,
-) {
-    let mut lines = vec![
-        Line::from(Span::styled(
-            format!("Trust MCP server {server}? No action is selected by default."),
-            theme.style(Tone::Warning),
-        )),
-        Line::from("Trust permits Smith to launch this server and connect its declared tools."),
-    ];
-    lines.extend(
-        content
-            .lines()
-            .take(MAX_BODY_LINES.saturating_sub(3))
-            .map(|line| Line::from(line.to_owned())),
-    );
-    lines.push(Line::from(vec![
-        Span::styled("y", theme.style(Tone::Warning)),
-        Span::styled(" trust and connect   ", theme.style(Tone::Dim)),
-        Span::styled("n/esc", theme.style(Tone::Success)),
-        Span::styled(" leave untrusted", theme.style(Tone::Dim)),
-    ]));
-    draw_modal(
-        frame,
-        area,
-        "trust this MCP server",
-        lines,
-        theme,
-        Tone::Warning,
-    );
-}
-
-pub(super) fn draw_skill_trust_confirm(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    skill: &str,
-    content: &str,
-    theme: Theme,
-) {
-    let mut lines = vec![
-        Line::from(Span::styled(
-            format!("Trust project skill {skill}? No action is selected by default."),
-            theme.style(Tone::Warning),
-        )),
-        Line::from("Trust permits Smith to activate this skill's project instructions."),
-    ];
-    lines.extend(
-        content
-            .lines()
-            .take(MAX_BODY_LINES.saturating_sub(3))
-            .map(|line| Line::from(line.to_owned())),
-    );
-    lines.push(Line::from(vec![
-        Span::styled("y", theme.style(Tone::Warning)),
-        Span::styled(" trust and activate   ", theme.style(Tone::Dim)),
-        Span::styled("n/esc", theme.style(Tone::Success)),
-        Span::styled(" leave withheld", theme.style(Tone::Dim)),
-    ]));
-    draw_modal(
-        frame,
-        area,
-        "trust this project skill",
-        lines,
-        theme,
-        Tone::Warning,
-    );
-}
-
-pub(super) fn draw_review_confirm(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    report: &ReviewPreview,
-    theme: Theme,
-) {
-    let mut lines = render_review_preview(report)
+    let body_y = inner.y + warning_height;
+    let visible = body
         .into_iter()
-        .take(MAX_BODY_LINES.saturating_sub(2))
+        .skip(dialog.scroll.min(scroll_limit))
+        .take(usize::from(body_height))
         .collect::<Vec<_>>();
-    lines.push(Line::default());
-    lines.push(Line::from(vec![
-        Span::styled("y", theme.style(Tone::Accent)),
-        Span::styled(" start provider-backed review   ", theme.style(Tone::Dim)),
-        Span::styled("n/esc", theme.style(Tone::Success)),
-        Span::styled(" cancel", theme.style(Tone::Dim)),
-    ]));
-    draw_modal(frame, area, "read-only review", lines, theme, Tone::Accent);
-}
-
-/// The rotation offer: a spent account, and what switching costs.
-///
-/// Its own renderer rather than the recovery one, whose preamble talks about
-/// reverse patches and whose action bar reads "apply undo" — accurate for an
-/// undo, nonsense here, and this modal is asking the user to spend money.
-pub(super) fn draw_rotation_confirm(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    content: &str,
-    theme: Theme,
-) {
-    let mut lines = content
-        .lines()
-        .take(MAX_BODY_LINES.saturating_sub(2))
-        .map(|line| Line::from(line.to_owned()))
-        .collect::<Vec<_>>();
-    lines.push(Line::default());
-    lines.push(Line::from(vec![
-        Span::styled("y", theme.style(Tone::Accent)),
-        Span::styled(" switch account and resend   ", theme.style(Tone::Dim)),
-        Span::styled("n/esc", theme.style(Tone::Success)),
-        Span::styled(" stay", theme.style(Tone::Dim)),
-    ]));
-    draw_modal(
-        frame,
-        area,
-        "switch provider account",
-        lines,
-        theme,
-        Tone::Warning,
+    frame.render_widget(
+        Paragraph::new(visible),
+        Rect::new(inner.x, body_y, inner.width, body_height),
     );
-}
-
-pub(super) fn draw_agent_confirm(frame: &mut Frame<'_>, area: Rect, content: &str, theme: Theme) {
-    draw_child_continuation_confirm(
-        frame,
-        area,
-        "read-only child agent",
-        " start child and spend provider tokens   ",
-        content,
-        theme,
+    frame.render_widget(
+        Paragraph::new(foot),
+        Rect::new(
+            inner.x,
+            body_y + body_height,
+            inner.width,
+            inner.height.saturating_sub(warning_height + body_height),
+        ),
     );
-}
-
-pub(super) fn draw_child_continuation_confirm(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    title: &str,
-    action: &str,
-    content: &str,
-    theme: Theme,
-) {
-    let mut lines = content
-        .lines()
-        .take(MAX_BODY_LINES.saturating_sub(2))
-        .map(|line| Line::from(line.to_owned()))
-        .collect::<Vec<_>>();
-    lines.push(Line::default());
-    lines.push(Line::from(vec![
-        Span::styled("y", theme.style(Tone::Accent)),
-        Span::styled(action.to_owned(), theme.style(Tone::Dim)),
-        Span::styled("n/esc", theme.style(Tone::Success)),
-        Span::styled(" cancel", theme.style(Tone::Dim)),
-    ]));
-    draw_modal(frame, area, title, lines, theme, Tone::Accent);
-}
-
-pub(super) fn draw_exit_confirm(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    app: &App,
-    pending_approval: bool,
-    pending_questionnaire: bool,
-    theme: Theme,
-) {
-    let mut lines = vec![
-        Line::from(Span::styled(
-            "quit with work in progress?",
-            theme.style(Tone::Heading),
-        )),
-        Line::default(),
-    ];
-    if app.is_busy() {
-        lines.push(Line::from(Span::raw("· a turn is still running")));
-    }
-    if pending_approval {
-        lines.push(Line::from(Span::raw("· an approval is pending")));
-    }
-    if pending_questionnaire {
-        lines.push(Line::from(Span::raw("· a questionnaire is pending")));
-    }
-    if !app.running_tasks.is_empty() {
-        let ids = app
-            .running_tasks
-            .iter()
-            .map(|task| task.task_id.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        lines.push(Line::from(Span::raw(format!(
-            "· {} background {} running: {ids}",
-            app.running_tasks.len(),
-            if app.running_tasks.len() == 1 {
-                "task"
-            } else {
-                "tasks"
-            },
-        ))));
-    }
-    lines.push(Line::default());
-    lines.push(Line::from(vec![
-        Span::styled("y", theme.style(Tone::Danger)),
-        Span::styled(" quit   ", theme.style(Tone::Dim)),
-        Span::styled("n", theme.style(Tone::Success)),
-        Span::styled(" keep working", theme.style(Tone::Dim)),
-    ]));
-
-    draw_modal(frame, area, "exit", lines, theme, Tone::Warning);
 }
 
 /// A modal's width: centered, at most 72 columns (`DESIGN.md` §2).

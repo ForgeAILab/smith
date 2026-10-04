@@ -241,8 +241,7 @@ fn compose(
         body.extend(raw.lines().map(|text| line(text, theme, Tone::Dim)));
     }
 
-    let waiting =
-        app.pending_approval_count().saturating_sub(1) + app.pending_questionnaire_count();
+    let waiting = app.queued_prompt_count();
     let mut hint = if app.work_details {
         "ctrl+o fold"
     } else {

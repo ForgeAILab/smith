@@ -1,10 +1,10 @@
-title: redo
+title: redo last exact Smith turn
 state: Confirmation
 body:
+No action is selected by default. Review the complete forward patch.
 Smith turn 1 redo
 
 --- current <PROJECT>/tracked.txt
 +++ reapply <PROJECT>/tracked.txt
 -before
 +after
-

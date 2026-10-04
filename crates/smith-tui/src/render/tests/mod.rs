@@ -30,6 +30,7 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
     use ratatui::style::{Color, Modifier};
+    use smith_client::NoticeKind;
     use smith_client::status_report::{StatusGoal, StatusReport};
     use unicode_width::UnicodeWidthStr;
 

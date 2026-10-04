@@ -29,6 +29,14 @@ pub enum RestoreReport {
 }
 
 impl RestoreReport {
+    /// Typed kind used when restoring a transcript notice.
+    pub fn notice_kind(&self) -> crate::NoticeKind {
+        match self {
+            Self::ActivationChanged { .. } => crate::NoticeKind::SessionRestored,
+            Self::EphemeralWork { .. } => crate::NoticeKind::Recovery,
+        }
+    }
+
     /// Existing transcript notice source.
     pub fn source(&self) -> &'static str {
         match self {
@@ -117,6 +125,15 @@ pub enum RecoveryAction {
 }
 
 impl RecoveryAction {
+    /// Typed kind for the existing sourced-notice presentation.
+    pub fn notice_kind(self) -> crate::NoticeKind {
+        match self {
+            Self::Undo => crate::NoticeKind::Undo,
+            Self::Redo => crate::NoticeKind::Redo,
+            Self::Revert => crate::NoticeKind::Revert,
+        }
+    }
+
     /// Existing command name and notice source.
     pub fn name(self) -> &'static str {
         match self {

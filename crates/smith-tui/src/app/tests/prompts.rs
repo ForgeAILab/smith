@@ -25,7 +25,7 @@
         busy.apply(&event(RuntimeEvent::TurnStarted));
         type_text(&mut busy, "/quit");
         assert_eq!(busy.on_key(key(KeyCode::Enter)), None);
-        assert!(matches!(busy.overlay, Some(Overlay::ExitConfirm { .. })));
+        assert!(matches!(busy.overlay, Some(Overlay::Confirm(_))));
     }
 
     #[test]
@@ -88,20 +88,20 @@
     }
 
     #[tokio::test]
-    async fn cancelling_an_explicit_exit_restores_the_pending_approval() {
+    async fn an_explicit_exit_queues_behind_the_pending_approval() {
         let mut app = app();
         app.present_approval(prompt("shell").await);
 
         assert_eq!(app.request_exit(), None);
-        assert!(matches!(
-            app.overlay,
-            Some(Overlay::ExitConfirm {
-                approval: Some(_),
-                ..
-            })
-        ));
-        assert_eq!(app.on_key(key(KeyCode::Char('n'))), None);
         assert!(matches!(app.overlay, Some(Overlay::Approval { .. })));
+        assert_eq!(app.queued_prompt_count(), 1);
+        elapse_prompt_guard(&mut app);
+        app.on_key(key(KeyCode::Char('n')));
+        assert!(matches!(&app.overlay, Some(Overlay::Confirm(dialog)) if dialog.title == "exit"));
+        elapse_prompt_guard(&mut app);
+        assert_eq!(app.on_key(key(KeyCode::Char('n'))), None);
+        assert!(app.overlay.is_none());
+        assert!(!app.should_quit);
     }
 
     #[tokio::test]
@@ -364,8 +364,8 @@
         );
         assert!(app.transcript.blocks().iter().any(|block| matches!(
             block,
-            Block::Notice { source, text }
-                if source == "approval" && text.contains("timed out")
+            Block::Notice { kind: source, text }
+                if source.label() == "approval" && text.contains("timed out")
         )));
     }
 
@@ -458,7 +458,7 @@
         let mut undo = app();
         undo.confirm_undo(recovery_preview("--- current\n+++ restore\n-old\n+new\n"));
         assert_eq!(undo.on_key(key(KeyCode::Enter)), None);
-        assert!(matches!(undo.overlay, Some(Overlay::UndoConfirm { .. })));
+        assert!(matches!(undo.overlay, Some(Overlay::Confirm(_))));
         elapse_prompt_guard(&mut undo);
         assert_eq!(undo.on_key(key(KeyCode::Esc)), Some(Action::CancelUndo));
 
@@ -471,8 +471,9 @@
         assert_eq!(review.on_key(key(KeyCode::Enter)), None);
         assert!(matches!(
             review.overlay,
-            Some(Overlay::ReviewConfirm { .. })
+            Some(Overlay::Confirm(_))
         ));
+        elapse_prompt_guard(&mut review);
         assert_eq!(
             review.on_key(key(KeyCode::Char('y'))),
             Some(Action::StartReview {

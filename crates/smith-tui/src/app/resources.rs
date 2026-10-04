@@ -1,9 +1,11 @@
 //! Palette, runtime-resource selection, and local-result transitions.
 
+use crate::theme::Tone;
 use crossterm::event::{KeyCode, KeyEvent};
+use smith_client::NoticeKind;
 use smith_client::agent_report::{AgentReport, AgentResumeReport};
 use smith_client::recovery_report::{RecoveryPreview, RevertPreview};
-use smith_client::review_report::ReviewPreview;
+use smith_client::review_report::{ReviewPreview, ReviewReport};
 
 use crate::commands::{
     self, Command, ConfirmCommand, GoalAction, HostCommand, ParsedCommand, SelectionCommand,
@@ -100,7 +102,7 @@ impl App {
         if let Some(query) = initial_query {
             picker.query = query.to_owned();
         }
-        self.overlay = Some(Overlay::ResourcePicker {
+        self.open_overlay(Overlay::ResourcePicker {
             picker,
             target,
             restore_on_escape,
@@ -239,8 +241,10 @@ impl App {
             ResourceTarget::Resume => {
                 self.composer.clear();
                 if self.resources.current_session.as_deref() == Some(id.as_str()) {
-                    self.transcript
-                        .push_notice("resume", "already in the selected session");
+                    self.push_notice(
+                        NoticeKind::SessionUnchanged,
+                        "already in the selected session",
+                    );
                     None
                 } else {
                     Some(Action::Reconfigure(SessionControl::Reconfigure(
@@ -469,18 +473,26 @@ impl App {
     pub(super) fn dispatch_command(&mut self, parsed: ParsedCommand) -> Option<Action> {
         let ParsedCommand { spec, command } = parsed;
 
+        let prompt_waiting = self.overlay.as_ref().is_some_and(Overlay::is_prompt)
+            || !self.pending_prompts.is_empty();
+
         let context_selection_requires_idle = matches!(command, Command::Ui(UiCommand::Context(_)));
         if (spec.requires_idle || context_selection_requires_idle)
-            && (self.is_busy() || self.has_pending_input())
+            && (self.is_busy() || self.has_pending_input() || prompt_waiting)
         {
-            self.overlay = None;
-            self.transcript.push_notice(
-                "smith",
+            if !self.overlay.as_ref().is_some_and(Overlay::is_prompt) {
+                self.overlay = None;
+            }
+            self.push_notice(
+                NoticeKind::CommandRefused,
                 format!(
                     "/{name} requires an idle turn; draft preserved",
                     name = spec.name
                 ),
             );
+            return None;
+        }
+        if prompt_waiting {
             return None;
         }
         if self.is_busy()
@@ -496,8 +508,8 @@ impl App {
             )
         {
             self.overlay = None;
-            self.transcript.push_notice(
-                "goal",
+            self.push_notice(
+                NoticeKind::GoalRefused,
                 "this goal change requires an idle turn; command preserved",
             );
             return None;
@@ -511,7 +523,7 @@ impl App {
                 self.accept_composer_input();
                 self.toggle_work_details();
                 self.transcript.push_notice(
-                    "details",
+                    NoticeKind::Details,
                     if self.work_details {
                         "bounded tool details shown"
                     } else {
@@ -555,15 +567,18 @@ impl App {
                     .find(|entry| entry.id == position.to_string());
                 match entry {
                     Some(entry) if entry.active => {
-                        self.transcript
-                            .push_notice("account", "already using that account");
+                        self.push_notice(
+                            NoticeKind::AccountUnchanged,
+                            "already using that account",
+                        );
                         None
                     }
                     Some(entry) => {
                         // A spent account stays selectable: the cooldown is
                         // Smith's estimate, and the user may know better.
                         if let Some(reason) = &entry.disabled_reason {
-                            self.transcript.push_notice("account", reason.clone());
+                            self.transcript
+                                .push_notice(NoticeKind::Account, reason.clone());
                         }
                         Some(Action::Reconfigure(SessionControl::Account(position)))
                     }
@@ -752,10 +767,10 @@ impl App {
             Command::Confirm(ConfirmCommand::AgentResume(child_id)) => {
                 if self.is_busy() {
                     self.overlay = None;
-                    self.transcript
-                        .push_local(LocalResult::Agent(Box::new(AgentReport::Resume(
-                            AgentResumeReport::RequiresIdle,
-                        ))));
+                    self.push_notice(
+                        NoticeKind::AgentResumeRefused,
+                        AgentResumeReport::RequiresIdle.render_value(),
+                    );
                     return None;
                 }
                 let Some(summary) = self.children.get(&child_id) else {
@@ -773,12 +788,16 @@ impl App {
                     return None;
                 }
                 self.accept_composer_input();
-                self.overlay = Some(Overlay::AgentResumeConfirm {
-                    child_id: child_id.clone(),
-                    content: format!(
-                        "child: {child_id}\noperation: continue exact interrupted checkpoint\nnew task: no\nturn slot consumed: no\nprovider spend: may continue\nside effects: committed work is not replayed"
-                    ),
-                });
+                let content = format!(
+                    "child: {child_id}\noperation: continue exact interrupted checkpoint\nnew task: no\nturn slot consumed: no\nprovider spend: may continue\nside effects: committed work is not replayed"
+                );
+                self.confirm_child(
+                    "resume interrupted child",
+                    "resume exact checkpoint",
+                    "y resume exact checkpoint · n/esc cancel",
+                    content,
+                    Action::ResumeAgent { child_id },
+                );
                 None
             }
             Command::Host(local @ HostCommand::Goal(GoalAction::Pause)) => {
@@ -814,55 +833,167 @@ impl App {
 
     /// Shows an exact undo preview with no default action.
     pub fn confirm_undo(&mut self, report: RecoveryPreview) {
-        self.overlay = Some(Overlay::UndoConfirm {
-            report: Box::new(report),
-        });
-        self.prompt_input_guard.start();
+        let mut dialog = ConfirmDialog::new(
+            "undo last Smith turn",
+            Tone::Warning,
+            patch_body(&report.patch),
+            "apply undo",
+            ConfirmOutcome::Action(Action::ApplyUndo),
+            ConfirmOutcome::Action(Action::CancelUndo),
+        );
+        dialog.warning = Some((
+            "No action is selected by default. Review the complete reverse patch.".to_owned(),
+            Tone::Warning,
+        ));
+        dialog.accept_tone = Tone::Danger;
+        self.open_overlay(Overlay::Confirm(dialog));
     }
 
     /// Shows an exact redo preview with no default action.
     pub fn confirm_redo(&mut self, report: RecoveryPreview) {
-        self.overlay = Some(Overlay::RedoConfirm {
-            report: Box::new(report),
-        });
-        self.prompt_input_guard.start();
+        let mut dialog = ConfirmDialog::new(
+            "redo last exact Smith turn",
+            Tone::Warning,
+            patch_body(&report.patch),
+            "apply redo",
+            ConfirmOutcome::Action(Action::ApplyRedo),
+            ConfirmOutcome::Action(Action::CancelRedo),
+        );
+        dialog.warning = Some((
+            "No action is selected by default. Review the complete forward patch.".to_owned(),
+            Tone::Warning,
+        ));
+        dialog.accept_tone = Tone::Danger;
+        self.open_overlay(Overlay::Confirm(dialog));
     }
 
     /// Shows an exact selective-revert preview with no default action.
     pub fn confirm_revert(&mut self, report: RevertPreview) {
-        self.overlay = Some(Overlay::RevertConfirm {
-            report: Box::new(report),
-        });
-        self.prompt_input_guard.start();
+        let mut body = vec![format!("origin: {}", report.origin.label()), String::new()];
+        body.extend(patch_body(&report.patch));
+        let mut dialog = ConfirmDialog::new(
+            "revert selected change",
+            Tone::Warning,
+            body,
+            "apply revert",
+            ConfirmOutcome::Action(Action::ApplyRevert {
+                scope: report.scope.clone(),
+                fingerprint: report.fingerprint.clone(),
+            }),
+            ConfirmOutcome::Action(Action::CancelRevert {
+                scope: report.scope,
+                fingerprint: report.fingerprint,
+            }),
+        );
+        dialog.warning = Some((
+            "No action is selected by default. Review the complete reverse patch.".to_owned(),
+            Tone::Warning,
+        ));
+        dialog.accept_tone = Tone::Danger;
+        self.open_overlay(Overlay::Confirm(dialog));
     }
 
     /// Shows one MCP server's resolved invocation and content identity, with no
     /// default action: a repository asking Smith to run a program is exactly
     /// the decision that must never be made by pressing Enter.
     pub fn confirm_mcp_trust(&mut self, server: impl Into<String>, content: impl Into<String>) {
-        self.overlay = Some(Overlay::McpTrustConfirm {
-            server: server.into(),
-            content: content.into(),
-        });
-        self.prompt_input_guard.start();
+        let server = server.into();
+        let mut body = vec![
+            "Trust permits Smith to launch this server and connect its declared tools.".to_owned(),
+        ];
+        body.extend(content.into().lines().map(str::to_owned));
+        let mut dialog = ConfirmDialog::new(
+            "trust this MCP server",
+            Tone::Warning,
+            body,
+            "trust and connect",
+            ConfirmOutcome::Action(Action::TrustMcpServer {
+                server: server.clone(),
+            }),
+            ConfirmOutcome::Dismiss,
+        );
+        dialog.warning = Some((
+            format!("Trust MCP server {server}? No action is selected by default."),
+            Tone::Warning,
+        ));
+        dialog.cancel_label = "leave untrusted".to_owned();
+        dialog.hint = "y trust and connect · n/esc leave untrusted".to_owned();
+        self.open_overlay(Overlay::Confirm(dialog));
     }
 
     /// Shows one project skill's location and content identity, with no default
     /// action: a repository asking Smith to adopt its instructions is decided
     /// deliberately or not at all.
     pub fn confirm_skill_trust(&mut self, skill: impl Into<String>, content: impl Into<String>) {
-        self.overlay = Some(Overlay::SkillTrustConfirm {
-            skill: skill.into(),
-            content: content.into(),
-        });
-        self.prompt_input_guard.start();
+        let skill = skill.into();
+        let mut body =
+            vec!["Trust permits Smith to activate this skill's project instructions.".to_owned()];
+        body.extend(content.into().lines().map(str::to_owned));
+        let mut dialog = ConfirmDialog::new(
+            "trust this project skill",
+            Tone::Warning,
+            body,
+            "trust and activate",
+            ConfirmOutcome::Action(Action::TrustSkill {
+                skill: skill.clone(),
+            }),
+            ConfirmOutcome::Dismiss,
+        );
+        dialog.warning = Some((
+            format!("Trust project skill {skill}? No action is selected by default."),
+            Tone::Warning,
+        ));
+        dialog.cancel_label = "leave withheld".to_owned();
+        dialog.hint = "y trust and activate · n/esc leave withheld".to_owned();
+        self.open_overlay(Overlay::Confirm(dialog));
     }
 
     /// Shows review scope and provider spend before dispatch.
     pub fn confirm_review(&mut self, report: ReviewPreview) {
-        self.overlay = Some(Overlay::ReviewConfirm {
-            report: Box::new(report),
-        });
+        let mut body: Vec<_> = format!("scope: {}\n", report.title)
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        body.extend([
+            "provider-backed: yes".to_owned(),
+            "workspace authority: read-only".to_owned(),
+            ReviewReport::AUTHORITY_MESSAGE.to_owned(),
+            String::new(),
+        ]);
+        body.extend(patch_body(&report.patch));
+        let mut dialog = ConfirmDialog::new(
+            "read-only review",
+            Tone::Accent,
+            body,
+            "start provider-backed review",
+            ConfirmOutcome::Action(Action::StartReview {
+                scope: report.scope,
+            }),
+            ConfirmOutcome::Dismiss,
+        );
+        dialog.hint = "y start review · n/esc cancel".to_owned();
+        self.open_overlay(Overlay::Confirm(dialog));
+    }
+
+    pub(super) fn confirm_child(
+        &mut self,
+        title: &str,
+        label: &str,
+        hint: &str,
+        content: String,
+        action: Action,
+    ) {
+        let body = content.lines().map(str::to_owned).collect();
+        let mut dialog = ConfirmDialog::new(
+            title,
+            Tone::Accent,
+            body,
+            label,
+            ConfirmOutcome::Action(action),
+            ConfirmOutcome::Dismiss,
+        );
+        dialog.hint = hint.to_owned();
+        self.open_overlay(Overlay::Confirm(dialog));
     }
 }
 
@@ -892,4 +1023,12 @@ fn model_pair(providers: &[ResourceEntry], id: &str) -> Option<(String, String)>
     }
     let (provider, model) = id.split_once('/')?;
     (!provider.is_empty() && !model.is_empty()).then(|| (provider.to_owned(), model.to_owned()))
+}
+
+fn patch_body(patch: &[smith_client::diff_report::DiffLine]) -> Vec<String> {
+    patch
+        .iter()
+        .flat_map(|line| line.text.lines())
+        .map(str::to_owned)
+        .collect()
 }

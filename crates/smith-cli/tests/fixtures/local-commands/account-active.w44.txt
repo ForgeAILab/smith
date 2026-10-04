@@ -1,9 +1,9 @@
-● account · already using that account
+  Get started
+  Type a task below and press Enter.
 
-
-
-
-
+  /model    Switch model
+  /connect  Connect or reconnect a provider
+  /help     List commands and keys
 
 
 
@@ -509,4 +509,4 @@
 ────────────────────────────────────────────
 > Ask Smith to do anything
 ────────────────────────────────────────────
-  ? for shortcuts      example-model · build
+  already using that account   example-model

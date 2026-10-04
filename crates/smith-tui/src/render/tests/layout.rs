@@ -246,7 +246,7 @@
             app.transcript
                 .push_user(format!("{word} ").repeat(8).trim_end().to_owned());
         }
-        app.transcript.push_notice("marker", "newest-entry");
+        app.transcript.push_notice(NoticeKind::Marker, "newest-entry");
         assert!(app.following);
 
         let screen = render(&app, 44, 14, Theme::new().without_color());
@@ -285,7 +285,7 @@
     #[test]
     fn a_drag_copies_exactly_the_glyphs_it_covered() {
         let mut app = App::new("gpt-5.3", "~/work/api");
-        app.transcript.push_notice("marker", "copy-me-exactly");
+        app.transcript.push_notice(NoticeKind::Marker, "copy-me-exactly");
         let (buffer, _) = render_and_copy(&mut app, 60, 12);
 
         // Locate the marker by cell, not by byte offset into the joined row:
@@ -315,7 +315,7 @@
     #[test]
     fn the_highlight_marks_the_selected_cells_and_nothing_else() {
         let mut app = App::new("gpt-5.3", "~/work/api");
-        app.transcript.push_notice("marker", "highlight-target");
+        app.transcript.push_notice(NoticeKind::Marker, "highlight-target");
         drag(&mut app, (2, 1), (6, 1));
         let (buffer, _) = render_and_copy(&mut app, 60, 12);
 
@@ -333,7 +333,7 @@
     #[test]
     fn a_selection_spans_the_composer_and_the_transcript_in_one_drag() {
         let mut app = App::new("gpt-5.3", "~/work/api");
-        app.transcript.push_notice("marker", "transcript-side");
+        app.transcript.push_notice(NoticeKind::Marker, "transcript-side");
         // A drag from the first row to the last crosses every pane; the point
         // is that no widget has to know selection exists.
         drag(&mut app, (0, 0), (59, 11));
@@ -347,7 +347,7 @@
     #[test]
     fn new_output_clears_a_highlight_rather_than_marking_what_moved_under_it() {
         let mut app = App::new("gpt-5.3", "~/work/api");
-        app.transcript.push_notice("marker", "first");
+        app.transcript.push_notice(NoticeKind::Marker, "first");
         drag(&mut app, (2, 1), (8, 1));
         assert!(app.selection.is_some());
 
@@ -361,7 +361,7 @@
     #[test]
     fn a_resize_past_the_selection_drops_it() {
         let mut app = App::new("gpt-5.3", "~/work/api");
-        app.transcript.push_notice("marker", "resize-target");
+        app.transcript.push_notice(NoticeKind::Marker, "resize-target");
         drag(&mut app, (10, 20), (30, 20));
 
         // The selection was made against a 24-row surface; a 12-row one has no
