@@ -107,9 +107,12 @@ Smith SHALL calculate cost only from a versioned price reference and compatible
 usage counters. Calculated values MUST be labelled exact, estimated, or unknown
 according to their inputs. The catalog snapshot's per-model price entry is one
 such reference, and it MUST carry the same revision and retrieval provenance as
-every other catalog field. Cost MUST remain presentation only: it MUST NOT
-enter routing, approval, context, or budget decisions, and MUST NOT reach the
-model.
+every other catalog field. Counters MUST be priced by the reference of the
+provider/model binding that produced them: root counters by the binding active
+when they were reported, delegated counters by the child's own binding.
+Counters from one binding MUST NOT be priced at another binding's rates. Cost
+MUST remain presentation only: it MUST NOT enter routing, approval, context,
+or budget decisions, and MUST NOT reach the model.
 
 #### Scenario: Price is unavailable
 
@@ -128,6 +131,38 @@ model.
 - **THEN** it reports one USD figure labelled exact
 - **AND** names the provider and model the price came from
 
+#### Scenario: Two models in one session
+
+- **GIVEN** a session ran turns on `zai/glm-5.3`, then switched with `/model`
+  to `google/gemini-3.8-flash` and ran more turns
+- **AND** the catalog prices both and every counter is provider-reported
+- **WHEN** Smith renders the exit report or `/status`
+- **THEN** the GLM counters are priced at GLM's rates and the Gemini counters
+  at Gemini's
+- **AND** the line gives the total labelled exact, then each binding with its
+  share, for example `$0.034 exact · zai/glm-5.3 $0.022 ·
+  google/gemini-3.8-flash $0.012`
+
+#### Scenario: One binding has no price
+
+- **GIVEN** a session used a priced model and a model the catalog does not
+  price
+- **WHEN** Smith renders the session cost
+- **THEN** the figure covers only the priced binding and is labelled estimated
+- **AND** the line names the unpriced binding as `price unknown for
+  <provider>/<model>`
+
+#### Scenario: Usage restored on resume
+
+- **GIVEN** a resumed session whose snapshot restores usage records, which
+  carry no model identity
+- **WHEN** Smith prices the session
+- **THEN** the restored counters are priced by the binding the snapshot's
+  activation manifests name, when they name exactly one
+- **AND** when they name several, the restored counters are unpriced, the
+  figure is labelled estimated, and the line says `price unknown for earlier
+  models`
+
 #### Scenario: An estimated counter downgrades the label
 
 - **GIVEN** any contributing counter is tokenizer-estimated,
@@ -139,7 +174,7 @@ model.
 
 #### Scenario: A model the catalog does not price
 
-- **GIVEN** the active model's catalog record carries no price entry
+- **GIVEN** no binding that contributed counters has a catalog price entry
 - **WHEN** Smith renders the exit report
 - **THEN** it prints the token lines and no cost line
 - **AND** does not substitute a price from another model, provider, or
@@ -171,6 +206,8 @@ the child event streams the host subscribes to, and SHALL keep those counters
 distinguishable from the root session's own at every surface that reports them.
 It MUST report the number of children that contributed usage, and MUST NOT
 present delegated tokens as root tokens or omit them from a session total.
+Delegated counters SHALL be kept per child binding, resolved from the child's
+profile when it is spawned.
 
 #### Scenario: Four children report usage
 
@@ -203,8 +240,25 @@ present delegated tokens as root tokens or omit them from a session total.
 - **GIVEN** a child reports cache-read input, uncached input, and output
 - **WHEN** Smith accumulates it into the delegated totals
 - **THEN** each counter lands in its own category
-- **AND** the delegated totals are priced by the same per-counter reference the
-  root totals are
+- **AND** the delegated counters are priced by the per-counter reference of
+  the child's own binding
+
+#### Scenario: A child runs another model
+
+- **GIVEN** the root runs `zai/glm-5.3` and a child spawned with a profile
+  bound to `chatgpt/gpt-6.1-sol`
+- **WHEN** Smith prices the session
+- **THEN** the child's counters are priced at the ChatGPT model's rates, or
+  left unpriced and the figure labelled estimated if the catalog has none
+- **AND** the cost line names both bindings
+
+#### Scenario: A child's binding is unknown
+
+- **GIVEN** a child whose profile cannot be resolved to a binding reports
+  usage
+- **WHEN** Smith prices the session
+- **THEN** that child's counters are unpriced and the figure is labelled
+  estimated
 
 ### Requirement: Cache re-billing is derived and non-overlapping
 
@@ -323,6 +377,7 @@ ordinary call, exact input/output, deadline, provider, and session limits.
   maintenance limits
 - **AND** any accepted attempt records actual provider usage/cost separately
   from the presentation estimate
+
 ### Requirement: Server-reported limit windows surface
 
 Smith SHALL retain the latest normalized rate-limit snapshot per provider pool
@@ -346,3 +401,24 @@ stale snapshot MUST remain attributable to the attempt that produced it.
 - **WHEN** usage is displayed
 - **THEN** that member's window state presents as unknown
 - **AND** it is not rendered as 0% used or as exhausted
+
+### Requirement: Usage log keeps per-binding counters
+
+The usage log record SHALL carry each contributing binding's counters
+separately (schema version 5), and SHALL keep its existing top-level provider
+and model fields naming the last root binding. Readers MUST accept records of
+versions 1 through 5.
+
+#### Scenario: A two-model session is logged
+
+- **GIVEN** a session that ran GLM and then Gemini
+- **WHEN** Smith appends its usage record on exit
+- **THEN** the record lists GLM's and Gemini's counters under their own
+  bindings
+- **AND** the top-level model is `gemini-3.8-flash`
+
+#### Scenario: An older record is read
+
+- **GIVEN** a version-4 record with no per-binding counters
+- **WHEN** the log is read
+- **THEN** it parses, with its totals attributed to its top-level binding
