@@ -408,34 +408,21 @@ enum Step {
     Busy,
 }
 
-#[derive(Default)]
-struct MaskedInput(String);
+struct MaskedInput(crate::line_input::LineInput);
+
+impl Default for MaskedInput {
+    fn default() -> Self {
+        Self(crate::line_input::LineInput::masked())
+    }
+}
 
 impl MaskedInput {
-    fn push(&mut self, character: char) {
-        self.0.push(character);
-    }
-
-    fn push_str(&mut self, value: &str) {
-        self.0.push_str(value);
-    }
-
-    fn pop(&mut self) {
-        self.0.pop();
-    }
-
     fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
-
-    fn masked(&self) -> String {
-        "•".repeat(self.0.chars().count())
-    }
-
     fn secret(&self) -> Secret {
-        Secret::new(self.0.clone())
+        Secret::new(self.0.text().to_owned())
     }
-
     fn clear(&mut self) {
         self.0.clear();
     }
@@ -479,7 +466,7 @@ pub struct SetupApp {
     max_output_tokens: Option<u32>,
     reasoning_only_text: bool,
     make_default: bool,
-    input: String,
+    input: crate::line_input::LineInput,
     error: Option<String>,
     /// Why the surface is busy, shown instead of the default applying note.
     busy_note: Option<String>,
@@ -561,7 +548,7 @@ impl SetupApp {
             max_output_tokens: None,
             reasoning_only_text: false,
             make_default: true,
-            input: String::new(),
+            input: crate::line_input::LineInput::default(),
             error: None,
             busy_note: None,
             limits_source: None,
@@ -973,37 +960,22 @@ impl SetupApp {
             };
         }
 
-        match key.code {
-            KeyCode::Backspace => {
-                if self.step == Step::CredentialValue
-                    && self
-                        .credential_method
-                        .is_some_and(CredentialMethod::takes_secret)
-                {
-                    self.secret.pop();
-                } else {
-                    self.input.pop();
-                }
-                SetupEffect::None
-            }
-            KeyCode::Enter => self.submit_input(),
-            KeyCode::Char(character)
-                if !key.modifiers.intersects(
-                    KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
-                ) =>
-            {
-                if self.step == Step::CredentialValue
-                    && self
-                        .credential_method
-                        .is_some_and(CredentialMethod::takes_secret)
-                {
-                    self.secret.push(character);
-                } else {
-                    self.input.push(character);
-                }
-                SetupEffect::None
-            }
-            _ => SetupEffect::None,
+        if key.code == KeyCode::Enter {
+            return self.submit_input();
+        }
+        self.active_input_mut().on_key(key);
+        SetupEffect::None
+    }
+
+    fn active_input_mut(&mut self) -> &mut crate::line_input::LineInput {
+        if self.step == Step::CredentialValue
+            && self
+                .credential_method
+                .is_some_and(CredentialMethod::takes_secret)
+        {
+            &mut self.secret.0
+        } else {
+            &mut self.input
         }
     }
 
@@ -1021,22 +993,7 @@ impl SetupApp {
             return;
         }
         self.error = None;
-        let cleaned = text
-            .chars()
-            .filter(|character| !character.is_control())
-            .collect::<String>();
-        if cleaned.is_empty() {
-            return;
-        }
-        if self.step == Step::CredentialValue
-            && self
-                .credential_method
-                .is_some_and(CredentialMethod::takes_secret)
-        {
-            self.secret.push_str(&cleaned);
-        } else {
-            self.input.push_str(&cleaned);
-        }
+        self.active_input_mut().paste(text);
     }
 
     fn enter(&mut self, step: Step, remember: bool) {
@@ -1061,7 +1018,7 @@ impl SetupApp {
             if self.step == Step::CredentialValue
                 && self.credential_method == Some(CredentialMethod::Environment)
             {
-                self.environment_variable.clone_from(&self.input);
+                self.environment_variable = self.input.text().to_owned();
             }
             self.step = step;
             self.review_scroll.set(ReviewScroll::default());
@@ -1081,7 +1038,8 @@ impl SetupApp {
                     .context_tokens
                     .map_or_else(String::new, |value| value.to_string()),
                 _ => String::new(),
-            };
+            }
+            .into();
             // Secret input is deliberately never restored by navigation. If
             // Back reaches authentication again, require a fresh key rather
             // than retaining the previously entered credential.
@@ -1302,7 +1260,7 @@ impl SetupApp {
                     self.secret.clear();
                     self.credential_method = Some(CredentialMethod::Environment);
                     self.enter(Step::CredentialValue, true);
-                    self.input.clone_from(&self.environment_variable);
+                    self.input.replace(self.environment_variable.clone());
                 }
                 _ => {}
             },
@@ -1362,7 +1320,7 @@ impl SetupApp {
     }
 
     fn submit_input(&mut self) -> SetupEffect {
-        let value = self.input.trim().to_owned();
+        let value = self.input.text().trim().to_owned();
         match self.step {
             Step::ProviderName => {
                 if value.is_empty()
@@ -1752,7 +1710,7 @@ fn draw_setup_surface(
         Step::Busy => "Applying setup",
         _ => app.prompt().0,
     };
-    let rows = setup_content_rows(app, area.width, theme);
+    let mut rows = setup_content_rows(app, area.width, theme);
     let mut footer = match app.step {
         Step::Review => ScreenFooter::Review { back, scroll: None },
         Step::Busy => ScreenFooter::Busy { back },
@@ -1814,6 +1772,30 @@ fn draw_setup_surface(
             (!embedded).then_some(footer),
             theme,
         );
+        if app.step != Step::Busy
+            && let Some(row) = rows
+                .iter()
+                .position(|line| line.to_string().starts_with("› "))
+        {
+            // The editable value must remain reachable when help exceeds the
+            // small-terminal body; discard only the offscreen help prefix.
+            let row = if row >= usize::from(body.height) && body.height > 0 {
+                let skipped = row + 1 - usize::from(body.height);
+                rows.drain(..skipped);
+                row - skipped
+            } else {
+                row
+            };
+            let field = if app.prompt().2 {
+                &app.secret.0
+            } else {
+                &app.input
+            };
+            let (_, cursor) = field.viewport(usize::from(body.width).saturating_sub(2));
+            if row < usize::from(body.height) && body.width > 2 {
+                frame.set_cursor_position((body.x + 2 + cursor as u16, body.y + row as u16));
+            }
+        }
         frame.render_widget(Paragraph::new(rows), body);
     }
 }
@@ -1841,12 +1823,14 @@ fn setup_content_rows(app: &SetupApp, width: u16, theme: Theme) -> Vec<Line<'sta
                 lines.extend(indented_words(&help, width, 2, Tone::Dim, theme));
                 lines.push(Line::default());
             }
+            let field = if masked { &app.secret.0 } else { &app.input };
+            let (visible, _) = field.viewport(usize::from(width).saturating_sub(2));
             let value = if masked {
-                app.secret.masked()
+                visible.clone()
             } else if app.input.is_empty() {
                 "type a value".to_owned()
             } else {
-                app.input.clone()
+                visible
             };
             lines.push(Line::from(vec![
                 Span::styled("› ", theme.style(Tone::Accent)),
@@ -1940,6 +1924,270 @@ mod tests {
     use super::*;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+
+    #[test]
+    fn line_editing_table_drives_all_five_fields() {
+        use crate::{App, LineInput, Overlay};
+        use crossterm::event::Event;
+        let key = |code| Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        let ctrl = |ch| Event::Key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL));
+        let alt = |ch| Event::Key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::ALT));
+        let cases = vec![
+            (
+                "left",
+                "alpha beta",
+                vec![key(KeyCode::Left)],
+                "alpha beta",
+                9,
+            ),
+            (
+                "right",
+                "alpha beta",
+                vec![key(KeyCode::Home), key(KeyCode::Right)],
+                "alpha beta",
+                1,
+            ),
+            (
+                "home",
+                "alpha beta",
+                vec![key(KeyCode::Home)],
+                "alpha beta",
+                0,
+            ),
+            (
+                "end",
+                "alpha beta",
+                vec![key(KeyCode::Home), key(KeyCode::End)],
+                "alpha beta",
+                10,
+            ),
+            ("ctrl+a", "alpha beta", vec![ctrl('a')], "alpha beta", 0),
+            (
+                "ctrl+e",
+                "alpha beta",
+                vec![ctrl('a'), ctrl('e')],
+                "alpha beta",
+                10,
+            ),
+            ("ctrl+u", "alpha beta", vec![ctrl('u')], "", 0),
+            ("ctrl+k", "alpha beta", vec![ctrl('a'), ctrl('k')], "", 0),
+            ("ctrl+w", "alpha beta", vec![ctrl('w')], "alpha ", 6),
+            ("alt+b", "alpha beta", vec![alt('b')], "alpha beta", 6),
+            (
+                "alt+f",
+                "alpha beta",
+                vec![ctrl('a'), alt('f')],
+                "alpha beta",
+                5,
+            ),
+            (
+                "backspace",
+                "alpha beta",
+                vec![key(KeyCode::Backspace)],
+                "alpha bet",
+                9,
+            ),
+            (
+                "delete",
+                "alpha beta",
+                vec![ctrl('a'), key(KeyCode::Delete)],
+                "lpha beta",
+                0,
+            ),
+            (
+                "middle paste",
+                "alpha beta",
+                vec![alt('b'), Event::Paste("Z".into())],
+                "alpha Zbeta",
+                7,
+            ),
+            (
+                "insert",
+                "alpha beta",
+                vec![alt('b'), key(KeyCode::Char('Z'))],
+                "alpha Zbeta",
+                7,
+            ),
+            (
+                "unicode",
+                "a中é",
+                vec![
+                    key(KeyCode::Left),
+                    key(KeyCode::Backspace),
+                    Event::Paste("界".into()),
+                ],
+                "a界é",
+                2,
+            ),
+            (
+                "empty boundaries",
+                "",
+                vec![
+                    key(KeyCode::Left),
+                    key(KeyCode::Delete),
+                    ctrl('w'),
+                    key(KeyCode::Backspace),
+                ],
+                "",
+                0,
+            ),
+            (
+                "whitespace words",
+                "one  two  ",
+                vec![ctrl('w')],
+                "one  ",
+                5,
+            ),
+            (
+                "secret correction",
+                "sk-tyxo",
+                vec![
+                    key(KeyCode::Left),
+                    key(KeyCode::Backspace),
+                    key(KeyCode::Char('p')),
+                ],
+                "sk-typo",
+                6,
+            ),
+        ];
+        for (name, initial, edits, expected, cursor) in cases {
+            let mut composer = App::new("model", "project");
+            let mut picker = ResourcePicker::new("filter", Vec::new(), "empty");
+            let mut plain = setup_app(SetupMode::FirstRun, Vec::new(), Vec::new());
+            plain.step = Step::ProviderName;
+            plain.picker = None;
+            let mut masked = setup_app(
+                SetupMode::Credential {
+                    provider: "zai".into(),
+                },
+                Vec::new(),
+                Vec::new(),
+            );
+            masked.step = Step::CredentialValue;
+            masked.credential_method = Some(CredentialMethod::Config);
+            masked.picker = None;
+            let mut history = App::new("model", "project");
+            history.overlay = Some(Overlay::HistorySearch {
+                original: String::new(),
+                query: LineInput::default(),
+                selected: None,
+                matched: None,
+            });
+            for event in std::iter::once(Event::Paste(initial.into())).chain(edits) {
+                match event {
+                    Event::Key(key) => {
+                        composer.on_key(key);
+                        picker.on_key(key);
+                        plain.on_key(key);
+                        masked.on_key(key);
+                        history.on_key(key);
+                    }
+                    Event::Paste(text) => {
+                        composer.on_paste(&text);
+                        picker.paste(&text);
+                        plain.on_paste(&text);
+                        masked.on_paste(&text);
+                        history.on_paste(&text);
+                    }
+                    _ => unreachable!(),
+                }
+                let Some(Overlay::HistorySearch { query, .. }) = &history.overlay else {
+                    panic!("search stays open");
+                };
+                let reference = (composer.composer.text(), composer.composer.cursor());
+                for (field, input) in [
+                    ("picker", &picker.query),
+                    ("plain", &plain.input),
+                    ("masked", &masked.secret.0),
+                    ("history", query),
+                ] {
+                    assert_eq!((input.text(), input.cursor()), reference, "{name}: {field}");
+                }
+                assert_eq!(
+                    masked.secret.0.display_text(),
+                    "•".repeat(reference.0.chars().count())
+                );
+                assert!(!format!("{:?}", masked.secret.0).contains(initial) || initial.is_empty());
+            }
+            assert_eq!(
+                (composer.composer.text(), composer.composer.cursor()),
+                (expected, cursor),
+                "{name}"
+            );
+            if !expected.is_empty() {
+                masked.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                assert_eq!(
+                    masked.secret.0.text(),
+                    expected,
+                    "submission retains corrected secret"
+                );
+                assert!(
+                    matches!(masked.submission(), Some(SetupSubmission::ChangeCredential { credential: SetupCredential::StoreInConfig(value), .. }) if value.expose() == expected)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn field_cursors_follow_edits_and_remain_visible_in_narrow_viewports() {
+        use ratatui::backend::Backend;
+        for masked in [false, true] {
+            let mut app = setup_app(
+                SetupMode::Credential {
+                    provider: "zai".into(),
+                },
+                Vec::new(),
+                Vec::new(),
+            );
+            app.step = Step::CredentialValue;
+            app.picker = None;
+            app.credential_method = Some(if masked {
+                CredentialMethod::Config
+            } else {
+                CredentialMethod::Environment
+            });
+            app.on_paste("abcdefghij".repeat(8).as_str());
+            app.on_key(key(KeyCode::Left));
+            let mut terminal = Terminal::new(TestBackend::new(44, 10)).unwrap();
+            terminal
+                .draw(|frame| draw_setup(frame, &app, Theme::new()))
+                .unwrap();
+            let position = terminal.backend_mut().get_cursor_position().unwrap();
+            assert_eq!(position.x, 43);
+            assert!(position.y < 10);
+            app.on_key(key(KeyCode::Home));
+            app.on_key(key(KeyCode::Right));
+            terminal
+                .draw(|frame| draw_setup(frame, &app, Theme::new()))
+                .unwrap();
+            assert_eq!(terminal.backend_mut().get_cursor_position().unwrap().x, 3);
+            if masked {
+                let rendered = render_setup(&app, 44, 24);
+                assert!(!rendered.contains("abc"));
+                assert!(rendered.contains('•'));
+            }
+        }
+        let mut picker = ResourcePicker::new(
+            "A title that leaves little room for a filter",
+            Vec::new(),
+            "empty",
+        );
+        picker.paste(&"query".repeat(20));
+        picker.on_key(key(KeyCode::Left));
+        let mut terminal = Terminal::new(TestBackend::new(44, 10)).unwrap();
+        terminal
+            .draw(|frame| crate::draw_resource_picker(frame, frame.area(), &picker, Theme::new()))
+            .unwrap();
+        assert!(terminal.backend_mut().get_cursor_position().unwrap().x < 44);
+        let mut app = crate::App::new("model", "project");
+        app.on_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        app.on_paste("query");
+        app.on_key(key(KeyCode::Left));
+        terminal
+            .draw(|frame| crate::draw(frame, &app, Theme::new()))
+            .unwrap();
+        assert_eq!(terminal.backend_mut().get_cursor_position().unwrap().x, 22);
+    }
 
     #[test]
     fn step_keys_change_on_navigation_and_return_but_not_field_input() {
@@ -2142,7 +2390,7 @@ mod tests {
                     assert_eq!(app.input, "ZAI_API_KEY");
                     app.on_paste("_CORRECTED");
                 }
-                let expected = app.input.clone();
+                let expected = app.input.text().to_owned();
                 app.on_key(key(back));
                 assert_eq!(app.step, Step::CredentialMethod);
                 app.on_key(key(back));
@@ -2150,7 +2398,7 @@ mod tests {
                 app.on_key(key(KeyCode::Char('1')));
                 app.on_key(key(KeyCode::Char('4')));
                 assert_eq!(app.step, Step::CredentialValue);
-                assert_eq!(app.input, expected);
+                assert_eq!(app.input.text(), expected);
                 assert!(render_setup(&app, 100, 32).contains(&expected));
                 app.on_key(key(KeyCode::Enter));
                 assert_eq!(app.step, Step::Review);
@@ -3206,7 +3454,8 @@ mod tests {
         assert!(!rendered.contains(secret), "{rendered}");
         assert!(
             app.secret
-                .masked()
+                .0
+                .display_text()
                 .chars()
                 .all(|character| character == '•')
         );

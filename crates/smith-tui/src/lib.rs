@@ -26,6 +26,8 @@ pub mod accounts;
 pub mod app;
 pub mod composer;
 pub mod diff;
+mod hyperlink;
+pub mod line_input;
 pub mod picker;
 pub mod questionnaire;
 pub mod references;
@@ -56,6 +58,7 @@ pub use commands::{
 };
 pub use composer::Composer;
 pub use diff::{Change, EditReview, diff_lines};
+pub use line_input::LineInput;
 pub use picker::{PickerOutcome, ResourceEntry, ResourcePicker, draw_resource_picker};
 pub use questionnaire::{
     QuestionnaireAnswer, QuestionnaireAnswerValue, QuestionnaireChoice, QuestionnaireFocus,

@@ -124,6 +124,7 @@ pub mod glyph {
 pub struct Theme {
     color: bool,
     motion: bool,
+    hyperlinks: bool,
 }
 
 impl Theme {
@@ -132,10 +133,11 @@ impl Theme {
         Self {
             color: true,
             motion: true,
+            hyperlinks: false,
         }
     }
 
-    /// Reads `NO_COLOR`, `NO_MOTION`, and `TERM=dumb` from the environment.
+    /// Reads color, motion, and known hyperlink capabilities from the environment.
     ///
     /// Per the `NO_COLOR` convention, the variable disables color when it is
     /// present and non-empty, whatever its value.
@@ -145,6 +147,9 @@ impl Theme {
         Self {
             color: !set("NO_COLOR") && !dumb,
             motion: !set("NO_MOTION") && !dumb,
+            hyperlinks: supports_hyperlinks(|name| {
+                std::env::var_os(name).map(|value| value.to_string_lossy().into_owned())
+            }),
         }
     }
 
@@ -168,6 +173,17 @@ impl Theme {
     /// Whether animation is permitted.
     pub fn uses_motion(self) -> bool {
         self.motion
+    }
+
+    /// Explicit capability keeps test and fixture themes deterministic.
+    pub fn with_hyperlinks(mut self, supported: bool) -> Self {
+        self.hyperlinks = supported;
+        self
+    }
+
+    /// Rendering consults capability independently of color and motion.
+    pub fn uses_hyperlinks(self) -> bool {
+        self.hyperlinks
     }
 
     /// The style for a tone.
@@ -223,6 +239,23 @@ impl Theme {
     }
 }
 
+/// Multiplexers override terminal claims because their defaults can strip OSC 8.
+fn supports_hyperlinks(env: impl Fn(&str) -> Option<String>) -> bool {
+    if env("TMUX").is_some() || env("STY").is_some() {
+        return false;
+    }
+    matches!(
+        env("TERM_PROGRAM").as_deref(),
+        Some("iTerm.app" | "WezTerm" | "ghostty" | "vscode")
+    ) || matches!(
+        env("TERM").as_deref(),
+        Some("xterm-kitty" | "xterm-ghostty")
+    ) || env("VTE_VERSION")
+        .and_then(|value| value.parse::<u32>().ok())
+        .is_some_and(|version| version >= 5000)
+        || env("WT_SESSION").is_some()
+}
+
 impl Default for Theme {
     fn default() -> Self {
         Self::new()
@@ -233,6 +266,48 @@ impl Default for Theme {
 mod tests {
     use super::*;
     use unicode_width::UnicodeWidthStr;
+
+    #[test]
+    fn hyperlink_detection_matrix() {
+        let cases: &[(&[(&str, &str)], bool)] = &[
+            (&[], false),
+            (&[("TERM", "xterm-256color")], false),
+            (&[("TERM_PROGRAM", "iTerm.app")], true),
+            (&[("TERM_PROGRAM", "WezTerm")], true),
+            (&[("TERM_PROGRAM", "ghostty")], true),
+            (&[("TERM_PROGRAM", "vscode")], true),
+            (&[("TERM_PROGRAM", "unknown")], false),
+            (&[("TERM", "xterm-kitty")], true),
+            (&[("TERM", "xterm-ghostty")], true),
+            (&[("VTE_VERSION", "4999")], false),
+            (&[("VTE_VERSION", "5000")], true),
+            (&[("VTE_VERSION", "7800")], true),
+            (&[("VTE_VERSION", "invalid")], false),
+            (&[("WT_SESSION", "")], true),
+            (&[("TERM_PROGRAM", "ghostty"), ("TMUX", "")], false),
+            (&[("TERM", "xterm-kitty"), ("STY", "session")], false),
+            (&[("VTE_VERSION", "7800"), ("TMUX", "session")], false),
+            (&[("WT_SESSION", "session"), ("STY", "session")], false),
+            (&[("TERM_PROGRAM", "ghostty"), ("NO_COLOR", "1")], true),
+        ];
+        for (env, expected) in cases {
+            assert_eq!(
+                supports_hyperlinks(|name| env
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| (*value).to_owned())),
+                *expected,
+                "{env:?}"
+            );
+        }
+        assert!(!Theme::new().uses_hyperlinks());
+        assert!(
+            Theme::new()
+                .with_hyperlinks(true)
+                .without_color()
+                .uses_hyperlinks()
+        );
+    }
 
     #[test]
     fn every_glyph_occupies_exactly_one_column() {

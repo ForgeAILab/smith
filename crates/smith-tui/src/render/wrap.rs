@@ -25,6 +25,7 @@ use ratatui::text::{Line, Span, StyledGrapheme};
 /// unwrapped text — a cursor — onto the row it ends up drawn in.
 struct Placed<'a> {
     grapheme: StyledGrapheme<'a>,
+    target: Option<&'a str>,
     width: usize,
     column: usize,
 }
@@ -79,32 +80,45 @@ fn wrap_line(
     let mut word: Vec<Placed<'_>> = Vec::new();
     let mut column = 0usize;
 
-    for grapheme in line.styled_graphemes(Style::default()) {
-        let width = usize::from(grapheme.symbol.cell_width());
-        let placed = Placed {
-            grapheme,
-            width,
-            column,
-        };
-        column += width;
-        if placed.grapheme.is_whitespace() {
-            if !word.is_empty() {
-                place(
-                    &mut row,
-                    rows,
-                    offsets,
-                    limit,
-                    &mut spaces,
-                    spaces_width,
-                    &word,
-                );
-                spaces_width = 0;
-                word.clear();
+    let runs: Vec<_> = line
+        .spans
+        .iter()
+        .flat_map(|span| {
+            crate::hyperlink::runs(&span.content)
+                .into_iter()
+                .map(|(text, target)| (Span::styled(text, line.style.patch(span.style)), target))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    for (span, target) in &runs {
+        for grapheme in span.styled_graphemes(Style::default()) {
+            let width = usize::from(grapheme.symbol.cell_width());
+            let placed = Placed {
+                grapheme,
+                target: *target,
+                width,
+                column,
+            };
+            column += width;
+            if placed.grapheme.is_whitespace() {
+                if !word.is_empty() {
+                    place(
+                        &mut row,
+                        rows,
+                        offsets,
+                        limit,
+                        &mut spaces,
+                        spaces_width,
+                        &word,
+                    );
+                    spaces_width = 0;
+                    word.clear();
+                }
+                spaces_width += width;
+                spaces.push(placed);
+            } else {
+                word.push(placed);
             }
-            spaces_width += width;
-            spaces.push(placed);
-        } else {
-            word.push(placed);
         }
     }
     if !word.is_empty() {
@@ -175,6 +189,7 @@ fn fill(row: &mut Row, spaces: &mut Vec<Placed<'_>>, limit: usize) {
 struct Row {
     spans: Vec<Span<'static>>,
     text: String,
+    target: Option<String>,
     style: Style,
     width: usize,
     /// Display column in the source line this row starts at.
@@ -187,6 +202,7 @@ impl Row {
         Self {
             spans: Vec::new(),
             text: String::new(),
+            target: None,
             style: Style::default(),
             width: 0,
             column: 0,
@@ -198,18 +214,27 @@ impl Row {
         if self.width == 0 && self.spans.is_empty() && self.text.is_empty() {
             self.column = placed.column;
         }
-        if !self.text.is_empty() && placed.grapheme.style != self.style {
+        if !self.text.is_empty()
+            && (placed.grapheme.style != self.style || placed.target != self.target.as_deref())
+        {
             self.flush();
         }
         self.style = placed.grapheme.style;
+        if self.target.as_deref() != placed.target {
+            self.target = placed.target.map(str::to_owned);
+        }
         self.text.push_str(placed.grapheme.symbol);
         self.width += placed.width;
     }
 
     fn flush(&mut self) {
         if !self.text.is_empty() {
-            self.spans
-                .push(Span::styled(std::mem::take(&mut self.text), self.style));
+            let text = std::mem::take(&mut self.text);
+            let text = match self.target.as_deref() {
+                Some(target) => crate::hyperlink::annotate(&text, target),
+                None => text,
+            };
+            self.spans.push(Span::styled(text, self.style));
         }
     }
 
