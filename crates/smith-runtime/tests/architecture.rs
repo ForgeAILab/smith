@@ -252,6 +252,29 @@ fn smith_runtime_public_modules_match_the_allow_list() {
     );
 }
 
+/// Longest a `.rs` file under `crates/` may grow before it is split into child
+/// modules under the same module root.
+const MAX_RUST_FILE_LINES: usize = 1_500;
+
+#[test]
+fn every_rust_file_is_within_the_line_budget() {
+    let root = workspace_root();
+    let mut over = Vec::new();
+    visit_rust(&root.join("crates"), &mut |path, source| {
+        let lines = source.lines().count();
+        if lines > MAX_RUST_FILE_LINES {
+            let path = path.strip_prefix(&root).unwrap_or(path);
+            over.push(format!("{} ({lines} lines)", path.display()));
+        }
+    });
+    over.sort();
+    assert!(
+        over.is_empty(),
+        "split these into child modules of at most {MAX_RUST_FILE_LINES} lines:\n{}",
+        over.join("\n"),
+    );
+}
+
 fn workspace_root() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
