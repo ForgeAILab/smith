@@ -1,0 +1,32 @@
+  Smith setup · Authentication
+
+  1. Store API key securely
+❯ 2. Use existing secure entry
+     keychain:smith/zai
+  3. Store in config (no prompts)
+  4. Use environment variable
+
+  ↑↓ or 1–4 choose · enter confirm · esc back
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

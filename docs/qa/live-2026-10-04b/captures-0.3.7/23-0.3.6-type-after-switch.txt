@@ -1,0 +1,32 @@
+● provider · changed · zai/glm-5.2 → zai/glm-5-turbo · prior cache not transferable
+
+● reasoning · thinking provider default · effort provider default · provider/model default · applies
+  to the next turn
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts                                                        zai/glm-5-turbo · glm · ask

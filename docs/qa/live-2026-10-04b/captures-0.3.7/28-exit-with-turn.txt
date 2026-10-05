@@ -1,0 +1,32 @@
+1 turn(s) · input 1.2k · output 3
+$0.000 exact · zai/glm-5.3
+prompt cache: 0% of input read from cache · 0 cached tokens (last turn)
+resume with smith --resume session-e07b325a-e01a-4e37-8733-47186e832310
+
+<prompt> main ················· 19s 20:28:50 ─╮
+❯                                                                                                ─╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

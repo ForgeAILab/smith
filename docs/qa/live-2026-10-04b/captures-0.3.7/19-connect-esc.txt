@@ -1,0 +1,32 @@
+  Get started
+  Type a task below and press Enter.
+
+  /model    Switch model
+  /connect  Connect or reconnect a provider
+  /help     List commands and keys
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Connect OpenRouter · Authentication
+
+❯ 1. Store API key securely
+     macOS Keychain / Linux Secret Service
+  2. Use existing secure entry
+  3. Store in config (no prompts)
+  4. Use environment variable
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts                                                            zai/glm-5.2 · glm · ask
+  ↑↓ or 1–4 choose · enter confirm · esc cancel

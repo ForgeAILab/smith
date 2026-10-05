@@ -69,3 +69,26 @@ Delegated children are priced at the root's rate by an explicit
 `usage-accounting` rule ("the delegated totals are priced by the same
 per-counter reference the root totals are"), so a child on another model has
 the same flaw; changing that is a spec change.
+
+## Re-check on the 0.3.7 release build
+
+2026-10-04, release build of `feat/inline-pickers-and-cost` at `6d79a98`, same
+tmux setup. Captures are in [captures-0.3.7/](captures-0.3.7/). Setup was
+completed against a scratch `HOME` with the environment-variable credential
+method, so the Keychain was not touched.
+
+Fixed and seen working: R1–R4 (`01-resume`, `24-in-session-resume`,
+`27-exit-empty`, `28-exit-with-turn`), S1–S6 (`04-first-run` to `16-setup-complete`;
+Esc on the ChatGPT method list returns to setup, `06-chatgpt-esc-back`; Ctrl+C
+prints `Setup cancelled · nothing was written`, `15-ctrl-c-cancel`), C1 and C2
+(`/connect openrouter` and `/connect chatgpt` draw above the composer with the
+transcript in place, `17`–`20`, `25`–`26`), M1 (`/model` opens on the current
+model, `21-model-picker`), and the per-model exit line.
+
+New:
+
+| # | Finding | Evidence |
+| --- | --- | --- |
+| N1 | **The environment-variable name is not kept** after going back past its field and forward again; the field is empty. Provider names, endpoints and model IDs are kept. | `10-existing-entry`, `11-env-field-again` |
+| N2 | **Ctrl+C after a failed connection check prints the stale error** (`env:ZAI_API_KEY resolves to nothing…`) above `Setup cancelled · nothing was written`. | `15-ctrl-c-cancel` |
+| N3 | **Keys typed while the host rebuilds after `/model` are dropped**: text typed right after choosing a model never reaches the composer. 0.3.6 does the same (`23-0.3.6-type-after-switch`), so it predates this change. It is also the cause of the one flaky PTY run (`/quit` sent right after a switch, under full-workspace load). | `22-type-after-switch`, `23-0.3.6-type-after-switch` |

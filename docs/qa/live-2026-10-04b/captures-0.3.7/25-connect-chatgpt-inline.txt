@@ -1,0 +1,32 @@
+  Get started
+  Type a task below and press Enter.
+
+  /model    Switch model
+  /connect  Connect or reconnect a provider
+  /help     List commands and keys
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Connect ChatGPT · already connected
+
+❯ 1. Add another account
+     usage-aware pool · /account switches between them
+  2. Replace the stored login
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts                                                           zai/glm-5.3 · code · ask
+  ↑↓ or 1–2 choose · enter confirm · esc cancel

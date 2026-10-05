@@ -1,0 +1,32 @@
+  Smith setup · Welcome · choose how to connect a model
+  Nothing is sent to a provider until setup finishes.
+  1. Quick start with GLM
+  2. Connect OpenRouter
+  3. Custom OpenAI-compatible provider
+  4. Anthropic Messages API
+❯ 5. Connect ChatGPT (experimental)
+     Sign in with your ChatGPT account · experimental
+  6. Connect xAI Grok
+  7. Connect Google Gemini
+
+  ↑↓ or 1–7 choose · enter confirm · esc cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

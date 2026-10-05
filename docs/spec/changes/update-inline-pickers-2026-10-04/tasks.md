@@ -73,6 +73,6 @@ Findings R1–R4, S1–S6, C1, C2, M1 from
   1.88 toolchain), workspace tests with `--no-fail-fast`, `cargo deny`.
 - [x] 6.2 `DESIGN.md` updated: choosers are inline lists; centered modals
   remain only for approvals and confirmations.
-- [ ] 6.3 Repeat the live pass's steps on the release build, using the
+- [x] 6.3 Repeat the live pass's steps on the release build, using the
   environment-variable credential method so review can be confirmed without
   touching the Keychain.

@@ -1,0 +1,32 @@
+`env:ZAI_API_KEY` resolves to nothing: no credential is stored there
+Setup cancelled · nothing was written
+
+<prompt> main ················· 48s 20:27:03 ─╮
+❯                                                                                                ─╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

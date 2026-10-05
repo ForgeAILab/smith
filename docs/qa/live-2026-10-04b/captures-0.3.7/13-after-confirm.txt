@@ -1,0 +1,32 @@
+  Smith setup · Environment variable
+
+› type a value
+
+  error: Use an environment variable such as ZAI_API_KEY (letters, digits, underscore).
+
+  enter continue · esc back
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
