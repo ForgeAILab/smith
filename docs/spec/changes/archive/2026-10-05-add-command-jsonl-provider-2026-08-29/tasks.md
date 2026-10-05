@@ -121,11 +121,17 @@ completed_at:
 - [x] 5.3 Run formatting, all-target Clippy with warnings denied, focused
   config/protocol/factory tests, workspace and all-features tests, TUI/headless
   golden fixtures, and the Agent Runtime Smith consumer-conformance gate.
-- [ ] 5.4 Pin the immutable Agent Runtime revision containing the command
+- [x] 5.4 Pin the immutable Agent Runtime revision containing the command
   framework, remove the temporary direct provider dependency in favor of the
   facade's `command-provider` feature, then run the supported macOS and Linux
   process tests and verify the exact Git dependency builds without sibling
   checkouts or an uncommitted Cargo patch.
+  (2026-10-05: closed. Smith pins `fc92efb` (`smith-baseline-v0.3.8`), and
+  `smith-runtime` uses the facade's `command-provider` feature with no direct
+  provider dependency. CI run 37276866132 at `e03e8e5` passed on
+  `macOS · Rust 1.88`, `Linux · Rust 1.88`, and `Linux · stable + dependency
+  policy`, building the Git pin with no Cargo patch; the Linux 1.88 leg passed
+  2,409 tests.)
 
 ## 6. Release review blockers
 
@@ -170,3 +176,9 @@ Cargo patch, builds `cargo build -p smith-cli --release --locked` and reports
 warning-denied Clippy, formatting, and dependency policy; installer and npm
 tests pass. Real Linux process execution is still the one open clause, and
 CI's `Linux · Rust 1.88` leg covers it on push.
+
+Note (2026-10-05, at archive): the `SemanticSummary*` -> `Lcm*` migration
+mentioned above and in `design.md` and `verification.md` is not planned. The
+owner decided on 2026-09-05 that Smith keeps the semantic-summary runtime line
+and does not move to lossless context memory; runtime work Smith needs lands
+on that line (now `fc92efb`). Read those references as history.

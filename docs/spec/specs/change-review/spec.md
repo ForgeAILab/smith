@@ -52,7 +52,8 @@ Smith SHALL journal a versioned change set for completed turns that perform
 authorized mutations. Each change set MUST distinguish exact attributable
 patches from observed or ambiguous deltas and MUST retain bounded pre/post
 evidence sufficient for safe conflict checks without exposing protected
-arguments or credentials.
+arguments or credentials. An ambiguous delta MUST NOT withdraw the exact
+patches recorded in the same turn.
 
 #### Scenario: Exact edit is attributable
 

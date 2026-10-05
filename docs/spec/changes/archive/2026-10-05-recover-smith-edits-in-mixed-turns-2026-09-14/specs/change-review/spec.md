@@ -117,3 +117,4 @@ patches of a mixed turn stays reversible on the same terms.
   unattributable shell delta
 - **WHEN** the user invokes `/redo`
 - **THEN** Smith reports that no exact redo candidate exists
+- **AND** does not synthesize or apply a patch from observed Git state

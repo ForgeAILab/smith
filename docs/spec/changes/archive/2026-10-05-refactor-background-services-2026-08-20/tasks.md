@@ -42,10 +42,15 @@ completed_at:
   shutdown through the injected registry.
 - [x] 3.2 Prove dropping one embedded host cannot stop, inspect, or reconfigure
   another host's tasks.
-- [ ] 3.3 Run formatting, Clippy, workspace/all-feature tests, background-task
+- [x] 3.3 Run formatting, Clippy, workspace/all-feature tests, background-task
   integration tests, persistence/recovery tests, and macOS/Linux process-group
   CI.
 
 Local macOS formatting, Clippy, workspace/all-feature, background-task, and
 persistence/recovery gates are green as of 2026-08-20. The checkbox remains
 open for the Linux process-group CI half.
+
+Closed 2026-10-05: CI run 37276866132 at `e03e8e5` passed on
+`macOS · Rust 1.88`, `Linux · Rust 1.88`, and `Linux · stable + dependency
+policy`. The Linux legs run the `#[cfg(unix)]` process-group paths in
+`smith-runtime/src/background_tasks.rs` and `smith-tools/src/shell.rs`.

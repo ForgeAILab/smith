@@ -1700,3 +1700,280 @@ provider limit, and a timeout MUST leave the child running in the background.
 - **WHEN** Smith resolves the profile
 - **THEN** the configured value wins for the foreground wait only
 - **AND** it cannot stop or expire a child when the wait ends
+
+### Requirement: Layered command-provider declaration
+
+Smith SHALL accept a `command-jsonl` provider with a strict namespaced
+`[providers.<name>.command]` declaration containing an absolute executable,
+bounded fixed arguments, a workspace-or-absolute working directory, and an
+explicit environment map. Every field MUST retain ordinary layer and path
+provenance, and settings for HTTP provider transports MUST remain invalid for
+this provider kind.
+
+#### Scenario: Resolve a user-declared command provider
+
+- **GIVEN** owner-controlled user configuration declares a `command-jsonl`
+  provider with an absolute executable, fixed arguments, workspace cwd, and an
+  environment credential reference
+- **AND** the selected model has complete enforceable limits
+- **WHEN** Smith resolves the run configuration
+- **THEN** it produces one typed command-provider declaration with source
+  provenance for every process field
+- **AND** it does not resolve the environment credential or start the process
+  during declarative resolution
+
+#### Scenario: Command provider declares HTTP settings
+
+- **GIVEN** a `command-jsonl` provider also declares a base URL, top-level
+  provider credential, credential pool, rotation threshold, headers, or HTTP
+  response normalization
+- **WHEN** Smith resolves configuration
+- **THEN** it rejects the incompatible option before credential or process I/O
+- **AND** it does not silently ignore or reinterpret the setting
+
+#### Scenario: Native provider declares a command table
+
+- **GIVEN** a native HTTP provider contains a `command` table
+- **WHEN** Smith resolves configuration
+- **THEN** it rejects the table as incompatible with that adapter kind
+- **AND** it does not execute or probe the declared program
+
+#### Scenario: Executable or working directory is relative
+
+- **GIVEN** a command provider declares a relative executable or a relative cwd
+  other than the exact `workspace` token
+- **WHEN** Smith validates the selected provider
+- **THEN** resolution fails with the field and source that supplied it
+- **AND** Smith performs no PATH lookup, credential access, or process spawn
+
+### Requirement: Command-provider process authority
+
+Smith MUST accept process-bearing command-provider settings only from
+owner-controlled user configuration or an explicit higher-precedence host
+authority. Repository-controlled configuration MAY select a provider/model
+whose complete command declaration is already user-owned, but MUST NOT define
+or override its adapter kind, executable, arguments, working directory, or
+environment.
+
+#### Scenario: Project selects a user-owned command provider
+
+- **GIVEN** user configuration completely declares provider `local-bridge`
+- **AND** project configuration selects `local-bridge/local-model` without
+  supplying any process field
+- **WHEN** Smith resolves the project run
+- **THEN** the selection succeeds with user provenance on the whole command
+  declaration
+- **AND** project text gains no process or environment authority
+
+#### Scenario: Project changes fixed arguments
+
+- **GIVEN** user configuration declares a command provider
+- **AND** project or project-local configuration replaces or appends one fixed
+  argument, cwd, executable, environment value, or command adapter kind
+- **WHEN** Smith preflights configuration
+- **THEN** startup fails before credential access, process spawn, session
+  creation, or terminal entry
+- **AND** the diagnostic identifies the unauthorized field and source without
+  rendering any environment value
+
+### Requirement: Explicit command-provider environment
+
+Smith SHALL clear the child process's ambient environment and pass only the
+bounded names and values declared in the resolved command provider. Credential
+references MUST resolve through Smith's existing secret boundary immediately
+before provider construction, and all resolved values MUST remain absent from
+configuration explanation, Debug, errors, events, journals, and terminal
+output.
+
+#### Scenario: Bridge receives an environment credential
+
+- **GIVEN** a command environment entry maps `BRIDGE_TOKEN` to a valid
+  credential reference
+- **WHEN** Smith constructs the command provider
+- **THEN** it resolves and redaction-registers the secret before adding that
+  exact variable to the process configuration
+- **AND** no other ambient variable is inherited
+- **AND** no visible or persisted surface contains the resolved value
+
+#### Scenario: Environment reference is unusable
+
+- **GIVEN** a command environment credential reference is missing, malformed,
+  locked, or exceeds its bounded lookup deadline
+- **WHEN** Smith preflights the provider
+- **THEN** startup fails before probing or starting the executable
+- **AND** the diagnostic names the variable and reference source without the
+  secret value
+
+### Requirement: Declarative MCP server configuration
+
+Smith SHALL resolve Model Context Protocol server declarations through the same
+layered precedence and source attribution as every other setting. A declaration
+MUST identify its transport, and environment values referencing credentials MUST
+resolve through the existing secret path rather than being read as literals.
+A raw secret literal in repository-controlled configuration MUST be rejected.
+
+#### Scenario: Explain where a server came from
+
+- **GIVEN** a server declared in user configuration and overridden in project
+  configuration
+- **WHEN** the user inspects resolved configuration
+- **THEN** the effective declaration reports its winning layer
+- **AND** the overridden layer remains visible as an explanation
+
+#### Scenario: Project configuration embeds a literal secret
+
+- **GIVEN** project configuration declares a server whose environment contains a
+  literal token value
+- **WHEN** Smith resolves configuration
+- **THEN** resolution fails with a diagnostic naming the offending key
+- **AND** the diagnostic does not reproduce the value
+
+### Requirement: Hash-bound MCP server execution trust
+
+Smith MUST obtain user confirmation before spawning a declared MCP server, in
+every configuration layer. Trust SHALL bind the canonical project path to a
+digest of the fully resolved invocation — command, arguments, and environment
+variable names — and MUST NOT include environment values. A change to the
+command, its arguments, or the set of environment variable names MUST invalidate
+the prior decision.
+
+#### Scenario: First connection to a declared server
+
+- **GIVEN** a declared MCP server with no matching trust record
+- **WHEN** Smith would connect to it
+- **THEN** Smith displays the server name, its resolved command and arguments,
+  and its content identity
+- **AND** does not spawn it until the user confirms
+
+#### Scenario: Server arguments change
+
+- **GIVEN** the user trusted a server
+- **WHEN** its resolved arguments change
+- **THEN** the old trust record no longer authorizes execution
+- **AND** Smith requests confirmation for the new digest
+
+#### Scenario: Credential rotates behind a trusted server
+
+- **GIVEN** the user trusted a server whose environment references a credential
+- **WHEN** that credential's value changes but its name does not
+- **THEN** the existing trust record still authorizes execution
+- **AND** Smith does not re-prompt
+
+### Requirement: Remote MCP servers authenticate through the existing secret path
+
+A declared remote server SHALL send credentials resolved through the same
+secret path as a provider's, never values written in configuration. A bearer
+credential MUST be declared as a reference and sent under an authorization
+header Smith composes; an authorization-bearing header written as a literal
+MUST be rejected. Execution trust for a remote server SHALL bind its endpoint
+and the names of the headers it would send, and MUST NOT include their values.
+
+#### Scenario: Authorization written in plain text
+
+- **GIVEN** a declared remote server whose headers contain a literal
+  authorization value
+- **WHEN** Smith resolves configuration
+- **THEN** resolution fails with a diagnostic naming the offending header
+- **AND** the diagnostic does not reproduce the value
+
+#### Scenario: Bearer credential rotates behind a trusted endpoint
+
+- **GIVEN** the user trusted a remote server declaring a bearer credential
+- **WHEN** that credential's value changes but the endpoint and header names do
+  not
+- **THEN** the existing trust record still authorizes the connection
+
+#### Scenario: The endpoint changes
+
+- **GIVEN** the user trusted a remote server
+- **WHEN** its declared endpoint changes
+- **THEN** the old trust record no longer authorizes the connection
+- **AND** Smith requests confirmation for the new content identity
+
+#### Scenario: An option the transport cannot use
+
+- **GIVEN** a declaration naming a local command together with a credential, or
+  a remote endpoint together with command arguments
+- **WHEN** Smith resolves configuration
+- **THEN** resolution fails naming the option the chosen transport cannot use
+
+### Requirement: Repository configuration cannot self-authorize MCP servers
+
+An approval mode or auto-approval list MUST NOT authorize spawning an MCP
+server; execution trust is a separate decision asked per content digest.
+Repository-controlled configuration that attempts to auto-approve MCP tools MUST
+fail preflight, consistent with the existing prohibition on repository
+self-authorization of tools.
+
+#### Scenario: Allow-all does not spawn an untrusted server
+
+- **GIVEN** user configuration selects an allow-all approval mode
+- **AND** a project declares an MCP server with no trust record
+- **WHEN** Smith starts the session
+- **THEN** the server is not spawned
+- **AND** Smith still requests execution confirmation
+
+#### Scenario: Project auto-approves a remote tool
+
+- **GIVEN** project or project-local configuration auto-approves a tool
+  belonging to an MCP server
+- **WHEN** Smith preflights the session
+- **THEN** startup fails before creating session state
+- **AND** the diagnostic says to move the policy to user configuration
+
+### Requirement: Prepared-call-scoped automatic approval
+
+Smith SHALL express automatic approval as versioned typed rules over immutable
+prepared calls rather than lists of tool names. A rule MUST constrain a
+module-qualified tool identity, allowed operations, a permission ceiling, a
+risk ceiling, and a concrete resource pattern; it MAY additionally expire or
+limit uses. Matching MUST fail closed for unknown fields, operations,
+permissions, risks, resource kinds, or revisions, and repository-controlled
+layers MUST remain unable to supply approval authority.
+
+#### Scenario: Workspace replacement matches a narrow rule
+
+- **GIVEN** user configuration authorizes `smith/edit` `replace` beneath
+  `src/**` with only filesystem read and write permissions
+- **WHEN** an immutable prepared replacement targets `src/lib.rs` within that
+  ceiling
+- **THEN** Smith may approve it without prompting
+- **AND** the exact prepared call fingerprint remains the action invoked
+
+#### Scenario: Edit operation widens to delete
+
+- **GIVEN** a rule authorizes `replace` and `create` but not `delete`
+- **WHEN** an `edit` prepared call requests delete authority
+- **THEN** the rule does not match
+- **AND** Smith consults the configured fallback approval policy
+
+#### Scenario: Rule encounters host or egress authority
+
+- **GIVEN** a prepared call includes a host-root resource, arbitrary process
+  execution, network, credential use, data egress, or an unclassified resource
+- **WHEN** Smith evaluates scoped automatic approval
+- **THEN** no scoped rule authorizes the call
+- **AND** only an explicit broader approval policy can allow it
+
+### Requirement: Tool-name auto-approval migration fails closed
+
+The legacy `approval.auto_approve = ["tool"]` shape SHALL NOT be interpreted as
+a grant. A non-empty legacy value MUST fail preflight with a bounded migration
+diagnostic before session state, terminal entry, provider I/O, or tool
+execution; absent or empty legacy values MAY be accepted as inert during the
+migration window.
+
+#### Scenario: Legacy edit allowlist is present
+
+- **GIVEN** user configuration contains `approval.auto_approve = ["edit"]`
+- **WHEN** Smith resolves approval policy
+- **THEN** preflight rejects the ambiguous grant and names the typed replacement
+- **AND** no edit is automatically approved
+
+#### Scenario: Project supplies a typed automatic rule
+
+- **GIVEN** repository-controlled configuration contains a syntactically valid
+  typed automatic approval rule
+- **WHEN** Smith preflights the run
+- **THEN** startup fails under the existing self-authorization prohibition
+- **AND** the rule grants no authority merely because the project is trusted

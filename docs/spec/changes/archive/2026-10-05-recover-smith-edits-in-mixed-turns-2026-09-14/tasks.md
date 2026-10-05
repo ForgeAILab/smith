@@ -40,6 +40,13 @@
 - [x] 4.2 `cargo fmt --check`, `cargo clippy --workspace` (warnings are
       errors), and the `smith-tools`, `smith-config`, `smith-runtime`,
       `smith-tui`, `smith-cli` test suites.
-- [ ] 4.3 Live check in the TUI: run a turn that edits a file and then runs a
+- [x] 4.3 Live check in the TUI: run a turn that edits a file and then runs a
       shell command, confirm the notice wording, `/undo` preview contents, and
       that the shell-written path survives the undo.
+      (2026-10-05, Smith 0.3.8 on `zai/glm-5.3`: the turn edited `README.md`
+      and ran `echo shell-wrote > shell.txt`; the notice read `contains
+      ambiguous changes; /undo covers Smith's own edits, /diff shows the
+      rest`; the `/undo` preview said the shell changes are left untouched
+      and showed only the `README.md` reverse patch; after `y`, `README.md`
+      was back to `# alpha` and `shell.txt` still held `shell-wrote`. See
+      `docs/qa/live-2026-10-05/`.)

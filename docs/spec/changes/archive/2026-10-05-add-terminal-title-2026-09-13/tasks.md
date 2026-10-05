@@ -32,11 +32,18 @@
 
 - [x] 3.1 `cargo fmt`, `cargo clippy --workspace` (warnings are errors), and
       workspace tests; focused runs for `smith-tui` and `smith-cli`.
-- [ ] 3.2 Live check in a real terminal: two concurrent TUI sessions in
+- [x] 3.2 Live check in a real terminal: two concurrent TUI sessions in
       different projects show distinct, updating titles; title clears on
       exit; `smith -p 'x' | cat` output contains no ESC bytes.
       (Machine-verified half: the headless/setup/picker/login paths contain
       no `terminal_title` reference, and the non-terminal guard is unit
       tested; the two-window visual check still needs a human at a real
       terminal.)
+      (2026-10-05, Smith 0.3.8 in tmux 3.7b, read through `#{pane_title}`:
+      the two sessions showed `smith · proj-alpha:main · glm-5.3` and
+      `smith · proj-beta:main · glm-5.3`; alpha's title gained `· working`
+      during a turn and dropped it after; a pane running only Smith had an
+      empty title after `/exit`. A headless run to a non-terminal stdout
+      printed `ok` with 0 ESC bytes. See
+      `docs/qa/live-2026-10-05/findings.md`.)
 

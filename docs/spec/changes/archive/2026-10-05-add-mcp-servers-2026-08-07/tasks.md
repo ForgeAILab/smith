@@ -128,10 +128,15 @@ bought anything.
 
 ## 7. Conservative Remote Tool Authority
 
-- [ ] 7.1 Update to the approved Agent Runtime revision that distinguishes
+- [x] 7.1 Update to the approved Agent Runtime revision that distinguishes
   external read/write resources from local filesystem effects, scopes network
   authority to the resolved server endpoint, and maps data egress into prepared
   permissions.
+  (2026-10-05: closed. `e72390a` is published and an ancestor of Smith's pin
+  `fc92efb`. That revision's `agent-runtime-core::tool::Effect` has
+  `ExternalRead`, `ExternalWrite`, `NetworkTo { endpoint }`, and
+  `DataEgress { destination }`, and Smith's default MCP policy uses all four
+  in `smith-runtime/src/mcp.rs`.)
 - [x] 7.2 Add a Smith-owned MCP tool authority policy whose default classifies
   every unreviewed tool as external read, possible external write, network, and
   data egress. Inject it into every `McpServerConfig`; do not retain the shared

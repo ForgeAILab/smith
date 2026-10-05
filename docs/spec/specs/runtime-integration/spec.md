@@ -664,3 +664,76 @@ mirror. A context or output budget failure SHALL reach the user.
 - **GIVEN** a runtime revision with an event variant Smith does not mirror
 - **WHEN** Smith is built against it
 - **THEN** the build fails in the projection test that names the variant
+
+### Requirement: One composition path for command and native providers
+
+Smith SHALL construct `command-jsonl` through the same
+`smith-runtime::factory` boundary and shared `Provider` contract used by native
+HTTP providers. Provider transport differences MUST NOT create a second
+context, tool/MCP, approval, retry, event, persistence, child, TUI, or headless
+composition path.
+
+#### Scenario: Compare command-provider surfaces
+
+- **GIVEN** identical resolved policy and a deterministic command-provider
+  fixture
+- **WHEN** the TUI and `smith -p` execute the same turn
+- **THEN** their canonical messages, attempts, tool results, usage, and
+  terminal lifecycle are equivalent
+- **AND** only declared presentation metadata differs
+
+#### Scenario: Switch between native and command providers
+
+- **GIVEN** an idle persisted session used a native provider on its previous
+  turn
+- **WHEN** the user selects a compatible command provider at the existing safe
+  turn boundary
+- **THEN** Smith rebuilds the same session through the one factory with the new
+  `Arc<dyn Provider>`
+- **AND** canonical history and Smith policy remain local
+- **AND** prior provider cache state does not transfer
+
+### Requirement: Compatible command-provider dependency gate
+
+Smith SHALL enable command-provider composition only from an exact immutable
+Agent Runtime revision containing the approved bounded process framework.
+Smith's factory integration and Agent Runtime's Smith consumer-conformance
+suite MUST both pass before the adapter becomes available.
+
+#### Scenario: Pinned runtime lacks the feature
+
+- **GIVEN** Smith's exact Agent Runtime revision does not expose the approved
+  `command-provider` facade feature and contracts
+- **WHEN** a build or configuration requests `command-jsonl`
+- **THEN** the adapter remains unavailable rather than falling back to a Smith-
+  local process implementation
+- **AND** existing native providers remain buildable and unchanged
+
+#### Scenario: Compatible runtime revision is adopted
+
+- **GIVEN** the candidate runtime includes the approved command framework
+- **WHEN** Smith enables the feature and runs both compatibility gates
+- **THEN** direct argv, bounds, terminal validation, cancellation, and process-
+  tree semantics match the reviewed upstream contract
+- **AND** the exact revision is recorded in Smith's manifest and lockfile
+
+### Requirement: Host services have explicit runtime ownership
+
+Smith's composition path SHALL receive host services explicitly and retain them
+for the lifetime they serve. Mutable process-global installation MUST NOT be
+used for background tasks or other host adapters, and direct embedders MUST be
+able to construct multiple isolated Smith hosts in one process.
+
+#### Scenario: Factory composes background-capable tools
+
+- **GIVEN** the resolved host supplies a background task service
+- **WHEN** the one Smith factory assembles built-in tools
+- **THEN** every background-capable tool receives that exact service
+- **AND** host exit policy and shutdown use the same owned service instance
+
+#### Scenario: Concurrent hosts use different fakes
+
+- **GIVEN** two deterministic tests compose hosts with different fake services
+- **WHEN** their turns run concurrently
+- **THEN** each fake observes only its own calls
+- **AND** construction order does not select a process-wide winner

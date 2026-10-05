@@ -89,8 +89,13 @@ completed_at:
 
 ## 5. Verification
 
-- [ ] 5.1 Run formatting, Clippy, workspace tests, all-features tests, and the
+- [x] 5.1 Run formatting, Clippy, workspace tests, all-features tests, and the
   Agent Runtime Smith consumer-conformance gate on macOS and Linux.
+  (2026-10-05: closed. Smith CI run 37276866132 at `e03e8e5` passed format,
+  Clippy, and workspace tests on macOS and Linux. The runtime's consumer gate,
+  `cargo test -p agent-runtime-testkit --test consumer_smith --locked` at the
+  pinned `fc92efb`, passed 3 of 3 on macOS and 3 of 3 on Linux in a
+  `rust:1-bookworm` container (rustc 1.99.0).)
 - [x] 5.2 Update security and configuration references and record focused live
   evidence for host-shell approval and executable-file editing.
 
