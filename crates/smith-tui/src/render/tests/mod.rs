@@ -266,6 +266,7 @@ mod tests {
             .collect()
     }
     include!("layout.rs");
+    include!("embedded.rs");
     include!("transcript.rs");
     include!("markdown.rs");
     include!("composer.rs");

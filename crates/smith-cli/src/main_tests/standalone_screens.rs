@@ -11,6 +11,7 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, CellWidth};
 use ratatui::{Frame, Terminal};
 use smith_runtime::session::{SNAPSHOT_SCHEMA_VERSION, SessionListing};
+use smith_tui::Screen;
 use smith_tui::picker::draw_resource_picker;
 use smith_tui::setup::{SetupApp, SetupEffect, SetupMode, draw_setup};
 use smith_tui::{ResourcePicker, Theme};
@@ -206,5 +207,18 @@ fn fixtures_standalone_chatgpt_login_progress() {
     };
     fixture_screens("chatgpt_login_progress", |frame, _theme| {
         chatgpt::draw_login_progress(frame, &display, 0, true);
+    });
+}
+
+#[test]
+fn fixtures_standalone_xai_login_progress() {
+    let progress = crate::xai::login_progress(
+        "ABCD-1234",
+        "https://auth.x.ai/activate?user_code=ABCD-1234",
+        true,
+        true,
+    );
+    fixture_screens("xai_login_progress", |frame, theme| {
+        progress.draw(frame, frame.area(), theme);
     });
 }

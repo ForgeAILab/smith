@@ -1,0 +1,32 @@
+  Connect xAI
+
+  Enter code: ABCD-1234
+  Open: https://auth.x.ai/activate?user_code=ABCD-1234
+  A browser window was requested.
+
+  Waiting for xAI…
+
+  esc cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

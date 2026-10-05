@@ -657,28 +657,59 @@ async fn run_interactive_hosts(
             InteractiveExit::Connect(provider) => {
                 resume = Some(current_session);
                 frozen_catalog = None;
-                terminal.suspend().context("suspending the terminal")?;
-                let _completed = connection::connect(
-                    args.selection.clone(),
-                    &provider,
-                    args.no_color,
-                    args.no_motion,
-                )
-                .await?;
-                terminal.resume().context("resuming the terminal")?;
+                if let Some(retained) = &mut app {
+                    let result = {
+                        let mut session = crate::screen_runner::ScreenSession::embedded(
+                            terminal,
+                            &retained.app,
+                            args.no_color,
+                            args.no_motion,
+                        );
+                        connection::connect(
+                            args.selection.clone(),
+                            &provider,
+                            &mut session,
+                            args.no_motion,
+                        )
+                        .await
+                    };
+                    if let Ok(outcome) = &result
+                        && outcome.outcome == crate::setup::SetupOutcome::Cancelled
+                    {
+                        frozen_catalog = Some(catalog);
+                    }
+                    connection::push_notices(
+                        &mut retained.app,
+                        result.map(|outcome| outcome.messages),
+                    );
+                }
                 continue;
             }
             InteractiveExit::Disconnect(provider) => {
-                terminal.suspend().context("suspending the terminal")?;
-                let outcome = connection::disconnect(&args.selection, &provider).await?;
-                if outcome == connection::DisconnectOutcome::ActiveDirectProvider {
-                    terminal.restore().context("restoring the terminal")?;
-                    println!(
-                        "The active provider was disconnected. The session is saved; restart Smith with a connected provider to resume it."
-                    );
-                    return Ok(0);
+                let result = connection::disconnect(&args.selection, &provider).await;
+                match result {
+                    Ok(result)
+                        if result.outcome
+                            == connection::DisconnectOutcome::ActiveDirectProvider =>
+                    {
+                        terminal.restore().context("restoring the terminal")?;
+                        for message in result.messages {
+                            println!("{message}");
+                        }
+                        println!(
+                            "The active provider was disconnected. The session is saved; restart Smith with a connected provider to resume it."
+                        );
+                        return Ok(0);
+                    }
+                    result => {
+                        if let Some(retained) = &mut app {
+                            connection::push_notices(
+                                &mut retained.app,
+                                result.map(|result| result.messages),
+                            );
+                        }
+                    }
                 }
-                terminal.resume().context("resuming the terminal")?;
                 resume = Some(current_session);
                 frozen_catalog = None;
                 continue;

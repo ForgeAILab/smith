@@ -43,33 +43,6 @@ impl Terminal {
         self.restored = true;
         Ok(())
     }
-
-    /// Gives another interactive flow the normal screen and cooked input.
-    pub(crate) fn suspend(&mut self) -> Result<()> {
-        self.restore()
-    }
-
-    /// Returns to the application with fresh buffers for a full redraw.
-    pub(crate) fn resume(&mut self) -> Result<()> {
-        if !self.restored {
-            return Ok(());
-        }
-        enable_raw_mode()?;
-        self.restored = false;
-        let result = (|| -> Result<Inner> {
-            enter_screen(&mut stdout())?;
-            clear_screen(&mut stdout())?;
-            Ok(ratatui::Terminal::new(CrosstermBackend::new(stdout()))?)
-        })();
-        match result {
-            Ok(inner) => self.inner = inner,
-            Err(error) => {
-                let _ = self.restore();
-                return Err(error);
-            }
-        }
-        Ok(())
-    }
 }
 
 impl Drop for Terminal {
@@ -119,8 +92,8 @@ fn clear_screen(writer: &mut impl Write) -> std::io::Result<()> {
     // A write-only clear, never `ratatui::Terminal::clear()`: its `ESC[6n`
     // query can lose its reply to crossterm's global reader after an
     // `EventStream` has existed, then time out under a multiplexer (cmux).
-    // Host rebuilds keep the screen; entering a connection flow or resuming
-    // afterwards still needs this clear and fresh buffers for a full redraw.
+    // Only initial entry clears; connections borrow the active terminal and
+    // host rebuilds keep its buffers for an uninterrupted session surface.
     execute!(writer, Clear(ClearType::All), MoveTo(0, 0))
 }
 

@@ -7,16 +7,13 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::Rect;
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Wrap};
 use sha2::{Digest, Sha256};
 use smith_runtime::chatgpt::{
     BrowserAuthorization, ChatGptOAuthClient, ChatGptTokenBundle, browser_authorization_url,
 };
-use smith_tui::picker::{ScreenFooter, draw_inline_surface};
-use smith_tui::theme::{Theme, Tone};
+use smith_tui::picker::ScreenFooter;
+use smith_tui::theme::Theme;
 use smith_tui::{FlowOutcome, ResourceEntry, ResourcePicker, Screen, ScreenEvent, Step};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -45,14 +42,13 @@ pub(super) struct LoginDisplay {
 /// Runs Smith's experimental direct ChatGPT login and returns a token bundle
 /// only after the complete ceremony succeeds.
 pub(super) async fn login(
-    session: &mut ScreenSession,
+    session: &mut ScreenSession<'_>,
+    picker: &mut ResourcePicker,
     no_motion: bool,
     from_setup: bool,
-    has_previous: bool,
 ) -> Result<FlowOutcome<ChatGptTokenBundle>> {
-    let mut picker = login_method_picker().with_back(has_previous);
     loop {
-        let method = match choose_login_method(session, &mut picker).await? {
+        let method = match choose_login_method(session, picker).await? {
             FlowOutcome::Completed(method) => method,
             FlowOutcome::Back => return Ok(FlowOutcome::Back),
             FlowOutcome::Cancelled => return Ok(FlowOutcome::Cancelled),
@@ -74,7 +70,7 @@ pub(super) async fn login(
 
 async fn browser_login(
     oauth: ChatGptOAuthClient,
-    session: &mut ScreenSession,
+    session: &mut ScreenSession<'_>,
     no_motion: bool,
     from_setup: bool,
 ) -> Result<FlowOutcome<ChatGptTokenBundle>> {
@@ -115,7 +111,7 @@ async fn browser_login(
 
 async fn device_login(
     oauth: ChatGptOAuthClient,
-    session: &mut ScreenSession,
+    session: &mut ScreenSession<'_>,
     no_motion: bool,
     from_setup: bool,
 ) -> Result<FlowOutcome<ChatGptTokenBundle>> {
@@ -256,7 +252,7 @@ async fn respond(stream: &mut TcpStream, status: u16, body: &str) {
 }
 
 async fn wait_for_login_surface<F>(
-    session: &mut ScreenSession,
+    session: &mut ScreenSession<'_>,
     display: LoginDisplay,
     completion: F,
     no_motion: bool,
@@ -317,27 +313,33 @@ impl Screen for LoginProgress {
         );
     }
 
+    fn draw_embedded(&self, frame: &mut ratatui::Frame<'_>, area: Rect, theme: Theme) {
+        crate::login_progress::draw_progress(
+            frame,
+            area,
+            "Connect ChatGPT · experimental",
+            embedded_login_progress_lines(&self.display, self.frame_number, self.no_motion),
+            self.from_setup,
+            true,
+            theme,
+        );
+    }
+
+    fn content_height(&self, width: u16) -> u16 {
+        crate::login_progress::progress_height(
+            embedded_login_progress_lines(&self.display, self.frame_number, self.no_motion),
+            width,
+        )
+    }
+
+    fn footer(&self) -> Option<ScreenFooter> {
+        Some(ScreenFooter::Progress {
+            back: self.from_setup,
+        })
+    }
+
     fn on_event(&mut self, event: ScreenEvent) -> Step<Self::Outcome, Self::Effect> {
-        match event {
-            ScreenEvent::Key(key) if key.kind != KeyEventKind::Release => {
-                if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                    Step::Outcome(FlowOutcome::Cancelled)
-                } else if key.code == KeyCode::Esc || key.code == KeyCode::BackTab {
-                    Step::Outcome(if self.from_setup {
-                        FlowOutcome::Back
-                    } else {
-                        FlowOutcome::Cancelled
-                    })
-                } else {
-                    Step::Pending
-                }
-            }
-            ScreenEvent::Tick => {
-                self.frame_number = self.frame_number.wrapping_add(1);
-                Step::Pending
-            }
-            _ => Step::Pending,
-        }
+        crate::login_progress::progress_event(event, &mut self.frame_number, self.from_setup)
     }
 
     fn tick_interval(&self) -> Option<Duration> {
@@ -374,56 +376,63 @@ fn draw_login_progress_in_area(
     from_setup: bool,
     theme: Theme,
 ) {
-    let mut lines = login_progress_lines(display, frame_number, no_motion);
-    let waiting = lines.pop().unwrap_or_default();
-    // Reserve the waiting line independently of a long copyable authorization
-    // URL, so narrow terminals always expose progress and cancellation.
-    while lines.last().is_some_and(String::is_empty) {
-        lines.pop();
-    }
-    let text = lines.join("\n");
-    let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
-    let width = area.width.saturating_sub(2);
-    let content_rows = paragraph.line_count(width);
-    let body = draw_inline_surface(
+    crate::login_progress::draw_progress(
         frame,
         area,
         "Connect ChatGPT · experimental",
-        content_rows + 2,
-        ScreenFooter::Progress { back: from_setup },
+        login_progress_lines(display, frame_number, no_motion),
+        from_setup,
+        false,
         theme,
     );
-    let text_height = body.height.saturating_sub(2);
-    frame.render_widget(
-        paragraph,
-        Rect::new(body.x.saturating_add(2), body.y, width, text_height),
-    );
-    if body.height > 0 {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                format!("  {waiting}"),
-                theme.style(Tone::Dim),
-            ))),
-            Rect::new(body.x, body.bottom().saturating_sub(1), body.width, 1),
-        );
-    }
 }
 
 fn login_progress_lines(display: &LoginDisplay, frame: usize, no_motion: bool) -> Vec<String> {
-    let mut lines = vec![
+    login_progress_lines_for_surface(display, frame, no_motion, false)
+}
+
+/// Put actionable instructions first because the embedded pane shares height with a transcript.
+fn embedded_login_progress_lines(
+    display: &LoginDisplay,
+    frame: usize,
+    no_motion: bool,
+) -> Vec<String> {
+    login_progress_lines_for_surface(display, frame, no_motion, true)
+}
+
+fn login_progress_lines_for_surface(
+    display: &LoginDisplay,
+    frame: usize,
+    no_motion: bool,
+    embedded: bool,
+) -> Vec<String> {
+    let mut introduction = vec![
         "Sign in to ChatGPT in your browser.".to_owned(),
         "Experimental: ChatGPT sign-in is not an official API for Smith.".to_owned(),
         String::new(),
-        "Open this URL:".to_owned(),
-        display.destination.clone(),
     ];
+    let mut instructions = vec!["Open this URL:".to_owned(), display.destination.clone()];
     if let Some(code) = &display.user_code {
-        lines.push(format!("Enter code: {code}"));
+        let code = format!("Enter code: {code}");
+        if embedded {
+            // A wrapping URL must not consume the code's only visible row.
+            instructions.insert(0, code);
+        } else {
+            instructions.push(code);
+        }
     } else if display.browser_opened {
-        lines.push("A browser window was requested; the URL remains copyable.".to_owned());
+        instructions.push("A browser window was requested; the URL remains copyable.".to_owned());
     } else {
-        lines.push("Copy the URL; the browser could not be opened automatically.".to_owned());
+        instructions
+            .push("Copy the URL; the browser could not be opened automatically.".to_owned());
     }
+    let mut lines = if embedded {
+        instructions.append(&mut introduction);
+        instructions
+    } else {
+        introduction.append(&mut instructions);
+        introduction
+    };
     let dots = if no_motion {
         "…".to_owned()
     } else {
@@ -451,7 +460,7 @@ pub(super) fn login_method_picker() -> ResourcePicker {
 }
 
 async fn choose_login_method(
-    session: &mut ScreenSession,
+    session: &mut ScreenSession<'_>,
     picker: &mut ResourcePicker,
 ) -> Result<FlowOutcome<LoginMethod>> {
     match session
@@ -481,6 +490,64 @@ async fn choose_login_method(
 #[allow(clippy::wildcard_imports)]
 mod tests {
     use super::*;
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    #[test]
+    fn embedded_login_keeps_code_url_waiting_and_session_visible() {
+        for (width, height) in [(44, 16), (100, 32)] {
+            for user_code in [None, Some("ABCD-1234".to_owned())] {
+                let progress = LoginProgress {
+                    display: LoginDisplay {
+                        destination: "https://auth.openai.com/codex/device".into(),
+                        user_code: user_code.clone(),
+                        browser_opened: true,
+                    },
+                    frame_number: 0,
+                    no_motion: true,
+                    from_setup: false,
+                };
+                let mut app = smith_tui::App::new("gpt-5.3", "~/work/api");
+                app.transcript.push_user("retained transcript");
+                app.composer.insert_str("retained draft");
+                let mut terminal =
+                    ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height))
+                        .expect("terminal");
+                terminal
+                    .draw(|frame| {
+                        smith_tui::render::draw_with_screen(
+                            frame,
+                            &app,
+                            &progress,
+                            Theme::new().without_color(),
+                        );
+                    })
+                    .expect("draw");
+                let buffer = terminal.backend().buffer();
+                let text = (0..height)
+                    .map(|y| {
+                        (0..width)
+                            .map(|x| buffer[(x, y)].symbol())
+                            .collect::<String>()
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                for expected in [
+                    "retained transcript",
+                    "retained draft",
+                    "Connect ChatGPT · experimental",
+                    "https://auth.openai.com",
+                    "Waiting for ChatGPT…",
+                    "esc cancel",
+                ] {
+                    assert!(text.contains(expected), "{text}");
+                }
+                if let Some(code) = user_code {
+                    assert!(text.contains(&format!("Enter code: {code}")), "{text}");
+                }
+                assert!(!text.contains("Smith setup"), "{text}");
+            }
+        }
+    }
 
     #[test]
     fn login_progress_keeps_waiting_and_navigation_visible_at_44_by_16() {

@@ -13,4 +13,7 @@ pub(crate) mod wrap;
 
 pub(crate) use transcript::TranscriptCache;
 
-pub use layout::{MIN_HEIGHT, MIN_WIDTH, SurfaceLayout, draw, draw_synced, layout, selected_text};
+pub use layout::{
+    MIN_HEIGHT, MIN_WIDTH, SurfaceLayout, draw, draw_synced, draw_with_screen, layout,
+    selected_text,
+};

@@ -6,6 +6,7 @@ use crossterm::event::KeyEvent;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
+use crate::picker::ScreenFooter;
 use crate::theme::Theme;
 
 /// Input a host can deliver without giving a screen ownership of the terminal.
@@ -52,6 +53,21 @@ pub trait Screen {
 
     /// Draw within the host's viewport so the same state needs no terminal handle.
     fn draw(&self, frame: &mut Frame<'_>, area: Rect, theme: Theme);
+
+    /// Embedded hosts own the hint row; simple screens can keep their ordinary drawing.
+    fn draw_embedded(&self, frame: &mut Frame<'_>, area: Rect, theme: Theme) {
+        self.draw(frame, area, theme);
+    }
+
+    /// Size the inline pane to content, with a bounded default for new screens.
+    fn content_height(&self, _width: u16) -> u16 {
+        10
+    }
+
+    /// Let a session keep controls beside its composer instead of inside the pane.
+    fn footer(&self) -> Option<ScreenFooter> {
+        None
+    }
 
     /// Reduce one input while leaving external work to the host.
     fn on_event(&mut self, event: ScreenEvent) -> Step<Self::Outcome, Self::Effect>;

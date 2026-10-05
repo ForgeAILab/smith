@@ -42,7 +42,7 @@ use smith_tui::setup::{
 use zeroize::Zeroizing;
 
 use crate::cli::{Selection, SetupAction, SetupArgs};
-use crate::screen_runner::{ScreenContext, ScreenResult, ScreenSession};
+use crate::screen_runner::{EffectCancellation, ScreenContext, ScreenResult, ScreenSession};
 
 /// Result of running a setup surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +51,21 @@ pub(crate) enum SetupOutcome {
     Completed,
     /// User cancelled; nothing was committed.
     Cancelled,
+}
+
+/// Messages travel to the owner, which can restore stdout or retain session notices.
+pub(crate) struct SurfaceOutcome {
+    pub(crate) outcome: SetupOutcome,
+    pub(crate) messages: Vec<String>,
+}
+
+impl SurfaceOutcome {
+    fn cancelled(messages: Vec<String>) -> Self {
+        Self {
+            outcome: SetupOutcome::Cancelled,
+            messages,
+        }
+    }
 }
 
 struct SetupContext {
@@ -93,7 +108,7 @@ pub(crate) async fn run_explicit(args: SetupArgs) -> Result<SetupOutcome> {
         SetupAction::Credential { provider } => SetupMode::Credential { provider },
         SetupAction::CheckpointKey => unreachable!("handled before the provider setup surface"),
     };
-    run_surface(selection, mode, args.no_color, args.no_motion).await
+    run_standalone_surface(selection, mode, args.no_color, args.no_motion).await
 }
 
 async fn run_checkpoint_key_setup(project: Option<PathBuf>) -> Result<SetupOutcome> {
@@ -334,7 +349,7 @@ pub(crate) async fn run_first_run(
     no_motion: bool,
 ) -> Result<SetupOutcome> {
     require_interactive_terminal()?;
-    run_surface(selection, SetupMode::FirstRun, no_color, no_motion).await
+    run_standalone_surface(selection, SetupMode::FirstRun, no_color, no_motion).await
 }
 
 fn require_interactive_terminal() -> Result<()> {
@@ -351,12 +366,28 @@ fn require_interactive_terminal() -> Result<()> {
     }
 }
 
-pub(crate) async fn run_surface(
+async fn run_standalone_surface(
     selection: Selection,
     mode: SetupMode,
     no_color: bool,
     no_motion: bool,
 ) -> Result<SetupOutcome> {
+    let mut session = ScreenSession::enter(no_color, no_motion).context("entering guided setup")?;
+    let result = run_surface(selection, mode, &mut session, no_motion, None).await;
+    let result = session.finish(result, "restoring the terminal")?;
+    for message in result.messages {
+        println!("{message}");
+    }
+    Ok(result.outcome)
+}
+
+pub(crate) async fn run_surface(
+    selection: Selection,
+    mode: SetupMode,
+    session: &mut ScreenSession<'_>,
+    no_motion: bool,
+    title: Option<&str>,
+) -> Result<SurfaceOutcome> {
     let context = setup_context(selection, &mode).await?;
     let providers = provider_entries(&context.inventory);
     let catalog_connection = match &mode {
@@ -419,78 +450,121 @@ pub(crate) async fn run_surface(
     )
     .with_catalog_model_limits(catalog_model_limits)
     .with_destination(context.user_dir.join("config.toml").display().to_string());
-    let mut session = ScreenSession::enter(no_color, no_motion).context("entering guided setup")?;
-    let result = async {
-        loop {
-            let effect = match session
-                .run(
-                    &mut app,
-                    ScreenContext {
-                        draw: Some("drawing guided setup"),
-                        input: "reading a guided-setup terminal event",
-                    },
+    if let Some(title) = title {
+        app = app.with_title(title);
+    }
+    let mut messages = Vec::new();
+    loop {
+        let effect = match session
+            .run(
+                &mut app,
+                ScreenContext {
+                    draw: Some("drawing guided setup"),
+                    input: "reading a guided-setup terminal event",
+                },
+            )
+            .await?
+        {
+            ScreenResult::Outcome(()) | ScreenResult::InputEnded => {
+                return Ok(SurfaceOutcome::cancelled(messages));
+            }
+            ScreenResult::Effect(effect) => effect,
+            ScreenResult::Completed(never) => match never {},
+        };
+        match effect {
+            SetupEffect::None => {}
+            SetupEffect::Cancel => return Ok(SurfaceOutcome::cancelled(messages)),
+            SetupEffect::ConnectChatGpt => {
+                let outcome = crate::connection::connect_chatgpt_from_setup(
+                    context.selection.clone(),
+                    context.user_dir.clone(),
+                    context.inventory.models.iter().any(|model| {
+                        model.provider == CHATGPT_PROVIDER && model.model == CHATGPT_TERRA.model
+                    }),
+                    context.unconfigured,
+                    session,
+                    no_motion,
+                    true,
                 )
-                .await?
-            {
-                ScreenResult::Outcome(()) | ScreenResult::InputEnded => {
-                    return Ok(SetupOutcome::Cancelled);
-                }
-                ScreenResult::Effect(effect) => effect,
-                ScreenResult::Completed(never) => match never {},
-            };
-            match effect {
-                SetupEffect::None => {}
-                SetupEffect::Cancel => return Ok(SetupOutcome::Cancelled),
-                SetupEffect::ConnectChatGpt => {
-                    let outcome = crate::connection::connect_chatgpt_from_setup(
-                        context.selection.clone(),
-                        context.user_dir.clone(),
-                        context.inventory.models.iter().any(|model| {
-                            model.provider == CHATGPT_PROVIDER && model.model == CHATGPT_TERRA.model
-                        }),
-                        context.unconfigured,
-                        &mut session,
-                        no_motion,
-                        true,
-                    )
-                    .await
-                    .context("ChatGPT setup could not complete")?;
-                    match outcome {
-                        smith_tui::FlowOutcome::Completed(()) => {
-                            return Ok(SetupOutcome::Completed);
-                        }
-                        smith_tui::FlowOutcome::Cancelled => return Ok(SetupOutcome::Cancelled),
-                        smith_tui::FlowOutcome::Back => app.back_from_chatgpt(),
+                .await
+                .context("ChatGPT setup could not complete")?;
+                match outcome {
+                    smith_tui::FlowOutcome::Completed(login_messages) => {
+                        messages.extend(login_messages);
+                        return Ok(SurfaceOutcome {
+                            outcome: SetupOutcome::Completed,
+                            messages,
+                        });
                     }
+                    smith_tui::FlowOutcome::Cancelled => {
+                        return Ok(SurfaceOutcome::cancelled(messages));
+                    }
+                    smith_tui::FlowOutcome::Back => app.back_from_chatgpt(),
                 }
-                SetupEffect::ResolveModelLimits { request } => {
-                    // One bounded, non-inference read; the surface stays busy
-                    // and key-blind until the result lands.
-                    session
-                        .draw(&app)
-                        .context("drawing setup limit resolution")?;
-                    let resolved = resolve_model_limits(&context, &request).await;
-                    app.apply_resolved_limits(resolved);
+            }
+            SetupEffect::ResolveModelLimits { request } => {
+                // One bounded, non-inference read; the surface stays busy
+                // until it completes or a recorded cancellation can return safely.
+                session
+                    .draw(&app)
+                    .context("drawing setup limit resolution")?;
+                let cancellation = EffectCancellation::default();
+                let resolved = session
+                    .wait_effect(
+                        &app,
+                        resolve_model_limits(&context, &request),
+                        &cancellation,
+                        ScreenContext {
+                            draw: Some("drawing setup limit resolution"),
+                            input: "reading setup limit resolution input",
+                        },
+                    )
+                    .await?;
+                if cancellation.requested() {
+                    return Ok(SurfaceOutcome::cancelled(messages));
                 }
-                SetupEffect::Submit {
-                    submission,
-                    allow_collisions,
-                } => {
-                    session.draw(&app).context("drawing setup preflight")?;
-                    match apply_submission(&context, submission, allow_collisions).await {
-                        ApplyOutcome::Completed => return Ok(SetupOutcome::Completed),
-                        ApplyOutcome::Collision(preview) => app.review_collisions(preview),
-                        ApplyOutcome::Failed {
-                            message,
-                            authentication,
-                        } => app.fail(message, authentication),
+                app.apply_resolved_limits(resolved);
+            }
+            SetupEffect::Submit {
+                submission,
+                allow_collisions,
+            } => {
+                session.draw(&app).context("drawing setup preflight")?;
+                let cancellation = EffectCancellation::default();
+                match session
+                    .wait_effect(
+                        &app,
+                        apply_submission(&context, submission, allow_collisions, &cancellation),
+                        &cancellation,
+                        ScreenContext {
+                            draw: Some("drawing setup preflight"),
+                            input: "reading setup preflight input",
+                        },
+                    )
+                    .await?
+                {
+                    ApplyOutcome::Cancelled => return Ok(SurfaceOutcome::cancelled(messages)),
+                    ApplyOutcome::Completed => {
+                        return Ok(SurfaceOutcome {
+                            outcome: SetupOutcome::Completed,
+                            messages,
+                        });
+                    }
+                    ApplyOutcome::Collision(preview) => app.review_collisions(preview),
+                    ApplyOutcome::Failed {
+                        message,
+                        authentication,
+                    } => {
+                        messages.push(message.clone());
+                        if cancellation.requested() {
+                            return Ok(SurfaceOutcome::cancelled(messages));
+                        }
+                        app.fail(message, authentication);
                     }
                 }
             }
         }
     }
-    .await;
-    session.finish(result, "restoring the terminal")
 }
 
 fn catalog_model_entries(
@@ -798,6 +872,7 @@ fn model_entries(inventory: &SelectionInventory) -> Vec<ResourceEntry> {
 }
 
 enum ApplyOutcome {
+    Cancelled,
     Completed,
     Collision(String),
     Failed {
@@ -957,12 +1032,27 @@ async fn apply_submission(
     context: &SetupContext,
     submission: SetupSubmission,
     allow_collisions: bool,
+    cancellation: &EffectCancellation,
 ) -> ApplyOutcome {
+    const CANCELLED: &str = "Setup cancelled · nothing was written";
+    if cancellation.requested() {
+        return ApplyOutcome::Cancelled;
+    }
     let enroller = CredentialEnroller::new();
-    apply_submission_with(context, submission, allow_collisions, &enroller, || {
-        preflight(context)
-    })
-    .await
+    let outcome =
+        apply_submission_with(context, submission, allow_collisions, &enroller, || async {
+            let result = preflight(context).await;
+            if cancellation.requested() {
+                Err((CANCELLED.to_owned(), false))
+            } else {
+                result
+            }
+        })
+        .await;
+    match outcome {
+        ApplyOutcome::Failed { message, .. } if message == CANCELLED => ApplyOutcome::Cancelled,
+        outcome => outcome,
+    }
 }
 
 async fn apply_submission_with<F, Fut>(

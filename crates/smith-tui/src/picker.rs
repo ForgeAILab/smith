@@ -19,8 +19,8 @@ use crate::theme::{Theme, Tone};
 
 /// Maximum number of resource matches shown beside the composer.
 ///
-/// Runtime choice keeps five choices beside the composer. Setup and the
-/// standalone pre-host resume surface use the available terminal height.
+/// Session choices keep five matches beside the composer, including connection
+/// steps. Standalone setup and pre-host resume use the available terminal height.
 const COMPACT_VISIBLE_ENTRIES: usize = 5;
 
 /// One locally selectable resource.
@@ -322,6 +322,29 @@ impl Screen for ResourcePicker {
         draw_resource_picker(frame, area, self, theme);
     }
 
+    fn draw_embedded(&self, frame: &mut Frame<'_>, area: Rect, theme: Theme) {
+        draw_picker_context(
+            frame,
+            area,
+            self,
+            PickerContext {
+                title: &self.title,
+                note: None,
+                error: None,
+                embedded: true,
+            },
+            theme,
+        );
+    }
+
+    fn content_height(&self, width: u16) -> u16 {
+        picker_content_height(self, width, None, None)
+    }
+
+    fn footer(&self) -> Option<ScreenFooter> {
+        Some(ResourcePicker::footer(self))
+    }
+
     fn on_event(&mut self, event: ScreenEvent) -> Step<Self::Outcome, Self::Effect> {
         match event {
             ScreenEvent::Key(key) => match self.on_key(key) {
@@ -462,14 +485,29 @@ pub fn draw_inline_surface(
     footer: ScreenFooter,
     theme: Theme,
 ) -> Rect {
+    draw_inline_screen(frame, area, title, content_rows, Some(footer), theme)
+}
+
+/// Session hosts omit the local footer because controls live below their composer.
+pub fn draw_inline_screen(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    title: &str,
+    content_rows: usize,
+    footer: Option<ScreenFooter>,
+    theme: Theme,
+) -> Rect {
     frame.render_widget(Clear, area);
-    let footer_lines = footer.rows(area.width);
+    let footer_lines = footer
+        .map(|footer| footer.rows(area.width))
+        .unwrap_or_default();
     let footer_rows = u16::try_from(footer_lines.len())
         .unwrap_or(u16::MAX)
         .min(area.height.saturating_sub(1));
-    let height = u16::try_from(content_rows)
-        .unwrap_or(u16::MAX)
-        .min(area.height.saturating_sub(3 + footer_rows));
+    let height = u16::try_from(content_rows).unwrap_or(u16::MAX).min(
+        area.height
+            .saturating_sub(if footer.is_some() { 3 + footer_rows } else { 2 }),
+    );
     let body = Rect::new(area.x, area.y.saturating_add(2), area.width, height);
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
@@ -515,6 +553,73 @@ pub(crate) fn draw_picker_with_context(
     error: Option<&str>,
     theme: Theme,
 ) {
+    draw_picker_context(
+        frame,
+        area,
+        picker,
+        PickerContext {
+            title,
+            note,
+            error,
+            embedded: false,
+        },
+        theme,
+    );
+}
+
+/// Measure with the same wrapped rows as drawing, so inline screens need no filler.
+pub(crate) fn picker_content_height(
+    picker: &ResourcePicker,
+    width: u16,
+    note: Option<&str>,
+    error: Option<&str>,
+) -> u16 {
+    let theme = Theme::new();
+    let rows = entry_view_capped(
+        picker,
+        usize::MAX,
+        width,
+        theme,
+        false,
+        COMPACT_VISIBLE_ENTRIES,
+    )
+    .lines
+    .len()
+        + note
+            .map(|text| indented_words(text, width, 2, Tone::Dim, theme).len())
+            .unwrap_or(0)
+        + error
+            .map(|text| {
+                indented_words(&format!("error: {text}"), width, 2, Tone::Danger, theme).len()
+            })
+            .unwrap_or(0);
+    u16::try_from(
+        rows.saturating_add(2)
+            .saturating_sub(usize::from(note.is_some())),
+    )
+    .unwrap_or(u16::MAX)
+}
+
+pub(crate) struct PickerContext<'a> {
+    pub(crate) title: &'a str,
+    pub(crate) note: Option<&'a str>,
+    pub(crate) error: Option<&'a str>,
+    pub(crate) embedded: bool,
+}
+
+pub(crate) fn draw_picker_context(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    picker: &ResourcePicker,
+    context: PickerContext<'_>,
+    theme: Theme,
+) {
+    let PickerContext {
+        title,
+        note,
+        error,
+        embedded,
+    } = context;
     let mut prefix = note
         .map(|note| indented_words(note, area.width, 2, Tone::Dim, theme))
         .unwrap_or_default();
@@ -527,13 +632,18 @@ pub(crate) fn draw_picker_with_context(
             theme,
         ));
     }
-    let all = entry_view(picker, usize::MAX, area.width, theme, false);
-    let mut body = draw_inline_surface(
+    let entry_cap = if embedded {
+        COMPACT_VISIBLE_ENTRIES
+    } else {
+        usize::MAX
+    };
+    let all = entry_view_capped(picker, usize::MAX, area.width, theme, false, entry_cap);
+    let mut body = draw_inline_screen(
         frame,
         area,
         title,
         (prefix.len() + all.lines.len()).saturating_sub(usize::from(note.is_some())),
-        picker.footer(),
+        (!embedded).then(|| picker.footer()),
         theme,
     );
     // The intro occupies the title's usual blank row so it precedes choices
@@ -543,12 +653,13 @@ pub(crate) fn draw_picker_with_context(
         body.height = body.height.saturating_add(1);
     }
     let prefix_rows = prefix.len().min(usize::from(body.height).saturating_sub(1));
-    let view = entry_view(
+    let view = entry_view_capped(
         picker,
         usize::from(body.height).saturating_sub(prefix_rows),
         area.width,
         theme,
         false,
+        entry_cap,
     );
     draw_picker_heading(frame, area, picker, title, view.scrolling, theme);
     prefix.truncate(prefix_rows);
@@ -647,6 +758,29 @@ fn entry_view(
     width: u16,
     theme: Theme,
     compact: bool,
+) -> EntryView {
+    entry_view_capped(
+        picker,
+        height,
+        width,
+        theme,
+        compact,
+        if compact {
+            COMPACT_VISIBLE_ENTRIES
+        } else {
+            usize::MAX
+        },
+    )
+}
+
+/// Embedded flows retain full descriptions while yielding list height to the transcript.
+fn entry_view_capped(
+    picker: &ResourcePicker,
+    height: usize,
+    width: u16,
+    theme: Theme,
+    compact: bool,
+    entry_cap: usize,
 ) -> EntryView {
     let indices = picker.filtered_indices();
     if indices.is_empty() {
@@ -790,11 +924,7 @@ fn entry_view(
             lines
         })
         .collect::<Vec<_>>();
-    let cap = if compact {
-        COMPACT_VISIBLE_ENTRIES
-    } else {
-        indices.len()
-    };
+    let cap = entry_cap.min(indices.len());
     let mut start = selected;
     let mut used = groups[selected].len();
     while start > 0
@@ -1055,6 +1185,63 @@ mod tests {
             assert!(rows[footer].starts_with("  "));
             assert!(rows[footer..].join("\n").contains("esc cancel"));
             assert!(rows[footer..].join("\n").contains("↑↓ or 1–1 choose"));
+        }
+    }
+
+    #[test]
+    fn embedded_inventory_keeps_five_choices_and_reaches_the_last_entry() {
+        let mut picker = ResourcePicker::new(
+            "Connect OpenRouter · Choose model",
+            (0..30)
+                .map(|index| {
+                    ResourceEntry::new(index.to_string(), format!("resource-{index}"), "metadata")
+                })
+                .collect(),
+            "empty",
+        );
+        for (width, height) in [(44, 16), (100, 32)] {
+            let mut app = crate::App::new("gpt-5.3", "~/work/api");
+            app.transcript.push_user("retained transcript");
+            app.composer.insert_str("retained draft");
+            for selected in [0, 29] {
+                picker.selected = selected;
+                let mut terminal =
+                    Terminal::new(TestBackend::new(width, height)).expect("terminal");
+                terminal
+                    .draw(|frame| {
+                        crate::render::draw_with_screen(
+                            frame,
+                            &app,
+                            &picker,
+                            Theme::new().without_color(),
+                        );
+                    })
+                    .expect("draw");
+                let buffer = terminal.backend().buffer();
+                let text = (0..height)
+                    .map(|y| {
+                        (0..width)
+                            .map(|x| buffer[(x, y)].symbol())
+                            .collect::<String>()
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert_eq!(
+                    text.lines().filter(|row| row.contains("resource-")).count(),
+                    COMPACT_VISIBLE_ENTRIES,
+                    "{text}"
+                );
+                for expected in [
+                    "retained transcript".to_owned(),
+                    "retained draft".to_owned(),
+                    format!("❯ resource-{selected}"),
+                    format!("{}/30", selected + 1),
+                    "enter confirm".to_owned(),
+                    "esc cancel".to_owned(),
+                ] {
+                    assert!(text.contains(&expected), "{text}");
+                }
+            }
         }
     }
 

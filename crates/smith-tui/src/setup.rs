@@ -18,8 +18,8 @@ use ratatui::widgets::Paragraph;
 use smith_client::compact_tokens;
 
 use crate::picker::{
-    PickerOutcome, ResourceEntry, ResourcePicker, ScreenFooter, draw_inline_surface,
-    draw_picker_with_context, indented_words,
+    PickerContext, PickerOutcome, ResourceEntry, ResourcePicker, ScreenFooter, draw_inline_screen,
+    draw_picker_context, indented_words, picker_content_height,
 };
 use crate::screen::{Screen, ScreenEvent, Step as ScreenStep};
 use crate::theme::{Theme, Tone};
@@ -487,6 +487,7 @@ pub struct SetupApp {
     review_scroll: Cell<ReviewScroll>,
     allow_collisions: bool,
     destination: String,
+    title: Option<String>,
 }
 
 /// Wrapped-row viewport refreshed by drawing, including after a resize.
@@ -565,6 +566,7 @@ impl SetupApp {
             review_scroll: Cell::new(ReviewScroll::default()),
             allow_collisions: false,
             destination: "~/.smith/config.toml".into(),
+            title: None,
         };
         match mode {
             SetupMode::FirstRun | SetupMode::Menu => app.enter(Step::Action, false),
@@ -1621,6 +1623,47 @@ impl Screen for SetupApp {
         draw_setup_in_area(frame, area, self, theme);
     }
 
+    fn draw_embedded(&self, frame: &mut Frame<'_>, area: Rect, theme: Theme) {
+        draw_setup_surface(frame, area, self, theme, true);
+    }
+
+    fn content_height(&self, width: u16) -> u16 {
+        if let Some(picker) = &self.picker {
+            return picker_content_height(
+                picker,
+                width,
+                (self.step == Step::Action)
+                    .then_some("Nothing is sent to a provider until setup finishes."),
+                self.error.as_deref(),
+            );
+        }
+        u16::try_from(
+            setup_content_rows(self, width, Theme::new())
+                .len()
+                .saturating_add(2),
+        )
+        .unwrap_or(u16::MAX)
+    }
+
+    fn footer(&self) -> Option<ScreenFooter> {
+        let back = !self.history.is_empty();
+        Some(match self.step {
+            Step::Review => {
+                let scroll = self.review_scroll.get();
+                ScreenFooter::Review {
+                    back,
+                    scroll: (scroll.limit > 0).then_some((scroll.offset + 1, scroll.limit + 1)),
+                }
+            }
+            Step::Busy => ScreenFooter::Busy { back },
+            _ => self
+                .picker
+                .as_ref()
+                .map(ResourcePicker::footer)
+                .unwrap_or(ScreenFooter::Field { back }),
+        })
+    }
+
     fn on_event(&mut self, event: ScreenEvent) -> ScreenStep<Self::Outcome, Self::Effect> {
         match event {
             ScreenEvent::Key(key) => match self.on_key(key) {
@@ -1637,6 +1680,15 @@ impl Screen for SetupApp {
     }
 }
 
+impl SetupApp {
+    /// Connection callers supply their identity without creating another setup screen.
+    #[must_use]
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+}
+
 /// Draws the complete setup surface.
 pub fn draw_setup(frame: &mut Frame<'_>, app: &SetupApp, theme: Theme) {
     let area = frame.area();
@@ -1644,50 +1696,131 @@ pub fn draw_setup(frame: &mut Frame<'_>, app: &SetupApp, theme: Theme) {
 }
 
 fn draw_setup_in_area(frame: &mut Frame<'_>, area: Rect, app: &SetupApp, theme: Theme) {
+    draw_setup_surface(frame, area, app, theme, false);
+}
+
+fn draw_setup_surface(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &SetupApp,
+    theme: Theme,
+    embedded: bool,
+) {
     let back = !app.history.is_empty();
+    let base_title = app.title.as_deref().unwrap_or("Smith setup");
     if let Some(picker) = &app.picker {
         let title = if app.step == Step::Action {
-            "Smith setup · Welcome · choose how to connect a model".to_owned()
+            format!("{base_title} · Welcome · choose how to connect a model")
         } else {
-            format!("Smith setup · {}", picker.title)
+            format!("{base_title} · {}", picker.title)
         };
-        draw_picker_with_context(
+        draw_picker_context(
             frame,
             area,
             picker,
-            &title,
-            (app.step == Step::Action)
-                .then_some("Nothing is sent to a provider until setup finishes."),
-            app.error.as_deref(),
+            PickerContext {
+                title: &title,
+                note: (app.step == Step::Action)
+                    .then_some("Nothing is sent to a provider until setup finishes."),
+                error: app.error.as_deref(),
+                embedded,
+            },
             theme,
         );
         return;
     }
-    let mut lines = Vec::new();
     let heading = match app.step {
         Step::Review => "Review · nothing is written until you confirm",
         Step::Busy => "Applying setup",
         _ => app.prompt().0,
     };
+    let rows = setup_content_rows(app, area.width, theme);
+    let mut footer = match app.step {
+        Step::Review => ScreenFooter::Review { back, scroll: None },
+        Step::Busy => ScreenFooter::Busy { back },
+        _ => ScreenFooter::Field { back },
+    };
+    let base_page = usize::from(area.height).saturating_sub(if embedded {
+        2
+    } else {
+        3 + footer.rows(area.width).len()
+    });
+    if app.step == Step::Review {
+        if rows.len() > base_page {
+            footer = ScreenFooter::Review {
+                back,
+                scroll: Some((1, 1)),
+            };
+        }
+        let page = rows
+            .len()
+            .min(usize::from(area.height).saturating_sub(if embedded {
+                2
+            } else {
+                3 + footer.rows(area.width).len()
+            }));
+        let limit = rows.len().saturating_sub(page);
+        let offset = app.review_scroll.get().offset.min(limit);
+        app.review_scroll.set(ReviewScroll {
+            offset,
+            limit,
+            page,
+        });
+        footer = ScreenFooter::Review {
+            back,
+            scroll: (limit > 0).then_some((offset + 1, limit + 1)),
+        };
+        let body = draw_inline_screen(
+            frame,
+            area,
+            &format!("{base_title} · {heading}"),
+            rows.len(),
+            (!embedded).then_some(footer),
+            theme,
+        );
+        frame.render_widget(
+            Paragraph::new(
+                rows.into_iter()
+                    .skip(offset)
+                    .take(usize::from(body.height))
+                    .collect::<Vec<_>>(),
+            ),
+            body,
+        );
+    } else {
+        let body = draw_inline_screen(
+            frame,
+            area,
+            &format!("{base_title} · {heading}"),
+            rows.len(),
+            (!embedded).then_some(footer),
+            theme,
+        );
+        frame.render_widget(Paragraph::new(rows), body);
+    }
+}
+
+fn setup_content_rows(app: &SetupApp, width: u16, theme: Theme) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
     match app.step {
         Step::Review | Step::Busy => {
             if app.step == Step::Busy {
                 lines.extend(indented_words(
                     app.busy_note()
                         .unwrap_or("Writing your choices and checking the connection…"),
-                    area.width,
+                    width,
                     2,
                     Tone::Accent,
                     theme,
                 ));
                 lines.push(Line::default());
             }
-            lines.extend(app.wrapped_review_lines(area.width));
+            lines.extend(app.wrapped_review_lines(width));
         }
         _ => {
             let (_, help, masked) = app.prompt();
             if app.error.is_none() {
-                lines.extend(indented_words(&help, area.width, 2, Tone::Dim, theme));
+                lines.extend(indented_words(&help, width, 2, Tone::Dim, theme));
                 lines.push(Line::default());
             }
             let value = if masked {
@@ -1714,68 +1847,13 @@ fn draw_setup_in_area(frame: &mut Frame<'_>, area: Rect, app: &SetupApp, theme: 
         lines.push(Line::default());
         lines.extend(indented_words(
             &format!("error: {error}"),
-            area.width,
+            width,
             2,
             Tone::Danger,
             theme,
         ));
     }
-    let rows = crate::render::wrap::wrap_lines(&lines, area.width);
-    let mut footer = match app.step {
-        Step::Review => ScreenFooter::Review { back, scroll: None },
-        Step::Busy => ScreenFooter::Busy { back },
-        _ => ScreenFooter::Field { back },
-    };
-    let base_page = usize::from(area.height).saturating_sub(3 + footer.rows(area.width).len());
-    if app.step == Step::Review {
-        if rows.len() > base_page {
-            footer = ScreenFooter::Review {
-                back,
-                scroll: Some((1, 1)),
-            };
-        }
-        let page = rows
-            .len()
-            .min(usize::from(area.height).saturating_sub(3 + footer.rows(area.width).len()));
-        let limit = rows.len().saturating_sub(page);
-        let offset = app.review_scroll.get().offset.min(limit);
-        app.review_scroll.set(ReviewScroll {
-            offset,
-            limit,
-            page,
-        });
-        footer = ScreenFooter::Review {
-            back,
-            scroll: (limit > 0).then_some((offset + 1, limit + 1)),
-        };
-        let body = draw_inline_surface(
-            frame,
-            area,
-            &format!("Smith setup · {heading}"),
-            rows.len(),
-            footer,
-            theme,
-        );
-        frame.render_widget(
-            Paragraph::new(
-                rows.into_iter()
-                    .skip(offset)
-                    .take(usize::from(body.height))
-                    .collect::<Vec<_>>(),
-            ),
-            body,
-        );
-    } else {
-        let body = draw_inline_surface(
-            frame,
-            area,
-            &format!("Smith setup · {heading}"),
-            rows.len(),
-            footer,
-            theme,
-        );
-        frame.render_widget(Paragraph::new(rows), body);
-    }
+    crate::render::wrap::wrap_lines(&lines, width)
 }
 
 fn valid_variable(value: &str) -> bool {
@@ -2353,6 +2431,67 @@ mod tests {
         }
         app.on_key(key(KeyCode::Enter));
         app
+    }
+
+    #[test]
+    fn embedded_review_scrolls_inside_the_session_pane() {
+        for (width, height) in [(44, 16), (100, 32)] {
+            let mut review = glm_environment_review().with_title("Connect OpenRouter");
+            review.review_collisions(format!("{}\nreview-final", "reviewed change\n".repeat(60)));
+            let mut backdrop = crate::App::new("gpt-5.3", "~/work/api");
+            backdrop.transcript.push_user("retained transcript");
+            backdrop.composer.insert_str("retained draft");
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height))
+                    .expect("terminal");
+            let mut region = Rect::default();
+            let mut saw_review_end = false;
+            for _ in 0..80 {
+                terminal
+                    .draw(|frame| {
+                        region = crate::render::draw_with_screen(
+                            frame,
+                            &backdrop,
+                            &review,
+                            Theme::new().without_color(),
+                        );
+                    })
+                    .expect("draw");
+                let buffer = terminal.backend().buffer();
+                for y in region.y..region.bottom() {
+                    let row = (0..width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>();
+                    saw_review_end |= row.contains("review-final");
+                }
+                review.on_key(key(KeyCode::PageDown));
+            }
+            let buffer = terminal.backend().buffer();
+            let rows = (0..height)
+                .map(|y| {
+                    (0..width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>();
+            let text = rows.join("\n");
+            for expected in [
+                "retained transcript",
+                "retained draft",
+                "Connect OpenRouter",
+                "enter confirm",
+                "esc back",
+            ] {
+                assert!(text.contains(expected), "{text}");
+            }
+            // The merged review now follows its collision preview with Writes and
+            // the warning. Its last preview row must be reachable within the pane.
+            assert!(saw_review_end, "{text}");
+            let scroll = review.review_scroll.get();
+            assert_eq!(scroll.offset, scroll.limit);
+            assert!(!text.contains("Smith setup"), "{text}");
+            assert_eq!(backdrop.composer.text(), "retained draft");
+        }
     }
 
     #[test]

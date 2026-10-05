@@ -949,34 +949,16 @@ pub(super) async fn pick_one(
     title: &str,
     entries: Vec<ResourceEntry>,
     empty_hint: &str,
-    no_color: bool,
-    no_motion: bool,
+    session: &mut ScreenSession<'_>,
 ) -> Result<Option<String>> {
-    let mut session = ScreenSession::enter(no_color, no_motion)
-        .with_context(|| format!("entering the {title} picker"))?;
     let mut picker = ResourcePicker::choices(title, entries, empty_hint);
-    let result = run_picker_in_screen(&mut picker, &mut session).await;
-    session.finish(
-        result,
-        &format!("restoring the terminal after the {title} picker"),
-    )
-}
-
-/// Reuses the active terminal when account choice leads into another screen.
-pub(super) async fn pick_one_in_screen(
-    title: &str,
-    entries: Vec<ResourceEntry>,
-    empty_hint: &str,
-    session: &mut ScreenSession,
-) -> Result<Option<String>> {
-    let mut picker = ResourcePicker::new(title, entries, empty_hint);
     run_picker_in_screen(&mut picker, session).await
 }
 
 /// Both fixed account choices and inventories use the same screen runner.
 async fn run_picker_in_screen(
     picker: &mut ResourcePicker,
-    session: &mut ScreenSession,
+    session: &mut ScreenSession<'_>,
 ) -> Result<Option<String>> {
     match session
         .run(
