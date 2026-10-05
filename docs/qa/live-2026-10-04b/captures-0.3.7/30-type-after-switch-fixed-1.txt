@@ -1,0 +1,32 @@
+● provider · changed · zai/glm-5.2 → zai/glm-5.2-highspeed · prior cache not transferable
+
+● reasoning · thinking provider default · effort provider default · provider/model default · applies
+  to the next turn
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> typed right after the switch 1
+────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                                   zai/glm-5.2-highspeed · glm · ask

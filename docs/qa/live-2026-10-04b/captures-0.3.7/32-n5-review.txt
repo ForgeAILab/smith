@@ -1,0 +1,32 @@
+  Smith setup · Review · nothing is written until you confirm
+
+  Provider     zai · https://api.z.ai/api/coding/paas/v4
+  API key      env:ZAI_API_KEY
+  Model        glm-5.2 · 1M context · 1M input · 131k output · trusted catalog v5
+  Requests     32.7k output · 32.7k reserved
+  GLM replies  an answer sent only as reasoning is shown as the reply; thinking stays on
+  Default      profile glm
+  Writes       ~/.smith/config.toml, then checks the configuration
+
+  enter confirm · esc back
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

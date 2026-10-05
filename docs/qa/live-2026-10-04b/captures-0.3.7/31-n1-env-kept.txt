@@ -1,0 +1,32 @@
+  Smith setup · Environment variable
+
+  Smith records the name only and does not read its value during setup
+
+› ZAI_API_KEY
+
+  enter continue · esc back
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

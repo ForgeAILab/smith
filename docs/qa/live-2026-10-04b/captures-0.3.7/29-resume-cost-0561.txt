@@ -1,7 +1,7 @@
 2 turn(s) · input ~2.4k · output ~15 · estimated
 resume with smith --resume session-0561f8ac-7ffa-4c0c-87af-615a05069210
 
-/private/tm/cl/-Volumes-Data-codes-ai-t/e/scratchpad/qa-proj main ····················· 20:31:43 ─╮
+<prompt> main ····················· 20:31:43 ─╮
 ❯                                                                                                ─╯
 
 

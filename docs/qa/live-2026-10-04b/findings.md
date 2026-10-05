@@ -105,3 +105,12 @@ New:
 | N3 | **Keys typed while the host rebuilds after `/model` are dropped**: text typed right after choosing a model never reaches the composer. 0.3.6 does the same (`23-0.3.6-type-after-switch`), so it predates this change. It is also the cause of the one flaky PTY run (`/quit` sent right after a switch, under full-workspace load). | `22-type-after-switch`, `23-0.3.6-type-after-switch` |
 | N4 | **A `/connect` step leaves `? for shortcuts` in the hint row** with the step's keys on a second row; `?` does nothing there. In-session pickers drop it while open. | `17-connect-openrouter`, `25-connect-chatgpt-inline` |
 | N5 | **The review's last row says `then checks the connection`**, but the check is local (the credential reference must resolve; no request is sent). `checks the configuration` would be accurate. | `09-review` |
+
+All five were fixed and re-checked live on the release build of the
+follow-up commits: the name is kept (`31-n1-env-kept`), cancelling after a
+failed check prints only the cancel line (`33-n2-cancel-after-failed-check`),
+text typed right after a `/model` switch reaches the composer in three of
+three tries (`30-type-after-switch-fixed-*`), a `/connect` step's keys take
+the hint row and `?` stays in the step (`34-n4-connect-hint-row`), and the
+review says `then checks the configuration` (`32-n5-review`).
+

@@ -3,7 +3,7 @@ $0.000 exact · zai/glm-5.3
 prompt cache: 68% of input read from cache · 6.1k cached tokens (last turn)
 resume with smith --resume session-2042b4df-6465-42d4-be69-180feb01a926
 
-/private/tm/cl/-Volumes-Data-codes-ai-t/e/scratchpad/qa-proj main ·················· 5s 20:31:52 ─╮
+<prompt> main ·················· 5s 20:31:52 ─╮
 ❯                                                                                                ─╯
 
 
