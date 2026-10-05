@@ -84,7 +84,7 @@ be typed on that screen, and MUST NOT use internal terms (`PKCE`, `auth.json`,
   followed by its revision
 - **AND** a destination under the home directory is written with `~`
 - **AND** the last row says that confirming writes that file and then checks
-  the connection
+  the configuration
 
 #### Scenario: Credential choices name the real entry
 
@@ -370,3 +370,18 @@ every row.
   before reporting usage
 - **WHEN** the user opens `/resume`
 - **THEN** the session is listed with its prompt as the row's name
+
+### Requirement: Input typed during a rebuild is kept
+
+Smith SHALL deliver keys typed while the host rebuilds for the same session
+(a model, profile, effort, thinking, or context-window change, an MCP
+recomposition, or a provider connection) to the rebuilt session's composer in
+the order typed, and MUST NOT drop them.
+
+#### Scenario: Typing right after choosing a model
+
+- **GIVEN** an idle session with an empty draft
+- **WHEN** the user chooses another model in `/model` and immediately types
+  `hello`
+- **THEN** after the rebuild the composer holds `hello`
+- **AND** a `/quit` typed the same way quits the rebuilt session

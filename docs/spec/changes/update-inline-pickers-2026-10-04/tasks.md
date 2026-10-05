@@ -1,7 +1,7 @@
 ---
 created_at: 2026-10-04T19:35:32Z
 updated_at: 2026-10-05T00:29:24Z
-completed_at: 2026-10-05T00:29:24Z
+completed_at:
 ---
 
 Findings R1–R4, S1–S6, C1, C2, M1 from
@@ -76,3 +76,20 @@ Findings R1–R4, S1–S6, C1, C2, M1 from
 - [x] 6.3 Repeat the live pass's steps on the release build, using the
   environment-variable credential method so review can be confirmed without
   touching the Keychain.
+
+## 7. Re-check follow-ups
+
+Approved 2026-10-04 ("yes please"); N1–N5 from the 0.3.7 re-check in
+`docs/qa/live-2026-10-04b/findings.md`.
+
+- [ ] 7.1 The environment-variable name is kept when the user goes back past
+  its field and forward again, like other non-secret values (N1).
+- [ ] 7.2 Cancelling setup after a failed check prints only
+  `Setup cancelled · nothing was written`, not the stale error (N2).
+- [ ] 7.3 Keys typed while the host rebuilds reach the rebuilt session's
+  composer in order (N3).
+- [ ] 7.4 While a `/connect` step is open the hint row shows the step's keys,
+  not `? for shortcuts`, as in-session pickers do (N4).
+- [ ] 7.5 The review's last row says `then checks the configuration` (N5).
+- [ ] 7.6 Tests for each; gate; live re-check of N1–N5 on the release build.
+
