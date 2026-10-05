@@ -2,8 +2,8 @@
   "change_id": "fix-per-model-session-cost",
   "change_ref": "fix-per-model-session-cost-2026-10-04",
   "created_at": "2026-10-04T19:35:32Z",
-  "updated_at": "2026-10-04T19:44:39Z",
-  "completed_at": null,
-  "status": "implementing",
+  "updated_at": "2026-10-05T00:29:24Z",
+  "completed_at": "2026-10-05T00:29:24Z",
+  "status": "implemented",
   "implementation_started_at": "2026-10-04T19:44:39Z"
 }

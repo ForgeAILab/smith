@@ -1,7 +1,7 @@
 ---
 created_at: 2026-10-04T19:35:32Z
-updated_at: 2026-10-04T19:35:32Z
-completed_at:
+updated_at: 2026-10-05T00:29:24Z
+completed_at: 2026-10-05T00:29:24Z
 ---
 
 From the open question in `docs/qa/live-2026-10-04/findings.md`, confirmed
