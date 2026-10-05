@@ -427,9 +427,14 @@ async fn seed_host_state(
     // intentionally not suitable for seeding the TUI: synthetic cache work
     // (keepalives, handoffs, idle summaries, …) is part of that total but
     // must stay out of ordinary turn/context accounting.
+    let logged_usage = host
+        .paths()
+        .and_then(|paths| last_session_usage(paths, host.session().id()));
+    app.status.restore_turn_count(snapshot.identity.turn);
     restore_usage_with_bindings(
         &mut app.status,
         snapshot.usage.records(),
+        logged_usage.as_ref(),
         snapshot.manifests.iter().map(|entry| {
             let model = &entry.manifest.model;
             (model.provider.as_str(), model.model.as_str())
@@ -449,7 +454,7 @@ async fn seed_host_state(
         },
     );
     // In-process rebinds still know each turn's binding. A process resume has
-    // only identity-free records, so it retains the manifest-based fallback.
+    // only identity-free records, so the log or manifest supplies attribution.
     app.status.retain_usage_bindings(&previous_usage);
     if let Ok(events) = host.client_timeline_events().await {
         app.status.replay_cache_events(events);
@@ -546,6 +551,18 @@ pub(super) async fn run_interactive(
     })
 }
 
+/// Only the last record for this identity can describe the restored session;
+/// searching for any matching older totals could hide a newer mismatch.
+fn last_session_usage(
+    paths: &smith_runtime::session::SessionPaths,
+    session: &agent_runtime_core::ids::SessionId,
+) -> Option<smith_client::usage_log::SessionUsageRecord> {
+    smith_client::usage_log::read_all(&smith_client::usage_log::default_path(paths.directory()))
+        .into_iter()
+        .rev()
+        .find(|record| record.session == session.as_str())
+}
+
 /// Seeds the status projection from durable Runtime records without losing
 /// their typed provenance. In particular, synthetic cache attempts count
 /// toward session spend but never become an ordinary user turn.
@@ -555,13 +572,15 @@ fn restore_usage_records(status: &mut smith_client::status::Status, records: &[U
     }
 }
 
-/// Identity-free restored records may use a price only when every activation
-/// names the same binding; otherwise their attribution stays explicitly unknown.
+/// A matching v5 log preserves model switches that identity-free runtime
+/// records cannot recover. Stale or older logs use the single-manifest rule
+/// rather than assigning all earlier usage to the last model.
 fn restore_usage_with_bindings<'a>(
     status: &mut smith_client::status::Status,
     records: &[UsageRecord],
+    logged: Option<&smith_client::usage_log::SessionUsageRecord>,
     manifests: impl IntoIterator<Item = (&'a str, &'a str)>,
-    price_for: impl FnOnce(&str, &str) -> Option<smith_client::status::PriceReference>,
+    mut price_for: impl FnMut(&str, &str) -> Option<smith_client::status::PriceReference>,
 ) {
     if records.is_empty() {
         return;
@@ -581,10 +600,80 @@ fn restore_usage_with_bindings<'a>(
         status.switch_model(None, "earlier models");
     }
     restore_usage_records(status, records);
+    if let Some(logged) = logged {
+        restore_logged_bindings(status, logged, &mut price_for);
+    }
     if status.provider != provider || status.model != model {
         status.switch_model(provider, model);
         status.set_price(price);
     }
+}
+
+/// Checks the root rollup and the binding partition before using the log:
+/// v4's synthesized last-model bucket is not evidence of earlier attribution.
+fn restore_logged_bindings(
+    status: &mut smith_client::status::Status,
+    logged: &smith_client::usage_log::SessionUsageRecord,
+    price_for: &mut impl FnMut(&str, &str) -> Option<smith_client::status::PriceReference>,
+) {
+    use smith_client::status::{BindingUsage, counter_label};
+    let mut restored = status.session_usage();
+    let totals = restored
+        .totals
+        .iter()
+        .map(|(kind, value)| (counter_label(*kind).to_owned(), *value))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    if logged.schema_version != 5 || logged.totals != totals || logged.bindings.is_empty() {
+        return;
+    }
+    let mut partition = std::collections::BTreeMap::<String, u64>::new();
+    for binding in &logged.bindings {
+        for (kind, value) in &binding.totals {
+            let total = partition.entry(kind.clone()).or_default();
+            let Some(sum) = total.checked_add(*value) else {
+                return;
+            };
+            *total = sum;
+        }
+    }
+    let mut expected = totals;
+    for (kind, value) in &logged.delegated_totals {
+        let total = expected.entry(kind.clone()).or_default();
+        let Some(sum) = total.checked_add(*value) else {
+            return;
+        };
+        *total = sum;
+    }
+    if partition != expected {
+        return;
+    }
+    let kinds = [
+        CounterKind::InputUncached,
+        CounterKind::InputCached,
+        CounterKind::CacheWrite,
+        CounterKind::Output,
+        CounterKind::Reasoning,
+    ];
+    let mut bindings = Vec::new();
+    for entry in &logged.bindings {
+        let mut binding = BindingUsage::new(entry.provider.clone(), &entry.model, None);
+        for (label, value) in &entry.totals {
+            let Some(kind) = kinds.iter().find(|kind| counter_label(**kind) == label) else {
+                return;
+            };
+            binding.totals.insert(*kind, *value);
+        }
+        binding.reported = logged.reported && restored.bindings.iter().all(|entry| entry.reported);
+        bindings.push(binding);
+    }
+    for binding in &mut bindings {
+        binding.price = binding
+            .provider
+            .as_deref()
+            .and_then(|provider| price_for(provider, &binding.model));
+    }
+    restored.bindings = bindings;
+    status.retain_usage_bindings(&restored);
 }
 
 /// Resolves the active model's catalog price, using **exactly** the binding
@@ -1839,6 +1928,7 @@ mod tests {
         restore_usage_with_bindings(
             &mut status,
             &[root_record(1_000_000)],
+            None,
             [("zai", "glm-5.3"), ("zai", "glm-5.3")],
             |provider, model| Some(price(provider, model)),
         );
@@ -1863,6 +1953,7 @@ mod tests {
         restore_usage_with_bindings(
             &mut status,
             &[root_record(9_000_000)],
+            None,
             [("zai", "glm-5.3"), ("google", "current")],
             |_, _| panic!("ambiguous records must not request a price"),
         );
@@ -1886,13 +1977,135 @@ mod tests {
         let mut status = smith_client::status::Status::new("current", "project");
         status.switch_model(Some("google".into()), "current");
         status.set_price(Some(price("google", "current")));
-        restore_usage_with_bindings(&mut status, &[root_record(100)], [], |_, _| {
+        restore_usage_with_bindings(&mut status, &[root_record(100)], None, [], |_, _| {
             panic!("missing manifests must not request a price")
         });
         let usage = status.session_usage();
         assert!(usage.cost_price(status.price()).is_none());
         assert_eq!(usage.bindings[0].model, "earlier models");
         assert!(usage.bindings[0].price.is_none());
+    }
+
+    fn logged_usage() -> smith_client::usage_log::SessionUsageRecord {
+        let mut observed = smith_client::status::Status::new("glm-5.3", "project");
+        observed.switch_model(Some("zai".into()), "glm-5.3");
+        observed.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 11_000));
+        observed.switch_model(Some("google".into()), "gemini-3.8-flash");
+        observed.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 12_000));
+        smith_client::usage_log::SessionUsageRecord::new(
+            "session",
+            observed.provider.clone(),
+            &observed.model,
+            "build",
+            &observed.session_usage(),
+        )
+    }
+
+    #[test]
+    fn usage_restore_reads_only_the_last_record_for_the_session_from_the_project_log() {
+        use smith_client::usage_log::{append, default_path};
+        use smith_runtime::session::{ProjectId, SessionPaths};
+        let root = tempfile::tempdir().expect("root");
+        let paths = SessionPaths::new(root.path(), &ProjectId::new("project").expect("project"));
+        let mut logged = logged_usage();
+        append(&default_path(paths.directory()), &logged).expect("first record");
+        logged.totals.insert("input".into(), 24_000);
+        append(&default_path(paths.directory()), &logged).expect("last record");
+        let mut other = logged.clone();
+        other.session = "other-session".into();
+        append(&default_path(paths.directory()), &other).expect("other record");
+        let session = agent_runtime_core::ids::SessionId::new("session");
+        assert_eq!(super::last_session_usage(&paths, &session), Some(logged));
+        assert!(
+            super::last_session_usage(&paths, &agent_runtime_core::ids::SessionId::new("missing"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn matching_usage_log_restores_both_model_prices_and_keeps_the_active_binding() {
+        let logged = logged_usage();
+        let mut status = smith_client::status::Status::new("current", "project");
+        status.switch_model(Some("google".into()), "current");
+        status.restore_turn_count(2);
+        restore_usage_with_bindings(
+            &mut status,
+            &[root_record(23_000)],
+            Some(&logged),
+            [("zai", "glm-5.3"), ("google", "gemini-3.8-flash")],
+            |provider, model| {
+                let mut reference = price(provider, model);
+                if provider == "google" {
+                    reference.table.input = Some(3_000_000);
+                }
+                Some(reference)
+            },
+        );
+        let usage = status.session_usage();
+        assert_eq!(usage.turns, 2);
+        assert_eq!(usage.bindings.len(), 2);
+        assert_eq!(
+            usage.bindings[0].totals[&CounterKind::InputUncached],
+            11_000
+        );
+        assert_eq!(
+            usage.bindings[1].totals[&CounterKind::InputUncached],
+            12_000
+        );
+        assert_eq!(status.model, "current");
+        let retained = usage.cost_price(status.price()).expect("restored price");
+        assert_eq!(
+            retained.render_sources(&usage),
+            "zai/glm-5.3 $0.022 · google/gemini-3.8-flash $0.036"
+        );
+        assert_eq!(
+            smith_client::status::SessionCost::compute(&usage, retained).micro_usd,
+            58_000
+        );
+        assert_eq!(
+            smith_client::status::SessionCost::compute(&usage, retained).label,
+            smith_client::status::CostLabel::Exact
+        );
+    }
+
+    #[test]
+    fn mismatched_or_v4_usage_log_falls_back_to_manifests() {
+        let original = logged_usage();
+        let mut mismatched = original.clone();
+        mismatched.totals.insert("input".into(), 1);
+        let mut legacy = serde_json::to_value(&original).expect("record");
+        legacy["schema_version"] = serde_json::json!(4);
+        legacy.as_object_mut().expect("object").remove("bindings");
+        let legacy = serde_json::from_value(legacy).expect("v4 record");
+        let mut invalid_partition = original;
+        invalid_partition.bindings[0]
+            .totals
+            .insert("input".into(), 1);
+        for logged in [mismatched, legacy, invalid_partition] {
+            for manifests in [
+                vec![("zai", "glm-5.3")],
+                vec![("zai", "glm-5.3"), ("google", "gemini-3.8-flash")],
+            ] {
+                let mut status = smith_client::status::Status::new("current", "project");
+                restore_usage_with_bindings(
+                    &mut status,
+                    &[root_record(23_000)],
+                    Some(&logged),
+                    manifests.clone(),
+                    |provider, model| Some(price(provider, model)),
+                );
+                let usage = status.session_usage();
+                assert_eq!(usage.bindings.len(), 1);
+                assert_eq!(
+                    usage.bindings[0].model,
+                    if manifests.len() == 1 {
+                        "glm-5.3"
+                    } else {
+                        "earlier models"
+                    }
+                );
+            }
+        }
     }
 
     #[test]
@@ -1995,7 +2208,7 @@ mod tests {
         restore_usage_records(&mut status, &[ordinary, idle_summary]);
 
         let usage = status.session_usage();
-        assert_eq!(usage.turns, 1);
+        assert_eq!(usage.turns, 0);
         assert_eq!(usage.totals[&CounterKind::InputUncached], 400);
         assert_eq!(usage.totals[&CounterKind::Output], 20);
         assert_eq!(usage.synthetic_totals[&CounterKind::InputCached], 900);

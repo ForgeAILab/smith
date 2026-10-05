@@ -70,8 +70,8 @@ produced no result. Both mean nothing ran.
 Smith its prior conversation, which is much cheaper and more accurate than
 restating context in a fresh prompt. Prefer resuming over re-describing.
 
-`smith sessions list` prints one tab-separated row per session for this project:
-id, last-updated, turn count, model, and the opening prompt.
+`smith sessions list` prints one tab-separated row per resumable session for this project:
+id, last-updated, turn count, model, and the latest prompt.
 
 ## What not to do
 

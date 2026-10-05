@@ -13,7 +13,7 @@ use crate::model::{
 };
 
 /// Revision of the trusted model data shipped with this Smith build.
-pub const TRUSTED_MODEL_CATALOG_REVISION: u32 = 5;
+pub const TRUSTED_MODEL_CATALOG_REVISION: u32 = 6;
 
 /// Stable name recorded for Smith's built-in setup model data.
 pub const TRUSTED_MODEL_CATALOG_NAME: &str = "smith-trusted-models";
@@ -271,6 +271,23 @@ pub const GLM_5_2: TrustedModelRecord = TrustedModelRecord {
     default_context_window: None,
 };
 
+/// GLM-5.3 limits retained separately so the new quick start does not
+/// change how existing GLM-5.2 configurations resolve.
+pub const GLM_5_3: TrustedModelRecord = TrustedModelRecord {
+    provider: GLM_PROVIDER,
+    model: "glm-5.3",
+    label: "GLM-5.3",
+    catalog: TRUSTED_MODEL_CATALOG_NAME,
+    revision: TRUSTED_MODEL_CATALOG_REVISION,
+    context_tokens: 1_000_000,
+    max_input_tokens: 1_000_000,
+    max_output_tokens: 131_072,
+    request_output_tokens: 32_768,
+    output_reserve: 32_768,
+    context_windows: None,
+    default_context_window: None,
+};
+
 const CHATGPT_CONTEXT_WINDOWS: &[TrustedContextWindow] = &[
     TrustedContextWindow {
         name: "272k",
@@ -400,7 +417,7 @@ pub const CHATGPT_GPT_6_LUNA: TrustedModelRecord = TrustedModelRecord {
     default_context_window: Some("272k"),
 };
 
-const GLM_MODELS: &[TrustedModelRecord] = &[GLM_5_2, GLM_4_7];
+const GLM_MODELS: &[TrustedModelRecord] = &[GLM_5_3, GLM_5_2, GLM_4_7];
 const CHATGPT_MODELS: &[TrustedModelRecord] = &[
     CHATGPT_ASTRA,
     CHATGPT_GPT_6_1_SOL,
@@ -425,7 +442,7 @@ const DESCRIPTORS: &[ProviderSetupDescriptor] = &[
             reasoning: None,
         },
         label: "Quick start with GLM",
-        description: "Z.AI Coding Plan endpoint with trusted GLM-5.2 limits",
+        description: "Z.AI Coding Plan endpoint with trusted GLM-5.3 limits",
         provider: Some(GLM_PROVIDER),
         profile: Some(GLM_PROFILE),
         adapter: KIND_OPENAI_COMPATIBLE,
@@ -765,7 +782,7 @@ mod tests {
         assert_eq!(glm.profile, Some("glm"));
         assert_eq!(glm.endpoint, Some("https://api.z.ai/api/coding/paas/v4"));
         assert_eq!(glm.reasoning_only, Some(ReasoningOnlyBehavior::Text));
-        assert_eq!(glm.models, &[GLM_5_2, GLM_4_7]);
+        assert_eq!(glm.models, &[GLM_5_3, GLM_5_2, GLM_4_7]);
         assert_eq!(GLM_4_7.catalog, TRUSTED_MODEL_CATALOG_NAME);
         assert_eq!(GLM_4_7.revision, TRUSTED_MODEL_CATALOG_REVISION);
         assert_eq!(
@@ -778,6 +795,18 @@ mod tests {
             ),
             (200_000, 196_000, 131_072, 8_192, 8_192)
         );
+        assert_eq!(TRUSTED_MODEL_CATALOG_REVISION, 6);
+        assert_eq!(GLM_5_3.model, "glm-5.3");
+        assert_eq!(GLM_5_3.label, "GLM-5.3");
+        assert_eq!(
+            GLM_5_3,
+            TrustedModelRecord {
+                model: "glm-5.3",
+                label: "GLM-5.3",
+                ..GLM_5_2
+            }
+        );
+        assert_eq!(trusted_model("zai", "glm-5.3"), Some(&GLM_5_3));
         assert_eq!(GLM_5_2.catalog, TRUSTED_MODEL_CATALOG_NAME);
         assert_eq!(GLM_5_2.revision, TRUSTED_MODEL_CATALOG_REVISION);
         assert_eq!(

@@ -285,8 +285,12 @@ impl App {
             self.transcript.push_notice(
                 NoticeKind::Stream,
                 format!(
-                    "live stream lagged; recovered {} skipped event(s) from the session journal",
-                    self.pending_recovered_events
+                    "live stream lagged; recovered {} from the session journal",
+                    smith_client::plural(
+                        self.pending_recovered_events,
+                        "skipped event",
+                        "skipped events"
+                    )
                 ),
             );
             self.pending_recovered_events = 0;
@@ -356,6 +360,9 @@ impl App {
                 self.turn_usage = Default::default();
             }
             RuntimeEvent::TurnStarted | RuntimeEvent::InternalTurnStarted { .. } => {
+                if matches!(envelope.payload, RuntimeEvent::TurnStarted) {
+                    self.status.record_user_turn();
+                }
                 self.reset_live_turn();
                 self.status.activity = Activity::Working;
                 self.turn_summary = None;

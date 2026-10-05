@@ -1,0 +1,32 @@
+● provider · Connected OpenRouter
+
+● provider · Disconnected `openrouter` without changing its endpoint, models, profiles, or defaults.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts                                                            zai/glm-5.2 · glm · ask

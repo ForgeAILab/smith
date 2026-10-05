@@ -211,13 +211,12 @@ fn terminal_session_table_hides_empty_sessions_but_keeps_failed_and_image_prompt
 }
 
 #[test]
-fn piped_session_table_keeps_empty_sessions_byte_for_byte() {
+fn piped_session_table_hides_empty_sessions_and_keeps_failed_prompts() {
     let listing = format_session_list(&session_visibility_fixture(), false, |_| unreachable!());
     assert_eq!(
         listing,
         "session-short\t1790935135329ms\t2\tlocal/example-model\texplain main.rs\n\
          session-longer-identity\tunknown-version\t?\t?/?\tno user preview\n\
-         session-empty\t1790935135329ms\t0\t?/?\tno user preview\n\
          session-failed-prompt\t1790935135329ms\t0\t?/?\tplease fix the build\n\
          session-image-only\t1790935135329ms\t1\t?/?\tno user preview\n"
     );
@@ -259,7 +258,7 @@ fn session_list_terminal_rows_have_headers_aligned_columns_and_local_time() {
         "LAST UPDATED",
         "TURNS",
         "MODEL",
-        "OPENING PROMPT",
+        "LATEST PROMPT",
     ];
     let first = [
         "session-short",
@@ -286,7 +285,7 @@ fn session_list_terminal_rows_have_headers_aligned_columns_and_local_time() {
     let empty = format_session_list(&[], true, |_| unreachable!());
     assert_eq!(
         empty,
-        "SESSION ID  LAST UPDATED  TURNS  MODEL  OPENING PROMPT\n"
+        "SESSION ID  LAST UPDATED  TURNS  MODEL  LATEST PROMPT\n"
     );
 }
 
@@ -295,7 +294,7 @@ fn session_list_terminal_columns_use_display_width_for_unicode_models() {
     let mut sessions = session_list_fixture();
     sessions[0].model = Some("模型".to_owned());
     let listing = format_session_list(&sessions, true, |_| "date".to_owned());
-    assert!(listing.contains("MODEL       OPENING PROMPT"), "{listing}");
+    assert!(listing.contains("MODEL       LATEST PROMPT"), "{listing}");
     assert!(listing.contains("local/模型  explain main.rs"), "{listing}");
     assert!(listing.contains("?/?         no user preview"), "{listing}");
 }

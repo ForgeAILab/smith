@@ -17,7 +17,7 @@
   cache maintenance   off
   resume checkpoint   saved <TIMESTAMP>
   project             <PROJECT>
-  Git                 2 changed path(s)
+  Git                 2 changed paths
   goal                none
   children            0
   usage               nothing spent yet

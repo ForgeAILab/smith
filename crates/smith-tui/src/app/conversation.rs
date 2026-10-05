@@ -300,7 +300,12 @@ impl ConversationMut<'_> {
         self.transcript.push_notice(
             NoticeKind::Integrity,
             format!(
-                "discarded {orphaned} unterminated speculative provider attempt(s) at {boundary}"
+                "discarded {} at {boundary}",
+                smith_client::plural(
+                    orphaned,
+                    "unterminated speculative provider attempt",
+                    "unterminated speculative provider attempts"
+                )
             ),
         );
     }

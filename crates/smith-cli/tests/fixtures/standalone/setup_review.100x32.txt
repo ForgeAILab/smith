@@ -2,7 +2,7 @@
 
   Provider     zai · https://api.z.ai/api/coding/paas/v4
   API key      env:ZAI_API_KEY
-  Model        glm-5.2 · 1M context · 1M input · 131k output · trusted catalog v5
+  Model        glm-5.3 · 1M context · 1M input · 131k output · trusted catalog v6
   Requests     32.7k output · 32.7k reserved
   GLM replies  an answer sent only as reasoning is shown as the reply; thinking stays on
   Default      profile glm

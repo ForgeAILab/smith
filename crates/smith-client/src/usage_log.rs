@@ -55,7 +55,9 @@ pub struct SessionUsageRecord {
     pub model: String,
     /// Active agent profile.
     pub agent: String,
-    /// Turns that produced provider usage.
+    /// User-started root conversation turns for new records. Earlier Smith
+    /// builds counted provider attempts with input, even in schema v5; readers
+    /// must use the session identity rather than this field to restore turns.
     pub turns: u32,
     /// Whether the counters are provider-reported.
     pub reported: bool,
@@ -412,7 +414,7 @@ mod tests {
         };
         assert_eq!(
             usage.render().expect("a summary"),
-            "1 turn(s) · input 860 · output 13"
+            "1 turn · input 860 · output 13"
         );
     }
 
@@ -435,7 +437,7 @@ mod tests {
         };
         assert_eq!(
             usage.render().expect("a summary"),
-            "3 turn(s) · input 1.2k · cached 90k · cache-write 2k · output 400"
+            "3 turns · input 1.2k · cached 90k · cache-write 2k · output 400"
         );
     }
 
@@ -492,8 +494,8 @@ mod tests {
         assert_eq!(
             usage.render().expect("a summary"),
             "total · input 1k · output 20\n\
-             \u{20}\u{20}root: 1 turn(s) · input 860 · output 13\n\
-             \u{20}\u{20}agents: 4 agent(s) · input 140 · output 7"
+             \u{20}\u{20}root: 1 turn · input 860 · output 13\n\
+             \u{20}\u{20}agents: 4 agents · input 140 · output 7"
         );
         assert_eq!(usage.total_tokens(), 873);
         assert_eq!(usage.merged_total_tokens(), 1_020);
@@ -524,7 +526,7 @@ mod tests {
         };
         let rendered = usage.render().expect("a summary");
         assert_eq!(
-            rendered.matches("compaction(s)").count(),
+            rendered.matches("1 compaction reclaiming 40k").count(),
             1,
             "a compaction is a root context event and is attributed once: {rendered}"
         );
@@ -532,7 +534,7 @@ mod tests {
             rendered
                 .lines()
                 .next()
-                .is_some_and(|line| !line.contains("compaction(s)")),
+                .is_some_and(|line| !line.contains("compaction")),
             "the merged line carries counters only: {rendered}"
         );
     }
@@ -550,7 +552,7 @@ mod tests {
         let rendered = usage
             .render()
             .expect("a delegated-only session still renders");
-        assert!(rendered.contains("agents: 1 agent(s)"), "{rendered}");
+        assert!(rendered.contains("agents: 1 agent ·"), "{rendered}");
     }
 
     #[test]

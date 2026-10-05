@@ -21,9 +21,9 @@
                       worktree)
   goal                none
   children            0
-  usage               1 turn(s) · input 1k ·
+  usage               1 turn · input 1k ·
                       cached 800 · output
-                      120 · 1 compaction(s)
+                      120 · 1 compaction
                       reclaiming 250
   cost                $0.003 exact ·
                       local/example-model

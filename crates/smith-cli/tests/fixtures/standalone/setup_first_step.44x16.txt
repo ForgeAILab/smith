@@ -3,7 +3,7 @@
   finishes.
 ❯ 1. Quick start with GLM
      Z.AI Coding Plan endpoint with trusted
-     GLM-5.2 limits
+     GLM-5.3 limits
   2. Connect OpenRouter
   3. Custom OpenAI-compatible provider
   4. Anthropic Messages API

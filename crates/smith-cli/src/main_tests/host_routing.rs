@@ -271,7 +271,7 @@ async fn exit_resume_hint_uses_user_history_even_when_the_provider_fails_before_
             ProjectWorkspace::new(project.path()).expect("workspace"),
         )),
         approval: Some(Arc::new(agent_runtime_core::approval::DenyAll)),
-        ..RuntimeRequest::new(config, HostSurface::Terminal)
+        ..RuntimeRequest::new(config.clone(), HostSurface::Terminal)
     };
     let host = smith_runtime::host::start(
         HostSessionRequest::new(runtime, project.path())
@@ -282,6 +282,32 @@ async fn exit_resume_hint_uses_user_history_even_when_the_provider_fails_before_
     host.set_goal_continuation_enabled(false);
     assert!(host.paths().is_some(), "persistent session");
     assert_eq!(session_resume_hint(&host), None);
+    // A second empty host closes before cleanup; the prompted host must stay.
+    let empty_id = {
+        let runtime = RuntimeRequest {
+            provider: Some(provider.clone()),
+            workspace: Some(Arc::new(
+                ProjectWorkspace::new(project.path()).expect("workspace"),
+            )),
+            approval: Some(Arc::new(agent_runtime_core::approval::DenyAll)),
+            ..RuntimeRequest::new(config, HostSurface::Terminal)
+        };
+        let empty = smith_runtime::host::start(
+            HostSessionRequest::new(runtime, project.path())
+                .checkpoint_keys(Arc::new(TestCheckpointKeys)),
+        )
+        .await
+        .expect("empty host");
+        let paths = empty.paths().expect("paths").clone();
+        let id = empty.session().id().clone();
+        empty.shutdown().await.expect("empty shutdown");
+        assert!(paths.snapshot(&id).expect("snapshot").exists());
+        crate::runtime_host::remove_empty_interactive_session(&empty).await;
+        assert!(!paths.snapshot(&id).expect("snapshot").exists());
+        assert!(!paths.journal(&id).expect("journal").exists());
+        id
+    };
+    assert_ne!(&empty_id, host.session().id());
 
     let submitted = host
         .session()
@@ -297,6 +323,20 @@ async fn exit_resume_hint_uses_user_history_even_when_the_provider_fails_before_
         ))
     );
     host.shutdown().await.expect("shutdown");
+    crate::runtime_host::remove_empty_interactive_session(&host).await;
+    let paths = host.paths().expect("paths");
+    assert!(
+        paths
+            .snapshot(host.session().id())
+            .expect("snapshot")
+            .exists()
+    );
+    assert!(
+        paths
+            .journal(host.session().id())
+            .expect("journal")
+            .exists()
+    );
     assert_eq!(
         session_resume_hint(&host),
         Some(format!(

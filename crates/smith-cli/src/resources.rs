@@ -993,8 +993,8 @@ pub(super) async fn list_sessions(selection: &Selection) -> Result<()> {
 
 /// Formats terminal columns or the plugin's unchanged tab-separated rows.
 /// The caller supplies local timestamp rendering so this function needs no
-/// terminal or time-zone lookup of its own. Empty sessions are hidden only in
-/// the terminal table because pipes must keep the complete plugin inventory.
+/// terminal or time-zone lookup of its own. Both forms hide known empty
+/// sessions so plugins offer the same resumable inventory as the terminal.
 pub(super) fn format_session_list(
     sessions: &[SessionListing],
     terminal: bool,
@@ -1008,13 +1008,13 @@ pub(super) fn format_session_list(
                 "LAST UPDATED",
                 "TURNS",
                 "MODEL",
-                "OPENING PROMPT",
+                "LATEST PROMPT",
             ]
             .map(str::to_owned),
         );
     }
     for session in sessions {
-        if terminal && !session.should_offer_resume() {
+        if !session.should_offer_resume() {
             continue;
         }
         let updated = session.updated.map_or_else(

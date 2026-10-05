@@ -1,7 +1,7 @@
   Smith setup · Welcome · choose how to connect a model
   Nothing is sent to a provider until setup finishes.
 ❯ 1. Quick start with GLM
-     Z.AI Coding Plan endpoint with trusted GLM-5.2 limits
+     Z.AI Coding Plan endpoint with trusted GLM-5.3 limits
   2. Connect OpenRouter
   3. Custom OpenAI-compatible provider
   4. Anthropic Messages API

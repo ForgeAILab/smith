@@ -1,0 +1,32 @@
+  Get started
+  Type a task below and press Enter.
+
+  /model    Switch model
+  /connect  Connect or reconnect a provider
+  /help     List commands and keys
+
+
+
+
+
+
+
+
+
+
+
+  Connect OpenRouter · Review · nothing is written until you confirm
+
+  Action      Add OpenAI-compatible provider
+  Connection  OpenAI-compatible API
+  Provider    openrouter · https://openrouter.ai/api/v1
+  API key     env:OPENROUTER_API_KEY
+  Model       openrouter/openai/gpt-4o-mini · 128k context · 128k input · 16.3k output (explicit
+              limits)
+  Replies     keep the provider's answer and thinking separate
+  Default     keep current selection
+  Writes      ~/.smith/config.toml, then checks the configuration
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  enter confirm · esc back                                                   zai/glm-5.2 · glm · ask

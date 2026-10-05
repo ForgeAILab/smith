@@ -531,6 +531,21 @@ pub(super) fn session_resume_hint(host: &HostSession) -> Option<String> {
     ))
 }
 
+/// Runs only after interactive shutdown releases writer leases. Canonical
+/// history preserves failed and image-only prompts; cleanup is best effort so
+/// a filesystem error never prevents the terminal surface from exiting.
+pub(super) async fn remove_empty_interactive_session(host: &HostSession) {
+    if !host
+        .session()
+        .history()
+        .iter()
+        .any(|message| message.role == agent_runtime_core::content::Role::User)
+        && let Some(paths) = host.paths()
+    {
+        let _ = paths.remove_session_files(host.session().id()).await;
+    }
+}
+
 pub(super) async fn run_interactive_command(args: RunArgs) -> Result<u8> {
     let mut terminal = None;
     let result = run_interactive_hosts(args, &mut terminal).await;
@@ -650,6 +665,7 @@ async fn run_interactive_hosts(
                     price.as_ref(),
                     cache.as_deref(),
                 );
+                remove_empty_interactive_session(&host).await;
                 return Ok(0);
             }
             // The same identity, recomposed around the tools a server
@@ -702,9 +718,16 @@ async fn run_interactive_hosts(
                         for message in result.messages {
                             println!("{message}");
                         }
-                        println!(
-                            "The active provider was disconnected. The session is saved; restart Smith with a connected provider to resume it."
-                        );
+                        if session_resume_hint(&host).is_some() {
+                            println!(
+                                "The active provider was disconnected. The session is saved; restart Smith with a connected provider to resume it."
+                            );
+                        } else {
+                            println!(
+                                "The active provider was disconnected. Restart Smith with a connected provider."
+                            );
+                        }
+                        remove_empty_interactive_session(&host).await;
                         return Ok(0);
                     }
                     result => {
@@ -731,6 +754,12 @@ async fn run_interactive_hosts(
                         | SelectionCommand::ContextWindow(_)
                 )
                 .then_some(catalog);
+                if matches!(
+                    command,
+                    SelectionCommand::NewSession | SelectionCommand::Resume(_)
+                ) {
+                    remove_empty_interactive_session(&host).await;
+                }
                 apply_palette_command(&mut args.selection, &mut resume, current_session, command);
             }
         }

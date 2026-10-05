@@ -1,0 +1,32 @@
+  Get started
+  Type a task below and press Enter.
+
+  /model    Switch model
+  /connect  Connect or reconnect a provider
+  /help     List commands and keys
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Connect OpenRouter · Default selection
+
+❯ 1. Make this the default
+     used by plain `smith`
+  2. Keep current default
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ↑↓ or 1–2 choose · enter confirm · esc back                                zai/glm-5.2 · glm · ask

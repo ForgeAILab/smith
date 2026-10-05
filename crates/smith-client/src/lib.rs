@@ -11,7 +11,7 @@ pub mod context_report;
 pub mod diagnostics_report;
 pub mod diff_report;
 mod format;
-pub use format::compact_tokens;
+pub use format::{compact_tokens, plural};
 pub mod goal_report;
 pub mod help_report;
 pub mod keymap;

@@ -251,13 +251,27 @@ impl App {
         if expired_approvals > 0 {
             self.transcript.push_notice(
                 NoticeKind::Approval,
-                format!("timed out {expired_approvals} pending approval request(s)"),
+                format!(
+                    "timed out {}",
+                    smith_client::plural(
+                        expired_approvals,
+                        "pending approval request",
+                        "pending approval requests"
+                    )
+                ),
             );
         }
         if expired_questions > 0 {
             self.transcript.push_notice(
                 NoticeKind::Questionnaire,
-                format!("timed out {expired_questions} pending question request(s)"),
+                format!(
+                    "timed out {}",
+                    smith_client::plural(
+                        expired_questions,
+                        "pending question request",
+                        "pending question requests"
+                    )
+                ),
             );
         }
         self.present_next_prompt();

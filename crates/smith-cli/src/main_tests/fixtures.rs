@@ -723,6 +723,8 @@ fn fixture_local_app(planned: bool, usage: bool) -> App {
         app.status.record_compaction(250);
     }
     if usage {
+        // These usage fixtures represent one user prompt, not provider attempts.
+        app.status.record_user_turn();
         app.status.record_usage(
             &agent_runtime_core::usage::UsageDelta::new()
                 .with(CounterKind::InputUncached, 1_000)
@@ -731,6 +733,20 @@ fn fixture_local_app(planned: bool, usage: bool) -> App {
         );
     }
     app
+}
+
+#[test]
+fn usage_fixture_builders_seed_one_user_turn() {
+    for planned in [false, true] {
+        let app = fixture_local_app(planned, true);
+        let usage = app.status.session_usage();
+        assert_eq!(usage.turns, 1);
+        assert!(usage.render().expect("usage").starts_with("1 turn ·"));
+    }
+    assert_eq!(
+        fixture_local_app(true, false).status.session_usage().turns,
+        0
+    );
 }
 
 fn fixture_raw_and_view(app: &App, normalizer: &mut fixture_support::Normalizer) -> (String, App) {

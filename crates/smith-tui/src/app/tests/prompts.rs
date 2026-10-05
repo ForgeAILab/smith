@@ -269,6 +269,13 @@
             Some((request_id, QuestionnaireResolution::TimedOut))
                 if request_id == "expired"
         ));
+        assert!(app.transcript.blocks().iter().any(|block| matches!(
+            block,
+            Block::Notice { kind: source, text }
+                if source.label() == "questionnaire" && matches!(text.as_str(),
+                    "timed out 1 pending question request" | "question timed out before it could be presented"
+                )
+        )));
         assert!(matches!(app.overlay, Some(Overlay::Questionnaire { .. })));
         app.on_key(key(KeyCode::Esc));
         assert!(matches!(
@@ -362,10 +369,13 @@
             decision.await.expect("timeout decision"),
             ApprovalDecision::TimedOut
         );
+        // Under load the deadline may pass before presentation; both paths expire.
         assert!(app.transcript.blocks().iter().any(|block| matches!(
             block,
             Block::Notice { kind: source, text }
-                if source.label() == "approval" && text.contains("timed out")
+                if source.label() == "approval" && matches!(text.as_str(),
+                    "timed out 1 pending approval request" | "approval timed out before it could be presented"
+                )
         )));
     }
 

@@ -1,4 +1,19 @@
-//! Shared token and currency precision for session accounting.
+//! Shared count wording and token and currency precision for client surfaces.
+
+/// Keeps count labels consistent across client surfaces, including zero counts
+/// and irregular plurals supplied by the caller.
+pub fn plural<T: std::fmt::Display + PartialEq + From<u8>>(
+    count: T,
+    singular: &str,
+    plural: &str,
+) -> String {
+    let noun = if count == T::from(1) {
+        singular
+    } else {
+        plural
+    };
+    format!("{count} {noun}")
+}
 
 /// Formats a token count compactly: `847`, `12.4k`, `1.2M`.
 pub fn compact_tokens(value: u64) -> String {
@@ -44,6 +59,14 @@ pub(crate) fn format_usd(micro_usd: u128) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn count_labels_use_singular_only_for_one() {
+        assert_eq!(plural(0_u32, "turn", "turns"), "0 turns");
+        assert_eq!(plural(1_u64, "turn", "turns"), "1 turn");
+        assert_eq!(plural(2_usize, "turn", "turns"), "2 turns");
+        assert_eq!(plural(2_u32, "child", "children"), "2 children");
+    }
 
     #[test]
     fn token_counts_are_compact_and_lose_a_pointless_decimal() {

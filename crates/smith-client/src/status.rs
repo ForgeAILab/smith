@@ -25,7 +25,7 @@ use agent_runtime_core::usage::{CounterKind, UsageDelta, UsageRecord, UsageSourc
 use smith_runtime::advisor::ADVISOR_USAGE_PURPOSE;
 use smith_runtime::client::{EstimationConfidence, SmithEvent as EventEnvelope};
 
-use crate::format::{compact_tokens, format_usd};
+use crate::format::{compact_tokens, format_usd, plural};
 
 use crate::cache::{CacheLifecycleSummary, CachePrice, CacheProjection, CacheTurnSummary};
 
@@ -367,7 +367,7 @@ impl BindingUsage {
 pub struct SessionUsage {
     /// Presentation-only attribution alongside unchanged root/child rollups.
     pub bindings: Vec<BindingUsage>,
-    /// Turns that produced provider usage.
+    /// User-started root conversation turns, independent of provider attempts.
     pub turns: u32,
     /// Whether any counter came from the provider rather than an estimate.
     pub reported: bool,
@@ -556,8 +556,8 @@ impl SessionUsage {
         if !self.delegated_totals.is_empty() {
             let agent_parts = render_counter_parts(&self.delegated_totals, mark);
             lines.push(format!(
-                "  agents: {} agent(s) · {}",
-                self.delegated_contributors,
+                "  agents: {} · {}",
+                plural(self.delegated_contributors, "agent", "agents"),
                 agent_parts.join(" · "),
             ));
         }
@@ -616,8 +616,8 @@ fn merge_counter_totals(
     merged
 }
 
-/// The shared `N turn(s) · … [· estimated] [· N compaction(s) …]` shape
-/// both the root line and the merged total line render.
+/// Keeps root usage counts and compaction wording consistent across surfaces;
+/// provider attempts never substitute for the user-started turn count.
 fn format_usage_line(
     turns: u32,
     parts: &[String],
@@ -625,17 +625,19 @@ fn format_usage_line(
     compactions: u32,
     reclaimed_tokens: u64,
 ) -> String {
+    let turns = plural(turns, "turn", "turns");
     let mut line = if parts.is_empty() {
-        format!("{turns} turn(s)")
+        turns
     } else {
-        format!("{turns} turn(s) · {}", parts.join(" · "))
+        format!("{turns} · {}", parts.join(" · "))
     };
     if !reported {
         line.push_str(" · estimated");
     }
     if compactions > 0 {
         line.push_str(&format!(
-            " · {compactions} compaction(s) reclaiming {}",
+            " · {} reclaiming {}",
+            plural(compactions, "compaction", "compactions"),
             compact_tokens(reclaimed_tokens)
         ));
     }
@@ -1054,6 +1056,18 @@ impl Status {
         })
     }
 
+    /// Counts admission of a user-started root turn so retries and tool calls
+    /// cannot inflate the conversation count. Internal turns use no admission.
+    pub fn record_user_turn(&mut self) {
+        self.turns = self.turns.saturating_add(1);
+    }
+
+    /// Seeds the durable completed-turn identity used by session listings.
+    /// Usage records carry provider attempts, so cannot reconstruct this count.
+    pub fn restore_turn_count(&mut self, turns: u64) {
+        self.turns = u32::try_from(turns).unwrap_or(u32::MAX);
+    }
+
     /// Folds a provider-reported usage delta into the running totals.
     ///
     /// Input categories are disjoint in the runtime's accounting, so context is
@@ -1073,7 +1087,6 @@ impl Status {
         }
         self.usage_reported = true;
         self.context = TokenCount::reported(self.context.value.saturating_add(input));
-        self.turns = self.turns.saturating_add(1);
         if let Some(binding) = &mut self.active_binding {
             binding.record(delta, true);
         }
@@ -1561,7 +1574,7 @@ mod tests {
         let mut usage = status.session_usage();
         assert_eq!(usage.total_tokens(), 100);
         assert_eq!(usage.merged_total_tokens(), 190);
-        assert_eq!(usage.turns, 1);
+        assert_eq!(usage.turns, 0);
         assert_eq!(status.context, TokenCount::reported(100));
         assert!(usage.render().expect("usage").contains("  advisor:"));
         assert_eq!(
@@ -1626,7 +1639,7 @@ mod tests {
         });
 
         let usage = status.session_usage();
-        assert_eq!(usage.turns, 1);
+        assert_eq!(usage.turns, 0);
         assert_eq!(usage.totals[&CounterKind::InputUncached], 1_000);
         assert_eq!(usage.totals[&CounterKind::Output], 50);
         assert_eq!(usage.synthetic_totals[&CounterKind::InputUncached], 100);

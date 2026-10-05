@@ -830,7 +830,7 @@
             .collect();
         assert_eq!(
             stream_notices,
-            vec!["live stream lagged; recovered 5 skipped event(s) from the session journal"],
+            vec!["live stream lagged; recovered 5 skipped events from the session journal"],
             "two accumulated recoveries must collapse into one line: {:?}",
             app.transcript.blocks()
         );
@@ -1391,7 +1391,7 @@
         assert!(app.transcript.blocks().iter().any(|block| matches!(
             block,
             Block::Notice { kind: source, text }
-                if source.label() == "integrity" && text.contains("unterminated")
+                if source.label() == "integrity" && text == "discarded 1 unterminated speculative provider attempt at turn completion"
         )));
         assert!(!format!("{:?}", app.transcript.blocks()).contains("orphaned draft"));
     }
@@ -1784,4 +1784,53 @@
                 "assistant: the version is 3".to_owned(),
             ]
         );
+    }
+
+
+    #[test]
+    fn session_usage_counts_root_prompts_instead_of_tool_provider_attempts() {
+        let mut resumed = app();
+        resumed.status.restore_turn_count(2);
+        for (turn, expected) in [("turn-3", 3), ("turn-4", 4)] {
+            resumed.apply(&turn_event(turn, RuntimeEvent::TurnStarted));
+            for index in 0..4 {
+                resumed.apply(&turn_event(
+                    turn,
+                    usage_event(UsageDelta::new().with(CounterKind::InputUncached, 100)),
+                ));
+                if index < 3 {
+                    let call = format!("call-{turn}-{index}");
+                    resumed.apply(&turn_event(turn, tool_requested(&call, "read")));
+                    resumed.apply(&turn_event(turn, tool_completed(&call, "read", false)));
+                }
+            }
+            resumed.apply(&turn_event(turn, RuntimeEvent::TurnCompleted {
+                finish: TurnFinish::Completed,
+                visible_output: true,
+            }));
+            let usage = resumed.session_usage();
+            assert_eq!(usage.turns, expected);
+            assert!(usage.render().expect("usage").starts_with(&format!("{expected} turns ·")));
+        }
+        let mut fresh = app();
+        fresh.apply(&turn_event("turn-1", RuntimeEvent::TurnStarted));
+        for _ in 0..4 {
+            fresh.apply(&turn_event(
+                "turn-1",
+                usage_event(UsageDelta::new().with(CounterKind::InputUncached, 100)),
+            ));
+        }
+        assert!(fresh.session_usage().render().expect("usage").starts_with("1 turn ·"));
+        fresh.apply(&turn_event("turn-2", RuntimeEvent::TurnStarted));
+        assert!(fresh.session_usage().render().expect("usage").starts_with("2 turns ·"));
+        fresh.apply(&turn_event("internal", RuntimeEvent::InternalTurnStarted {
+            source: agent_runtime_core::content::InternalTurnSource {
+                kind: "goal".into(),
+                id: "goal".into(),
+                revision: agent_runtime_registry::RegistryRevision::new("test"),
+                sensitivity: agent_runtime_core::content::InternalTurnSensitivity::Public,
+                goal: None,
+            },
+        }));
+        assert_eq!(fresh.session_usage().turns, 2);
     }

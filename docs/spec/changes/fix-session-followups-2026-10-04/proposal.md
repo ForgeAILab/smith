@@ -35,6 +35,9 @@ everything then push", 2026-10-04):
   command docs say latest prompt.
 - When the interactive surface ends a session with no user message, its
   files are removed.
+- User-visible counts drop `(s)` (`1 agent`, `1 compaction`), and the
+  catalog model list in setup and `/connect` uses compact sizes; both were
+  found in the live check of these follow-ups.
 - The GLM quick start proposes `glm-5.3` from a new trusted catalog record
   (same limits as 5.2; catalog revision bumped); 5.2 and 4.7 records stay
   for existing configurations.

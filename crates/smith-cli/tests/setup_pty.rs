@@ -511,7 +511,7 @@ expect {
         "screen: {screen}\nstderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(screen.contains("zai/glm-5.2"), "{screen}");
+    assert!(screen.contains("zai/glm-5.3"), "{screen}");
     assert!(
         !screen.contains("Setup cancelled · nothing was written"),
         "{screen}"
@@ -579,7 +579,7 @@ expect {{
     );
     assert!(screen.contains("[redacted]"), "{screen}");
     assert!(!screen.contains(SECRET), "{screen}");
-    assert!(screen.contains("zai/glm-5.2"), "{screen}");
+    assert!(screen.contains("zai/glm-5.3"), "{screen}");
     assert!(screen.contains("TERMINAL_RESTORED"), "{screen}");
 
     let path = fixture.home.path().join(".smith/config.toml");
@@ -1084,13 +1084,45 @@ expect {
     let listed = fixture.run_headless(&["sessions", "list"]);
     assert!(listed.status.success());
     let listing = String::from_utf8_lossy(&listed.stdout);
-    let rows = listing.lines().collect::<Vec<_>>();
-    assert_eq!(
-        rows.len(),
-        1,
-        "piped listing must keep the empty session: {listing}"
+    assert!(
+        listing.is_empty(),
+        "piped listing must omit empty sessions: {listing}"
     );
-    assert!(rows[0].ends_with("\t0\t?/?\tno user preview"), "{listing}");
+    let sessions = fixture.home.path().join(".smith/sessions");
+    for project in std::fs::read_dir(sessions).expect("session projects") {
+        let project = project.expect("project directory");
+        for file in std::fs::read_dir(project.path()).expect("session files") {
+            let file = file.expect("session file");
+            let name = file.file_name();
+            let name = name.to_string_lossy();
+            assert!(
+                !name.ends_with(".snapshot.json"),
+                "empty snapshot survived: {name}"
+            );
+            assert!(
+                !name.ends_with(".session.lock"),
+                "empty lease survived: {name}"
+            );
+            assert!(
+                !name.ends_with(".shell.jsonl"),
+                "empty shell sidecar survived: {name}"
+            );
+            assert!(
+                !name.ends_with(".checkpoint.bin"),
+                "empty checkpoint survived: {name}"
+            );
+            assert!(
+                !name.ends_with(".checkpoint.lock"),
+                "empty checkpoint lease survived: {name}"
+            );
+            assert!(
+                !name.ends_with(".jsonl")
+                    || name == "usage.jsonl"
+                    || name.ends_with(".changes.jsonl"),
+                "empty journal survived: {name}"
+            );
+        }
+    }
 
     let empty_resume = r#"
 expect {

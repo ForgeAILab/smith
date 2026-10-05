@@ -1,0 +1,32 @@
+● provider · Connected OpenRouter
+
+● provider · Disconnected `openrouter` without changing its endpoint, models, profiles, or defaults.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Connect xAI
+
+  Enter code: <code>
+  Open: https://accounts.x.ai/oauth2/device?user_code=<code>
+  A browser window was requested.
+
+  Waiting for xAI...
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  esc cancel                                                                 zai/glm-5.2 · glm · ask

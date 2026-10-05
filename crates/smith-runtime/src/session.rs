@@ -212,6 +212,36 @@ impl SessionPaths {
         Ok(self.directory.join(format!("{}.jsonl", session.as_str())))
     }
 
+    /// Removes exactly this session's persistence files after its host releases
+    /// all writer leases. Validation happens before deletion so an invalid id
+    /// cannot escape the project directory; missing files are harmless.
+    /// The caller decides whether history is empty and may ignore I/O failures.
+    pub async fn remove_session_files(&self, session: &SessionId) -> Result<(), RuntimeError> {
+        let files = [
+            self.snapshot(session)?,
+            self.journal(session)?,
+            self.lifecycle_lock(session)?,
+            self.shell(session)?,
+            self.checkpoint(session)?,
+            self.checkpoint_lock(session)?,
+        ];
+        let mut failure = None;
+        for path in files {
+            if let Err(error) = tokio::fs::remove_file(&path).await
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                failure = Some(RuntimeError::new(
+                    ErrorKind::Internal,
+                    format!("removing session file {}: {error}", path.display()),
+                ));
+            }
+        }
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
     /// The bounded per-task output spool directory for `session`.
     ///
     /// Background task output is not conversation content and is never
@@ -683,6 +713,56 @@ mod tests {
         assert!(paths.journal(&SessionId::new("../../escape")).is_err());
         assert!(paths.shell(&SessionId::new("../../escape")).is_err());
         assert!(paths.tasks_dir(&SessionId::new("../../escape")).is_err());
+    }
+
+    #[tokio::test]
+    async fn removing_one_session_deletes_only_its_six_files_and_rejects_escaping_ids() {
+        let root = tempfile::tempdir().expect("root");
+        let paths = SessionPaths::new(root.path(), &project());
+        std::fs::create_dir_all(paths.directory()).expect("directory");
+        let suffixes = [
+            ".snapshot.json",
+            ".jsonl",
+            ".session.lock",
+            ".shell.jsonl",
+            ".checkpoint.bin",
+            ".checkpoint.lock",
+        ];
+        for id in ["empty", "other"] {
+            for suffix in suffixes {
+                std::fs::write(paths.directory().join(format!("{id}{suffix}")), "file")
+                    .expect("file");
+            }
+        }
+        let retained = paths
+            .changes(&SessionId::new("empty"))
+            .expect("changes path");
+        std::fs::write(&retained, "file").expect("changes file");
+        assert!(
+            paths
+                .remove_session_files(&SessionId::new("../../escape"))
+                .await
+                .is_err()
+        );
+        assert!(
+            paths
+                .snapshot(&SessionId::new("empty"))
+                .expect("path")
+                .exists()
+        );
+        paths
+            .remove_session_files(&SessionId::new("empty"))
+            .await
+            .expect("remove");
+        paths
+            .remove_session_files(&SessionId::new("empty"))
+            .await
+            .expect("missing is harmless");
+        for suffix in suffixes {
+            assert!(!paths.directory().join(format!("empty{suffix}")).exists());
+            assert!(paths.directory().join(format!("other{suffix}")).exists());
+        }
+        assert!(retained.exists());
     }
 
     #[test]

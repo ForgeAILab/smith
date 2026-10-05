@@ -87,7 +87,11 @@ impl GitChanges {
             if text.trim().is_empty() {
                 "clean".to_owned()
             } else {
-                format!("{} changed path(s)", text.lines().count())
+                let count = text.lines().count();
+                format!(
+                    "{count} changed {}",
+                    if count == 1 { "path" } else { "paths" }
+                )
             }
         })
     }
@@ -449,8 +453,9 @@ fn select_hunk(patch: &str, wanted: usize) -> Result<String, RuntimeError> {
         .collect::<Vec<_>>();
     let Some(&start) = starts.get(wanted - 1) else {
         return Err(unavailable(format!(
-            "hunk {wanted} does not exist; this file has {} hunk(s)",
-            starts.len()
+            "hunk {wanted} does not exist; this file has {} {}",
+            starts.len(),
+            if starts.len() == 1 { "hunk" } else { "hunks" }
         )));
     };
     let end = starts.get(wanted).copied().unwrap_or(lines.len());
@@ -614,6 +619,26 @@ mod tests {
         git(dir.path(), &["add", "tracked.txt"]);
         git(dir.path(), &["commit", "-qm", "initial"]);
         dir
+    }
+
+    #[test]
+    fn local_git_status_and_hunk_errors_use_singular_and_plural_counts() {
+        let dir = repository();
+        let changes = GitChanges::discover(dir.path()).expect("repo");
+        assert_eq!(changes.status_summary().expect("status"), "clean");
+        std::fs::write(dir.path().join("tracked.txt"), "after\n").expect("write");
+        assert_eq!(changes.status_summary().expect("status"), "1 changed path");
+        std::fs::write(dir.path().join("new.txt"), "new\n").expect("write");
+        assert_eq!(changes.status_summary().expect("status"), "2 changed paths");
+        let error = changes
+            .preview_revert("tracked.txt#2")
+            .expect_err("missing hunk");
+        assert_eq!(error.message, "hunk 2 does not exist; this file has 1 hunk");
+        let patch = "--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new\n@@ -9 +9 @@\n-old\n+new\n";
+        assert_eq!(
+            select_hunk(patch, 3).expect_err("missing hunk").message,
+            "hunk 3 does not exist; this file has 2 hunks"
+        );
     }
 
     #[test]

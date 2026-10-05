@@ -14,6 +14,6 @@ project: <PROJECT>
 Git: unavailable (not a Git worktree)
 goal: none
 children: 0
-usage: 1 turn(s) · input 1k · cached 800 · output 120 · 1 compaction(s) reclaiming 250
+usage: 1 turn · input 1k · cached 800 · output 120 · 1 compaction reclaiming 250
 cost: $0.003 exact · local/example-model
 /diagnostics shows detailed cache and recovery information

@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chacha20poly1305::aead::Generate;
+use smith_client::{compact_tokens, plural};
 use smith_config::credential::{
     CredentialEnroller, CredentialEnrollmentError, CredentialRef, EnrollmentReceipt,
     setup_environment_reference, setup_keychain_reference,
@@ -24,7 +25,7 @@ use smith_config::model::{
 };
 use smith_config::resolve::{ConfigReadiness, ResolveRequest, inspect};
 use smith_config::setup::{
-    CHATGPT_PROVIDER, CHATGPT_TERRA, GLM_5_2, GLM_ENDPOINT, GLM_PROFILE, GLM_PROVIDER,
+    CHATGPT_PROVIDER, CHATGPT_TERRA, GLM_5_3, GLM_ENDPOINT, GLM_PROFILE, GLM_PROVIDER,
     GOOGLE_PROFILE, GOOGLE_PROVIDER, ProviderSetupDescriptor, ProviderSetupFlow, QuickKeySetup,
     SETUP_ENVIRONMENT_VARIABLE_ERROR, SETUP_PROVIDER_NAME_HELP, XAI_ENDPOINT, XAI_PROFILE,
     XAI_PROVIDER, connectable_provider_descriptors, provider_descriptors, setup_endpoint_help,
@@ -598,11 +599,11 @@ fn catalog_model_entries(
             model.id.clone(),
             model.name.clone(),
             format!(
-                "{} · ctx {} · input {} · output {}{}",
+                "{} · {} context · {} input · {} output{}",
                 model.id,
-                limits.context_tokens,
-                limits.max_input_tokens,
-                limits.max_output_tokens,
+                compact_tokens(u64::from(limits.context_tokens)),
+                compact_tokens(u64::from(limits.max_input_tokens)),
+                compact_tokens(u64::from(limits.max_output_tokens)),
                 if model.reasoning { " · reasoning" } else { "" }
             ),
         ));
@@ -842,9 +843,9 @@ fn provider_entries(inventory: &SelectionInventory) -> Vec<ResourceEntry> {
                 provider.name.clone(),
                 provider.name.clone(),
                 format!(
-                    "{} · {} model(s)",
+                    "{} · {}",
                     provider.kind.as_deref().unwrap_or("unknown adapter"),
-                    provider.model_count
+                    plural(provider.model_count, "model", "models")
                 ),
             )
             .active(provider.active);
@@ -1241,11 +1242,11 @@ fn setup_plan(submission: SetupSubmission) -> Result<SetupPlan> {
                     },
                 )]),
                 models: BTreeMap::from([(
-                    format!("{GLM_PROVIDER}/{}", GLM_5_2.model),
+                    format!("{GLM_PROVIDER}/{}", GLM_5_3.model),
                     ModelSection {
-                        context_tokens: Some(GLM_5_2.context_tokens),
-                        max_input_tokens: Some(GLM_5_2.max_input_tokens),
-                        max_output_tokens: Some(GLM_5_2.max_output_tokens),
+                        context_tokens: Some(GLM_5_3.context_tokens),
+                        max_input_tokens: Some(GLM_5_3.max_input_tokens),
+                        max_output_tokens: Some(GLM_5_3.max_output_tokens),
                         ..ModelSection::default()
                     },
                 )]),
@@ -1255,8 +1256,8 @@ fn setup_plan(submission: SetupSubmission) -> Result<SetupPlan> {
                 &mut patch,
                 GLM_PROFILE,
                 GLM_PROVIDER,
-                GLM_5_2.model,
-                GLM_5_2.request_output_tokens,
+                GLM_5_3.model,
+                GLM_5_3.request_output_tokens,
             );
             if let Some(profile) = patch.profiles.get_mut(GLM_PROFILE) {
                 // The trusted catalog contributes the request budget with
@@ -1614,6 +1615,25 @@ mod tests {
 
     fn setup_key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn catalog_model_choices_keep_ids_first_and_use_compact_limits() {
+        let context = setup_context_for(PathBuf::from("<HOME>"), PathBuf::from("<PROJECT>"));
+        let (entries, limits) =
+            catalog_model_entries(&context, "openrouter", "OpenRouter").expect("catalog models");
+        let entry = entries
+            .iter()
+            .find(|entry| entry.id == "aion-labs/aion-2.0")
+            .expect("Aion model");
+        assert_eq!(
+            entry.description,
+            "aion-labs/aion-2.0 · 131k context · 131k input · 32.7k output · reasoning"
+        );
+        let model_limits = limits.get(&entry.id).expect("model limits");
+        assert_eq!(model_limits.context_tokens, 131_072);
+        assert_eq!(model_limits.max_input_tokens, 131_072);
+        assert_eq!(model_limits.max_output_tokens, 32_768);
     }
 
     #[test]
@@ -2096,7 +2116,7 @@ mod tests {
         assert!(serialized.contains("keychain:smith/zai"));
         assert!(serialized.contains("reasoning_only = \"text\""));
         assert_eq!(
-            plan.patch.models["zai/glm-5.2"].context_tokens,
+            plan.patch.models["zai/glm-5.3"].context_tokens,
             Some(1_000_000)
         );
         assert_eq!(plan.patch.profiles[GLM_PROFILE].max_output_tokens, None);

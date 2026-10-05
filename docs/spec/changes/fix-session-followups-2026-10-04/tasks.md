@@ -8,16 +8,21 @@ Approved 2026-10-04 ("i think lets fix everything then push").
 
 ## 1. Implementation
 
-- [ ] 1.1 Usage line counts user-started turns, `1 turn` / `N turns`; every
+- [x] 1.1 Usage line counts user-started turns, `1 turn` / `N turns`; every
   surface that prints the session usage line follows.
-- [ ] 1.2 Resume attributes restored usage per model from the usage log's
+- [x] 1.2 Resume attributes restored usage per model from the usage log's
   last record for the session when its totals match; manifest rule otherwise.
-- [ ] 1.3 Both forms of `smith sessions list` omit sessions without a user
+- [x] 1.3 Both forms of `smith sessions list` omit sessions without a user
   message; `LATEST PROMPT` header; plugin docs say latest prompt.
-- [ ] 1.4 Remove an empty session's files when the interactive surface ends
+- [x] 1.4 Remove an empty session's files when the interactive surface ends
   it.
-- [ ] 1.5 GLM quick start proposes `glm-5.3` from a new trusted record;
+- [x] 1.5 GLM quick start proposes `glm-5.3` from a new trusted record;
   catalog revision bumped; older records kept.
+- [x] 1.6 User-visible counts read `1 agent` / `2 agents`, `1 compaction`,
+  and so on, through one helper; tool-result text the model reads is left
+  alone. Found in the live check (`1 agent(s)` in the exit report).
+- [x] 1.7 Setup's and `/connect`'s catalog model list uses compact sizes
+  (`131k context`), not raw integers. Found in the live check.
 
 ## 2. Verification
 

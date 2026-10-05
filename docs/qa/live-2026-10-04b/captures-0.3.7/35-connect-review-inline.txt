@@ -1,0 +1,32 @@
+  Get started
+  Type a task below and press Enter.
+
+  /model    Switch model
+  /connect  Connect or reconnect a provider
+  /help     List commands and keys
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Connect OpenRouter · Choose default model · type to filter                                   1/323
+
+❯ Aion-2.0                             aion-labs/aion-2.0 · ctx 131072 · input 131072 · output…
+  Aion-3.0                             aion-labs/aion-3.0 · ctx 131072 · input 131072 · output…
+  Aion-3.0-Mini                        aion-labs/aion-3.0-mini · ctx 131072 · input 131072 · output…
+  Aion 3.5                             aion-labs/aion-3.5 · ctx 262144 · input 262144 · output…
+  Aion 3.5 Mini                        aion-labs/aion-3.5-mini · ctx 262144 · input 262144 · output…
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ↑↓ choose · enter confirm · esc back                                       zai/glm-5.2 · glm · ask
