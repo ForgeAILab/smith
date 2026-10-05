@@ -880,7 +880,7 @@ impl SetupApp {
         let destination = review_destination(&self.destination, home.as_deref().map(Path::new));
         rows.push((
             "Writes",
-            format!("{destination}, then checks the connection"),
+            format!("{destination}, then checks the configuration"),
         ));
         rows
     }
@@ -1056,6 +1056,13 @@ impl SetupApp {
 
     fn back(&mut self) {
         if let Some(step) = self.history.pop() {
+            // The variable name is non-secret, so even an unsubmitted correction
+            // must survive leaving its field and choosing the method again.
+            if self.step == Step::CredentialValue
+                && self.credential_method == Some(CredentialMethod::Environment)
+            {
+                self.environment_variable.clone_from(&self.input);
+            }
             self.step = step;
             self.review_scroll.set(ReviewScroll::default());
             self.input = match step {
@@ -1295,6 +1302,7 @@ impl SetupApp {
                     self.secret.clear();
                     self.credential_method = Some(CredentialMethod::Environment);
                     self.enter(Step::CredentialValue, true);
+                    self.input.clone_from(&self.environment_variable);
                 }
                 _ => {}
             },
@@ -2118,6 +2126,71 @@ mod tests {
     }
 
     #[test]
+    fn environment_variable_name_survives_back_and_forward() {
+        for back in [KeyCode::Esc, KeyCode::BackTab] {
+            for submitted in [false, true] {
+                let mut app = setup_app(SetupMode::FirstRun, Vec::new(), Vec::new());
+                app.on_key(key(KeyCode::Char('1')));
+                app.on_key(key(KeyCode::Char('4')));
+                for character in "ZAI_API_KEY".chars() {
+                    app.on_key(key(KeyCode::Char(character)));
+                }
+                if submitted {
+                    app.on_key(key(KeyCode::Enter));
+                    assert_eq!(app.step, Step::Review);
+                    app.on_key(key(back));
+                    assert_eq!(app.input, "ZAI_API_KEY");
+                    app.on_paste("_CORRECTED");
+                }
+                let expected = app.input.clone();
+                app.on_key(key(back));
+                assert_eq!(app.step, Step::CredentialMethod);
+                app.on_key(key(back));
+                assert_eq!(app.step, Step::Action);
+                app.on_key(key(KeyCode::Char('1')));
+                app.on_key(key(KeyCode::Char('4')));
+                assert_eq!(app.step, Step::CredentialValue);
+                assert_eq!(app.input, expected);
+                assert!(render_setup(&app, 100, 32).contains(&expected));
+                app.on_key(key(KeyCode::Enter));
+                assert_eq!(app.step, Step::Review);
+                let SetupEffect::Submit {
+                    submission: SetupSubmission::QuickGlm { credential },
+                    ..
+                } = app.on_key(key(KeyCode::Enter))
+                else {
+                    panic!("restored environment reference reaches submission");
+                };
+                assert!(
+                    matches!(credential, SetupCredential::Environment(name) if name == expected)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn returning_to_a_secret_field_never_restores_the_key_or_variable_name() {
+        for method in ["keychain", "config"] {
+            let mut app = setup_app(SetupMode::FirstRun, Vec::new(), Vec::new());
+            choose(&mut app, "glm");
+            choose(&mut app, "environment");
+            app.on_paste("ZAI_API_KEY");
+            app.on_key(key(KeyCode::Esc));
+            choose(&mut app, method);
+            assert!(app.input.is_empty());
+            app.on_paste("sk-never-restored");
+            app.on_key(key(KeyCode::Enter));
+            app.on_key(key(KeyCode::Esc));
+            assert!(app.secret.is_empty());
+            app.on_key(key(KeyCode::Esc));
+            choose(&mut app, method);
+            assert!(app.input.is_empty());
+            assert!(app.secret.is_empty());
+            assert!(!render_setup(&app, 100, 32).contains("sk-never-restored"));
+        }
+    }
+
+    #[test]
     fn ctrl_c_cancels_review_and_busy_steps_without_submitting() {
         let mut review = glm_environment_review();
         assert!(matches!(
@@ -2523,6 +2596,13 @@ mod tests {
             let scroll = review.review_scroll.get();
             assert_eq!(scroll.offset, scroll.limit);
             assert!(!text.contains("Smith setup"), "{text}");
+            assert!(!text.contains("? for shortcuts"), "{text}");
+            assert!(
+                rows.last()
+                    .expect("hint row")
+                    .starts_with("  enter confirm · esc back"),
+                "{text}"
+            );
             assert_eq!(backdrop.composer.text(), "retained draft");
         }
     }
@@ -2619,7 +2699,7 @@ mod tests {
         assert_eq!(rows[5], "Default      profile glm");
         assert_eq!(
             rows[6],
-            "Writes       ~/.smith/config.toml, then checks the connection"
+            "Writes       ~/.smith/config.toml, then checks the configuration"
         );
         let text = rows.join("\n");
         for old in [
@@ -2732,7 +2812,7 @@ mod tests {
                 "long path must retain every character: {rendered}"
             );
             assert!(
-                writes.join(" ").contains("then checks the connection"),
+                writes.join(" ").contains("then checks the configuration"),
                 "{rendered}"
             );
         }
@@ -2788,7 +2868,7 @@ mod tests {
                         last.split_whitespace()
                             .collect::<Vec<_>>()
                             .join(" ")
-                            .contains("then checks the connection"),
+                            .contains("then checks the configuration"),
                         "{last}"
                     );
                     if collisions {

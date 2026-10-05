@@ -82,14 +82,14 @@ Findings R1–R4, S1–S6, C1, C2, M1 from
 Approved 2026-10-04 ("yes please"); N1–N5 from the 0.3.7 re-check in
 `docs/qa/live-2026-10-04b/findings.md`.
 
-- [ ] 7.1 The environment-variable name is kept when the user goes back past
+- [x] 7.1 The environment-variable name is kept when the user goes back past
   its field and forward again, like other non-secret values (N1).
-- [ ] 7.2 Cancelling setup after a failed check prints only
+- [x] 7.2 Cancelling setup after a failed check prints only
   `Setup cancelled · nothing was written`, not the stale error (N2).
 - [ ] 7.3 Keys typed while the host rebuilds reach the rebuilt session's
   composer in order (N3).
-- [ ] 7.4 While a `/connect` step is open the hint row shows the step's keys,
+- [x] 7.4 While a `/connect` step is open the hint row shows the step's keys,
   not `? for shortcuts`, as in-session pickers do (N4).
-- [ ] 7.5 The review's last row says `then checks the configuration` (N5).
+- [x] 7.5 The review's last row says `then checks the configuration` (N5).
 - [ ] 7.6 Tests for each; gate; live re-check of N1–N5 on the release build.
 

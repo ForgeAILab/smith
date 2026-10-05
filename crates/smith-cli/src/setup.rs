@@ -60,10 +60,11 @@ pub(crate) struct SurfaceOutcome {
 }
 
 impl SurfaceOutcome {
-    fn cancelled(messages: Vec<String>) -> Self {
+    /// Earlier recoverable errors belong to their step, not the cancellation report.
+    fn cancelled() -> Self {
         Self {
             outcome: SetupOutcome::Cancelled,
-            messages,
+            messages: Vec::new(),
         }
     }
 }
@@ -466,14 +467,14 @@ pub(crate) async fn run_surface(
             .await?
         {
             ScreenResult::Outcome(()) | ScreenResult::InputEnded => {
-                return Ok(SurfaceOutcome::cancelled(messages));
+                return Ok(SurfaceOutcome::cancelled());
             }
             ScreenResult::Effect(effect) => effect,
             ScreenResult::Completed(never) => match never {},
         };
         match effect {
             SetupEffect::None => {}
-            SetupEffect::Cancel => return Ok(SurfaceOutcome::cancelled(messages)),
+            SetupEffect::Cancel => return Ok(SurfaceOutcome::cancelled()),
             SetupEffect::ConnectChatGpt => {
                 let outcome = crate::connection::connect_chatgpt_from_setup(
                     context.selection.clone(),
@@ -497,7 +498,7 @@ pub(crate) async fn run_surface(
                         });
                     }
                     smith_tui::FlowOutcome::Cancelled => {
-                        return Ok(SurfaceOutcome::cancelled(messages));
+                        return Ok(SurfaceOutcome::cancelled());
                     }
                     smith_tui::FlowOutcome::Back => app.back_from_chatgpt(),
                 }
@@ -521,7 +522,7 @@ pub(crate) async fn run_surface(
                     )
                     .await?;
                 if cancellation.requested() {
-                    return Ok(SurfaceOutcome::cancelled(messages));
+                    return Ok(SurfaceOutcome::cancelled());
                 }
                 app.apply_resolved_limits(resolved);
             }
@@ -543,7 +544,7 @@ pub(crate) async fn run_surface(
                     )
                     .await?
                 {
-                    ApplyOutcome::Cancelled => return Ok(SurfaceOutcome::cancelled(messages)),
+                    ApplyOutcome::Cancelled => return Ok(SurfaceOutcome::cancelled()),
                     ApplyOutcome::Completed => {
                         return Ok(SurfaceOutcome {
                             outcome: SetupOutcome::Completed,
@@ -557,7 +558,7 @@ pub(crate) async fn run_surface(
                     } => {
                         messages.push(message.clone());
                         if cancellation.requested() {
-                            return Ok(SurfaceOutcome::cancelled(messages));
+                            return Ok(SurfaceOutcome::cancelled());
                         }
                         app.fail(message, authentication);
                     }

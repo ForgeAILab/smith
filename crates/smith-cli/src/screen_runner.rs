@@ -479,10 +479,15 @@ mod tests {
 
     #[tokio::test]
     async fn embedded_runner_keeps_the_backdrop_through_credentials_and_cancel() {
-        for (width, height) in [(44, 16), (100, 32)] {
+        for (width, height, draft) in [
+            (44, 16, ""),
+            (44, 16, "retained draft"),
+            (100, 32, ""),
+            (100, 32, "retained draft"),
+        ] {
             let mut app = App::new("gpt-5.3", "~/work/api");
             app.transcript.push_user("retained transcript");
-            app.composer.insert_str("retained draft");
+            app.composer.insert_str(draft);
             let mut terminal =
                 ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height))
                     .expect("terminal");
@@ -508,7 +513,10 @@ mod tests {
                         app: Some(&app),
                         repaints: 0,
                     },
-                    events: input(vec![KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE)]),
+                    events: input(vec![
+                        KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE),
+                        KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
+                    ]),
                     tick: None,
                     theme: Theme::new().without_color().without_motion(),
                     last_drawn_key: None,
@@ -524,13 +532,27 @@ mod tests {
                     let text = screen_text(terminal);
                     for expected in [
                         "retained transcript",
-                        "retained draft",
                         "Connect OpenRouter",
                         "enter continue",
                     ] {
                         assert!(text.contains(expected), "{text}");
                     }
                     assert!(!text.contains("Smith setup"), "{text}");
+                    assert!(text.contains(draft), "{text}");
+                    assert!(!text.contains("? for shortcuts"), "{text}");
+                    assert!(text.lines().any(|row| row.starts_with("› ?")), "{text}");
+                    let hint = text.lines().last().expect("hint row");
+                    assert!(hint.starts_with("  enter continue · esc back"), "{text}");
+                    assert!(
+                        text.lines()
+                            .nth(usize::from(height) - 2)
+                            .expect("lower rule")
+                            .starts_with('─'),
+                        "step keys share the identity row below the composer: {text}"
+                    );
+                    if width == 100 {
+                        assert!(hint.contains("gpt-5.3"), "{text}");
+                    }
                 }
                 session.events = input(vec![
                     KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
@@ -542,7 +564,8 @@ mod tests {
                 ));
                 session.restore().expect("borrowed restore is inert");
             }
-            assert_eq!(app.composer.text(), "retained draft");
+            assert_eq!(app.composer.text(), draft);
+            assert!(app.overlay.is_none());
             assert_eq!(app.transcript.blocks().len(), 1);
         }
     }

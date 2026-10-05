@@ -581,7 +581,7 @@ pub(super) fn draw_identity_footer(frame: &mut Frame<'_>, area: Rect, app: &App,
     draw_identity_footer_with_hint(frame, area, app, theme, composer_hint(app, area.width));
 }
 
-fn draw_identity_footer_with_hint(
+pub(super) fn draw_identity_footer_with_hint(
     frame: &mut Frame<'_>,
     area: Rect,
     app: &App,

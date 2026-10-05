@@ -172,63 +172,30 @@ pub fn draw_with_screen<S: Screen>(
     }
     let composer_rows = composer_rows(app, area.width).saturating_add(2);
     let desired = screen.content_height(area.width);
-    let mut controls_rows = screen
-        .footer()
-        .map(|footer| footer.rows(area.width).len())
-        .unwrap_or(0);
-    if let Some(crate::picker::ScreenFooter::Review { back, scroll: None }) = screen.footer() {
-        let available = area
-            .height
-            .saturating_sub(composer_rows)
-            .saturating_sub(u16::try_from(controls_rows).unwrap_or(u16::MAX))
-            .saturating_sub(4);
-        if desired > available {
-            controls_rows = crate::picker::ScreenFooter::Review {
-                back,
-                scroll: Some((1, 1)),
-            }
-            .rows(area.width)
-            .len();
-        }
-    }
-    let hint_rows = u16::try_from(controls_rows)
-        .unwrap_or(u16::MAX)
-        .saturating_add(1);
     let available = area
         .height
         .saturating_sub(composer_rows)
-        .saturating_sub(hint_rows)
+        .saturating_sub(1)
         .saturating_sub(3);
     let inline_rows = desired.min(available);
-    let [transcript, inline, composer, identity, controls] = Layout::vertical([
+    let [transcript, inline, composer, hint] = Layout::vertical([
         Constraint::Min(3),
         Constraint::Length(inline_rows),
         Constraint::Length(composer_rows),
         Constraint::Length(1),
-        Constraint::Length(hint_rows.saturating_sub(1)),
     ])
     .areas(area);
     draw_transcript(frame, transcript, app, theme);
     draw_composer(frame, composer, app, theme);
-    draw_identity_footer(frame, identity, app, theme);
     if !inline.is_empty() {
         screen.draw_embedded(frame, inline, theme);
     }
     // Drawing may update a review's wrapped-row viewport, so read its footer last.
-    if let Some(footer) = screen.footer() {
-        frame.render_widget(
-            Paragraph::new(
-                footer
-                    .rows(area.width)
-                    .into_iter()
-                    .map(|row| format!("  {row}"))
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            )
-            .style(theme.style(Tone::Dim)),
-            controls,
-        );
-    }
+    let keys = screen
+        .footer()
+        .map(|footer| footer.hint(area.width))
+        .unwrap_or_default();
+    draw_identity_footer_with_hint(frame, hint, app, theme, keys);
     inline
 }
 

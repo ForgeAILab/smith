@@ -283,6 +283,77 @@ fn cancelling_setup_restores_the_terminal_and_writes_nothing() {
 }
 
 #[test]
+fn cancelling_after_failed_setup_check_prints_only_the_cancel_line() {
+    for args in ["--no-color --no-motion", "setup --no-color --no-motion"] {
+        let fixture = Fixture::new();
+        let interaction = r#"
+expect {
+    -exact "Smith setup" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+send -- "1"
+expect {
+    -exact "Authentication" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+send -- "4"
+expect {
+    -exact "Environment variable" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+send -- "SMITH_SETUP_UNSET_API_KEY\r"
+expect {
+    -exact "Review" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+send -- "\r"
+expect {
+    -exact "resolves to nothing" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+send -- "\003"
+expect {
+    -exact "TERMINAL_RESTORED" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+"#;
+        let Some(output) = fixture.run_expect(args, interaction) else {
+            return;
+        };
+        let screen = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "screen: {screen}\nstderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!screen.contains("TERMINAL_DAMAGED"), "{screen}");
+        // Keep the failed check in the alternate screen; after restoration the
+        // only report is cancellation, with the terminal's cursor show removed.
+        let (setup, restored) = screen.split_once("\x1b[?1049l").expect("restored terminal");
+        assert!(setup.contains("resolves to nothing"), "{screen}");
+        let (report, _) = restored
+            .split_once("TERMINAL_RESTORED")
+            .expect("terminal modes restored");
+        assert_eq!(
+            report.replace("\x1b[?25h", "").replace('\r', "").trim(),
+            "Setup cancelled · nothing was written",
+            "{screen}"
+        );
+        assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+        assert!(
+            !fixture.home.path().join(".smith/config.toml").exists(),
+            "cancelled setup retained a config write"
+        );
+    }
+}
+
+#[test]
 fn fresh_glm_setup_reaches_authentication_and_can_cancel_cleanly() {
     let fixture = Fixture::new();
     let interaction = r#"

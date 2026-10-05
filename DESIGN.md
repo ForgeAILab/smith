@@ -149,8 +149,8 @@ value: the total context window. Smith derives the input ceiling from that
 window and the output ceiling from its automatic request-budget rule; it does
 not present separate input/output token fields. The review is one labelled row
 per fact — provider and endpoint, credential reference, model with compact
-limits and their provenance, default, and what confirming writes (the
-user-config destination, `~`-relative, then the local connection check) —
+limits and their provenance, default, and what confirming does (writes to the
+user-config destination, `~`-relative, then checks the configuration) —
 with no internal terms. API-key text is rendered only as masking glyphs.
 Every listed entry starts its flow; an entry that cannot proceed says why.
 Labels and review text are derived from the values that will be written.

@@ -4,6 +4,44 @@ struct EmbeddedFixture {
     rows: u16,
 }
 
+#[test]
+fn embedded_login_choices_put_step_keys_in_the_single_hint_row() {
+    let picker = crate::picker::ResourcePicker::choices(
+        "Connect ChatGPT",
+        vec![
+            crate::picker::ResourceEntry::new("browser", "Browser login", ""),
+            crate::picker::ResourceEntry::new("device", "Device code", ""),
+        ],
+        "",
+    );
+    let app = App::new("gpt-5.3", "~/work/api");
+    for (width, height, keys) in [
+        (44, 16, "enter confirm · esc cancel"),
+        (100, 32, "↑↓ or 1–2 choose · enter confirm · esc cancel"),
+    ] {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                draw_with_screen(frame, &app, &picker, Theme::new().without_color());
+            })
+            .expect("draw");
+        let text = screen_text(terminal.backend().buffer());
+        assert!(!text.contains("? for shortcuts"), "{text}");
+        let hint = text.lines().last().expect("hint row");
+        assert!(hint.starts_with(&format!("  {keys}")), "{text}");
+        assert!(
+            text.lines()
+                .nth(usize::from(height) - 2)
+                .expect("lower rule")
+                .starts_with('─'),
+            "{text}"
+        );
+        if width == 100 {
+            assert!(hint.contains("gpt-5.3"), "{text}");
+        }
+    }
+}
+
 impl crate::screen::Screen for EmbeddedFixture {
     type Outcome = ();
     type Effect = std::convert::Infallible;
@@ -48,6 +86,17 @@ fn embedded_screen_reserves_rows_without_covering_the_draft_or_transcript() {
                 })
                 .expect("draw");
             let text = screen_text(terminal.backend().buffer());
+            assert!(!text.contains("? for shortcuts"), "{text}");
+            let hint = text.lines().last().expect("hint row");
+            assert!(hint.starts_with("  esc cancel"), "{text}");
+            assert!(hint.contains("gpt-5.3"), "{text}");
+            assert!(
+                text.lines()
+                    .nth(usize::from(height) - 2)
+                    .expect("lower rule")
+                    .starts_with('─'),
+                "controls and identity share the only row below the composer: {text}"
+            );
             for expected in [
                 "retained transcript",
                 "Connect OpenRouter",
