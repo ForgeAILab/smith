@@ -45,11 +45,11 @@ Findings R1–R4, S1–S6, C1, C2, M1 from
 - [x] 4.2 Setup wording: welcome line, real credential entry names, no
   untypeable commands or internal terms, plain review with compact sizes and
   `~` paths, `Setup cancelled · nothing was written` (S1–S4, S6).
-- [ ] 4.3 `/connect` runs inside the session: an embedded `ScreenSession`
+- [x] 4.3 `/connect` runs inside the session: an embedded `ScreenSession`
   draws the retained `App` with the connection screen above the composer
   (design revised 2026-10-04, see design.md), rebuild that keeps the screen,
   results as notices instead of `println!` (C1).
-- [ ] 4.4 xAI device login gets a progress screen like ChatGPT's (code, URL,
+- [x] 4.4 xAI device login gets a progress screen like ChatGPT's (code, URL,
   waiting, esc cancels) instead of `println!` lines, so it shows inside a
   session and standalone.
 - [ ] 4.5 Screens repaint whole on a step change (step key on `Screen`,
