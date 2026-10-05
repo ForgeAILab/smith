@@ -114,3 +114,13 @@ three tries (`30-type-after-switch-fixed-*`), a `/connect` step's keys take
 the hint row and `?` stays in the step (`34-n4-connect-hint-row`), and the
 review says `then checks the configuration` (`32-n5-review`).
 
+
+## Cache, 0.3.6 against 0.3.7
+
+`../grammar-2026-10-03/cache_ab.py`, run twice ([first](cache-ab.json),
+[second](cache-ab-2.json)). No build reported a canonical cache miss. Z.AI
+and Gemini matched within provider variance; the second run's GLM turns were
+within 20 tokens of each other. xAI varied on both builds: in the first run
+0.3.7's third turn read 192 cached tokens against 0.3.6's 2,624, and in the
+second 0.3.6's second turn read 192 against 0.3.7's 2,496. Nothing in this
+release changes request composition.
