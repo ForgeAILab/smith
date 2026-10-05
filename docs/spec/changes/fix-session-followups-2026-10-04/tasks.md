@@ -23,10 +23,13 @@ Approved 2026-10-04 ("i think lets fix everything then push").
   alone. Found in the live check (`1 agent(s)` in the exit report).
 - [x] 1.7 Setup's and `/connect`'s catalog model list uses compact sizes
   (`131k context`), not raw integers. Found in the live check.
+- [x] 1.8 Child agents' sessions are not listed by the resume pickers or
+  either form of `smith sessions list`. Found in the live check
+  (`child-session-…` listed after a `sol` child ran).
 
 ## 2. Verification
 
-- [ ] 2.1 Tests for each; fixtures re-recorded and reviewed; gate.
-- [ ] 2.2 Live: a one-prompt session with tool calls exits with `1 turn`;
+- [x] 2.1 Tests for each; fixtures re-recorded and reviewed; gate.
+- [x] 2.2 Live: a one-prompt session with tool calls exits with `1 turn`;
   resuming the GLM-then-Gemini session prices both models; an empty session
   leaves no files; piped listing; setup review shows `glm-5.3`.

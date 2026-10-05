@@ -54,3 +54,21 @@ provider usage SHALL still be offered and kept.
 - **GIVEN** a project holds one session with a prompt and one without
 - **WHEN** `smith sessions list` is piped to another program
 - **THEN** only the session with a prompt is printed
+
+## ADDED Requirements
+
+### Requirement: Child sessions are reached through their parent
+
+Smith SHALL NOT list a child agent's session as a resumable session: the
+resume pickers and both forms of `smith sessions list` MUST omit sessions
+that belong to a parent session. A child stays reachable through its parent
+(`/agent`, follow-up), and an explicit `--resume <ID>` keeps its current
+behaviour.
+
+#### Scenario: A session that spawned a child
+
+- **GIVEN** a session that spawned one durable child agent
+- **WHEN** the user runs `smith sessions list` or opens `/resume`
+- **THEN** the parent session is listed once
+- **AND** no `child-session-…` entry is listed
+

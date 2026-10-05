@@ -1,6 +1,6 @@
-/Users/mai1015/.local/bin/smith --yolo
-/private/tm/cl/-Volumes-Data-codes-ai-t/e/scratchpad/qa-proj main ····················· 21:39:17 ─╮
-❯ /Users/mai1015/.local/bin/smith --yolo                                                         ─╯
+smith --yolo
+<prompt> main ····················· 21:39:17 ─╮
+❯ smith --yolo                                                         ─╯
 total · input 4.3k · cached 9.5k · output 218
   root: 4 turn(s) · input 3.8k · cached 9.5k · output 213
   agents: 1 agent(s) · input 579 · output 5
@@ -8,7 +8,7 @@ total · input 4.3k · cached 9.5k · output 218
 prompt cache: 64% of input read from cache · 6.4k cached tokens (last turn)
 resume with smith --resume session-19790e96-0188-47b5-9d70-e56262dc25f6
 
-/private/tm/cl/-Volumes-Data-codes-ai-t/e/scratchpad/qa-proj main ··············· 1m 9s 21:40:27 ─╮
+<prompt> main ··············· 1m 9s 21:40:27 ─╮
 ❯                                                                                                ─╯
 
 

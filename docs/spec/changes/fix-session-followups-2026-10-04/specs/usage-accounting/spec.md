@@ -57,8 +57,10 @@ or budget decisions, and MUST NOT reach the model.
   carry no model identity
 - **WHEN** Smith prices the session
 - **THEN** when the project's usage log holds a record for this session whose
-  totals equal the restored totals, the restored counters are priced by that
-  record's per-binding counters
+  totals equal the restored totals and whose counters are all attributed to
+  named models, the restored counters are priced by the latest such record's
+  per-binding counters; a later record that could not attribute them does not
+  hide an earlier one that did
 - **AND** otherwise they are priced by the binding the snapshot's activation
   manifests name, when they name exactly one
 - **AND** otherwise the restored counters are unpriced, the figure is labelled

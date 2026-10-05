@@ -24,7 +24,7 @@ Approved 2026-10-04 ("i think lets fix everything then push").
 
 ## 3. Verification
 
-- [ ] 3.1 Gate; fixtures unchanged by links; live check in a supporting
+- [x] 3.1 Gate; fixtures unchanged by links; live check in a supporting
   terminal (cmux/ghostty) and inside tmux.
 
 Live 2026-10-04 (debug build under `expect`, 100x32): with

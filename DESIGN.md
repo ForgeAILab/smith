@@ -763,8 +763,10 @@ The pre-host `smith --resume` picker uses the same rows before constructing a
 host, drawn from the top-left. Each session row leads with its latest prompt,
 then `2 min ago · 1 turn · zai/glm-5.3`; the full session ID appears only on
 the selected row's detail. A session with no user message is not offered by
-either resume picker, the terminal table of `smith sessions list`, or the exit
-report's `resume with …` line; the piped listing keeps every row. Older
+either resume picker or either form of `smith sessions list`, gets no
+`resume with …` line in the exit report, and has its files removed when the
+interactive surface ends it. The listing's prompt column is the latest
+prompt (`LATEST PROMPT`). Older
 compatible snapshots remain selectable with unknown fields labelled `unknown`;
 newer incompatible schemas remain visible but disabled. `Esc` in
 `smith --resume` exits without starting a session, and its empty state says
@@ -885,7 +887,11 @@ viewport away from someone reading.
   block quotes, tables, horizontal rules, and links. Tables wider than the
   pane fall back to stacked `key: value` rows. Links show an underlined label
   and, when the label is not the URL, the visible URL in dim parentheses. OSC 8
-  hyperlinks are emitted only when the terminal is known to support them.
+  hyperlinks are emitted only when the terminal is known to support them
+  (`TERM_PROGRAM` iTerm.app, WezTerm, ghostty, or vscode; `TERM`
+  xterm-kitty or xterm-ghostty; VTE 0.50+; Windows Terminal) and never under
+  tmux or screen. They ride on the cells' symbols without changing widths,
+  and Smith-owned copy yields the visible text only.
   Emphasis requires a non-space inside each marker; `2 * 3 * 4` stays literal.
 - `ProviderAttemptFinished` owns the retry decision shown by the root
   conversation. When its optional `index`, `max_attempts`, and

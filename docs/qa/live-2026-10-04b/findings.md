@@ -124,3 +124,45 @@ within 20 tokens of each other. xAI varied on both builds: in the first run
 0.3.7's third turn read 192 cached tokens against 0.3.6's 2,624, and in the
 second 0.3.6's second turn read 192 against 0.3.7's 2,496. Nothing in this
 release changes request composition.
+
+## Follow-ups before the push
+
+Same day, after "lets fix everything then push". Live, release build of the
+follow-up commits:
+
+- **In-session connection, end to end** (scratch `HOME`, environment-variable
+  credential): `/connect openrouter` ran credential method, default model,
+  default selection, and review above the composer (`35`–`37`); confirming
+  wrote the config and the session showed `● provider · Connected
+  OpenRouter` after the rebuild (`38`); `/disconnect openrouter` reported in
+  the session (`39`); `/connect xai` drew its code, link, and waiting line
+  inline and Esc wrote nothing (`40`, `41`).
+- **Child pricing:** a GLM root that spawned a `sol` child exited with
+  `~$0.000 estimated · zai/glm-5.3 $0.000 · price unknown for
+  chatgpt/gpt-6.1-sol` (`42`).
+- **Turn count:** one prompt with a tool call exits with `1 turn` (`43`).
+- **Resumed two-model session:** priced per model again from the usage log,
+  `$0.000875 exact · zai/glm-5.3 $0.000 · google/gemini-3.8-flash $0.000875`
+  (`44`). The log's newest record for that session had lost its per-model
+  split (written while testing an earlier build), so the lookup now takes the
+  newest record whose counters are all attributed.
+- **Empty sessions:** a start-and-quit adds two files while running and leaves
+  none behind; neither listing form shows empty or child sessions.
+- **Resume compatibility:** sessions written headless by 0.3.4 and 0.3.6
+  resumed on the build and recalled their word.
+- **Links:** with `TERM_PROGRAM=ghostty` an answer's Markdown link was written
+  with OSC 8; with `TMUX` set, none.
+
+Found and fixed in this round: child sessions were listed as resumable
+top-level sessions; the setup and `/connect` model lists showed raw token
+counts; counts printed `(s)`; and an empty session's snapshot could be
+rewritten after cleanup, because a detached runtime task persisted the child
+catalog after the host reported shutdown (the host now drains snapshot writes
+before releasing the session, and quitting shuts the host down before
+removing files).
+
+Seen under heavy load only and left alone: `host_session`
+`durable_child_follow_up_survives_a_full_smith_host_restart` (continuation
+count 2 vs 3; code untouched by this release), and keys typed before Smith's
+first frame may be discarded at startup (the setup-cancel PTY test now waits
+for the screen instead of sleeping 800 ms).
