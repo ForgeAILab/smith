@@ -1951,20 +1951,23 @@ configuration value, then the default `error`.
 `smith sessions list` SHALL print a header row, aligned columns, and the
 last-updated time in local time when standard output is a terminal. When
 standard output is not a terminal it MUST keep the existing tab-separated
-row format.
+row format. The prompt column SHALL be labelled for what it holds, the
+latest user prompt.
 
 #### Scenario: Listing on a terminal
 
 - **GIVEN** the project has saved sessions
 - **WHEN** the user runs `smith sessions list` in a terminal
-- **THEN** each column has a heading
+- **THEN** each column has a heading, and the prompt column reads
+  `LATEST PROMPT`
 - **AND** the update time is a local date and time, not a millisecond count
 
 #### Scenario: Listing through a pipe
 
 - **WHEN** the output of `smith sessions list` is piped to another program
-- **THEN** each session is one tab-separated row with the fields and order
-  documented for the Claude Code plugin
+- **THEN** each session that holds a user message is one tab-separated row
+  with the fields and order documented for the Claude Code plugin
+- **AND** the plugin's documentation names the last field the latest prompt
 
 ### Requirement: One transcript row per tool call
 
@@ -2629,11 +2632,11 @@ or credential change.
 ### Requirement: Sessions without a user message are not offered
 
 Smith SHALL NOT offer a session that holds no user message for resumption:
-the resume pickers and the terminal table of `smith sessions list` MUST omit
-it, and the exit report MUST NOT print a `resume with …` line for it. A
-session whose user message failed before any provider usage SHALL still be
-offered. The tab-separated `smith sessions list` output for pipes MUST keep
-every row.
+the resume pickers and both forms of `smith sessions list` MUST omit it, and
+the exit report MUST NOT print a `resume with …` line for it. When the
+interactive surface ends a session that holds no user message, Smith SHALL
+remove that session's files. A session whose user message failed before any
+provider usage SHALL still be offered and kept.
 
 #### Scenario: Start and quit without typing
 
@@ -2642,6 +2645,8 @@ every row.
   `smith sessions list` in a terminal
 - **THEN** the exit report has no `resume with …` line
 - **AND** that session is not listed
+- **AND** its snapshot, journal, and lock files are gone from the project's
+  session directory
 
 #### Scenario: A prompt that failed is still offered
 
@@ -2649,6 +2654,12 @@ every row.
   before reporting usage
 - **WHEN** the user opens `/resume`
 - **THEN** the session is listed with its prompt as the row's name
+
+#### Scenario: Piped listing
+
+- **GIVEN** a project holds one session with a prompt and one without
+- **WHEN** `smith sessions list` is piped to another program
+- **THEN** only the session with a prompt is printed
 
 ### Requirement: Input typed during a rebuild is kept
 
@@ -2664,3 +2675,72 @@ the order typed, and MUST NOT drop them.
   `hello`
 - **THEN** after the rebuild the composer holds `hello`
 - **AND** a `/quit` typed the same way quits the rebuilt session
+
+### Requirement: Child sessions are reached through their parent
+
+Smith SHALL NOT list a child agent's session as a resumable session: the
+resume pickers and both forms of `smith sessions list` MUST omit sessions
+that belong to a parent session. A child stays reachable through its parent
+(`/agent`, follow-up), and an explicit `--resume <ID>` keeps its current
+behaviour.
+
+#### Scenario: A session that spawned a child
+
+- **GIVEN** a session that spawned one durable child agent
+- **WHEN** the user runs `smith sessions list` or opens `/resume`
+- **THEN** the parent session is listed once
+- **AND** no `child-session-…` entry is listed
+
+### Requirement: Every text field edits like the composer
+
+Smith SHALL let every single-line text field — picker filters, setup fields
+including masked API-key fields, and history search — accept the
+composer's line-editing keys (Left, Right, Home, End, Ctrl+A, Ctrl+E, Ctrl+U,
+Ctrl+K, Ctrl+W, Alt+B, Alt+F, Backspace, Delete) and bracketed paste, with the
+cursor shown where the next character goes. A masked field MUST keep masking
+every character it holds and MUST NOT reveal its contents through editing.
+
+#### Scenario: Correcting a filter
+
+- **GIVEN** the `/model` picker is open with the filter `glm-5.2-highspeeed`
+- **WHEN** the user presses Alt+B, then Backspace
+- **THEN** the filter is `glm-5.2-highspeed` with the cursor before the last
+  word, and the list refilters
+- **AND** Ctrl+U clears the filter
+
+#### Scenario: Editing a masked key
+
+- **GIVEN** the API-key field holds a pasted key with a typo in the middle
+- **WHEN** the user moves left with the arrow keys and fixes the character
+- **THEN** the field still shows only masking glyphs
+- **AND** the corrected key is what setup stores
+
+### Requirement: Links are clickable where the terminal supports it
+
+When the terminal is known to support OSC 8 hyperlinks, Smith SHALL emit
+assistant Markdown links and bare `http(s)` URLs in the transcript as OSC 8
+hyperlinks, keeping the visible text and layout exactly as without them. When
+support is unknown, Smith MUST emit no hyperlink sequences. Smith-owned text
+selection and copy MUST yield the visible text only, never escape sequences.
+Hyperlinks MUST NOT change cell widths, wrapping, or the frames recorded by
+fixtures.
+
+#### Scenario: A supporting terminal
+
+- **GIVEN** the terminal identifies itself as one known to support OSC 8
+- **WHEN** an answer contains `[the docs](https://example.com/docs)`
+- **THEN** the label `the docs` is rendered underlined as before, followed by
+  the dim `(https://example.com/docs)`, and clicking it opens the URL
+- **AND** the rows and columns are identical to an unsupported terminal's
+
+#### Scenario: An unknown terminal
+
+- **GIVEN** no known-supporting terminal is detected, or the session runs
+  inside a multiplexer that does not pass hyperlinks through
+- **WHEN** the same answer renders
+- **THEN** no OSC 8 sequence is written
+
+#### Scenario: Copying a link
+
+- **WHEN** the user drag-selects a line containing a hyperlink and copies it
+- **THEN** the clipboard holds the visible characters of the line only

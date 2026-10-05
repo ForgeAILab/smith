@@ -296,10 +296,14 @@ output = the automatic percentage rule).
 - **GIVEN** the pinned runtime includes the OpenAI-compatible adapter
 - **WHEN** the user selects the GLM quick start
 - **THEN** setup proposes provider `zai` at
-  `https://api.z.ai/api/coding/paas/v4` and model `glm-4.7`
-- **AND** the proposed model profile declares 200000 context tokens, 196000
-  maximum input tokens, and 131072 maximum output tokens
-- **AND** the selected profile requests and reserves at most 8192 output tokens
+  `https://api.z.ai/api/coding/paas/v4` and model `glm-5.3`
+- **AND** the proposed model profile declares 1000000 context tokens, 1000000
+  maximum input tokens, and 131072 maximum output tokens from the trusted
+  catalog, whose revision is recorded with them
+- **AND** the selected profile requests and reserves at most 32768 output
+  tokens
+- **AND** existing configurations that name `glm-5.2` or `glm-4.7` keep
+  resolving their trusted limits
 - **AND** the proposed provider response policy treats a non-redacted
   reasoning-only completion as visible assistant text without disabling GLM
   thinking

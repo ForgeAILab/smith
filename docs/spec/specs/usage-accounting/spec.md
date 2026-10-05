@@ -157,11 +157,15 @@ or budget decisions, and MUST NOT reach the model.
 - **GIVEN** a resumed session whose snapshot restores usage records, which
   carry no model identity
 - **WHEN** Smith prices the session
-- **THEN** the restored counters are priced by the binding the snapshot's
-  activation manifests name, when they name exactly one
-- **AND** when they name several, the restored counters are unpriced, the
-  figure is labelled estimated, and the line says `price unknown for earlier
-  models`
+- **THEN** when the project's usage log holds a record for this session whose
+  totals equal the restored totals and whose counters are all attributed to
+  named models, the restored counters are priced by the latest such record's
+  per-binding counters; a later record that could not attribute them does not
+  hide an earlier one that did
+- **AND** otherwise they are priced by the binding the snapshot's activation
+  manifests name, when they name exactly one
+- **AND** otherwise the restored counters are unpriced, the figure is labelled
+  estimated, and the line says `price unknown for earlier models`
 
 #### Scenario: An estimated counter downgrades the label
 
@@ -191,13 +195,22 @@ or budget decisions, and MUST NOT reach the model.
 Smith SHALL expose Agent Runtime's versioned usage schema through the TUI,
 final non-interactive JSON result, streaming JSON events, and embedding
 boundary. The TUI MUST show current-turn and session totals with cache and
-provenance labels.
+provenance labels. The session total's turn count SHALL count the
+conversation turns the user started, not provider requests, and SHALL be
+written `1 turn` / `N turns`.
 
 #### Scenario: Compare CLI and runtime usage
 
 - **GIVEN** one deterministic session is run through the headless host
 - **WHEN** its runtime events and final JSON output are inspected
 - **THEN** both expose equivalent counters, provenance, and attribution
+
+#### Scenario: A turn with tool calls
+
+- **GIVEN** one user prompt that the model answered after three tool calls
+- **WHEN** the user quits
+- **THEN** the exit report's usage line starts `1 turn ·`
+- **AND** never `turn(s)`
 
 ### Requirement: Delegated usage is accounted separately
 
