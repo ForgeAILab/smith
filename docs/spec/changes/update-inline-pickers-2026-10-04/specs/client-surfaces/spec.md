@@ -188,7 +188,8 @@ at most nine entries SHALL be numbered and accept the digit instead. Filtering
 and selection MUST operate on bounded display metadata and MUST NOT add
 picker contents to canonical model history. Every chooser MUST use the same
 footer words: `↑↓ choose · enter confirm · esc back`, or `esc cancel` where
-there is no earlier step.
+there is no earlier step; a numbered list says `↑↓ or 1–N choose`, and an
+empty list whose guidance names its key shows no footer.
 
 Runtime pickers SHALL render directly above the fixed composer with at most
 five matching rows visible. They MUST preserve the transcript region instead

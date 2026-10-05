@@ -85,6 +85,17 @@ prints `Setup cancelled · nothing was written`, `15-ctrl-c-cancel`), C1 and C2
 transcript in place, `17`–`20`, `25`–`26`), M1 (`/model` opens on the current
 model, `21-model-picker`), and the per-model exit line.
 
+Resumed pricing (`29-resume-cost-*`): resuming the single-model session and
+quitting prints `$0.000 exact · zai/glm-5.3`; resuming the GLM-then-Gemini
+session prints the token line marked `estimated` and no cost line, because
+its restored usage cannot be attributed to one model. 0.3.6 printed a
+confident figure at the last model's rates there.
+
+Not exercised: completing a connection inside a session (the embedded review,
+its effects, and the notices after the rebuild are unit-tested only — every
+live `/connect` was left before the step that writes), `/disconnect`, the
+ChatGPT and xAI progress screens live, and child-agent pricing.
+
 New:
 
 | # | Finding | Evidence |
@@ -92,3 +103,5 @@ New:
 | N1 | **The environment-variable name is not kept** after going back past its field and forward again; the field is empty. Provider names, endpoints and model IDs are kept. | `10-existing-entry`, `11-env-field-again` |
 | N2 | **Ctrl+C after a failed connection check prints the stale error** (`env:ZAI_API_KEY resolves to nothing…`) above `Setup cancelled · nothing was written`. | `15-ctrl-c-cancel` |
 | N3 | **Keys typed while the host rebuilds after `/model` are dropped**: text typed right after choosing a model never reaches the composer. 0.3.6 does the same (`23-0.3.6-type-after-switch`), so it predates this change. It is also the cause of the one flaky PTY run (`/quit` sent right after a switch, under full-workspace load). | `22-type-after-switch`, `23-0.3.6-type-after-switch` |
+| N4 | **A `/connect` step leaves `? for shortcuts` in the hint row** with the step's keys on a second row; `?` does nothing there. In-session pickers drop it while open. | `17-connect-openrouter`, `25-connect-chatgpt-inline` |
+| N5 | **The review's last row says `then checks the connection`**, but the check is local (the credential reference must resolve; no request is sent). `checks the configuration` would be accurate. | `09-review` |
