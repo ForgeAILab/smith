@@ -1,3 +1,8 @@
+---
+created_at: 2026-09-15T00:00:00Z
+updated_at: 2026-10-05T19:58:49Z
+---
+
 # Bounded tool evidence in Smith
 
 ## Approval and scope

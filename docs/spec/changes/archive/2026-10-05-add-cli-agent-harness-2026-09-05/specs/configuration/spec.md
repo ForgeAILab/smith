@@ -2,39 +2,44 @@
 
 ### Requirement: CLI agent harness selection
 
-A profile MAY select an installed coding agent with `harness = "claude-code"`
-or `harness = "codex"`. Such a profile SHALL run its turns on that CLI instead
-of a model provider, and MUST be selectable as the main agent or as a delegated
-child through the ordinary `use` list.
+Smith SHALL let a profile select an installed coding agent by model id
+`cli/<kind>/<model>`, where `<kind>` is `claude-code` or `codex` (for example
+`cli/claude-code/sonnet`). Such a profile SHALL run its turns on that CLI
+instead of a model provider, and MUST be selectable as the main agent or as a
+delegated child through the ordinary `use` list. Selecting an agent MUST NOT
+require a `[harness]` declaration; installed-agent model ids SHALL be offered
+wherever models are listed.
 
-A harness profile SHALL still resolve a provider and model. The runtime plans
-against real model limits before any work runs, and those limits come from the
-profile whether or not a provider is ever called. The harness replaces how the
-turn is *executed*, not how the model is identified; the resolved provider is
-never called to produce a harness turn.
+The `<model>` segment is what the CLI is told to use. Smith plans against
+fixed installed-agent context, input, and output limits before any work runs.
+The harness replaces how the turn is *executed*, not how the profile resolves;
+the resolved provider is never called to produce a harness turn.
 
-The CLI's own model selection is `harness.<name>.model`, which is what the CLI
-is actually told to use. The profile's `model` remains Smith's identity and
-limit record for the run.
+#### Scenario: Profile selects an installed agent by model id
 
-#### Scenario: Profile selects a harness
-
-- **GIVEN** a profile with `harness = "claude-code"` and a resolved provider
+- **GIVEN** a profile whose model is `cli/claude-code/sonnet`
 - **WHEN** configuration resolves
-- **THEN** the profile is valid
-- **AND** `smith config explain` reports the harness and its source
+- **THEN** the profile is valid without any `[harness]` table
+- **AND** the CLI is asked to use `sonnet`
 - **AND** the resolved provider is never called to produce a turn
+
+#### Scenario: A provider model is not mistaken for an installed agent
+
+- **GIVEN** a profile whose model id does not start with `cli/`
+- **WHEN** configuration resolves
+- **THEN** no harness is resolved and the provider runs the turn
 
 ### Requirement: Harness process settings
 
-Per-harness settings SHALL be declared under `[harness.<name>]` with an
-executable, an optional model, optional fixed arguments, an optional working
-directory, and an explicit environment overlay. Values remain layered and
-source-explainable.
+Optional per-machine settings SHALL be declared under `[harness.<kind>]`: an
+absolute executable path, fixed arguments, an environment overlay, and
+`allow_own_tools`. Absent settings mean the program is found on `PATH` and run
+without its own tools. Values remain layered and source-explainable.
 
-The executable MUST be resolved without a shell. Project and project-local
-configuration MAY select a harness but MUST NOT declare or override its
-executable, arguments, working directory, or environment, matching the rule
+The executable MUST be an absolute path invoked without a shell. Project and
+project-local configuration MAY select an installed agent but MUST NOT declare
+or override its executable, arguments, environment, or `allow_own_tools`,
+matching the rule
 already applied to command providers.
 
 #### Scenario: Project selects but cannot redefine a harness

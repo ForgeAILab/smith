@@ -1,3 +1,9 @@
+---
+created_at: 2026-09-15T00:00:00Z
+updated_at: 2026-10-05T19:58:49Z
+completed_at: 2026-10-05T19:58:49Z
+---
+
 # Tasks
 
 - [x] Add layered inline-output setting with default, range and provenance tests.
@@ -33,8 +39,13 @@ matrix is separate from the successful isolated Linux run above.
 
 ## Explicitly separate follow-on scope
 
-- [ ] PR B: one durable semantic-history path with actual pressure triggers,
-      bounded model inputs/accounting, and safe mid-task atomic cutovers.
-- [ ] PR C: supported provider-native optimization and a shared `/compact` action.
+Not part of this change and not implemented; archived 2026-10-05 without them.
+Each needs its own proposal if pursued:
 
-Do not mark either follow-on complete on the strength of output-offloading tests.
+- PR B: one durable semantic-history path with actual pressure triggers,
+  bounded model inputs/accounting, and safe mid-task atomic cutovers. Smith
+  keeps the simple semantic summary rather than adopting LCM, so this would
+  build on that summary.
+- PR C: supported provider-native optimization and a shared `/compact` action.
+
+Output-offloading tests are not evidence for either follow-on.

@@ -1,7 +1,7 @@
 ---
 created_at: 2026-08-09T01:06:40Z
-updated_at: 2026-08-09T07:02:00Z
-completed_at:
+updated_at: 2026-10-05T19:58:50Z
+completed_at: 2026-10-05T19:58:50Z
 ---
 
 ## 0. Approval and baseline
@@ -73,9 +73,19 @@ completed_at:
   engine used to run the Index's AMD64 images.
 - [x] 5.8 Re-run focused unit/contract tests and calibrated Luna canaries before
   deciding whether to replace or resume the development manifest.
-- [ ] 5.9 Execute all nine serial development cells, retaining timeouts and
+
+## Not run
+
+Archived 2026-10-05 with the code shipped and the experiment not run. The first
+development-manifest attempt was paused and its manifest kept as
+`benchmarks/harbor/reports/dev-completion-policy-manifest-infra-failed-colima.json`;
+5.4 and 5.7 classified its failures and moved the Colima host to Rosetta. The
+three execution steps below remain available through the committed runner if
+the comparison is wanted later; no result is claimed.
+
+- 5.9 Execute all nine serial development cells, retaining timeouts and
   verifier failures, for 234 expected trajectories.
-- [ ] 5.10 Audit every job for OAuth material and validate every emitted ATIF
+- 5.10 Audit every job for OAuth material and validate every emitted ATIF
   trajectory.
-- [ ] 5.11 Generate sanitized JSON/Markdown reports for both primary contrasts
+- 5.11 Generate sanitized JSON/Markdown reports for both primary contrasts
   and state whether each result is statistically clear.
