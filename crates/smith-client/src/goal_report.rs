@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use agent_runtime_core::goal::GoalProjection;
 
+use crate::format::plural;
 use crate::status::render_elapsed;
 
 /// The result of showing or changing a persistent goal.
@@ -148,10 +149,15 @@ pub fn render_headless_plain(report: &GoalReport, continuation_turns: u32) -> Ve
         return Vec::new();
     };
     let mut lines = vec![format!(
-        "goal: {} · {} tokens · budget {} · {continuation_turns} continuation turn(s)",
+        "goal: {} · {} tokens · budget {} · {}",
         goal.status,
         goal.charged_tokens_value(),
         goal.budget_value(),
+        plural(
+            continuation_turns,
+            "continuation turn",
+            "continuation turns"
+        ),
     )];
     if let Some(reason) = &goal.stopped_reason {
         lines.push(format!("goal reason: {}", reason.render_value()));

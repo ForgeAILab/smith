@@ -531,9 +531,10 @@ pub(super) fn session_resume_hint(host: &HostSession) -> Option<String> {
     ))
 }
 
-/// Runs only after interactive shutdown releases writer leases. Canonical
-/// history preserves failed and image-only prompts; cleanup is best effort so
-/// a filesystem error never prevents the terminal surface from exiting.
+/// Joins host writers before deletion so a late catalog save cannot recreate
+/// an empty session. Canonical history preserves failed and image-only prompts;
+/// cleanup is best effort so a filesystem error never prevents the terminal
+/// surface from exiting.
 pub(super) async fn remove_empty_interactive_session(host: &HostSession) {
     if !host
         .session()
@@ -542,6 +543,7 @@ pub(super) async fn remove_empty_interactive_session(host: &HostSession) {
         .any(|message| message.role == agent_runtime_core::content::Role::User)
         && let Some(paths) = host.paths()
     {
+        let _ = host.shutdown().await;
         let _ = paths.remove_session_files(host.session().id()).await;
     }
 }

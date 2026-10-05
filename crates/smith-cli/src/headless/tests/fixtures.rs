@@ -11,6 +11,26 @@ const FORMATS: [OutputFormat; 3] = [
     OutputFormat::StreamJson,
 ];
 
+// Keep the historical text recordings on disk while asserting current human
+// wording. JSON and JSONL fixtures still use exact, unmodified comparisons.
+fn compare_text_fixture(relative: &str, captured: &str) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(relative);
+    let mut expected = std::fs::read_to_string(&path).expect("text fixture");
+    for (old, new) in [
+        ("0 continuation turn(s)", "0 continuation turns"),
+        ("1 continuation turn(s)", "1 continuation turn"),
+        ("1 child(ren) interrupted", "1 child interrupted"),
+        ("1 monitor(s) interrupted", "1 monitor interrupted"),
+        ("(1 question(s))", "(1 question)"),
+        ("(2 question(s))", "(2 questions)"),
+    ] {
+        expected = expected.replace(old, new);
+    }
+    assert_eq!(expected, captured, "fixture {}", path.display());
+}
+
 fn record_io(
     name: &str,
     format: OutputFormat,
@@ -35,10 +55,13 @@ fn record_io(
             ("jsonl", stdout)
         }
     };
-    compare_or_update(
-        &format!("headless/{name}.{extension}"),
-        &normalizer.normalize(&captured),
-    );
+    let relative = format!("headless/{name}.{extension}");
+    let captured = normalizer.normalize(&captured);
+    if format == OutputFormat::Text {
+        compare_text_fixture(&relative, &captured);
+    } else {
+        compare_or_update(&relative, &captured);
+    }
 }
 
 async fn record_flow(
@@ -805,8 +828,9 @@ fn record_projection(name: &str, result: &ResultEnvelope, events: &[EventEnvelop
                         approval_diagnostic(required)
                     } else if let Some(required) = &result.interaction_required {
                         format!(
-                            "interaction required for request `{}` ({} question(s)); rerun in an interactive terminal",
-                            required.request_id, required.question_count
+                            "interaction required for request `{}` ({}); rerun in an interactive terminal",
+                            required.request_id,
+                            smith_client::plural(required.question_count, "question", "questions")
                         )
                     } else {
                         result.error.clone().unwrap_or_else(|| {
@@ -1251,7 +1275,7 @@ fn lifecycle_text() {
     };
     let mut stderr = Vec::new();
     write_text_projection(&mut stderr, &result).expect("text lifecycle projection");
-    compare_or_update(
+    compare_text_fixture(
         "headless/lifecycle-text.txt",
         &String::from_utf8(stderr).expect("UTF-8 text"),
     );

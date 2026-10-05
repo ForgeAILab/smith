@@ -2,12 +2,9 @@
 
 #![cfg(unix)]
 
-use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, Output, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::process::{Command, Output};
 
 const FAKE_CONFIG: &str = r#"
 default_profile = "dev"
@@ -134,36 +131,6 @@ max_output_tokens = 4096
             .expect("headless Smith process")
     }
 
-    fn spawn(&self, smith_args: &str) -> Option<Child> {
-        if !std::path::Path::new("/usr/bin/script").is_file() {
-            return None;
-        }
-        let shell = format!(
-            "stty rows 32 cols 100; before=$(stty -g); \
-             \"$TUI_TEST_BIN\" {smith_args}; code=$?; \
-             after=$(stty -g); if [ \"$before\" = \"$after\" ]; then \
-             echo TERMINAL_RESTORED; else echo TERMINAL_DAMAGED; fi; exit \"$code\""
-        );
-        let mut command = Command::new("/usr/bin/script");
-        #[cfg(target_os = "macos")]
-        command.args(["-q", "/dev/null", "/bin/sh", "-c", &shell]);
-        #[cfg(not(target_os = "macos"))]
-        command.args(["-q", "-c", &shell, "/dev/null"]);
-        command
-            .current_dir(self.project.path())
-            .env_clear()
-            .env("HOME", self.home.path())
-            .env("PATH", "/usr/bin:/bin")
-            .env("TERM", "xterm-256color")
-            .env("TUI_TEST_BIN", env!("CARGO_BIN_EXE_smith"))
-            .env("ZAI_API_KEY", "test-only-no-network-key")
-            .env("OPENROUTER_API_KEY", "test-only-no-network-key")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        Some(command.spawn().expect("pseudo-terminal process"))
-    }
-
     fn run_expect(&self, smith_args: &str, interaction: &str) -> Option<Output> {
         self.run_expect_sized(smith_args, interaction, 32, 100)
     }
@@ -209,54 +176,26 @@ max_output_tokens = 4096
     }
 }
 
-fn finish(mut child: Child) -> Output {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let status = loop {
-        if let Some(status) = child.try_wait().expect("process status") {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            panic!("Smith did not leave the pseudo-terminal within 10 seconds");
-        }
-        thread::sleep(Duration::from_millis(20));
-    };
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    child
-        .stdout
-        .take()
-        .expect("stdout")
-        .read_to_end(&mut stdout)
-        .expect("stdout bytes");
-    child
-        .stderr
-        .take()
-        .expect("stderr")
-        .read_to_end(&mut stderr)
-        .expect("stderr bytes");
-    Output {
-        status,
-        stdout,
-        stderr,
-    }
-}
-
 #[test]
 fn cancelling_setup_restores_the_terminal_and_writes_nothing() {
     for args in ["--no-color --no-motion", "setup --no-color --no-motion"] {
         let fixture = Fixture::new();
-        let Some(mut child) = fixture.spawn(args) else {
+        let interaction = r#"
+expect {
+    -exact "Smith setup" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+send -- "\033"
+expect {
+    -exact "TERMINAL_RESTORED" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+"#;
+        let Some(output) = fixture.run_expect(args, interaction) else {
             return;
         };
-        thread::sleep(Duration::from_millis(800));
-        child
-            .stdin
-            .take()
-            .expect("setup input")
-            .write_all(b"\x1b")
-            .expect("cancel key");
-        let output = finish(child);
         let screen = String::from_utf8_lossy(&output.stdout);
         assert!(
             output.status.success(),

@@ -187,6 +187,174 @@ fn both_resume_entry_sources_hide_only_known_empty_sessions() {
     }
 }
 
+#[tokio::test]
+async fn saved_child_sessions_are_hidden_from_both_resume_pickers_and_listing_forms() {
+    use agent_runtime::delegation::{CHILD_CATALOG_NAMESPACE, DurableChildCatalog};
+    use agent_runtime::provider::fake::{FakeProvider, ScriptedStream};
+    use agent_runtime_core::provider::{Capabilities, FinishReason, ProviderStreamEvent};
+    use agent_runtime_core::store::SessionStore;
+    use smith_runtime::session::FileSessionStore;
+
+    let home = tempfile::tempdir().expect("home");
+    let project = tempfile::tempdir().expect("project");
+    std::fs::create_dir_all(project.path().join(".smith")).expect("config directory");
+    std::fs::write(
+        project.path().join(".smith/config.toml"),
+        LOCAL_COMMAND_CONFIG,
+    )
+    .expect("config");
+    let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+        .expect("resolution")
+        .config;
+    let provider = Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        ["parent answer", "child answer", "parent continuation"]
+            .into_iter()
+            .map(|text| {
+                ScriptedStream::new(vec![
+                    ProviderStreamEvent::TextDelta {
+                        text: text.to_owned(),
+                    },
+                    ProviderStreamEvent::Finish {
+                        reason: FinishReason::Stop,
+                    },
+                ])
+            })
+            .collect(),
+    ));
+    let runtime = RuntimeRequest {
+        provider: Some(provider),
+        workspace: Some(Arc::new(
+            ProjectWorkspace::new(project.path()).expect("workspace"),
+        )),
+        approval: Some(Arc::new(agent_runtime_core::approval::AllowAll)),
+        ..RuntimeRequest::new(config, HostSurface::Headless)
+    };
+    let host = smith_runtime::host::start(
+        HostSessionRequest::new(runtime, project.path())
+            .checkpoint_keys(Arc::new(TestCheckpointKeys)),
+    )
+    .await
+    .expect("host");
+    host.session()
+        .run(UserInput::text("review the project"))
+        .await
+        .expect("parent turn");
+    let parent_id = host.session().id().clone();
+    let coordinator = host
+        .runtime()
+        .delegation()
+        .and_then(|delegation| delegation.coordinator())
+        .expect("coordinator");
+    let child_id = match coordinator
+        .spawn(ChildSpec {
+            task: UserInput::text("review a delegated part"),
+            model: ChildModelSelection::Inherit,
+            limits: ChildLimits::turns(2),
+            tools: ToolViewScope::ReadOnly,
+            workspace: WorkspacePolicy::ReadOnlyView,
+        })
+        .await
+        .expect("spawn")
+    {
+        smith_runtime::SpawnOutcome::Spawned { child, .. } => child,
+        other => panic!("expected a child, got {other:?}"),
+    };
+    coordinator
+        .wait_task_outcome(&child_id)
+        .await
+        .expect("child outcome");
+    let child = coordinator.status(&child_id).expect("child status");
+    assert_eq!(child.durability, smith_runtime::ChildDurability::Durable);
+    let paths = host.paths().expect("persistent paths").clone();
+    host.shutdown().await.expect("shutdown");
+    let store = FileSessionStore::new(paths);
+    let mut parent_snapshot = store
+        .load(&parent_id)
+        .await
+        .expect("load parent")
+        .expect("parent");
+    let mut child_snapshot = store
+        .load(&child.session)
+        .await
+        .expect("load child")
+        .expect("child");
+    assert!(
+        !child_snapshot.history.is_empty(),
+        "the child remains directly addressable"
+    );
+
+    // Check existing child ids, arbitrary names, and snapshots without listing
+    // metadata so ownership must come from the durable parent catalog.
+    for variant in 0..3 {
+        if variant == 1 {
+            let state = parent_snapshot
+                .extension_state
+                .get_mut(CHILD_CATALOG_NAMESPACE)
+                .expect("durable catalog state");
+            let mut catalog: DurableChildCatalog =
+                serde_json::from_value(state.value.clone()).expect("durable catalog");
+            let record = catalog
+                .children
+                .iter_mut()
+                .find(|record| record.child == child_id)
+                .expect("child record");
+            let renamed = SessionId::new("delegated-review-without-special-prefix");
+            record.child_session = renamed.clone();
+            record.status.session = renamed.clone();
+            state.value = serde_json::to_value(catalog).expect("catalog JSON");
+            child_snapshot.id = renamed;
+            store.save(&parent_snapshot).await.expect("save parent");
+            store
+                .save(&child_snapshot)
+                .await
+                .expect("save renamed child");
+            std::fs::remove_file(
+                store
+                    .paths()
+                    .snapshot(&child.session)
+                    .expect("old child path"),
+            )
+            .expect("remove old child snapshot");
+        } else if variant == 2 {
+            for id in [&parent_id, &child_snapshot.id] {
+                let path = store.paths().snapshot(id).expect("snapshot path");
+                let mut value: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(&path).expect("snapshot bytes"))
+                        .expect("snapshot JSON");
+                value.as_object_mut().expect("envelope").remove("listing");
+                std::fs::write(path, serde_json::to_vec(&value).expect("legacy JSON"))
+                    .expect("legacy snapshot");
+            }
+        }
+        let sessions = store.list().await.expect("list project sessions");
+        for current in [None, Some(parent_id.as_str())] {
+            let entries = crate::resources::session_resource_entries(sessions.clone(), current);
+            assert_eq!(entries.len(), 1, "variant {variant}");
+            assert_eq!(entries[0].id, parent_id.as_str());
+            assert_eq!(entries[0].active, current.is_some());
+        }
+        for terminal in [false, true] {
+            let output = format_session_list(&sessions, terminal, |_| "date".to_owned());
+            assert_eq!(
+                output.lines().count(),
+                1 + usize::from(terminal),
+                "{output}"
+            );
+            assert_eq!(output.matches(parent_id.as_str()).count(), 1, "{output}");
+            assert!(!output.contains(child_snapshot.id.as_str()), "{output}");
+        }
+        assert!(
+            store
+                .load(&child_snapshot.id)
+                .await
+                .expect("direct load")
+                .is_some()
+        );
+    }
+}
+
 #[test]
 fn terminal_session_table_hides_empty_sessions_but_keeps_failed_and_image_prompts() {
     let sessions = session_visibility_fixture();

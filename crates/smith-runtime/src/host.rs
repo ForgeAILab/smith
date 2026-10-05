@@ -181,6 +181,8 @@ pub struct HostSession {
     display_redactor: DefaultRedactor,
     journal: Option<Arc<EventJournal>>,
     paths: Option<SessionPaths>,
+    snapshot_store: Option<Arc<RedactingSessionStore>>,
+    shutdown_result: tokio::sync::Mutex<Option<Result<Option<JournalStats>, RuntimeError>>>,
     ring: Option<Arc<EventRing>>,
     changes: Arc<smith_tools::ChangeRecorder>,
     lifecycle_lease: Mutex<Option<PrivateFileLock>>,
@@ -660,13 +662,20 @@ impl HostSession {
         })
     }
 
-    /// Stops host schedulers, performs Runtime's final save, then drains and
-    /// syncs the journal.
+    /// Stops host schedulers, performs Runtime's final save, closes snapshot
+    /// writes, then drains and syncs the journal. Closing prevents detached
+    /// Runtime watchers from recreating files after host cleanup.
     ///
     /// The journal is attempted even when snapshot persistence fails so a
     /// storage error cannot strand the writer task or silently lose events
     /// already accepted by its bounded queue.
     pub async fn shutdown(&self) -> Result<Option<JournalStats>, RuntimeError> {
+        // Cleanup may follow a driver shutdown, and concurrent callers must
+        // not close the store while another caller is still draining workers.
+        let mut shutdown_result = self.shutdown_result.lock().await;
+        if let Some(result) = shutdown_result.as_ref() {
+            return result.clone();
+        }
         let cache_controller = self
             .cache_controller
             .lock()
@@ -709,9 +718,15 @@ impl HostSession {
         }
         // Drain the controller before Runtime's terminal snapshot. An idle
         // summary accepted before shutdown may still finish optional capsule
-        // projection while the worker drains; the final Runtime save must be
-        // the last session-store write.
+        // projection while the worker drains; the final Runtime save must
+        // include that projection before the snapshot store closes.
         let session = self.session.shutdown().await;
+        // Runtime emits SessionShutdown before its final save. Its detached
+        // delegation watcher can persist the catalog afterwards, so close the
+        // host store before releasing ownership or allowing file cleanup.
+        if let Some(store) = &self.snapshot_store {
+            store.close().await;
+        }
         self.image_history_registration.unregister();
 
         // Background tasks are session-owned, process-group work, not runtime
@@ -732,10 +747,9 @@ impl HostSession {
             .lock()
             .expect("session lifecycle lease poisoned")
             .take();
-        goal_controller?;
-        delegation?;
-        session?;
-        journal
+        let result = goal_controller.and(delegation).and(session).and(journal);
+        *shutdown_result = Some(result.clone());
+        result
     }
 }
 
@@ -929,6 +943,7 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
     // shared redactor, even when durable session persistence is disabled.
     request.runtime.persistence_redactor = Some(persistence_redactor.clone());
 
+    let mut snapshot_store = None;
     let mut resume_snapshot_exists = false;
     let (paths, journal_slot, checkpoint_barrier, ring) = if persistence {
         let paths = paths(&config, &request.project_root)?;
@@ -993,6 +1008,7 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
             request.runtime.artifact_store.clone(),
             summary_provider.clone(),
         ));
+        snapshot_store = Some(store.clone());
         request.runtime.session_store = Some(store);
         if let Some(store) = request.runtime.checkpoint_store.take() {
             request.runtime.checkpoint_store =
@@ -1438,6 +1454,8 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         display_redactor: persistence_redactor,
         journal,
         paths,
+        snapshot_store,
+        shutdown_result: tokio::sync::Mutex::new(None),
         ring,
         changes,
         lifecycle_lease: Mutex::new(lifecycle_lease),
@@ -1572,9 +1590,12 @@ impl EventObserver for ChangeTurnObserver {
 /// turn. Persistence receives a clone with known credential literals removed,
 /// so a provider reflecting its own authorization value cannot turn a clean
 /// shutdown into a secret-bearing resume file.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct RedactingSessionStore {
-    inner: FileSessionStore,
+    inner: Arc<FileSessionStore>,
+    writes: Arc<tokio::sync::Mutex<bool>>,
+    #[cfg(test)]
+    save_pause: Arc<Mutex<Option<Arc<SavePause>>>>,
     redactor: DefaultRedactor,
     reasoning: PersistedReasoningOverride,
     resume_capsule: Option<Arc<ResumeCapsuleSlot>>,
@@ -1657,13 +1678,22 @@ impl RedactingSessionStore {
         summary_provider: Option<String>,
     ) -> Self {
         Self {
-            inner,
+            inner: Arc::new(inner),
+            writes: Arc::new(tokio::sync::Mutex::new(false)),
+            #[cfg(test)]
+            save_pause: Arc::new(Mutex::new(None)),
             redactor,
             reasoning,
             resume_capsule,
             artifact_store,
             summary_provider,
         }
+    }
+
+    /// Drains accepted writes and rejects later saves because Runtime
+    /// delegation watchers can outlive the session shutdown future.
+    async fn close(&self) {
+        *self.writes.lock().await = true;
     }
 
     /// Copies the latest Sensitive Runtime summary extension into an
@@ -1801,6 +1831,36 @@ impl SessionStore for RedactingSessionStore {
     }
 
     async fn save(&self, snapshot: &SessionSnapshot) -> Result<(), RuntimeError> {
+        // Keep the gate in an owned task: aborting a controller must not release
+        // it while Tokio's blocking filesystem work can still rename a file.
+        let store = self.clone();
+        let snapshot = snapshot.clone();
+        tokio::spawn(async move {
+            let closed = store.writes.lock().await;
+            if *closed {
+                return Err(RuntimeError::conflict("the Smith snapshot store is closed"));
+            }
+            #[cfg(test)]
+            {
+                let pause = store
+                    .save_pause
+                    .lock()
+                    .expect("save pause lock poisoned")
+                    .take();
+                if let Some(pause) = pause {
+                    pause.started.notify_one();
+                    pause.release.notified().await;
+                }
+            }
+            store.save_open(&snapshot).await
+        })
+        .await
+        .map_err(|error| RuntimeError::internal(format!("snapshot writer failed: {error}")))?
+    }
+}
+
+impl RedactingSessionStore {
+    async fn save_open(&self, snapshot: &SessionSnapshot) -> Result<(), RuntimeError> {
         let mut snapshot = snapshot.clone();
         if self.reasoning.is_empty() {
             snapshot.extension_state.remove(SESSION_STATE_NAMESPACE);
@@ -2187,6 +2247,13 @@ impl EventObserver for EventRing {
 }
 
 #[cfg(test)]
+#[derive(Debug, Default)]
+struct SavePause {
+    started: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::journal::JournalLine;
@@ -2279,6 +2346,85 @@ max_output_tokens = 4096
                 .shell(self.host.session().id())
                 .expect("shell sidecar")
         }
+    }
+
+    #[tokio::test]
+    async fn shutdown_closes_snapshot_store_before_empty_session_removal() {
+        let fixture = ShellShortcutFixture::new(true).await;
+        let host = &fixture.host;
+        let store = host
+            .snapshot_store
+            .as_ref()
+            .expect("snapshot store")
+            .clone();
+        let snapshot = host.snapshot();
+        let stats = host.shutdown().await.expect("shutdown");
+        assert_eq!(host.shutdown().await.expect("repeated shutdown"), stats);
+        let paths = host.paths().expect("paths");
+        paths
+            .remove_session_files(host.session().id())
+            .await
+            .expect("remove");
+
+        // This is the same store entry point used by Runtime's detached
+        // parent-shutdown watcher, held until after the host has returned.
+        let late_write = store.save(&snapshot).await;
+        assert!(
+            late_write.is_err(),
+            "shutdown must reject late catalog saves"
+        );
+        assert!(
+            !paths
+                .snapshot(host.session().id())
+                .expect("snapshot path")
+                .exists()
+        );
+    }
+
+    #[tokio::test]
+    async fn snapshot_store_close_drains_a_save_whose_caller_was_aborted() {
+        let fixture = ShellShortcutFixture::new(true).await;
+        let host = &fixture.host;
+        // Stop real schedulers so the hook belongs to the explicit save.
+        host.shutdown().await.expect("shutdown");
+        let original = host.snapshot_store.as_ref().expect("snapshot store");
+        let store = Arc::new(RedactingSessionStore::new(
+            FileSessionStore::new(host.paths().expect("paths").clone()),
+            original.redactor.clone(),
+            original.reasoning.clone(),
+            None,
+            None,
+            None,
+        ));
+        let pause = Arc::new(SavePause::default());
+        *store.save_pause.lock().expect("pause lock") = Some(pause.clone());
+        let snapshot = host.snapshot();
+        let writer = tokio::spawn({
+            let store = store.clone();
+            async move { store.save(&snapshot).await }
+        });
+        pause.started.notified().await;
+        writer.abort();
+        assert!(writer.await.expect_err("aborted caller").is_cancelled());
+        let close = store.close();
+        tokio::pin!(close);
+        assert!(
+            futures_util::poll!(&mut close).is_pending(),
+            "close must wait for the owned save"
+        );
+        pause.release.notify_one();
+        close.await;
+        let paths = host.paths().expect("paths");
+        paths
+            .remove_session_files(host.session().id())
+            .await
+            .expect("remove");
+        assert!(
+            !paths
+                .snapshot(host.session().id())
+                .expect("snapshot path")
+                .exists()
+        );
     }
 
     #[tokio::test]

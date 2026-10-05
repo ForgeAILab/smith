@@ -34,14 +34,18 @@
 //! Resume wiring and rebuilding a snapshot from a crashed journal are
 //! deliberately not here; they are separate tasks that build on this contract.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use agent_runtime::delegation::{CHILD_CATALOG_NAMESPACE, DurableChildCatalog};
 use agent_runtime_core::clock::Timestamp;
 use agent_runtime_core::content::Role;
 use agent_runtime_core::error::{ErrorKind, RuntimeError};
 use agent_runtime_core::ids::SessionId;
 use agent_runtime_core::metadata::Metadata;
-use agent_runtime_core::store::{SessionSnapshot, SessionStateSensitivity, SessionStore};
+use agent_runtime_core::store::{
+    SessionSnapshot, SessionStateSensitivity, SessionStore, VersionedSessionState,
+};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -426,6 +430,8 @@ struct StoredIdentity {
 #[derive(Debug, Deserialize)]
 struct StoredIdentityPayload {
     updated: Timestamp,
+    #[serde(default)]
+    extension_state: BTreeMap<String, VersionedSessionState>,
 }
 
 /// Versioned, bounded metadata prepared while saving a snapshot.
@@ -461,7 +467,11 @@ impl FileSessionStore {
         &self.paths
     }
 
-    /// Enumerates the project's saved sessions, most recently updated first.
+    /// Enumerates the project's saved top-level sessions, newest first.
+    ///
+    /// Durable children belong to their parent's catalog and are reached via
+    /// that parent, so they are omitted from discovery without changing direct
+    /// loading by id. Unknown ownership remains top-level for older snapshots.
     ///
     /// A missing session directory is an empty list, not an error: a project
     /// that has never been opened has no sessions. An individual file that
@@ -480,6 +490,7 @@ impl FileSessionStore {
         };
 
         let mut listings = Vec::new();
+        let mut child_sessions = BTreeSet::new();
         while let Some(entry) = entries.next_entry().await.map_err(|err| {
             io_error(format!(
                 "cannot list sessions in `{}`: {err}",
@@ -513,6 +524,10 @@ impl FileSessionStore {
                 serde_json::from_slice::<StoredIdentity>(&bytes)
                     .ok()
                     .map_or((None, None), |identity| {
+                        child_sessions.extend(catalog_child_sessions(
+                            &identity.snapshot,
+                            &SessionId::new(id),
+                        ));
                         (Some(identity.snapshot.updated), identity.listing)
                     })
             } else {
@@ -537,6 +552,8 @@ impl FileSessionStore {
             });
         }
 
+        listings.retain(|listing| !child_sessions.contains(&listing.id));
+
         // Newest first, with records this build cannot date sorted last: a
         // resume picker wants the session the user was just in at the top.
         listings.sort_by(|a, b| match (b.updated, a.updated) {
@@ -547,6 +564,39 @@ impl FileSessionStore {
         });
         Ok(listings)
     }
+}
+
+/// Uses the parent's durable ownership records rather than the child's name:
+/// the child's snapshot identity contains counters, not a parent relation.
+/// Unsupported catalogs cannot establish ownership and leave listings intact.
+fn catalog_child_sessions(snapshot: &StoredIdentityPayload, parent: &SessionId) -> Vec<SessionId> {
+    let Some(state) = snapshot.extension_state.get(CHILD_CATALOG_NAMESPACE) else {
+        return Vec::new();
+    };
+    if state.revision != DurableChildCatalog::revision()
+        || state.sensitivity != SessionStateSensitivity::RedactionSafe
+    {
+        return Vec::new();
+    }
+    let Ok(catalog) = serde_json::from_value::<DurableChildCatalog>(state.value.clone()) else {
+        return Vec::new();
+    };
+    if catalog.schema_version != 1 {
+        return Vec::new();
+    }
+    catalog
+        .children
+        .into_iter()
+        .filter(|record| {
+            record.schema_version == 1
+                && record.parent_session == *parent
+                && record.child_session != *parent
+                && record.status.parent == *parent
+                && record.status.session == record.child_session
+                && record.status.child == record.child
+        })
+        .map(|record| record.child_session)
+        .collect()
 }
 
 #[async_trait]

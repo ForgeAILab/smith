@@ -8,6 +8,7 @@ use agent_runtime_core::usage::UsageDelta;
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use smith_client::cache::{CacheLifecycleSummary, CacheProjection};
+use smith_client::plural;
 use smith_config::model::BackgroundExit;
 use smith_host::{HeadlessApproval, HeadlessInteraction, InteractionRequired};
 use smith_runtime::ChildState;
@@ -256,9 +257,10 @@ pub(super) async fn run_with_io(
             ) {
                 (Some(required), _, _) => approval_diagnostic(required),
                 (_, Some(required), _) => format!(
-                    "interaction required for request `{}` ({} question(s)); \
+                    "interaction required for request `{}` ({}); \
                      rerun in an interactive terminal",
-                    required.request_id, required.question_count
+                    required.request_id,
+                    plural(required.question_count, "question", "questions")
                 ),
                 (_, _, Some(error)) => error,
                 _ => format!("turn ended with status {:?}", result.status),
@@ -383,9 +385,10 @@ pub(super) async fn write_restored_interaction_required(
                 .expect("interaction-required result metadata");
             writeln!(
                 stderr,
-                "smith: interaction required for request `{}` ({} question(s)); \
+                "smith: interaction required for request `{}` ({}); \
                  rerun in an interactive terminal",
-                required.request_id, required.question_count
+                required.request_id,
+                plural(required.question_count, "question", "questions")
             )
             .context("writing diagnostic to stderr")?;
             stderr.flush().context("flushing diagnostic stderr")?;

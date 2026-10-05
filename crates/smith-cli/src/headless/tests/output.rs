@@ -569,7 +569,7 @@ fn text_projection_reports_lifecycle_without_exposing_todo_or_argument_content()
     assert!(rendered.contains("activation epoch 3 · tool:read, tool:write_todos"));
     assert!(rendered.contains("todo plan revision 4 · in_progress=1 · pending=2"));
     assert!(rendered.contains("artifact artifact-fixture · 262144 bytes · text/plain"));
-    assert!(rendered.contains("1 child(ren) interrupted · 1 monitor(s) interrupted"));
+    assert!(rendered.contains("1 child interrupted · 1 monitor interrupted"));
     assert!(!rendered.contains(protected_item));
 }
 

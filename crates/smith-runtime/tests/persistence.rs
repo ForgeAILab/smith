@@ -389,6 +389,52 @@ async fn listing_enumerates_saved_sessions_most_recently_updated_first() {
 }
 
 #[tokio::test]
+async fn unknown_child_ownership_stays_top_level_regardless_of_the_id_prefix() {
+    use agent_runtime::delegation::CHILD_CATALOG_NAMESPACE;
+
+    let (_directory, store) = store();
+    let parent = SessionId::new("s-parent");
+    let child_named = SessionId::new("child-session-without-known-parent");
+    let mut parent_snapshot = populated_snapshot(&parent);
+    store.save(&parent_snapshot).await.expect("save parent");
+    store
+        .save(&populated_snapshot(&child_named))
+        .await
+        .expect("save child-named session");
+
+    for future_catalog in [false, true] {
+        if future_catalog {
+            parent_snapshot.extension_state.insert(
+                CHILD_CATALOG_NAMESPACE.to_owned(),
+                VersionedSessionState::new(
+                    RegistryRevision::new("future-child-catalog"),
+                    serde_json::json!({"children": [{
+                        "parent_session": parent,
+                        "child_session": child_named,
+                    }]}),
+                )
+                .redaction_safe(),
+            );
+            store
+                .save(&parent_snapshot)
+                .await
+                .expect("save unknown catalog");
+        }
+        let listed = store.list().await.expect("list sessions");
+        assert_eq!(listed.len(), 2);
+        for id in [&parent, &child_named] {
+            let entry = listed
+                .iter()
+                .find(|entry| entry.id == *id)
+                .expect("top-level entry");
+            assert_eq!(entry.turn_count, Some(4));
+            assert!(entry.should_offer_resume());
+            assert!(store.load(id).await.expect("load snapshot").is_some());
+        }
+    }
+}
+
+#[tokio::test]
 async fn older_snapshot_without_listing_metadata_remains_selectable_with_unknown_fields() {
     let (_directory, store) = store();
     let id = SessionId::new("s-before-listing-metadata");

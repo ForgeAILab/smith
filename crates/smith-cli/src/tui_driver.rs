@@ -429,7 +429,7 @@ async fn seed_host_state(
     // must stay out of ordinary turn/context accounting.
     let logged_usage = host
         .paths()
-        .and_then(|paths| last_session_usage(paths, host.session().id()));
+        .and_then(|paths| last_session_usage(paths, host.session().id(), snapshot.usage.records()));
     app.status.restore_turn_count(snapshot.identity.turn);
     restore_usage_with_bindings(
         &mut app.status,
@@ -551,16 +551,46 @@ pub(super) async fn run_interactive(
     })
 }
 
-/// Only the last record for this identity can describe the restored session;
-/// searching for any matching older totals could hide a newer mismatch.
+/// A later unattributed record must not hide matching per-model counters.
 fn last_session_usage(
     paths: &smith_runtime::session::SessionPaths,
     session: &agent_runtime_core::ids::SessionId,
+    records: &[UsageRecord],
 ) -> Option<smith_client::usage_log::SessionUsageRecord> {
+    let mut restored = smith_client::status::Status::new("", "");
+    restore_usage_records(&mut restored, records);
+    let totals = restored
+        .session_usage()
+        .totals
+        .iter()
+        .map(|(kind, value)| {
+            (
+                smith_client::status::counter_label(*kind).to_owned(),
+                *value,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     smith_client::usage_log::read_all(&smith_client::usage_log::default_path(paths.directory()))
         .into_iter()
         .rev()
-        .find(|record| record.session == session.as_str())
+        .find(|record| {
+            record.session == session.as_str()
+                && record.totals == totals
+                && usage_bindings_are_attributed(record)
+        })
+}
+
+fn usage_bindings_are_attributed(record: &smith_client::usage_log::SessionUsageRecord) -> bool {
+    record.schema_version == 5
+        && !record.bindings.is_empty()
+        && record.bindings.iter().all(|binding| {
+            binding
+                .provider
+                .as_deref()
+                .is_some_and(|provider| !provider.trim().is_empty())
+                && !binding.model.trim().is_empty()
+                && binding.model != "earlier models"
+        })
 }
 
 /// Seeds the status projection from durable Runtime records without losing
@@ -623,7 +653,7 @@ fn restore_logged_bindings(
         .iter()
         .map(|(kind, value)| (counter_label(*kind).to_owned(), *value))
         .collect::<std::collections::BTreeMap<_, _>>();
-    if logged.schema_version != 5 || logged.totals != totals || logged.bindings.is_empty() {
+    if logged.totals != totals || !usage_bindings_are_attributed(logged) {
         return;
     }
     let mut partition = std::collections::BTreeMap::<String, u64>::new();
@@ -2002,24 +2032,152 @@ mod tests {
     }
 
     #[test]
-    fn usage_restore_reads_only_the_last_record_for_the_session_from_the_project_log() {
+    fn usage_restore_reads_the_latest_matching_attributed_record_from_the_project_log() {
         use smith_client::usage_log::{append, default_path};
         use smith_runtime::session::{ProjectId, SessionPaths};
         let root = tempfile::tempdir().expect("root");
         let paths = SessionPaths::new(root.path(), &ProjectId::new("project").expect("project"));
         let mut logged = logged_usage();
         append(&default_path(paths.directory()), &logged).expect("first record");
-        logged.totals.insert("input".into(), 24_000);
+        logged.turns += 1;
         append(&default_path(paths.directory()), &logged).expect("last record");
+        let mut mismatched = logged.clone();
+        mismatched.totals.insert("input".into(), 24_000);
+        append(&default_path(paths.directory()), &mismatched).expect("mismatched record");
         let mut other = logged.clone();
         other.session = "other-session".into();
         append(&default_path(paths.directory()), &other).expect("other record");
         let session = agent_runtime_core::ids::SessionId::new("session");
-        assert_eq!(super::last_session_usage(&paths, &session), Some(logged));
-        assert!(
-            super::last_session_usage(&paths, &agent_runtime_core::ids::SessionId::new("missing"))
-                .is_none()
+        let records = [root_record(23_000)];
+        assert_eq!(
+            super::last_session_usage(&paths, &session, &records),
+            Some(logged)
         );
+        assert!(
+            super::last_session_usage(
+                &paths,
+                &agent_runtime_core::ids::SessionId::new("missing"),
+                &records
+            )
+            .is_none()
+        );
+    }
+
+    fn usage_with_unattributed_followup() -> (
+        smith_client::usage_log::SessionUsageRecord,
+        smith_client::usage_log::SessionUsageRecord,
+        UsageRecord,
+    ) {
+        let mut observed = smith_client::status::Status::new("glm-5.3", "project");
+        for (provider, model, input, output) in [
+            ("zai", "glm-5.3", 1238, 14),
+            ("google", "gemini-3.8-flash", 1163, 1),
+        ] {
+            observed.switch_model(Some(provider.into()), model);
+            observed.record_usage(
+                &UsageDelta::new()
+                    .with(CounterKind::InputUncached, input)
+                    .with(CounterKind::Output, output),
+            );
+        }
+        let attributed = smith_client::usage_log::SessionUsageRecord::new(
+            "session",
+            observed.provider.clone(),
+            &observed.model,
+            "build",
+            &observed.session_usage(),
+        );
+        let mut unattributed = attributed.clone();
+        unattributed.bindings = vec![smith_client::usage_log::BindingUsageRecord {
+            provider: None,
+            model: "earlier models".into(),
+            totals: attributed.totals.clone(),
+        }];
+        let mut restored = root_record(2401);
+        restored.delta = restored.delta.with(CounterKind::Output, 15);
+        (attributed, unattributed, restored)
+    }
+
+    #[test]
+    fn usage_restore_skips_a_later_unattributed_record_and_restores_both_models() {
+        use smith_client::usage_log::{append, default_path};
+        use smith_runtime::session::{ProjectId, SessionPaths};
+        let root = tempfile::tempdir().expect("root");
+        let paths = SessionPaths::new(root.path(), &ProjectId::new("project").expect("project"));
+        let (attributed, unattributed, restored) = usage_with_unattributed_followup();
+        append(&default_path(paths.directory()), &attributed).expect("attributed record");
+        append(&default_path(paths.directory()), &unattributed).expect("unattributed record");
+        let records = [restored];
+        let logged = super::last_session_usage(
+            &paths,
+            &agent_runtime_core::ids::SessionId::new("session"),
+            &records,
+        );
+        assert_eq!(logged.as_ref(), Some(&attributed));
+        let mut status = smith_client::status::Status::new("current", "project");
+        restore_usage_with_bindings(
+            &mut status,
+            &records,
+            logged.as_ref(),
+            [("zai", "glm-5.3"), ("google", "gemini-3.8-flash")],
+            |provider, model| Some(price(provider, model)),
+        );
+        let usage = status.session_usage();
+        assert_eq!(usage.bindings.len(), 2);
+        for (binding, (provider, model, input, output)) in usage.bindings.iter().zip([
+            ("zai", "glm-5.3", 1238, 14),
+            ("google", "gemini-3.8-flash", 1163, 1),
+        ]) {
+            assert_eq!(binding.provider.as_deref(), Some(provider));
+            assert_eq!(binding.model, model);
+            assert_eq!(binding.totals[&CounterKind::InputUncached], input);
+            assert_eq!(binding.totals[&CounterKind::Output], output);
+        }
+    }
+
+    #[test]
+    fn usage_restore_with_only_unattributed_matches_falls_back_to_manifests() {
+        use smith_client::usage_log::{append, default_path};
+        use smith_runtime::session::{ProjectId, SessionPaths};
+        let root = tempfile::tempdir().expect("root");
+        let paths = SessionPaths::new(root.path(), &ProjectId::new("project").expect("project"));
+        let (_, unattributed, restored) = usage_with_unattributed_followup();
+        append(&default_path(paths.directory()), &unattributed).expect("first record");
+        append(&default_path(paths.directory()), &unattributed).expect("last record");
+        let records = [restored];
+        let logged = super::last_session_usage(
+            &paths,
+            &agent_runtime_core::ids::SessionId::new("session"),
+            &records,
+        );
+        assert!(logged.is_none());
+        for manifests in [
+            vec![("zai", "glm-5.3")],
+            vec![("zai", "glm-5.3"), ("google", "gemini-3.8-flash")],
+        ] {
+            let mut status = smith_client::status::Status::new("current", "project");
+            restore_usage_with_bindings(
+                &mut status,
+                &records,
+                logged.as_ref(),
+                manifests.clone(),
+                |provider, model| Some(price(provider, model)),
+            );
+            let usage = status.session_usage();
+            assert_eq!(usage.bindings.len(), 1);
+            let binding = &usage.bindings[0];
+            if manifests.len() == 1 {
+                assert_eq!(binding.provider.as_deref(), Some("zai"));
+                assert_eq!(binding.model, "glm-5.3");
+                assert!(binding.price.is_some());
+            } else {
+                assert!(binding.provider.is_none());
+                assert_eq!(binding.model, "earlier models");
+                assert!(binding.price.is_none());
+            }
+            assert_eq!(binding.totals[&CounterKind::InputUncached], 2401);
+            assert_eq!(binding.totals[&CounterKind::Output], 15);
+        }
     }
 
     #[test]

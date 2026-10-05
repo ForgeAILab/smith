@@ -4,6 +4,7 @@
 //! Terminal drawing belongs to `smith-tui`.
 
 use crate::diff_report::DiffLine;
+use crate::format::plural;
 
 /// Metadata-only reconciliation after restoring a saved session.
 /// Startup notices and headless output render the same report, retaining
@@ -107,7 +108,9 @@ pub fn render_restore_headless_plain(report: &RestoreReport) -> Option<String> {
             tasks,
         } => (*children > 0 || *monitors > 0 || *tasks > 0).then(|| {
             format!(
-                "recovery {reason} · {children} child(ren) interrupted · {monitors} monitor(s) interrupted · not restarted"
+                "recovery {reason} · {} interrupted · {} interrupted · not restarted",
+                plural(*children, "child", "children"),
+                plural(*monitors, "monitor", "monitors"),
             )
         }),
     }
