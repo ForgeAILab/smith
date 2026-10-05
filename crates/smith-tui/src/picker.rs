@@ -14,6 +14,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
+use crate::line_input::LineInput;
 use crate::render::lists::{clip_name, clip_words, list_row};
 use crate::screen::{FlowOutcome, Screen, ScreenEvent, Step};
 use crate::theme::{Theme, Tone};
@@ -104,7 +105,7 @@ pub struct ResourcePicker {
     /// Human-facing resource name.
     pub title: String,
     /// Current filter.
-    pub query: String,
+    pub query: LineInput,
     /// Complete bounded local inventory.
     pub entries: Vec<ResourceEntry>,
     /// Selected index within the filtered list.
@@ -141,7 +142,7 @@ impl ResourcePicker {
     ) -> Self {
         Self {
             title: title.into(),
-            query: String::new(),
+            query: LineInput::default(),
             entries,
             selected: 0,
             empty_guidance: empty_guidance.into(),
@@ -201,7 +202,7 @@ impl ResourcePicker {
         let query = if self.numbered {
             String::new()
         } else {
-            self.query.trim().to_ascii_lowercase()
+            self.query.text().trim().to_ascii_lowercase()
         };
         self.entries
             .iter()
@@ -254,24 +255,12 @@ impl ResourcePicker {
                 }
                 PickerOutcome::Pending
             }
-            (KeyCode::Char('u' | 'U'), modifiers)
-                if !self.numbered && modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                self.query.clear();
-                self.selected = 0;
-                PickerOutcome::Pending
-            }
             (KeyCode::Enter, _) => match self.selected_entry() {
                 Some(entry) if entry.disabled_reason.is_none() => {
                     PickerOutcome::Selected(entry.id.clone())
                 }
                 _ => PickerOutcome::Pending,
             },
-            (KeyCode::Backspace, _) if !self.numbered => {
-                self.query.pop();
-                self.selected = 0;
-                PickerOutcome::Pending
-            }
             (KeyCode::Char(character), modifiers)
                 if !modifiers.intersects(
                     KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
@@ -289,16 +278,21 @@ impl ResourcePicker {
                         return PickerOutcome::Selected(entry.id.clone());
                     }
                 } else {
-                    self.query.push(character);
+                    self.query.on_key(key);
                     self.selected = 0;
                 }
                 PickerOutcome::Pending
             }
-            _ => PickerOutcome::Pending,
+            _ => {
+                if !self.numbered && self.query.on_key(key) {
+                    self.selected = 0;
+                }
+                PickerOutcome::Pending
+            }
         }
     }
 
-    /// Appends pasted text to the filter query, control characters dropped.
+    /// Inserts pasted text to the filter query, control characters dropped.
     pub fn paste(&mut self, text: &str) {
         if self.numbered {
             return;
@@ -310,7 +304,7 @@ impl ResourcePicker {
         if cleaned.is_empty() {
             return;
         }
-        self.query.push_str(&cleaned);
+        self.query.paste(&cleaned);
         self.selected = 0;
     }
 }
@@ -723,12 +717,23 @@ fn draw_picker_heading(
     } else if picker.query.is_empty() {
         "type to filter".to_owned()
     } else {
-        format!("filter: {}", picker.query)
+        format!("filter: {}", picker.query.text())
     };
     let budget = usize::from(area.width)
         .saturating_sub(2 + position.width() + usize::from(!position.is_empty()));
-    let title = clip_words(title, budget);
-    let filter = clip_words(&filter, budget.saturating_sub(title.width() + 3));
+    let title_budget = if picker.query.is_empty() {
+        budget
+    } else {
+        budget.saturating_sub(12)
+    };
+    let title = clip_words(title, title_budget);
+    let filter_budget = budget.saturating_sub(title.width() + 3);
+    let (visible_query, query_cursor) = picker.query.viewport(filter_budget.saturating_sub(8));
+    let filter = if !picker.numbered && !picker.query.is_empty() && filter_budget > 8 {
+        format!("filter: {visible_query}")
+    } else {
+        clip_words(&filter, filter_budget)
+    };
     let filter = if filter.is_empty() {
         filter
     } else {
@@ -739,7 +744,7 @@ fn draw_picker_heading(
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(format!("  {title}"), theme.style(Tone::Heading)),
-            Span::styled(filter, theme.style(Tone::Dim)),
+            Span::styled(filter.clone(), theme.style(Tone::Dim)),
             Span::styled(
                 format!("{}{position}", " ".repeat(gap)),
                 theme.style(Tone::Dim),
@@ -747,6 +752,11 @@ fn draw_picker_heading(
         ])),
         Rect::new(area.x, area.y, area.width, area.height.min(1)),
     );
+    if !picker.numbered && area.width > 0 && area.height > 0 {
+        let prefix = if picker.query.is_empty() { 3 } else { 11 };
+        let column = (2 + title.width() + prefix + query_cursor).min(usize::from(area.width - 1));
+        frame.set_cursor_position((area.x + column as u16, area.y));
+    }
 }
 
 /// Row measurement uses the production viewport logic, preserving the five-choice cap.
@@ -1437,7 +1447,7 @@ mod tests {
             "run setup",
         );
         for query in ["project config", "input 124k", "128k context"] {
-            picker.query = query.to_owned();
+            picker.query = query.to_owned().into();
             assert_eq!(picker.filtered_indices(), [0]);
             assert_eq!(
                 picker.on_key(key(KeyCode::Enter)),
@@ -1517,7 +1527,7 @@ mod tests {
             vec![ResourceEntry::new("local/model", "local/model", "local")],
             "No local model is selectable · run smith setup add-model",
         );
-        filtered.query = "does-not-exist".to_owned();
+        filtered.query = "does-not-exist".to_owned().into();
         filtered.selected = 4;
         let filtered_lines = picker_lines(
             &filtered,
@@ -1593,7 +1603,7 @@ mod tests {
             "{rendered}"
         );
 
-        picker.query = "broken".to_owned();
+        picker.query = "broken".to_owned().into();
         assert_eq!(picker.on_key(key(KeyCode::Enter)), PickerOutcome::Pending);
     }
 
@@ -1672,7 +1682,7 @@ mod tests {
             .collect();
         let mut picker = ResourcePicker::new("Models", entries, "run setup");
 
-        picker.query = "vision".to_owned();
+        picker.query = "vision".to_owned().into();
         assert_eq!(picker.filtered_indices(), [599]);
         assert_eq!(
             picker.on_key(key(KeyCode::Enter)),

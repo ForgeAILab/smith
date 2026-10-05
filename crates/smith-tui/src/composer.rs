@@ -8,6 +8,7 @@
 use std::collections::VecDeque;
 use std::ops::Range;
 
+use crate::line_input::{LineEdit, edit_text, insert_text};
 use unicode_width::UnicodeWidthChar;
 
 /// Composer history is intentionally bounded, process-local UI state.
@@ -88,13 +89,6 @@ impl Composer {
         self.text.is_empty()
     }
 
-    fn byte_offset(&self, char_index: usize) -> usize {
-        self.text
-            .char_indices()
-            .nth(char_index)
-            .map_or(self.text.len(), |(offset, _)| offset)
-    }
-
     /// Character ranges occupied by registered placeholder labels.
     ///
     /// The composer remains a plain string; callers provide only labels that
@@ -120,142 +114,75 @@ impl Composer {
         ranges
     }
 
+    /// Shared edits retain atomic attachments and the shell prompt's protected start.
+    pub fn edit_line(&mut self, edit: LineEdit, ranges: &[Range<usize>]) {
+        self.vertical_column = None;
+        let protected = usize::from(self.is_bash_mode());
+        if edit_text(&mut self.text, &mut self.cursor, edit, ranges, protected) {
+            self.leave_history_navigation();
+        }
+    }
+
     /// Inserts a character at the cursor.
     pub fn insert(&mut self, ch: char) {
-        self.vertical_column = None;
-        self.leave_history_navigation();
-        let offset = self.byte_offset(self.cursor);
-        self.text.insert(offset, ch);
-        self.cursor += 1;
+        self.edit_line(LineEdit::Insert(ch), &[]);
     }
 
     /// Inserts a string at the cursor, as a paste would.
     pub fn insert_str(&mut self, value: &str) {
         self.vertical_column = None;
         self.leave_history_navigation();
-        let offset = self.byte_offset(self.cursor);
-        self.text.insert_str(offset, value);
-        self.cursor += value.chars().count();
+        insert_text(&mut self.text, &mut self.cursor, value);
     }
 
     /// Deletes the character before the cursor.
     pub fn backspace(&mut self) {
-        self.vertical_column = None;
-        if self.cursor == 0 {
-            return;
-        }
-        let offset = self.byte_offset(self.cursor - 1);
-        self.text.remove(offset);
-        self.cursor -= 1;
-        self.leave_history_navigation();
+        self.edit_line(LineEdit::Backspace, &[]);
     }
 
     /// Deletes the character or registered atomic range before the cursor.
     pub fn backspace_over(&mut self, atomic_ranges: &[Range<usize>]) {
-        if let Some(range) = atomic_ranges
-            .iter()
-            .find(|range| range.start < self.cursor && self.cursor <= range.end)
-            .cloned()
-        {
-            self.remove_range(range);
-        } else {
-            self.backspace();
-        }
+        self.edit_line(LineEdit::Backspace, atomic_ranges);
     }
 
     /// Deletes the character at the cursor.
     pub fn delete(&mut self) {
-        self.vertical_column = None;
-        if self.cursor >= self.len() {
-            return;
-        }
-        let offset = self.byte_offset(self.cursor);
-        self.text.remove(offset);
-        self.leave_history_navigation();
+        self.edit_line(LineEdit::Delete, &[]);
     }
 
     /// Deletes the character or registered atomic range after the cursor.
     pub fn delete_over(&mut self, atomic_ranges: &[Range<usize>]) {
-        if let Some(range) = atomic_ranges
-            .iter()
-            .find(|range| range.start <= self.cursor && self.cursor < range.end)
-            .cloned()
-        {
-            self.remove_range(range);
-        } else {
-            self.delete();
-        }
+        self.edit_line(LineEdit::Delete, atomic_ranges);
     }
 
     /// Moves the cursor one character left.
     pub fn move_left(&mut self) {
-        self.vertical_column = None;
-        self.cursor = self.cursor.saturating_sub(1);
+        self.edit_line(LineEdit::Left, &[]);
     }
 
     /// Moves left by one character or across one registered atomic range.
     pub fn move_left_over(&mut self, atomic_ranges: &[Range<usize>]) {
-        self.vertical_column = None;
-        if let Some(range) = atomic_ranges
-            .iter()
-            .find(|range| range.start < self.cursor && self.cursor <= range.end)
-        {
-            self.cursor = range.start;
-        } else {
-            self.move_left();
-        }
+        self.edit_line(LineEdit::Left, atomic_ranges);
     }
 
     /// Moves the cursor one character right.
     pub fn move_right(&mut self) {
-        self.vertical_column = None;
-        self.cursor = (self.cursor + 1).min(self.len());
+        self.edit_line(LineEdit::Right, &[]);
     }
 
     /// Moves right by one character or across one registered atomic range.
     pub fn move_right_over(&mut self, atomic_ranges: &[Range<usize>]) {
-        self.vertical_column = None;
-        if let Some(range) = atomic_ranges
-            .iter()
-            .find(|range| range.start <= self.cursor && self.cursor < range.end)
-        {
-            self.cursor = range.end;
-        } else {
-            self.move_right();
-        }
-    }
-
-    fn remove_range(&mut self, range: Range<usize>) {
-        self.vertical_column = None;
-        debug_assert!(range.start < range.end);
-        debug_assert!(range.end <= self.len());
-        let start = self.byte_offset(range.start);
-        let end = self.byte_offset(range.end);
-        self.text.replace_range(start..end, "");
-        self.cursor = range.start;
-        self.leave_history_navigation();
+        self.edit_line(LineEdit::Right, atomic_ranges);
     }
 
     /// Moves the cursor to the start of the current line.
     pub fn move_home(&mut self) {
-        self.vertical_column = None;
-        let chars: Vec<char> = self.text.chars().collect();
-        let mut index = self.cursor;
-        while index > 0 && chars[index - 1] != '\n' {
-            index -= 1;
-        }
-        self.cursor = index.max(usize::from(self.is_bash_mode()));
+        self.edit_line(LineEdit::Home, &[]);
     }
 
     /// Moves the cursor to the end of the current line.
     pub fn move_end(&mut self) {
-        self.vertical_column = None;
-        let chars: Vec<char> = self.text.chars().collect();
-        let mut index = self.cursor;
-        while index < chars.len() && chars[index] != '\n' {
-            index += 1;
-        }
-        self.cursor = index;
+        self.edit_line(LineEdit::End, &[]);
     }
 
     /// Moves to the start of the whole draft.
@@ -308,79 +235,27 @@ impl Composer {
 
     /// Moves left over whitespace and the preceding word or registered label.
     pub fn move_word_left_over(&mut self, atomic_ranges: &[Range<usize>]) {
-        self.vertical_column = None;
-        let chars: Vec<char> = self.text.chars().collect();
-        let mut index = self.cursor;
-        while index > 0 && chars[index - 1].is_whitespace() {
-            index -= 1;
-        }
-        if let Some(range) = atomic_ranges
-            .iter()
-            .find(|range| range.start < index && index <= range.end)
-        {
-            self.cursor = range.start;
-            return;
-        }
-        while index > 0 && !chars[index - 1].is_whitespace() {
-            if atomic_ranges.iter().any(|range| range.end == index) {
-                break;
-            }
-            index -= 1;
-        }
-        self.cursor = index;
+        self.edit_line(LineEdit::WordLeft, atomic_ranges);
     }
 
     /// Moves right over whitespace and the next word or registered label.
     pub fn move_word_right_over(&mut self, atomic_ranges: &[Range<usize>]) {
-        self.vertical_column = None;
-        let chars: Vec<char> = self.text.chars().collect();
-        let mut index = self.cursor;
-        while index < chars.len() && chars[index].is_whitespace() {
-            index += 1;
-        }
-        if let Some(range) = atomic_ranges
-            .iter()
-            .find(|range| range.start <= index && index < range.end)
-        {
-            self.cursor = range.end;
-            return;
-        }
-        while index < chars.len() && !chars[index].is_whitespace() {
-            if atomic_ranges.iter().any(|range| range.start == index) {
-                break;
-            }
-            index += 1;
-        }
-        self.cursor = index;
+        self.edit_line(LineEdit::WordRight, atomic_ranges);
     }
 
     /// Deletes the word or registered label to the left of the cursor.
     pub fn delete_word_left_over(&mut self, atomic_ranges: &[Range<usize>]) {
-        let end = self.cursor;
-        self.move_word_left_over(atomic_ranges);
-        if self.cursor < end {
-            self.remove_range(self.cursor..end);
-        }
+        self.edit_line(LineEdit::DeleteWordLeft, atomic_ranges);
     }
 
     /// Deletes to the current line's start without removing its newline.
     pub fn delete_to_line_start(&mut self) {
-        let end = self.cursor;
-        self.move_home();
-        if self.cursor < end {
-            self.remove_range(self.cursor..end);
-        }
+        self.edit_line(LineEdit::DeleteToStart, &[]);
     }
 
     /// Deletes to the current line's end without removing its newline.
     pub fn delete_to_line_end(&mut self) {
-        let start = self.cursor;
-        self.move_end();
-        let end = self.cursor;
-        self.cursor = start;
-        if start < end {
-            self.remove_range(start..end);
-        }
+        self.edit_line(LineEdit::DeleteToEnd, &[]);
     }
 
     /// Moves the cursor to a `(line, column)` position, both zero-based and
@@ -570,6 +445,19 @@ impl Composer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deletion_from_inside_an_atomic_label_removes_the_whole_label() {
+        for edit in [LineEdit::Backspace, LineEdit::Delete] {
+            let mut composer = Composer::new();
+            composer.replace("a [chunk] z");
+            let ranges = composer.registered_ranges(["[chunk]"]);
+            composer.cursor = 5;
+            composer.edit_line(edit, &ranges);
+            assert_eq!(composer.text(), "a  z");
+            assert_eq!(composer.cursor(), 2);
+        }
+    }
 
     #[test]
     fn typing_advances_the_cursor() {

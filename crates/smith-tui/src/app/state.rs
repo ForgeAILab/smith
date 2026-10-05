@@ -185,15 +185,6 @@ pub(super) const MAX_EXPLICIT_QUEUED_TURNS: usize = 16;
 pub(super) const MAX_REJECTED_FOLLOWUPS: usize = 16;
 pub(crate) const MAX_PENDING_PREVIEW_ENTRIES: usize = 3;
 
-/// Collapses a paste onto one line for single-line query surfaces.
-pub(super) fn flatten_paste(text: &str) -> String {
-    text.split('\n')
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 /// Resource-ID namespace for transition-release root-mode adapters.
 pub const LEGACY_AGENT_PROFILE_PREFIX: &str = "legacy-agent:";
 
@@ -398,7 +389,7 @@ pub enum Overlay {
         /// Composer draft restored when search is cancelled.
         original: String,
         /// Case-insensitive substring query.
-        query: String,
+        query: crate::line_input::LineInput,
         /// Stable history index of the selected match.
         selected: Option<usize>,
         /// Exact selected history entry, ready to restore into the composer.

@@ -382,7 +382,7 @@ fn transient_overlay(index: usize) -> Overlay {
         },
         2 => Overlay::HistorySearch {
             original: "draft".to_owned(),
-            query: String::new(),
+            query: crate::LineInput::default(),
             selected: None,
             matched: None,
         },

@@ -453,12 +453,13 @@ pub(super) fn desired_palette_rows(app: &App, selected: usize, error: Option<&st
 pub(super) fn draw_history_search(
     frame: &mut Frame<'_>,
     area: Rect,
-    query: &str,
+    query: &crate::line_input::LineInput,
     matched: Option<&str>,
     theme: Theme,
 ) {
     let query_empty = query.is_empty();
-    let query = if query_empty { "type query" } else { query };
+    let (visible, cursor) = query.viewport(usize::from(area.width).saturating_sub(18));
+    let query = if query_empty { "type query" } else { &visible };
     let result = matched.map_or_else(
         || {
             if query_empty {
@@ -484,6 +485,9 @@ pub(super) fn draw_history_search(
         )),
     ];
     frame.render_widget(Paragraph::new(lines), area);
+    if area.width > 18 && area.height > 0 {
+        frame.set_cursor_position((area.x + 18 + cursor as u16, area.y));
+    }
 }
 
 struct ConfirmLayout {

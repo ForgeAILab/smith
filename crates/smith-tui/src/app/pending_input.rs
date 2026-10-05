@@ -193,8 +193,8 @@ impl App {
     /// Folds one bracketed paste into whichever surface currently takes text.
     ///
     /// Large pastes into the composer collapse to an editable
-    /// `[Pasted text #N +L lines]` placeholder; single-line surfaces receive
-    /// the paste flattened onto one line.
+    /// `[Pasted text #N +L lines]` placeholder; single-line fields drop controls
+    /// through the shared line editor without trimming the text.
     pub fn on_paste(&mut self, pasted: &str) {
         let normalized = pasted.replace("\r\n", "\n").replace('\r', "\n");
         if normalized.is_empty() {
@@ -238,11 +238,11 @@ impl App {
                 state.paste(&normalized);
             }
             Some(Overlay::HistorySearch { query, .. }) => {
-                query.push_str(&flatten_paste(&normalized));
+                query.paste(&normalized);
                 self.refresh_history_search(false);
             }
             Some(Overlay::ResourcePicker { picker, .. }) => {
-                picker.paste(&flatten_paste(&normalized));
+                picker.paste(&normalized);
             }
             // Confirmation modals take no text.
             Some(_) => {}
@@ -292,27 +292,6 @@ impl App {
             .composer
             .registered_ranges(self.attachment_placeholders());
         self.composer.backspace_over(&ranges);
-    }
-
-    pub(super) fn composer_delete_over_attachment(&mut self) {
-        let ranges = self
-            .composer
-            .registered_ranges(self.attachment_placeholders());
-        self.composer.delete_over(&ranges);
-    }
-
-    pub(super) fn composer_move_left_over_attachment(&mut self) {
-        let ranges = self
-            .composer
-            .registered_ranges(self.attachment_placeholders());
-        self.composer.move_left_over(&ranges);
-    }
-
-    pub(super) fn composer_move_right_over_attachment(&mut self) {
-        let ranges = self
-            .composer
-            .registered_ranges(self.attachment_placeholders());
-        self.composer.move_right_over(&ranges);
     }
 
     /// Whether the composer surface currently accepts an image attachment.

@@ -240,7 +240,21 @@ pub(super) fn draw_transcript(frame: &mut Frame<'_>, area: Rect, app: &App, them
     } else {
         max_scroll.saturating_sub(app.scroll_back)
     };
-    frame.render_widget(Paragraph::new(rows.window(offset, area.height)), area);
+    let visible = rows.window(offset, area.height);
+    if theme.uses_hyperlinks() {
+        frame.render_widget(
+            Paragraph::new(
+                visible
+                    .iter()
+                    .map(crate::hyperlink::plain_line)
+                    .collect::<Vec<_>>(),
+            ),
+            area,
+        );
+        crate::hyperlink::apply(frame.buffer_mut(), area, &visible);
+    } else {
+        frame.render_widget(Paragraph::new(visible), area);
+    }
 }
 
 #[cfg(test)]

@@ -100,7 +100,7 @@ impl App {
         };
         let mut picker = ResourcePicker::new(title, entries, empty_guidance);
         if let Some(query) = initial_query {
-            picker.query = query.to_owned();
+            picker.query = query.to_owned().into();
         }
         if target == ResourceTarget::Model {
             picker.selected = picker

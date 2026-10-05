@@ -166,7 +166,7 @@ pub fn text_from_buffer(selection: &Selection, buffer: &Buffer, area: Rect) -> O
         let (from, to) = snap_span_to_glyphs(buffer, area, row, span);
         let text = glyph_bounds(buffer, area, row)
             .filter(|&(start, _)| start >= from && start < to)
-            .map(|(start, _)| buffer[(start, row)].symbol())
+            .map(|(start, _)| crate::hyperlink::visible_text(buffer[(start, row)].symbol()))
             .collect::<String>();
         rows.push(text.trim_end().to_owned());
     }
@@ -202,7 +202,10 @@ pub(crate) fn glyph_bounds(
         let start = column;
         // A zero-width symbol would never advance the walk, so every cell
         // counts for at least the one it was written into.
-        let width = buffer[(start, row)].symbol().cell_width().max(1);
+        let width = crate::hyperlink::visible_text(buffer[(start, row)].symbol())
+            .as_str()
+            .cell_width()
+            .max(1);
         column = start.saturating_add(width).min(right);
         Some((start, column))
     })

@@ -9,6 +9,7 @@ use smith_client::NoticeKind;
 use smith_host::approval::PromptScope;
 
 use crate::commands;
+use crate::line_input::{LineEdit, LineInput, line_edit};
 use crate::questionnaire::QuestionnaireResolution;
 use crate::references::{ComposerReference, parse_references};
 use crate::selection::Selection;
@@ -411,7 +412,7 @@ impl App {
     pub(super) fn open_history_search(&mut self) {
         self.open_overlay(Overlay::HistorySearch {
             original: self.composer.text().to_owned(),
-            query: String::new(),
+            query: LineInput::default(),
             selected: None,
             matched: None,
         });
@@ -434,26 +435,15 @@ impl App {
                     self.composer.replace(matched);
                 }
             }
-            (KeyCode::Backspace, _) => {
-                if let Some(Overlay::HistorySearch { query, .. }) = &mut self.overlay {
-                    query.pop();
-                }
-                self.refresh_history_search(false);
-            }
             (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
                 self.refresh_history_search(true);
             }
-            (KeyCode::Char(character), modifiers)
-                if !modifiers.intersects(
-                    KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
-                ) =>
-            {
+            _ => {
                 if let Some(Overlay::HistorySearch { query, .. }) = &mut self.overlay {
-                    query.push(character);
+                    query.on_key(key);
                 }
                 self.refresh_history_search(false);
             }
-            _ => {}
         }
         None
     }
@@ -465,7 +455,7 @@ impl App {
             }) => (query.clone(), cycle.then_some(*selected).flatten()),
             _ => return,
         };
-        let found = self.composer.search_history(&query, after);
+        let found = self.composer.search_history(query.text(), after);
         if let Some(Overlay::HistorySearch {
             selected, matched, ..
         }) = &mut self.overlay
@@ -732,6 +722,14 @@ impl App {
         let ranges = self
             .composer
             .registered_ranges(self.attachment_placeholders());
+        if let Some(edit) = line_edit(key).filter(|edit| !matches!(edit, LineEdit::Insert(_))) {
+            match key.code {
+                KeyCode::Home => self.composer.move_to_start(),
+                KeyCode::End => self.composer.move_to_end(),
+                _ => self.composer.edit_line(edit, &ranges),
+            }
+            return None;
+        }
         match (key.code, key.modifiers) {
             (KeyCode::Enter, m)
                 if m.contains(KeyModifiers::SHIFT) || m.contains(KeyModifiers::ALT) =>
@@ -945,58 +943,6 @@ impl App {
                     return None;
                 }
                 unreachable!("ordinary input without a child reference was prepared above")
-            }
-            (KeyCode::Backspace, _) => {
-                self.composer_backspace_over_attachment();
-                None
-            }
-            (KeyCode::Delete, _) => {
-                self.composer_delete_over_attachment();
-                None
-            }
-            (KeyCode::Left, _) => {
-                self.composer_move_left_over_attachment();
-                None
-            }
-            (KeyCode::Right, _) => {
-                self.composer_move_right_over_attachment();
-                None
-            }
-            (KeyCode::Home, _) => {
-                self.composer.move_to_start();
-                None
-            }
-            (KeyCode::End, _) => {
-                self.composer.move_to_end();
-                None
-            }
-            (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
-                self.composer.move_home();
-                None
-            }
-            (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
-                self.composer.move_end();
-                None
-            }
-            (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
-                self.composer.delete_word_left_over(&ranges);
-                None
-            }
-            (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
-                self.composer.delete_to_line_start();
-                None
-            }
-            (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
-                self.composer.delete_to_line_end();
-                None
-            }
-            (KeyCode::Char('b'), KeyModifiers::ALT) => {
-                self.composer.move_word_left_over(&ranges);
-                None
-            }
-            (KeyCode::Char('f'), KeyModifiers::ALT) => {
-                self.composer.move_word_right_over(&ranges);
-                None
             }
             (KeyCode::Char(ch), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
                 if ch == '@' && self.composer_at_token_boundary() {

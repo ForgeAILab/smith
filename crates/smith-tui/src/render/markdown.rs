@@ -229,7 +229,8 @@ impl Markdown {
         first: Vec<Span<'static>>,
         continuation: &str,
     ) {
-        let indent = Line::from(first.clone()).width().max(continuation.width());
+        let indent =
+            crate::hyperlink::line_width(&Line::from(first.clone())).max(continuation.width());
         let rows = wrap_lines(
             &[Line::from(spans)],
             self.width.saturating_sub(indent as u16).max(1),
@@ -280,11 +281,11 @@ impl Markdown {
         // must still count when deciding whether the table fits.
         let mut widths: Vec<_> = header_spans
             .iter()
-            .map(|spans| Line::from(spans.clone()).width())
+            .map(|spans| crate::hyperlink::line_width(&Line::from(spans.clone())))
             .collect();
         for row in &record_spans {
             for (width, cell) in widths.iter_mut().zip(row) {
-                *width = (*width).max(Line::from(cell.clone()).width());
+                *width = (*width).max(crate::hyperlink::line_width(&Line::from(cell.clone())));
             }
         }
         let table_width = widths.iter().sum::<usize>() + headers.len().saturating_sub(1) * 3;
@@ -313,7 +314,8 @@ impl Markdown {
                     };
                     let mut key = header.clone();
                     key.push(Span::styled(": ", self.theme.style(Tone::Dim)));
-                    let key_text = Line::from(key.clone()).to_string();
+                    let key_text =
+                        crate::hyperlink::plain_line(&Line::from(key.clone())).to_string();
                     let hanging = format!("{continuation}{}", " ".repeat(key_text.width()));
                     // A long key wraps too; it must not consume the value's
                     // entire line budget as an enormous hanging indent.
@@ -361,7 +363,8 @@ fn table_row(cells: &[Vec<Span<'static>>], widths: &[usize], theme: Theme) -> Ve
         }
         spans.extend(cell.iter().cloned());
         if index + 1 < cells.len() {
-            let padding = width.saturating_sub(Line::from(cell.clone()).width());
+            let padding =
+                width.saturating_sub(crate::hyperlink::line_width(&Line::from(cell.clone())));
             spans.push(Span::raw(" ".repeat(padding)));
         }
     }
@@ -596,15 +599,40 @@ fn inline(raw: &str, base: Style, theme: Theme, depth: usize) -> Vec<Span<'stati
         }
         if let Some((label, target, tail)) = link(rest) {
             let label = inline(label, base.patch(theme.style(Tone::Link)), theme, depth + 1);
-            let label_text = Line::from(label.clone()).to_string();
-            spans.extend(label);
+            let label_text = crate::hyperlink::plain_line(&Line::from(label.clone())).to_string();
+            for mut span in label {
+                if theme.uses_hyperlinks() {
+                    span.content = crate::hyperlink::annotate(
+                        &crate::hyperlink::visible_text(&span.content),
+                        target,
+                    )
+                    .into();
+                }
+                spans.push(span);
+            }
             if label_text != target {
-                // There is no terminal capability detection for OSC 8 yet.
-                // Keeping the target in cells makes it selectable everywhere.
+                // The visible target stays selectable in every terminal.
                 append(&mut spans, format!(" ({target})"), theme.style(Tone::Dim));
             }
             rest = tail;
             continue;
+        }
+        if theme.uses_hyperlinks() && (rest.starts_with("https://") || rest.starts_with("http://"))
+        {
+            let end = rest
+                .find(|ch: char| ch.is_whitespace() || matches!(ch, '<' | '>' | '"'))
+                .unwrap_or(rest.len());
+            let url = rest[..end].trim_end_matches(['.', ',', ';', '!', '?', ')', ']']);
+            if !url.is_empty() {
+                // Reuse the ordinary parser so enabling links cannot alter
+                // existing visible text or emphasis inside a bare URL.
+                for mut span in inline(url, base, theme.with_hyperlinks(false), depth + 1) {
+                    span.content = crate::hyperlink::annotate(&span.content, url).into();
+                    spans.push(span);
+                }
+                rest = &rest[url.len()..];
+                continue;
+            }
         }
         let first = rest.as_bytes()[0];
         if matches!(first, b'`' | b'*' | b'_') {
@@ -647,7 +675,12 @@ fn inline(raw: &str, base: Style, theme: Theme, depth: usize) -> Vec<Span<'stati
         let end = rest
             .char_indices()
             .skip(1)
-            .find(|(_, ch)| matches!(ch, '\\' | '[' | '`' | '*' | '_'))
+            .find(|(index, ch)| {
+                (theme.uses_hyperlinks()
+                    && (rest[*index..].starts_with("https://")
+                        || rest[*index..].starts_with("http://")))
+                    || matches!(ch, '\\' | '[' | '`' | '*' | '_')
+            })
             .map_or(rest.len(), |(index, _)| index);
         append(&mut spans, rest[..end].to_owned(), base);
         rest = &rest[end..];
@@ -770,4 +803,107 @@ fn balanced_end(raw: &str, open: char, close: char) -> Option<usize> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod hyperlink_tests {
+    use super::*;
+    use crate::hyperlink;
+    use ratatui::buffer::{Buffer, CellWidth};
+    use ratatui::layout::Rect;
+    use ratatui::widgets::{Paragraph, Widget};
+
+    #[test]
+    fn hyperlink_rows_have_identical_visible_glyphs_styles_widths_and_positions() {
+        let sources = [
+            "See [the **docs**](https://example.com/docs) and https://example.com/path?q=one now.",
+            "[中 é café](https://example.com) [x](https://x.test) https://example.com/a_b_c.",
+            "> - [nested docs](https://example.com) with a long tail that wraps",
+            "[e\u{301} ｶﾞ 😀](https://unicode.test) after",
+            "| [docs](https://example.com) | value |\n| --- | --- |\n| https://x.test | 中 |",
+            "`https://code.test` and [https://same.test](https://same.test)",
+        ];
+        for source in sources {
+            for width in [5, 12, 25, 40, 80, 120] {
+                let plain = render_assistant_lines(source, Theme::new(), width, false);
+                let linked = render_assistant_lines(
+                    source,
+                    Theme::new().with_hyperlinks(true),
+                    width,
+                    false,
+                );
+                assert_eq!(plain.len(), linked.len(), "{source}, {width}");
+                for (a, b) in plain.iter().zip(&linked) {
+                    assert_eq!(
+                        a.to_string(),
+                        hyperlink::plain_line(b).to_string(),
+                        "{source}, {width}"
+                    );
+                    assert_eq!(a.width(), hyperlink::line_width(b));
+                }
+                let area = Rect::new(0, 0, width, plain.len() as u16);
+                let mut off = Buffer::empty(area);
+                Paragraph::new(plain).render(area, &mut off);
+                let mut on = Buffer::empty(area);
+                Paragraph::new(linked.iter().map(hyperlink::plain_line).collect::<Vec<_>>())
+                    .render(area, &mut on);
+                hyperlink::apply(&mut on, area, &linked);
+                assert!(
+                    on.content
+                        .iter()
+                        .any(|cell| cell.symbol().contains("\x1b]8;;")),
+                    "links at width {width}"
+                );
+                for (a, b) in off.content.iter().zip(&on.content) {
+                    assert_eq!(
+                        a.symbol(),
+                        hyperlink::visible_text(b.symbol()),
+                        "{source}, {width}"
+                    );
+                    assert_eq!(a.cell_width(), b.cell_width(), "{source}, {width}");
+                    assert_eq!(a.style(), b.style());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn transcript_draw_applies_links_to_committed_and_streaming_rows() {
+        use crate::{App, Theme};
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut app = App::new("model", "project");
+        app.transcript
+            .push_text_delta("[docs](https://example.com) https://bare.test");
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal
+            .draw(|frame| crate::draw(frame, &app, Theme::new().with_hyperlinks(true)))
+            .unwrap();
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .any(|cell| cell.symbol().contains("\x1b]8;;https://example.com"))
+        );
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .any(|cell| cell.symbol().contains("\x1b]8;;https://bare.test"))
+        );
+        terminal
+            .draw(|frame| crate::draw(frame, &app, Theme::new()))
+            .unwrap();
+        assert!(
+            !terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .any(|cell| cell.symbol().contains('\x1b'))
+        );
+    }
 }
