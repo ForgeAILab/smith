@@ -155,12 +155,12 @@ fn production_smith_cli_has_no_glob_imports() {
 }
 
 #[test]
-fn smith_cli_event_streams_belong_only_to_the_screen_runner_and_session_loop() {
+fn smith_cli_event_streams_are_created_only_by_the_screen_runner() {
     let directory = workspace_root().join("crates/smith-cli/src");
-    let allowed = BTreeSet::from([
-        PathBuf::from("screen_runner.rs"),
-        PathBuf::from("tui_driver.rs"),
-    ]);
+    // Standalone screens own their reader; the interactive process borrows a
+    // runner-created reader across hosts and embedded screens. A constructor
+    // in the TUI loop would reintroduce a reader handoff on every rebuild.
+    let allowed = BTreeSet::from([PathBuf::from("screen_runner.rs")]);
     let mut owners = BTreeSet::new();
     visit_rust(&directory, &mut |path, source| {
         let count = source.matches("EventStream::new").count();
@@ -170,7 +170,7 @@ fn smith_cli_event_streams_belong_only_to_the_screen_runner_and_session_loop() {
         let relative = path.strip_prefix(&directory).expect("CLI source");
         assert!(
             allowed.contains(relative),
-            "{} creates an event stream outside the two terminal owners",
+            "{} creates an event stream outside the shared input owner",
             path.display(),
         );
         assert_eq!(
@@ -183,7 +183,7 @@ fn smith_cli_event_streams_belong_only_to_the_screen_runner_and_session_loop() {
     });
     assert_eq!(
         owners, allowed,
-        "both terminal owners must create their event stream"
+        "the runner must provide the single event-stream constructor"
     );
 }
 

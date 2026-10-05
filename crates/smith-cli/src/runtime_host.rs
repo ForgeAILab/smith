@@ -549,6 +549,9 @@ async fn run_interactive_hosts(
     let mut reasoning_notice = None;
     let mut mcp: Option<Arc<crate::mcp::McpContext>> = None;
     let mut app = None;
+    // Initialize after raw mode is entered, then retain input through host
+    // shutdown, startup retries, and embedded connection steps.
+    let mut keys = None;
     loop {
         let started = match start_host(
             &args.selection,
@@ -606,11 +609,13 @@ async fn run_interactive_hosts(
             }
         }
         let terminal = terminal.as_mut().expect("entered terminal");
+        let keys = keys.get_or_insert_with(crate::screen_runner::terminal_events);
         let (exit, retained) = run_interactive(
             terminal,
             app.take(),
             &host,
             InteractiveRequests {
+                keys: keys.as_mut(),
                 approvals,
                 interactions,
                 rotations,
@@ -662,6 +667,7 @@ async fn run_interactive_hosts(
                         let mut session = crate::screen_runner::ScreenSession::embedded(
                             terminal,
                             &retained.app,
+                            keys.as_mut(),
                             args.no_color,
                             args.no_motion,
                         );

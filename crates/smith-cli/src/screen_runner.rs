@@ -59,10 +59,21 @@ impl EffectCancellation {
     }
 }
 
+/// Borrows an interactive reader or owns a standalone one, so screen steps cannot
+/// replace the reader used by the surrounding session.
+pub(crate) type TerminalEvents =
+    dyn futures_util::Stream<Item = std::io::Result<TermEvent>> + Unpin + Send;
+
+/// Constructs readers in one place; interactive callers retain theirs across
+/// host rebuilds and lend it to embedded screens instead of restarting input.
+pub(crate) fn terminal_events() -> Box<TerminalEvents> {
+    Box::new(EventStream::new())
+}
+
 /// Keeps a single event reader and terminal guard alive across a chain of screens.
 pub(crate) struct ScreenSession<'a> {
     surface: Surface<'a>,
-    events: Box<dyn futures_util::Stream<Item = std::io::Result<TermEvent>> + Unpin + Send>,
+    events: Box<dyn futures_util::Stream<Item = std::io::Result<TermEvent>> + Unpin + Send + 'a>,
     tick: Option<Interval>,
     theme: Theme,
     /// Cell diffs are safe within a step; a new key needs whole text on both surfaces.
@@ -89,6 +100,7 @@ impl ScreenSession<'static> {
         let terminal = terminal::enter()?;
         Ok(Self::new(
             Surface::Standalone(terminal),
+            terminal_events(),
             no_color,
             no_motion,
         ))
@@ -100,16 +112,29 @@ impl<'a> ScreenSession<'a> {
     pub(crate) fn embedded(
         terminal: &'a mut Terminal,
         app: &'a App,
+        events: &'a mut TerminalEvents,
         no_color: bool,
         no_motion: bool,
     ) -> Self {
-        Self::new(Surface::Embedded { terminal, app }, no_color, no_motion)
+        Self::new(
+            Surface::Embedded { terminal, app },
+            Box::new(events),
+            no_color,
+            no_motion,
+        )
     }
 
-    fn new(surface: Surface<'a>, no_color: bool, no_motion: bool) -> Self {
+    fn new(
+        surface: Surface<'a>,
+        events: Box<
+            dyn futures_util::Stream<Item = std::io::Result<TermEvent>> + Unpin + Send + 'a,
+        >,
+        no_color: bool,
+        no_motion: bool,
+    ) -> Self {
         Self {
             surface,
-            events: Box::new(EventStream::new()),
+            events,
             tick: None,
             theme: theme_from_flags(no_color, no_motion),
             last_drawn_key: None,
@@ -627,5 +652,77 @@ mod tests {
                 assert!(text.contains(expected), "{text}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod input_handoff_tests {
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+    use futures_util::StreamExt;
+    use smith_tui::{App, FlowOutcome, Screen, ScreenEvent, Step, Theme};
+
+    use super::{ScreenContext, ScreenResult, ScreenSession, Surface};
+
+    struct ConnectionComplete;
+
+    impl Screen for ConnectionComplete {
+        type Outcome = FlowOutcome<()>;
+        type Effect = std::convert::Infallible;
+
+        fn draw(&self, _: &mut ratatui::Frame<'_>, _: ratatui::layout::Rect, _: Theme) {}
+
+        fn on_event(&mut self, event: ScreenEvent) -> Step<Self::Outcome, Self::Effect> {
+            match event {
+                ScreenEvent::Key(key) if key.code == KeyCode::Enter => {
+                    Step::Outcome(FlowOutcome::Completed(()))
+                }
+                _ => Step::Pending,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn embedded_screen_completion_leaves_following_input_for_the_session() {
+        let mut app = App::new("example-model", "project");
+        app.composer.insert_str("existing draft ");
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 32)).expect("terminal");
+        let events = std::iter::once(KeyCode::Enter)
+            .chain("typed after connect".chars().map(KeyCode::Char))
+            .map(|code| Ok(Event::Key(KeyEvent::new(code, KeyModifiers::NONE))));
+        let mut input = futures_util::stream::iter(events);
+        {
+            let mut session = ScreenSession::new(
+                Surface::Testing {
+                    terminal: &mut terminal,
+                    app: Some(&app),
+                    repaints: 0,
+                },
+                Box::new(&mut input),
+                true,
+                true,
+            );
+            assert!(matches!(
+                session
+                    .run(
+                        &mut ConnectionComplete,
+                        ScreenContext {
+                            draw: None,
+                            input: "scripted input"
+                        },
+                    )
+                    .await
+                    .expect("connection completion"),
+                ScreenResult::Outcome(FlowOutcome::Completed(()))
+            ));
+        }
+        app.rebind_host();
+        while let Some(event) = input.next().await {
+            let Event::Key(key) = event.expect("following input") else {
+                panic!("scripted key");
+            };
+            assert!(app.on_key(key).is_none());
+        }
+        assert_eq!(app.composer.text(), "existing draft typed after connect");
     }
 }

@@ -642,3 +642,137 @@ fn child_rebind_keeps_only_coordinator_listed_inspector_logs() {
     app.replace_children([]);
     assert!(app.inspected_child.is_none());
 }
+
+#[tokio::test]
+async fn input_during_model_rebuild_reaches_composer_in_order_and_quit_is_kept() {
+    use crossterm::event::Event;
+
+    let fixture = Fixture::new();
+    let (host, resources) = Box::pin(fixture.start(None, Overrides::default())).await;
+    let mut previous = Box::pin(fixture.app(&host, &resources, None, None)).await;
+    // The fake provider has no catalog inventory for inactive named windows;
+    // supply the selectable row whose configured host the test will rebuild.
+    previous.app.resources.models.push(ResourceEntry::new(
+        "local/next-model",
+        "next-model",
+        "local",
+    ));
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    let mut keys = Box::pin(futures_util::stream::unfold(
+        receiver,
+        |mut receiver| async { receiver.recv().await.map(|event| (event, receiver)) },
+    ));
+    let send_text = |text: &str| {
+        for character in text.chars() {
+            sender
+                .send(Ok(Event::Key(KeyEvent::new(
+                    KeyCode::Char(character),
+                    KeyModifiers::NONE,
+                ))))
+                .expect("queued key");
+        }
+    };
+    let send_key = |code, modifiers| {
+        sender
+            .send(Ok(Event::Key(KeyEvent::new(code, modifiers))))
+            .expect("queued key");
+    };
+    send_text("/model");
+    send_key(KeyCode::Enter, KeyModifiers::NONE);
+    send_text("next-model");
+    send_key(KeyCode::Enter, KeyModifiers::NONE);
+    // Also queue a key behind the confirmation: it must remain unread when
+    // the old loop returns, rather than being discarded with that loop.
+    send_text("t");
+    let (exit, app) = Box::pin(crate::tui_driver::run_scripted_tui(
+        &host,
+        fixture.project.path(),
+        &resources,
+        previous.app,
+        &mut keys,
+        false,
+    ))
+    .await
+    .expect("model picker loop");
+    assert!(matches!(
+        exit,
+        InteractiveExit::Reconfigure(SelectionCommand::Model { ref model, .. })
+            if model == "next-model"
+    ));
+    assert!(
+        app.composer.is_empty(),
+        "keys after confirmation stay queued"
+    );
+    previous.app = app;
+    let session = host.session().id().clone();
+    Box::pin(host.shutdown()).await.expect("shutdown");
+
+    // No loop is reading while the host is rebuilt. Mix keys, editing, and a
+    // paste so reordering or partial delivery changes the resulting draft.
+    send_text("yped right after the switcX");
+    send_key(KeyCode::Backspace, KeyModifiers::NONE);
+    sender.send(Ok(Event::Paste("h".into()))).expect("paste");
+    let (host, resources) = Box::pin(fixture.start(
+        Some(session),
+        Overrides {
+            model: Some("next-model".to_owned()),
+            ..Overrides::default()
+        },
+    ))
+    .await;
+    let mut rebound = Box::pin(fixture.app(&host, &resources, Some(previous), None)).await;
+    let (exit, app) = Box::pin(crate::tui_driver::run_scripted_tui(
+        &host,
+        fixture.project.path(),
+        &resources,
+        rebound.app,
+        &mut keys,
+        true,
+    ))
+    .await
+    .expect("rebuilt loop");
+    assert!(matches!(exit, InteractiveExit::CapabilitiesChanged));
+    assert_eq!(app.composer.text(), "typed right after the switch");
+    rebound.app = app;
+    Box::pin(host.shutdown()).await.expect("shutdown");
+
+    // A second same-session rebuild keeps the existing draft as well as new
+    // input. Clear only by an explicit user key, then quit from the queue.
+    send_text(" again");
+    let (host, resources) = Box::pin(fixture.start(
+        Some(host.session().id().clone()),
+        Overrides {
+            model: Some("next-model".to_owned()),
+            ..Overrides::default()
+        },
+    ))
+    .await;
+    let mut rebound = Box::pin(fixture.app(&host, &resources, Some(rebound), None)).await;
+    let (_, app) = Box::pin(crate::tui_driver::run_scripted_tui(
+        &host,
+        fixture.project.path(),
+        &resources,
+        rebound.app,
+        &mut keys,
+        true,
+    ))
+    .await
+    .expect("recomposition loop");
+    assert_eq!(app.composer.text(), "typed right after the switch again");
+    rebound.app = app;
+    send_key(KeyCode::Char('u'), KeyModifiers::CONTROL);
+    send_text("/quit");
+    send_key(KeyCode::Enter, KeyModifiers::NONE);
+    let (exit, _) = Box::pin(crate::tui_driver::run_scripted_tui(
+        &host,
+        fixture.project.path(),
+        &resources,
+        rebound.app,
+        &mut keys,
+        false,
+    ))
+    .await
+    .expect("queued quit");
+    assert!(matches!(exit, InteractiveExit::Quit(..)));
+    Box::pin(host.shutdown()).await.expect("shutdown");
+}

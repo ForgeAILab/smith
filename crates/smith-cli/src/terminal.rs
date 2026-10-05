@@ -26,6 +26,12 @@ pub(crate) struct Terminal {
 }
 
 impl Terminal {
+    /// Lets the session loop share its draw path with backend-driven input tests
+    /// while this guard continues to own raw mode and alternate-screen restoration.
+    pub(crate) fn inner_mut(&mut self) -> &mut Inner {
+        &mut self.inner
+    }
+
     /// Clear without querying the cursor and discard cell diffs so a new step's
     /// text is written whole, including an embedded session's retained backdrop.
     pub(crate) fn repaint(&mut self) -> std::io::Result<()> {

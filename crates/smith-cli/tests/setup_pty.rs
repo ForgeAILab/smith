@@ -965,15 +965,21 @@ expect {{
     timeout {{ exit 124 }}
     eof {{ exit 125 }}
 }}
-send -- "{query}"
-after 300
-send -- "\r"
+# Confirmation and following input share one write, with no rebuild wait.
+send -- "{query}\rtyped right after the switch"
 expect {{
-    -exact "{selected}" {{}}
+    -exact "typed right after the switch" {{}}
     timeout {{ exit 124 }}
     eof {{ exit 125 }}
 }}
-send -- "/quit\r"
+send -- "\025/model\r"
+expect {{
+    -exact "Choose model" {{}}
+    timeout {{ exit 124 }}
+    eof {{ exit 125 }}
+}}
+# Exercise the original flake: /quit immediately follows another switch.
+send -- "{query}\r/quit\r"
 expect {{
     -exact "TERMINAL_RESTORED" {{}}
     timeout {{ exit 124 }}

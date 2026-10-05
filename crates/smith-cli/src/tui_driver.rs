@@ -7,7 +7,7 @@ use agent_runtime_core::cancel::CancelReason;
 use agent_runtime_core::ids::ChildId;
 use agent_runtime_core::usage::{CounterKind, UsageRecord};
 use anyhow::{Context, Result};
-use crossterm::event::{Event as TermEvent, EventStream, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event as TermEvent, KeyCode, KeyEventKind, KeyModifiers};
 use futures_util::StreamExt;
 use smith_client::NoticeKind;
 use smith_client::agent_report::AgentSnapshot;
@@ -85,7 +85,9 @@ pub(super) struct InteractiveResources {
 /// The runtime's out-of-band request streams, plus the accounts they rotate
 /// between. Each stream is absent when the surface was started without that
 /// capability.
-pub(super) struct InteractiveRequests {
+pub(super) struct InteractiveRequests<'a> {
+    /// Borrow process input so shutdown and composition cannot replace its reader.
+    pub(super) keys: &'a mut crate::screen_runner::TerminalEvents,
     pub(super) approvals: Option<ApprovalRequests>,
     pub(super) interactions: Option<InteractionRequests>,
     pub(super) rotations: Option<RotationRequests>,
@@ -470,7 +472,7 @@ pub(super) async fn run_interactive(
     terminal: &mut terminal::Terminal,
     previous: Option<InteractiveApp>,
     host: &HostSession,
-    requests: InteractiveRequests,
+    requests: InteractiveRequests<'_>,
     project: &std::path::Path,
     resources: InteractiveResources,
     presentation: PresentationOptions,
@@ -481,6 +483,7 @@ pub(super) async fn run_interactive(
         binding,
     } = prepare_interactive_app(host, project, &resources, &presentation, previous).await;
     let InteractiveRequests {
+        keys,
         approvals,
         interactions,
         rotations,
@@ -501,6 +504,7 @@ pub(super) async fn run_interactive(
         terminal,
         app,
         TuiRunInputs {
+            keys,
             host,
             project,
             approvals,
@@ -694,6 +698,7 @@ fn subscribe_to_child(
 }
 
 pub(super) struct TuiRunInputs<'a> {
+    keys: &'a mut crate::screen_runner::TerminalEvents,
     host: &'a HostSession,
     project: &'a std::path::Path,
     approvals: Option<ApprovalRequests>,
@@ -725,7 +730,7 @@ struct TuiLoop<'a> {
     skills: Arc<crate::skills::SkillContext>,
     session: &'a smith_runtime::SessionHandle,
     events: smith_runtime::client::SmithEventStream,
-    keys: EventStream,
+    keys: &'a mut crate::screen_runner::TerminalEvents,
     spinner: tokio::time::Interval,
     frame: tokio::time::Interval,
     local_tx: tokio::sync::mpsc::UnboundedSender<LocalOutcome>,
@@ -749,7 +754,17 @@ pub(super) async fn run_tui(
     app: App,
     inputs: TuiRunInputs<'_>,
 ) -> Result<(InteractiveExit, App)> {
-    let mut tui = TuiLoop::new(app, inputs);
+    run_tui_on(terminal.inner_mut(), TuiLoop::new(app, inputs)).await
+}
+
+async fn run_tui_on<B>(
+    terminal: &mut ratatui::Terminal<B>,
+    mut tui: TuiLoop<'_>,
+) -> Result<(InteractiveExit, App)>
+where
+    B: ratatui::backend::Backend,
+    B::Error: Send + Sync + 'static,
+{
     let exit = loop {
         tokio::select! {
             // Keyboard first: a provider flood must not starve cancellation.
@@ -826,6 +841,7 @@ pub(super) async fn run_tui(
 impl<'a> TuiLoop<'a> {
     fn new(app: App, inputs: TuiRunInputs<'a>) -> Self {
         let TuiRunInputs {
+            keys,
             host,
             project,
             approvals,
@@ -842,7 +858,6 @@ impl<'a> TuiLoop<'a> {
         } = inputs;
         let session = host.session();
         let events = host.client().events();
-        let keys = EventStream::new();
         let spinner = tokio::time::interval(SPINNER_TICK);
         let frame = tokio::time::interval(FRAME);
         let (local_tx, local_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -913,11 +928,15 @@ impl<'a> TuiLoop<'a> {
         }
     }
 
-    async fn on_terminal_event(
+    async fn on_terminal_event<B>(
         &mut self,
-        terminal: &mut terminal::Terminal,
+        terminal: &mut ratatui::Terminal<B>,
         key: std::io::Result<TermEvent>,
-    ) -> Result<Option<InteractiveExit>> {
+    ) -> Result<Option<InteractiveExit>>
+    where
+        B: ratatui::backend::Backend,
+        B::Error: Send + Sync + 'static,
+    {
         match key.context("reading a terminal event")? {
             // `Ctrl+V` is the explicit "attach from clipboard" chord:
             // terminals deliver ordinary pastes as bracketed text, but
@@ -1502,10 +1521,14 @@ impl<'a> TuiLoop<'a> {
         }
     }
 
-    async fn on_frame(
+    async fn on_frame<B>(
         &mut self,
-        terminal: &mut terminal::Terminal,
-    ) -> Result<Option<InteractiveExit>> {
+        terminal: &mut ratatui::Terminal<B>,
+    ) -> Result<Option<InteractiveExit>>
+    where
+        B: ratatui::backend::Backend,
+        B::Error: Send + Sync + 'static,
+    {
         // A newly connected server's tools and a newly trusted skill
         // both join at the next idle boundary, never mid-turn:
         // swapping the ability set underneath a running turn is what
@@ -1736,6 +1759,46 @@ pub(super) async fn switch_account(
     Some(smith_tui::accounts::switch_notice(
         &outgoing, &incoming, true,
     ))
+}
+
+/// Exercises the production select loop without raw mode; an idle recomposition
+/// ends the run after queued input so tests can inspect an unsubmitted draft.
+#[cfg(test)]
+pub(super) async fn run_scripted_tui(
+    host: &HostSession,
+    project: &std::path::Path,
+    resources: &InteractiveResources,
+    app: App,
+    keys: &mut crate::screen_runner::TerminalEvents,
+    recompose: bool,
+) -> Result<(InteractiveExit, App)> {
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 32))?;
+    let mut tui = TuiLoop::new(
+        app,
+        TuiRunInputs {
+            keys,
+            host,
+            project,
+            approvals: None,
+            interactions: None,
+            rotations: None,
+            accounts: ActiveAccounts::ephemeral(),
+            credential_pool: None,
+            agents: &resources.agents,
+            catalog: &resources.catalog,
+            inventory: &resources.inventory,
+            theme: Theme::new().without_color().without_motion(),
+            mcp: None,
+            skills: resources.skills.clone(),
+        },
+    );
+    tui.remote_tools_pending = recompose;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        run_tui_on(&mut terminal, tui),
+    )
+    .await
+    .context("scripted loop did not reach an exit")?
 }
 
 #[cfg(test)]
