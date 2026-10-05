@@ -1144,6 +1144,20 @@ fn wait_status_json(status: &ChildStatus, timed_out: bool) -> Value {
     value
 }
 
+/// Tells Runtime this call's result hands `outcome` to the model, so the
+/// automatic completion turn does not deliver it a second time. Runtime acts
+/// only once the result commits. A refusal leaves automatic delivery in place,
+/// which repeats the result rather than losing it.
+fn acknowledge_delivered(
+    coordinator: &DelegationCoordinator,
+    ctx: &InvocationContext,
+    outcome: &ChildTaskOutcome,
+) {
+    if let Some(turn) = &ctx.turn {
+        let _ = coordinator.acknowledge_task_outcome_on_tool_result(turn, &ctx.call_id, outcome);
+    }
+}
+
 fn task_outcome_json(outcome: &ChildTaskOutcome) -> Value {
     match outcome {
         ChildTaskOutcome::Completed { child, result } => json!({
@@ -1178,7 +1192,8 @@ impl Tool for AgentTool {
              is an immediate status check; an expired wait leaves the child running in the background and terminal results are delivered automatically), \
              result, follow_up (start a new task on an idle child), resume (continue an exact \
              interrupted checkpoint), stop. A completed child's \
-             result is also delivered to you automatically at the next safe point. A child's \
+             result is delivered to you automatically at the next safe point unless wait or \
+             result already returned it to you. A child's \
              needs_input result is informational and does not open user interface; decide \
              whether to call root ask_user, then send the answer with an explicit follow_up."
                 .to_owned()
@@ -1194,8 +1209,9 @@ impl Tool for AgentTool {
                  inherits the parent's profile. A profile whose posture can write still needs \
                  tools=\"all\" to receive write-capable tools, and a read-only (the default) or \
                  otherwise declared read-only workspace keeps the child read-only no matter what \
-                 posture or tool scope it asked for. A completed child's result is also \
-                 delivered to you automatically at the next safe point. A child's needs_input \
+                 posture or tool scope it asked for. A completed child's result is delivered to \
+                 you automatically at the next safe point unless wait or result already returned \
+                 it to you. A child's needs_input \
                  result is informational and does not open user interface; decide whether to \
                  call root ask_user, then send the answer with an explicit follow_up.",
                 self.available_profiles_description()
@@ -1369,7 +1385,7 @@ impl Tool for AgentTool {
     async fn invoke(
         &self,
         prepared: PreparedToolCall,
-        _ctx: &InvocationContext,
+        ctx: &InvocationContext,
     ) -> Result<ToolOutcome, RuntimeError> {
         let arguments = prepared.into_arguments();
         let action: AgentAction = serde_json::from_value(arguments).map_err(|err| {
@@ -1462,13 +1478,25 @@ impl Tool for AgentTool {
                     Ok(result) => result,
                     Err(err) => return Ok(ToolOutcome::error(err.message)),
                 };
+                // The status carries the completed result text; when it is
+                // the child's latest outcome, the model now has it.
+                if let (Some(text), Ok(Some(outcome))) = (
+                    status.last_result.as_deref(),
+                    coordinator.task_outcome(&child),
+                ) && matches!(&outcome, ChildTaskOutcome::Completed { result, .. } if result.text == text)
+                {
+                    acknowledge_delivered(coordinator, ctx, &outcome);
+                }
                 Ok(ToolOutcome::json(wait_status_json(&status, timed_out)))
             }
             AgentAction::Result { child_id } => {
                 let outcome = coordinator
                     .task_outcome(&agent_runtime_core::ids::ChildId::new(child_id.clone()));
                 match outcome {
-                    Ok(Some(outcome)) => Ok(ToolOutcome::json(task_outcome_json(&outcome))),
+                    Ok(Some(outcome)) => {
+                        acknowledge_delivered(coordinator, ctx, &outcome);
+                        Ok(ToolOutcome::json(task_outcome_json(&outcome)))
+                    }
                     Ok(None) => Ok(ToolOutcome::json(json!({
                         "child_id": child_id,
                         "state": "running",

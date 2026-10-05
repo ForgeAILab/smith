@@ -2125,6 +2125,7 @@ async fn durable_child_follow_up_survives_a_full_smith_host_restart() {
     first_request.runtime.provider = Some(provider.clone());
     let first = start(first_request).await.expect("the first Smith host");
     let parent = first.session().id().clone();
+    let mut parent_events = first.session().subscribe();
     let first_coordinator = first
         .runtime()
         .delegation()
@@ -2148,6 +2149,19 @@ async fn durable_child_follow_up_survives_a_full_smith_host_restart() {
         .wait_task_outcome(&child)
         .await
         .expect("the first task completes");
+    // The admission worker delivers the result in a parent turn of its own.
+    // Shutting down after that turn is admitted but before its provider call
+    // leaves the result consumed and unanswered, so wait for the turn.
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while let Some(event) = parent_events.next().await {
+            if matches!(event.payload, RuntimeEvent::TurnCompleted { .. }) {
+                return;
+            }
+        }
+        panic!("the parent event stream ended before the delivery turn completed");
+    })
+    .await
+    .expect("the automatic delivery turn completes");
     let before = first_coordinator
         .status(&child)
         .expect("first child status");

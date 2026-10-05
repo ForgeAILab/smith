@@ -142,7 +142,9 @@ resolved maximum is rejected before waiting. A parent is
 `parked-awaiting-child` only while a direct child is still nonterminal; no
 provider stream or tool call is kept open after the foreground wait boundary.
 Terminal child outcomes are preserved and automatically admitted through an
-ordinary, attributed continuation at the next safe boundary. Child progress
+ordinary, attributed continuation at the next safe boundary, unless the parent
+model already received the outcome from the agent tool's `wait` or `result`
+action; that outcome is not delivered a second time. Child progress
 and child provider/tool work do not reset the parent's inactivity or cache-touch
 clocks.
 

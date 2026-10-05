@@ -70,7 +70,12 @@ pub(super) async fn run_with_io(
         }
     };
     let turn_id = turn.id().clone();
-    let mut fold = HeadlessFold::new(turn_id.clone(), cache_projection, initial_activation);
+    let mut fold = HeadlessFold::new(
+        turn_id.clone(),
+        cache_projection,
+        initial_activation,
+        delivery_cursor_revision(host),
+    );
 
     while let Some(event) = events.next().await {
         fold.apply(&event);
@@ -88,7 +93,11 @@ pub(super) async fn run_with_io(
             let _ = host.shutdown().await;
             return Err(error);
         }
-        if fold.exit(|| host.goal(), || has_required_child_work(host)) {
+        let observed_delivery = fold.observed_delivery_revision;
+        if fold.exit(
+            || host.goal(),
+            || has_required_child_work(host, observed_delivery),
+        ) {
             break;
         }
     }
@@ -297,12 +306,20 @@ pub(super) fn finish_waits_for_required_follow_up(finish: &TurnFinish) -> bool {
     }
 }
 
-pub(super) fn has_required_child_work(host: &HostSession) -> bool {
-    if host.delegation_parking().is_some_and(|parking| {
-        parking.admission_in_flight
-            || !parking.pending_children.is_empty()
-            || !parking.ready_outcomes.is_empty()
-    }) {
+/// Whether a child still runs, an outcome still waits for delivery, or a
+/// delivery turn admitted after `observed_delivery` has not started on the
+/// stream yet.
+///
+/// Ready and running state come from the live coordinator rather than the
+/// parking projection, which its workers refresh on their own schedule: an
+/// outcome the model already read through the agent tool leaves no delivery
+/// turn behind, so a stale projection would keep the run open with no event
+/// left to re-check it.
+pub(super) fn has_required_child_work(host: &HostSession, observed_delivery: u64) -> bool {
+    if host
+        .delegation_parking()
+        .is_some_and(|parking| parking.admission_in_flight)
+    {
         return true;
     }
     let Some(coordinator) = host
@@ -317,6 +334,18 @@ pub(super) fn has_required_child_work(host: &HostSession) -> bool {
         .into_iter()
         .any(|status| matches!(status.state, ChildState::Running))
         || !coordinator.take_ready_task_outcomes().is_empty()
+        || coordinator.child_outcome_cursor().revision() > observed_delivery
+}
+
+/// The child-outcome cursor revision, which advances once per admitted
+/// delivery turn.
+fn delivery_cursor_revision(host: &HostSession) -> u64 {
+    host.runtime()
+        .delegation()
+        .and_then(|delegation| delegation.coordinator())
+        .map_or(0, |coordinator| {
+            coordinator.child_outcome_cursor().revision()
+        })
 }
 
 pub(super) async fn write_restored_interaction_required(

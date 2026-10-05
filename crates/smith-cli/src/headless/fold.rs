@@ -34,7 +34,11 @@ pub(super) struct HeadlessFold {
     pub(super) goal_continuation_turns: u32,
     pub(super) active_goal_turns: BTreeSet<String>,
     pub(super) active_child_completion_turns: BTreeSet<String>,
-    pub(super) pending_child_completion_delivery: bool,
+    /// Child-outcome cursor revision of the last delivery turn seen on the
+    /// stream. Runtime advances the cursor when it admits a delivery turn,
+    /// before that turn's start event arrives here, so a live cursor ahead of
+    /// this value means a delivery is still on its way.
+    pub(super) observed_delivery_revision: u64,
 }
 
 impl HeadlessFold {
@@ -42,6 +46,7 @@ impl HeadlessFold {
         turn_id: TurnId,
         cache_projection: CacheProjection,
         initial_activation: Option<ActivationOutput>,
+        delivery_revision: u64,
     ) -> Self {
         Self {
             turn_id,
@@ -62,7 +67,7 @@ impl HeadlessFold {
             goal_continuation_turns: 0_u32,
             active_goal_turns: BTreeSet::new(),
             active_child_completion_turns: BTreeSet::new(),
-            pending_child_completion_delivery: false,
+            observed_delivery_revision: delivery_revision,
         }
     }
 
@@ -78,22 +83,21 @@ impl HeadlessFold {
                 self.active_goal_turns.insert(turn.as_str().to_owned());
             }
         }
-        if matches!(
-            &event.payload,
-            RuntimeEvent::InternalTurnStarted { source }
-                if source.kind == "delegation.child-completion"
-        ) {
-            self.pending_child_completion_delivery = false;
+        if let RuntimeEvent::InternalTurnStarted { source } = &event.payload
+            && source.kind == "delegation.child-completion"
+        {
+            // The source id is `cursor-<revision>`; each admission advances
+            // the revision by one.
+            let revision = source
+                .id
+                .strip_prefix("cursor-")
+                .and_then(|revision| revision.parse::<u64>().ok())
+                .unwrap_or(self.observed_delivery_revision.saturating_add(1));
+            self.observed_delivery_revision = self.observed_delivery_revision.max(revision);
             if let Some(turn) = &event.turn {
                 self.active_child_completion_turns
                     .insert(turn.as_str().to_owned());
             }
-        }
-        if matches!(
-            &event.payload,
-            RuntimeEvent::ChildCompleted { .. } | RuntimeEvent::ChildNeedsInput { .. }
-        ) {
-            self.pending_child_completion_delivery = true;
         }
         let belongs_to_turn = event.turn.as_ref() == Some(&self.turn_id);
         let belongs_to_goal_turn = event
@@ -287,7 +291,6 @@ impl HeadlessFold {
                 Ok(_)
                     if self.active_goal_turns.is_empty()
                         && self.active_child_completion_turns.is_empty()
-                        && !self.pending_child_completion_delivery
                         && !child_work() =>
                 {
                     return true;
@@ -314,7 +317,7 @@ mod tests {
     use agent_runtime_core::clock::Timestamp;
     use agent_runtime_core::content::{InternalTurnSensitivity, InternalTurnSource};
     use agent_runtime_core::goal::{GoalTokenUsage, GoalUsageProvenance};
-    use agent_runtime_core::ids::{ChildId, EventId, GoalId, InteractionRequestId, SessionId};
+    use agent_runtime_core::ids::{EventId, GoalId, InteractionRequestId, SessionId};
     use agent_runtime_core::provider::ProviderAttemptPurpose;
     use agent_runtime_core::usage::{CounterKind, Provenance, UsageRecord, UsageSource};
     use smith_runtime::client::LimitKind;
@@ -325,7 +328,7 @@ mod tests {
     };
 
     fn fold() -> HeadlessFold {
-        HeadlessFold::new(TurnId::new("root"), CacheProjection::default(), None)
+        HeadlessFold::new(TurnId::new("root"), CacheProjection::default(), None, 0)
     }
 
     fn event(seq: u64, turn: &str, payload: RuntimeEvent) -> EventEnvelope {
@@ -482,23 +485,12 @@ mod tests {
 
         fold.apply(&event(
             2,
-            "root",
-            RuntimeEvent::ChildCompleted {
-                child: ChildId::new("child"),
-                result: "Done".to_owned(),
-            },
-        ));
-        assert!(fold.pending_child_completion_delivery);
-        assert!(!fold.exit(no_goal, || panic!("child work while delivery is pending")));
-
-        fold.apply(&event(
-            3,
             "child-completion-turn",
             RuntimeEvent::InternalTurnStarted {
-                source: internal_source("delegation.child-completion", "child"),
+                source: internal_source("delegation.child-completion", "cursor-3"),
             },
         ));
-        assert!(!fold.pending_child_completion_delivery);
+        assert_eq!(fold.observed_delivery_revision, 3);
         assert!(
             fold.active_child_completion_turns
                 .contains("child-completion-turn")
@@ -508,12 +500,25 @@ mod tests {
         )));
 
         fold.apply(&completed(
-            4,
+            3,
             "child-completion-turn",
             TurnFinish::Completed,
         ));
         assert!(fold.active_child_completion_turns.is_empty());
         assert!(fold.exit(no_goal, || false));
+    }
+
+    #[test]
+    fn a_delivery_source_without_a_cursor_revision_counts_one_admission() {
+        let mut fold = fold();
+        fold.apply(&event(
+            1,
+            "child-completion-turn",
+            RuntimeEvent::InternalTurnStarted {
+                source: internal_source("delegation.child-completion", "unexpected"),
+            },
+        ));
+        assert_eq!(fold.observed_delivery_revision, 1);
     }
 
     #[test]

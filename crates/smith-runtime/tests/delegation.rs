@@ -2647,6 +2647,165 @@ async fn a_child_spawned_inside_a_parent_turn_is_delivered_without_another_user_
     session.shutdown().await.expect("a clean shutdown");
 }
 
+const PONG_TASK_MARKER: &str = "reply-pong-to-the-parent";
+const PONG_PARENT_INPUT: &str = "ask a sub-agent to reply pong";
+
+/// Spawns a child, waits for it with the `agent` tool, optionally fetches the
+/// result too, and answers in the same turn. This is the turn that used to
+/// get a second, automatic delivery of the result it had already read.
+#[derive(Debug)]
+struct SpawnReadAnswerProvider {
+    /// `"wait"` answers from the wait status; `"result"` also calls result.
+    read: &'static str,
+    parent_calls: Mutex<u32>,
+    requests: Mutex<Vec<ProviderRequest>>,
+}
+
+impl SpawnReadAnswerProvider {
+    fn new(read: &'static str) -> Self {
+        Self {
+            read,
+            parent_calls: Mutex::new(0),
+            requests: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn requests(&self) -> Vec<ProviderRequest> {
+        self.requests
+            .lock()
+            .expect("provider requests poisoned")
+            .clone()
+    }
+
+    fn parent_calls(&self) -> u32 {
+        *self.parent_calls.lock().expect("parent calls poisoned")
+    }
+}
+
+#[async_trait]
+impl Provider for SpawnReadAnswerProvider {
+    fn describe(&self) -> Vec<ModelDescriptor> {
+        Vec::new()
+    }
+
+    fn capabilities(&self, _model: &agent_runtime_core::provider::ModelId) -> Option<Capabilities> {
+        Some(Capabilities::basic_streaming())
+    }
+
+    async fn stream(
+        &self,
+        request: ProviderRequest,
+        _ctx: ProviderCallContext,
+    ) -> Result<ProviderStream, ProviderError> {
+        let wire = serde_json::to_string(&request.messages).expect("provider messages");
+        self.requests
+            .lock()
+            .expect("provider requests poisoned")
+            .push(request);
+        let answer = |text: &str| {
+            Ok(Box::pin(futures_util::stream::iter(vec![
+                ProviderStreamEvent::TextDelta {
+                    text: text.to_owned(),
+                },
+                usage_event(5, 2),
+                ProviderStreamEvent::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ])) as ProviderStream)
+        };
+        // Only the parent's history holds the user's request.
+        if !wire.contains(PONG_PARENT_INPUT) {
+            return answer("pong");
+        }
+        let step = {
+            let mut calls = self.parent_calls.lock().expect("parent calls poisoned");
+            *calls += 1;
+            *calls
+        };
+        let arguments = match (step, self.read) {
+            (1, _) => serde_json::json!({"action": "spawn", "task": PONG_TASK_MARKER}),
+            (2, _) => serde_json::json!({"action": "wait", "child_id": "child-1"}),
+            (3, "result") => serde_json::json!({"action": "result", "child_id": "child-1"}),
+            _ => return answer("pong"),
+        };
+        let mut events = tool_call_fragments(
+            0,
+            &format!("parent-call-{step}"),
+            AGENT_TOOL_NAME,
+            &arguments.to_string(),
+        );
+        events.push(ProviderStreamEvent::Finish {
+            reason: FinishReason::ToolCalls,
+        });
+        Ok(Box::pin(futures_util::stream::iter(events)))
+    }
+}
+
+/// A parent that reads its child's result with `wait` or `result` and
+/// answers in the same turn gets no second, automatic delivery of it.
+async fn assert_a_read_child_result_is_answered_once(read: &'static str, parent_calls: u32) {
+    let fixture = Fixture::new();
+    let provider = Arc::new(SpawnReadAnswerProvider::new(read));
+    let smith = factory::build_request(request(&fixture, provider.clone()))
+        .await
+        .expect("a root runtime");
+    let session = smith
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .expect("a session");
+    let delegation = smith.delegation().expect("a delegation surface");
+    let _lifecycle = wire_delegation(&session, delegation)
+        .await
+        .expect("delegation wires once");
+
+    session
+        .run(UserInput::text(PONG_PARENT_INPUT))
+        .await
+        .expect("the parent turn reads the result and answers");
+    let coordinator = delegation.coordinator().expect("a coordinator");
+    assert!(
+        coordinator.take_ready_task_outcomes().is_empty(),
+        "the result the model read is no longer pending automatic delivery"
+    );
+    assert!(
+        coordinator
+            .task_outcome(&agent_runtime_core::ids::ChildId::new("child-1"))
+            .expect("a known child")
+            .is_some(),
+        "the result stays readable"
+    );
+
+    // Before the fix the admission worker started its delivery turn within
+    // milliseconds of the parent turn ending.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert_eq!(
+        provider.parent_calls(),
+        parent_calls,
+        "the parent model answers once"
+    );
+    assert!(
+        !provider.requests().iter().any(|request| {
+            serde_json::to_string(&request.messages)
+                .expect("provider messages")
+                .contains("delegation.child-completion")
+        }),
+        "no automatic turn delivers the result again"
+    );
+
+    session.shutdown().await.expect("a clean shutdown");
+}
+
+#[tokio::test]
+async fn a_child_result_read_with_wait_is_not_delivered_again() {
+    assert_a_read_child_result_is_answered_once("wait", 3).await;
+}
+
+#[tokio::test]
+async fn a_child_result_read_with_result_is_not_delivered_again() {
+    assert_a_read_child_result_is_answered_once("result", 4).await;
+}
+
 /// Runtime answers `Busy` when the parent turn boundary is still occupied.
 /// The admission worker is otherwise woken only by runtime events, so a
 /// refusal arriving after the last event of a run must schedule its own retry

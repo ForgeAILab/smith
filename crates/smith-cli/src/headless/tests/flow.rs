@@ -147,6 +147,163 @@ mode = "deny"
     );
 }
 
+/// The parent model spawns a child, reads its result with `wait`, and answers
+/// in the same turn; the child answers `pong`. Parent and child share this
+/// provider, so it answers by request content rather than call order.
+#[derive(Debug, Default)]
+struct SpawnWaitAnswerProvider {
+    parent_calls: std::sync::Mutex<u32>,
+    child_completion_requests: std::sync::Mutex<u32>,
+}
+
+const PONG_PARENT_PROMPT: &str = "ask a sub-agent to reply pong";
+
+#[async_trait::async_trait]
+impl Provider for SpawnWaitAnswerProvider {
+    fn describe(&self) -> Vec<agent_runtime_core::provider::ModelDescriptor> {
+        Vec::new()
+    }
+
+    fn capabilities(&self, _model: &agent_runtime_core::provider::ModelId) -> Option<Capabilities> {
+        Some(Capabilities::basic_streaming())
+    }
+
+    async fn stream(
+        &self,
+        request: agent_runtime_core::provider::ProviderRequest,
+        _ctx: agent_runtime_core::provider::ProviderCallContext,
+    ) -> Result<agent_runtime_core::provider::ProviderStream, ProviderError> {
+        let wire = serde_json::to_string(&request.messages).expect("provider messages");
+        let answer = |text: &str| {
+            Ok(Box::pin(futures_util::stream::iter(vec![
+                ProviderStreamEvent::TextDelta {
+                    text: text.to_owned(),
+                },
+                usage_event(5, 2),
+                ProviderStreamEvent::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ]))
+                as agent_runtime_core::provider::ProviderStream)
+        };
+        // Only the parent's history holds the user's prompt.
+        if !wire.contains(PONG_PARENT_PROMPT) {
+            return answer("pong");
+        }
+        if wire.contains("delegation.child-completion") {
+            *self
+                .child_completion_requests
+                .lock()
+                .expect("child completion requests poisoned") += 1;
+        }
+        let step = {
+            let mut calls = self.parent_calls.lock().expect("parent calls poisoned");
+            *calls += 1;
+            *calls
+        };
+        let arguments = match step {
+            1 => serde_json::json!({"action": "spawn", "task": "reply pong"}),
+            2 => serde_json::json!({"action": "wait", "child_id": "child-1"}),
+            _ => return answer("pong"),
+        };
+        let mut events = tool_call_fragments(
+            0,
+            &format!("parent-call-{step}"),
+            "agent",
+            &arguments.to_string(),
+        );
+        events.push(ProviderStreamEvent::Finish {
+            reason: FinishReason::ToolCalls,
+        });
+        Ok(Box::pin(futures_util::stream::iter(events)))
+    }
+}
+
+/// A headless run whose model read the child's result itself ends after the
+/// root turn: no delivery turn is coming, and none is waited for.
+#[tokio::test]
+async fn a_headless_run_that_read_its_child_result_exits_without_a_delivery_turn() {
+    const CONFIG: &str = r#"
+default_profile = "dev"
+
+[profiles.dev]
+provider = "local"
+model = "example-model"
+
+[providers.local]
+kind = "fake"
+
+[models."local/example-model"]
+context_tokens = 128000
+max_input_tokens = 124000
+max_output_tokens = 4096
+"#;
+    let home = tempfile::tempdir().expect("a home");
+    let project = tempfile::tempdir().expect("a project");
+    let config_dir = project.path().join(".smith");
+    std::fs::create_dir_all(&config_dir).expect("a config directory");
+    std::fs::write(config_dir.join("config.toml"), CONFIG).expect("a config");
+    let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+        .expect("resolved config")
+        .config;
+    let provider = Arc::new(SpawnWaitAnswerProvider::default());
+    let runtime = RuntimeRequest {
+        workspace: Some(Arc::new(
+            ProjectWorkspace::new(project.path()).expect("a workspace"),
+        )),
+        approval: Some(Arc::new(AllowAll)),
+        provider: Some(provider.clone() as Arc<dyn Provider>),
+        ..RuntimeRequest::new(config, HostSurface::Headless)
+    };
+    let host = smith_runtime::host::start(host_request(runtime, project.path()))
+        .await
+        .expect("a host");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let outcome = tokio::time::timeout(
+        HEADLESS_TEST_WATCHDOG,
+        run_with_io(
+            &host,
+            PONG_PARENT_PROMPT.into(),
+            OutputFormat::StreamJson,
+            HeadlessBrokers::default(),
+            BackgroundExit::Error,
+            &mut stdout,
+            &mut stderr,
+        ),
+    )
+    .await
+    .expect("the run ends instead of waiting for a delivery that is not coming")
+    .expect("a structured result");
+
+    assert_eq!(outcome.exit_code, 0, "{}", String::from_utf8_lossy(&stderr));
+    let lines = String::from_utf8(stdout)
+        .expect("UTF-8 JSONL")
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("one JSON value"))
+        .collect::<Vec<_>>();
+    assert_eq!(terminal_stream_result(&lines)["status"], "ok");
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line["event"]["payload"]["source"]["kind"] == "delegation.child-completion"),
+        "no automatic turn delivers the result the model already read"
+    );
+    assert_eq!(
+        *provider.parent_calls.lock().expect("parent calls poisoned"),
+        3,
+        "spawn, wait, answer"
+    );
+    assert_eq!(
+        *provider
+            .child_completion_requests
+            .lock()
+            .expect("child completion requests poisoned"),
+        0
+    );
+}
+
 #[test]
 fn a_failed_parent_does_not_wait_for_pending_child_delivery() {
     assert!(finish_waits_for_required_follow_up(&TurnFinish::Completed));

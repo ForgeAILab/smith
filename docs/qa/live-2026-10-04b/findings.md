@@ -166,3 +166,19 @@ Seen under heavy load only and left alone: `host_session`
 count 2 vs 3; code untouched by this release), and keys typed before Smith's
 first frame may be discarded at startup (the setup-cancel PTY test now waits
 for the screen instead of sleeping 800 ms).
+
+Follow-up (2026-10-05):
+
+- The `host_session` failure was a race in the test, not lost work. It shut
+  the host down right after the child's result arrived; when shutdown cancels
+  the automatic delivery turn after admission but before its provider call,
+  the result is already in the parent's history and is only unanswered, which
+  is the 2-instead-of-3 count. It did not reproduce in 21 runs at load
+  averages up to about 100. The test now waits for the delivery turn to
+  finish before shutting down (v0.3.8).
+- Keys typed before the first frame are not discarded. Typing immediately at
+  launch reached the composer 3 of 3 times on the release build: the terminal
+  library enters raw mode without flushing pending input, and Smith sends no
+  startup query that could consume it. The earlier failure was that PTY
+  test's 10-second limit for a debug build to start and exit on a heavily
+  loaded machine.
