@@ -51,7 +51,7 @@ handoff-checkpoint summaries, and any provider request changes.
 ## Impact
 
 - Affected specs: `client-surfaces`, `session-recovery`
-- Affected Smith code: `crates/smith-tui/src/app/{reducer,commands,conversation}.rs`
+- Affected Smith code: `crates/smith-tui/src/app/{reducer,conversation}.rs`, `crates/smith-client/src/commands.rs` (`/summary`),
   and transcript rendering; `crates/smith-runtime/src/cache_controller/`
   (completed-compaction projection), `crates/smith-runtime/src/resume_capsule.rs`
   (bounded protected-artifact view already exists); `crates/smith-cli/src/headless/`
