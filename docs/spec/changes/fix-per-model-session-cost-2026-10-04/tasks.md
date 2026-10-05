@@ -34,7 +34,7 @@ as a pricing bug in `docs/qa/live-2026-10-04b/findings.md`. Approved 2026-10-04 
 - [x] 3.1 Unit tests: two root bindings, a child on another model, an
   unpriced binding, an unresolved child, a version-4 log record; existing
   cost tests unchanged.
-- [ ] 3.2 fmt, strict Clippy (including Rust 1.88), workspace tests with
+- [x] 3.2 fmt, strict Clippy (including Rust 1.88), workspace tests with
   `--no-fail-fast`, `cargo deny`; fixtures reviewed.
 - [x] 3.3 Live: GLM then `/model` to Gemini, one turn each; the exit line
   names both with their shares and the shares match each model's catalog

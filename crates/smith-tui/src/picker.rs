@@ -5,6 +5,7 @@
 //! history or a provider.
 
 use std::convert::Infallible;
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::Frame;
@@ -315,6 +316,13 @@ impl ResourcePicker {
 }
 
 impl Screen for ResourcePicker {
+    /// Titles distinguish chooser steps; filtering and selection keep the same key.
+    fn step_key(&self) -> u64 {
+        let mut key = DefaultHasher::new();
+        self.title.hash(&mut key);
+        key.finish()
+    }
+
     type Outcome = FlowOutcome<String>;
     type Effect = Infallible;
 
@@ -1006,6 +1014,23 @@ fn picker_lines(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn step_key_tracks_the_title_without_repainting_filter_or_selection_changes() {
+        use crate::Screen;
+
+        let mut picker = ResourcePicker::new(
+            "Choose model",
+            vec![ResourceEntry::new("model", "Model", "model detail")],
+            "No models",
+        );
+        let initial = picker.step_key();
+        picker.on_key(key(KeyCode::Down));
+        picker.paste("model");
+        assert_eq!(picker.step_key(), initial);
+        picker.title = "Choose provider".into();
+        assert_ne!(picker.step_key(), initial);
+    }
+
     use super::*;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;

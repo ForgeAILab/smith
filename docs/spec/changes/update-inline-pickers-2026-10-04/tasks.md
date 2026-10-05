@@ -52,7 +52,7 @@ Findings R1–R4, S1–S6, C1, C2, M1 from
 - [x] 4.4 xAI device login gets a progress screen like ChatGPT's (code, URL,
   waiting, esc cancels) instead of `println!` lines, so it shows inside a
   session and standalone.
-- [ ] 4.5 Screens repaint whole on a step change (step key on `Screen`,
+- [x] 4.5 Screens repaint whole on a step change (step key on `Screen`,
   repaint in `ScreenSession`, standalone and embedded); the PTY waits go back
   to the phrases users see. Found in review.
 
@@ -68,7 +68,7 @@ Findings R1–R4, S1–S6, C1, C2, M1 from
 
 ## 6. Verification
 
-- [ ] 6.1 Unit tests for each screen value and the chooser component;
+- [x] 6.1 Unit tests for each screen value and the chooser component;
   fixtures re-recorded and reviewed; fmt, strict Clippy (including the Rust
   1.88 toolchain), workspace tests with `--no-fail-fast`, `cargo deny`.
 - [x] 6.2 `DESIGN.md` updated: choosers are inline lists; centered modals

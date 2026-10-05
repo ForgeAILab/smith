@@ -51,6 +51,14 @@ pub trait Screen {
     /// Work returned to the host rather than performed by the reducer.
     type Effect;
 
+    /// Identify a step boundary so hosts write its text whole instead of cell diffs.
+    /// Keep this stable while typing, selecting, or ticking within a step; change it
+    /// when entering another step, including when returning to an earlier one.
+    /// Single-step screens can keep the default; hosts repaint each new run too.
+    fn step_key(&self) -> u64 {
+        0
+    }
+
     /// Draw within the host's viewport so the same state needs no terminal handle.
     fn draw(&self, frame: &mut Frame<'_>, area: Rect, theme: Theme);
 

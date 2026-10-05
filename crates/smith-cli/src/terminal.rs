@@ -26,6 +26,15 @@ pub(crate) struct Terminal {
 }
 
 impl Terminal {
+    /// Clear without querying the cursor and discard cell diffs so a new step's
+    /// text is written whole, including an embedded session's retained backdrop.
+    pub(crate) fn repaint(&mut self) -> std::io::Result<()> {
+        clear_screen(&mut stdout())?;
+        self.inner = ratatui::Terminal::new(CrosstermBackend::new(stdout()))?;
+        invalidate_previous_frame(&mut self.inner);
+        Ok(())
+    }
+
     /// Draws one coalesced frame.
     pub(crate) fn draw<F>(&mut self, render: F) -> std::io::Result<ratatui::CompletedFrame<'_>>
     where
@@ -43,6 +52,19 @@ impl Terminal {
         self.restored = true;
         Ok(())
     }
+}
+
+/// A fresh blank buffer still lets ratatui skip spaces between words. Seed its
+/// previous frame with empty symbols so every visible cell differs, then swap back
+/// to an empty drawing buffer. These sentinels are never sent to the terminal;
+/// the completed frame replaces them and ordinary frames resume normal diffs.
+pub(crate) fn invalidate_previous_frame<B: ratatui::backend::Backend>(
+    terminal: &mut ratatui::Terminal<B>,
+) {
+    for cell in &mut terminal.current_buffer_mut().content {
+        cell.set_symbol("");
+    }
+    terminal.swap_buffers();
 }
 
 impl Drop for Terminal {
@@ -92,8 +114,8 @@ fn clear_screen(writer: &mut impl Write) -> std::io::Result<()> {
     // A write-only clear, never `ratatui::Terminal::clear()`: its `ESC[6n`
     // query can lose its reply to crossterm's global reader after an
     // `EventStream` has existed, then time out under a multiplexer (cmux).
-    // Only initial entry clears; connections borrow the active terminal and
-    // host rebuilds keep its buffers for an uninterrupted session surface.
+    // Entry and screen step boundaries clear; ordinary frames and host
+    // rebuilds keep their buffers for an uninterrupted session surface.
     execute!(writer, Clear(ClearType::All), MoveTo(0, 0))
 }
 
@@ -134,6 +156,43 @@ fn leave_screen(writer: &mut impl Write) -> std::io::Result<()> {
 #[allow(clippy::wildcard_imports)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repaint_writes_spaces_in_whole_phrases_and_then_resumes_cell_diffs() {
+        let mut output = Vec::new();
+        {
+            let mut terminal = ratatui::Terminal::with_options(
+                CrosstermBackend::new(&mut output),
+                ratatui::TerminalOptions {
+                    viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 60, 2)),
+                },
+            )
+            .expect("fixed terminal");
+            invalidate_previous_frame(&mut terminal);
+            let render = |frame: &mut ratatui::Frame<'_>| {
+                frame.render_widget(
+                    ratatui::widgets::Paragraph::new("Quick start with GLM"),
+                    frame.area(),
+                );
+            };
+            terminal.draw(render).expect("whole repaint");
+            // A marker in the captured byte stream separates the two draws.
+            terminal
+                .backend_mut()
+                .write_all(b"FRAME_BOUNDARY")
+                .expect("marker");
+            terminal.draw(render).expect("unchanged frame");
+        }
+        let output = String::from_utf8(output).expect("ANSI is UTF-8");
+        let (first, second) = output.split_once("FRAME_BOUNDARY").expect("two frames");
+        assert!(first.contains("Quick start with GLM"), "{first:?}");
+        assert!(!second.contains("Quick"), "{second:?}");
+        assert!(!output.contains('\0'), "sentinels must never be emitted");
+        assert!(
+            !output.contains("\u{1b}[6n"),
+            "cursor queries must never be emitted"
+        );
+    }
 
     #[test]
     fn terminal_screen_modes_enable_and_restore_button_and_drag_reporting() {

@@ -301,6 +301,11 @@ impl Screen for LoginProgress {
     type Outcome = FlowOutcome<ChatGptTokenBundle>;
     type Effect = Infallible;
 
+    /// Browser and device-code instructions are distinct steps; ticks are not.
+    fn step_key(&self) -> u64 {
+        u64::from(self.display.user_code.is_some())
+    }
+
     fn draw(&self, frame: &mut ratatui::Frame<'_>, area: Rect, theme: Theme) {
         draw_login_progress_in_area(
             frame,
@@ -621,6 +626,11 @@ mod tests {
             no_motion: true,
             from_setup: true,
         };
+        let browser_step = progress.step_key();
+        progress.on_event(ScreenEvent::Tick);
+        assert_eq!(progress.step_key(), browser_step);
+        progress.display.user_code = Some("ABCD-1234".into());
+        assert_ne!(progress.step_key(), browser_step);
         assert!(matches!(
             progress.on_event(ScreenEvent::Key(crossterm::event::KeyEvent::new(
                 KeyCode::Esc,

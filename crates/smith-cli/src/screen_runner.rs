@@ -65,6 +65,8 @@ pub(crate) struct ScreenSession<'a> {
     events: Box<dyn futures_util::Stream<Item = std::io::Result<TermEvent>> + Unpin + Send>,
     tick: Option<Interval>,
     theme: Theme,
+    /// Cell diffs are safe within a step; a new key needs whole text on both surfaces.
+    last_drawn_key: Option<u64>,
 }
 
 enum Surface<'a> {
@@ -76,7 +78,8 @@ enum Surface<'a> {
     #[cfg(test)]
     Testing {
         terminal: &'a mut ratatui::Terminal<ratatui::backend::TestBackend>,
-        app: &'a App,
+        app: Option<&'a App>,
+        repaints: usize,
     },
 }
 
@@ -109,13 +112,35 @@ impl<'a> ScreenSession<'a> {
             events: Box::new(EventStream::new()),
             tick: None,
             theme: theme_from_flags(no_color, no_motion),
+            last_drawn_key: None,
         }
     }
 
     /// Draws an effect's busy state without accepting input during external work.
     pub(crate) fn draw<S: Screen>(&mut self, screen: &S) -> std::io::Result<()> {
+        let key = screen.step_key();
+        if self.last_drawn_key != Some(key) {
+            match &mut self.surface {
+                Surface::Standalone(terminal) => terminal.repaint()?,
+                Surface::Embedded { terminal, .. } => terminal.repaint()?,
+                #[cfg(test)]
+                Surface::Testing {
+                    terminal, repaints, ..
+                } => {
+                    use ratatui::backend::Backend;
+                    terminal
+                        .backend_mut()
+                        .clear()
+                        .map_err(|never| -> std::io::Error { match never {} })?;
+                    **terminal = ratatui::Terminal::new(terminal.backend().clone())
+                        .map_err(|never| -> std::io::Error { match never {} })?;
+                    terminal::invalidate_previous_frame(terminal);
+                    *repaints += 1;
+                }
+            }
+        }
         let theme = self.theme;
-        match &mut self.surface {
+        let result = match &mut self.surface {
             Surface::Standalone(terminal) => terminal
                 .draw(|frame| draw_screen(frame, screen, theme, None))
                 .map(|_| ()),
@@ -123,12 +148,16 @@ impl<'a> ScreenSession<'a> {
                 .draw(|frame| draw_screen(frame, screen, theme, Some(app)))
                 .map(|_| ()),
             #[cfg(test)]
-            Surface::Testing { terminal, app } => terminal
-                .draw(|frame| draw_screen(frame, screen, theme, Some(app)))
+            Surface::Testing { terminal, app, .. } => terminal
+                .draw(|frame| draw_screen(frame, screen, theme, *app))
                 .map(|_| ())
                 // TestBackend cannot fail; keep its result compatible with I/O backends.
                 .map_err(|never| match never {}),
+        };
+        if result.is_ok() {
+            self.last_drawn_key = Some(key);
         }
+        result
     }
 
     /// Runs an input-only screen without requiring a dummy completion future at call sites.
@@ -186,6 +215,9 @@ impl<'a> ScreenSession<'a> {
         S: Screen,
         F: Future,
     {
+        // A new run can use the same key as the preceding screen value in a
+        // chain; its first frame still needs to write the complete surface.
+        self.last_drawn_key = None;
         self.tick = screen.tick_interval().map(tokio::time::interval);
         let completion = async {
             match completion {
@@ -258,6 +290,9 @@ struct Working<'a, S>(&'a S, &'a EffectCancellation);
 impl<S: Screen> Screen for Working<'_, S> {
     type Outcome = Infallible;
     type Effect = Infallible;
+    fn step_key(&self) -> u64 {
+        self.0.step_key()
+    }
     fn draw(&self, frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, theme: Theme) {
         self.0.draw(frame, area, theme);
     }
@@ -309,7 +344,7 @@ fn draw_screen<S: Screen>(
 mod tests {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
     use smith_tui::setup::{SetupApp, SetupMode};
-    use smith_tui::{App, FlowOutcome, Theme};
+    use smith_tui::{App, FlowOutcome, Screen, ScreenEvent, Step, Theme};
 
     use super::{ScreenContext, ScreenResult, ScreenSession, Surface};
 
@@ -331,6 +366,115 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[derive(Default)]
+    struct ChangingScreen {
+        step: u64,
+        updates: usize,
+    }
+
+    impl Screen for ChangingScreen {
+        type Outcome = ();
+        type Effect = std::convert::Infallible;
+
+        fn step_key(&self) -> u64 {
+            self.step
+        }
+
+        fn draw(&self, frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, _theme: Theme) {
+            frame.render_widget(
+                ratatui::widgets::Paragraph::new(format!(
+                    "step {} update {}",
+                    self.step, self.updates
+                )),
+                area,
+            );
+        }
+
+        fn on_event(&mut self, event: ScreenEvent) -> Step<Self::Outcome, Self::Effect> {
+            if matches!(event, ScreenEvent::Key(key) if key.code == KeyCode::Tab) {
+                self.step += 1;
+            }
+            self.updates += 1;
+            Step::Pending
+        }
+    }
+
+    fn repaints(session: &ScreenSession<'_>) -> usize {
+        match session.surface {
+            Surface::Testing { repaints, .. } => repaints,
+            _ => panic!("test surface"),
+        }
+    }
+
+    #[tokio::test]
+    async fn step_boundaries_repaint_once_on_both_surfaces_and_new_runs() {
+        let mut app = App::new("gpt-5.3", "~/work/api");
+        app.transcript.push_user("retained transcript");
+        app.composer.insert_str("retained draft");
+        for backdrop in [None, Some(&app)] {
+            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 32))
+                .expect("terminal");
+            let mut session = ScreenSession {
+                surface: Surface::Testing {
+                    terminal: &mut terminal,
+                    app: backdrop,
+                    repaints: 0,
+                },
+                events: input(Vec::new()),
+                tick: None,
+                theme: Theme::new().without_color().without_motion(),
+                last_drawn_key: None,
+            };
+            let mut screen = ChangingScreen::default();
+            session.draw(&screen).expect("first frame");
+            assert_eq!(repaints(&session), 1);
+            for expected in [1, 2] {
+                for event in [
+                    ScreenEvent::Tick,
+                    ScreenEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
+                    ScreenEvent::Resize(100, 32),
+                ] {
+                    screen.on_event(event);
+                    session.draw(&screen).expect("within step");
+                    assert_eq!(repaints(&session), expected);
+                }
+                screen.on_event(ScreenEvent::Key(KeyEvent::new(
+                    KeyCode::Tab,
+                    KeyModifiers::NONE,
+                )));
+                session.draw(&screen).expect("new step");
+                session.draw(&screen).expect("same step");
+                assert_eq!(repaints(&session), expected + 1);
+            }
+            if let Surface::Testing { terminal, .. } = &session.surface {
+                let text = screen_text(terminal);
+                assert!(text.contains("step 2 update 8"), "{text}");
+                if backdrop.is_some() {
+                    assert!(text.contains("retained transcript"), "{text}");
+                    assert!(text.contains("retained draft"), "{text}");
+                }
+            }
+            let context = ScreenContext {
+                draw: None,
+                input: "test input",
+            };
+            let mut next_screen = ChangingScreen {
+                step: screen.step,
+                updates: 0,
+            };
+            assert!(matches!(
+                session
+                    .run(&mut next_screen, context)
+                    .await
+                    .expect("next screen"),
+                ScreenResult::InputEnded
+            ));
+            assert_eq!(repaints(&session), 4, "same key in a new screen run");
+            session.draw(&next_screen).expect("same step after run");
+            assert_eq!(repaints(&session), 4);
+        }
     }
 
     #[tokio::test]
@@ -361,11 +505,13 @@ mod tests {
                 let mut session = ScreenSession {
                     surface: Surface::Testing {
                         terminal: &mut terminal,
-                        app: &app,
+                        app: Some(&app),
+                        repaints: 0,
                     },
                     events: input(vec![KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE)]),
                     tick: None,
                     theme: Theme::new().without_color().without_motion(),
+                    last_drawn_key: None,
                 };
                 assert!(matches!(
                     session
@@ -409,11 +555,13 @@ mod tests {
         let mut session = ScreenSession {
             surface: Surface::Testing {
                 terminal: &mut terminal,
-                app: &app,
+                app: Some(&app),
+                repaints: 0,
             },
             events: input(vec![KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)]),
             tick: None,
             theme: Theme::new().without_color().without_motion(),
+            last_drawn_key: None,
         };
         let mut progress =
             crate::xai::login_progress("ABCD-1234", "https://auth.x.ai/activate", true, true);

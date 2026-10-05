@@ -139,6 +139,26 @@ mod tests {
     use smith_tui::{FlowOutcome, Screen, ScreenEvent, Step, Theme};
 
     #[test]
+    fn login_step_keys_change_with_instructions_but_not_waiting_ticks() {
+        let starting = super::LoginProgress::new(
+            "Connect xAI",
+            vec!["Getting sign-in instructions from xAI…".into()],
+            "Waiting for xAI",
+            false,
+        );
+        let mut progress =
+            super::login_progress("ABCD-1234", "https://auth.x.ai/activate", true, false);
+        let waiting = progress.step_key();
+        assert_ne!(starting.step_key(), waiting);
+        progress.on_event(ScreenEvent::Tick);
+        progress.on_event(ScreenEvent::Key(KeyEvent::new(
+            KeyCode::Char('a'),
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(progress.step_key(), waiting);
+    }
+
+    #[test]
     fn xai_progress_shows_public_instructions_and_cancels() {
         for (width, height) in [(44, 16), (100, 32)] {
             for opened in [false, true] {

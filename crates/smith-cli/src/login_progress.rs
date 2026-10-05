@@ -1,6 +1,7 @@
 //! Shared public OAuth instructions, kept separate from tokens and polling work.
 
 use std::convert::Infallible;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::time::Duration;
 
 use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
@@ -52,6 +53,13 @@ impl LoginProgress {
 impl Screen for LoginProgress {
     type Outcome = FlowOutcome<()>;
     type Effect = Infallible;
+
+    /// Public instructions identify the login step, while animation stays incremental.
+    fn step_key(&self) -> u64 {
+        let mut key = DefaultHasher::new();
+        (&self.title, &self.instructions).hash(&mut key);
+        key.finish()
+    }
 
     fn draw(&self, frame: &mut Frame<'_>, area: Rect, theme: Theme) {
         draw_progress(frame, area, &self.title, self.lines(), false, false, theme);

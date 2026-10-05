@@ -451,6 +451,8 @@ impl fmt::Debug for MaskedInput {
 pub struct SetupApp {
     mode: SetupMode,
     step: Step,
+    /// Re-entered steps need whole text even when their picker title is unchanged.
+    step_generation: u64,
     history: Vec<Step>,
     picker_selections: BTreeMap<Step, String>,
     picker: Option<ResourcePicker>,
@@ -532,6 +534,7 @@ impl SetupApp {
         let mut app = Self {
             mode: mode.clone(),
             step: Step::Action,
+            step_generation: 0,
             history: Vec::new(),
             picker_selections: BTreeMap::new(),
             picker: None,
@@ -1095,6 +1098,7 @@ impl SetupApp {
     }
 
     fn configure_picker(&mut self) {
+        self.step_generation = self.step_generation.wrapping_add(1);
         self.picker = match self.step {
             Step::Action => {
                 let entries = self
@@ -1469,6 +1473,7 @@ impl SetupApp {
                     return SetupEffect::None;
                 };
                 self.step = Step::Busy;
+                self.step_generation = self.step_generation.wrapping_add(1);
                 return SetupEffect::Submit {
                     submission,
                     allow_collisions: self.allow_collisions,
@@ -1619,6 +1624,10 @@ impl Screen for SetupApp {
     type Outcome = ();
     type Effect = SetupEffect;
 
+    fn step_key(&self) -> u64 {
+        self.step_generation
+    }
+
     fn draw(&self, frame: &mut Frame<'_>, area: Rect, theme: Theme) {
         draw_setup_in_area(frame, area, self, theme);
     }
@@ -1685,6 +1694,7 @@ impl SetupApp {
     #[must_use]
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
+        self.step_generation = self.step_generation.wrapping_add(1);
         self
     }
 }
@@ -1922,6 +1932,29 @@ mod tests {
     use super::*;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+
+    #[test]
+    fn step_keys_change_on_navigation_and_return_but_not_field_input() {
+        let mut app = setup_app(SetupMode::FirstRun, Vec::new(), Vec::new());
+        let welcome = app.step_key();
+        app.on_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
+        let authentication = app.step_key();
+        assert_ne!(authentication, welcome);
+        app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.step_key(), authentication);
+        app.on_key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE));
+        let field = app.step_key();
+        assert_ne!(field, authentication);
+        app.on_paste("ZAI_API_KEY");
+        app.on_event(ScreenEvent::Tick);
+        app.on_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(app.step_key(), field);
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_ne!(app.step_key(), field);
+        assert_ne!(app.step_key(), authentication, "re-entered authentication");
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_ne!(app.step_key(), welcome, "re-entered welcome");
+    }
 
     fn setup_app(
         mode: SetupMode,

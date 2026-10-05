@@ -298,18 +298,16 @@ expect {
     eof { exit 125 }
 }
 send -- "\033\[B\033\[B\033\[B\r"
-# Ratatui skips the unchanged t shared with Authentication, splitting Environment.
 expect {
-    -re {Environ.*variable} {}
+    -exact "Environment variable" {}
     timeout { exit 124 }
     eof { exit 125 }
 }
 send -- "ZAI_API_KEY"
 after 150
 send -- "\033"
-# Ratatui skips Authentication's unchanged t shared with Environment; Keychain is hidden.
 expect {
-    -re {Authentic.*ion} {}
+    -exact "Authentication" {}
     timeout { exit 124 }
     eof { exit 125 }
 }
@@ -330,12 +328,7 @@ expect {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(screen.contains("TERMINAL_RESTORED"), "{screen}");
-    assert!(
-        screen
-            .find("Environ")
-            .is_some_and(|start| screen[start + "Environ".len()..].contains("variable")),
-        "{screen}"
-    );
+    assert!(screen.contains("Environment variable"), "{screen}");
     assert!(
         !fixture.home.path().join(".smith").exists(),
         "authentication cancellation committed user state"
@@ -365,9 +358,8 @@ expect {{
     eof {{ exit 125 }}
 }}
 send -- "\033"
-# Quick is written contiguously after either list, avoiding skipped unchanged cells.
 expect {{
-    -exact "Quick" {{}}
+    -exact "Quick start with GLM" {{}}
     timeout {{ exit 124 }}
     eof {{ exit 125 }}
 }}
@@ -510,9 +502,6 @@ expect {{
         "screen: {screen}\nstderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    // Ratatui updates individual cells, so cursor-position escapes can split
-    // the warning's words across writes. The rendered wording is covered by
-    // setup snapshots; here retain the process-level warning and masking checks.
     assert!(
         screen.contains("plaintext") && screen.contains("same-user"),
         "{screen}"
@@ -1028,7 +1017,7 @@ expect {
 
     let empty_resume = r#"
 expect {
-    -exact "exits" {}
+    -exact "No sessions to resume in this project · esc exits" {}
     timeout { exit 124 }
     eof { exit 125 }
 }

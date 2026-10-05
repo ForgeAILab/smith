@@ -2,6 +2,7 @@
 
 use std::cell::Cell;
 use std::convert::Infallible;
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::Frame;
@@ -95,6 +96,13 @@ impl Screen for ConnectionReview {
     type Outcome = FlowOutcome<()>;
     type Effect = Infallible;
 
+    /// Saving replaces review as a step, but scrolling must not clear the surface.
+    fn step_key(&self) -> u64 {
+        let mut key = DefaultHasher::new();
+        self.title.hash(&mut key);
+        key.finish()
+    }
+
     fn draw(&self, frame: &mut Frame<'_>, area: Rect, theme: Theme) {
         self.draw_surface(frame, area, theme, false);
     }
@@ -164,6 +172,12 @@ mod tests {
             "Connect ChatGPT · experimental",
             "destination: ~/.smith/config.toml".into(),
         );
+        let review_key = review.step_key();
+        review.on_event(ScreenEvent::Key(KeyEvent::new(
+            KeyCode::Down,
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(review.step_key(), review_key);
         for (code, modifiers, expected) in [
             (KeyCode::Esc, KeyModifiers::NONE, FlowOutcome::Back),
             (
@@ -181,5 +195,7 @@ mod tests {
                 matches!(review.on_event(ScreenEvent::Key(KeyEvent::new(code, modifiers))), Step::Outcome(outcome) if outcome == expected)
             );
         }
+        review.saving();
+        assert_ne!(review.step_key(), review_key);
     }
 }
