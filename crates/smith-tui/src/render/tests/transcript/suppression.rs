@@ -82,6 +82,33 @@ fn successful_write_todos_and_registry_search_rows_are_suppressed_without_a_blan
 }
 
 #[test]
+fn a_running_registry_search_row_never_flashes_before_its_suppression() {
+    let mut app = App::new("gpt-5.3", "~/work/api");
+    app.transcript.push_user("find a tool");
+    app.apply(&event(RuntimeEvent::ToolCallRequested {
+        call: ToolCallId::new("search-1"),
+        name: "registry.search".to_owned(),
+        argument_keys: vec!["query".to_owned()],
+        argument_fingerprint: agent_runtime_registry::Fingerprint::of("arguments"),
+        arguments: None,
+    }));
+
+    let texts = transcript_lines(&app, Theme::new(), 74)
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        !texts.iter().any(|text| text.contains("Registry Search")),
+        "the row would vanish on completion, so it is not drawn while running: {texts:#?}"
+    );
+}
+
+#[test]
 fn a_failed_denied_or_unreported_suppressed_call_still_renders() {
     let mut app = App::new("gpt-5.3", "~/work/api");
 

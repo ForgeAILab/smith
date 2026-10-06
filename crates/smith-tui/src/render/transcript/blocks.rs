@@ -370,8 +370,10 @@ fn nested_result_lines(
 /// name shape, argument count, or result size — see `tool-call-display`'s
 /// "Reviewed redundant-row suppression". Only a successful call ever
 /// qualifies: a failure, a denial, or a call whose outcome never arrived is
-/// not redundant with anything, so any status other than
-/// [`ToolStatus::Ok`] always renders. `agent`'s action is read from the
+/// not redundant with anything, so those statuses always render. The
+/// host-local calls that finish within a frame or two are also hidden while
+/// running; otherwise their row is drawn only to vanish on completion, which
+/// reads as a glitch. `agent`'s action is read from the
 /// projector's own `target()` (`"spawn"`, `"wait"`, …) — a call with no
 /// reviewed display cannot be matched against that vocabulary at all, so it
 /// renders rather than being guessed at.
@@ -380,6 +382,9 @@ fn is_redundant_tool_row(
     status: ToolStatus,
     display: Option<&ToolCallDisplay>,
 ) -> bool {
+    if status == ToolStatus::Running {
+        return matches!(name, "write_todos" | "registry.search");
+    }
     if status != ToolStatus::Ok {
         return false;
     }
