@@ -128,7 +128,9 @@ denied, or ended unreported MUST always render its row.
 
 Smith SHALL suppress a transcript tool row only from an explicit reviewed set
 of tool calls whose effect a named non-transcript surface already reports, and
-only when the call succeeded. The set MUST be enumerated in code rather than
+only when the call succeeded. A `write_todos` or `registry.search` call SHALL
+also draw no row while it is running, so a row is never shown only to be
+removed on success. The set MUST be enumerated in code rather than
 inferred from a call's name, arguments, or result size. Suppression MUST NOT
 change tool execution, approval, canonical history, the journal, or machine
 output.
@@ -167,6 +169,14 @@ output.
   inspected
 - **THEN** the call, its arguments, and its result are present unchanged
 - **AND** only the local transcript presentation omitted the row
+
+#### Scenario: A capability search does not flash
+
+- **GIVEN** the model calls `registry.search` and the call is still running
+- **WHEN** Smith renders the transcript
+- **THEN** no row is drawn for that call
+- **AND** the row appears with its status if the call then fails, is denied,
+  or ends unreported
 
 ### Requirement: Reviewed delegation invocation summaries
 
