@@ -304,6 +304,8 @@ pub struct Status {
     pub context_window: Option<String>,
     /// Compact non-default reasoning override, when one is active.
     pub reasoning_hint: Option<String>,
+    /// Effective advisor and where that choice came from.
+    pub advisor: Option<String>,
     /// The project root, shown abbreviated.
     pub project: String,
     /// Cumulative provider-reported input for this session.
@@ -355,6 +357,7 @@ impl Status {
             model: model.into(),
             context_window: None,
             reasoning_hint: None,
+            advisor: None,
             project: project.into(),
             context: TokenCount::UNKNOWN,
             context_plan: None,

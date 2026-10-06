@@ -70,6 +70,8 @@ pub struct ResolveRequest {
     /// Resolves the tool-free advisor binding for this target instead of a
     /// configured profile selection; `profile_use` is not checked.
     pub advisor_route: Option<Sourced<AdvisorTarget>>,
+    /// Session choice replacing the active main profile's configured advisor.
+    pub advisor_override: Option<AdvisorOverride>,
     /// Explicit host authority for synthetic cache spend.  This value is
     /// intentionally injected by the host rather than read from any project
     /// or repository file: untrusted configuration may narrow authority but
@@ -128,6 +130,13 @@ impl ResolveRequest {
     /// profile in any placement, and a model resolves with no profile layer.
     pub fn with_advisor_route(mut self, target: Sourced<AdvisorTarget>) -> Self {
         self.advisor_route = Some(target);
+        self
+    }
+
+    /// Replaces the active main profile's advisor for this session only.
+    #[must_use]
+    pub fn with_advisor_override(mut self, choice: AdvisorOverride) -> Self {
+        self.advisor_override = Some(choice);
         self
     }
 
@@ -640,6 +649,11 @@ pub struct ResolvedAgent {
     pub profiles: BTreeMap<String, ResolvedAgentProfile>,
     /// Stable user-facing order of main-enabled profiles.
     pub profile_order: Sourced<Vec<String>>,
+    /// The active profile's advisor as configuration resolves it, kept beside
+    /// the effective one so a session override can be shown and undone.
+    pub configured_advisor: Option<Sourced<AdvisorTarget>>,
+    /// Whether a session override decided the active profile's advisor.
+    pub advisor_overridden: bool,
 }
 
 impl ResolvedAgent {
@@ -654,6 +668,15 @@ impl ResolvedAgent {
             .get(name)
             .filter(|profile| profile.supports(ProfileUse::Child))
     }
+}
+
+/// A session's choice of advisor in place of what configuration resolves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdvisorOverride {
+    /// Consult no advisor.
+    Off,
+    /// Consult this profile or model.
+    Target(AdvisorTarget),
 }
 
 /// What an `advisor` setting names.

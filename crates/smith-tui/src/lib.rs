@@ -53,8 +53,8 @@ pub use cache::{
     MISS_NOTICE_TOKENS,
 };
 pub use commands::{
-    COMMANDS, Command, CommandSpec, ConfirmCommand, GoalAction, HostCommand, McpAction,
-    SelectionCommand, SessionControl, SkillsAction, UiCommand,
+    AdvisorChoice, COMMANDS, Command, CommandSpec, ConfirmCommand, GoalAction, HostCommand,
+    McpAction, SelectionCommand, SessionControl, SkillsAction, UiCommand,
 };
 pub use composer::Composer;
 pub use diff::{Change, EditReview, diff_lines};

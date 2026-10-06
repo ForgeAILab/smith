@@ -42,6 +42,7 @@ pub(super) fn runtime_resources(
     let disconnections = disconnection_entries(&inventory.providers);
     append_connectable_connections(&mut connections);
     let providers = provider_entries(inventory.providers);
+    let advisors = advisor_entries(agents, &inventory.models);
     let models = model_entries(inventory.models, context_window);
     let session_entries = session_resource_entries(sessions, Some(current_session));
     let files = workspace_file_entries(project, 4_096);
@@ -66,6 +67,7 @@ pub(super) fn runtime_resources(
         main_profiles,
         thinking,
         efforts,
+        advisors,
         accounts: account_entries(credential_pool),
         current_session: Some(current_session.to_owned()),
     }
@@ -475,6 +477,84 @@ fn reasoning_capability_reason(
             reasoning.capability_source
         ),
     }
+}
+
+/// The effective advisor and whether configuration or the session chose it.
+pub(crate) fn advisor_status(agents: &ResolvedAgent) -> String {
+    match (&agents.profile.advisor, agents.advisor_overridden) {
+        (Some(advisor), true) => format!("{} · session override", advisor.value),
+        (Some(advisor), false) => {
+            format!("{} · {}", advisor.value, advisor.source.layer.label())
+        }
+        (None, true) => "off · session override".to_owned(),
+        (None, false) => "off · none configured".to_owned(),
+    }
+}
+
+/// Choices for `/advisor`: the keywords, then every profile and model the
+/// resolver would accept as this session's advisor.
+fn advisor_entries(agents: &ResolvedAgent, models: &[ModelInventoryEntry]) -> Vec<ResourceEntry> {
+    let overridden = agents.advisor_overridden;
+    let effective = agents
+        .profile
+        .advisor
+        .as_ref()
+        .map(|advisor| advisor.value.to_string());
+    let configured = agents
+        .configured_advisor
+        .as_ref()
+        .map(|advisor| advisor.value.to_string());
+    let on = ResourceEntry::new("on", "on", "use the configured advisor");
+    let mut entries = vec![
+        ResourceEntry::new(
+            "default",
+            "configured default",
+            configured.as_deref().map_or_else(
+                || "none configured".to_owned(),
+                |name| format!("advisor {name}"),
+            ),
+        )
+        .active(!overridden),
+        match configured {
+            Some(_) => on,
+            None => {
+                on.disabled("no advisor is configured; name a profile or provider/model instead")
+            }
+        },
+        ResourceEntry::new("off", "off", "consult no advisor in this session")
+            .active(overridden && effective.is_none()),
+    ];
+    let active = |id: &str| overridden && effective.as_deref() == Some(id);
+    // A profile cannot advise itself, and legacy adapters are not profiles.
+    entries.extend(
+        agents
+            .profiles
+            .values()
+            .filter(|profile| !profile.legacy && profile.name != agents.profile.name)
+            .map(|profile| {
+                let pair = match (&profile.provider, &profile.model) {
+                    (Some(provider), Some(model)) => {
+                        format!("{}/{}", provider.value, model.value)
+                    }
+                    _ => "inherits the default provider and model".to_owned(),
+                };
+                ResourceEntry::new(profile.name.clone(), profile.name.clone(), pair)
+                    .active(active(&profile.name))
+            }),
+    );
+    // The session's own binding would only consult itself, and a model with
+    // no limits cannot be planned against.
+    entries.extend(
+        models
+            .iter()
+            .filter(|model| !model.active && model.context_tokens.is_some())
+            .filter(|model| smith_config::cli_agents::parse_cli_model_id(&model.model).is_none())
+            .map(|model| {
+                let id = model.id();
+                ResourceEntry::new(id.clone(), id.clone(), model.label.clone()).active(active(&id))
+            }),
+    );
+    entries
 }
 
 fn thinking_entries(

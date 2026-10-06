@@ -53,6 +53,10 @@ pub(super) fn resolution_request(selection: &Selection) -> Result<(PathBuf, Reso
         .with_cli(selection.overrides())
         .with_session(selection.session_overrides())
         .with_synthetic_cache_spend(authority);
+    let request = match &selection.advisor {
+        Some(choice) => request.with_advisor_override(choice.clone()),
+        None => request,
+    };
     Ok((start, request))
 }
 

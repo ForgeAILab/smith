@@ -58,6 +58,8 @@ pub(crate) enum SetupOutcome {
 pub(crate) struct SurfaceOutcome {
     pub(crate) outcome: SetupOutcome,
     pub(crate) messages: Vec<String>,
+    /// What a committed submission changed, for owners with no other confirmation.
+    pub(crate) summary: Option<String>,
 }
 
 impl SurfaceOutcome {
@@ -66,8 +68,46 @@ impl SurfaceOutcome {
         Self {
             outcome: SetupOutcome::Cancelled,
             messages: Vec::new(),
+            summary: None,
         }
     }
+}
+
+/// Names what a submission commits, without any credential material.
+fn completion_summary(submission: &SetupSubmission, destination: &Path) -> String {
+    let added = |provider: &str, model: &str, make_default: bool| {
+        format!(
+            "added {provider}/{model}{}",
+            if make_default { " as the default" } else { "" }
+        )
+    };
+    let change = match submission {
+        SetupSubmission::QuickGlm { .. } => added(GLM_PROVIDER, GLM_5_3.model, true),
+        SetupSubmission::QuickXai { model, .. } => added(XAI_PROVIDER, model, true),
+        SetupSubmission::QuickGoogle { model, .. } => added(GOOGLE_PROVIDER, model, true),
+        SetupSubmission::AddProvider {
+            provider,
+            model,
+            make_default,
+            ..
+        }
+        | SetupSubmission::AddModel {
+            provider,
+            model,
+            make_default,
+            ..
+        } => added(provider, model, *make_default),
+        SetupSubmission::ChangeDefault { provider, model } => {
+            format!("default is now {provider}/{model}")
+        }
+        SetupSubmission::ChangeCredential { provider, .. } => {
+            format!("updated the credential for {provider}")
+        }
+    };
+    format!(
+        "Setup complete · {change} · saved to {}",
+        destination.display()
+    )
 }
 
 struct SetupContext {
@@ -118,9 +158,11 @@ pub(crate) async fn run_first_run(
     selection: Selection,
     no_color: bool,
     no_motion: bool,
-) -> Result<SetupOutcome> {
+) -> Result<(SetupOutcome, Option<String>)> {
     require_interactive_terminal()?;
-    run_standalone_surface(selection, SetupMode::FirstRun, no_color, no_motion).await
+    let result =
+        run_standalone_messages(selection, SetupMode::FirstRun, no_color, no_motion).await?;
+    Ok((result.outcome, result.summary))
 }
 
 fn require_interactive_terminal() -> Result<()> {
@@ -143,13 +185,27 @@ async fn run_standalone_surface(
     no_color: bool,
     no_motion: bool,
 ) -> Result<SetupOutcome> {
-    let mut session = ScreenSession::enter(no_color, no_motion).context("entering guided setup")?;
-    let result = run_surface(selection, mode, &mut session, no_motion, None).await;
-    let result = session.finish(result, "restoring the terminal")?;
-    for message in result.messages {
-        println!("{message}");
+    let result = run_standalone_messages(selection, mode, no_color, no_motion).await?;
+    if let Some(summary) = result.summary {
+        println!("{summary}");
     }
     Ok(result.outcome)
+}
+
+/// Leaves the summary to the caller: a first run opens the session over stdout.
+async fn run_standalone_messages(
+    selection: Selection,
+    mode: SetupMode,
+    no_color: bool,
+    no_motion: bool,
+) -> Result<SurfaceOutcome> {
+    let mut session = ScreenSession::enter(no_color, no_motion).context("entering guided setup")?;
+    let result = run_surface(selection, mode, &mut session, no_motion, None).await;
+    let mut result = session.finish(result, "restoring the terminal")?;
+    for message in result.messages.drain(..) {
+        println!("{message}");
+    }
+    Ok(result)
 }
 
 pub(crate) async fn run_surface(
@@ -265,6 +321,7 @@ pub(crate) async fn run_surface(
                         return Ok(SurfaceOutcome {
                             outcome: SetupOutcome::Completed,
                             messages,
+                            summary: None,
                         });
                     }
                     smith_tui::FlowOutcome::Cancelled => {
@@ -301,6 +358,8 @@ pub(crate) async fn run_surface(
                 allow_collisions,
             } => {
                 session.draw(&app).context("drawing setup preflight")?;
+                let summary =
+                    completion_summary(&submission, &context.user_dir.join("config.toml"));
                 let cancellation = EffectCancellation::default();
                 match session
                     .wait_effect(
@@ -319,6 +378,7 @@ pub(crate) async fn run_surface(
                         return Ok(SurfaceOutcome {
                             outcome: SetupOutcome::Completed,
                             messages,
+                            summary: Some(summary),
                         });
                     }
                     ApplyOutcome::Collision(preview) => app.review_collisions(preview),

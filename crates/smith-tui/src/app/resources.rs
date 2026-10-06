@@ -8,8 +8,8 @@ use smith_client::recovery_report::{RecoveryPreview, RevertPreview};
 use smith_client::review_report::{ReviewPreview, ReviewReport};
 
 use crate::commands::{
-    self, Command, ConfirmCommand, GoalAction, HostCommand, ParsedCommand, SelectionCommand,
-    SessionControl, UiCommand,
+    self, AdvisorChoice, Command, ConfirmCommand, GoalAction, HostCommand, ParsedCommand,
+    SelectionCommand, SessionControl, UiCommand,
 };
 use crate::picker::{PickerOutcome, ResourceEntry, ResourcePicker};
 use crate::status::Activity;
@@ -95,6 +95,7 @@ impl App {
             ResourceTarget::Resume => "Resume session",
             ResourceTarget::Think => "Choose thinking state",
             ResourceTarget::Effort => "Choose reasoning effort",
+            ResourceTarget::Advisor => "Choose advisor",
             ResourceTarget::Reference => "Attach file or invoke agent",
             ResourceTarget::Account => "Choose account",
         };
@@ -149,6 +150,10 @@ impl App {
             ResourceTarget::Effort => (
                 self.resources.efforts.clone(),
                 "Effort is not adjustable for this provider/model",
+            ),
+            ResourceTarget::Advisor => (
+                self.resources.advisors.clone(),
+                "No advisor is selectable for this session",
             ),
             ResourceTarget::Account => (
                 self.resources.accounts.clone(),
@@ -278,6 +283,18 @@ impl App {
                 self.composer.clear();
                 Some(Action::Reconfigure(SessionControl::Reconfigure(
                     SelectionCommand::Effort((id != "default").then_some(id)),
+                )))
+            }
+            ResourceTarget::Advisor => {
+                self.composer.clear();
+                Some(Action::Reconfigure(SessionControl::Reconfigure(
+                    SelectionCommand::Advisor(match id.as_str() {
+                        // `on` is offered only when configuration names an
+                        // advisor, so both restore that selection.
+                        "default" | "on" => AdvisorChoice::Default,
+                        "off" => AdvisorChoice::Off,
+                        _ => AdvisorChoice::Target(id),
+                    }),
                 )))
             }
             ResourceTarget::Reference => {
@@ -468,6 +485,41 @@ impl App {
             "reasoning choice `{value}` is unavailable: {reason}"
         ));
         None
+    }
+
+    /// Accepts only an offered advisor choice, so a target that cannot be
+    /// resolved is refused here and the running session is left untouched.
+    pub(super) fn apply_direct_advisor_choice(
+        &mut self,
+        value: &str,
+        restore: String,
+    ) -> Option<Action> {
+        let value = value.trim();
+        let keyword = value.to_ascii_lowercase();
+        let id = if matches!(keyword.as_str(), "on" | "off" | "default") {
+            keyword
+        } else {
+            value.to_owned()
+        };
+        match self.resources.advisors.iter().find(|entry| entry.id == id) {
+            Some(entry) if entry.disabled_reason.is_none() => {
+                self.accept_composer_input();
+                self.apply_resource_selection(ResourceTarget::Advisor, id, restore)
+            }
+            Some(entry) => {
+                let reason = entry.disabled_reason.clone().unwrap_or_default();
+                self.transcript
+                    .push_error(format!("advisor `{value}` is unavailable: {reason}"));
+                None
+            }
+            None => {
+                self.transcript.push_error(format!(
+                    "advisor `{value}` is not a configured profile or provider/model; \
+                     use `/advisor` to choose"
+                ));
+                None
+            }
+        }
     }
 
     pub(super) fn show_command_help(&mut self) -> Option<Action> {
@@ -734,6 +786,14 @@ impl App {
             }
             Command::Ui(UiCommand::Effort(Some(value))) => {
                 self.apply_direct_reasoning_choice(ResourceTarget::Effort, &value, restore)
+            }
+            Command::Ui(UiCommand::Advisor(None)) => {
+                self.accept_composer_input();
+                self.open_target_picker(ResourceTarget::Advisor, restore);
+                None
+            }
+            Command::Ui(UiCommand::Advisor(Some(value))) => {
+                self.apply_direct_advisor_choice(&value, restore)
             }
             Command::Ui(UiCommand::Context(value)) if value == "default" => {
                 self.accept_composer_input();

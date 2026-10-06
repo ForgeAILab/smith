@@ -20,6 +20,8 @@ pub struct StatusReport {
     pub reasoning: String,
     /// Supported reasoning controls and their source.
     pub reasoning_controls: String,
+    /// Effective advisor and whether configuration or the session chose it.
+    pub advisor: String,
     /// Last root turn's cache usage, or its availability.
     pub prompt_cache: String,
     /// Cache maintenance summary.

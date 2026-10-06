@@ -237,6 +237,71 @@
         );
     }
 
+    fn advisor_app() -> App {
+        let mut app = app();
+        app.resources.advisors = vec![
+            ResourceEntry::new("default", "configured default", "none configured").active(true),
+            ResourceEntry::new("on", "on", "use the configured advisor")
+                .disabled("no advisor is configured; name a profile or provider/model instead"),
+            ResourceEntry::new("off", "off", "consult no advisor in this session"),
+            ResourceEntry::new("sol", "sol", "acme/advisor-model"),
+            ResourceEntry::new("acme/big", "acme/big", "Big"),
+        ];
+        app
+    }
+
+    #[test]
+    fn advisor_command_selects_keywords_and_offered_targets_directly() {
+        for (input, expected) in [
+            ("/advisor off", AdvisorChoice::Off),
+            ("/advisor OFF", AdvisorChoice::Off),
+            ("/advisor default", AdvisorChoice::Default),
+            ("/advisor sol", AdvisorChoice::Target("sol".to_owned())),
+            (
+                "/advisor acme/big",
+                AdvisorChoice::Target("acme/big".to_owned()),
+            ),
+        ] {
+            let mut app = advisor_app();
+            type_text(&mut app, input);
+            assert_eq!(
+                app.on_key(key(KeyCode::Enter)),
+                Some(Action::Reconfigure(SessionControl::Reconfigure(
+                    SelectionCommand::Advisor(expected)
+                ))),
+                "{input}"
+            );
+        }
+    }
+
+    #[test]
+    fn advisor_command_without_a_value_opens_its_picker() {
+        let mut app = advisor_app();
+        type_text(&mut app, "/advisor");
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert!(matches!(
+            app.overlay,
+            Some(Overlay::ResourcePicker {
+                target: ResourceTarget::Advisor,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn an_unresolvable_or_unconfigured_advisor_is_refused_before_any_rebuild() {
+        for (input, reason) in [
+            ("/advisor on", "no advisor is configured"),
+            ("/advisor nobody", "not a configured profile or provider/model"),
+        ] {
+            let mut app = advisor_app();
+            type_text(&mut app, input);
+            assert_eq!(app.on_key(key(KeyCode::Enter)), None, "{input}");
+            let transcript = format!("{:?}", app.transcript);
+            assert!(transcript.contains(reason), "{input}: {transcript}");
+        }
+    }
+
     #[test]
     fn unavailable_reasoning_choice_fails_locally_without_reconfiguration() {
         let mut app = app();

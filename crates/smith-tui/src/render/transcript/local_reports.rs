@@ -28,6 +28,7 @@ pub(in crate::render) fn render_status_card(
         ("provider", report.provider.clone()),
         ("model", report.model.clone()),
         ("permission", report.permission.clone()),
+        ("advisor", report.advisor.clone()),
         ("reasoning", report.reasoning.clone()),
         ("reasoning controls", report.reasoning_controls.clone()),
         ("prompt cache", report.prompt_cache.clone()),

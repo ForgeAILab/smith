@@ -100,6 +100,7 @@ async fn execute(command: Command) -> Result<u8> {
 }
 
 async fn run_command(mut args: RunArgs) -> Result<u8> {
+    let mut setup_notice = None;
     let configured_background_exit = match inspect_selection(&args.selection)? {
         ConfigReadiness::Ready(resolution) => Some(resolution.config.background.exit_policy.value),
         ConfigReadiness::Invalid(error) => {
@@ -116,14 +117,14 @@ async fn run_command(mut args: RunArgs) -> Result<u8> {
             match setup::run_first_run(args.selection.clone(), args.no_color, args.no_motion)
                 .await?
             {
-                setup::SetupOutcome::Cancelled => {
+                (setup::SetupOutcome::Cancelled, _) => {
                     print_setup_outcome(
                         setup::SetupOutcome::Cancelled,
                         &mut std::io::stdout().lock(),
                     )?;
                     return Ok(0);
                 }
-                setup::SetupOutcome::Completed => {}
+                (setup::SetupOutcome::Completed, summary) => setup_notice = summary,
             }
             None
         }
@@ -196,7 +197,7 @@ async fn run_command(mut args: RunArgs) -> Result<u8> {
             .await
             .map(|outcome| outcome.exit_code)
         }
-        None => run_interactive_command(args).await,
+        None => run_interactive_command(args, setup_notice).await,
     }
 }
 

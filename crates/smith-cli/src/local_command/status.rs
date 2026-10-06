@@ -57,6 +57,11 @@ pub(super) fn report(app: &App, host: &HostSession, project: &Path) -> StatusRep
         permission: diagnostic_label(policy.approval_mode),
         reasoning,
         reasoning_controls,
+        advisor: app
+            .status
+            .advisor
+            .clone()
+            .unwrap_or_else(|| "off".to_owned()),
         prompt_cache: app
             .status
             .cache_summary()

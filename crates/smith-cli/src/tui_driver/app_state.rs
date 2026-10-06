@@ -31,6 +31,9 @@ pub(super) async fn seed_app(
     if let Some(notice) = presentation.reasoning_notice.as_ref() {
         app.transcript.push_notice(NoticeKind::Reasoning, notice);
     }
+    if let Some(notice) = presentation.host_notice.as_ref() {
+        app.transcript.push_notice(NoticeKind::Provider, notice);
+    }
     if let Some(previous) = snapshot.manifests.last().map(|entry| &entry.manifest.model)
         && (previous.provider != policy.provider_name || previous.model != policy.model)
     {
@@ -57,6 +60,9 @@ pub(super) async fn rebind_app(
 ) {
     app.rebind_host();
     seed_host_state(host, app, project, resources, presentation).await;
+    if let Some(notice) = presentation.host_notice.as_ref() {
+        app.transcript.push_notice(NoticeKind::Provider, notice);
+    }
     let policy = host.runtime().policy();
     if previous.provider != policy.provider_name || previous.model != policy.model.as_str() {
         app.transcript.push_notice(
@@ -163,6 +169,7 @@ async fn seed_host_state(
                 policy.reasoning.effective_effort(),
             )
         }));
+    app.status.advisor = Some(crate::resources::advisor_status(&resources.agents));
     app.set_resources(runtime_resources(
         resources.inventory.clone(),
         resources.sessions.clone(),

@@ -63,8 +63,21 @@ pub enum SelectionCommand {
     Think(Option<bool>),
     /// Select an advertised effort; `None` restores provider behavior.
     Effort(Option<String>),
+    /// Choose the session's advisor in place of the configured one.
+    Advisor(AdvisorChoice),
     /// Select a model context window; `None` restores the model default.
     ContextWindow(Option<String>),
+}
+
+/// A session's advisor choice, already checked against the offered targets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdvisorChoice {
+    /// Use what configuration resolves.
+    Default,
+    /// Consult no advisor.
+    Off,
+    /// Consult this profile or `provider/model`.
+    Target(String),
 }
 
 /// Typed local MCP server control.
@@ -373,6 +386,17 @@ command_registry! {
         advanced: false,
         grammar: ArgumentGrammar::OptionalValue(|value| Ok(Command::Ui(UiCommand::Effort(value)))),
         usage_example: "/effort high",
+        complete_without_value: false,
+    },
+    /// Turn the advisor on or off, or choose who advises.
+    Ui Advisor(Option<String>) => CommandSpec {
+        name: "advisor",
+        argument_hint: "[on|off|default|TARGET]",
+        description: "Turn the advisor on or off, or choose it",
+        requires_idle: true,
+        advanced: false,
+        grammar: ArgumentGrammar::OptionalValue(|value| Ok(Command::Ui(UiCommand::Advisor(value)))),
+        usage_example: "/advisor off",
         complete_without_value: false,
     },
     /// Show provider accounts and their usage.
@@ -916,6 +940,14 @@ mod tests {
         assert_eq!(
             parse("/model").expect("picker"),
             Command::Ui(UiCommand::Model(None))
+        );
+        assert_eq!(
+            parse("/advisor").expect("advisor picker"),
+            Command::Ui(UiCommand::Advisor(None))
+        );
+        assert_eq!(
+            parse("/advisor acme/big").expect("advisor target"),
+            Command::Ui(UiCommand::Advisor(Some("acme/big".into())))
         );
         assert_eq!(
             parse("/connect openrouter").expect("connection"),

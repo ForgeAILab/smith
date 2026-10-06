@@ -678,6 +678,7 @@ pub(super) fn extract(
         agent_profiles,
         request.profile_use,
         request.advisor_route.is_some(),
+        request.advisor_override.as_ref(),
     )?;
     let provider = resolve_provider(provenance, provider_name)?;
     let model_limits = resolve_model_limits(provenance, &provider.name.value, &model.value)?;
@@ -750,6 +751,7 @@ pub(super) fn resolve_agent(
     profiles: BTreeMap<String, ResolvedAgentProfile>,
     profile_use: ProfileUse,
     advisor_route: bool,
+    advisor_override: Option<&AdvisorOverride>,
 ) -> Result<ResolvedAgent, ConfigError> {
     let active = required_text(provenance, "agent")?;
     if !declared.agent_modes.contains_key(&active.value) {
@@ -898,25 +900,49 @@ pub(super) fn resolve_agent(
             ),
         });
     }
-    validate_advisor(profile.advisor.as_ref(), &profiles, declared)?;
+    // A session override replaces only the root session's own selection: a
+    // child has no advisor, and an advisor route never consults another.
+    let advisor_override =
+        advisor_override.filter(|_| !advisor_route && profile_use == ProfileUse::Main);
+    if advisor_override.is_none() {
+        validate_advisor(profile.advisor.as_ref(), &profiles, declared)?;
+    }
+    let own_binding = advises_own_binding(provenance, profile.advisor.as_ref())?;
+    let configured_advisor = profile
+        .advisor
+        .clone()
+        .filter(|_| !advisor_route && !own_binding);
+    let effective_advisor = match advisor_override {
+        None => configured_advisor.clone(),
+        Some(AdvisorOverride::Off) => None,
+        Some(AdvisorOverride::Target(target)) => {
+            let selected = Sourced::new(target.clone(), Source::session("advisor"));
+            // The override outlives `/profile` and `/model`, so landing on its
+            // own target consults nobody rather than failing the rebuild.
+            let itself = matches!(target, AdvisorTarget::Profile(name) if *name == profile.name)
+                || advises_own_binding(provenance, Some(&selected))?;
+            (!itself).then_some(selected)
+        }
+    };
     // An advisor request has no tools and cannot consult another advisor; the
     // catalog retains the profile's own selection for its main use. A model
     // advisor naming the session's own binding would only consult itself.
-    if advisor_route || advises_own_binding(provenance, profile.advisor.as_ref())? {
-        profile.advisor = None;
+    if profile.advisor != effective_advisor {
+        profile.advisor = effective_advisor;
         profile.revision = agent_profile_revision(
             &profile.name,
             &profile.posture,
             profile.description.as_ref(),
             profile.instructions.as_ref(),
             &profile.delegation,
-            None,
+            profile.advisor.as_ref(),
             &profile.uses,
             profile.provider.as_ref(),
             profile.model.as_ref(),
             profile.legacy,
         );
     }
+    validate_advisor(profile.advisor.as_ref(), &profiles, declared)?;
 
     let profile_order = match list(provenance, "profile_order")? {
         Some(order) => {
@@ -986,6 +1012,8 @@ pub(super) fn resolve_agent(
         profile,
         profiles,
         profile_order,
+        configured_advisor,
+        advisor_overridden: advisor_override.is_some(),
     })
 }
 

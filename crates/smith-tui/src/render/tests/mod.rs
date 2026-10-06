@@ -56,6 +56,7 @@ mod tests {
             permission: "ask".to_owned(),
             reasoning: "provider default".to_owned(),
             reasoning_controls: "unsupported".to_owned(),
+            advisor: "off · none configured".to_owned(),
             prompt_cache: "usage not reported".to_owned(),
             cache_maintenance: "off".to_owned(),
             resume_checkpoint: "not yet saved".to_owned(),

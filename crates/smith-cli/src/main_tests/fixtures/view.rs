@@ -259,6 +259,7 @@ fn fixture_status_view(
         &mut report.permission,
         &mut report.reasoning,
         &mut report.reasoning_controls,
+        &mut report.advisor,
         &mut report.prompt_cache,
         &mut report.cache_maintenance,
         &mut report.resume_checkpoint,

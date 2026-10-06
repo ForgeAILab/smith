@@ -7,11 +7,13 @@ use std::time::Duration;
 
 use agent_runtime_core::ids::SessionId;
 use anyhow::{Context, Result};
-use smith_client::commands::SelectionCommand;
+use smith_client::commands::{AdvisorChoice, SelectionCommand};
 use smith_config::credential::CredentialResolver;
 use smith_config::inventory::{SelectionInventory, local_inventory_with_catalog};
 use smith_config::model::{ApprovalMode, ProfileUse};
-use smith_config::resolve::{Layer, Resolution, ResolvedAgent, resolve};
+use smith_config::resolve::{
+    AdvisorOverride, AdvisorTarget, Layer, Resolution, ResolvedAgent, resolve,
+};
 use smith_host::{
     ApprovalRequests, HeadlessApproval, HeadlessInteraction, HeadlessRotation, InteractionRequests,
     InteractiveApproval, InteractiveInteraction, InteractiveRotation, ProjectWorkspace,
@@ -233,6 +235,7 @@ pub(super) async fn start_host(
         advisor_selection.context_window_reset = false;
         advisor_selection.effort = None;
         advisor_selection.context_window_flag = None;
+        advisor_selection.advisor = None;
         let (_, advisor_request) = resolution_request(&advisor_selection)?;
         let advisor_resolution = resolve(&advisor_request.with_advisor_route(advisor.clone()))
             .map_err(|error| anyhow::anyhow!("{error}"))
@@ -548,9 +551,12 @@ pub(super) async fn remove_empty_interactive_session(host: &HostSession) {
     }
 }
 
-pub(super) async fn run_interactive_command(args: RunArgs) -> Result<u8> {
+pub(super) async fn run_interactive_command(
+    args: RunArgs,
+    setup_notice: Option<String>,
+) -> Result<u8> {
     let mut terminal = None;
-    let result = run_interactive_hosts(args, &mut terminal).await;
+    let result = run_interactive_hosts(args, setup_notice, &mut terminal).await;
     if let Some(terminal) = terminal.as_mut() {
         terminal.restore().context("restoring the terminal")?;
     }
@@ -559,11 +565,15 @@ pub(super) async fn run_interactive_command(args: RunArgs) -> Result<u8> {
 
 async fn run_interactive_hosts(
     mut args: RunArgs,
+    mut host_notice: Option<String>,
     terminal: &mut Option<terminal::Terminal>,
 ) -> Result<u8> {
     let mut resume = args.resume.take();
     let mut frozen_catalog = None;
     let mut reasoning_notice = None;
+    // The advisor in effect before a pending `/advisor` change, restored if
+    // the rebuilt session cannot start with the new one.
+    let mut advisor_change: Option<Option<AdvisorOverride>> = None;
     let mut mcp: Option<Arc<crate::mcp::McpContext>> = None;
     let mut app = None;
     // Initialize after raw mode is entered, then retain input through host
@@ -594,8 +604,19 @@ async fn run_interactive_hosts(
                 );
                 continue;
             }
+            Err(error) if advisor_change.is_some() => {
+                args.selection.advisor = advisor_change.take().flatten();
+                host_notice = Some(format!("advisor unchanged · {error:#}"));
+                continue;
+            }
             Err(error) => return Err(error),
         };
+        if advisor_change.take().is_some() {
+            host_notice = Some(format!(
+                "advisor {}",
+                crate::resources::advisor_status(&started.agents)
+            ));
+        }
         crate::logging::init(started.host.session().id()).await;
         let StartedHost {
             host,
@@ -652,6 +673,7 @@ async fn run_interactive_hosts(
                 no_color: args.no_color,
                 no_motion: args.no_motion,
                 reasoning_notice: reasoning_notice.take(),
+                host_notice: host_notice.take(),
                 cache_miss_notices,
             },
         )
@@ -754,6 +776,7 @@ async fn run_interactive_hosts(
                         | SelectionCommand::Think(_)
                         | SelectionCommand::Effort(_)
                         | SelectionCommand::ContextWindow(_)
+                        | SelectionCommand::Advisor(_)
                 )
                 .then_some(catalog);
                 if matches!(
@@ -761,6 +784,9 @@ async fn run_interactive_hosts(
                     SelectionCommand::NewSession | SelectionCommand::Resume(_)
                 ) {
                     remove_empty_interactive_session(&host).await;
+                }
+                if matches!(command, SelectionCommand::Advisor(_)) {
+                    advisor_change = Some(args.selection.advisor.clone());
                 }
                 apply_palette_command(&mut args.selection, &mut resume, current_session, command);
             }
@@ -806,10 +832,13 @@ pub(super) fn apply_palette_command(
     command: SelectionCommand,
 ) {
     match command {
+        // The advisor choice belongs to the session it was made in.
         SelectionCommand::NewSession => {
+            selection.advisor = None;
             *resume = None;
         }
         SelectionCommand::Resume(session) => {
+            selection.advisor = None;
             *resume = Some(session);
         }
         SelectionCommand::Profile(profile) => {
@@ -847,6 +876,18 @@ pub(super) fn apply_palette_command(
         SelectionCommand::ContextWindow(window) => {
             selection.context_window_reset = window.is_none();
             selection.context_window = window;
+            *resume = Some(current_session);
+        }
+        SelectionCommand::Advisor(choice) => {
+            selection.advisor = match choice {
+                AdvisorChoice::Default => None,
+                AdvisorChoice::Off => Some(AdvisorOverride::Off),
+                // The picker offers only parseable targets; an unparseable
+                // one leaves the configured advisor in place.
+                AdvisorChoice::Target(target) => {
+                    AdvisorTarget::parse(&target).map(AdvisorOverride::Target)
+                }
+            };
             *resume = Some(current_session);
         }
     }

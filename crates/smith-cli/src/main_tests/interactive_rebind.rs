@@ -165,6 +165,7 @@ dialect = "openai-effort"
                 no_color: true,
                 no_motion: true,
                 reasoning_notice,
+                host_notice: None,
                 cache_miss_notices: true,
             },
             previous,

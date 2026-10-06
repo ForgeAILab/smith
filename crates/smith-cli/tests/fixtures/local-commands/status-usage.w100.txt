@@ -4,6 +4,7 @@
   provider            local
   model               example-model
   permission          ask
+  advisor             off
   reasoning           provider default · effort provider default · provider/model default
   reasoning controls  unsupported · switch unavailable · efforts none · resolved model catalog
                       (presence only)
@@ -17,7 +18,6 @@
   usage               1 turn · input 1k · cached 800 · output 120 · 1 compaction reclaiming 250
   cost                unknown · no price reference for local/example-model
   /diagnostics shows detailed cache and recovery information
-
 
 
 

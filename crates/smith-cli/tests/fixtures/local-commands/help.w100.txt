@@ -28,6 +28,8 @@
                 [on|off|default]
   /effort       Set reasoning effort for the next turn
                 [LEVEL|default]
+  /advisor      Turn the advisor on or off, or choose it
+                [on|off|default|TARGET]
   /account      Show provider accounts and their usage
                 [N]
   /agent        List, inspect, or resume an existing agent
@@ -84,8 +86,6 @@
   @                         Complete files and agents; @@ sends a literal @
   !                         Run a local shell command; !! sends a literal !
   //                        Send text with a leading slash
-
-
 
 
 

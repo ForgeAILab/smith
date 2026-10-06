@@ -2,8 +2,8 @@
 
 use smith_config::model::{AdvisorSelection, ConfigFile, ProfileUse};
 use smith_config::resolve::{
-    AdvisorTarget, ConfigError, Layer, Overrides, ReferenceKind, Resolution, ResolveRequest,
-    SettingValue, resolve,
+    AdvisorOverride, AdvisorTarget, ConfigError, Layer, Overrides, ReferenceKind, Resolution,
+    ResolveRequest, SettingValue, resolve,
 };
 use tempfile::TempDir;
 
@@ -765,4 +765,118 @@ fn advisor_file_values_round_trip_and_reject_true_or_wrong_types() {
             assert!(ConfigFile::parse(&format!("{prefix}advisor = {value}\n")).is_err());
         }
     }
+}
+
+#[test]
+fn a_session_override_turns_the_configured_advisor_off() {
+    let fixture = Fixture::new(&config("advisor = \"sol\"", "", SOL));
+    let configured = fixture.resolve().expect("configured advisor");
+    let resolution = resolve(
+        &fixture
+            .request()
+            .with_advisor_override(AdvisorOverride::Off),
+    )
+    .expect("an override never invalidates configuration");
+    let agent = &resolution.config.agent;
+
+    assert!(agent.profile.advisor.is_none());
+    assert!(agent.advisor_overridden);
+    assert_eq!(
+        agent
+            .configured_advisor
+            .as_ref()
+            .map(|advisor| &advisor.value),
+        Some(&profile("sol"))
+    );
+    assert_ne!(
+        agent.profile.revision, configured.config.agent.profile.revision,
+        "the tool list and guidance changed, so the profile identity must too"
+    );
+}
+
+#[test]
+fn a_session_override_selects_another_advisor_with_session_provenance() {
+    let fixture = Fixture::new(&config("", "", SOL));
+    let unset = fixture.resolve().expect("no advisor configured");
+    assert!(unset.config.agent.profile.advisor.is_none());
+    assert!(!unset.config.agent.advisor_overridden);
+
+    for target in [profile("sol"), model("acme", "advisor-model")] {
+        let resolution = resolve(
+            &fixture
+                .request()
+                .with_advisor_override(AdvisorOverride::Target(target.clone())),
+        )
+        .expect("a resolvable override");
+        let advisor = resolution
+            .config
+            .agent
+            .profile
+            .advisor
+            .as_ref()
+            .expect("the override is effective");
+        assert_eq!(advisor.value, target);
+        assert_eq!(advisor.source.layer, Layer::SessionOverride);
+        assert!(resolution.config.agent.configured_advisor.is_none());
+    }
+}
+
+#[test]
+fn a_session_override_naming_itself_consults_nobody() {
+    let fixture = Fixture::new(&config("advisor = \"sol\"", "", SOL));
+    for target in [profile("code"), model("acme", "working-model")] {
+        let resolution = resolve(
+            &fixture
+                .request()
+                .with_advisor_override(AdvisorOverride::Target(target)),
+        )
+        .expect("landing on the override's own target must not fail the rebuild");
+        assert!(resolution.config.agent.profile.advisor.is_none());
+        assert!(resolution.config.agent.advisor_overridden);
+    }
+}
+
+#[test]
+fn a_session_override_that_cannot_resolve_is_refused() {
+    let fixture = Fixture::new(&config("advisor = \"sol\"", "", SOL));
+    for target in [profile("missing"), model("nowhere", "model")] {
+        let error = resolve(
+            &fixture
+                .request()
+                .with_advisor_override(AdvisorOverride::Target(target)),
+        )
+        .expect_err("an unknown target");
+        assert!(
+            matches!(error, ConfigError::UnusableReference { .. }),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn a_session_override_does_not_reach_child_or_advisor_resolutions() {
+    let fixture = Fixture::new(&config("advisor = \"sol\"", "", SOL));
+    let main = fixture.resolve().expect("configured advisor");
+    let route = resolve(
+        &fixture
+            .request()
+            .with_advisor_route(main.config.agent.profile.advisor.clone().unwrap())
+            .with_advisor_override(AdvisorOverride::Target(profile("code"))),
+    )
+    .expect("the advisor route ignores the override");
+    assert!(route.config.agent.profile.advisor.is_none());
+    assert!(!route.config.agent.advisor_overridden);
+
+    let child = resolve(
+        &fixture
+            .request()
+            .with_cli(Overrides {
+                profile: Some("sol".to_owned()),
+                ..Overrides::default()
+            })
+            .with_profile_use(ProfileUse::Child)
+            .with_advisor_override(AdvisorOverride::Target(profile("code"))),
+    )
+    .expect("a child resolution");
+    assert!(!child.config.agent.advisor_overridden);
 }

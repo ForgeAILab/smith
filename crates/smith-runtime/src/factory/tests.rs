@@ -1337,6 +1337,8 @@ fn agent(posture: AgentPosture) -> ResolvedAgent {
         profile: profile.clone(),
         profiles: std::collections::BTreeMap::from([(name.clone(), profile)]),
         profile_order: sourced(vec![name]),
+        configured_advisor: None,
+        advisor_overridden: false,
     }
 }
 

@@ -38,6 +38,9 @@
   /effort       Set reasoning effort for the
                 next turn
                 [LEVEL|default]
+  /advisor      Turn the advisor on or off,
+                or choose it
+                [on|off|default|TARGET]
   /account      Show provider accounts and
                 their usage
                 [N]
@@ -133,9 +136,6 @@
                       literal !
   //                  Send text with a
                       leading slash
-
-
-
 
 
 

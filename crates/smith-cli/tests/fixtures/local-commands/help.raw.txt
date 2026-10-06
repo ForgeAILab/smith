@@ -21,6 +21,7 @@ Primary
 /disconnect [PROVIDER] — Disconnect a provider
 /think [on|off|default] — Set thinking for the next turn
 /effort [LEVEL|default] — Set reasoning effort for the next turn
+/advisor [on|off|default|TARGET] — Turn the advisor on or off, or choose it
 /account [N] — Show provider accounts and their usage
 /agent [ID|resume ID] — List, inspect, or resume an existing agent
 /mcp [trust NAME] — Show MCP servers, or trust one so it may run

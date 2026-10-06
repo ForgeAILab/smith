@@ -862,3 +862,35 @@ async fn additive_provider_and_model_transactions_preserve_existing_defaults() {
         Some("primary")
     );
 }
+
+#[test]
+fn completion_summary_names_the_change_and_destination() {
+    let destination = std::path::Path::new("/home/u/.smith/config.toml");
+    let limits = SetupModelLimits {
+        context_tokens: 1,
+        max_input_tokens: 1,
+        max_output_tokens: 1,
+    };
+    assert_eq!(
+        super::completion_summary(
+            &SetupSubmission::AddModel {
+                provider: "local".into(),
+                model: "m".into(),
+                limits,
+                make_default: false,
+            },
+            destination,
+        ),
+        "Setup complete · added local/m · saved to /home/u/.smith/config.toml"
+    );
+    assert_eq!(
+        super::completion_summary(
+            &SetupSubmission::ChangeDefault {
+                provider: "local".into(),
+                model: "m".into(),
+            },
+            destination,
+        ),
+        "Setup complete · default is now local/m · saved to /home/u/.smith/config.toml"
+    );
+}

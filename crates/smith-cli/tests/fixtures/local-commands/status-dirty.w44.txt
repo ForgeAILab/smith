@@ -4,6 +4,7 @@
   provider            local
   model               example-model
   permission          ask
+  advisor             off
   reasoning           provider default ·
                       effort provider
                       default ·
@@ -24,7 +25,6 @@
   cost                nothing spent yet
   /diagnostics shows detailed cache and
   recovery information
-
 
 
 

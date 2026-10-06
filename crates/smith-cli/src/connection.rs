@@ -342,10 +342,12 @@ fn connection_outcome(outcome: FlowOutcome<Vec<String>>) -> setup::SurfaceOutcom
         FlowOutcome::Completed(messages) => setup::SurfaceOutcome {
             outcome: setup::SetupOutcome::Completed,
             messages,
+            summary: None,
         },
         FlowOutcome::Back | FlowOutcome::Cancelled => setup::SurfaceOutcome {
             outcome: setup::SetupOutcome::Cancelled,
             messages: Vec::new(),
+            summary: None,
         },
     }
 }

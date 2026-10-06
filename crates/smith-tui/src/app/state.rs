@@ -308,6 +308,9 @@ pub struct RuntimeResources {
     pub thinking: Vec<ResourceEntry>,
     /// Bounded effort choices for the active binding.
     pub efforts: Vec<ResourceEntry>,
+    /// Advisor choices: default, on, off, then each profile or model that can
+    /// advise this session.
+    pub advisors: Vec<ResourceEntry>,
     /// Named context windows for the active binding.
     pub context_windows: Vec<ResourceEntry>,
     /// Active context window name when the binding has named windows.
@@ -339,6 +342,8 @@ pub enum ResourceTarget {
     Think,
     /// Advertised effort for subsequent turns.
     Effort,
+    /// Who the session's advisor tool consults, if anyone.
+    Advisor,
     /// Insert one typed file or child-agent reference into the composer.
     Reference,
     /// Credential-pool member serving subsequent attempts.

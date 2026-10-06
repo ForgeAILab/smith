@@ -63,6 +63,9 @@ pub(super) struct PresentationOptions {
     pub(super) no_color: bool,
     pub(super) no_motion: bool,
     pub(super) reasoning_notice: Option<String>,
+    /// A host-side outcome to confirm once the session is on screen: first-run
+    /// setup's summary, or the result of an `/advisor` change.
+    pub(super) host_notice: Option<String>,
     pub(super) cache_miss_notices: bool,
 }
 
@@ -580,6 +583,7 @@ pub(super) fn reconfigure_exit(app: &mut App, command: SessionControl) -> Option
             SelectionCommand::Agent(_) => "agent",
             SelectionCommand::Think(_) => "think",
             SelectionCommand::Effort(_) => "effort",
+            SelectionCommand::Advisor(_) => "advisor",
             SelectionCommand::ContextWindow(_) => "context",
         },
         SessionControl::Connect(_) => "connect",
