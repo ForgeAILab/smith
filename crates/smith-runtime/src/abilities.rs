@@ -196,6 +196,32 @@ fn keywords(name: &str) -> Vec<&'static str> {
             "validation",
             "benchmark",
             "build",
+            // A shell is also the only way to reach the network and the host,
+            // and those requests never use a coding word. Without these a
+            // "scan this server" prompt activates nothing and the model
+            // reports that it has no terminal.
+            "terminal",
+            "bash",
+            "cli",
+            "execute",
+            "script",
+            "install",
+            "git",
+            "network",
+            "scan",
+            "probe",
+            "port",
+            "ports",
+            "host",
+            "server",
+            "dns",
+            "http",
+            "https",
+            "curl",
+            "ping",
+            "nmap",
+            "process",
+            "system",
         ],
         "task_output" => vec![
             "task",
@@ -393,6 +419,21 @@ mod tests {
             .into_iter()
             .map(|(id, _)| id)
             .collect()
+    }
+
+    #[test]
+    fn a_host_or_network_task_activates_the_shell() {
+        for query in [
+            "scan oc.example.com",
+            "check which ports are open on my server",
+            "curl the health endpoint",
+            "run this in the terminal",
+        ] {
+            assert!(
+                selected(query).iter().any(|id| id.name == "shell"),
+                "`{query}` must reach shell"
+            );
+        }
     }
 
     #[test]
