@@ -414,6 +414,15 @@ fn classify_status(
     }
 
     let mut err = match status.as_u16() {
+        // An edge proxy's block page is not the provider judging the key: the
+        // request never reached it, and invalidating a good credential over
+        // it would hide the real cause.
+        403 if is_proxy_block(headers) => fail(
+            ProviderErrorKind::BadRequest,
+            "a proxy in front of the provider blocked the request (HTTP 403) before it reached \
+             the provider; the credential was not rejected",
+            endpoint,
+        ),
         401 | 403 => fail(
             ProviderErrorKind::Auth,
             "the provider rejected the credential",
@@ -463,6 +472,18 @@ fn classify_status(
         err = err.retry_after(ms);
     }
     Some(err)
+}
+
+/// Whether a 403 carries an edge proxy's signature rather than an API's.
+///
+/// Cloudflare marks its own mitigations with `cf-mitigated`, and WAF block
+/// pages are HTML, which no model API answers an authenticated request with.
+fn is_proxy_block(headers: &HeaderMap) -> bool {
+    headers.contains_key("cf-mitigated")
+        || headers
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.trim_start().starts_with("text/html"))
 }
 
 /// Reads `Retry-After` as a delay in milliseconds.
@@ -898,6 +919,31 @@ mod tests {
         // Still the retry policy's business, exactly as before this change.
         assert_eq!(err.kind, ProviderErrorKind::RateLimited);
         assert!(err.retryable);
+    }
+
+    #[test]
+    fn a_proxy_block_page_is_not_a_credential_rejection() {
+        let mut headers = HeaderMap::new();
+        let plain = classify_status(StatusCode::FORBIDDEN, &headers, "https://api.example.test")
+            .expect("403 is a failure");
+        assert_eq!(plain.kind, ProviderErrorKind::Auth);
+
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            "text/html; charset=UTF-8".parse().expect("header value"),
+        );
+        let blocked = classify_status(StatusCode::FORBIDDEN, &headers, "https://api.example.test")
+            .expect("403 is a failure");
+        assert_eq!(blocked.kind, ProviderErrorKind::BadRequest);
+        assert!(!blocked.retryable);
+        // A 401 is the provider's own answer whatever its body type.
+        let unauthorized = classify_status(
+            StatusCode::UNAUTHORIZED,
+            &headers,
+            "https://api.example.test",
+        )
+        .expect("401 is a failure");
+        assert_eq!(unauthorized.kind, ProviderErrorKind::Auth);
     }
 
     #[test]
