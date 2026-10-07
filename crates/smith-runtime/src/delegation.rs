@@ -185,6 +185,8 @@ impl SecurityCheck for DelegationAuthority {
 pub struct SmithChildFactory {
     pub(crate) default_route: SmithChildRoute,
     pub(crate) profile_routes: BTreeMap<String, SmithChildRoute>,
+    /// The parent session's limits, which every child inherits.
+    pub(crate) capability_limits: crate::capability_limits::CapabilityLimits,
     pub(crate) approval: Arc<dyn ApprovalPolicy>,
     pub(crate) workspace: Arc<dyn Workspace>,
     pub(crate) clock: Arc<dyn Clock>,
@@ -218,6 +220,8 @@ pub struct SmithChildRoute {
     /// for a full tool scope and a non-read-only workspace policy — see
     /// [`SmithChildFactory::child_builder`].
     pub(crate) read_only: bool,
+    /// The child profile's own capability limits, applied with the parent's.
+    pub(crate) capabilities: smith_config::resolve::ResolvedCapabilityLimits,
     /// What executes this route's turns: the provider above, or the installed
     /// agent the profile's model id named.
     pub(crate) execution: TurnExecution,
@@ -375,6 +379,10 @@ impl ChildRuntimeFactory for SmithChildFactory {
                 .with_workspace(workspace.root())
                 .with_agent("child"),
         );
+        let scope_inputs = self
+            .capability_limits
+            .for_child(&route.capabilities)
+            .apply(scope_inputs)?;
         let activation_budget = ActivationBudget::new(
             ContextBudget::from_limits(&route.model_profile.limits, &route.context_policy)
                 .capability_budget,
@@ -435,6 +443,7 @@ impl ChildRuntimeFactory for SmithChildFactory {
             .workspace(workspace)
             .tools(tools)
             .live_ability_routing()
+            .pinned_abilities(crate::capability_limits::pinned_core())
             .scope_inputs(scope_inputs)
             .capability_resolver(Arc::new(CapabilityResolver::new()))
             .activation_policy(Arc::new(FailClosedPolicy))

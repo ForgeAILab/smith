@@ -68,6 +68,7 @@ pub(super) fn runtime_resources(
         thinking,
         efforts,
         advisors,
+        capability_denials: Vec::new(),
         accounts: account_entries(credential_pool),
         current_session: Some(current_session.to_owned()),
     }

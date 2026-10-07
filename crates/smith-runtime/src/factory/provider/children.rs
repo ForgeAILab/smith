@@ -214,6 +214,7 @@ pub(in crate::factory) async fn prepare_child_profile_routes(
                 agent_profile_revision: agent_profile.revision.clone(),
                 agent_profile_posture: agent_profile.posture.value,
                 read_only: agent_profile.posture.value.is_read_only(),
+                capabilities: agent_profile.capabilities.clone(),
                 execution,
             },
         );

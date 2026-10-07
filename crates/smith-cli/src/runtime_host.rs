@@ -159,6 +159,7 @@ pub(super) async fn start_host(
     }
     let mut runtime = preflight_request(&resolution, &project, surface, Some(catalog.clone()))
         .context("rooting the project workspace")?;
+    runtime.capability_denials = selection.capability_denials.clone();
     // Folded on here rather than inside the factory so that a direct embedder
     // still gets exactly the sources it supplied: discovery is a property of
     // the Smith *host*, which is the only layer that knows a user state root, a
@@ -668,6 +669,7 @@ async fn run_interactive_hosts(
                 catalog: catalog.clone(),
                 mcp: mcp.clone(),
                 skills,
+                capability_denials: args.selection.capability_denials.clone(),
             },
             PresentationOptions {
                 no_color: args.no_color,
@@ -777,6 +779,8 @@ async fn run_interactive_hosts(
                         | SelectionCommand::Effort(_)
                         | SelectionCommand::ContextWindow(_)
                         | SelectionCommand::Advisor(_)
+                        | SelectionCommand::CapabilityDeny(_)
+                        | SelectionCommand::CapabilityAllow(_)
                 )
                 .then_some(catalog);
                 if matches!(
@@ -835,10 +839,12 @@ pub(super) fn apply_palette_command(
         // The advisor choice belongs to the session it was made in.
         SelectionCommand::NewSession => {
             selection.advisor = None;
+            selection.capability_denials.clear();
             *resume = None;
         }
         SelectionCommand::Resume(session) => {
             selection.advisor = None;
+            selection.capability_denials.clear();
             *resume = Some(session);
         }
         SelectionCommand::Profile(profile) => {
@@ -876,6 +882,18 @@ pub(super) fn apply_palette_command(
         SelectionCommand::ContextWindow(window) => {
             selection.context_window_reset = window.is_none();
             selection.context_window = window;
+            *resume = Some(current_session);
+        }
+        SelectionCommand::CapabilityDeny(pattern) => {
+            if !selection.capability_denials.contains(&pattern) {
+                selection.capability_denials.push(pattern);
+            }
+            *resume = Some(current_session);
+        }
+        SelectionCommand::CapabilityAllow(pattern) => {
+            selection
+                .capability_denials
+                .retain(|denied| *denied != pattern);
             *resume = Some(current_session);
         }
         SelectionCommand::Advisor(choice) => {

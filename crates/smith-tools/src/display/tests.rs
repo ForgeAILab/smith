@@ -211,7 +211,19 @@ fn registry_search_projects_its_reviewed_query_and_bound() {
         "Registry Search(\"sql\")"
     );
     assert!(has_tool_call_display_schema("registry.search"));
-    assert!(project_tool_call_display("registry.search", &json!({"max_results": 3})).is_none());
+    // No query is the browse form: it lists what exists.
+    assert_eq!(
+        invocation("registry.search", json!({"domain": "skill", "offset": 8})),
+        "Registry Search(all · skill · from 8)"
+    );
+    assert_eq!(
+        invocation(
+            "registry.activate",
+            json!({"ids": ["tool:agent", "skill:notes"]})
+        ),
+        "Activate(tool:agent, skill:notes)"
+    );
+    assert!(project_tool_call_display("registry.activate", &json!({"ids": []})).is_none());
 }
 
 #[test]

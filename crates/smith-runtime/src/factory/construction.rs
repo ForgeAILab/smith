@@ -345,6 +345,13 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
                 agent_profile_name.as_str()
             }),
     );
+    let capability_limits = crate::capability_limits::CapabilityLimits::for_session(
+        &request.config.agent.profile.capabilities,
+        &request.capability_denials,
+    );
+    let scope_inputs = capability_limits
+        .apply(scope_inputs)
+        .map_err(FactoryError::Runtime)?;
     let capability_budget =
         ContextBudget::from_limits(&profile.profile.limits, &context_policy).capability_budget;
     // Skills are the asymmetric half of the capability budget. A tool schema
@@ -413,6 +420,7 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         .workspace(workspace.clone())
         .tools(capabilities.tools.clone())
         .live_ability_routing()
+        .pinned_abilities(crate::capability_limits::pinned_core())
         .scope_inputs(scope_inputs)
         .capability_resolver(Arc::new(CapabilityResolver::new()))
         .activation_policy(Arc::new(FailClosedPolicy))
@@ -522,11 +530,13 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
                     agent_profile_revision: agent_profile.revision.clone(),
                     agent_profile_posture: agent_profile.posture.value,
                     read_only: agent_profile.posture.value.is_read_only(),
+                    capabilities: Default::default(),
                     // An inheriting child is the parent's run narrowed, so it
                     // runs turns wherever the parent's do.
                     execution,
                 },
                 profile_routes: child_profile_routes,
+                capability_limits: capability_limits.clone(),
                 approval,
                 workspace,
                 clock,

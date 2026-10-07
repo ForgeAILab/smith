@@ -303,6 +303,51 @@
     }
 
     #[test]
+    fn capabilities_deny_and_allow_narrow_only_the_session() {
+        let mut denying = app();
+        type_text(&mut denying, "/capabilities deny tool:shell");
+        assert_eq!(
+            denying.on_key(key(KeyCode::Enter)),
+            Some(Action::Reconfigure(SessionControl::Reconfigure(
+                SelectionCommand::CapabilityDeny("tool:shell".to_owned())
+            )))
+        );
+
+        // Lifting something this session never denied would widen the
+        // profile, so it is refused before any rebuild.
+        let mut widening = app();
+        type_text(&mut widening, "/capabilities allow tool:shell");
+        assert_eq!(widening.on_key(key(KeyCode::Enter)), None);
+        assert!(
+            format!("{:?}", widening.transcript).contains("cannot be lifted here"),
+            "{:?}",
+            widening.transcript
+        );
+
+        let mut lifting = app();
+        lifting.resources.capability_denials = vec!["tool:shell".to_owned()];
+        type_text(&mut lifting, "/capabilities allow tool:shell");
+        assert_eq!(
+            lifting.on_key(key(KeyCode::Enter)),
+            Some(Action::Reconfigure(SessionControl::Reconfigure(
+                SelectionCommand::CapabilityAllow("tool:shell".to_owned())
+            )))
+        );
+    }
+
+    #[test]
+    fn capabilities_without_a_value_asks_the_host_for_the_listing() {
+        let mut app = app();
+        type_text(&mut app, "/capabilities");
+        assert_eq!(
+            app.on_key(key(KeyCode::Enter)),
+            Some(Action::Command(HostCommand::Capabilities(
+                crate::commands::CapabilitiesAction::List
+            )))
+        );
+    }
+
+    #[test]
     fn unavailable_reasoning_choice_fails_locally_without_reconfiguration() {
         let mut app = app();
         app.resources.thinking[2] = app.resources.thinking[2]

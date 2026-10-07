@@ -8,8 +8,8 @@ use smith_client::recovery_report::{RecoveryPreview, RevertPreview};
 use smith_client::review_report::{ReviewPreview, ReviewReport};
 
 use crate::commands::{
-    self, AdvisorChoice, Command, ConfirmCommand, GoalAction, HostCommand, ParsedCommand,
-    SelectionCommand, SessionControl, UiCommand,
+    self, AdvisorChoice, CapabilitiesAction, Command, ConfirmCommand, GoalAction, HostCommand,
+    ParsedCommand, SelectionCommand, SessionControl, UiCommand,
 };
 use crate::picker::{PickerOutcome, ResourceEntry, ResourcePicker};
 use crate::status::Activity;
@@ -873,6 +873,34 @@ impl App {
                 }
                 self.accept_composer_input();
                 Some(Action::Command(local))
+            }
+            Command::Host(HostCommand::Capabilities(CapabilitiesAction::Deny(pattern))) => {
+                if self.resources.capability_denials.contains(&pattern) {
+                    self.push_notice(
+                        NoticeKind::SessionUnchanged,
+                        format!("`{pattern}` is already denied for this session"),
+                    );
+                    return None;
+                }
+                self.accept_composer_input();
+                Some(Action::Reconfigure(SessionControl::Reconfigure(
+                    SelectionCommand::CapabilityDeny(pattern),
+                )))
+            }
+            Command::Host(HostCommand::Capabilities(CapabilitiesAction::Allow(pattern))) => {
+                // A session can only undo its own denial: anything else that
+                // is missing was withheld by the profile.
+                if !self.resources.capability_denials.contains(&pattern) {
+                    self.transcript.push_error(format!(
+                        "`{pattern}` is not denied by this session; a profile's \
+                         `capabilities` limits cannot be lifted here"
+                    ));
+                    return None;
+                }
+                self.accept_composer_input();
+                Some(Action::Reconfigure(SessionControl::Reconfigure(
+                    SelectionCommand::CapabilityAllow(pattern),
+                )))
             }
             Command::Host(local) => {
                 self.accept_composer_input();

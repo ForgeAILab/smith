@@ -22,6 +22,7 @@ pub(crate) mod budget_notice;
 pub mod built_in_skills;
 pub mod cache_controller;
 pub mod cache_lifecycle;
+pub mod capability_limits;
 pub(crate) mod catalog;
 pub mod chatgpt;
 pub mod checkpoint;

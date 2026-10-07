@@ -146,6 +146,7 @@ dialect = "openai-effort"
                 catalog: self.catalog.clone(),
                 mcp: None,
                 skills: Arc::new(skills),
+                capability_denials: Vec::new(),
             },
         )
     }

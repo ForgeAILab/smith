@@ -84,9 +84,10 @@ async fn a_spawned_child_completes_and_its_result_reaches_the_parent_model() {
         "{names:?}"
     );
     assert!(
-        names
-            .iter()
-            .all(|name| matches!(*name, "read" | "list" | "search" | "registry.search")),
+        names.iter().all(|name| matches!(
+            *name,
+            "read" | "list" | "search" | "registry.search" | "registry.activate"
+        )),
         "a narrowed child exposed a broader or orphaned descriptor: {names:?}"
     );
 

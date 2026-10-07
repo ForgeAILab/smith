@@ -427,6 +427,8 @@ pub struct RuntimeRequest {
     pub child_profiles: Vec<ChildProfileRequest>,
     /// Fully resolved advisor profile, required when the root selects an advisor.
     pub advisor_profile: Option<AdvisorProfileRequest>,
+    /// Capability patterns the session denied on top of its profile's limits.
+    pub capability_denials: Vec<String>,
     /// The runtime's event broadcast buffer.
     pub event_buffer: usize,
     /// The bounded-shutdown grace period, in milliseconds.
@@ -472,6 +474,7 @@ impl RuntimeRequest {
             model_catalog: None,
             child_profiles: Vec::new(),
             advisor_profile: None,
+            capability_denials: Vec::new(),
             event_buffer: DEFAULT_EVENT_BUFFER,
             shutdown_timeout_ms: DEFAULT_SHUTDOWN_TIMEOUT_MS,
         }

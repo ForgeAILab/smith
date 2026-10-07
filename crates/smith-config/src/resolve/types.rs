@@ -720,6 +720,50 @@ impl fmt::Display for AdvisorTarget {
     }
 }
 
+/// A profile's capability limits as validated `<domain>:<name>` patterns.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ResolvedCapabilityLimits {
+    /// When present, only capabilities matching one of these are usable.
+    pub allow: Option<Sourced<Vec<String>>>,
+    /// Capabilities matching any of these are never usable.
+    pub deny: Option<Sourced<Vec<String>>>,
+}
+
+impl ResolvedCapabilityLimits {
+    /// Whether the profile leaves every capability available.
+    pub fn is_empty(&self) -> bool {
+        self.allow.is_none() && self.deny.is_none()
+    }
+}
+
+/// The registry domains a capability pattern may name, besides `*`.
+pub const CAPABILITY_PATTERN_DOMAINS: &[&str] = &["tool", "skill", "mcp", "agent"];
+
+/// Checks one `<domain>:<name>` capability pattern, returning why it is not one.
+pub fn validate_capability_pattern(pattern: &str) -> Result<(), String> {
+    let Some((domain, name)) = pattern.split_once(':') else {
+        return Err(format!(
+            "`{pattern}` is not `<domain>:<name>`; for example `tool:shell` or `skill:*`"
+        ));
+    };
+    if domain != "*" && !CAPABILITY_PATTERN_DOMAINS.contains(&domain) {
+        return Err(format!(
+            "`{domain}` is not a capability domain; use `*`, {}",
+            CAPABILITY_PATTERN_DOMAINS
+                .iter()
+                .map(|domain| format!("`{domain}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if name.is_empty() || name.chars().any(|character| character.is_whitespace()) {
+        return Err(format!(
+            "`{pattern}` needs a capability name or `*` after the `:`"
+        ));
+    }
+    Ok(())
+}
+
 /// One resolved reusable agent profile.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ResolvedAgentProfile {
@@ -742,6 +786,8 @@ pub struct ResolvedAgentProfile {
     pub provider: Option<Sourced<String>>,
     /// Effective model preference, when declared or inherited.
     pub model: Option<Sourced<String>>,
+    /// Which capabilities a session on this profile may use at all.
+    pub capabilities: ResolvedCapabilityLimits,
     /// Deterministic behavior/source revision safe for status and persistence.
     pub revision: String,
     /// Whether this entry came from the transition adapter.

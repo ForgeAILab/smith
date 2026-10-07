@@ -83,6 +83,8 @@ pub(super) struct InteractiveResources {
     pub(super) mcp: Option<Arc<crate::mcp::McpContext>>,
     /// The skills this composition indexed, and the files it refused.
     pub(super) skills: Arc<crate::skills::SkillContext>,
+    /// Capability patterns this session denied on top of its profile.
+    pub(super) capability_denials: Vec<String>,
 }
 
 /// The runtime's out-of-band request streams, plus the accounts they rotate
@@ -584,6 +586,9 @@ pub(super) fn reconfigure_exit(app: &mut App, command: SessionControl) -> Option
             SelectionCommand::Think(_) => "think",
             SelectionCommand::Effort(_) => "effort",
             SelectionCommand::Advisor(_) => "advisor",
+            SelectionCommand::CapabilityDeny(_) | SelectionCommand::CapabilityAllow(_) => {
+                "capabilities"
+            }
             SelectionCommand::ContextWindow(_) => "context",
         },
         SessionControl::Connect(_) => "connect",

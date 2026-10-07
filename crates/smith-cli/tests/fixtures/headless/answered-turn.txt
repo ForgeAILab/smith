@@ -3,5 +3,5 @@ fixture answer
 stderr:
 smith: parent: idle
 smith: provider attempts: 1 committed · 0 discarded
-smith: activation epoch 0 · tool:registry.search
+smith: activation epoch 0 · tool:edit, tool:list, tool:read, tool:registry.activate, tool:registry.search, tool:search, tool:shell, tool:task_output, tool:task_stop
 smith: resume checkpoint: saved <TIMESTAMP>

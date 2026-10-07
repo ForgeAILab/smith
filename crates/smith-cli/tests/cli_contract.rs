@@ -153,11 +153,22 @@ fn json_mode_runs_through_config_and_returns_a_resumable_identity() {
         .as_array()
         .expect("a frozen activation projection");
     assert!(!activated.is_empty());
-    assert!(activated.iter().all(|id| {
-        id.as_str().is_some_and(|id| {
-            !id.contains("edit") && !id.contains("shell") && !id.contains("write_todos")
-        })
-    }));
+    // The core tools are pinned from the first request; anything else still
+    // arrives only by discovery.
+    let activated = activated
+        .iter()
+        .filter_map(|id| id.as_str())
+        .collect::<Vec<_>>();
+    for core in ["edit", "shell", "read"] {
+        assert!(
+            activated.iter().any(|id| id.ends_with(core)),
+            "{core} is not active: {activated:?}"
+        );
+    }
+    assert!(
+        activated.iter().all(|id| !id.contains("write_todos")),
+        "{activated:?}"
+    );
     assert!(
         result["output"]
             .as_str()

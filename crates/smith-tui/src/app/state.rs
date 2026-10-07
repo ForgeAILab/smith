@@ -311,6 +311,8 @@ pub struct RuntimeResources {
     /// Advisor choices: default, on, off, then each profile or model that can
     /// advise this session.
     pub advisors: Vec<ResourceEntry>,
+    /// Capability patterns this session denied on top of its profile.
+    pub capability_denials: Vec<String>,
     /// Named context windows for the active binding.
     pub context_windows: Vec<ResourceEntry>,
     /// Active context window name when the binding has named windows.

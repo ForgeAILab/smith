@@ -1,79 +1,83 @@
 ● /help
   Start here
   Type a task and press Enter.
-  /model        Switch model
-  /connect      Connect or reconnect a
-                provider
-  /help         List commands and keys
+  /model         Switch model
+  /connect       Connect or reconnect a
+                 provider
+  /help          List commands and keys
 
   Primary
-  /help         List commands and keys
-  /goal         Inspect or control a
-                multi-turn goal
-                [OBJECTIVE|edit …|budget
-                N|pause|resume|clear]
-  /context      Show context usage or choose
-                a window
-                [NAME|default]
-  /status       Show session, usage, and
-                workspace status
-                [--verbose]
-  /model        Switch model
-                [PROVIDER/MODEL]
-  /details      Toggle bounded live tool
-                detail
-  /timeline     Show local turn, child, and
-                recovery history
-  /new          Start a fresh session
-  /resume       Resume a saved session
-                [ID]
-  /connect      Connect or reconnect a
-                provider
-                [PROVIDER]
-  /disconnect   Disconnect a provider
-                [PROVIDER]
-  /think        Set thinking for the next
-                turn
-                [on|off|default]
-  /effort       Set reasoning effort for the
-                next turn
-                [LEVEL|default]
-  /advisor      Turn the advisor on or off,
-                or choose it
-                [on|off|default|TARGET]
-  /account      Show provider accounts and
-                their usage
-                [N]
-  /agent        List, inspect, or resume an
-                existing agent
-                [ID|resume ID]
-  /mcp          Show MCP servers, or trust
-                one so it may run
-                [trust NAME]
-  /skills       Show indexed skills, or
-                trust one this project ships
-                [trust NAME]
-  /diff         Inspect workspace changes
-                [SCOPE]
-  /review       Run a read-only change
-                review
-                [SCOPE]
-  /undo         Undo the last attributable
-                turn
-  /redo         Reapply the newest exact
-                undone turn
-  /revert       Selectively revert a file or
-                hunk
-                [FILE]
+  /help          List commands and keys
+  /goal          Inspect or control a
+                 multi-turn goal
+                 [OBJECTIVE|edit …|budget
+                 N|pause|resume|clear]
+  /context       Show context usage or
+                 choose a window
+                 [NAME|default]
+  /status        Show session, usage, and
+                 workspace status
+                 [--verbose]
+  /model         Switch model
+                 [PROVIDER/MODEL]
+  /details       Toggle bounded live tool
+                 detail
+  /timeline      Show local turn, child, and
+                 recovery history
+  /new           Start a fresh session
+  /resume        Resume a saved session
+                 [ID]
+  /connect       Connect or reconnect a
+                 provider
+                 [PROVIDER]
+  /disconnect    Disconnect a provider
+                 [PROVIDER]
+  /think         Set thinking for the next
+                 turn
+                 [on|off|default]
+  /effort        Set reasoning effort for
+                 the next turn
+                 [LEVEL|default]
+  /advisor       Turn the advisor on or off,
+                 or choose it
+                 [on|off|default|TARGET]
+  /account       Show provider accounts and
+                 their usage
+                 [N]
+  /agent         List, inspect, or resume an
+                 existing agent
+                 [ID|resume ID]
+  /mcp           Show MCP servers, or trust
+                 one so it may run
+                 [trust NAME]
+  /capabilities  Show capabilities, or deny
+                 one for this session
+                 [deny ID|allow ID]
+  /skills        Show indexed skills, or
+                 trust one this project
+                 ships
+                 [trust NAME]
+  /diff          Inspect workspace changes
+                 [SCOPE]
+  /review        Run a read-only change
+                 review
+                 [SCOPE]
+  /undo          Undo the last attributable
+                 turn
+  /redo          Reapply the newest exact
+                 undone turn
+  /revert        Selectively revert a file
+                 or hunk
+                 [FILE]
 
   Advanced
-  /diagnostics  Show detailed cache and
-                recovery diagnostics
-  /profile      Switch configured profile
-                [NAME]
-  /provider     Switch provider
-                [NAME]
-  /quit         Exit Smith
+  /diagnostics   Show detailed cache and
+                 recovery diagnostics
+  /profile       Switch configured profile
+                 [NAME]
+  /provider      Switch provider
+                 [NAME]
+  /quit          Exit Smith
 
   Keys
   Enter               Send a task
@@ -136,10 +140,6 @@
                       literal !
   //                  Send text with a
                       leading slash
-
-
-
-
 
 
 

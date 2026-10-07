@@ -396,6 +396,9 @@ pub struct ProfileSection {
     /// Profile-scoped `[context]` overrides.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<ContextSection>,
+    /// Which capabilities a session on this profile may use at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<CapabilitiesSection>,
     /// Profile-scoped `[child_agents]` wait policy overrides.
     ///
     /// This is deliberately separate from the top-level named child-agent
@@ -805,6 +808,22 @@ pub struct ModelReasoningSection {
     /// Exact request-body dialect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dialect: Option<ReasoningDialect>,
+}
+
+/// Capability limits for one profile, as `<domain>:<name>` patterns.
+///
+/// A denied capability is absent from the session rather than merely
+/// inactive: it is not listed, searched, or activatable. `deny` wins over
+/// `allow`, and with no `allow` everything not denied is allowed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CapabilitiesSection {
+    /// When present, only capabilities matching one of these are usable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow: Option<Vec<String>>,
+    /// Capabilities matching any of these are never usable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deny: Option<Vec<String>>,
 }
 
 /// Context reserves, sub-budgets, and compaction watermarks.

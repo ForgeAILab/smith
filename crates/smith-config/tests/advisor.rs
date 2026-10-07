@@ -880,3 +880,47 @@ fn a_session_override_does_not_reach_child_or_advisor_resolutions() {
     .expect("a child resolution");
     assert!(!child.config.agent.advisor_overridden);
 }
+
+#[test]
+fn profile_capability_limits_resolve_with_their_source() {
+    let fixture = Fixture::new(&config(
+        "",
+        "[profiles.code.capabilities]\nallow = [\"tool:*\"]\ndeny = [\"tool:shell\"]",
+        SOL,
+    ));
+    let unlimited = Fixture::new(&config("", "", SOL))
+        .resolve()
+        .expect("no limits");
+    let resolution = fixture.resolve().expect("valid limits");
+    let limits = &resolution.config.agent.profile.capabilities;
+
+    assert_eq!(limits.allow.as_ref().unwrap().value, ["tool:*"]);
+    assert_eq!(limits.deny.as_ref().unwrap().value, ["tool:shell"]);
+    assert_eq!(limits.deny.as_ref().unwrap().source.layer, Layer::Profile);
+    assert!(unlimited.config.agent.profile.capabilities.is_empty());
+    assert_ne!(
+        resolution.config.agent.profile.revision, unlimited.config.agent.profile.revision,
+        "limits change the tool surface, so they change the profile identity"
+    );
+}
+
+#[test]
+fn an_invalid_capability_pattern_fails_resolution_with_its_source() {
+    for (pattern, reason) in [
+        ("shell", "is not `<domain>:<name>`"),
+        ("tools:shell", "is not a capability domain"),
+        ("tool:", "needs a capability name"),
+    ] {
+        let fixture = Fixture::new(&config(
+            "",
+            &format!("[profiles.code.capabilities]\ndeny = [\"{pattern}\"]"),
+            SOL,
+        ));
+        let error = fixture.resolve().expect_err("an invalid pattern");
+        assert!(
+            matches!(error, ConfigError::InvalidValue { .. }),
+            "{pattern}: {error}"
+        );
+        assert!(error.to_string().contains(reason), "{pattern}: {error}");
+    }
+}

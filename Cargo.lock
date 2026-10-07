@@ -21,7 +21,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=fc92efb2d0e98299bee2fb4e2317caa25be40bd4#fc92efb2d0e98299bee2fb4e2317caa25be40bd4"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e#d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e"
 dependencies = [
  "agent-runtime-ability",
  "agent-runtime-context",
@@ -46,7 +46,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-ability"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=fc92efb2d0e98299bee2fb4e2317caa25be40bd4#fc92efb2d0e98299bee2fb4e2317caa25be40bd4"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e#d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e"
 dependencies = [
  "agent-runtime-core",
  "agent-runtime-registry",
@@ -58,7 +58,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-context"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=fc92efb2d0e98299bee2fb4e2317caa25be40bd4#fc92efb2d0e98299bee2fb4e2317caa25be40bd4"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e#d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e"
 dependencies = [
  "agent-runtime-core",
  "agent-runtime-registry",
@@ -69,7 +69,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-core"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=fc92efb2d0e98299bee2fb4e2317caa25be40bd4#fc92efb2d0e98299bee2fb4e2317caa25be40bd4"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e#d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e"
 dependencies = [
  "agent-runtime-registry",
  "async-trait",
@@ -87,7 +87,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-mcp"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=fc92efb2d0e98299bee2fb4e2317caa25be40bd4#fc92efb2d0e98299bee2fb4e2317caa25be40bd4"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e#d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e"
 dependencies = [
  "agent-runtime-ability",
  "agent-runtime-core",
@@ -104,7 +104,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-provider"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=fc92efb2d0e98299bee2fb4e2317caa25be40bd4#fc92efb2d0e98299bee2fb4e2317caa25be40bd4"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e#d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e"
 dependencies = [
  "agent-runtime-core",
  "agent-runtime-registry",
@@ -123,7 +123,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-registry"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=fc92efb2d0e98299bee2fb4e2317caa25be40bd4#fc92efb2d0e98299bee2fb4e2317caa25be40bd4"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e#d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e"
 dependencies = [
  "serde",
 ]
@@ -131,7 +131,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-testkit"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=fc92efb2d0e98299bee2fb4e2317caa25be40bd4#fc92efb2d0e98299bee2fb4e2317caa25be40bd4"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e#d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e"
 dependencies = [
  "agent-runtime",
  "agent-runtime-core",

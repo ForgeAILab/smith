@@ -235,6 +235,7 @@ pub(super) fn resolve_agent_profiles(
                 uses,
                 provider: None,
                 model: None,
+                capabilities: ResolvedCapabilityLimits::default(),
                 revision,
                 legacy: true,
             },
@@ -281,6 +282,7 @@ pub(super) fn resolve_agent_profiles(
                 uses,
                 provider: None,
                 model: None,
+                capabilities: ResolvedCapabilityLimits::default(),
                 revision,
                 legacy: true,
             },
@@ -358,17 +360,24 @@ pub(super) fn resolved_profile(
     )?;
     let provider = text(effective, "provider")?;
     let model = text(effective, "model")?;
-    let revision = agent_profile_revision(
-        name,
-        &posture,
-        description.as_ref(),
-        instructions.as_ref(),
-        &delegation,
-        advisor.as_ref(),
-        &uses,
-        provider.as_ref(),
-        model.as_ref(),
-        legacy,
+    let capabilities = ResolvedCapabilityLimits {
+        allow: capability_patterns(effective, "capabilities.allow")?,
+        deny: capability_patterns(effective, "capabilities.deny")?,
+    };
+    let revision = with_capability_limits(
+        agent_profile_revision(
+            name,
+            &posture,
+            description.as_ref(),
+            instructions.as_ref(),
+            &delegation,
+            advisor.as_ref(),
+            &uses,
+            provider.as_ref(),
+            model.as_ref(),
+            legacy,
+        ),
+        &capabilities,
     );
     Ok(ResolvedAgentProfile {
         name: name.to_owned(),
@@ -380,6 +389,7 @@ pub(super) fn resolved_profile(
         uses,
         provider,
         model,
+        capabilities,
         revision,
         legacy,
     })
@@ -590,6 +600,43 @@ pub(super) fn bounded_instructions(
         });
     }
     Ok(instructions)
+}
+
+/// Reads one capability pattern list, rejecting anything that is not a pattern.
+fn capability_patterns(
+    provenance: &Provenance,
+    key: &str,
+) -> Result<Option<Sourced<Vec<String>>>, ConfigError> {
+    let Some(patterns) = list(provenance, key)? else {
+        return Ok(None);
+    };
+    for pattern in &patterns.value {
+        validate_capability_pattern(pattern).map_err(|message| ConfigError::InvalidValue {
+            source: patterns.source.clone(),
+            message,
+        })?;
+    }
+    Ok(Some(patterns))
+}
+
+/// Folds capability limits into a profile revision; identity when there are
+/// none, so existing configurations keep their revisions.
+fn with_capability_limits(revision: String, limits: &ResolvedCapabilityLimits) -> String {
+    if limits.is_empty() {
+        return revision;
+    }
+    let mut digest = Sha256::new();
+    digest.update(revision.as_bytes());
+    for (label, patterns) in [("allow", &limits.allow), ("deny", &limits.deny)] {
+        let Some(patterns) = patterns else { continue };
+        digest.update([0]);
+        digest.update(label.as_bytes());
+        for pattern in &patterns.value {
+            digest.update([0]);
+            digest.update(pattern.as_bytes());
+        }
+    }
+    format!("{:x}", digest.finalize())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -866,6 +913,7 @@ pub(super) fn resolve_agent(
                 uses: Sourced::new(vec![ProfileUse::Main], active.source.clone()),
                 provider: None,
                 model: None,
+                capabilities: ResolvedCapabilityLimits::default(),
                 revision: agent_profile_revision(
                     &active.value,
                     &modes
@@ -929,17 +977,20 @@ pub(super) fn resolve_agent(
     // advisor naming the session's own binding would only consult itself.
     if profile.advisor != effective_advisor {
         profile.advisor = effective_advisor;
-        profile.revision = agent_profile_revision(
-            &profile.name,
-            &profile.posture,
-            profile.description.as_ref(),
-            profile.instructions.as_ref(),
-            &profile.delegation,
-            profile.advisor.as_ref(),
-            &profile.uses,
-            profile.provider.as_ref(),
-            profile.model.as_ref(),
-            profile.legacy,
+        profile.revision = with_capability_limits(
+            agent_profile_revision(
+                &profile.name,
+                &profile.posture,
+                profile.description.as_ref(),
+                profile.instructions.as_ref(),
+                &profile.delegation,
+                profile.advisor.as_ref(),
+                &profile.uses,
+                profile.provider.as_ref(),
+                profile.model.as_ref(),
+                profile.legacy,
+            ),
+            &profile.capabilities,
         );
     }
     validate_advisor(profile.advisor.as_ref(), &profiles, declared)?;

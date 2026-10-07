@@ -104,6 +104,8 @@ pub(crate) struct Selection {
     pub context_window_reset: bool,
     /// Session-local `/advisor` choice; absent uses the configured advisor.
     pub advisor: Option<smith_config::resolve::AdvisorOverride>,
+    /// Capability patterns `/capabilities deny` added for this session.
+    pub capability_denials: Vec<String>,
     /// An approval policy override.
     pub approval: Option<ApprovalMode>,
     /// A background-exit policy override.

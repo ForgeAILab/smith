@@ -4,5 +4,5 @@ stderr:
 smith: parent: idle
 smith: goal: complete · 19 tokens · budget none · 1 continuation turn(s)
 smith: provider attempts: 2 committed · 0 discarded
-smith: activation epoch 1 · tool:create_goal, tool:edit, tool:get_goal, tool:registry.search, tool:update_goal, skill:smith.configuration.complete-example
+smith: activation epoch 1 · tool:create_goal, tool:edit, tool:get_goal, tool:list, tool:read, tool:registry.activate, tool:registry.search, tool:search, tool:shell, tool:task_output, tool:task_stop, tool:update_goal, skill:smith.configuration.complete-example
 smith: resume checkpoint: saved <TIMESTAMP>

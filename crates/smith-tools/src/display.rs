@@ -170,6 +170,7 @@ pub fn project_tool_call_display(name: &str, arguments: &Value) -> Option<ToolCa
         "task_stop" => project_task_stop(arguments),
         "generate_image" => project_generate_image(arguments),
         "registry.search" => project_registry_search(arguments),
+        "registry.activate" => project_registry_activate(arguments),
         "agent" => project_agent(arguments),
         "advisor" if arguments.is_empty() => Some(display("Advisor", String::new(), Vec::new())),
         _ => None,
@@ -190,6 +191,7 @@ pub fn tool_display_label(name: &str) -> Option<&'static str> {
         "task_stop" => Some("Task Stop"),
         "generate_image" => Some("Generate Image"),
         "registry.search" => Some("Registry Search"),
+        "registry.activate" => Some("Activate"),
         _ => None,
     }
 }
@@ -207,6 +209,7 @@ pub fn has_tool_call_display_schema(name: &str) -> bool {
             | "task_stop"
             | "generate_image"
             | "registry.search"
+            | "registry.activate"
             | "agent"
             | "advisor"
     )
@@ -307,17 +310,41 @@ fn edit_line_changes(old: &str, new: &str) -> Option<(usize, usize)> {
 }
 
 /// The runtime's capability-discovery bootstrap (`registry.search`) is a
-/// first-party tool with a reviewed schema: `query` plus an optional
-/// `max_results`.
+/// first-party tool with a reviewed schema: an optional `query` (absent means
+/// "list what exists"), plus optional `domain`, `offset`, and `max_results`.
 fn project_registry_search(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
-    let query = required_value(arguments, "query")?;
-    let target = serde_json::to_string(&query).ok()?;
+    let target = match optional_value(arguments, "query")? {
+        Some(query) => serde_json::to_string(&query).ok()?,
+        None => "all".to_owned(),
+    };
+    let domain = optional_value(arguments, "domain")?;
+    let offset = optional_non_negative_integer(arguments, "offset")?;
     let max_results = optional_positive_integer(arguments, "max_results")?;
     let mut qualifiers = Vec::new();
+    if let Some(domain) = domain {
+        qualifiers.push(domain);
+    }
+    if let Some(offset) = offset.filter(|offset| *offset > 0) {
+        qualifiers.push(format!("from {offset}"));
+    }
     if let Some(max_results) = max_results {
         qualifiers.push(format!("max {max_results}"));
     }
     Some(display("Registry Search", target, qualifiers))
+}
+
+/// `registry.activate` names the capabilities the agent chose to turn on.
+fn project_registry_activate(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
+    let ids = arguments
+        .get("ids")?
+        .as_array()?
+        .iter()
+        .map(|id| id.as_str().and_then(normalize_value))
+        .collect::<Option<Vec<_>>>()?;
+    if ids.is_empty() {
+        return None;
+    }
+    Some(display("Activate", ids.join(", "), Vec::new()))
 }
 
 fn project_shell(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {

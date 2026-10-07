@@ -13,6 +13,7 @@ use smith_runtime::host::HostSession;
 use smith_tui::app::App;
 
 pub(crate) mod agent;
+mod capabilities;
 pub(super) mod context;
 pub(super) mod diagnostics;
 mod diff;
@@ -47,6 +48,11 @@ pub(super) async fn handle_local_command(
             skills::command(skills, host.runtime().skill_index(), action)
         }
         HostCommand::Mcp(action) => mcp::command(mcp, action),
+        // The TUI turns `deny` and `allow` into a session rebuild before they
+        // reach the host, so only the listing arrives here.
+        HostCommand::Capabilities(_) => {
+            capabilities::command(host, &app.resources.capability_denials)
+        }
         HostCommand::Context => CommandReport::Show(LocalResult::Context(Box::new(
             context::report(&app.status, host.runtime().policy()),
         ))),

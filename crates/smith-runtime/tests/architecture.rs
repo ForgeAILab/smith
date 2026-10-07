@@ -197,6 +197,7 @@ const PUBLIC_RUNTIME_MODULES: &[&str] = &[
     "built_in_skills",
     "cache_controller",
     "cache_lifecycle",
+    "capability_limits",
     "chatgpt",
     "checkpoint",
     "client",

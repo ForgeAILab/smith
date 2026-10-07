@@ -170,7 +170,7 @@ async fn seed_host_state(
             )
         }));
     app.status.advisor = Some(crate::resources::advisor_status(&resources.agents));
-    app.set_resources(runtime_resources(
+    let mut runtime_resources = runtime_resources(
         resources.inventory.clone(),
         resources.sessions.clone(),
         host.session().id().as_str(),
@@ -181,7 +181,9 @@ async fn seed_host_state(
         policy.context_window.as_deref(),
         resources.credential_pool.as_ref(),
         policy.harness.as_ref(),
-    ));
+    );
+    runtime_resources.capability_denials = resources.capability_denials.clone();
+    app.set_resources(runtime_resources);
     app.status.account = account_status(resources.credential_pool.as_ref());
     let children = host
         .runtime()

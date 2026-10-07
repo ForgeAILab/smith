@@ -25,6 +25,7 @@ Primary
 /account [N] — Show provider accounts and their usage
 /agent [ID|resume ID] — List, inspect, or resume an existing agent
 /mcp [trust NAME] — Show MCP servers, or trust one so it may run
+/capabilities [deny ID|allow ID] — Show capabilities, or deny one for this session
 /skills [trust NAME] — Show indexed skills, or trust one this project ships
 /diff [SCOPE] — Inspect workspace changes
 /review [SCOPE] — Run a read-only change review

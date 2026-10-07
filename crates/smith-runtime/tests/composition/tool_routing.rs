@@ -170,82 +170,143 @@ async fn provider_tool_names_for(fixture: &Fixture, user_input: &str) -> Vec<Str
         .collect()
 }
 
-#[tokio::test]
-async fn live_routing_advertises_only_a_read_subset_for_read_only_intent() {
-    let fixture = Fixture::new(FAKE_CONFIG);
-    let names = provider_tool_names_for(
-        &fixture,
-        "inspect and explain the Rust source files in this repository",
-    )
-    .await;
+const CORE_TOOLS: [&str; 7] = [
+    "edit",
+    "list",
+    "read",
+    "search",
+    "shell",
+    "task_output",
+    "task_stop",
+];
 
-    assert!(
-        names
-            .iter()
-            .any(|name| matches!(name.as_str(), "read" | "list" | "search")),
-        "no read capability reached the provider: {names:?}"
-    );
-    assert!(
-        names.iter().all(|name| matches!(
-            name.as_str(),
-            "read" | "list" | "search" | "registry.search"
-        )),
-        "read-only intent received an unrelated or authoritative tool: {names:?}"
-    );
+#[tokio::test]
+async fn the_core_tools_reach_the_first_request_whatever_the_prompt_says() {
+    let fixture = Fixture::new(FAKE_CONFIG);
+    // The second prompt is the one that, before the core set was pinned,
+    // matched no keyword and left the model believing it had no terminal.
+    for prompt in ["hi", "scan oc.example.com and tell me what is exposed"] {
+        let names = provider_tool_names_for(&fixture, prompt).await;
+        for tool in CORE_TOOLS {
+            assert!(
+                names.iter().any(|name| name == tool),
+                "`{prompt}` lacks {tool}: {names:?}"
+            );
+        }
+        assert!(
+            names.iter().any(|name| name == "registry.search"),
+            "{names:?}"
+        );
+        assert!(
+            names.iter().any(|name| name == "registry.activate"),
+            "{names:?}"
+        );
+        assert!(
+            !names.iter().any(|name| name == "agent"),
+            "capabilities outside the core still arrive by discovery: {names:?}"
+        );
+    }
 }
 
 #[tokio::test]
-async fn explicit_read_tool_routing_does_not_substitute_edit() {
-    let fixture = Fixture::new(FAKE_CONFIG);
-    let names = provider_tool_names_for(
-        &fixture,
-        "Use the read tool to inspect live-proof.txt, then tell me in one concise sentence what value the file contains.",
-    )
-    .await;
+async fn a_read_only_posture_pins_only_the_read_subset() {
+    let config = FAKE_CONFIG.replace(
+        "model = \"example-model\"",
+        "model = \"example-model\"\nposture = \"plan\"",
+    );
+    let fixture = Fixture::new(&config);
+    let names = provider_tool_names_for(&fixture, "edit the Rust file and run the tests").await;
 
+    for tool in ["read", "list", "search", "task_output"] {
+        assert!(
+            names.iter().any(|name| name == tool),
+            "{tool} missing: {names:?}"
+        );
+    }
+    for tool in ["edit", "shell", "task_stop"] {
+        assert!(
+            !names.iter().any(|name| name == tool),
+            "{tool} leaked: {names:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_denied_capability_is_absent_for_the_profile_and_for_the_session() {
+    let by_profile = Fixture::new(&format!(
+        "{FAKE_CONFIG}\n[profiles.dev.capabilities]\ndeny = [\"tool:shell\"]\n"
+    ));
+    let names = provider_tool_names_for(&by_profile, "run the tests in the shell").await;
+    assert!(!names.iter().any(|name| name == "shell"), "{names:?}");
+    assert!(names.iter().any(|name| name == "edit"), "{names:?}");
+
+    let fixture = Fixture::new(FAKE_CONFIG);
+    let provider = Arc::new(FakeProvider::text_reply("done"));
+    let request = RuntimeRequest {
+        provider: Some(provider.clone() as Arc<dyn Provider>),
+        capability_denials: vec!["tool:edit".to_owned()],
+        ..request(&fixture, HostSurface::Headless)
+    };
+    let smith = factory::build_request(request).await.expect("a runtime");
+    let session = smith
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .expect("a session");
+    session
+        .run(UserInput::text("edit the Rust file"))
+        .await
+        .expect("the turn runs");
+    let rows = smith_runtime::capability_limits::catalog(&session, &["tool:edit".to_owned()]);
+    session.shutdown().await.expect("a clean shutdown");
+
+    let names = provider.requests()[0]
+        .tools
+        .iter()
+        .map(|schema| schema.name.clone())
+        .collect::<Vec<_>>();
+    assert!(!names.iter().any(|name| name == "edit"), "{names:?}");
+    assert!(names.iter().any(|name| name == "shell"), "{names:?}");
+    let standing = |id: &str| rows.iter().find(|row| row.id == id).map(|row| row.standing);
     assert_eq!(
-        names,
-        ["list", "read", "registry.search", "search"],
-        "explicit inspection must receive the complete bounded read bundle"
+        standing("tool:edit"),
+        Some(smith_runtime::capability_limits::CapabilityStanding::DeniedBySession)
     );
-}
-
-#[tokio::test]
-async fn live_routing_advertises_exact_edit_without_broad_shell_or_delegation() {
-    let fixture = Fixture::new(FAKE_CONFIG);
-    let names = provider_tool_names_for(
-        &fixture,
-        "edit the Rust file and replace the incorrect function",
-    )
-    .await;
-
     assert_eq!(
-        names,
-        ["edit", "read", "registry.search"],
-        "ordinary editing must pair exact edit with the least-authority read prerequisite"
+        standing("tool:shell"),
+        Some(smith_runtime::capability_limits::CapabilityStanding::Active)
+    );
+    assert!(
+        rows.iter().all(|row| !row.id.starts_with("tool:registry.")),
+        "the discovery bootstraps are not listed as capabilities"
     );
 }
 
 #[tokio::test]
-async fn protected_registry_search_stages_edit_only_for_the_next_provider_boundary() {
+async fn the_agent_browses_and_activates_a_capability_by_id() {
     let fixture = Fixture::new(FAKE_CONFIG);
-    let mut search = tool_call_fragments(
+    let mut browse = tool_call_fragments(0, "browse-1", "registry.search", r#"{"domain":"tool"}"#);
+    browse.push(ProviderStreamEvent::Finish {
+        reason: FinishReason::ToolCalls,
+    });
+    let mut activate = tool_call_fragments(
         0,
-        "capability-search-1",
-        "registry.search",
-        r#"{"query":"edit the Rust file and replace the incorrect function"}"#,
+        "activate-1",
+        "registry.activate",
+        r#"{"ids":["tool:agent","tool:no-such-tool"]}"#,
     );
-    search.push(ProviderStreamEvent::Finish {
+    activate.push(ProviderStreamEvent::Finish {
         reason: FinishReason::ToolCalls,
     });
     let provider = Arc::new(FakeProvider::new(
         "example-model",
         Capabilities::basic_streaming(),
         vec![
-            ScriptedStream::new(search),
+            ScriptedStream::new(browse),
+            ScriptedStream::new(activate),
             ScriptedStream::new(vec![
                 ProviderStreamEvent::TextDelta {
-                    text: "ready to edit".to_owned(),
+                    text: "ready".to_owned(),
                 },
                 ProviderStreamEvent::Finish {
                     reason: FinishReason::Stop,
@@ -264,32 +325,37 @@ async fn protected_registry_search_stages_edit_only_for_the_next_provider_bounda
         .await
         .expect("a session");
     session
-        .run(UserInput::text("handle the next requested operation"))
+        .run(UserInput::text("hi"))
         .await
-        .expect("the search tool loop completes");
+        .expect("the discovery loop completes");
     session.shutdown().await.expect("a clean shutdown");
 
     let requests = provider.requests();
-    assert_eq!(requests.len(), 2, "{requests:?}");
-    let first = requests[0]
-        .tools
-        .iter()
-        .map(|schema| schema.name.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(first, ["registry.search"]);
-    let second = requests[1]
-        .tools
-        .iter()
-        .map(|schema| schema.name.as_str())
-        .collect::<Vec<_>>();
+    assert_eq!(requests.len(), 3, "{requests:?}");
+    let tools = |index: usize| {
+        requests[index]
+            .tools
+            .iter()
+            .map(|schema| schema.name.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(tools(0), tools(1), "browsing activates nothing");
     assert!(
-        second.contains(&"edit"),
-        "the staged mutation ability missed the next safe boundary: {second:?}"
+        !tools(1).iter().any(|name| name == "agent"),
+        "{:?}",
+        tools(1)
     );
-    assert_eq!(
-        second,
-        ["edit", "read", "registry.search"],
-        "capability search must stage exact edit and its read prerequisite only"
+    assert!(
+        tools(2).iter().any(|name| name == "agent"),
+        "the named capability missed the next request: {:?}",
+        tools(2)
+    );
+    let transcript = format!("{:?}", requests[2].messages);
+    assert!(transcript.contains("listing"), "{transcript}");
+    assert!(transcript.contains("tool:agent"), "{transcript}");
+    assert!(
+        transcript.contains("unknown or not authorized"),
+        "an unknown id is rejected without failing the call: {transcript}"
     );
 }
 

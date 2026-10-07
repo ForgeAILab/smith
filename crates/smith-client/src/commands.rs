@@ -65,6 +65,10 @@ pub enum SelectionCommand {
     Effort(Option<String>),
     /// Choose the session's advisor in place of the configured one.
     Advisor(AdvisorChoice),
+    /// Deny one capability pattern for the rest of this session.
+    CapabilityDeny(String),
+    /// Lift a denial this session added.
+    CapabilityAllow(String),
     /// Select a model context window; `None` restores the model default.
     ContextWindow(Option<String>),
 }
@@ -78,6 +82,17 @@ pub enum AdvisorChoice {
     Off,
     /// Consult this profile or `provider/model`.
     Target(String),
+}
+
+/// Typed capability listing and session-limit control.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CapabilitiesAction {
+    /// List active, available, and denied capabilities.
+    List,
+    /// Deny a `<domain>:<name>` pattern for this session.
+    Deny(String),
+    /// Lift a denial this session added.
+    Allow(String),
 }
 
 /// Typed local MCP server control.
@@ -434,6 +449,17 @@ command_registry! {
         usage_example: "/mcp trust github",
         complete_without_value: false,
     },
+    /// Show what the session can use, or narrow it for this session.
+    Host Capabilities(CapabilitiesAction) => CommandSpec {
+        name: "capabilities",
+        argument_hint: "[deny ID|allow ID]",
+        description: "Show capabilities, or deny one for this session",
+        requires_idle: false,
+        advanced: false,
+        grammar: ArgumentGrammar::Subcommand(parse_capabilities),
+        usage_example: "/capabilities deny tool:shell",
+        complete_without_value: true,
+    },
     /// Show indexed skills, or trust one this project ships.
     Host Skills(SkillsAction) => CommandSpec {
         name: "skills",
@@ -689,6 +715,32 @@ fn parse_mcp(argument: Option<String>, second: Option<String>) -> Result<Command
     }
 }
 
+fn parse_capabilities(argument: Option<String>, second: Option<String>) -> Result<Command, String> {
+    let action = match (argument.as_deref(), second) {
+        (None, _) => CapabilitiesAction::List,
+        (Some(verb @ ("deny" | "allow")), Some(pattern)) => {
+            smith_config::resolve::validate_capability_pattern(&pattern)?;
+            if verb == "deny" {
+                CapabilitiesAction::Deny(pattern)
+            } else {
+                CapabilitiesAction::Allow(pattern)
+            }
+        }
+        (Some(verb @ ("deny" | "allow")), None) => {
+            return Err(format!(
+                "`/capabilities {verb}` requires an id such as `tool:shell` — run \
+                 `/capabilities` to list them"
+            ));
+        }
+        (Some(other), _) => {
+            return Err(format!(
+                "`/capabilities` takes no value, `deny ID`, or `allow ID`; `{other}` is none of those"
+            ));
+        }
+    };
+    Ok(Command::Host(HostCommand::Capabilities(action)))
+}
+
 fn parse_skills(argument: Option<String>, second: Option<String>) -> Result<Command, String> {
     match (argument.as_deref(), second) {
         (None, _) => Ok(Command::Host(HostCommand::Skills(SkillsAction::List))),
@@ -940,6 +992,21 @@ mod tests {
         assert_eq!(
             parse("/model").expect("picker"),
             Command::Ui(UiCommand::Model(None))
+        );
+        assert_eq!(
+            parse("/capabilities").expect("capability listing"),
+            Command::Host(HostCommand::Capabilities(CapabilitiesAction::List))
+        );
+        assert_eq!(
+            parse("/capabilities deny tool:shell").expect("session denial"),
+            Command::Host(HostCommand::Capabilities(CapabilitiesAction::Deny(
+                "tool:shell".into()
+            )))
+        );
+        assert!(
+            parse("/capabilities deny shell")
+                .expect_err("not a pattern")
+                .contains("<domain>:<name>")
         );
         assert_eq!(
             parse("/advisor").expect("advisor picker"),

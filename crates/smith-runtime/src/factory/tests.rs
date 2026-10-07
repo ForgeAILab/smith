@@ -1320,6 +1320,7 @@ fn agent(posture: AgentPosture) -> ResolvedAgent {
         uses: sourced(vec![ProfileUse::Main]),
         provider: None,
         model: None,
+        capabilities: Default::default(),
         revision: format!("test-{name}-profile-1"),
         legacy: false,
     };
