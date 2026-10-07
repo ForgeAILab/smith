@@ -910,6 +910,7 @@ fn an_invalid_capability_pattern_fails_resolution_with_its_source() {
         ("shell", "is not `<domain>:<name>`"),
         ("tools:shell", "is not a capability domain"),
         ("tool:", "needs a capability name"),
+        ("tool:a:b", "needs a capability name"),
     ] {
         let fixture = Fixture::new(&config(
             "",

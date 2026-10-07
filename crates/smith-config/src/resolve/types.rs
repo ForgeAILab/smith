@@ -756,7 +756,12 @@ pub fn validate_capability_pattern(pattern: &str) -> Result<(), String> {
                 .join(", ")
         ));
     }
-    if name.is_empty() || name.chars().any(|character| character.is_whitespace()) {
+    // The runtime's own parser accepts one separator; anything it would
+    // reject must be refused here, before a session is rebuilt around it.
+    if name.is_empty()
+        || name.contains(':')
+        || name.chars().any(|character| character.is_whitespace())
+    {
         return Err(format!(
             "`{pattern}` needs a capability name or `*` after the `:`"
         ));

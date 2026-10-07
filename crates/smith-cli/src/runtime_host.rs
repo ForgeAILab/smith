@@ -575,6 +575,8 @@ async fn run_interactive_hosts(
     // The advisor in effect before a pending `/advisor` change, restored if
     // the rebuilt session cannot start with the new one.
     let mut advisor_change: Option<Option<AdvisorOverride>> = None;
+    // Likewise the session's denials before a pending `/capabilities` change.
+    let mut capability_change: Option<Vec<String>> = None;
     let mut mcp: Option<Arc<crate::mcp::McpContext>> = None;
     let mut app = None;
     // Initialize after raw mode is entered, then retain input through host
@@ -610,8 +612,23 @@ async fn run_interactive_hosts(
                 host_notice = Some(format!("advisor unchanged · {error:#}"));
                 continue;
             }
+            Err(error) if capability_change.is_some() => {
+                args.selection.capability_denials = capability_change.take().unwrap_or_default();
+                host_notice = Some(format!("capabilities unchanged · {error:#}"));
+                continue;
+            }
             Err(error) => return Err(error),
         };
+        if capability_change.take().is_some() {
+            host_notice = Some(if args.selection.capability_denials.is_empty() {
+                "capabilities · no session denials".to_owned()
+            } else {
+                format!(
+                    "capabilities · denied for this session: {}",
+                    args.selection.capability_denials.join(", ")
+                )
+            });
+        }
         if advisor_change.take().is_some() {
             host_notice = Some(format!(
                 "advisor {}",
@@ -791,6 +808,12 @@ async fn run_interactive_hosts(
                 }
                 if matches!(command, SelectionCommand::Advisor(_)) {
                     advisor_change = Some(args.selection.advisor.clone());
+                }
+                if matches!(
+                    command,
+                    SelectionCommand::CapabilityDeny(_) | SelectionCommand::CapabilityAllow(_)
+                ) {
+                    capability_change = Some(args.selection.capability_denials.clone());
                 }
                 apply_palette_command(&mut args.selection, &mut resume, current_session, command);
             }
