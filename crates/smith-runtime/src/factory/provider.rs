@@ -23,6 +23,7 @@ struct ImageBackendBinding {
 
 pub(super) struct ProviderStage {
     pub(super) provider: Arc<dyn Provider>,
+    pub(super) image_binding: Option<smith_module::ImageBinding>,
     pub(super) image_backend: Option<Arc<dyn smith_tools::ImageGenerationBackend>>,
 }
 
@@ -76,6 +77,14 @@ pub(super) fn construct_runtime(
         }
         None => provider,
     };
+    let module_image_binding = image_binding
+        .as_ref()
+        .map(|binding| smith_module::ImageBinding {
+            endpoint: binding.endpoint.clone(),
+            target: binding.target.clone(),
+            credentials: binding.credentials.clone(),
+            chatgpt: binding.chatgpt,
+        });
     let image_backend =
         if request.config.image_generation.enabled.value
             && !request.config.agent.active_posture().is_read_only()
@@ -104,5 +113,6 @@ pub(super) fn construct_runtime(
     Ok(ProviderStage {
         provider: credentials::apply_credential_pool(request, provider, pool),
         image_backend,
+        image_binding: module_image_binding,
     })
 }

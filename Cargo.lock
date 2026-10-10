@@ -3343,6 +3343,7 @@ dependencies = [
  "smith-client",
  "smith-config",
  "smith-host",
+ "smith-module",
  "smith-runtime",
  "smith-tools",
  "smith-tui",
@@ -3416,6 +3417,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "smith-module"
+version = "0.3.10"
+dependencies = [
+ "agent-runtime",
+ "agent-runtime-core",
+ "agent-runtime-testkit",
+]
+
+[[package]]
 name = "smith-runtime"
 version = "0.3.10"
 dependencies = [
@@ -3442,6 +3452,7 @@ dependencies = [
  "sha2",
  "smith-config",
  "smith-host",
+ "smith-module",
  "smith-tools",
  "syn 2.0.119",
  "tempfile",

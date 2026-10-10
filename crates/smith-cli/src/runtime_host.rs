@@ -87,6 +87,7 @@ pub(super) fn preflight_request(
         workspace: Some(Arc::new(workspace)),
         credentials: Some(CredentialResolver::new(&resolution.layout.user_dir)),
         model_catalog: catalog.clone(),
+        modules: crate::modules::composition(),
         ..RuntimeRequest::new(resolution.config.clone(), surface)
     };
     if let Some(catalog) = catalog

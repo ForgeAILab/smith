@@ -10,7 +10,7 @@ use syn::{Attribute, Item, Meta, Token, UseTree, Visibility};
 use toml::{Table, Value};
 
 #[test]
-fn the_full_runtime_facade_is_a_smith_runtime_production_dependency_only() {
+fn the_full_runtime_facade_is_used_only_by_composition_and_module_contracts() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
@@ -32,10 +32,15 @@ fn the_full_runtime_facade_is_a_smith_runtime_production_dependency_only() {
         }
     }
 
+    // The six shared pipeline traits are exposed only through the facade;
+    // the contract crate needs them without admitting another composition root.
     assert_eq!(
         owners,
-        BTreeSet::from(["crates/smith-runtime".to_owned()]),
-        "the full facade must enter production composition only through smith-runtime"
+        BTreeSet::from([
+            "crates/smith-runtime".to_owned(),
+            "crates/smith-module".to_owned()
+        ]),
+        "the facade is limited to runtime composition and the shared module pipeline contracts"
     );
 }
 

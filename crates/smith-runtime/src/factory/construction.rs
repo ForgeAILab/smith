@@ -160,7 +160,7 @@ fn prepare_summary_stage(
 pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryError> {
     let resolved = resolve::accept(harness);
     let mut harness_identity = resolved.identity;
-    let harness_modules = resolved.modules;
+    let mut harness_modules = resolved.modules;
     let mut harness_report = resolved.report;
     let request = resolved.request;
     // Host policy first. It costs nothing to check and everything to get wrong,
@@ -253,12 +253,25 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         .ok()
         .map(Arc::new)
     });
+    let module_plan = modules::prepare(
+        &request,
+        provider_stage.image_binding,
+        profile.profile.limits.max_input_tokens,
+        semantic_summary.is_some(),
+    )?;
+    crate::harness::record_mounted_modules(
+        &mut harness_identity,
+        &mut harness_modules,
+        &mut harness_report,
+        modules::specs(&module_plan)?,
+    )?;
     let capabilities = capabilities::prepare(
         &request,
         agent_tool_profiles,
         advisor_route,
         image_backend,
         image_history.clone(),
+        modules::tools(&module_plan),
     )?;
     let durability = persistence::prepare(&request).await?;
 
@@ -511,6 +524,7 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         builder = builder.observer(observer);
     }
 
+    let builder = modules::apply(builder, &module_plan);
     let built = compose::runtime(builder)?;
     let delegation = delegation::assemble(capabilities.delegation_slot.clone().map(|slot| {
         SmithDelegation {
@@ -569,6 +583,8 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         harness_identity,
         harness_modules,
         harness_report,
+        mounted_modules: Arc::from(module_plan.mounted),
+        module_report: Arc::from(module_plan.report),
         image_history,
     })
 }

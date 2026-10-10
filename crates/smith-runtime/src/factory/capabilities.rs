@@ -8,6 +8,7 @@ pub(super) fn prepare(
     advisor_route: Option<Arc<AdvisorRoute>>,
     image_backend: Option<Arc<dyn smith_tools::ImageGenerationBackend>>,
     image_history: Arc<crate::image_history::SessionImageHistory>,
+    module_tools: Vec<(Arc<dyn Tool>, agent_runtime::registry::RegistrySource)>,
 ) -> Result<CapabilityStage, FactoryError> {
     let mut tools = tools(request, image_backend, image_history);
     let (advisor, advisor_slot) = if advisor_eligible(request) {
@@ -91,6 +92,10 @@ pub(super) fn prepare(
         ability_sources.push(agent_runtime::registry::RegistrySource::BuiltIn);
         Some(slot)
     };
+    for (tool, source) in module_tools {
+        tools.push(tool);
+        ability_sources.push(source);
+    }
     let abilities = seal_tool_abilities(tools.iter().cloned().zip(ability_sources))
         .map_err(FactoryError::AbilityRegistry)?;
 

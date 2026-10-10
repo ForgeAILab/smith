@@ -6,28 +6,28 @@ completed_at:
 
 ## 1. Contract
 
-- [ ] 1.1 Add `crates/smith-module`: `Module` trait (id, revision,
+- [x] 1.1 Add `crates/smith-module`: `Module` trait (id, revision,
   description, default, requirements, `mount`), `ModuleContext` (resolved
   settings, user directory, posture, HTTP transport, image binding),
   `Mounted`, and the contribution types. Depends on Agent Runtime crates
   only.
-- [ ] 1.2 Extend `Contribution` in `smith-runtime/src/harness.rs` with
+- [x] 1.2 Extend `Contribution` in `smith-runtime/src/harness.rs` with
   `Pipeline` and `StatusItem`, and `ModuleProvenance` with
   `CompiledThirdParty`; update resolution and evidence tests.
-- [ ] 1.3 Add the mount planner: topological order over requirements, cycle
+- [x] 1.3 Add the mount planner: topological order over requirements, cycle
   and unmet-requirement reporting, mount-failure isolation. Unit tests for
   each outcome.
 
 ## 2. Composition
 
-- [ ] 2.1 Add the single compiled-in module list in `smith-cli`, empty, and
+- [x] 2.1 Add the single compiled-in module list in `smith-cli`, empty, and
   pass it into runtime construction.
-- [ ] 2.2 Feed mounted contributions into the factory: tools to the
+- [x] 2.2 Feed mounted contributions into the factory: tools to the
   registry, pipeline components to the harness pipeline, observers to the
   observer chain, each recorded as a `ModuleSpec`.
 - [ ] 2.3 Rebuild the composition from the mounted set on the existing
   safe-boundary reconfigure; test off-then-on equals never-off.
-- [ ] 2.4 Confirm existing fixtures pass unchanged with the empty list.
+- [x] 2.4 Confirm existing fixtures pass unchanged with the empty list.
 
 ## 3. Configuration
 

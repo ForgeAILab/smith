@@ -176,6 +176,7 @@ mod construction;
 mod context_policy;
 mod delegation;
 mod errors;
+mod modules;
 mod persistence;
 mod provider;
 mod resolve;
@@ -361,6 +362,8 @@ pub struct RuntimeRequest {
     /// Trusted in-process Rust contributions registered in addition to Smith's
     /// built-ins. This is an embedding API, not a sandboxed plugin surface.
     pub trusted_native: TrustedNativeModule,
+    /// Explicit compiled module catalog, enabled set, and resolved own settings.
+    pub modules: smith_module::ModuleComposition,
     /// Connected MCP servers, whose tools are registered alongside the
     /// built-ins.
     ///
@@ -450,6 +453,7 @@ impl RuntimeRequest {
             rotation: None,
             credential_pool: None,
             trusted_native: TrustedNativeModule::default(),
+            modules: smith_module::ModuleComposition::default(),
             mcp: None,
             background_services: None,
             change_recorder: None,
@@ -658,6 +662,8 @@ pub struct SmithRuntime {
     harness_identity: HarnessIdentity,
     harness_modules: Arc<[ResolvedModule]>,
     harness_report: HarnessResolutionReport,
+    mounted_modules: Arc<[smith_module::MountedModule]>,
+    module_report: Arc<[smith_module::ModuleReport]>,
     image_history: Arc<crate::image_history::SessionImageHistory>,
 }
 
@@ -764,6 +770,16 @@ impl SmithRuntime {
     /// Bounded non-secret harness resolution report.
     pub fn harness_report(&self) -> &HarnessResolutionReport {
         &self.harness_report
+    }
+
+    /// Successful module values, including declarations for future client surfaces.
+    pub fn mounted_modules(&self) -> &[smith_module::MountedModule] {
+        &self.mounted_modules
+    }
+
+    /// Plain catalog and mount outcomes for future module listings.
+    pub fn module_report(&self) -> &[smith_module::ModuleReport] {
+        &self.module_report
     }
 
     /// Canonical active-session image history used by `generate_image`.

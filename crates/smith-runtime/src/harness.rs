@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 
+use agent_runtime::harness::ComponentPhase;
 use agent_runtime::registry::Permission;
 use agent_runtime_core::tool::Tool;
 use sha2::{Digest, Sha256};
@@ -93,6 +94,8 @@ impl ModuleRevision {
 pub enum ModuleProvenance {
     /// Smith's compiled product.
     BuiltIn,
+    /// A third-party crate explicitly compiled into the product.
+    CompiledThirdParty(String),
     /// A host that already executes inside Smith's process.
     TrustedHost(String),
     /// A user-installed manifest, which can never select native execution.
@@ -150,6 +153,13 @@ pub enum Contribution {
     Command { name: String },
     /// A redaction-safe event observer declaration.
     Observer { name: String },
+    /// A shared harness component; collisions are scoped to its phase.
+    Pipeline {
+        phase: ComponentPhase,
+        component: String,
+    },
+    /// Bounded declarative status data.
+    StatusItem { name: String },
     /// Bounded declarative panel data.
     Panel { name: String },
     /// Reserved subprocess tool contribution.
@@ -169,6 +179,18 @@ impl Contribution {
             Self::Command { name } => ("command", name),
             Self::Observer { name } => ("observer", name),
             Self::Panel { name } => ("panel", name),
+            Self::StatusItem { name } => ("status_item", name),
+            Self::Pipeline { phase, component } => (
+                match phase {
+                    ComponentPhase::History => "pipeline/history",
+                    ComponentPhase::Context => "pipeline/context",
+                    ComponentPhase::ToolView => "pipeline/tool_view",
+                    ComponentPhase::Model => "pipeline/model",
+                    ComponentPhase::ToolOutput => "pipeline/tool_output",
+                    ComponentPhase::TurnCommit => "pipeline/turn_commit",
+                },
+                component,
+            ),
             Self::ProcessTool { name, .. } => ("tool", name),
             Self::NativeLibrary { path } => ("native_library", path),
         }
@@ -181,6 +203,8 @@ impl Contribution {
             | Self::Command { .. }
             | Self::Observer { .. }
             | Self::Panel { .. }
+            | Self::Pipeline { .. }
+            | Self::StatusItem { .. }
             | Self::NativeLibrary { .. } => CapabilitySet::new(),
         }
     }
@@ -403,31 +427,7 @@ pub fn resolve(spec: HarnessSpec) -> Result<ResolvedHarness, HarnessResolutionEr
     }
     modules.extend(mcp_specs(&request)?);
 
-    let mut contribution_owners = BTreeMap::<(String, String), ModuleId>::new();
-    let mut resolved = Vec::with_capacity(modules.len());
-    for module in modules {
-        validate_module(&module, broker_running)?;
-        for contribution in &module.contributions {
-            let (kind, name) = contribution.key();
-            let key = (kind.to_owned(), name.to_owned());
-            if contribution_owners.insert(key, module.id.clone()).is_some() {
-                return Err(HarnessResolutionError::ContributionCollision {
-                    kind: kind.to_owned(),
-                    name: name.to_owned(),
-                });
-            }
-        }
-        resolved.push(ResolvedModule {
-            id: module.id,
-            revision: module.revision,
-            provenance: module.provenance,
-            trust: module.trust,
-            contributions: module.contributions,
-            requested_capabilities: module.requested_capabilities,
-            granted_capabilities: module.granted_capabilities,
-        });
-    }
-    resolved.sort_by(|left, right| left.id.cmp(&right.id));
+    let resolved = resolve_module_specs(modules, broker_running)?;
 
     let provider_revision_inputs = [
         format!("{:?}", request.config.provider),
@@ -546,6 +546,91 @@ pub fn resolve(spec: HarnessSpec) -> Result<ResolvedHarness, HarnessResolutionEr
     })
 }
 
+/// Validates one combined declaration set, including factory-mounted values.
+pub(crate) fn resolve_module_specs(
+    modules: Vec<ModuleSpec>,
+    broker_running: bool,
+) -> Result<Vec<ResolvedModule>, HarnessResolutionError> {
+    let mut contribution_owners = BTreeMap::<(String, String), ModuleId>::new();
+    let mut resolved = Vec::with_capacity(modules.len());
+    for module in modules {
+        validate_module(&module, broker_running)?;
+        for contribution in &module.contributions {
+            let (kind, name) = contribution.key();
+            let key = (kind.to_owned(), name.to_owned());
+            if contribution_owners.insert(key, module.id.clone()).is_some() {
+                return Err(HarnessResolutionError::ContributionCollision {
+                    kind: kind.to_owned(),
+                    name: name.to_owned(),
+                });
+            }
+        }
+        resolved.push(ResolvedModule {
+            id: module.id,
+            revision: module.revision,
+            provenance: module.provenance,
+            trust: module.trust,
+            contributions: module.contributions,
+            requested_capabilities: module.requested_capabilities,
+            granted_capabilities: module.granted_capabilities,
+        });
+    }
+    resolved.sort_by(|left, right| left.id.cmp(&right.id));
+
+    Ok(resolved)
+}
+
+/// Extends identity only when native modules actually mounted, preserving the
+/// legacy digest and evidence bytes for the empty composition path.
+pub(crate) fn record_mounted_modules(
+    identity: &mut HarnessIdentity,
+    modules: &mut Arc<[ResolvedModule]>,
+    report: &mut HarnessResolutionReport,
+    mounted: Vec<ModuleSpec>,
+) -> Result<(), HarnessResolutionError> {
+    if mounted.is_empty() {
+        return Ok(());
+    }
+    let mut declarations = modules
+        .iter()
+        .map(|module| ModuleSpec {
+            id: module.id.clone(),
+            revision: module.revision.clone(),
+            provenance: module.provenance.clone(),
+            trust: module.trust,
+            contributions: module.contributions.clone(),
+            requested_capabilities: module.requested_capabilities.clone(),
+            granted_capabilities: module.granted_capabilities.clone(),
+        })
+        .collect::<Vec<_>>();
+    declarations.extend(mounted);
+    let resolved = resolve_module_specs(declarations, false)?;
+    let records = resolved
+        .iter()
+        .map(|module| format!("{module:?}"))
+        .collect::<Vec<_>>();
+    identity.revision = digest(
+        std::iter::once("compiled-modules-v1")
+            .chain(std::iter::once(identity.revision.as_str()))
+            .chain(records.iter().map(String::as_str)),
+    );
+    report.entries.truncate(3);
+    report.entries[0] = format!("harness={}", identity.revision);
+    report
+        .entries
+        .extend(resolved.iter().take(62).map(|module| {
+            format!(
+                "module={} revision={} trust={:?} contributions={}",
+                module.id.as_str(),
+                module.revision.as_str(),
+                module.trust,
+                module.contributions.len()
+            )
+        }));
+    *modules = Arc::from(resolved);
+    Ok(())
+}
+
 fn trusted_native_spec(request: &RuntimeRequest) -> Result<ModuleSpec, HarnessResolutionError> {
     let mut required = CapabilitySet::new();
     let revision = tool_specs_revision(
@@ -630,7 +715,9 @@ fn validate_module(
     if module.trust == ModuleTrust::TrustedNative
         && !matches!(
             module.provenance,
-            ModuleProvenance::BuiltIn | ModuleProvenance::TrustedHost(_)
+            ModuleProvenance::BuiltIn
+                | ModuleProvenance::CompiledThirdParty(_)
+                | ModuleProvenance::TrustedHost(_)
         )
     {
         return Err(HarnessResolutionError::InvalidNativeTrust(
@@ -672,7 +759,7 @@ fn validate_module(
     Ok(())
 }
 
-fn tool_capabilities(tool: &dyn Tool) -> CapabilitySet {
+pub(crate) fn tool_capabilities(tool: &dyn Tool) -> CapabilitySet {
     tool.spec()
         .permission_upper_bound
         .iter()
@@ -887,5 +974,81 @@ mod tests {
             tool_specs_revision("module-v1", [first]),
             tool_specs_revision("module-v1", [second])
         );
+    }
+
+    #[test]
+    fn compiled_third_party_and_new_contributions_resolve_without_authority() {
+        let mut spec = module(
+            ModuleTrust::TrustedNative,
+            ModuleProvenance::CompiledThirdParty("example-crate".into()),
+            Contribution::Pipeline {
+                phase: ComponentPhase::Context,
+                component: "example.context".into(),
+            },
+            CapabilitySet::new(),
+            CapabilitySet::new(),
+        );
+        spec.contributions.push(Contribution::StatusItem {
+            name: "pressure".into(),
+        });
+        let resolved = resolve_module_specs(vec![spec.clone()], false).unwrap();
+        assert_eq!(resolved[0].provenance, spec.provenance);
+        assert_eq!(resolved[0].trust, ModuleTrust::TrustedNative);
+        assert_eq!(resolved[0].contributions, spec.contributions);
+        assert!(resolved[0].granted_capabilities.is_empty());
+    }
+
+    #[test]
+    fn pipeline_collisions_are_phase_scoped_and_status_names_are_unique() {
+        let context = module(
+            ModuleTrust::TrustedNative,
+            ModuleProvenance::BuiltIn,
+            Contribution::Pipeline {
+                phase: ComponentPhase::Context,
+                component: "shared".into(),
+            },
+            CapabilitySet::new(),
+            CapabilitySet::new(),
+        );
+        let mut commit = context.clone();
+        commit.id = ModuleId::parse("example/commit").unwrap();
+        commit.contributions = vec![Contribution::Pipeline {
+            phase: ComponentPhase::TurnCommit,
+            component: "shared".into(),
+        }];
+        resolve_module_specs(vec![context.clone(), commit], false).unwrap();
+        assert!(matches!(
+            resolve_module_specs(vec![context.clone(), context], false),
+            Err(HarnessResolutionError::ContributionCollision { .. })
+        ));
+
+        let status = module(
+            ModuleTrust::Declarative,
+            ModuleProvenance::BuiltIn,
+            Contribution::StatusItem {
+                name: "pressure".into(),
+            },
+            CapabilitySet::new(),
+            CapabilitySet::new(),
+        );
+        assert!(matches!(
+            resolve_module_specs(vec![status.clone(), status], false),
+            Err(HarnessResolutionError::ContributionCollision { .. })
+        ));
+    }
+
+    #[test]
+    fn empty_mounted_set_keeps_identity_evidence_and_report_unchanged() {
+        let mut identity = HarnessIdentity {
+            revision: "original".into(),
+        };
+        let mut modules: Arc<[ResolvedModule]> = Arc::from([]);
+        let mut report = HarnessResolutionReport {
+            entries: vec!["original report".into()],
+        };
+        record_mounted_modules(&mut identity, &mut modules, &mut report, vec![]).unwrap();
+        assert_eq!(identity.revision, "original");
+        assert!(modules.is_empty());
+        assert_eq!(report.entries, ["original report"]);
     }
 }

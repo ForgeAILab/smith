@@ -33,6 +33,7 @@ smith-config = { workspace = true }
 smith-client = { workspace = true }
 smith-host = { workspace = true }
 smith-runtime = { workspace = true }
+smith-module = { workspace = true }
 smith-tools = { workspace = true }
 smith-tui = { workspace = true }
 time = { workspace = true }

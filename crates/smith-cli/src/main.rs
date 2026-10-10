@@ -19,6 +19,7 @@ mod local_command;
 mod logging;
 mod login_progress;
 mod mcp;
+mod modules;
 mod resources;
 mod runtime_host;
 mod screen_runner;

@@ -1358,3 +1358,5 @@ fn background() -> smith_config::resolve::ResolvedBackground {
         max_monitors: sourced(8),
     }
 }
+
+mod modules;

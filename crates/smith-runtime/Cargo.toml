@@ -19,6 +19,7 @@ agent-runtime-mcp = { workspace = true, features = ["http"] }
 smith-config = { workspace = true }
 smith-host = { workspace = true }
 smith-tools = { workspace = true }
+smith-module = { workspace = true }
 async-trait = { workspace = true }
 async-stream = { workspace = true }
 base64 = { workspace = true }
