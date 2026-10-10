@@ -57,6 +57,9 @@
                  trust one this project
                  ships
                  [trust NAME]
+  /commands      Show file commands, trust
+                 one, or reload the catalog
+                 [trust NAME|reload]
   /diff          Inspect workspace changes
                  [SCOPE]
   /review        Run a read-only change
@@ -140,9 +143,6 @@
                       literal !
   //                  Send text with a
                       leading slash
-
-
-
 
 
 

@@ -94,6 +94,10 @@ async fn fixture_command(
     mcp: Option<&crate::mcp::McpContext>,
     skills: &crate::skills::SkillContext,
 ) {
+    let user_root = tempfile::tempdir().expect("command user root");
+    let commands =
+        local_command::file_commands::CommandContext::discover(user_root.path(), project)
+            .expect("commands");
     let parsed = smith_client::commands::parse(command).expect("fixture command parses");
     app.composer.replace(command.to_owned());
     let action = app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -104,7 +108,7 @@ async fn fixture_command(
                 parsed.command
             );
             Box::pin(handle_local_command(
-                &mut app, host, project, mcp, skills, actual,
+                &mut app, host, project, mcp, skills, &commands, actual,
             ))
             .await;
         }
@@ -177,6 +181,11 @@ impl FixtureLocal {
             self.project.path(),
             None,
             &self.skills,
+            &local_command::file_commands::CommandContext::discover(
+                &self.home.path().join(".smith"),
+                self.project.path(),
+            )
+            .expect("commands"),
             command,
         ))
         .await;
@@ -198,6 +207,11 @@ impl FixtureLocal {
                         self.project.path(),
                         None,
                         &self.skills,
+                        &local_command::file_commands::CommandContext::discover(
+                            &self.home.path().join(".smith"),
+                            self.project.path(),
+                        )
+                        .expect("commands"),
                         command,
                     ))
                     .await;

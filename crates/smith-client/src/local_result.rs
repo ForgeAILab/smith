@@ -3,6 +3,7 @@
 //! Terminal drawing belongs to `smith-tui`.
 
 use crate::agent_report::{AgentReport, AgentResumeReport};
+use crate::commands_report::CommandsReport;
 use crate::context_report::ContextReport;
 use crate::diagnostics_report::DiagnosticsReport;
 use crate::diff_report::{DiffOutcome, DiffReport};
@@ -49,6 +50,8 @@ pub enum LocalResult {
     Mcp(Box<McpReport>),
     /// Indexed skills, discovery problems, and local trust outcomes.
     Skills(Box<SkillsReport>),
+    /// File command layers, discovery problems, and trust outcomes.
+    Commands(Box<CommandsReport>),
     /// Classified Git patches or the last Smith turn's recovery preview.
     Diff(Box<DiffReport>),
     /// Read-only review scopes, inspection results, and dispatch outcomes.
@@ -74,6 +77,7 @@ impl LocalResult {
             Self::Agent(report) => report.title(),
             Self::Mcp(_) => "mcp",
             Self::Skills(_) => "skills",
+            Self::Commands(_) => "commands",
             Self::Diff(report) => &report.title,
             Self::Review(report) => report.title(),
             Self::Recovery(report) => report.title(),
@@ -125,6 +129,10 @@ impl LocalResult {
                 SkillsReport::Empty
                 | SkillsReport::Indexed { .. }
                 | SkillsReport::Trusted { .. } => LocalResultState::Info,
+            },
+            Self::Commands(report) => match report.as_ref() {
+                CommandsReport::Error(_) => LocalResultState::Error,
+                _ => LocalResultState::Info,
             },
             Self::Diff(report) => match &report.outcome {
                 DiffOutcome::Empty => LocalResultState::Empty,

@@ -6,7 +6,25 @@ use super::*;
 /// then opened only after provider/runtime preflight succeeds and before the
 /// first session event is emitted. A bad provider configuration therefore
 /// cannot leave an empty session journal behind.
-pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostSessionError> {
+pub fn start(
+    request: HostSessionRequest,
+) -> impl std::future::Future<Output = Result<HostSession, HostSessionError>> {
+    // Keep the large startup state out of callers' futures in debug builds.
+    Box::pin(start_with_modules(request, Vec::new()))
+}
+
+/// Starts a standard session with additional host-supplied composition evidence.
+///
+/// Declarations pass through ordinary harness validation and grant no authority
+/// by being present. They are composition inputs, not persisted session state.
+///
+/// # Errors
+///
+/// Returns startup or harness resolution failures, as [`start`] does.
+pub async fn start_with_modules(
+    mut request: HostSessionRequest,
+    modules: Vec<crate::harness::ModuleSpec>,
+) -> Result<HostSession, HostSessionError> {
     if request.runtime.system_prompt.is_none() && request.runtime.project_instructions.is_none() {
         request.runtime.project_instructions =
             discover_project_instructions(&request.project_root)?;
@@ -193,8 +211,11 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         .observers
         .push(Arc::new(ChangeTurnObserver(changes.clone())));
 
-    let harness = crate::harness::resolve(crate::harness::HarnessSpec::trusted(request.runtime))
-        .map_err(FactoryError::from)?;
+    let spec = modules.into_iter().fold(
+        crate::harness::HarnessSpec::trusted(request.runtime),
+        crate::harness::HarnessSpec::with_module,
+    );
+    let harness = crate::harness::resolve(spec).map_err(FactoryError::from)?;
     let runtime = crate::factory::build(harness).await?;
 
     // Probe existence before creating the lifecycle lock file. The reads are

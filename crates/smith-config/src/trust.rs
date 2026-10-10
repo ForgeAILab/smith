@@ -40,15 +40,16 @@ const FILE_NAME: &str = "trust.json";
 /// The kinds of project-supplied authority Smith will not exercise unasked.
 ///
 /// Most variants name something Smith would *run*. [`ExecutableKind::Skill`]
-/// names something Smith would *say*: a body the project supplies becomes part
-/// of the instructions the model is steered by, which is authority exercised on
-/// the project's behalf whether or not a process is spawned.
+/// and [`ExecutableKind::SlashCommand`] name something Smith would *say*: a body
+/// the project supplies becomes part of the instructions the model is steered
+/// by, which is authority exercised on the project's behalf whether or not a
+/// process is spawned.
 ///
 /// Plain declarative settings have no variant here on purpose: they carry no
 /// execution, are readable before any decision, and gating them would make
 /// Smith prompt for a model name. That reasoning stops at text Smith would
-/// adopt as its own instructions, which is why skills are gated and a model
-/// name is not.
+/// adopt as its own instructions, which is why skills and slash commands are
+/// gated and a model name is not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutableKind {
@@ -65,10 +66,13 @@ pub enum ExecutableKind {
     /// A project-supplied skill body Smith would activate as privileged
     /// instructions.
     Skill,
+    /// A project-supplied command template Smith would submit as the user's own
+    /// prompt.
+    SlashCommand,
 }
 
 impl ExecutableKind {
-    /// The kind's stable name, as diagnostics and the persisted file spell it.
+    /// The kind's stable name, as diagnostics spell it.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Extension => "extension",
@@ -77,6 +81,7 @@ impl ExecutableKind {
             Self::ShellSetting => "shell setting",
             Self::McpServer => "MCP server",
             Self::Skill => "skill",
+            Self::SlashCommand => "slash command",
         }
     }
 }
@@ -629,6 +634,21 @@ fn write_private(path: &Path, body: &[u8]) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
+    /// A project with one command, and a store rooted outside any real home.
+    fn project() -> (tempfile::TempDir, tempfile::TempDir, TrustStore) {
+        let project = tempfile::tempdir().expect("a project");
+        fs::create_dir_all(project.path().join(".smith/commands")).expect("the directory");
+        fs::write(
+            project.path().join(".smith/commands/review.md"),
+            "Review the project.\n",
+        )
+        .expect("the command");
+
+        let state = tempfile::tempdir().expect("a state root");
+        let store = TrustStore::open(state.path()).expect("an empty store");
+        (project, state, store)
+    }
+
     #[test]
     fn a_digest_is_stable_and_content_addressed() {
         assert_eq!(ContentDigest::of(b"hook"), ContentDigest::of(b"hook"));
@@ -666,5 +686,230 @@ mod tests {
         assert_eq!(setting.digest(), &ContentDigest::of(b"echo hi"));
         // The command itself is not carried anywhere a diagnostic could print.
         assert!(!format!("{setting:?}").contains("echo hi"));
+    }
+
+    #[test]
+    fn a_slash_command_has_distinct_persisted_and_diagnostic_names() {
+        let kind = ExecutableKind::SlashCommand;
+        assert_eq!(kind.as_str(), "slash command");
+        assert_eq!(kind.to_string(), "slash command");
+        assert_eq!(
+            serde_json::to_string(&kind).expect("serialized"),
+            r#""slash_command""#
+        );
+        assert_eq!(
+            serde_json::from_str::<ExecutableKind>(r#""slash_command""#).expect("deserialized"),
+            kind
+        );
+    }
+
+    #[test]
+    fn a_slash_command_decision_binds_its_path_and_its_content_together() {
+        let (project, state, mut store) = project();
+        let path = project.path().join(".smith/commands/review.md");
+        let reviewed = Executable::from_file(project.path(), ExecutableKind::SlashCommand, &path)
+            .expect("project content");
+        assert_eq!(reviewed.kind(), ExecutableKind::SlashCommand);
+        assert_eq!(reviewed.label(), ".smith/commands/review.md");
+        store
+            .record(project.path(), &reviewed, TrustDecision::Allow)
+            .expect("recorded");
+
+        let reopened = TrustStore::open(state.path()).expect("the persisted store");
+        let status = reopened
+            .status(project.path(), &reviewed)
+            .expect("a status");
+        assert_eq!(status, TrustStatus::Trusted);
+        assert!(status.allows_execution());
+
+        // Same content, another path: approving one project command must not
+        // approve a copy of it installed elsewhere in the repository.
+        let copy = project.path().join(".smith/commands/copy.md");
+        fs::copy(&path, &copy).expect("the copy");
+        let copied = Executable::from_file(project.path(), ExecutableKind::SlashCommand, &copy)
+            .expect("project content");
+        assert_eq!(copied.digest(), reviewed.digest());
+        let status = reopened.status(project.path(), &copied).expect("a status");
+        assert_eq!(status, TrustStatus::Untrusted);
+        assert!(!status.allows_execution());
+
+        // Same path, later content: the decision covers a prompt that no
+        // longer exists, so the rewritten command must stop running.
+        fs::write(&path, "Deploy the project.\n").expect("a later commit");
+        let rewritten = Executable::from_file(project.path(), ExecutableKind::SlashCommand, &path)
+            .expect("project content");
+        let status = reopened
+            .status(project.path(), &rewritten)
+            .expect("a status");
+        assert_eq!(status, TrustStatus::Changed);
+        assert!(!status.allows_execution());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_slash_command_symlink_out_of_the_project_cannot_inherit_its_trust() {
+        let (project, _state, _store) = project();
+        let elsewhere = tempfile::tempdir().expect("somewhere else");
+        let command = elsewhere.path().join("deploy.md");
+        fs::write(&command, "Deploy the project.\n").expect("the command");
+        let link = project.path().join(".smith/commands/deploy.md");
+        std::os::unix::fs::symlink(&command, &link).expect("the symlink");
+
+        let err = Executable::from_file(project.path(), ExecutableKind::SlashCommand, &link)
+            .expect_err("the link leaves the project");
+        assert_eq!(err.kind, ErrorKind::Workspace);
+        assert!(err.to_string().contains("resolves outside the project"));
+    }
+
+    #[test]
+    fn a_trust_file_written_before_slash_commands_still_loads() {
+        let (project, state, _store) = project();
+        // Literal version-one bytes with every older kind, independent of the
+        // current serializer. Only the temporary project's root is injected.
+        let fixture = r#"{
+            "version": 1,
+            "projects": {
+                "PROJECT": [
+                    {
+                        "kind": "extension", "label": ".smith/commands/review.md",
+                        "digest": "d0f6dd9ed43f03abc6178e4dc5b9b89d7e88842c991f0196352850cba730a865",
+                        "decision": "allow"
+                    },
+                    {
+                        "kind": "hook", "label": ".smith/commands/review.md",
+                        "digest": "d0f6dd9ed43f03abc6178e4dc5b9b89d7e88842c991f0196352850cba730a865",
+                        "decision": "deny"
+                    },
+                    {
+                        "kind": "credential_helper", "label": ".smith/commands/review.md",
+                        "digest": "d0f6dd9ed43f03abc6178e4dc5b9b89d7e88842c991f0196352850cba730a865",
+                        "decision": "allow"
+                    },
+                    {
+                        "kind": "shell_setting", "label": ".smith/commands/review.md",
+                        "digest": "d0f6dd9ed43f03abc6178e4dc5b9b89d7e88842c991f0196352850cba730a865",
+                        "decision": "deny"
+                    },
+                    {
+                        "kind": "mcp_server", "label": ".smith/commands/review.md",
+                        "digest": "d0f6dd9ed43f03abc6178e4dc5b9b89d7e88842c991f0196352850cba730a865",
+                        "decision": "allow"
+                    },
+                    {
+                        "kind": "skill", "label": ".smith/commands/review.md",
+                        "digest": "d0f6dd9ed43f03abc6178e4dc5b9b89d7e88842c991f0196352850cba730a865",
+                        "decision": "allow"
+                    }
+                ]
+            }
+        }"#;
+        let key = serde_json::to_string(&project_key(project.path()).expect("a project key"))
+            .expect("a JSON key");
+        fs::write(
+            state.path().join("trust.json"),
+            fixture.replace(r#""PROJECT""#, &key),
+        )
+        .expect("the old trust file");
+
+        let reopened = TrustStore::open(state.path()).expect("the old store");
+        let records = reopened
+            .records(project.path())
+            .expect("the existing decisions");
+        assert_eq!(records.len(), 6);
+        let path = project.path().join(".smith/commands/review.md");
+        for (index, (kind, decision, status)) in [
+            (
+                ExecutableKind::Extension,
+                TrustDecision::Allow,
+                TrustStatus::Trusted,
+            ),
+            (
+                ExecutableKind::Hook,
+                TrustDecision::Deny,
+                TrustStatus::Denied,
+            ),
+            (
+                ExecutableKind::CredentialHelper,
+                TrustDecision::Allow,
+                TrustStatus::Trusted,
+            ),
+            (
+                ExecutableKind::ShellSetting,
+                TrustDecision::Deny,
+                TrustStatus::Denied,
+            ),
+            (
+                ExecutableKind::McpServer,
+                TrustDecision::Allow,
+                TrustStatus::Trusted,
+            ),
+            (
+                ExecutableKind::Skill,
+                TrustDecision::Allow,
+                TrustStatus::Trusted,
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let executable =
+                Executable::from_file(project.path(), kind, &path).expect("project content");
+            assert_eq!(records[index].kind, kind);
+            assert_eq!(records[index].label, executable.label());
+            assert_eq!(&records[index].digest, executable.digest());
+            assert_eq!(records[index].decision, decision);
+            assert_eq!(
+                reopened
+                    .status(project.path(), &executable)
+                    .expect("a status"),
+                status
+            );
+        }
+
+        let command = Executable::from_file(project.path(), ExecutableKind::SlashCommand, &path)
+            .expect("project content");
+        let status = reopened.status(project.path(), &command).expect("a status");
+        assert_eq!(status, TrustStatus::Untrusted);
+        assert!(!status.allows_execution());
+    }
+
+    #[test]
+    fn slash_command_and_skill_decisions_for_the_same_content_are_distinct() {
+        let (project, state, mut store) = project();
+        let path = project.path().join(".smith/commands/review.md");
+        let command = Executable::from_file(project.path(), ExecutableKind::SlashCommand, &path)
+            .expect("project content");
+        let skill = Executable::from_file(project.path(), ExecutableKind::Skill, &path)
+            .expect("project content");
+        assert_eq!(command.label(), skill.label());
+        assert_eq!(command.digest(), skill.digest());
+
+        store
+            .record(project.path(), &command, TrustDecision::Allow)
+            .expect("recorded");
+        assert_eq!(
+            store.status(project.path(), &skill).expect("a status"),
+            TrustStatus::Untrusted
+        );
+        store
+            .record(project.path(), &skill, TrustDecision::Deny)
+            .expect("recorded");
+
+        let reopened = TrustStore::open(state.path()).expect("the persisted store");
+        assert_eq!(
+            reopened
+                .records(project.path())
+                .expect("the decisions")
+                .len(),
+            2
+        );
+        assert_eq!(
+            reopened.status(project.path(), &command).expect("a status"),
+            TrustStatus::Trusted
+        );
+        assert_eq!(
+            reopened.status(project.path(), &skill).expect("a status"),
+            TrustStatus::Denied
+        );
     }
 }

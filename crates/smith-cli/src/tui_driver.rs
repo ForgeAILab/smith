@@ -83,6 +83,8 @@ pub(super) struct InteractiveResources {
     pub(super) mcp: Option<Arc<crate::mcp::McpContext>>,
     /// The skills this composition indexed, and the files it refused.
     pub(super) skills: Arc<crate::skills::SkillContext>,
+    /// File commands and their host-owned discovery roots.
+    pub(super) commands: Arc<local_command::file_commands::CommandContext>,
     /// Capability patterns this session denied on top of its profile.
     pub(super) capability_denials: Vec<String>,
 }
@@ -250,6 +252,7 @@ pub(super) async fn run_interactive(
         credential_pool,
         mcp,
         skills,
+        commands,
         ..
     } = resources;
     let theme =
@@ -272,6 +275,7 @@ pub(super) async fn run_interactive(
             theme,
             mcp,
             skills,
+            commands,
         },
     )
     .await;
@@ -357,6 +361,7 @@ pub(super) struct TuiRunInputs<'a> {
     theme: Theme,
     mcp: Option<Arc<crate::mcp::McpContext>>,
     skills: Arc<crate::skills::SkillContext>,
+    commands: Arc<local_command::file_commands::CommandContext>,
 }
 
 struct TuiLoop<'a> {
@@ -373,6 +378,7 @@ struct TuiLoop<'a> {
     theme: Theme,
     mcp: Option<Arc<crate::mcp::McpContext>>,
     skills: Arc<crate::skills::SkillContext>,
+    commands: Arc<local_command::file_commands::CommandContext>,
     session: &'a smith_runtime::SessionHandle,
     events: smith_runtime::client::SmithEventStream,
     keys: &'a mut crate::screen_runner::TerminalEvents,
@@ -500,6 +506,7 @@ impl<'a> TuiLoop<'a> {
             theme,
             mcp,
             skills,
+            commands,
         } = inputs;
         let session = host.session();
         let events = host.client().events();
@@ -551,6 +558,7 @@ impl<'a> TuiLoop<'a> {
             theme,
             mcp,
             skills,
+            commands,
             session,
             events,
             keys,
@@ -730,6 +738,7 @@ pub(super) async fn run_scripted_tui(
             theme: Theme::new().without_color().without_motion(),
             mcp: None,
             skills: resources.skills.clone(),
+            commands: resources.commands.clone(),
         },
     );
     tui.remote_tools_pending = recompose;

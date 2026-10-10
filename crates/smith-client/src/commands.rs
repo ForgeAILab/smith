@@ -3,6 +3,7 @@
 //! Slash completion, `Ctrl+P`, `/help`, and parsing consume the same table.
 //! Each parsed value carries its entry and encodes the executor in its type.
 
+use crate::file_commands::{CatalogEntry, CommandCatalog};
 use crate::help_report::{HelpCommand, HelpKey, HelpReport};
 
 /// A command routed to the executor that can handle it.
@@ -115,6 +116,17 @@ pub enum SkillsAction {
     Trust(String),
 }
 
+/// Typed local file-command catalog control.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandsAction {
+    /// List every command and discovery problem.
+    List,
+    /// Review the named project command for approval.
+    Trust(String),
+    /// Rebuild command metadata and admission decisions from disk.
+    Reload,
+}
+
 /// Typed local persistent-goal control.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GoalAction {
@@ -199,6 +211,63 @@ pub struct ParsedCommand {
     pub spec: &'static CommandSpec,
     /// Typed executor and arguments.
     pub command: Command,
+}
+
+/// A built-in or resolved file command shown by shared discovery surfaces.
+#[derive(Debug, Clone, Copy)]
+pub enum MenuRow<'a> {
+    /// A compiled command, always authoritative for its name.
+    BuiltIn(&'static CommandSpec),
+    /// A file winner, including a withheld project command without a fallback.
+    File(&'a CatalogEntry),
+}
+
+impl MenuRow<'_> {
+    /// Name without the slash.
+    pub fn name(&self) -> &str {
+        match self {
+            Self::BuiltIn(spec) => spec.name,
+            Self::File(entry) => &entry.command.name,
+        }
+    }
+
+    /// The bounded description supplied by the command's source.
+    pub fn description(&self) -> &str {
+        match self {
+            Self::BuiltIn(spec) => spec.description,
+            Self::File(entry) => &entry.command.description,
+        }
+    }
+
+    /// Argument syntax, when the source declares it.
+    pub fn argument_hint(&self) -> Option<&str> {
+        match self {
+            Self::BuiltIn(spec) => (!spec.argument_hint.is_empty()).then_some(spec.argument_hint),
+            Self::File(entry) => entry.command.argument_hint.as_deref(),
+        }
+    }
+
+    /// File source layer; built-ins have no layer label.
+    pub fn layer_label(&self) -> Option<&'static str> {
+        match self {
+            Self::BuiltIn(_) => None,
+            Self::File(entry) => Some(entry.command.layer.label()),
+        }
+    }
+}
+
+/// Parsed routing data, before any file command is prepared or submitted.
+#[derive(Debug, Clone)]
+pub enum ParsedInput {
+    /// A registry command with its existing typed grammar.
+    BuiltIn(ParsedCommand),
+    /// A file command's name and unmodified remaining argument text.
+    File {
+        /// Name without the slash.
+        name: String,
+        /// Raw arguments after removing the separating whitespace run.
+        arguments: String,
+    },
 }
 
 // Collect route variants and entries in one declaration. A new host command
@@ -471,6 +540,17 @@ command_registry! {
         usage_example: "/skills trust deploy",
         complete_without_value: false,
     },
+    /// Show file commands, trust one this project ships, or reload the catalog.
+    Host Commands(CommandsAction) => CommandSpec {
+        name: "commands",
+        argument_hint: "[trust NAME|reload]",
+        description: "Show file commands, trust one, or reload the catalog",
+        requires_idle: false,
+        advanced: false,
+        grammar: ArgumentGrammar::Subcommand(parse_commands),
+        usage_example: "/commands trust deploy",
+        complete_without_value: false,
+    },
     /// Inspect workspace changes.
     Host Diff(DiffScope) => CommandSpec {
         name: "diff",
@@ -607,6 +687,75 @@ pub fn has_exact_name(input: &str) -> bool {
     COMMANDS.iter().any(|command| command.name == name)
 }
 
+/// Matches built-ins first, then resolved files, with the shared prefix rule.
+pub fn matches_with<'a>(input: &str, catalog: &'a CommandCatalog) -> Vec<MenuRow<'a>> {
+    let query = input.trim().trim_start_matches('/');
+    let name = query.split_whitespace().next().unwrap_or_default();
+    let rows = COMMANDS
+        .iter()
+        .map(MenuRow::BuiltIn)
+        .chain(
+            catalog
+                .entries()
+                .iter()
+                .filter(|entry| {
+                    !crate::file_commands::is_reserved_name(&entry.command.name)
+                        && catalog
+                            .resolve(&entry.command.name)
+                            .is_some_and(|winner| std::ptr::eq(winner, *entry))
+                })
+                .map(MenuRow::File),
+        )
+        .collect::<Vec<_>>();
+    let name_matches = rows
+        .iter()
+        .copied()
+        .filter(|row| row.name().starts_with(name))
+        .collect::<Vec<_>>();
+    if !name_matches.is_empty() || name.is_empty() {
+        return name_matches;
+    }
+    let query = query.to_ascii_lowercase();
+    rows.into_iter()
+        .filter(|row| row.description().to_ascii_lowercase().contains(&query))
+        .collect()
+}
+
+/// Whether the first token exactly names a built-in or resolved file command.
+pub fn has_exact_name_with(input: &str, catalog: &CommandCatalog) -> bool {
+    if has_exact_name(input) {
+        return true;
+    }
+    let query = input.trim().trim_start_matches('/');
+    query
+        .split_whitespace()
+        .next()
+        .is_some_and(|name| catalog.resolve(name).is_some())
+}
+
+/// Parses built-ins first; file arguments retain internal and trailing whitespace.
+///
+/// # Errors
+///
+/// Preserves built-in grammar errors and the existing unknown-command diagnostic.
+pub fn parse_with(input: &str, catalog: &CommandCatalog) -> Result<ParsedInput, String> {
+    if has_exact_name(input) {
+        return parse(input).map(ParsedInput::BuiltIn);
+    }
+    let text = input.trim_start().trim_start_matches('/').trim_start();
+    let Some(name) = text.split_whitespace().next() else {
+        return parse(input).map(ParsedInput::BuiltIn);
+    };
+    if catalog.resolve(name).is_none() {
+        return parse(input).map(ParsedInput::BuiltIn);
+    }
+    let arguments = text.strip_prefix(name).unwrap_or_default().trim_start();
+    Ok(ParsedInput::File {
+        name: name.to_owned(),
+        arguments: arguments.to_owned(),
+    })
+}
+
 /// Completes the selected command without executing it.
 pub fn completion(command: &CommandSpec) -> String {
     // /status is complete by itself; its diagnostic flag is optional.
@@ -614,6 +763,14 @@ pub fn completion(command: &CommandSpec) -> String {
         format!("/{}", command.name)
     } else {
         format!("/{} ", command.name)
+    }
+}
+
+/// Completes a shared menu row without executing it.
+pub fn completion_with(command: MenuRow<'_>) -> String {
+    match command {
+        MenuRow::BuiltIn(spec) => completion(spec),
+        MenuRow::File(entry) => format!("/{} ", entry.command.name),
     }
 }
 
@@ -756,6 +913,27 @@ fn parse_skills(argument: Option<String>, second: Option<String>) -> Result<Comm
     }
 }
 
+fn parse_commands(argument: Option<String>, second: Option<String>) -> Result<Command, String> {
+    let action = match (argument.as_deref(), second) {
+        (None, _) => CommandsAction::List,
+        (Some("trust"), Some(name)) => CommandsAction::Trust(name),
+        (Some("reload"), None) => CommandsAction::Reload,
+        (Some("trust"), None) => {
+            return Err(
+                "`/commands trust` requires a command name — run `/commands` to list them"
+                    .to_owned(),
+            );
+        }
+        (Some("reload"), Some(_)) => return Err("`/commands reload` takes no value".to_owned()),
+        (Some(other), _) => {
+            return Err(format!(
+                "`/commands` takes no value, `trust NAME`, or `reload`; `{other}` is none of those"
+            ));
+        }
+    };
+    Ok(Command::Host(HostCommand::Commands(action)))
+}
+
 fn parse_goal(argument: &str) -> Result<Command, String> {
     let action = if argument.is_empty() {
         GoalAction::Show
@@ -824,6 +1002,7 @@ pub fn help() -> HelpReport {
             .filter(|command| command.advanced)
             .map(help_command)
             .collect(),
+        file_commands: Vec::new(),
         composer: [
             "? or /help shows this local guide without contacting the model.",
             "Tab cycles the configured profile order only while empty and idle.",
@@ -848,6 +1027,25 @@ pub fn help() -> HelpReport {
     }
 }
 
+/// Adds runnable file winners after the built-in help groups.
+pub fn help_with(catalog: &CommandCatalog) -> HelpReport {
+    let mut report = help();
+    report.file_commands = catalog
+        .runnable()
+        .filter(|entry| !crate::file_commands::is_reserved_name(&entry.command.name))
+        .map(|entry| HelpCommand {
+            name: entry.command.name.clone(),
+            argument_hint: entry.command.argument_hint.clone().unwrap_or_default(),
+            description: format!(
+                "{} · {}",
+                entry.command.layer.label(),
+                entry.command.description
+            ),
+        })
+        .collect();
+    report
+}
+
 /// The shared key table for `/help` and the ephemeral shortcuts panel.
 pub fn help_keys() -> Vec<HelpKey> {
     crate::keymap::KEY_BINDINGS
@@ -868,335 +1066,7 @@ fn help_command(command: &CommandSpec) -> HelpCommand {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn parse(input: &str) -> Result<Command, String> {
-        super::parse(input).map(|parsed| parsed.command)
-    }
-
-    #[test]
-    fn status_completion_remains_a_complete_bare_command() {
-        let status = COMMANDS
-            .iter()
-            .find(|command| command.name == "status")
-            .unwrap();
-        assert_eq!(completion(status), "/status");
-        assert_eq!(
-            parse(&completion(status)).unwrap(),
-            Command::Host(HostCommand::Status)
-        );
-        assert_eq!(
-            parse("/status --verbose").unwrap(),
-            Command::Host(HostCommand::Diagnostics)
-        );
-        let model = COMMANDS
-            .iter()
-            .find(|command| command.name == "model")
-            .unwrap();
-        assert_eq!(completion(model), "/model ");
-    }
-
-    #[test]
-    fn help_and_completion_share_the_complete_registry() {
-        let report = help();
-        assert_eq!(
-            report
-                .getting_started
-                .iter()
-                .map(|command| command.name.as_str())
-                .collect::<Vec<_>>(),
-            ["model", "connect", "help"]
-        );
-        for command in &report.getting_started {
-            let registered = COMMANDS
-                .iter()
-                .find(|registered| registered.name == command.name)
-                .unwrap();
-            assert_eq!(command.description, registered.description);
-            assert!(command.argument_hint.is_empty());
-        }
-        let help = crate::help_report::render_plain(&report);
-        assert!(help.starts_with("Getting started\n"));
-        assert!(help.contains("/model — Switch model"));
-        for command in COMMANDS {
-            assert!(help.contains(&format!("/{}", command.name)), "{help}");
-        }
-        assert!(help.contains("Ctrl+R searches composer history"), "{help}");
-        assert!(help.contains("Up/Down browse accepted"), "{help}");
-        assert_eq!(
-            matches("/rev")
-                .into_iter()
-                .map(|command| command.name)
-                .collect::<Vec<_>>(),
-            ["review", "revert"]
-        );
-    }
-
-    #[test]
-    fn goal_argument_hint_uses_compact_alternatives_in_completion_and_help() {
-        let goal = matches("/goal")[0];
-        let expected = "[OBJECTIVE|edit …|budget N|pause|resume|clear]";
-        assert_eq!(goal.argument_hint, expected);
-        let guide = help();
-        let help_goal = guide
-            .primary
-            .iter()
-            .find(|command| command.name == "goal")
-            .unwrap();
-        assert_eq!(help_goal.argument_hint, expected);
-    }
-
-    #[test]
-    fn description_search_is_used_only_after_name_prefixes() {
-        assert_eq!(
-            matches("switch")
-                .into_iter()
-                .map(|command| command.name)
-                .collect::<Vec<_>>(),
-            ["model", "profile", "provider"]
-        );
-        assert_eq!(
-            matches("/pro")
-                .into_iter()
-                .map(|command| command.name)
-                .collect::<Vec<_>>(),
-            ["profile", "provider"]
-        );
-        assert!(has_exact_name("/status --verbose"));
-        assert!(!has_exact_name("/sta"));
-    }
-
-    #[test]
-    fn parser_returns_typed_actions_and_actionable_errors() {
-        assert_eq!(
-            parse("/model zai").expect("model"),
-            Command::Ui(UiCommand::Model(Some("zai".into())))
-        );
-        assert_eq!(
-            parse("/diff staged").expect("diff"),
-            Command::Host(HostCommand::Diff(DiffScope::Git(Some("staged".into()))))
-        );
-        assert_eq!(
-            parse("/context").expect("context"),
-            Command::Host(HostCommand::Context)
-        );
-        assert_eq!(
-            parse("/context 272k").expect("named context window"),
-            Command::Ui(UiCommand::Context("272k".into()))
-        );
-        assert_eq!(
-            parse("/context default").expect("default context window"),
-            Command::Ui(UiCommand::Context("default".into()))
-        );
-        assert_eq!(
-            parse("/model").expect("picker"),
-            Command::Ui(UiCommand::Model(None))
-        );
-        assert_eq!(
-            parse("/capabilities").expect("capability listing"),
-            Command::Host(HostCommand::Capabilities(CapabilitiesAction::List))
-        );
-        assert_eq!(
-            parse("/capabilities deny tool:shell").expect("session denial"),
-            Command::Host(HostCommand::Capabilities(CapabilitiesAction::Deny(
-                "tool:shell".into()
-            )))
-        );
-        assert!(
-            parse("/capabilities deny shell")
-                .expect_err("not a pattern")
-                .contains("<domain>:<name>")
-        );
-        assert_eq!(
-            parse("/advisor").expect("advisor picker"),
-            Command::Ui(UiCommand::Advisor(None))
-        );
-        assert_eq!(
-            parse("/advisor acme/big").expect("advisor target"),
-            Command::Ui(UiCommand::Advisor(Some("acme/big".into())))
-        );
-        assert_eq!(
-            parse("/connect openrouter").expect("connection"),
-            Command::Ui(UiCommand::Connect(Some("openrouter".into())))
-        );
-        assert_eq!(
-            parse("/disconnect").expect("disconnect picker"),
-            Command::Ui(UiCommand::Disconnect(None))
-        );
-        assert_eq!(
-            parse("/think off").expect("thinking state"),
-            Command::Ui(UiCommand::Think(Some("off".into())))
-        );
-        assert_eq!(
-            parse("/effort high").expect("effort"),
-            Command::Ui(UiCommand::Effort(Some("high".into())))
-        );
-        assert_eq!(
-            parse("/think").expect("picker"),
-            Command::Ui(UiCommand::Think(None))
-        );
-        assert_eq!(
-            parse("/effort").expect("picker"),
-            Command::Ui(UiCommand::Effort(None))
-        );
-        assert_eq!(
-            parse("/agent resume child-7").expect("child resume"),
-            Command::Confirm(ConfirmCommand::AgentResume("child-7".into()))
-        );
-        assert!(
-            parse("/agent resume")
-                .unwrap_err()
-                .contains("requires a child ID")
-        );
-        assert!(parse("/missing").unwrap_err().contains("/help"));
-    }
-
-    #[test]
-    fn goal_parser_preserves_objectives_and_validates_controls() {
-        assert_eq!(
-            parse("/goal").unwrap(),
-            Command::Host(HostCommand::Goal(GoalAction::Show))
-        );
-        assert_eq!(
-            parse("/goal ship the persistent goal system").unwrap(),
-            Command::Host(HostCommand::Goal(GoalAction::Create(
-                "ship the persistent goal system".into()
-            )))
-        );
-        assert_eq!(
-            parse("/goal edit ship it safely").unwrap(),
-            Command::Host(HostCommand::Goal(GoalAction::Edit("ship it safely".into())))
-        );
-        assert_eq!(
-            parse("/goal budget 12000").unwrap(),
-            Command::Host(HostCommand::Goal(GoalAction::Budget(Some(12_000))))
-        );
-        assert_eq!(
-            parse("/goal budget none").unwrap(),
-            Command::Host(HostCommand::Goal(GoalAction::Budget(None)))
-        );
-        assert_eq!(
-            parse("/goal pause").unwrap(),
-            Command::Host(HostCommand::Goal(GoalAction::Pause))
-        );
-        assert!(parse("/goal edit").unwrap_err().contains("objective"));
-        assert!(parse("/goal budget 0").unwrap_err().contains("positive"));
-    }
-
-    #[test]
-    fn slash_skills_parses_its_list_and_trust_forms() {
-        assert_eq!(
-            parse("/skills"),
-            Ok(Command::Host(HostCommand::Skills(SkillsAction::List)))
-        );
-        assert_eq!(
-            parse("/skills trust deploy"),
-            Ok(Command::Host(HostCommand::Skills(SkillsAction::Trust(
-                "deploy".into()
-            ))))
-        );
-        let error = parse("/skills trust").expect_err("a name is required");
-        assert!(error.contains("requires a skill name"), "{error}");
-        let error = parse("/skills deploy").expect_err("trust is the only verb");
-        assert!(error.contains("is neither"), "{error}");
-    }
-
-    #[test]
-    fn the_mcp_command_parses_its_only_two_forms() {
-        assert_eq!(
-            parse("/mcp"),
-            Ok(Command::Host(HostCommand::Mcp(McpAction::List)))
-        );
-        assert_eq!(
-            parse("/mcp trust github"),
-            Ok(Command::Host(HostCommand::Mcp(McpAction::Trust(
-                "github".to_owned()
-            ))))
-        );
-        assert!(parse("/mcp trust").is_err());
-        assert!(parse("/mcp nonsense").is_err());
-    }
-
-    #[test]
-    fn every_entry_parses_its_own_usage_example() {
-        let mut names = std::collections::BTreeSet::new();
-        for spec in COMMANDS {
-            assert!(names.insert(spec.name), "duplicate command {}", spec.name);
-            let parsed = super::parse(spec.usage_example)
-                .unwrap_or_else(|error| panic!("{}: {error}", spec.usage_example));
-            assert_eq!(parsed.spec.name, spec.name, "{}", spec.usage_example);
-            let completed = super::parse(&completion(spec)).expect("completion parses");
-            assert_eq!(completed.spec.name, spec.name);
-        }
-    }
-
-    #[test]
-    fn agent_and_diff_subarguments_are_routed_before_dispatch() {
-        for (input, action) in [
-            ("/agent", AgentAction::List),
-            ("/agent parent", AgentAction::Parent),
-            ("/agent next", AgentAction::Next),
-            ("/agent previous", AgentAction::Previous),
-            ("/agent child-7", AgentAction::Inspect("child-7".into())),
-        ] {
-            assert_eq!(
-                parse(input).unwrap(),
-                Command::Host(HostCommand::Agent(action))
-            );
-        }
-        assert_eq!(
-            parse("/diff last-turn").unwrap(),
-            Command::Host(HostCommand::Diff(DiffScope::LastTurn))
-        );
-        for scope in [
-            None,
-            Some("all"),
-            Some("staged"),
-            Some("unstaged"),
-            Some("untracked"),
-            Some("commit:HEAD"),
-            Some("base:main"),
-            Some("file.txt"),
-        ] {
-            let input = scope.map_or_else(|| "/diff".to_owned(), |value| format!("/diff {value}"));
-            assert_eq!(
-                parse(&input).unwrap(),
-                Command::Host(HostCommand::Diff(DiffScope::Git(scope.map(str::to_owned))))
-            );
-        }
-        assert!(parse("/agent resume child-7 extra").is_err());
-        assert!(parse("/agent next extra").is_err());
-        assert!(parse("/diff staged extra").is_err());
-        assert_eq!(
-            parse("/accounts").unwrap_err(),
-            "unknown command `/accounts` — type /help"
-        );
-    }
-}
+mod tests;
 
 #[cfg(test)]
-mod diagnostics_tests {
-    use super::*;
-
-    fn parse(input: &str) -> Result<Command, String> {
-        super::parse(input).map(|parsed| parsed.command)
-    }
-
-    #[test]
-    fn diagnostics_are_explicit_and_status_stays_concise() {
-        assert_eq!(
-            parse("/status").unwrap(),
-            Command::Host(HostCommand::Status)
-        );
-        assert_eq!(
-            parse("/status --verbose").unwrap(),
-            Command::Host(HostCommand::Diagnostics)
-        );
-        assert_eq!(
-            parse("/diagnostics").unwrap(),
-            Command::Host(HostCommand::Diagnostics)
-        );
-        assert!(parse("/status nonsense").is_err());
-    }
-}
+mod diagnostics_tests;

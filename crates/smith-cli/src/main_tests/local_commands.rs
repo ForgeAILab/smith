@@ -426,8 +426,20 @@ async fn informational_commands_append_inline_without_provider_history() {
         HostCommand::Diff(DiffScope::Git(None)),
         HostCommand::Skills(smith_client::commands::SkillsAction::List),
     ];
+    let file_commands =
+        local_command::file_commands::CommandContext::discover(home.path(), project.path())
+            .expect("commands");
     for command in commands {
-        handle_local_command(&mut app, &host, project.path(), None, &skills, command).await;
+        handle_local_command(
+            &mut app,
+            &host,
+            project.path(),
+            None,
+            &skills,
+            &file_commands,
+            command,
+        )
+        .await;
     }
 
     git(project.path(), &["init"]);
@@ -446,6 +458,7 @@ async fn informational_commands_append_inline_without_provider_history() {
         project.path(),
         None,
         &skills,
+        &file_commands,
         HostCommand::Diff(DiffScope::Git(Some("unstaged".to_owned()))),
     )
     .await;

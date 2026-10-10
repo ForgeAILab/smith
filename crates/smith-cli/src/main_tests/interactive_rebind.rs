@@ -146,6 +146,13 @@ dialect = "openai-effort"
                 catalog: self.catalog.clone(),
                 mcp: None,
                 skills: Arc::new(skills),
+                commands: Arc::new(
+                    local_command::file_commands::CommandContext::discover(
+                        &self.home.path().join(".smith"),
+                        self.project.path(),
+                    )
+                    .expect("commands"),
+                ),
                 capability_denials: Vec::new(),
             },
         )
@@ -229,6 +236,7 @@ async fn model_rebind_keeps_blocks_folding_scroll_composer_and_history() {
         fixture.project.path(),
         None,
         &resources.skills,
+        &resources.commands,
         HostCommand::Status,
     ))
     .await;

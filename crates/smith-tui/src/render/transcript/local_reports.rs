@@ -345,7 +345,8 @@ pub(in crate::render) fn render_help_report(
         .getting_started
         .iter()
         .chain(&report.primary)
-        .chain(&report.advanced);
+        .chain(&report.advanced)
+        .chain(&report.file_commands);
     let names = commands
         .map(|command| format!("/{}", command.name))
         .collect::<Vec<_>>();
@@ -370,6 +371,17 @@ pub(in crate::render) fn render_help_report(
         lines.push(Line::default());
         lines.extend(reports::text(heading, width, theme.style(Tone::Heading)));
         for command in commands {
+            lines.extend(render_help_command(command, name_width, width, theme));
+        }
+    }
+    if !report.file_commands.is_empty() {
+        lines.push(Line::default());
+        lines.extend(reports::text(
+            HelpReport::FILE_COMMANDS_HEADING,
+            width,
+            theme.style(Tone::Heading),
+        ));
+        for command in &report.file_commands {
             lines.extend(render_help_command(command, name_width, width, theme));
         }
     }

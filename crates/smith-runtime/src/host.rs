@@ -91,7 +91,7 @@ use policy::{reject_project_controlled_persistence, reject_project_granted_autho
 use recovery::{unresolved_ephemeral_work, wait_for_background_tasks_to_stop};
 
 pub use policy::{list, mint_session_id, paths, project_id, validate_host_policy};
-pub use startup::start;
+pub use startup::{start, start_with_modules};
 
 #[cfg(test)]
 mod tests;

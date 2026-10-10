@@ -19,6 +19,14 @@ smith -p "continue" --resume session-...
 Prompt stdin is read once, as bounded UTF-8, before the turn. It is never used
 as an asynchronous approval or questionnaire channel.
 
+Both argument and stdin prompts expand discovered
+[file commands](skills.md#file-commands) before host startup.
+`smith -p "/audit src/lib.rs"` uses the `audit` template;
+`smith -p "//audit the plan"` sends `/audit the plan` literally. Other prompts,
+including built-in command names, pass through unchanged. Untrusted or changed
+project commands fail before any provider request, with a `smith:` diagnostic
+on stderr, empty stdout, and exit 1 in every output format.
+
 | Format | stdout | stderr |
 | --- | --- | --- |
 | `text` | Final committed assistant text only | Bounded lifecycle/authority diagnostics |

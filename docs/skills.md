@@ -97,6 +97,85 @@ project's trust.
 project-relative path and the content digest, records the decision, and the
 session picks the skill up at the next idle boundary without restarting.
 
+## File commands
+
+A file command is a Markdown prompt template that you invoke by name. Smith
+reads commands from two fixed locations:
+
+```
+~/.smith/commands/<name>.md              # user layer
+<project>/.smith/commands/<name>.md      # project layer
+```
+
+`~/.smith/` is the user state root. Smith creates neither commands directory.
+The file stem names the command: `audit.md` becomes `/audit`. Names must be
+1 to 64 lowercase ASCII letters, digits, or hyphens. Built-in names such as
+`help`, `model`, `quit`, and `commands` are reserved; a file with a reserved
+name is refused and reported.
+`review` is also a reserved built-in name.
+
+Create `~/.smith/commands/audit.md` with this complete content:
+
+```markdown
+---
+description: Audit code for bugs.
+argument-hint: <file or directory>
+---
+Audit $ARGUMENTS for bugs.
+```
+
+Frontmatter is optional. `description` describes the command in discovery
+menus; when omitted, Smith uses the first non-empty body line. `argument-hint`
+shows what arguments the command expects. Frontmatter cannot rename the command.
+
+Invoke `/audit src/lib.rs` to submit `Audit src/lib.rs for bugs.` as an
+ordinary user prompt. Smith replaces every `$ARGUMENTS` in the body with the
+text after the command name, skipping the separating whitespace. Newlines
+inside the arguments are preserved. Substitution runs once, so `$ARGUMENTS`
+inside the arguments stays literal. When the body has no placeholder, Smith
+appends non-empty arguments after a blank line.
+
+Templates are text only. They do not execute shell commands, embed files, or
+expand positional placeholders such as `$1`. Invoking a command grants no tool
+or approval authority; the expanded prompt follows the ordinary submission
+rules. The composer, input history, and queue preview show what you typed; the
+committed transcript shows the expanded prompt.
+
+Project commands need approval before they can run. In an interactive session,
+use `/commands trust audit` to review the project-relative path and content
+identity and confirm the decision. Approval covers that file's exact content;
+after edits, approve it again. A trusted project command shadows a user command
+with the same name. Untrusted, changed, or denied project commands stay listed
+and cannot shadow a user command. Project files that resolve outside the
+project root are refused.
+
+`/commands` lists commands by layer with their descriptions, whether they can
+run, shadowed entries, and discovery problems. Commands also appear in slash
+completion, `Ctrl+P`, and `/help`. Use `/commands reload` while idle to discover
+new files and refresh descriptions and argument hints. Each invocation reads
+its file again: user edits apply on the next invocation, and project edits
+require re-approval.
+
+The same expansion works in non-interactive mode:
+
+```sh
+smith -p "/audit src/lib.rs"
+printf '%s' '/audit src/lib.rs' | smith -p -
+```
+
+Start a prompt with `//` to send a literal leading slash. For example,
+`smith -p "//audit the plan"` sends `/audit the plan` without expanding the
+template. Exactly one slash is removed. Headless prompts that do not name a
+discovered command pass through unchanged, including built-in names such as
+`/model` and paths such as `/usr/bin/env`. Leading whitespace before a slash
+also leaves the prompt unchanged. An untrusted or changed project command
+exits non-zero with a diagnostic on stderr and makes no provider request.
+
+Discovery reads at most 256 command files per layer and at most 64 KiB per
+file, including frontmatter. Unusable files and exceeded bounds are reported
+by name in `/commands` without refusing startup. Subdirectories and files
+without a `.md` extension are ignored.
+
 ## Built-in harness references
 
 Smith ships built-in skills for its own reference documentation. Each body is

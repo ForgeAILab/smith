@@ -10,6 +10,7 @@ impl App {
             status: Status::new(model, project),
             cache_miss_notices: false,
             composer: Composer::new(),
+            command_catalog: smith_client::file_commands::CommandCatalog::empty(),
             overlay: None,
             prompt_input_guard: crate::app::prompts::PromptInputGuard::default(),
             pending_prompts: VecDeque::new(),

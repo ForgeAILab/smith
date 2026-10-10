@@ -17,6 +17,7 @@ mod capabilities;
 pub(super) mod context;
 pub(super) mod diagnostics;
 mod diff;
+pub(crate) mod file_commands;
 mod goal;
 pub(super) mod mcp;
 pub(super) mod recovery;
@@ -41,12 +42,14 @@ pub(super) async fn handle_local_command(
     project: &std::path::Path,
     mcp: Option<&crate::mcp::McpContext>,
     skills: &crate::skills::SkillContext,
+    commands: &file_commands::CommandContext,
     command: HostCommand,
 ) {
     let report = match command {
         HostCommand::Skills(action) => {
             skills::command(skills, host.runtime().skill_index(), action)
         }
+        HostCommand::Commands(action) => file_commands::command(commands, app, action),
         HostCommand::Mcp(action) => mcp::command(mcp, action),
         // The TUI turns `deny` and `allow` into a session rebuild before they
         // reach the host, so only the listing arrives here.
@@ -89,8 +92,19 @@ pub(super) enum CommandReport {
     Append(LocalResult),
     Inspect(Box<AgentSnapshot>),
     Parent,
-    SkillTrust { skill: String, content: String },
-    McpTrust { server: String, content: String },
+    SkillTrust {
+        skill: String,
+        content: String,
+    },
+    McpTrust {
+        server: String,
+        content: String,
+    },
+    CommandTrust {
+        name: String,
+        content: String,
+        digest: String,
+    },
     ReviewConfirmation(ReviewPreview),
     UndoConfirmation(RecoveryPreview),
     RedoConfirmation(RecoveryPreview),
@@ -115,6 +129,11 @@ impl CommandReport {
             }
             Self::SkillTrust { skill, content } => app.confirm_skill_trust(skill, content),
             Self::McpTrust { server, content } => app.confirm_mcp_trust(server, content),
+            Self::CommandTrust {
+                name,
+                content,
+                digest,
+            } => app.confirm_command_trust(name, content, digest),
             Self::ReviewConfirmation(preview) => app.confirm_review(preview),
             Self::UndoConfirmation(preview) => app.confirm_undo(preview),
             Self::RedoConfirmation(preview) => app.confirm_redo(preview),

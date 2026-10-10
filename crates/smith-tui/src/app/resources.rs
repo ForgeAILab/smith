@@ -525,8 +525,40 @@ impl App {
     pub(super) fn show_command_help(&mut self) -> Option<Action> {
         self.overlay = None;
         self.accept_composer_input();
-        self.show_local_report(LocalResult::Help(Box::new(commands::help())));
+        self.show_local_report(LocalResult::Help(Box::new(commands::help_with(
+            &self.command_catalog,
+        ))));
         None
+    }
+
+    /// Replaces the host's bounded command metadata after discovery.
+    pub fn set_command_catalog(&mut self, catalog: smith_client::file_commands::CommandCatalog) {
+        self.command_catalog = catalog;
+    }
+
+    pub(super) fn dispatch_parsed_input(
+        &mut self,
+        parsed: commands::ParsedInput,
+    ) -> Option<Action> {
+        match parsed {
+            commands::ParsedInput::BuiltIn(command) => self.dispatch_command(command),
+            commands::ParsedInput::File { name, arguments } => {
+                if self.overlay.as_ref().is_some_and(Overlay::is_prompt)
+                    || !self.pending_prompts.is_empty()
+                {
+                    return None;
+                }
+                self.overlay = None;
+                let action = Action::FileCommand {
+                    typed: self.composer.text().to_owned(),
+                    name,
+                    arguments: self.expand_pasted(&arguments),
+                    queue: false,
+                };
+                self.accept_composer_input();
+                Some(action)
+            }
+        }
     }
 
     pub(super) fn dispatch_command(&mut self, parsed: ParsedCommand) -> Option<Action> {
@@ -1040,6 +1072,31 @@ impl App {
         ));
         dialog.cancel_label = "leave withheld".to_owned();
         dialog.hint = "y trust and activate · n/esc leave withheld".to_owned();
+        self.open_overlay(Overlay::Confirm(dialog));
+    }
+
+    /// Uses the shared, unselected confirmation surface for project commands.
+    pub fn confirm_command_trust(&mut self, name: String, content: String, digest: String) {
+        let mut body =
+            vec!["Trust permits Smith to submit this project's command prompt.".to_owned()];
+        body.extend(content.lines().map(str::to_owned));
+        let mut dialog = ConfirmDialog::new(
+            "trust this project command",
+            Tone::Warning,
+            body,
+            "trust and admit",
+            ConfirmOutcome::Action(Action::TrustCommand {
+                name: name.clone(),
+                digest,
+            }),
+            ConfirmOutcome::Dismiss,
+        );
+        dialog.warning = Some((
+            format!("Trust project command {name}? No action is selected by default."),
+            Tone::Warning,
+        ));
+        dialog.cancel_label = "leave withheld".to_owned();
+        dialog.hint = "y trust and admit · n/esc leave withheld".to_owned();
         self.open_overlay(Overlay::Confirm(dialog));
     }
 

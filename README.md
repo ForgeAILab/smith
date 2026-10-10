@@ -94,6 +94,14 @@ identities remain exact and their bytes are read when the queued turn starts.
 Slash commands, shell shortcuts, child operations, approvals, and
 questionnaires are never queued implicitly.
 
+## File commands
+
+Save a Markdown prompt template at `~/.smith/commands/<name>.md` or
+`<project>/.smith/commands/<name>.md`, then invoke `/<name> args` in the TUI or
+with `smith -p "/<name> args"`. Project commands need `/commands trust <name>`
+before they can run. See [File commands](docs/skills.md#file-commands) for a
+complete example, argument substitution, trust, and the `//` literal escape.
+
 ## Installation
 
 ```sh

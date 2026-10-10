@@ -7,9 +7,11 @@
 pub mod agent_report;
 pub mod cache;
 pub mod commands;
+pub mod commands_report;
 pub mod context_report;
 pub mod diagnostics_report;
 pub mod diff_report;
+pub mod file_commands;
 mod format;
 pub use format::{compact_tokens, plural};
 pub mod goal_report;

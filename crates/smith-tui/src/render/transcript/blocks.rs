@@ -280,6 +280,17 @@ pub(super) fn block_lines(
                 )));
                 lines.extend(render_skills_report(report, width, theme));
             }
+            Block::Local(LocalResult::Commands(report)) => {
+                lines.push(Line::from(Span::styled(
+                    "/commands",
+                    theme.style(Tone::Command),
+                )));
+                lines.extend(super::super::reports::text(
+                    &smith_client::commands_report::render_plain(report),
+                    width,
+                    theme.style(Tone::Default),
+                ));
+            }
             Block::Local(LocalResult::Diff(report)) => {
                 lines.push(Line::from(Span::styled(
                     format!("/{}", report.title),

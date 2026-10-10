@@ -65,11 +65,13 @@ async fn main() -> ExitCode {
 
     match execute(command).await {
         Ok(code) => ExitCode::from(code),
-        Err(error) => {
-            eprintln!("smith: {error:#}");
-            ExitCode::FAILURE
-        }
+        Err(error) => report_failure(&error, &mut std::io::stderr().lock()),
     }
+}
+
+fn report_failure(error: &anyhow::Error, stderr: &mut impl std::io::Write) -> ExitCode {
+    let _ = writeln!(stderr, "smith: {error:#}");
+    ExitCode::FAILURE
 }
 
 async fn execute(command: Command) -> Result<u8> {
@@ -165,6 +167,14 @@ async fn run_command(mut args: RunArgs) -> Result<u8> {
 
     match prompt {
         Some(prompt) => {
+            let prompt = {
+                let prepared = config_command::prepare(&args.selection)?;
+                headless::prepare_prompt(
+                    &prompt,
+                    &prepared.resolution.layout.user_dir,
+                    &prepared.project,
+                )?
+            };
             let started = start_host(
                 &args.selection,
                 args.resume.as_deref(),

@@ -14,6 +14,8 @@ pub struct HelpReport {
     pub primary: Vec<HelpCommand>,
     /// Commands in the advanced registry group, in discovery order.
     pub advanced: Vec<HelpCommand>,
+    /// Runnable file commands, each description labelled with its source layer.
+    pub file_commands: Vec<HelpCommand>,
     /// Plain-text capture guidance, kept separately so terminal key wording
     /// does not change the recorder's existing plain-text output.
     pub composer: Vec<String>,
@@ -32,6 +34,8 @@ impl HelpReport {
     pub const PRIMARY_HEADING: &str = "Primary";
     /// The existing heading for advanced commands.
     pub const ADVANCED_HEADING: &str = "Advanced";
+    /// The heading for runnable file commands.
+    pub const FILE_COMMANDS_HEADING: &str = "File commands";
     /// The existing heading for composer guidance.
     pub const COMPOSER_HEADING: &str = "Composer";
 }
@@ -84,6 +88,11 @@ pub fn render_plain(report: &HelpReport) -> String {
         lines.extend(commands.iter().map(plain_command));
     }
     lines.push(String::new());
+    if !report.file_commands.is_empty() {
+        lines.push(HelpReport::FILE_COMMANDS_HEADING.to_owned());
+        lines.extend(report.file_commands.iter().map(plain_command));
+        lines.push(String::new());
+    }
     lines.push(HelpReport::COMPOSER_HEADING.to_owned());
     lines.extend(report.composer.iter().cloned());
     lines.join("\n")
