@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::path::PathBuf;
 
 use smith_config::model::{ConfigFile, ModuleSection};
 use smith_config::resolve::{
@@ -50,6 +51,17 @@ impl Fixture {
 
     fn write_user(&self, text: &str) {
         fs::write(self.home.path().join(".smith/config.toml"), text).expect("user config");
+    }
+
+    fn home_root(&self) -> PathBuf {
+        self.home.path().canonicalize().expect("a canonical home")
+    }
+
+    fn project_root(&self) -> PathBuf {
+        self.project
+            .path()
+            .canonicalize()
+            .expect("a canonical project root")
     }
 
     fn request(&self) -> ResolveRequest {
@@ -163,15 +175,15 @@ fn each_spelling_works_in_every_layer_with_the_written_source() {
             let file = resolution.config.modules[ID].enabled.source.file.as_ref();
             match layer {
                 Layer::UserFile => {
-                    assert_eq!(file, Some(&fixture.home.path().join(".smith/config.toml")))
+                    assert_eq!(file, Some(&fixture.home_root().join(".smith/config.toml")))
                 }
                 Layer::ProjectFile | Layer::Profile => assert_eq!(
                     file,
-                    Some(&fixture.project.path().join(".smith/config.toml"))
+                    Some(&fixture.project_root().join(".smith/config.toml"))
                 ),
                 Layer::ProjectLocalFile => assert_eq!(
                     file,
-                    Some(&fixture.project.path().join(".smith/config.local.toml"))
+                    Some(&fixture.project_root().join(".smith/config.local.toml"))
                 ),
                 _ => assert!(file.is_none()),
             }
@@ -244,12 +256,12 @@ fn disagreeing_aliases_fail_in_each_layer_and_name_both_sources() {
             "{message}"
         );
         let path = match layer {
-            Layer::UserFile => Some(fixture.home.path().join(".smith/config.toml")),
+            Layer::UserFile => Some(fixture.home_root().join(".smith/config.toml")),
             Layer::ProjectFile | Layer::Profile => {
-                Some(fixture.project.path().join(".smith/config.toml"))
+                Some(fixture.project_root().join(".smith/config.toml"))
             }
             Layer::ProjectLocalFile => {
-                Some(fixture.project.path().join(".smith/config.local.toml"))
+                Some(fixture.project_root().join(".smith/config.local.toml"))
             }
             _ => None,
         };
