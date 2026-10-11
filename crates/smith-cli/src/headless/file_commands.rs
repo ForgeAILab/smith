@@ -49,7 +49,7 @@ fn expand_prompt(
     };
     let end = text.find(char::is_whitespace).unwrap_or(text.len());
     let name = &text[..end];
-    if validate_invocation_name(name).is_err() || catalog.resolve(name).is_none() {
+    if validate_invocation_name(name).is_err() || !catalog.recognizes(name) {
         return Ok(prompt.to_owned());
     }
     let arguments = text[end..].trim_start();

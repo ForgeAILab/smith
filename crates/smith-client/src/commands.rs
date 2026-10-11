@@ -807,7 +807,7 @@ pub fn has_exact_name_with(input: &str, catalog: &CommandCatalog) -> bool {
     query
         .split_whitespace()
         .next()
-        .is_some_and(|name| catalog.resolve(name).is_some())
+        .is_some_and(|name| catalog.recognizes(name))
 }
 
 /// Parses built-ins first; file arguments retain internal and trailing whitespace.
@@ -823,7 +823,7 @@ pub fn parse_with(input: &str, catalog: &CommandCatalog) -> Result<ParsedInput, 
     let Some(name) = text.split_whitespace().next() else {
         return parse(input).map(ParsedInput::BuiltIn);
     };
-    if catalog.resolve(name).is_none() {
+    if !catalog.recognizes(name) {
         return parse(input).map(ParsedInput::BuiltIn);
     }
     let arguments = text.strip_prefix(name).unwrap_or_default().trim_start();

@@ -96,8 +96,14 @@ impl CommandContext {
         arguments: &str,
     ) -> Result<PreparedSubmission, String> {
         let trust = self.trust_store()?;
-        let prepared = self
-            .catalog()
+        // Recheck the whole bundle at invocation, including supporting files
+        // edited since discovery. Keep this session's resolved enablement.
+        let catalog = if self.plugin_config.is_some() && name.contains(':') {
+            self.reload()?
+        } else {
+            self.catalog()
+        };
+        let prepared = catalog
             .prepare(name, arguments, Some(&self.project), &trust)
             .map_err(|refusal| refusal.to_string())?;
         app.prepare_file_command_submission(typed, &prepared.prompt)

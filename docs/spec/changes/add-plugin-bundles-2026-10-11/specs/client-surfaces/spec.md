@@ -45,3 +45,33 @@ completion, and MUST appear under their namespaced name.
 - **WHEN** the user opens `/help`
 - **THEN** `/deploy-tools:status` is listed and labelled as from
   `deploy-tools`
+
+### Requirement: Withheld plugin command invocations fail closed
+
+Smith SHALL refuse an invocation in an installed plugin namespace whose
+plugin is changed, untrusted, failed, or off through the file-command path and
+MUST NOT be submitted as ordinary prompt text. The refusal MUST name the
+command and plugin and state the reason and remedy. Changed content MUST
+name `smith plugin update <name>`; off plugins MUST name `/plugins <name> on`
+or `plugins.<name>.enabled = true`. Unknown uninstalled prefixes and the
+literal `//` escape MUST keep their existing behavior.
+
+#### Scenario: Headless withheld plugin invocation
+
+- **GIVEN** an installed plugin `deploy-tools` that is changed or off
+- **WHEN** the user runs `smith -p "/deploy-tools:status api"`
+- **THEN** Smith exits non-zero with the command, plugin, reason and remedy
+- **AND** no provider request is issued
+
+#### Scenario: Terminal withheld plugin invocation
+
+- **GIVEN** an installed plugin that is changed, untrusted, failed, or off
+- **WHEN** the user invokes a command in its namespace
+- **THEN** Smith shows the same local refusal as headless preflight
+- **AND** no input is submitted or queued for the provider
+
+#### Scenario: Unknown plugin prefix and literal escape
+
+- **GIVEN** no installed plugin named `unknown`
+- **WHEN** the user submits `/unknown:status` or `//deploy-tools:status`
+- **THEN** each follows its existing unknown-input or literal-input route

@@ -129,6 +129,14 @@ them unchanged.
   extension kind, keyed by the plugin store root.
 - Plugin management resolves plugin switches without needing a provider, so
   `smith plugin list` works on a fresh install.
+- Slash invocations in an installed, inactive plugin namespace fail closed
+  through the existing file-command refusal path in headless and terminal
+  runs. The refusal names the command, plugin, reason, and update or enable
+  remedy. The whole namespace is reserved while withheld, including when a
+  failed inventory cannot establish which commands exist. Unknown installed
+  command suffixes therefore also refuse in that state; uninstalled prefixes
+  and the `//` escape retain their existing behavior. Terminal invocations
+  recheck the bundle digest, including supporting files edited after startup.
 - Open: a plugin installed from a relative path inside a git-backed
   marketplace does not record the marketplace's ref and commit on its own
   install record; they stay on the marketplace record.

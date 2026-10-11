@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-11T01:38:05Z
-updated_at: 2026-10-11T03:59:02Z
+updated_at: 2026-10-11T04:04:13Z
 completed_at: 2026-10-11T03:59:02Z
 ---
 
@@ -73,3 +73,12 @@ completed_at: 2026-10-11T03:59:02Z
 - [x] 6.3 `docs/plugins.md` (install, trust, what is and is not loaded,
   authoring) and README.
 - [x] 6.4 Full gate with `--no-fail-fast`, including the minimal build.
+
+## 7. Withheld command invocation follow-up
+
+- [x] 7.1 Retain installed inactive namespaces in command preflight, refuse
+  locally with the plugin reason and remedy, and preserve unknown prefixes
+  and literal slash escapes.
+- [x] 7.2 Verify changed/off headless refusals without provider requests,
+  terminal refusals, and unchanged unknown-prefix/escape handling with the
+  permitted plugin tests and CLI/client clippy checks.

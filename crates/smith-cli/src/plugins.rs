@@ -312,6 +312,26 @@ impl ActivePlugins {
     }
 
     pub(crate) fn commands(&self, mut catalog: CommandCatalog) -> CommandCatalog {
+        for entry in &self.entries {
+            let name = &entry.installed.name;
+            let reason = match &entry.status {
+                PluginStatus::On => continue,
+                PluginStatus::Off => format!(
+                    "plugin `{name}` is off; run `/plugins {name} on` or set `plugins.{name}.enabled = true`"
+                ),
+                PluginStatus::Changed => format!(
+                    "plugin `{name}` content changed; run `smith plugin update {name}` to review and confirm it again"
+                ),
+                PluginStatus::Untrusted(status) => format!(
+                    "plugin `{name}` bundle trust is {status:?}; run `smith plugin update {name}` to review and confirm it"
+                ),
+                PluginStatus::Failed(reason) => format!(
+                    "plugin `{name}` failed: {}; run `smith plugin update {name}` to repair and confirm it",
+                    reason.chars().take(200).collect::<String>()
+                ),
+            };
+            catalog = catalog.with_unavailable_plugin(name, reason);
+        }
         for plugin in &self.active {
             catalog = catalog.with_plugin(&plugin.inventory, plugin.paths());
         }

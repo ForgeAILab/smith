@@ -204,6 +204,7 @@ pub struct CommandCatalog {
     entries: Vec<CatalogEntry>,
     problems: Vec<CommandProblem>,
     plugins: BTreeMap<String, PluginCommand>,
+    unavailable_plugins: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -389,6 +390,24 @@ impl CommandCatalog {
         &self.problems
     }
 
+    /// Retains an installed plugin's namespace without admitting its content.
+    pub fn with_unavailable_plugin(mut self, name: &str, reason: String) -> Self {
+        self.unavailable_plugins.insert(name.to_owned(), reason);
+        self
+    }
+
+    fn unavailable_plugin_reason(&self, name: &str) -> Option<&str> {
+        validate_invocation_name(name).ok()?;
+        let (plugin, _) = name.split_once(':')?;
+        self.unavailable_plugins.get(plugin).map(String::as_str)
+    }
+
+    /// Recognizes resolved commands and installed, withheld plugin namespaces.
+    /// Withheld content stays absent from completion and runnable entries.
+    pub fn recognizes(&self, name: &str) -> bool {
+        self.resolve(name).is_some() || self.unavailable_plugin_reason(name).is_some()
+    }
+
     /// The runnable winner, or the withheld project entry if no user fallback exists.
     pub fn resolve(&self, name: &str) -> Option<&CatalogEntry> {
         let mut withheld = None;
@@ -431,6 +450,9 @@ impl CommandCatalog {
             name: name.to_owned(),
             reason,
         };
+        if let Some(reason) = self.unavailable_plugin_reason(name) {
+            return Err(refuse(reason.to_owned()));
+        }
         let entry = self
             .resolve(name)
             .ok_or_else(|| refuse("command is not in the catalog".to_owned()))?;
