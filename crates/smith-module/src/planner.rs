@@ -46,6 +46,21 @@ pub struct ModuleReport {
     pub descriptor: ModuleDescriptor,
     /// Outcome of this composition's selection and mount.
     pub state: ModuleState,
+    /// Live sandbox health; absent for compiled native modules.
+    pub health: Option<std::sync::Arc<crate::ModuleHealth>>,
+}
+
+impl ModuleReport {
+    /// Current session state, including failures after mounting.
+    pub fn current_state(&self) -> ModuleState {
+        self.health
+            .as_ref()
+            .and_then(|health| health.failure())
+            .map_or_else(
+                || self.state.clone(),
+                |reason| ModuleState::Failed { reason },
+            )
+    }
 }
 
 /// Complete values returned by one successfully mounted module.
@@ -109,12 +124,7 @@ pub fn mount_modules(composition: &ModuleComposition, context: &ModuleContext) -
         .iter()
         .filter(|(id, _)| !states.contains_key(*id))
         .map(|(id, compiled)| {
-            let requirements = compiled
-                .module
-                .requirements()
-                .iter()
-                .map(|id| (*id).to_owned())
-                .collect();
+            let requirements = compiled.module.requirement_ids();
             (id.clone(), requirements)
         })
         .collect::<BTreeMap<String, Vec<String>>>();
@@ -142,6 +152,7 @@ pub fn mount_modules(composition: &ModuleComposition, context: &ModuleContext) -
         }
     }
     let mut mounted = Vec::new();
+    let mut health = BTreeMap::new();
     for id in graph.keys() {
         mount_one(
             id,
@@ -150,6 +161,7 @@ pub fn mount_modules(composition: &ModuleComposition, context: &ModuleContext) -
             &mut mounted,
             composition,
             context,
+            &mut health,
         );
     }
     MountPlan {
@@ -158,6 +170,7 @@ pub fn mount_modules(composition: &ModuleComposition, context: &ModuleContext) -
             .into_iter()
             .map(|(id, descriptor)| ModuleReport {
                 descriptor,
+                health: health.remove(&id),
                 state: states
                     .remove(&id)
                     .expect("every catalog entry has a mount outcome"),
@@ -179,6 +192,7 @@ fn reachable(id: &str, graph: &BTreeMap<String, Vec<String>>) -> BTreeSet<String
     reached
 }
 
+#[allow(clippy::too_many_arguments)]
 fn mount_one(
     id: &str,
     implementations: &BTreeMap<String, &CompiledModule>,
@@ -186,6 +200,7 @@ fn mount_one(
     mounted: &mut Vec<MountedModule>,
     composition: &ModuleComposition,
     context: &ModuleContext,
+    health: &mut BTreeMap<String, std::sync::Arc<crate::ModuleHealth>>,
 ) {
     if states.contains_key(id) {
         return;
@@ -193,22 +208,23 @@ fn mount_one(
     let Some(compiled) = implementations.get(id) else {
         return;
     };
-    let mut requirements = compiled.module.requirements().to_vec();
+    let mut requirements = compiled.module.requirement_ids();
     requirements.sort_unstable();
     for requirement in requirements {
         mount_one(
-            requirement,
+            &requirement,
             implementations,
             states,
             mounted,
             composition,
             context,
+            health,
         );
-        if states.get(requirement) != Some(&ModuleState::Mounted) {
+        if states.get(&requirement) != Some(&ModuleState::Mounted) {
             states.insert(
                 id.into(),
                 ModuleState::Blocked {
-                    reason: ModuleBlockReason::Requirement(requirement.into()),
+                    reason: ModuleBlockReason::Requirement(requirement),
                 },
             );
             return;
@@ -218,6 +234,18 @@ fn mount_one(
     own_context.settings = composition.settings.get(id).cloned().unwrap_or_default();
     let state = match compiled.module.mount(&own_context) {
         Ok(Mounted::Contributions(contributions)) => {
+            mounted.push(MountedModule {
+                descriptor: compiled.descriptor(),
+                revision: compiled.module.revision().into(),
+                contributions,
+            });
+            ModuleState::Mounted
+        }
+        Ok(Mounted::TrackedContributions {
+            contributions,
+            health: live,
+        }) => {
+            health.insert(id.into(), live);
             mounted.push(MountedModule {
                 descriptor: compiled.descriptor(),
                 revision: compiled.module.revision().into(),

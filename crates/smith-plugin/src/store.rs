@@ -31,6 +31,9 @@ pub struct InstalledPlugin {
     pub resolved_commit: Option<String>,
     /// Digest the caller reviewed before committing.
     pub digest: ContentDigest,
+    /// Confirmed module grants, bound to this record's digest.
+    #[serde(default)]
+    pub module_grants: BTreeMap<String, crate::ModuleCapabilities>,
     /// Canonical directory from which the installed version is inspected.
     pub install_directory: PathBuf,
 }
@@ -450,6 +453,12 @@ impl PluginStore {
         let recorded = (|| {
             ensure_directory(root, &data_path)?;
             let installed = InstalledPlugin {
+                module_grants: prepared
+                    .inventory
+                    .modules
+                    .iter()
+                    .map(|module| (module.id.clone(), module.capabilities.clone()))
+                    .collect(),
                 name: name.clone(),
                 version: inventory.manifest.version.clone(),
                 source: prepared.source,

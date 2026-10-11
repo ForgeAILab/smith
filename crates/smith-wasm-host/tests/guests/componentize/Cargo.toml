@@ -1,0 +1,8 @@
+[package]
+name = "smith-fixture-componentize"
+version = "0.3.10"
+edition = "2024"
+publish = false
+[dependencies]
+wit-component = "=0.239.0"
+wat = "=1.239.0"

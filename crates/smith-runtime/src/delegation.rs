@@ -372,13 +372,41 @@ impl ChildRuntimeFactory for SmithChildFactory {
         } else {
             smith_module::ModulePosture::ReadOnly
         };
-        let mut module_plan = smith_module::mount_modules(&route.modules, &module_context);
+        module_context.is_child_session = true;
+        module_context.workspace_root = Some(std::path::PathBuf::from(workspace.root()));
+        let mut modules = route.modules.clone();
+        if let Some(plugins) = &route.plugins {
+            modules
+                .compiled
+                .extend(plugins.wasm_modules.compiled.clone());
+            modules.known.extend(plugins.wasm_modules.known.clone());
+            modules.enabled.extend(plugins.wasm_modules.enabled.clone());
+        }
+        let mut module_plan = smith_module::mount_modules(&modules, &module_context);
+        crate::factory::modules::apply_sandbox_authority(&mut module_plan);
         crate::factory::modules::enforce_posture(&mut module_plan, module_context.posture);
+        crate::factory::modules::reject_sandbox_pipeline_ordering(&mut module_plan);
         let mut tools = if write_capable {
             smith_tools::all()
         } else {
             smith_tools::read_only()
         };
+        let plugin_tools = route
+            .plugins
+            .as_ref()
+            .map_or_else(Vec::new, |plugins| plugins.tools());
+        let plugin_names = plugin_tools
+            .iter()
+            .map(|tool| tool.spec().name)
+            .collect::<std::collections::BTreeSet<_>>();
+        crate::factory::modules::reject_sandbox_tool_names(
+            &mut module_plan,
+            tools
+                .iter()
+                .chain(&plugin_tools)
+                .map(|tool| tool.spec().name)
+                .collect(),
+        );
         for contribution in module_plan
             .mounted
             .iter()
@@ -388,14 +416,6 @@ impl ChildRuntimeFactory for SmithChildFactory {
                 tools.push(tool.clone());
             }
         }
-        let plugin_tools = route
-            .plugins
-            .as_ref()
-            .map_or_else(Vec::new, |plugins| plugins.tools());
-        let plugin_names = plugin_tools
-            .iter()
-            .map(|tool| tool.spec().name)
-            .collect::<std::collections::BTreeSet<_>>();
         tools.extend(
             plugin_tools
                 .into_iter()
@@ -407,8 +427,29 @@ impl ChildRuntimeFactory for SmithChildFactory {
             tools.push(Arc::new(route.tool_output_context.reader(store)));
         }
         let todo_component = Arc::new(TodoComponent::public());
+        let sandbox_names = module_plan
+            .mounted
+            .iter()
+            .filter(|module| {
+                matches!(
+                    module.descriptor.origin,
+                    smith_module::ModuleOrigin::Sandboxed { .. }
+                )
+            })
+            .flat_map(|module| {
+                module
+                    .contributions
+                    .iter()
+                    .filter_map(|contribution| match contribution {
+                        smith_module::ModuleContribution::Tool(tool) => Some(tool.spec().name),
+                        _ => None,
+                    })
+            })
+            .collect::<std::collections::BTreeSet<_>>();
         let abilities = seal_tool_abilities(tools.iter().cloned().map(|tool| {
-            let source = if plugin_names.contains(&tool.spec().name) {
+            let source = if sandbox_names.contains(&tool.spec().name) {
+                RegistrySource::Host
+            } else if plugin_names.contains(&tool.spec().name) {
                 RegistrySource::Provider
             } else {
                 RegistrySource::BuiltIn
@@ -537,7 +578,13 @@ impl ChildRuntimeFactory for SmithChildFactory {
         for skill in skills {
             builder = builder.ability(skill);
         }
-        Ok(crate::factory::modules::apply(builder, &module_plan))
+        let mut builder = crate::factory::modules::apply(builder, &module_plan);
+        if let Some(filter) =
+            crate::factory::modules::sandbox_health_filter(&modules, &module_plan, true)
+        {
+            builder = builder.tool_view_resolver(filter);
+        }
+        Ok(builder)
     }
 }
 

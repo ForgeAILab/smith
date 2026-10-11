@@ -97,3 +97,5 @@ to configuration and listings. Evidence records
 binary: compiling it is the embedder's trust decision, and its syscalls are
 not mediated. Smith does not load native modules at runtime. The unpublished
 `crates/test-support/module-fixture` crate exercises this path only in tests.
+
+Sandboxed executable components are described in [WASM modules](wasm-modules.md).

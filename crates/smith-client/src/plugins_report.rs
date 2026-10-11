@@ -100,10 +100,29 @@ pub fn render_plain(report: &PluginsReport) -> String {
         if let Some(commit) = &row.resolved_commit {
             lines.push(format!("  resolved commit: {commit}"));
         }
+        for (label, components) in [("loaded", &row.loaded), ("not loaded", &row.not_loaded)] {
+            for component in components
+                .iter()
+                .filter(|component| component.kind == "sandboxed module")
+            {
+                lines.push(format!(
+                    "  {label}: {} {}{}",
+                    component.kind,
+                    component.name,
+                    component
+                        .detail
+                        .as_ref()
+                        .map_or_else(String::new, |detail| format!(" · {detail}"))
+                ));
+            }
+        }
         lines.push(format!("  digest: {}", row.digest));
         lines.push(format!("  enablement: {}", row.enabled_source));
         for (label, components) in [("loaded", &row.loaded), ("not loaded", &row.not_loaded)] {
-            for component in components {
+            for component in components
+                .iter()
+                .filter(|component| component.kind != "sandboxed module")
+            {
                 lines.push(format!(
                     "  {label}: {} {}{}",
                     component.kind,
@@ -124,4 +143,55 @@ pub fn render_plain(report: &PluginsReport) -> String {
     }
     lines.push(GUIDANCE.into());
     lines.join("\n")
+}
+
+/// Joins live session mount/failure state to sandboxed inventory rows.
+/// Content-only component rows remain untouched.
+pub fn apply_module_states(report: &mut PluginsReport, modules: &[smith_module::ModuleReport]) {
+    for plugin in &mut report.rows {
+        for component in plugin
+            .loaded
+            .iter_mut()
+            .chain(&mut plugin.not_loaded)
+            .filter(|component| component.kind == "sandboxed module")
+        {
+            if let Some(module) = modules
+                .iter()
+                .find(|module| module.descriptor.id == component.name)
+            {
+                let state = module.current_state();
+                let label = if state == smith_module::ModuleState::NotBuilt {
+                    "not supported in this build".into()
+                } else {
+                    crate::modules_report::state_label(&state)
+                };
+                let detail = component.detail.as_deref().unwrap_or_default();
+                let base = detail
+                    .rsplit_once(" · state: ")
+                    .map_or(detail, |(base, _)| base);
+                component.detail = Some(format!("{base} · state: {label}"));
+            }
+        }
+        let mut withheld = Vec::new();
+        plugin.loaded.retain(|component| {
+            let failed = component.kind == "sandboxed module"
+                && modules
+                    .iter()
+                    .find(|module| module.descriptor.id == component.name)
+                    .is_some_and(|module| {
+                        matches!(
+                            module.current_state(),
+                            smith_module::ModuleState::Failed { .. }
+                                | smith_module::ModuleState::Off
+                                | smith_module::ModuleState::NotBuilt
+                                | smith_module::ModuleState::Blocked { .. }
+                        )
+                    });
+            if failed {
+                withheld.push(component.clone());
+            }
+            !failed
+        });
+        plugin.not_loaded.extend(withheld);
+    }
 }

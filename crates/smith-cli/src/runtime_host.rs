@@ -84,6 +84,22 @@ pub(super) fn preflight_request(
     surface: HostSurface,
     catalog: Option<Arc<smith_config::catalog::CatalogSnapshot>>,
 ) -> Result<RuntimeRequest> {
+    preflight_with_modules(
+        resolution,
+        project,
+        surface,
+        catalog,
+        &crate::modules::ModuleSessions::default(),
+    )
+}
+
+fn preflight_with_modules(
+    resolution: &Resolution,
+    project: &std::path::Path,
+    surface: HostSurface,
+    catalog: Option<Arc<smith_config::catalog::CatalogSnapshot>>,
+    sessions: &crate::modules::ModuleSessions,
+) -> Result<RuntimeRequest> {
     let workspace = ProjectWorkspace::new(project).map_err(|error| anyhow::anyhow!("{error}"))?;
     let mut request = RuntimeRequest {
         workspace: Some(Arc::new(workspace)),
@@ -107,6 +123,15 @@ pub(super) fn preflight_request(
     {
         request.catalog_sources.push(source);
     }
+    let plugins = crate::plugins::PluginCatalog::discover(&resolution.layout.user_dir)?
+        .resolve(&resolution.config, project)?;
+    request.plugin_profiles.insert(
+        resolution.config.agent.profile.name.clone(),
+        smith_runtime::factory::PluginProfile {
+            wasm_modules: plugins.wasm_modules(&resolution.config, sessions)?,
+            ..Default::default()
+        },
+    );
     Ok(request)
 }
 
@@ -116,6 +141,25 @@ pub(super) async fn start_host(
     surface: HostSurface,
     frozen_catalog: Option<Arc<smith_config::catalog::CatalogSnapshot>>,
     mcp: Option<Arc<crate::mcp::McpContext>>,
+) -> Result<StartedHost> {
+    start_host_with_modules(
+        selection,
+        resume,
+        surface,
+        frozen_catalog,
+        mcp,
+        &crate::modules::ModuleSessions::default(),
+    )
+    .await
+}
+
+async fn start_host_with_modules(
+    selection: &Selection,
+    resume: Option<&str>,
+    surface: HostSurface,
+    frozen_catalog: Option<Arc<smith_config::catalog::CatalogSnapshot>>,
+    mcp: Option<Arc<crate::mcp::McpContext>>,
+    sessions: &crate::modules::ModuleSessions,
 ) -> Result<StartedHost> {
     let prepared = prepare(selection)?;
     let project = prepared.project;
@@ -165,8 +209,14 @@ pub(super) async fn start_host(
     for diagnostic in plugins.diagnostics() {
         eprintln!("{diagnostic}");
     }
-    let mut runtime = preflight_request(&resolution, &project, surface, Some(catalog.clone()))
-        .context("rooting the project workspace")?;
+    let mut runtime = preflight_with_modules(
+        &resolution,
+        &project,
+        surface,
+        Some(catalog.clone()),
+        sessions,
+    )
+    .context("rooting the project workspace")?;
     runtime.capability_denials = selection.capability_denials.clone();
     // Folded on here rather than inside the factory so that a direct embedder
     // still gets exactly the sources it supplied: discovery is a property of
@@ -214,13 +264,18 @@ pub(super) async fn start_host(
         runtime.mcp = Some(context.supervisor());
     }
 
-    let root_plugins = plugins.profile(
+    let mut root_plugins = plugins.profile(
         &resolution.config,
         &resolution.layout.user_dir,
         &project,
         runtime.credentials.clone(),
         mcp.as_ref(),
     )?;
+    root_plugins.wasm_modules = runtime
+        .plugin_profiles
+        .get(&agents.profile.name)
+        .map(|profile| profile.wasm_modules.clone())
+        .unwrap_or_default();
     runtime
         .plugin_profiles
         .insert(agents.profile.name.clone(), root_plugins);
@@ -268,13 +323,15 @@ pub(super) async fn start_host(
         }
         let child_plugins = crate::plugins::PluginCatalog::discover(&resolution.layout.user_dir)?
             .resolve(&child_resolution.config, &project)?;
-        let profile_plugins = child_plugins.profile(
+        let mut profile_plugins = child_plugins.profile(
             &child_resolution.config,
             &resolution.layout.user_dir,
             &project,
             runtime.credentials.clone(),
             mcp.as_ref(),
         )?;
+        profile_plugins.wasm_modules =
+            child_plugins.wasm_modules(&child_resolution.config, sessions)?;
         runtime
             .plugin_profiles
             .insert(profile.name.clone(), profile_plugins);
@@ -321,13 +378,14 @@ pub(super) async fn start_host(
         }
         let advisor_plugins = crate::plugins::PluginCatalog::discover(&resolution.layout.user_dir)?
             .resolve(&advisor_resolution.config, &project)?;
-        let profile_plugins = advisor_plugins.profile(
+        let mut profile_plugins = advisor_plugins.profile(
             &advisor_resolution.config,
             &resolution.layout.user_dir,
             &project,
             runtime.credentials.clone(),
             mcp.as_ref(),
         )?;
+        profile_plugins.wasm_modules = Default::default();
         runtime.plugin_profiles.insert(
             advisor_resolution.config.agent.profile.name.clone(),
             profile_plugins,
@@ -666,16 +724,22 @@ async fn run_interactive_hosts(
     )> = None;
     let mut mcp: Option<Arc<crate::mcp::McpContext>> = None;
     let mut app = None;
+    let mut wasm_sessions = crate::modules::ModuleSessions::default();
+    let mut wasm_session_id: Option<String> = None;
     // Initialize after raw mode is entered, then retain input through host
     // shutdown, startup retries, and embedded connection steps.
     let mut keys = None;
     loop {
-        let started = match start_host(
+        if wasm_session_id.as_deref() != resume.as_deref() {
+            wasm_sessions = Default::default();
+        }
+        let started = match start_host_with_modules(
             &args.selection,
             resume.as_deref(),
             HostSurface::Terminal,
             frozen_catalog.clone(),
             mcp.clone(),
+            &wasm_sessions,
         )
         .await
         {
@@ -783,6 +847,7 @@ async fn run_interactive_hosts(
         } = started;
         mcp = started_mcp;
         let current_session = host.session().id().as_str().to_owned();
+        wasm_session_id = Some(current_session.clone());
         if terminal.is_none() {
             match terminal::enter() {
                 Ok(entered) => *terminal = Some(entered),

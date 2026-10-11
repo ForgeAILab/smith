@@ -247,6 +247,7 @@ async fn mounted_values_reach_registry_pipeline_observer_and_evidence() {
         let record = &runtime.harness_modules()[0];
         assert_eq!(record.trust, crate::harness::ModuleTrust::TrustedNative);
         match origin {
+            ModuleOrigin::Sandboxed { .. } => unreachable!("this test supplies native origins"),
             ModuleOrigin::FirstParty => {
                 assert_eq!(record.id.as_str(), "smith/fixture");
                 assert_eq!(record.provenance, crate::harness::ModuleProvenance::BuiltIn);
@@ -746,4 +747,452 @@ async fn inheriting_children_mount_fresh_pipeline_state() {
     );
     child.shutdown().await.unwrap();
     root.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn wasm_and_native_modules_share_registry_and_record_distinct_tiers() {
+    let workspace = tempfile::tempdir().unwrap();
+    let module = smith_wasm_host::WasmModule::load(
+        smith_wasm_host::WasmEngine::new().unwrap(),
+        include_bytes!("../../../../smith-wasm-host/tests/fixtures/tools.wasm"),
+        smith_wasm_host::WasmModuleConfig {
+            plugin_name: "fixture-plugin".into(),
+            requested_capabilities: vec![smith_wasm_host::CapabilityGrant {
+                capability: smith_module::ModuleCapability::WorkspaceWrite,
+                roots: vec!["workspace".into()],
+                hosts: vec![],
+                allow_http: false,
+            }],
+            granted_capabilities: vec![smith_wasm_host::CapabilityGrant {
+                capability: smith_module::ModuleCapability::WorkspaceWrite,
+                roots: vec!["workspace".into()],
+                hosts: vec![],
+                allow_http: false,
+            }],
+            host_state_dir: workspace.path().join("host"),
+            data_dir: workspace.path().join("data"),
+            cache_dir: workspace
+                .path()
+                .join("host")
+                .join(smith_wasm_host::COMPONENT_CACHE_DIRECTORY),
+            limits: smith_wasm_host::WasmLimits::default(),
+            session_health: Arc::new(smith_module::ModuleHealth::default()),
+            reserved_tool_names: BTreeSet::new(),
+        },
+    )
+    .unwrap();
+    let wasm = CompiledModule {
+        origin: module.origin(),
+        module,
+    };
+    let mut request = request(
+        workspace.path(),
+        vec![
+            compiled(Arc::new(Hooks::default()), ModuleOrigin::FirstParty, false),
+            wasm,
+        ],
+    );
+    request.config.user_dir = workspace.path().join("host");
+    request.config.approval.mode = sourced(ApprovalMode::Ask);
+    let approvals = Arc::new(WasmApproval(
+        AtomicUsize::new(0),
+        workspace.path().join("fixture.txt"),
+    ));
+    request.approval = Some(approvals.clone());
+    let mut call = agent_runtime::provider::fake::tool_call_fragments(
+        0,
+        "wasm-call",
+        "wasm_14_fixture-plugin_guest__probe",
+        r#"{"action":"fs-write"}"#,
+    );
+    call.push(ProviderStreamEvent::Finish {
+        reason: FinishReason::ToolCalls,
+    });
+    request.provider = Some(Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        vec![
+            ScriptedStream::new(call),
+            ScriptedStream::new(vec![
+                ProviderStreamEvent::TextDelta {
+                    text: "done".into(),
+                },
+                ProviderStreamEvent::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ]),
+        ],
+    )));
+    let harness = crate::harness::resolve(crate::harness::HarnessSpec::trusted(request)).unwrap();
+    let runtime = build(harness).await.unwrap();
+    assert!(runtime.policy().tools.iter().any(|name| name == "read"));
+    assert!(
+        runtime
+            .policy()
+            .tools
+            .iter()
+            .any(|name| name.ends_with("__probe"))
+    );
+    assert!(
+        runtime
+            .harness_modules()
+            .iter()
+            .any(|record| record.trust == crate::harness::ModuleTrust::TrustedNative)
+    );
+    let sandbox = runtime
+        .harness_modules()
+        .iter()
+        .find(|record| record.trust == crate::harness::ModuleTrust::Sandboxed)
+        .unwrap();
+    assert_eq!(
+        sandbox.provenance,
+        crate::harness::ModuleProvenance::UserManifest("fixture-plugin".into())
+    );
+    assert_eq!(
+        sandbox.granted_capabilities,
+        crate::harness::CapabilitySet::from([crate::harness::Capability::WorkspaceWrite])
+    );
+    let session = runtime
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .unwrap();
+    session
+        .send(UserInput::text(
+            "call wasm_14_fixture-plugin_guest__probe with fs-write",
+        ))
+        .unwrap()
+        .completed()
+        .await;
+    assert_eq!(
+        approvals.0.load(Ordering::Relaxed),
+        1,
+        "read-only guest claims must not bypass approval"
+    );
+    assert_eq!(
+        std::fs::read(workspace.path().join("fixture.txt")).unwrap(),
+        b"written"
+    );
+}
+
+#[derive(Debug, Default)]
+struct WasmApproval(AtomicUsize, std::path::PathBuf);
+#[async_trait::async_trait]
+impl agent_runtime_core::approval::ApprovalPolicy for WasmApproval {
+    async fn decide(
+        &self,
+        _: &agent_runtime_core::approval::ApprovalRequest,
+    ) -> agent_runtime_core::approval::ApprovalDecision {
+        assert!(!self.1.exists(), "guest must not write before approval");
+        self.0.fetch_add(1, Ordering::Relaxed);
+        agent_runtime_core::approval::ApprovalDecision::Allow
+    }
+}
+
+#[tokio::test]
+async fn wasm_faults_leave_runtime_sessions_running() {
+    for action in ["trap", "loop", "memory", "oversized", "malformed"] {
+        let workspace = tempfile::tempdir().unwrap();
+        let module = smith_wasm_host::WasmModule::load(
+            smith_wasm_host::WasmEngine::new().unwrap(),
+            include_bytes!("../../../../smith-wasm-host/tests/fixtures/tools.wasm"),
+            smith_wasm_host::WasmModuleConfig {
+                plugin_name: "faults".into(),
+                requested_capabilities: vec![],
+                granted_capabilities: vec![],
+                host_state_dir: workspace.path().join("host"),
+                data_dir: workspace.path().join("data"),
+                cache_dir: workspace
+                    .path()
+                    .join("host")
+                    .join(smith_wasm_host::COMPONENT_CACHE_DIRECTORY),
+                limits: smith_wasm_host::WasmLimits {
+                    tool_deadline: Duration::from_millis(if action == "memory" {
+                        1000
+                    } else {
+                        30
+                    }),
+                    ..Default::default()
+                },
+                session_health: Arc::new(smith_module::ModuleHealth::default()),
+                reserved_tool_names: BTreeSet::new(),
+            },
+        )
+        .unwrap();
+        let mut request = request(
+            workspace.path(),
+            vec![CompiledModule {
+                origin: module.origin(),
+                module,
+            }],
+        );
+        request.config.user_dir = workspace.path().join("host");
+        let mut call = agent_runtime::provider::fake::tool_call_fragments(
+            0,
+            "fault-call",
+            "wasm_6_faults_guest__probe",
+            &serde_json::json!({"action":action}).to_string(),
+        );
+        call.push(ProviderStreamEvent::Finish {
+            reason: FinishReason::ToolCalls,
+        });
+        let provider = Arc::new(FakeProvider::new(
+            "example-model",
+            Capabilities::basic_streaming(),
+            vec![
+                ScriptedStream::new(call),
+                ScriptedStream::new(vec![
+                    ProviderStreamEvent::TextDelta {
+                        text: "session survived".into(),
+                    },
+                    ProviderStreamEvent::Finish {
+                        reason: FinishReason::Stop,
+                    },
+                ]),
+            ],
+        ));
+        request.provider = Some(provider.clone());
+        let harness =
+            crate::harness::resolve(crate::harness::HarnessSpec::trusted(request)).unwrap();
+        let runtime = build(harness).await.unwrap();
+        let session = runtime
+            .runtime()
+            .start_session(StartSession::new())
+            .await
+            .unwrap();
+        session
+            .send(UserInput::text("call wasm_6_faults_guest__probe"))
+            .unwrap()
+            .completed()
+            .await;
+        assert_eq!(
+            provider.requests().len(),
+            2,
+            "{action}: provider must continue after guest failure"
+        );
+        let history = format!("{:?}", session.history());
+        assert!(
+            !history.contains("not active"),
+            "fixture must enter the guest: {history}"
+        );
+        assert!(
+            history.contains("module "),
+            "guest failure must be reported: {history}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn plugin_wasm_tools_reach_inheriting_children_and_keep_ordinary_approval() {
+    use agent_runtime::delegation::ChildRuntimeFactory;
+    use agent_runtime_core::delegation::{
+        ChildLimits, ChildModelSelection, ChildSpec, ToolViewScope, WorkspacePolicy,
+    };
+    let workspace = tempfile::tempdir().unwrap();
+    let grant = smith_wasm_host::CapabilityGrant {
+        capability: smith_module::ModuleCapability::WorkspaceWrite,
+        roots: vec!["workspace".into()],
+        hosts: vec![],
+        allow_http: false,
+    };
+    let module = smith_wasm_host::WasmModule::load(
+        smith_wasm_host::WasmEngine::new().unwrap(),
+        include_bytes!("../../../../smith-wasm-host/tests/fixtures/tools.wasm"),
+        smith_wasm_host::WasmModuleConfig {
+            plugin_name: "child-plugin".into(),
+            requested_capabilities: vec![grant.clone()],
+            granted_capabilities: vec![grant],
+            host_state_dir: workspace.path().join("host"),
+            data_dir: workspace.path().join("data"),
+            cache_dir: workspace
+                .path()
+                .join("host")
+                .join(smith_wasm_host::COMPONENT_CACHE_DIRECTORY),
+            limits: Default::default(),
+            session_health: Arc::new(smith_module::ModuleHealth::default()),
+            reserved_tool_names: BTreeSet::new(),
+        },
+    )
+    .unwrap();
+    let mut request = request(workspace.path(), vec![]);
+    request.config.user_dir = workspace.path().join("host");
+    request.config.agent.profile.delegation.value = true;
+    request.config.approval.mode = sourced(ApprovalMode::Ask);
+    let approval = Arc::new(WasmApproval(
+        AtomicUsize::new(0),
+        workspace.path().join("fixture.txt"),
+    ));
+    request.approval = Some(approval.clone());
+    request.plugin_profiles.insert(
+        request.config.agent.profile.name.clone(),
+        PluginProfile {
+            wasm_modules: ModuleComposition::with_defaults(
+                vec![CompiledModule {
+                    origin: module.origin(),
+                    module,
+                }],
+                vec![],
+            ),
+            ..Default::default()
+        },
+    );
+    let name = "wasm_12_child-plugin_guest__probe";
+    let mut call = agent_runtime::provider::fake::tool_call_fragments(
+        0,
+        "child-wasm",
+        name,
+        r#"{"action":"fs-write"}"#,
+    );
+    call.push(ProviderStreamEvent::Finish {
+        reason: FinishReason::ToolCalls,
+    });
+    request.provider = Some(Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        vec![
+            ScriptedStream::new(call),
+            ScriptedStream::new(vec![ProviderStreamEvent::Finish {
+                reason: FinishReason::Stop,
+            }]),
+        ],
+    )));
+    let runtime =
+        build(crate::harness::resolve(crate::harness::HarnessSpec::trusted(request)).unwrap())
+            .await
+            .unwrap();
+    let spec = ChildSpec {
+        task: UserInput::text(format!("call {name}")),
+        model: ChildModelSelection::Inherit,
+        limits: ChildLimits {
+            max_turns: 1,
+            max_tokens: None,
+            deadline_ms: None,
+        },
+        tools: ToolViewScope::All,
+        workspace: WorkspacePolicy::SharedProject,
+    };
+    let child_runtime = runtime
+        .delegation()
+        .unwrap()
+        .factory
+        .child_builder(&spec)
+        .unwrap()
+        .build()
+        .unwrap();
+    let child = child_runtime
+        .start_session(StartSession::new())
+        .await
+        .unwrap();
+    child.send(spec.task).unwrap().completed().await;
+    assert_eq!(
+        approval.0.load(Ordering::Relaxed),
+        1,
+        "child WASM tools must reach ordinary approval"
+    );
+    assert_eq!(
+        std::fs::read(workspace.path().join("fixture.txt")).unwrap(),
+        b"written"
+    );
+    child.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_child_rebuild_omits_disabled_wasm_schemas_without_disabling_siblings() {
+    use agent_runtime::delegation::ChildRuntimeFactory;
+    use agent_runtime_core::delegation::{
+        ChildLimits, ChildModelSelection, ChildSpec, ToolViewScope, WorkspacePolicy,
+    };
+    let workspace = tempfile::tempdir().unwrap();
+    let health = Arc::new(smith_module::ModuleHealth::default());
+    let module = smith_wasm_host::WasmModule::load(
+        smith_wasm_host::WasmEngine::new().unwrap(),
+        include_bytes!("../../../../smith-wasm-host/tests/fixtures/tools.wasm"),
+        smith_wasm_host::WasmModuleConfig {
+            plugin_name: "view".into(),
+            requested_capabilities: vec![],
+            granted_capabilities: vec![],
+            host_state_dir: workspace.path().join("host"),
+            data_dir: workspace.path().join("data"),
+            cache_dir: workspace
+                .path()
+                .join("host")
+                .join(smith_wasm_host::COMPONENT_CACHE_DIRECTORY),
+            limits: Default::default(),
+            session_health: health.clone(),
+            reserved_tool_names: BTreeSet::new(),
+        },
+    )
+    .unwrap();
+    let mut request = request(workspace.path(), vec![]);
+    request.config.user_dir = workspace.path().join("host");
+    request.config.agent.profile.delegation.value = true;
+    request.plugin_profiles.insert(
+        request.config.agent.profile.name.clone(),
+        PluginProfile {
+            wasm_modules: ModuleComposition::with_defaults(
+                vec![CompiledModule {
+                    origin: module.origin(),
+                    module,
+                }],
+                vec![],
+            ),
+            ..Default::default()
+        },
+    );
+    let provider = Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        (0..2)
+            .map(|_| {
+                ScriptedStream::new(vec![ProviderStreamEvent::Finish {
+                    reason: FinishReason::Stop,
+                }])
+            })
+            .collect(),
+    ));
+    request.provider = Some(provider.clone());
+    let runtime =
+        build(crate::harness::resolve(crate::harness::HarnessSpec::trusted(request)).unwrap())
+            .await
+            .unwrap();
+    health.fail("parent disabled".into());
+    let failed = SessionId::new("failed-child");
+    health.child_session(&failed).fail("child disabled".into());
+    let name = "wasm_4_view_guest__probe";
+    let spec = ChildSpec {
+        task: UserInput::text(format!("call {name}")),
+        model: ChildModelSelection::Inherit,
+        limits: ChildLimits {
+            max_turns: 1,
+            max_tokens: None,
+            deadline_ms: None,
+        },
+        tools: ToolViewScope::All,
+        workspace: WorkspacePolicy::SharedProject,
+    };
+    for id in [failed, SessionId::new("healthy-child")] {
+        let child_runtime = runtime
+            .delegation()
+            .unwrap()
+            .factory
+            .child_builder(&spec)
+            .unwrap()
+            .build()
+            .unwrap();
+        let child = child_runtime
+            .start_session(StartSession::new().with_id(id))
+            .await
+            .unwrap();
+        child.send(spec.task.clone()).unwrap().completed().await;
+        child.shutdown().await.unwrap();
+    }
+    let requests = provider.requests();
+    assert!(
+        !requests[0].tools.iter().any(|schema| schema.name == name),
+        "a failed child must not offer the tool after rebuild"
+    );
+    assert!(
+        requests[1].tools.iter().any(|schema| schema.name == name),
+        "parent or sibling failures must not hide a healthy child's tool"
+    );
 }

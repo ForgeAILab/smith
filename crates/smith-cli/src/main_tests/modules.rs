@@ -318,6 +318,7 @@ async fn user_module_edits_preserve_legacy_spelling_and_rollback_exact_bytes() {
             let fixture = Fixture::new();
             fixture.user_config(&original);
             let reports = [smith_module::ModuleReport {
+                health: None,
                 descriptor: ModuleDescriptor {
                     id: "image-generation".into(),
                     description: "Image module".into(),
@@ -375,6 +376,7 @@ async fn user_module_edits_preserve_legacy_spelling_and_rollback_exact_bytes() {
 async fn module_switch_refusals_write_nothing_and_stale_previews_are_rejected() {
     let fixture = Fixture::new();
     let reports = [smith_module::ModuleReport {
+        health: None,
         descriptor: ModuleDescriptor {
             id: "image-generation".into(),
             description: "fixture".into(),

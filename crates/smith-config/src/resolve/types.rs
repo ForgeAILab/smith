@@ -295,6 +295,10 @@ pub struct ResolvedConfig {
 pub struct ResolvedPlugin {
     /// Effective switch with ordinary layered provenance.
     pub enabled: Sourced<bool>,
+    /// User-file restrictions only; project declarations never enter this map.
+    pub modules: crate::model::PluginModuleRestrictions,
+    /// Ignored project/profile capability settings, with their source.
+    pub ignored_module_settings: Vec<String>,
 }
 
 /// A plugin setting that cannot affect a run because the plugin is not installed.

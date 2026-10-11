@@ -114,6 +114,17 @@ jobs:
           test "${actual_revision}" = "${RUNTIME_REVISION}"
           test -z "$(git status --porcelain)"
 
+      - name: Build WASM components from source
+        if: matrix.dependency_policy
+        working-directory: tui
+        shell: bash
+        run: |
+          rustup target add wasm32-unknown-unknown --toolchain stable
+          bash scripts/build-wasm-fixtures.sh
+          bash examples/wasm-module-hello/build.sh
+          # The gates below test these freshly built artifacts. Local repeated
+          # builds match, but cross-machine byte reproducibility is not proven.
+
       - name: Run Smith and shared conformance gates
         working-directory: tui
         shell: bash
@@ -130,6 +141,12 @@ jobs:
           cargo test --locked -p smith-cli --no-default-features --bin smith \
             minimal_build_starts_a_session_with_core_tools_and_no_optional_modules
           bash scripts/smoke-minimal.sh
+
+      - name: Test the CLI without the WASM feature
+        if: matrix.dependency_policy
+        working-directory: tui
+        shell: bash
+        run: cargo test --locked -p smith-cli --no-default-features --bin smith
 
       - name: Install cargo-deny
         if: matrix.dependency_policy

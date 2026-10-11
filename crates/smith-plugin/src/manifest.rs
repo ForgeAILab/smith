@@ -28,6 +28,8 @@ pub struct PluginManifest {
     pub commands: Option<Value>,
     /// Effective MCP path or inline declarations.
     pub mcp_servers: Option<Value>,
+    /// Smith component paths and capability requests.
+    pub modules: Option<Value>,
     /// Overlaid JSON, retained for recognised unsupported keys.
     pub(crate) effective: Map<String, Value>,
 }
@@ -51,7 +53,8 @@ pub fn validate_name(name: &str) -> Result<()> {
 pub fn read_manifest(root: &Path, fallback_name: &str) -> Result<PluginManifest> {
     let root = root.canonicalize()?;
     let mut effective = read_object(&root, ".claude-plugin/plugin.json")?;
-    effective.extend(read_object(&root, ".smith-plugin/plugin.json")?);
+    let overlay = read_object(&root, ".smith-plugin/plugin.json")?;
+    effective.extend(overlay.clone());
     let name = string(&effective, "name")?.unwrap_or_else(|| fallback_name.to_owned());
     validate_name(&name)?;
     let default_enabled = match effective.get("defaultEnabled") {
@@ -72,6 +75,7 @@ pub fn read_manifest(root: &Path, fallback_name: &str) -> Result<PluginManifest>
         skills: effective.get("skills").cloned(),
         commands: effective.get("commands").cloned(),
         mcp_servers: effective.get("mcpServers").cloned(),
+        modules: overlay.get("modules").cloned(),
         effective,
     })
 }

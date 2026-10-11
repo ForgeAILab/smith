@@ -215,3 +215,118 @@ impl<'ast> Visit<'ast> for CompiledEntries {
         visit::visit_expr_struct(self, expression);
     }
 }
+
+#[test]
+fn wasm_engine_is_confined_to_host_and_optional_cli_feature() {
+    let root = workspace_root();
+    let workspace = manifest(&root.join("Cargo.toml"));
+    for member in workspace["workspace"]["members"].as_array().unwrap() {
+        let path = member.as_str().unwrap();
+        let package = manifest(&root.join(path).join("Cargo.toml"));
+        let name = package["package"]["name"].as_str().unwrap();
+        let mut production = package.clone();
+        remove_dev_dependencies(&mut production);
+        let shared = workspace["workspace"]["dependencies"].as_table().unwrap();
+        let names = production_dependency_names(&production, shared);
+        for engine in ["wasmtime", "wasmtime-wasi", "wasmer", "wasmi"] {
+            assert!(
+                name == "smith-wasm-host" || !names.contains(engine),
+                "{name} depends on forbidden engine {engine}"
+            );
+        }
+        if name == "smith-wasm-host" {
+            for forbidden in ["smith-config", "smith-cli", "smith-tui", "wasmtime-wasi"] {
+                assert!(
+                    !dependency_names(&package).contains(forbidden),
+                    "WASM host depends on forbidden {forbidden}"
+                );
+            }
+        }
+    }
+    let cli = manifest(&root.join("crates/smith-cli/Cargo.toml"));
+    assert_eq!(
+        cli["dependencies"]["smith-wasm-host"]["optional"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(
+        cli["features"]["wasm-modules"].as_array().unwrap(),
+        &[Value::String("dep:smith-wasm-host".into())]
+    );
+}
+fn remove_dev_dependencies(table: &mut Table) {
+    table.remove("dev-dependencies");
+    if let Some(targets) = table.get_mut("target").and_then(Value::as_table_mut) {
+        for target in targets
+            .iter_mut()
+            .map(|(_, value)| value)
+            .filter_map(Value::as_table_mut)
+        {
+            remove_dev_dependencies(target);
+        }
+    }
+}
+
+#[test]
+fn guest_workspaces_are_excluded_and_cli_host_has_one_feature_owner() {
+    let root = workspace_root();
+    let workspace = manifest(&root.join("Cargo.toml"));
+    let excluded = workspace["workspace"]["exclude"].as_array().unwrap();
+    for path in [
+        "crates/smith-wasm-host/tests/guests",
+        "examples/wasm-module-hello",
+    ] {
+        assert!(
+            excluded.iter().any(|entry| entry.as_str() == Some(path)),
+            "guest workspace {path} must be excluded"
+        );
+        assert!(manifest(&root.join(path).join("Cargo.toml")).contains_key("workspace"));
+    }
+    let cli = manifest(&root.join("crates/smith-cli/Cargo.toml"));
+    let owners = cli["features"]
+        .as_table()
+        .unwrap()
+        .iter()
+        .filter(|(_, values)| {
+            values.as_array().unwrap().iter().any(|value| {
+                value.as_str().is_some_and(|value| {
+                    value == "dep:smith-wasm-host"
+                        || value == "smith-wasm-host"
+                        || value.starts_with("smith-wasm-host/")
+                })
+            })
+        })
+        .map(|(name, _)| name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(owners, ["wasm-modules"]);
+}
+
+fn production_dependency_names(table: &Table, shared: &Table) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for section in ["dependencies", "build-dependencies"] {
+        if let Some(entries) = table.get(section).and_then(Value::as_table) {
+            names.extend(entries.iter().map(|(alias, entry)| {
+                let resolved = if entry.get("workspace").and_then(Value::as_bool) == Some(true) {
+                    shared.get(alias).unwrap_or(entry)
+                } else {
+                    entry
+                };
+                dependency_package(alias, resolved).to_owned()
+            }));
+        }
+    }
+    if let Some(targets) = table.get("target").and_then(Value::as_table) {
+        for target in targets.values().filter_map(Value::as_table) {
+            names.extend(production_dependency_names(target, shared));
+        }
+    }
+    names
+}
+
+#[test]
+fn an_engine_hidden_behind_a_workspace_alias_is_detected() {
+    let shared: Table =
+        toml::from_str("engine = { package = 'wasmtime', version = '=36.0.17' }").unwrap();
+    let runtime: Table =
+        toml::from_str("[target.'cfg(unix)'.dependencies]\nengine = { workspace = true }").unwrap();
+    assert!(production_dependency_names(&runtime, &shared).contains("wasmtime"));
+}

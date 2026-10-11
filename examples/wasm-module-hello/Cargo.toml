@@ -1,0 +1,12 @@
+[workspace]
+resolver = "3"
+[package]
+name = "smith-wasm-module-hello"
+version = "0.3.10"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+[lib]
+crate-type = ["cdylib"]
+[dependencies]
+smith-module-sdk = { path = "../../crates/smith-module-sdk", version = "0.3.10" }

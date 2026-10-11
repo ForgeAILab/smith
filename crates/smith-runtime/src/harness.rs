@@ -109,6 +109,8 @@ pub enum ModuleProvenance {
 pub enum ModuleTrust {
     /// In-process Rust with ordinary ambient same-user authority.
     TrustedNative,
+    /// In-process WASM with no ambient authority.
+    Sandboxed,
     /// Capability-brokered subprocess. Not enabled until the broker exists.
     BrokeredProcess,
     /// Parsed bounded content with no executable handle.
@@ -119,22 +121,8 @@ pub enum ModuleTrust {
     TrustedMcp,
 }
 
-/// Authority categories a module may request and a host may grant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Capability {
-    WorkspaceRead,
-    WorkspaceWrite,
-    HostRead,
-    HostWrite,
-    Process,
-    Network,
-    ExternalRead,
-    ExternalWrite,
-    DataEgress,
-    Credential,
-    Approval,
-    Provider,
-}
+/// Authority categories shared with sandbox module contracts.
+pub use smith_module::ModuleCapability as Capability;
 
 /// Deterministic capability set.
 pub type CapabilitySet = BTreeSet<Capability>;
@@ -394,6 +382,8 @@ pub enum HarnessResolutionError {
     InvalidNativeTrust(String),
     #[error("module `{0}` uses MCP execution without MCP-server provenance")]
     InvalidMcpTrust(String),
+    #[error("module `{0}` uses sandboxed execution without user-manifest provenance")]
+    InvalidSandboxTrust(String),
     #[error("native dynamic library loading is unsupported for module `{0}`")]
     NativeLibraryUnsupported(String),
     #[error("the subprocess capability broker is not running for module `{0}`")]
@@ -749,6 +739,13 @@ fn validate_module(
             module.id.as_str().to_owned(),
         ));
     }
+    if module.trust == ModuleTrust::Sandboxed
+        && !matches!(module.provenance, ModuleProvenance::UserManifest(_))
+    {
+        return Err(HarnessResolutionError::InvalidSandboxTrust(
+            module.id.as_str().to_owned(),
+        ));
+    }
     for contribution in &module.contributions {
         if matches!(contribution, Contribution::NativeLibrary { .. }) {
             return Err(HarnessResolutionError::NativeLibraryUnsupported(
@@ -761,6 +758,13 @@ fn validate_module(
             ));
         }
         let required = contribution.required();
+        // Approval effects are conservative declarations, not broker grants.
+        // Sandboxed tools can advertise effects without authority to use them.
+        if module.trust == ModuleTrust::Sandboxed
+            && matches!(contribution, Contribution::Tool { .. })
+        {
+            continue;
+        }
         if !required.is_subset(&module.requested_capabilities) {
             return Err(HarnessResolutionError::UndeclaredCapability {
                 module: module.id.as_str().to_owned(),

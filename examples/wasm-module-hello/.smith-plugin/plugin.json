@@ -1,0 +1,6 @@
+{
+  "name": "wasm-module-hello",
+  "version": "0.1.0",
+  "description": "A minimal SDK component with a tool and cached status",
+  "modules": [{ "wasm": "./module.wasm", "capabilities": { "workspace_read": true } }]
+}

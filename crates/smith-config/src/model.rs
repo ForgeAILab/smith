@@ -451,6 +451,9 @@ pub struct PluginSection {
     /// Whether this plugin is selected. Omitted uses its manifest default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+    /// User-only restrictions, keyed by the namespaced id shown in listings.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub modules: PluginModuleRestrictions,
 }
 
 /// Built-in tool settings under `[tools]`.
@@ -1226,6 +1229,10 @@ impl ConfigFile {
         toml::from_str(text)
     }
 }
+
+pub use crate::plugin_modules::{
+    ModuleEndpointRestriction, PluginModuleRestrictions, PluginModuleSection,
+};
 
 #[cfg(test)]
 mod tests {

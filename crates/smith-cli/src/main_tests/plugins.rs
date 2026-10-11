@@ -925,3 +925,5 @@ mod surfaces;
 
 mod fixtures;
 mod invocation;
+
+mod wasm;

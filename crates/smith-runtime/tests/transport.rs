@@ -639,3 +639,108 @@ async fn an_invalid_header_value_is_reported_by_name_only() {
     assert!(err.message.contains("authorization"), "{}", err.message);
     assert!(!format!("{err:?} {err}").contains(TOKEN));
 }
+
+// Module service uses the same loopback stubs and HTTP client as providers.
+#[tokio::test]
+async fn module_http_sends_every_method_and_bounds_bodies() {
+    use smith_module::{ModuleHttp, ModuleHttpMethod as M, ModuleHttpRequest};
+    for (method, spelling) in [
+        (M::Get, "GET"),
+        (M::Post, "POST"),
+        (M::Put, "PUT"),
+        (M::Patch, "PATCH"),
+        (M::Delete, "DELETE"),
+        (M::Head, "HEAD"),
+        (M::Options, "OPTIONS"),
+    ] {
+        let server = stub(move |_, mut socket| async move {
+            respond(
+                &mut socket,
+                "200 OK",
+                &[],
+                if method == M::Head { "" } else { "hello" },
+            )
+            .await;
+        })
+        .await;
+        let response = transport(TransportConfig::default())
+            .request(ModuleHttpRequest {
+                method,
+                url: format!("http://{}/test", server.addr),
+                headers: vec![],
+                body: b"request".to_vec(),
+                max_response_bytes: 16,
+                timeout: PATIENCE,
+            })
+            .await
+            .unwrap();
+        assert_eq!(response.status, 200);
+        assert_eq!(
+            response.body,
+            if method == M::Head {
+                b"".as_slice()
+            } else {
+                b"hello".as_slice()
+            }
+        );
+        let request = within("stub completion", server.served).await.unwrap();
+        assert!(request.starts_with(format!("{spelling} /test ").as_bytes()));
+        assert!(request.ends_with(b"request"));
+    }
+    let server = stub(|_, mut socket| async move {
+        respond(&mut socket, "200 OK", &[], "oversized").await;
+    })
+    .await;
+    let error = transport(TransportConfig::default())
+        .request(ModuleHttpRequest {
+            method: M::Get,
+            url: format!("http://{}/", server.addr),
+            headers: vec![],
+            body: vec![],
+            max_response_bytes: 2,
+            timeout: PATIENCE,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, ProviderErrorKind::MalformedStream);
+    within("stub completion", server.served).await.unwrap();
+}
+
+#[tokio::test]
+async fn module_http_refuses_redirects_and_oversized_requests_before_sending() {
+    use smith_module::{MODULE_HTTP_BODY_LIMIT, ModuleHttp, ModuleHttpMethod, ModuleHttpRequest};
+    let server = stub(|_, mut socket| async move {
+        respond(
+            &mut socket,
+            "302 Found",
+            &[("location", "https://ungranted.example/")],
+            "",
+        )
+        .await;
+    })
+    .await;
+    let request = ModuleHttpRequest {
+        method: ModuleHttpMethod::Get,
+        url: format!("http://{}/", server.addr),
+        headers: vec![],
+        body: vec![],
+        max_response_bytes: 1024,
+        timeout: PATIENCE,
+    };
+    let client = transport(TransportConfig::default());
+    assert!(
+        client
+            .request(request.clone())
+            .await
+            .unwrap_err()
+            .message
+            .contains("redirect refused")
+    );
+    within("stub completion", server.served).await.unwrap();
+    let mut oversized = request;
+    oversized.body = vec![0; MODULE_HTTP_BODY_LIMIT + 1];
+    assert_eq!(
+        client.request(oversized).await.unwrap_err().kind,
+        ProviderErrorKind::BadRequest
+    );
+}

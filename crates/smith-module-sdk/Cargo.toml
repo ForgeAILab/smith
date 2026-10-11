@@ -1,0 +1,15 @@
+[package]
+name = "smith-module-sdk"
+description = "Rust authoring helpers for sandboxed Smith modules."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wit-bindgen = { workspace = true }

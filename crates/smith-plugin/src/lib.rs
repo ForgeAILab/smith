@@ -9,6 +9,8 @@ mod digest;
 mod manifest;
 mod marketplace;
 mod mcp;
+mod modules;
+pub use modules::{ModuleCapabilities, WasmModuleComponent, endpoint_parts};
 mod scan;
 mod source;
 mod store;

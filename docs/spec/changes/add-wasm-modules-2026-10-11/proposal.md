@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-11T01:38:05Z
-updated_at: 2026-10-11T01:44:09Z
+updated_at: 2026-10-11T08:26:59Z
 ---
 
 ## Why
@@ -72,8 +72,9 @@ those.
   `crates/smith-module-sdk` (guest side), `crates/smith-plugin` (manifest
   field and capability inventory), `crates/smith-runtime` (new trust tier,
   capability brokers), `crates/smith-cli` (feature, catalog), `examples/`.
-- New dependencies: `wasmtime` and `wasmtime-wasi` (large; see `design.md`
-  for the size budget and the measurement task), `wit-bindgen` for the SDK.
+- New dependencies: `wasmtime` (pinned to 36.0.17, the newest release that
+  builds on Rust 1.88 and passes `cargo deny`; see `design.md` for the
+  measurements) and `wit-bindgen` for the SDK. No WASI crate is linked.
 - Depends on `add-module-kernel` and `add-plugin-bundles`, and archives
   after both: its MODIFIED "Native registration is trusted embedding only"
   block is written against the text `add-module-kernel` introduces.

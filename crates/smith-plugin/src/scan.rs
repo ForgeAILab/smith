@@ -77,6 +77,8 @@ pub struct PluginInventory {
     pub commands: Vec<CommandComponent>,
     /// Merged MCP declarations before path substitution, sorted by name.
     pub mcp_servers: Vec<McpDeclaration>,
+    /// Sandboxed component declarations, without loading an engine.
+    pub modules: Vec<crate::WasmModuleComponent>,
     /// Recognised unsupported or failed components, sorted and deduplicated.
     pub not_loaded: Vec<NotLoadedComponent>,
     /// Content identity, independent of the installation directory.
@@ -109,6 +111,7 @@ pub fn inspect(root: &Path, fallback_name: &str) -> Result<PluginInventory> {
     scanner.scan_commands();
     scanner.scan_mcp();
     scanner.scan_unsupported();
+    let modules = crate::modules::scan(&root, &manifest, &mut scanner.problems);
     scanner.problems.sort();
     scanner.problems.dedup();
     let skills: Vec<_> = scanner.skills.into_values().collect();
@@ -122,6 +125,7 @@ pub fn inspect(root: &Path, fallback_name: &str) -> Result<PluginInventory> {
         skills,
         commands,
         mcp_servers,
+        modules,
         not_loaded,
         digest,
     })

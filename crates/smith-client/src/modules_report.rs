@@ -38,7 +38,7 @@ pub fn module_report(
         .map(|report| ModuleRow {
             id: report.descriptor.id.clone(),
             description: report.descriptor.description.clone(),
-            state: report.state.clone(),
+            state: report.current_state(),
             source: switches.get(&report.descriptor.id).map_or_else(
                 || Source::built_in(format!("modules.{}.enabled", report.descriptor.id)),
                 |module| module.enabled.source.clone(),
@@ -75,6 +75,30 @@ pub fn state_label(state: &ModuleState) -> String {
 pub fn origin_label(origin: &ModuleOrigin) -> String {
     match origin {
         ModuleOrigin::FirstParty => "first-party".into(),
+        ModuleOrigin::Sandboxed {
+            plugin,
+            granted_capabilities,
+            capability_details,
+            withheld_capabilities,
+            ..
+        } => {
+            let granted = if capability_details.is_empty() {
+                format!("{granted_capabilities:?}")
+            } else {
+                capability_details.join(", ")
+            };
+            format!(
+                "sandboxed ({plugin}) · granted: {granted}{}",
+                if withheld_capabilities.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " · withheld by the user: {}",
+                        withheld_capabilities.join(", ")
+                    )
+                }
+            )
+        }
         ModuleOrigin::ThirdParty { crate_name } => format!("third-party ({crate_name})"),
     }
 }
@@ -88,7 +112,13 @@ pub fn render_plain(report: &ModulesReport) -> String {
             format!(
                 "{} · {} · {}\n  {}\n  {} ← {} · {}",
                 row.id,
-                state_label(&row.state),
+                if matches!(row.origin, ModuleOrigin::Sandboxed { .. })
+                    && row.state == ModuleState::NotBuilt
+                {
+                    "not supported in this build".into()
+                } else {
+                    state_label(&row.state)
+                },
                 origin_label(&row.origin),
                 row.description,
                 row.source.key,

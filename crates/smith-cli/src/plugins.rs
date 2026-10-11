@@ -93,6 +93,20 @@ pub(crate) fn with_known_plugins(request: ResolveRequest) -> Result<ResolveReque
         None => smith_config::credential::user_state_root()?,
     };
     let catalog = PluginCatalog::discover(&user_root)?;
+    let mut request = request;
+    request.known_modules.extend(
+        catalog
+            .entries
+            .iter()
+            .filter_map(|entry| entry.inventory.as_ref())
+            .flat_map(|inventory| inventory.modules.iter())
+            .map(|module| smith_config::resolve::KnownModule {
+                id: module.id.clone(),
+                default_enabled: true,
+                compiled_in: cfg!(feature = "wasm-modules"),
+                legacy_enabled_key: None,
+            }),
+    );
     Ok(request.with_known_plugins(catalog.known_plugins()))
 }
 
@@ -231,6 +245,8 @@ impl PluginCatalog {
         }
         Ok(ActivePlugins {
             entries: self.entries,
+            user_root: self.user_root,
+            module_switches: config.modules.clone(),
             active,
         })
     }
@@ -291,6 +307,8 @@ fn resolved_server(
 pub(crate) struct ActivePlugins {
     pub(crate) entries: Vec<PluginEntry>,
     active: Vec<ActivePlugin>,
+    user_root: PathBuf,
+    module_switches: BTreeMap<String, smith_config::resolve::ResolvedModule>,
 }
 
 impl ActivePlugins {
@@ -410,6 +428,7 @@ impl ActivePlugins {
             mcp: supervisor,
             servers: servers.into_keys().collect(),
             modules: self.modules()?,
+            wasm_modules: Default::default(),
         })
     }
 
@@ -437,3 +456,21 @@ mod report;
 mod switch;
 pub(crate) use report::{inventory_components, mcp_target, source_label};
 pub(crate) use switch::{commit_switch, prepare_switch, switch_outcome};
+
+pub(crate) mod wasm;
+impl ActivePlugins {
+    pub(crate) fn wasm_modules(
+        &self,
+        config: &ResolvedConfig,
+        sessions: &crate::modules::ModuleSessions,
+    ) -> Result<smith_module::ModuleComposition> {
+        crate::modules::plugin_composition(
+            &self.entries,
+            &self.user_root,
+            &config.plugins,
+            &config.modules,
+            sessions,
+        )
+        .map(|modules| modules.composition)
+    }
+}

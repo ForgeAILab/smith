@@ -1,0 +1,18 @@
+[package]
+name = "smith-conformance-guest"
+version = "0.3.10"
+edition = "2024"
+publish = false
+[lib]
+crate-type = ["cdylib"]
+[dependencies]
+smith-module-sdk = { path = "../../../../smith-module-sdk", version = "0.3.10" }
+[features]
+context = []
+processor = []
+inactive = []
+mount-error = []
+malformed = []
+collision = []
+mount-http = []
+quiet = []

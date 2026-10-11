@@ -19,3 +19,4 @@ toml = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 fs2 = { workspace = true }
+url = { workspace = true }

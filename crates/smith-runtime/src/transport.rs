@@ -29,6 +29,8 @@
 //! attaches whatever headers the adapter hands it and never reads Smith
 //! configuration.
 
+mod module_http;
+
 use std::fmt;
 use std::pin::Pin;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};

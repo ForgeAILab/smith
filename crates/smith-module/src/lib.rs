@@ -1,7 +1,14 @@
 //! Value-returning module contracts, independent of Smith configuration and hosts.
 
 mod contributions;
+mod http;
+pub use http::{
+    MODULE_HTTP_BODY_LIMIT, ModuleHttp, ModuleHttpFuture, ModuleHttpMethod, ModuleHttpRequest,
+    ModuleHttpResponse,
+};
 mod planner;
+mod sandbox;
+pub use sandbox::{ModuleCapability, ModuleHealth};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -74,12 +81,18 @@ pub trait SessionHistory: Send + Sync + fmt::Debug {
 pub struct ModuleContext {
     /// This module's own resolved plain settings.
     pub settings: ModuleSettings,
+    /// Canonical workspace root for confined module file access.
+    pub workspace_root: Option<PathBuf>,
     /// Host-selected user data directory.
     pub user_dir: PathBuf,
+    /// Child mounts bind their health by the actual invocation session id.
+    pub is_child_session: bool,
     /// Effective session authority posture.
     pub posture: ModulePosture,
     /// Shared provider HTTP transport contract.
     pub transport: Arc<dyn HttpTransport>,
+    /// Bounded guest HTTP service, separate from provider POST serialization.
+    pub http: Option<Arc<dyn ModuleHttp>>,
     /// Selected provider image route, if supported.
     pub image_binding: Option<ImageBinding>,
     /// Read-only canonical history service for recent conversation inputs.
@@ -121,6 +134,18 @@ pub trait Module: Send + Sync + fmt::Debug {
     fn requirements(&self) -> &[&str] {
         &[]
     }
+    /// Owned dependency ids for adapters whose metadata is loaded at runtime.
+    fn requirement_ids(&self) -> Vec<String> {
+        self.requirements()
+            .iter()
+            .map(|id| (*id).to_owned())
+            .collect()
+    }
+    /// Host-owned session health pool for filtering disabled sandboxed tools.
+    /// Native modules normally return None; this handle is never exported to guests.
+    fn session_health(&self) -> Option<Arc<ModuleHealth>> {
+        None
+    }
     /// Constructs all contributions atomically, or explains inactivity/failure.
     fn mount(&self, context: &ModuleContext) -> Result<Mounted, ModuleError>;
 }
@@ -130,6 +155,13 @@ pub trait Module: Send + Sync + fmt::Debug {
 pub enum Mounted {
     /// Complete set of contributions, including an intentionally empty set.
     Contributions(Vec<ModuleContribution>),
+    /// Session contributions with live failure diagnostics.
+    TrackedContributions {
+        /// Atomic contribution set.
+        contributions: Vec<ModuleContribution>,
+        /// Session-scoped health, retained by reports and clients.
+        health: Arc<ModuleHealth>,
+    },
     /// Host facts make this selected module inapplicable to the session.
     Inactive {
         /// Safe user-facing explanation, never credentials or setting values.
@@ -154,6 +186,19 @@ impl std::error::Error for ModuleError {}
 pub enum ModuleOrigin {
     /// A module maintained in Smith's source.
     FirstParty,
+    /// Sandboxed component installed in a user plugin.
+    Sandboxed {
+        /// Digest-trusted plugin name.
+        plugin: String,
+        /// Manifest requests, before narrowing.
+        requested_capabilities: BTreeSet<ModuleCapability>,
+        /// Effective host grants; tool approval effects are separate.
+        granted_capabilities: BTreeSet<ModuleCapability>,
+        /// Plain descriptions of exact effective scopes.
+        capability_details: Vec<String>,
+        /// Confirmed capabilities withheld by user restrictions.
+        withheld_capabilities: Vec<String>,
+    },
     /// Trusted native code supplied by another crate.
     ThirdParty {
         /// Crate compiled into this binary.

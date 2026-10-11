@@ -522,7 +522,20 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         semantic_summary.is_some(),
         session_history.clone(),
     )?;
-    let builder = modules::apply(builder, &module_plan);
+    let mut builder = modules::apply(builder, &module_plan);
+    let mut composition = request.modules.clone();
+    if let Some(plugins) = request.plugin_profiles.get(&config.agent.profile.name) {
+        composition
+            .compiled
+            .extend(plugins.wasm_modules.compiled.clone());
+    }
+    if let Some(filter) = modules::sandbox_health_filter(
+        &composition,
+        &module_plan,
+        matches!(request.surface, HostSurface::Child),
+    ) {
+        builder = builder.tool_view_resolver(filter);
+    }
     let built = compose::runtime(builder)?;
     let delegation = delegation::assemble(capabilities.delegation_slot.clone().map(|slot| {
         SmithDelegation {

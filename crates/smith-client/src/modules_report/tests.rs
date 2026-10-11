@@ -52,6 +52,7 @@ fn every_mount_outcome_keeps_the_deciding_key_layer_and_origin() {
             },
         )]);
         let reports = [ModuleReport {
+            health: None,
             descriptor: ModuleDescriptor {
                 id: "image-generation".into(),
                 description: "Make images".into(),

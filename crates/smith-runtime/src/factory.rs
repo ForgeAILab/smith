@@ -499,6 +499,8 @@ pub struct PluginProfile {
     pub servers: BTreeSet<String>,
     /// User-manifest composition evidence, granting no new capabilities.
     pub modules: Vec<crate::harness::ModuleSpec>,
+    /// Digest-admitted sandboxed implementations for this exact profile.
+    pub wasm_modules: smith_module::ModuleComposition,
 }
 
 impl PluginProfile {

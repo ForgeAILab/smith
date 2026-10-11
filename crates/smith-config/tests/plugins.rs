@@ -353,6 +353,7 @@ fn plugin_user_edit_is_previewed_committed_and_rollback_capable() {
             plugins: BTreeMap::from([(
                 name.to_owned(),
                 PluginSection {
+                    modules: Default::default(),
                     enabled: Some(false),
                 },
             )]),
@@ -391,6 +392,7 @@ fn plugin_user_edit_reports_collisions_before_replacing_the_switch() {
         plugins: BTreeMap::from([(
             NAME.to_owned(),
             PluginSection {
+                modules: Default::default(),
                 enabled: Some(false),
             },
         )]),

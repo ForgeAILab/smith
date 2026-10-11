@@ -273,6 +273,36 @@ fn update(
             writeln!(output, "  {label}: {kind} {name}")?;
         }
     }
+    for (label, modules) in [
+        ("added", &diff.added_modules),
+        ("removed", &diff.removed_modules),
+    ] {
+        for module in modules {
+            writeln!(
+                output,
+                "  {label} sandboxed module {}: {}",
+                module.id,
+                module.capabilities.labels().join(", ")
+            )?;
+        }
+    }
+    for change in &diff.changed_modules {
+        let added = change
+            .new
+            .capabilities
+            .labels()
+            .into_iter()
+            .filter(|label| !change.old.capabilities.labels().contains(label))
+            .collect::<Vec<_>>();
+        writeln!(
+            output,
+            "  changed sandboxed module {}: old [{}]; new [{}]; newly requested capabilities [{}] require confirmation",
+            change.name,
+            change.old.capabilities.labels().join(", "),
+            change.new.capabilities.labels().join(", "),
+            added.join(", ")
+        )?;
+    }
     let data = store.data_directory(&update.installed.name)?;
     let root =
         store.install_directory(&update.installed.name, &update.prepared.inventory().digest)?;

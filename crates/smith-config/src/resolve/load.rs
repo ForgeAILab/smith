@@ -968,6 +968,24 @@ pub(super) fn flatten(
     for (name, value) in table {
         prefix.push(name.clone());
         let result = match value {
+            toml::Value::Table(_)
+                if prefix.len() >= 3
+                    && prefix[prefix.len() - 3] == "plugins"
+                    && name == "modules" =>
+            {
+                let key = join_owned(prefix);
+                out.push(Contribution {
+                    source: source_for(layer, path, &key),
+                    key,
+                    value: SettingValue::Text(serde_json::to_string(value).map_err(|error| {
+                        ConfigError::Unrepresentable {
+                            message: error.to_string(),
+                        }
+                    })?),
+                });
+                Ok(())
+            }
+
             // An automatic-approval rule is one security-policy object. Keep
             // the complete ordered rule list as one layered value so a higher
             // layer replaces it rather than accidentally merging individual

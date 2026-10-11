@@ -6,7 +6,10 @@ use super::*;
 
 fn context() -> ModuleContext {
     ModuleContext {
+        is_child_session: false,
+        http: None,
         settings: ModuleSettings::new(),
+        workspace_root: None,
         user_dir: "user".into(),
         posture: ModulePosture::ReadWrite,
         transport: Arc::new(ReplayTransport::single(Vec::new())),

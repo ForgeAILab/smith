@@ -81,11 +81,15 @@ first-party modules, and `--no-default-features` builds retain the core tools.
 See [`docs/modules.md`](docs/modules.md) for the contract and contributor steps.
 
 Installable plugins bundle namespaced skills, prompt commands, and MCP servers
+and sandboxed WASM components
 in the Claude Code layout. `smith plugin add` reviews every component and a digest
 of every plugin file before installation and trust; `/plugins` lists admission
 states and previews user-config enablement changes. Hooks are listed and do not
 run. Local directories, git sources, and marketplaces are supported. See
 [`docs/plugins.md`](docs/plugins.md) for installation and authoring.
+WASM modules have no ambient authority and use confirmed capability grants;
+see [`docs/wasm-modules.md`](docs/wasm-modules.md) and the SDK example.
+The default `wasm-modules` feature can be omitted without removing content plugins.
 
 When ordinary session persistence and protected checkpoints are both
 available, delegated children are durable addressable sessions. `@child-1

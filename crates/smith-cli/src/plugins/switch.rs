@@ -40,6 +40,7 @@ pub(crate) fn prepare_switch(
         plugins: [(
             id.into(),
             PluginSection {
+                modules: Default::default(),
                 enabled: Some(enabled),
             },
         )]

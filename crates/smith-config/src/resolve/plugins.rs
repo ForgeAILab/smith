@@ -118,10 +118,47 @@ pub(super) fn extract_plugins(
     known
         .iter()
         .map(|plugin| {
+            let mut modules = crate::model::PluginModuleRestrictions::new();
+            let mut ignored_module_settings = Vec::new();
+            for key in provenance.keys().filter(|key| key.ends_with(".modules")) {
+                let expected = join_key(&["plugins", &plugin.name, "modules"]);
+                if key != expected && !key.ends_with(&format!(".{expected}")) {
+                    continue;
+                }
+                let explanation = provenance.explain(key)?;
+                for entry in explanation.overridden.iter().rev().chain(std::iter::once(
+                    &super::provenance::Entry {
+                        value: explanation.value.clone(),
+                        source: explanation.source.clone(),
+                    },
+                )) {
+                    match (
+                        &entry.value,
+                        entry.source.layer == Layer::UserFile && key == expected && entry.source.key == expected,
+                    ) {
+                        (SettingValue::Text(text), true) => {
+                            modules = serde_json::from_str(text).map_err(|error| {
+                                ConfigError::InvalidValue {
+                                    source: entry.source.clone(),
+                                    message: error.to_string(),
+                                }
+                            })?;
+                        }
+                        _ => ignored_module_settings.push(format!(
+                            "{} ignored: module capabilities may only be narrowed in the global user plugin table",
+                            entry.source
+                        )),
+                    }
+                }
+            }
+            ignored_module_settings.sort();
+            ignored_module_settings.dedup();
             Ok((
                 plugin.name.clone(),
                 ResolvedPlugin {
                     enabled: required_flag(provenance, &enabled_key(&plugin.name))?,
+                    modules,
+                    ignored_module_settings,
                 },
             ))
         })

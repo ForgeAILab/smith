@@ -6,6 +6,7 @@ members = [
     "crates/smith-runtime",
     "crates/smith-module",
     "crates/smith-wasm-host",
+    "crates/smith-module-sdk",
     "crates/smith-plugin",
     "crates/test-support/module-fixture",
     "crates/modules/image-generation",
@@ -15,6 +16,8 @@ members = [
     "crates/smith-tui",
     "crates/smith-cli",
 ]
+
+exclude = ["crates/smith-wasm-host/tests/guests", "examples/wasm-module-hello"]
 
 [workspace.package]
 version = "0.3.10"
@@ -29,6 +32,9 @@ smith-config = { path = "crates/smith-config", version = "0.3.10" }
 smith-host = { path = "crates/smith-host", version = "0.3.10" }
 smith-runtime = { path = "crates/smith-runtime", version = "0.3.10" }
 smith-module = { path = "crates/smith-module", version = "0.3.10" }
+smith-module-sdk = { path = "crates/smith-module-sdk", version = "0.3.10" }
+jsonschema = { version = "=0.28.3", default-features = false }
+wit-bindgen = { version = "=0.46.0", default-features = false, features = ["macros", "realloc", "std"] }
 smith-wasm-host = { path = "crates/smith-wasm-host", version = "0.3.10" }
 # Patched LTS compatible with Rust 1.88; measured features only (see WASM design gate).
 wasmtime = { version = "=36.0.17", default-features = false, features = ["component-model", "cranelift", "runtime", "std"] }

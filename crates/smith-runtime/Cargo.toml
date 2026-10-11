@@ -47,6 +47,7 @@ zeroize = { workspace = true }
 nix = { version = "0.31", default-features = false, features = ["signal"] }
 
 [dev-dependencies]
+smith-wasm-host = { workspace = true }
 smith-module-image-generation = { workspace = true }
 smith-module-budget-notice = { workspace = true }
 # The integration suite drives the supervisor through a fake connector, so it

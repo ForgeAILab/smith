@@ -509,6 +509,35 @@ is wanted later it gets a new proposal against the then-current contract.
 5. Plugin manifest field, install confirmation, listings.
 6. Guest SDK, example module, CI build, docs.
 
+## Found during implementation
+
+- No WASI is linked. The host exposes only the `smith:module` imports, and a
+  component importing any `wasi:*` interface is refused at load. Guests
+  target `wasm32-unknown-unknown`.
+- A sandboxed module's tools take their authority from the same rule as
+  unreviewed MCP tools; what the guest declares about its own effects is
+  ignored for approval.
+- Module HTTP goes through a narrow `ModuleHttp` service on the module
+  context, over the HTTP client Smith already has. Every redirect is
+  refused, bodies are capped at 1 MiB, and a request needs both the network
+  and the data-egress capability.
+- Capability keys: `workspace_read`, `workspace_write`, `plugin_data_read`,
+  `plugin_data_write`, `session_history`, `network`, `data_egress`. Grants
+  are stored with the installed plugin and admitted only with the confirmed
+  digest. Only the user's global plugin table can narrow them.
+- A module's id is `wasm.` plus hashes of the plugin name and component
+  path. It is stable across installs but not readable; a friendlier id is a
+  follow-up.
+- Tool schemas must be self-contained (no `$ref`). Module log text is
+  withheld; only level and length are recorded. Calls into one module are
+  serialised. Semantic-summary usage records cannot be represented in
+  interface 0.1.
+- Test guests and the example are committed as prebuilt components. Local
+  rebuilds were byte-identical twice, but cross-machine reproducibility is
+  unproven, so CI builds fresh components and tests against those.
+- Three consecutive failures disable a module for the session; health is
+  kept across rebuilds and tracked separately for child sessions.
+
 ## Open Questions
 
 - Default limits (5 s tool deadline, 64 MiB): configurable per plugin by

@@ -75,6 +75,15 @@ pub(crate) fn inventory_components(
                 }),
         )
         .collect::<Vec<_>>();
+    loaded.extend(inventory.modules.iter().map(|module| PluginComponent {
+        kind: "sandboxed module".into(),
+        name: module.id.clone(),
+        detail: Some(format!(
+            "{} · requested: {}",
+            module.wasm,
+            module.capabilities.labels().join(", ")
+        )),
+    }));
     let mut not_loaded = inventory
         .not_loaded
         .iter()
@@ -146,6 +155,8 @@ impl PluginCatalog {
         }
         ActivePlugins {
             entries: self.entries,
+            user_root: self.user_root.clone(),
+            module_switches: BTreeMap::new(),
             active: Vec::new(),
         }
         .report(&self.user_root, switches, unknown, project)
@@ -188,9 +199,72 @@ impl ActivePlugins {
                 }
                 None => (Vec::new(), Vec::new()),
             };
+            if let Some(plugin) = switches.get(&entry.installed.name) {
+                not_loaded.extend(plugin.ignored_module_settings.iter().map(|reason| {
+                    PluginComponent {
+                        kind: "configuration".into(),
+                        name: entry.installed.name.clone(),
+                        detail: Some(reason.clone()),
+                    }
+                }));
+            }
+            for component in loaded
+                .iter_mut()
+                .filter(|component| component.kind == "sandboxed module")
+            {
+                if let Some(inventory) = &entry.inventory {
+                    let module = inventory
+                        .modules
+                        .iter()
+                        .find(|module| module.id == component.name)
+                        .expect("module inventory");
+                    let restriction = switches
+                        .get(&entry.installed.name)
+                        .and_then(|plugin| plugin.modules.get(&module.id));
+                    let grant = super::wasm::narrow(
+                        entry
+                            .installed
+                            .module_grants
+                            .get(&module.id)
+                            .cloned()
+                            .unwrap_or_default(),
+                        restriction,
+                    );
+                    let labels = grant.labels();
+                    let withheld = module
+                        .capabilities
+                        .labels()
+                        .into_iter()
+                        .filter(|label| !labels.contains(label))
+                        .collect::<Vec<_>>();
+                    component.detail = Some(format!(
+                        "{} · granted: {}{}{}",
+                        module.wasm,
+                        labels.join(", "),
+                        if withheld.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" · withheld by the user: {}", withheld.join(", "))
+                        },
+                        if cfg!(feature = "wasm-modules") {
+                            ""
+                        } else {
+                            " · not supported in this build"
+                        }
+                    ));
+                }
+            }
             if state != PluginState::On {
                 not_loaded.extend(loaded.drain(..).map(|mut component| {
-                    component.detail = Some(state.label());
+                    if component.kind == "sandboxed module" {
+                        component.detail = Some(format!(
+                            "{} · {}",
+                            component.detail.as_deref().unwrap_or_default(),
+                            state.label()
+                        ));
+                    } else {
+                        component.detail = Some(state.label());
+                    }
                     component
                 }));
             }
@@ -209,7 +283,7 @@ impl ActivePlugins {
                 not_loaded,
             });
         }
-        Ok(PluginsReport {
+        let mut report = PluginsReport {
             rows,
             unknown: unknown
                 .iter()
@@ -218,6 +292,15 @@ impl ActivePlugins {
                     source: unknown.source.to_string(),
                 })
                 .collect(),
-        })
+        };
+        let modules = crate::modules::plugin_composition(
+            &self.entries,
+            user_root,
+            switches,
+            &self.module_switches,
+            &crate::modules::ModuleSessions::default(),
+        )?;
+        smith_client::plugins_report::apply_module_states(&mut report, &modules.reports);
+        Ok(report)
     }
 }

@@ -36,6 +36,12 @@ pub struct InventoryDifference {
     pub removed_mcp_servers: Vec<McpDeclaration>,
     /// Old and new declarations, including command lines, environment and headers.
     pub changed_mcp_servers: Vec<ComponentChange<McpDeclaration>>,
+    /// Added sandboxed components, with all requested capabilities.
+    pub added_modules: Vec<crate::WasmModuleComponent>,
+    /// Removed sandboxed components.
+    pub removed_modules: Vec<crate::WasmModuleComponent>,
+    /// Changed paths or capability requests, retaining both inventories.
+    pub changed_modules: Vec<ComponentChange<crate::WasmModuleComponent>>,
     /// Newly present components that will not load.
     pub added_not_loaded: Vec<NotLoadedComponent>,
     /// Components no longer listed as not loaded.
@@ -117,7 +123,35 @@ impl InventoryDifference {
             .map(|s| (s.name.clone(), s))
             .collect();
         let (added, removed, changed) = names(&old_mcp, &new_mcp);
+        let old_modules: BTreeMap<_, _> = old.modules.iter().map(|m| (m.id.clone(), m)).collect();
+        let new_modules: BTreeMap<_, _> = new.modules.iter().map(|m| (m.id.clone(), m)).collect();
+        // Installation paths differ between snapshots; compare portable declarations.
+        let changed_modules = new_modules
+            .iter()
+            .filter_map(|(id, module)| {
+                let prior = old_modules.get(id)?;
+                (prior.capabilities != module.capabilities
+                    || prior.wasm != module.wasm
+                    || prior.digest != module.digest)
+                    .then(|| ComponentChange {
+                        name: id.clone(),
+                        old: (*prior).clone(),
+                        new: (*module).clone(),
+                    })
+            })
+            .collect();
         Self {
+            added_modules: new_modules
+                .iter()
+                .filter(|(id, _)| !old_modules.contains_key(*id))
+                .map(|(_, m)| (*m).clone())
+                .collect(),
+            removed_modules: old_modules
+                .iter()
+                .filter(|(id, _)| !new_modules.contains_key(*id))
+                .map(|(_, m)| (*m).clone())
+                .collect(),
+            changed_modules,
             added_skills,
             removed_skills,
             changed_skills,

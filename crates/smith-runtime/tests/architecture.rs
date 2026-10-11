@@ -44,6 +44,7 @@ fn the_full_runtime_facade_is_used_only_by_composition_and_module_contracts() {
         BTreeSet::from([
             "crates/smith-runtime".to_owned(),
             "crates/smith-module".to_owned(),
+            "crates/smith-wasm-host".to_owned(),
             "crates/modules/image-generation".to_owned(),
             "crates/modules/budget-notice".to_owned()
         ]),

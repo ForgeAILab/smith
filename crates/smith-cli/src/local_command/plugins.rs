@@ -13,7 +13,11 @@ pub(super) fn command(
     action: PluginsAction,
 ) -> CommandReport {
     let result = (|| {
-        let report = context.plugins_report().map_err(anyhow::Error::msg)?;
+        let mut report = context.plugins_report().map_err(anyhow::Error::msg)?;
+        smith_client::plugins_report::apply_module_states(
+            &mut report,
+            host.runtime().module_report(),
+        );
         match action {
             PluginsAction::List => Ok(CommandReport::Show(LocalResult::Plugins(Box::new(report)))),
             PluginsAction::Switch { name, enabled } => {

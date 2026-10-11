@@ -50,7 +50,20 @@ pub(super) fn prepare(
     semantic_summary_enabled: bool,
     session_history: Arc<crate::session_history::LiveSessionHistory>,
 ) -> Result<MountPlan, FactoryError> {
-    if request.modules.compiled.is_empty() && request.modules.known.is_empty() {
+    let mut composition = request.modules.clone();
+    if let Some(profile) = request
+        .plugin_profiles
+        .get(&request.config.agent.profile.name)
+    {
+        composition
+            .compiled
+            .extend(profile.wasm_modules.compiled.clone());
+        composition.known.extend(profile.wasm_modules.known.clone());
+        composition
+            .enabled
+            .extend(profile.wasm_modules.enabled.clone());
+    }
+    if composition.compiled.is_empty() && composition.known.is_empty() {
         return Ok(MountPlan::default());
     }
     let context = context(
@@ -60,9 +73,59 @@ pub(super) fn prepare(
         semantic_summary_enabled,
         session_history,
     )?;
-    let mut plan = mount_modules(&request.modules, &context);
+    let mut plan = mount_modules(&composition, &context);
+    apply_sandbox_authority(&mut plan);
     enforce_posture(&mut plan, context.posture);
+    reject_sandbox_tool_collisions(&mut plan, request);
+    reject_sandbox_pipeline_ordering(&mut plan);
     Ok(plan)
+}
+
+/// Guest declarations cannot classify their own authority. Use exactly the
+/// shared MCP policy for an unreviewed external service, including preparation.
+pub(crate) fn apply_sandbox_authority(plan: &mut MountPlan) {
+    for module in &mut plan.mounted {
+        if !matches!(module.descriptor.origin, ModuleOrigin::Sandboxed { .. }) {
+            continue;
+        }
+        let policy = agent_runtime_mcp::McpServerConfig::stdio(
+            &module.descriptor.id,
+            format!("wasm:{}", module.descriptor.id),
+        );
+        for contribution in &mut module.contributions {
+            if let ModuleContribution::Tool(tool) = contribution {
+                let mut spec = tool.spec();
+                spec.effects = policy.resolved_effect_floor();
+                spec.permission_upper_bound = spec.effects.permission_upper_bound();
+                *tool = Arc::new(SandboxTool {
+                    inner: tool.clone(),
+                    spec,
+                });
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct SandboxTool {
+    inner: Arc<dyn Tool>,
+    spec: agent_runtime_core::tool::ToolSpec,
+}
+
+#[async_trait::async_trait]
+impl Tool for SandboxTool {
+    fn spec(&self) -> agent_runtime_core::tool::ToolSpec {
+        self.spec.clone()
+    }
+
+    async fn invoke(
+        &self,
+        prepared: agent_runtime_core::tool::PreparedToolCall,
+        context: &agent_runtime_core::tool::InvocationContext,
+    ) -> Result<agent_runtime_core::tool::ToolOutcome, agent_runtime_core::error::RuntimeError>
+    {
+        self.inner.invoke(prepared, context).await
+    }
 }
 
 pub(crate) fn enforce_posture(plan: &mut MountPlan, posture: ModulePosture) {
@@ -89,17 +152,24 @@ pub(super) fn context(
     semantic_summary_enabled: bool,
     session_history: Arc<crate::session_history::LiveSessionHistory>,
 ) -> Result<ModuleContext, FactoryError> {
+    let transport = Arc::new(
+        ReqwestTransport::new(request.transport.clone()).map_err(FactoryError::Transport)?,
+    );
     Ok(ModuleContext {
         settings: ModuleSettings::new(),
+        is_child_session: matches!(request.surface, super::HostSurface::Child),
+        workspace_root: request
+            .workspace
+            .as_ref()
+            .map(|workspace| std::path::PathBuf::from(workspace.root())),
         user_dir: request.config.user_dir.clone(),
         posture: if request.config.agent.active_posture().is_read_only() {
             ModulePosture::ReadOnly
         } else {
             ModulePosture::ReadWrite
         },
-        transport: Arc::new(
-            ReqwestTransport::new(request.transport.clone()).map_err(FactoryError::Transport)?,
-        ),
+        transport: transport.clone(),
+        http: Some(transport),
         image_binding,
         session_history: Some(session_history),
         semantic_summary_enabled,
@@ -147,7 +217,9 @@ pub(super) fn tools(plan: &MountPlan) -> Vec<(Arc<dyn Tool>, RegistrySource)> {
         .flat_map(|module| {
             let source = match module.descriptor.origin {
                 ModuleOrigin::FirstParty => RegistrySource::BuiltIn,
-                ModuleOrigin::ThirdParty { .. } => RegistrySource::Host,
+                ModuleOrigin::ThirdParty { .. } | ModuleOrigin::Sandboxed { .. } => {
+                    RegistrySource::Host
+                }
             };
             module
                 .contributions
@@ -198,6 +270,14 @@ fn module_spec(module: &MountedModule) -> Result<ModuleSpec, FactoryError> {
             format!("smith/{}", module.descriptor.id),
             ModuleProvenance::BuiltIn,
         ),
+        ModuleOrigin::Sandboxed { plugin, .. } => (
+            format!(
+                "wasm/{}/{}",
+                &smith_config::trust::ContentDigest::of(plugin.as_bytes()).as_hex()[..16],
+                module.descriptor.id
+            ),
+            ModuleProvenance::UserManifest(plugin.clone()),
+        ),
         ModuleOrigin::ThirdParty { crate_name } => (
             format!(
                 "third-party/{}/{}",
@@ -207,14 +287,26 @@ fn module_spec(module: &MountedModule) -> Result<ModuleSpec, FactoryError> {
             ModuleProvenance::CompiledThirdParty(crate_name.clone()),
         ),
     };
+    let (trust, requested, granted) = match &module.descriptor.origin {
+        ModuleOrigin::Sandboxed {
+            requested_capabilities,
+            granted_capabilities,
+            ..
+        } => (
+            ModuleTrust::Sandboxed,
+            requested_capabilities.clone(),
+            granted_capabilities.clone(),
+        ),
+        _ => (ModuleTrust::TrustedNative, required.clone(), required),
+    };
     Ok(ModuleSpec {
         id: ModuleId::parse(id)?,
         revision: ModuleRevision::parse(module.revision.clone())?,
         provenance,
-        trust: ModuleTrust::TrustedNative,
+        trust,
         contributions,
-        requested_capabilities: required.clone(),
-        granted_capabilities: required,
+        requested_capabilities: requested,
+        granted_capabilities: granted,
     })
 }
 
@@ -248,4 +340,204 @@ pub(crate) fn apply(mut builder: RuntimeBuilder, plan: &MountPlan) -> RuntimeBui
         };
     }
     builder
+}
+
+fn reject_sandbox_tool_collisions(plan: &mut MountPlan, request: &RuntimeRequest) {
+    let mut taken = super::capabilities::tools(request)
+        .iter()
+        .map(|tool| tool.spec().name)
+        .collect::<std::collections::BTreeSet<_>>();
+    if let Some(mcp) = &request.mcp {
+        taken.extend(mcp.tools().iter().map(|tool| tool.spec().name));
+    }
+    reject_sandbox_tool_names(plan, taken);
+}
+
+pub(crate) fn reject_sandbox_tool_names(
+    plan: &mut MountPlan,
+    mut taken: std::collections::BTreeSet<String>,
+) {
+    // Native modules keep their existing registration semantics and take precedence.
+    for module in &plan.mounted {
+        if !matches!(module.descriptor.origin, ModuleOrigin::Sandboxed { .. }) {
+            taken.extend(module.contributions.iter().filter_map(|c| match c {
+                ModuleContribution::Tool(tool) => Some(tool.spec().name),
+                _ => None,
+            }));
+        }
+    }
+    plan.mounted.retain(|module| {
+        if !matches!(module.descriptor.origin, ModuleOrigin::Sandboxed { .. }) {
+            return true;
+        }
+        let names = module
+            .contributions
+            .iter()
+            .filter_map(|c| match c {
+                ModuleContribution::Tool(tool) => Some(tool.spec().name),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if let Some(name) = names.iter().find(|name| taken.contains(*name)) {
+            let reason = format!("sandboxed tool collision: {name}");
+            if let Some(report) = plan
+                .report
+                .iter_mut()
+                .find(|report| report.descriptor.id == module.descriptor.id)
+            {
+                report.state = smith_module::ModuleState::Failed {
+                    reason: reason.clone(),
+                };
+                if let Some(health) = &report.health {
+                    health.fail(reason);
+                }
+            }
+            false
+        } else {
+            taken.extend(names);
+            true
+        }
+    });
+}
+
+pub(crate) fn reject_sandbox_pipeline_ordering(plan: &mut MountPlan) {
+    let has_guest_pipeline = |module: &MountedModule| {
+        matches!(module.descriptor.origin, ModuleOrigin::Sandboxed { .. })
+            && module
+                .contributions
+                .iter()
+                .any(|c| matches!(c, ModuleContribution::Pipeline(_)))
+    };
+    if !plan.mounted.iter().any(has_guest_pipeline) {
+        return;
+    }
+    let mut builder = agent_runtime::harness::HarnessPipelineBuilder::new();
+    for contribution in plan.mounted.iter().flat_map(|module| &module.contributions) {
+        if let ModuleContribution::Pipeline(component) = contribution {
+            match component {
+                PipelineComponent::HistoryProjector(c) => {
+                    builder.history_projector(c.clone());
+                }
+                PipelineComponent::ContextContributor(c) => {
+                    builder.context_contributor(c.clone());
+                }
+                PipelineComponent::ToolViewResolver(c) => {
+                    builder.tool_view_resolver(c.clone());
+                }
+                PipelineComponent::ModelInterceptor(c) => {
+                    builder.model_interceptor(c.clone());
+                }
+                PipelineComponent::ToolOutputProcessor(c) => {
+                    builder.tool_output_processor(c.clone());
+                }
+                PipelineComponent::TurnCommitHook(c) => {
+                    builder.turn_commit_hook(c.clone());
+                }
+            }
+        }
+    }
+    if let Err(error) = builder.seal() {
+        // Ordering is validated by the shared pipeline, before guest metadata
+        // can make RuntimeBuilder fail and prevent the session from starting.
+        plan.mounted.retain(|module| {
+            if !has_guest_pipeline(module) {
+                return true;
+            }
+            if let Some(report) = plan
+                .report
+                .iter_mut()
+                .find(|r| r.descriptor.id == module.descriptor.id)
+            {
+                let reason = format!("sandboxed pipeline ordering rejected: {error}");
+                if let Some(health) = &report.health {
+                    health.fail(reason.clone());
+                }
+                report.state = smith_module::ModuleState::Failed { reason };
+            }
+            false
+        });
+    }
+}
+
+/// Host protection, not a guest contribution: apply failure state to the actual
+/// session's ability view when a safe-boundary rebuild creates that view.
+pub(crate) fn sandbox_health_filter(
+    composition: &smith_module::ModuleComposition,
+    plan: &MountPlan,
+    child: bool,
+) -> Option<Arc<dyn agent_runtime::harness::ToolViewResolver>> {
+    let modules = plan
+        .mounted
+        .iter()
+        .filter(|module| matches!(module.descriptor.origin, ModuleOrigin::Sandboxed { .. }))
+        .filter_map(|module| {
+            let health = composition
+                .compiled
+                .iter()
+                .find(|compiled| compiled.module.id() == module.descriptor.id)?
+                .module
+                .session_health()?;
+            let ids = module
+                .contributions
+                .iter()
+                .filter_map(|contribution| match contribution {
+                    ModuleContribution::Tool(tool) => {
+                        Some(agent_runtime::registry::RegistryId::tool(tool.spec().name))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            Some(SandboxHealthEntry { health, ids })
+        })
+        .collect::<Vec<_>>();
+    (!modules.is_empty()).then(|| {
+        Arc::new(SandboxHealthView { modules, child })
+            as Arc<dyn agent_runtime::harness::ToolViewResolver>
+    })
+}
+
+#[derive(Debug)]
+struct SandboxHealthEntry {
+    health: Arc<smith_module::ModuleHealth>,
+    ids: Vec<agent_runtime::registry::RegistryId>,
+}
+#[derive(Debug)]
+struct SandboxHealthView {
+    modules: Vec<SandboxHealthEntry>,
+    child: bool,
+}
+#[async_trait::async_trait]
+impl agent_runtime::harness::ToolViewResolver for SandboxHealthView {
+    fn descriptor(&self) -> agent_runtime::harness::ComponentDescriptor {
+        agent_runtime::harness::ComponentDescriptor::new(
+            "smith.wasm-health",
+            agent_runtime::registry::RegistryRevision::new("1"),
+        )
+    }
+    async fn resolve(
+        &self,
+        view: &agent_runtime::harness::ToolViewContext,
+    ) -> Result<agent_runtime::harness::ToolViewPatch, agent_runtime_core::error::RuntimeError>
+    {
+        let deny = self
+            .modules
+            .iter()
+            .filter(|entry| {
+                if self.child {
+                    entry
+                        .health
+                        .child_session(&view.session)
+                        .failure()
+                        .is_some()
+                } else {
+                    entry.health.failure().is_some()
+                }
+            })
+            .flat_map(|entry| entry.ids.clone())
+            .collect();
+        Ok(agent_runtime::harness::ToolViewPatch {
+            deny,
+            ..Default::default()
+        })
+    }
 }

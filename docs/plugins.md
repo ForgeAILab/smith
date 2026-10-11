@@ -162,3 +162,5 @@ A plugin contributes existing content catalogs without native code in Smith.
 A [module](modules.md) is a compiled Rust component with explicit build and mount
 contracts. Use a plugin for portable content and MCP declarations; use a module
 for native tools or pipeline behavior.
+
+Sandboxed executable components are described in [WASM modules](wasm-modules.md).

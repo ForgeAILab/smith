@@ -34,3 +34,5 @@ pub mod resolve;
 pub mod setup;
 pub mod trust;
 pub mod user_config;
+
+mod plugin_modules;

@@ -8,9 +8,35 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
 
 [dependencies]
 smith-module = { workspace = true }
 wasmtime = { workspace = true }
+agent-runtime = { workspace = true }
+agent-runtime-core = { workspace = true }
+agent-runtime-mcp = { workspace = true }
+agent-runtime-registry = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+jsonschema = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+futures-util = { workspace = true }
+url = { workspace = true }
+cap-std = { workspace = true }
+
+tracing = { workspace = true }
+rustix = { workspace = true }
+tempfile = { workspace = true }
+
+[dev-dependencies]
+agent-runtime-testkit = { workspace = true }

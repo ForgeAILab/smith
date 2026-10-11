@@ -1,18 +1,29 @@
 //! Versioned WASM component engine, independent of configuration and clients.
 
 #[allow(missing_docs, unreachable_pub)]
-mod bindings {
+pub(crate) mod bindings {
     wasmtime::component::bindgen!({
         path: "wit",
         world: "module",
+        additional_derives: [serde::Serialize, serde::Deserialize],
     });
 }
+
+mod adapter;
+mod bounds;
+mod broker;
+mod engine;
+mod limits;
+mod projection;
+pub use adapter::{COMPONENT_CACHE_DIRECTORY, CapabilityGrant, WasmModule, WasmModuleConfig};
+pub use engine::WasmEngine;
+pub use limits::{WasmError, WasmLimits};
 
 // Generated with `wasm-tools parse tests/fixtures/diagnostic.wat`; the engine
 // consumes binary bytes, so no production WAT parser is needed.
 const DIAGNOSTIC_COMPONENT: &[u8] = include_bytes!("../tests/fixtures/diagnostic.wasm");
 
-fn engine() -> wasmtime::Result<wasmtime::Engine> {
+fn diagnostic_engine() -> wasmtime::Result<wasmtime::Engine> {
     let mut config = wasmtime::Config::new();
     config.wasm_component_model(true).epoch_interruption(true);
     wasmtime::Engine::new(&config)
@@ -21,7 +32,7 @@ fn engine() -> wasmtime::Result<wasmtime::Engine> {
 /// Exercises component compilation and instantiation for build diagnostics.
 /// Keeping this reachable from the CLI includes the engine in size measurements.
 pub fn diagnostic() -> wasmtime::Result<&'static str> {
-    let engine = engine()?;
+    let engine = diagnostic_engine()?;
     let component = wasmtime::component::Component::new(&engine, DIAGNOSTIC_COMPONENT)?;
     let linker = wasmtime::component::Linker::<()>::new(&engine);
     let mut store = wasmtime::Store::new(&engine, ());
