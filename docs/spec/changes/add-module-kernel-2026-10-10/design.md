@@ -201,6 +201,25 @@ serializable inputs and outputs so a WASM adapter can implement it.
 3. Add `/modules` and the headless listing last, once there is something to
    list.
 
+## Found during implementation
+
+- The budget notice placed its warning in `ContextLane::TailContext` with
+  `FragmentKind::DeveloperInstruction`. The pinned Agent Runtime driver
+  (`agent/driver/mod.rs`, `validate_contributed_fragment`) accepts only
+  `Continuation` in that lane, so the notice would have failed the first
+  time it fired. The port uses `Continuation`. No production session was
+  affected: the CLI never enables semantic summary, so the notice was, and
+  still is, dormant there; `/modules` now shows it as inactive with that
+  reason.
+- Module crates import the six pipeline traits from the full Agent Runtime
+  facade, the only place they are exported. The architecture test that
+  limits facade use therefore names `smith-module` and each module crate.
+  Follow-up: admit `crates/modules/*` structurally, or re-export the traits
+  from `smith-module`.
+- `smith config modules` needs a resolvable provider, like
+  `smith config explain`; a fresh install with no provider cannot list
+  modules yet.
+
 ## Open Questions
 
 - WASM or the TypeScript subprocess host as the code tier for third-party

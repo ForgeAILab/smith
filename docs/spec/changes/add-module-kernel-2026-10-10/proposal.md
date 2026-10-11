@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-10T22:30:05Z
-updated_at: 2026-10-10T22:36:06Z
+updated_at: 2026-10-11T00:41:52Z
 ---
 
 ## Why
@@ -44,7 +44,9 @@ keys and is removed with this proposal (0 of 13 tasks were done).
 - Ported features keep their existing configuration key as an alias of the
   module switch, so no user configuration breaks.
 - **BREAKING** for embedders only: `Contribution` and `ModuleProvenance` in
-  `smith-runtime` gain variants.
+  `smith-runtime` gain variants, and a host that builds a `RuntimeRequest`
+  directly gets neither image generation nor the budget notice unless it
+  passes them in `RuntimeRequest.modules`.
 
 ## Out of Scope
 
