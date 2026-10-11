@@ -42,6 +42,8 @@
                  [deny ID|allow ID]
   /skills        Show indexed skills, or trust one this project ships
                  [trust NAME]
+  /commands      Show file commands, trust one, or reload the catalog
+                 [trust NAME|reload]
   /diff          Inspect workspace changes
                  [SCOPE]
   /review        Run a read-only change review
@@ -90,8 +92,6 @@
   @                         Complete files and agents; @@ sends a literal @
   !                         Run a local shell command; !! sends a literal !
   //                        Send text with a leading slash
-
-
 
 
 

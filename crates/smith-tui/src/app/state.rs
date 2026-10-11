@@ -93,6 +93,18 @@ pub struct PreparedSubmission {
 }
 
 impl PreparedSubmission {
+    /// Builds an ordinary prompt from a host-validated file expansion, with no I/O.
+    pub fn from_file_command(display_text: String, prompt: String) -> Self {
+        Self {
+            display_text,
+            committed_text: prompt.clone(),
+            expanded_text: prompt,
+            files: Vec::new(),
+            images: Vec::new(),
+            pastes: Vec::new(),
+        }
+    }
+
     /// Exact compact text shown in the composer and queue preview.
     pub fn display_text(&self) -> &str {
         &self.display_text
@@ -199,6 +211,17 @@ pub enum Action {
         /// Whole-turn or active-turn intent.
         target: SubmissionTarget,
     },
+    /// Ask the host to read and validate a file command before submission.
+    FileCommand {
+        /// Exactly what the user typed.
+        typed: String,
+        /// Catalog name without the slash.
+        name: String,
+        /// Arguments, with composer paste placeholders expanded.
+        arguments: String,
+        /// Queue a whole turn instead of steering the current one.
+        queue: bool,
+    },
     /// Execute one explicit local shell shortcut without provider spend.
     RunShell {
         /// Command after the leading `!` marker.
@@ -259,6 +282,13 @@ pub enum Action {
     TrustSkill {
         /// The project skill's name.
         skill: String,
+    },
+    /// Record trust for exactly the project command content shown in confirmation.
+    TrustCommand {
+        /// Project command name.
+        name: String,
+        /// Content identity the user confirmed.
+        digest: String,
     },
     /// Start the already-confirmed provider-backed read-only review.
     StartReview {
@@ -763,6 +793,8 @@ pub struct App {
     pub cache_miss_notices: bool,
     /// The input buffer.
     pub composer: Composer,
+    /// Host-discovered file metadata; no file reads happen in the app.
+    pub command_catalog: smith_client::file_commands::CommandCatalog,
     /// The current overlay, if any.
     pub overlay: Option<Overlay>,
     /// Quiet-window input guard for the visible consequential prompt.

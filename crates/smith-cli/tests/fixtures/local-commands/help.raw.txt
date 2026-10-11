@@ -28,6 +28,7 @@ Primary
 /modules [ID on|off] — List modules or turn one on or off
 /capabilities [deny ID|allow ID] — Show capabilities, or deny one for this session
 /skills [trust NAME] — Show indexed skills, or trust one this project ships
+/commands [trust NAME|reload] — Show file commands, trust one, or reload the catalog
 /diff [SCOPE] — Inspect workspace changes
 /review [SCOPE] — Run a read-only change review
 /undo — Undo the last attributable turn

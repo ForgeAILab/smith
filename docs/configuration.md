@@ -32,17 +32,20 @@ smith config explain context.output_reserve --profile work
 
 ### Directories beside the configuration
 
-Two locations are read by their fixed paths rather than through the layered
-settings, because a setting that relocates them would be a setting that
+Skills and file commands are read by their fixed paths rather than through
+the layered settings, because a setting that relocates them would be a setting that
 relocates what Smith trusts:
 
 | Path | Holds |
 | --- | --- |
 | `~/.smith/skills/<name>/SKILL.md` | User skills, available in every project |
 | `<project>/.smith/skills/<name>/SKILL.md` | Project skills, gated by project trust |
+| `~/.smith/commands/<name>.md` | User prompt templates, available in every project |
+| `<project>/.smith/commands/<name>.md` | Project prompt templates, gated by project trust |
 
-Smith creates neither directory. See [Skills](skills.md) for the file format,
-the bounds, and how a project skill comes to be trusted.
+Smith creates none of these directories. See [Skills](skills.md) and
+[File commands](skills.md#file-commands) for the file formats, bounds, and
+project trust decisions.
 
 Environment names are the uppercased dotted key with `SMITH_` prepended, for
 example `SMITH_CONTEXT_REASONING_RESERVE`,

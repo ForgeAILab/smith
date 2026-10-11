@@ -17,6 +17,7 @@ mod capabilities;
 pub(super) mod context;
 pub(super) mod diagnostics;
 mod diff;
+pub(crate) mod file_commands;
 mod goal;
 pub(super) mod mcp;
 mod modules;
@@ -42,12 +43,14 @@ pub(super) async fn handle_local_command(
     project: &std::path::Path,
     mcp: Option<&crate::mcp::McpContext>,
     skills: &crate::skills::SkillContext,
+    commands: &file_commands::CommandContext,
     command: HostCommand,
 ) {
     let report = match command {
         HostCommand::Skills(action) => {
             skills::command(skills, host.runtime().skill_index(), action)
         }
+        HostCommand::Commands(action) => file_commands::command(commands, app, action),
         HostCommand::Mcp(action) => mcp::command(mcp, action),
         HostCommand::Modules(action) => modules::command(host, action),
         // The TUI turns `deny` and `allow` into a session rebuild before they
@@ -103,6 +106,11 @@ pub(super) enum CommandReport {
         request: smith_client::commands::ModuleSwitchRequest,
         preview: String,
     },
+    CommandTrust {
+        name: String,
+        content: String,
+        digest: String,
+    },
     ReviewConfirmation(ReviewPreview),
     UndoConfirmation(RecoveryPreview),
     RedoConfirmation(RecoveryPreview),
@@ -128,6 +136,11 @@ impl CommandReport {
             Self::SkillTrust { skill, content } => app.confirm_skill_trust(skill, content),
             Self::McpTrust { server, content } => app.confirm_mcp_trust(server, content),
             Self::ModuleSwitch { request, preview } => app.confirm_module_switch(request, preview),
+            Self::CommandTrust {
+                name,
+                content,
+                digest,
+            } => app.confirm_command_trust(name, content, digest),
             Self::ReviewConfirmation(preview) => app.confirm_review(preview),
             Self::UndoConfirmation(preview) => app.confirm_undo(preview),
             Self::RedoConfirmation(preview) => app.confirm_redo(preview),

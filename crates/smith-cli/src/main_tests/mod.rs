@@ -103,6 +103,9 @@ fn git(project: &std::path::Path, arguments: &[&str]) {
 mod cross_provider;
 #[cfg(test)]
 #[allow(clippy::wildcard_imports)]
+mod file_commands;
+#[cfg(test)]
+#[allow(clippy::wildcard_imports)]
 mod fixtures;
 #[cfg(test)]
 #[allow(clippy::wildcard_imports)]

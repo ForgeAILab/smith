@@ -72,6 +72,9 @@ pub(super) fn fixture_raw_and_view(
                     LocalResult::Skills(report) => {
                         smith_client::skills_report::render_plain(report)
                     }
+                    LocalResult::Commands(report) => {
+                        smith_client::commands_report::render_plain(report)
+                    }
                     LocalResult::Diff(report) => smith_client::diff_report::render_plain(report),
                     LocalResult::Review(report) => {
                         smith_client::review_report::render_plain(report)
@@ -127,6 +130,7 @@ pub(super) fn fixture_raw_and_view(
                     LocalResult::Skills(report) => {
                         LocalResult::Skills(Box::new(fixture_skills_view(report, normalizer)))
                     }
+                    LocalResult::Commands(report) => LocalResult::Commands(report.clone()),
                     LocalResult::Diff(report) => {
                         LocalResult::Diff(Box::new(fixture_diff_view(report, normalizer)))
                     }

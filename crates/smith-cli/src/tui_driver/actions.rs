@@ -76,6 +76,37 @@ impl TuiLoop<'_> {
     async fn on_action(&mut self, action: Action) -> Option<InteractiveExit> {
         match action {
             Action::Submit { submission, target } => self.on_submit(submission, target).await,
+            Action::FileCommand {
+                typed,
+                name,
+                arguments,
+                queue,
+            } => match self.commands.prepare(&self.app, typed, &name, &arguments) {
+                Ok(submission) if queue => {
+                    self.host.set_goal_continuation_enabled(false);
+                    self.app.queue_prepared(submission);
+                }
+                Ok(submission) => {
+                    let Action::Submit { submission, target } =
+                        self.app.submit_prepared(submission)
+                    else {
+                        unreachable!("prepared prompt produces a submission");
+                    };
+                    self.on_submit(submission, target).await;
+                }
+                Err(error) => self.app.transcript.push_error(error),
+            },
+            Action::TrustCommand { name, digest } => {
+                let report = match self.commands.trust(&name, &digest) {
+                    Ok(report) => {
+                        self.app.set_command_catalog(self.commands.catalog());
+                        report
+                    }
+                    Err(error) => smith_client::commands_report::CommandsReport::Error(error),
+                };
+                self.app
+                    .show_local_report(LocalResult::Commands(Box::new(report)));
+            }
             Action::RunShell { command } => self.on_run_shell(command).await,
             Action::Interrupt => self.on_interrupt(),
             Action::BackgroundShell => self.on_background_shell(),
@@ -233,6 +264,7 @@ impl TuiLoop<'_> {
             self.project,
             self.mcp.as_deref(),
             &self.skills,
+            &self.commands,
             command,
         )
         .await;

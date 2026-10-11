@@ -13,10 +13,12 @@ use smith_runtime::rotation::SharedPool;
 use crate::cli::OutputFormat;
 
 mod background;
+mod file_commands;
 mod fold;
 mod output;
 mod run_flow;
 
+pub(crate) use file_commands::prepare_prompt;
 use run_flow::run_with_io;
 
 /// Version of Smith's result/event wrappers, independent of runtime events.

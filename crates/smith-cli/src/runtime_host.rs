@@ -70,6 +70,8 @@ pub(super) struct StartedHost {
     pub(super) mcp: Option<Arc<crate::mcp::McpContext>>,
     /// The skills this composition indexed, and the files it refused.
     pub(super) skills: Arc<crate::skills::SkillContext>,
+    /// File commands retained for this host composition.
+    pub(super) commands: Arc<crate::local_command::file_commands::CommandContext>,
     /// Layered local cache-miss notice policy.
     pub(super) cache_miss_notices: bool,
 }
@@ -173,6 +175,15 @@ pub(super) async fn start_host(
     .context("discovering skills")?;
     runtime.skills = skills;
     let skill_context = Arc::new(skill_context);
+    let commands = Arc::new(
+        crate::local_command::file_commands::CommandContext::discover(
+            &resolution.layout.user_dir,
+            &project,
+        )
+        .map_err(|error| anyhow::anyhow!("{error}"))
+        .context("discovering commands")?,
+    );
+    let command_modules = smith_client::file_commands::contribution_modules(&commands.catalog());
     let persistence_redactor = DefaultRedactor::new();
     runtime.persistence_redactor = Some(persistence_redactor.clone());
     for profile in agents
@@ -399,10 +410,13 @@ pub(super) async fn start_host(
             .settle(Duration::from_millis(budget))
             .await;
     }
-    let host = smith_runtime::host::start(request)
-        .await
-        .map_err(anyhow::Error::new)
-        .context("starting the Smith session")?;
+    let host = Box::pin(smith_runtime::host::start_with_modules(
+        request,
+        command_modules,
+    ))
+    .await
+    .map_err(anyhow::Error::new)
+    .context("starting the Smith session")?;
     let sessions = smith_runtime::host::list(&resolution.config, &project)
         .await
         .map_err(|error| anyhow::anyhow!("{error}"))
@@ -425,6 +439,7 @@ pub(super) async fn start_host(
         catalog,
         mcp,
         skills: skill_context,
+        commands,
         cache_miss_notices,
     })
 }
@@ -675,6 +690,7 @@ async fn run_interactive_hosts(
             accounts,
             mcp: started_mcp,
             skills,
+            commands,
             cache_miss_notices,
             ..
         } = started;
@@ -711,6 +727,7 @@ async fn run_interactive_hosts(
                 catalog: catalog.clone(),
                 mcp: mcp.clone(),
                 skills,
+                commands,
                 capability_denials: args.selection.capability_denials.clone(),
             },
             PresentationOptions {

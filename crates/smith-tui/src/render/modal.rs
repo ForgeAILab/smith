@@ -383,7 +383,7 @@ pub(super) fn draw_palette(
     error: Option<&str>,
     theme: Theme,
 ) {
-    let matches = commands::matches(app.composer.text());
+    let matches = commands::matches_with(app.composer.text(), &app.command_catalog);
     let mut lines = Vec::new();
     if matches.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -393,7 +393,7 @@ pub(super) fn draw_palette(
     } else {
         let error_rows = usize::from(error.is_some());
         let selected = selected.min(matches.len().saturating_sub(1));
-        let detail = matches[selected].argument_hint;
+        let detail = palette_detail(matches[selected]);
         let detail_rows = usize::from(!detail.is_empty());
         let capacity = usize::from(area.height).saturating_sub(error_rows + detail_rows);
         let visible = capacity.min(MAX_VISIBLE_PALETTE_ROWS).min(matches.len());
@@ -404,14 +404,25 @@ pub(super) fn draw_palette(
             .iter()
             .skip(start)
             .take(visible)
-            .map(|command| command.name.width() + 1)
+            .map(|command| command.name().width() + 1)
             .max()
             .unwrap_or(0);
         for (index, command) in matches.into_iter().enumerate().skip(start).take(visible) {
             lines.push(list_row(
-                &format!("/{}", command.name),
-                command.description,
-                "",
+                &format!("/{}", command.name()),
+                &match command {
+                    commands::MenuRow::File(entry)
+                        if entry.state != smith_client::file_commands::CommandState::Runnable =>
+                    {
+                        format!(
+                            "{} · {}",
+                            command.description(),
+                            entry.state.reason(command.name())
+                        )
+                    }
+                    _ => command.description().to_owned(),
+                },
+                command.layer_label().unwrap_or_default(),
                 index == selected,
                 name_width,
                 area.width,
@@ -423,7 +434,7 @@ pub(super) fn draw_palette(
                 theme,
             ));
             if index == selected && !detail.is_empty() {
-                lines.push(detail_line(detail, name_width, area.width, theme));
+                lines.push(detail_line(&detail, name_width, area.width, theme));
             }
         }
     }
@@ -439,11 +450,28 @@ pub(super) fn draw_palette(
     frame.render_widget(Paragraph::new(lines), area);
 }
 
+fn palette_detail(command: commands::MenuRow<'_>) -> String {
+    let hint = command.argument_hint().unwrap_or_default();
+    match command {
+        commands::MenuRow::File(entry)
+            if entry.state != smith_client::file_commands::CommandState::Runnable =>
+        {
+            let reason = entry.state.reason(command.name());
+            if hint.is_empty() {
+                reason
+            } else {
+                format!("{hint} · {reason}")
+            }
+        }
+        _ => hint.to_owned(),
+    }
+}
+
 pub(super) fn desired_palette_rows(app: &App, selected: usize, error: Option<&str>) -> u16 {
-    let matches = commands::matches(app.composer.text());
+    let matches = commands::matches_with(app.composer.text(), &app.command_catalog);
     let detail = matches
         .get(selected.min(matches.len().saturating_sub(1)))
-        .is_some_and(|command| !command.argument_hint.is_empty());
+        .is_some_and(|command| !palette_detail(*command).is_empty());
     let rows = matches.len().clamp(1, MAX_VISIBLE_PALETTE_ROWS)
         + usize::from(detail)
         + usize::from(error.is_some());

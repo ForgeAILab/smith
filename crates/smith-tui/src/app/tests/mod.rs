@@ -375,6 +375,7 @@ mod tests {
 
     include!("reducer.rs");
     include!("pending_input.rs");
+    include!("file_commands.rs");
     include!("input.rs");
     include!("prompts.rs");
     include!("confirmations.rs");

@@ -131,12 +131,18 @@ async fn list(host: &HostSession, fixture: &Fixture, action: ModulesAction) -> A
         fixture.project.path(),
     )
     .unwrap();
+    let commands = crate::local_command::file_commands::CommandContext::discover(
+        &fixture.user_dir(),
+        fixture.project.path(),
+    )
+    .unwrap();
     crate::local_command::handle_local_command(
         &mut app,
         host,
         fixture.project.path(),
         None,
         &skills,
+        &commands,
         HostCommand::Modules(action),
     )
     .await;

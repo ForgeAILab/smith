@@ -396,31 +396,107 @@ impl App {
         }))
     }
 
-    pub(super) fn queue_current_ordinary_submission(&mut self) {
-        let text = self.composer.text().trim().to_owned();
-        let submission = match self.prepare_ordinary_submission(&text) {
-            Ok(Some(submission)) => submission,
-            Ok(None) => {
-                self.transcript.push_error(
-                    "only an ordinary user prompt can be queued; commands, shell actions, and child actions keep their explicit paths",
-                );
-                return;
+    /// Validates composer references in an expansion without reading files.
+    pub fn prepare_file_command_submission(
+        &self,
+        typed: String,
+        prompt: &str,
+    ) -> Result<PreparedSubmission, String> {
+        let files = self
+            .resources
+            .files
+            .iter()
+            .filter_map(|entry| entry.id.strip_prefix("file:"))
+            .map(str::to_owned)
+            .collect();
+        let parsed = parse_references(prompt, &files, &Default::default())?;
+        let mut submission = PreparedSubmission::from_file_command(typed, parsed.text);
+        submission.files = parsed
+            .references
+            .into_iter()
+            .filter_map(|reference| match reference {
+                ComposerReference::File(path) => Some(path),
+                ComposerReference::Agent(_) => None,
+            })
+            .collect();
+        submission.images = self
+            .image_attachments
+            .iter()
+            .filter(|image| submission.display_text.contains(&image.placeholder))
+            .cloned()
+            .collect();
+        submission.pastes = self
+            .pasted_chunks
+            .iter()
+            .filter(|paste| submission.display_text.contains(&paste.placeholder))
+            .cloned()
+            .collect();
+        Ok(submission)
+    }
+
+    /// Accepts host-prepared input through the ordinary composer submission path.
+    pub fn submit_prepared(&mut self, submission: PreparedSubmission) -> Action {
+        let target = if self.is_busy() {
+            SubmissionTarget::Steer {
+                expected_turn: self.live_turn.active_turn.clone(),
             }
-            Err(error) => {
-                self.transcript.push_error(error);
-                return;
-            }
+        } else {
+            SubmissionTarget::WholeTurn
         };
+        self.composer.record_current();
+        self.composer.clear();
+        self.follow_newest();
+        Action::Submit { submission, target }
+    }
+
+    /// Queues a prepared expansion through the same bounded FIFO as typed input.
+    pub fn queue_prepared(&mut self, submission: PreparedSubmission) {
         if self.pending_input.queued_turns.len() == MAX_EXPLICIT_QUEUED_TURNS {
-            self.transcript.push_error(format!(
-                "the explicit turn queue is full ({MAX_EXPLICIT_QUEUED_TURNS} entries)"
-            ));
+            self.restore_submission(
+                submission,
+                format!("the explicit turn queue is full ({MAX_EXPLICIT_QUEUED_TURNS} entries)"),
+            );
             return;
         }
         self.composer.record_current();
         self.composer.clear();
         self.pending_input.queued_turns.push_back(submission);
         self.follow_newest();
+    }
+
+    pub(super) fn queue_current_ordinary_submission(&mut self) -> Option<Action> {
+        let text = self.composer.text().trim().to_owned();
+        if !text.starts_with("//")
+            && let Ok(parsed @ crate::commands::ParsedInput::File { .. }) =
+                crate::commands::parse_with(self.composer.text(), &self.command_catalog)
+        {
+            let mut action = self.dispatch_parsed_input(parsed)?;
+            if let Action::FileCommand { queue, .. } = &mut action {
+                *queue = true;
+            }
+            return Some(action);
+        }
+        let submission = match self.prepare_ordinary_submission(&text) {
+            Ok(Some(submission)) => submission,
+            Ok(None) => {
+                self.transcript.push_error(
+                    "only an ordinary user prompt can be queued; commands, shell actions, and child actions keep their explicit paths",
+                );
+                return None;
+            }
+            Err(error) => {
+                self.transcript.push_error(error);
+                return None;
+            }
+        };
+        if self.pending_input.queued_turns.len() == MAX_EXPLICIT_QUEUED_TURNS {
+            self.transcript.push_error(format!(
+                "the explicit turn queue is full ({MAX_EXPLICIT_QUEUED_TURNS} entries)"
+            ));
+            return None;
+        }
+        self.queue_prepared(submission);
+        None
     }
 
     pub(super) fn edit_newest_queued_submission(&mut self) {

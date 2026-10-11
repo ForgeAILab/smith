@@ -12,6 +12,82 @@ use agent_runtime_core::provider::{
 };
 use serde_json::json;
 
+#[tokio::test]
+async fn additional_content_modules_reach_composition_evidence_on_both_surfaces() {
+    use crate::harness::{
+        CapabilitySet, Contribution, ModuleId, ModuleProvenance, ModuleRevision, ModuleSpec,
+        ModuleTrust,
+    };
+
+    let home = tempfile::tempdir().expect("home");
+    let project = tempfile::tempdir().expect("project");
+    let config_dir = home.path().join(".smith");
+    std::fs::create_dir_all(&config_dir).expect("config directory");
+    std::fs::write(
+        config_dir.join("config.toml"),
+        r#"
+default_profile = "dev"
+[profiles.dev]
+provider = "local"
+model = "example-model"
+[providers.local]
+kind = "fake"
+[models."local/example-model"]
+context_tokens = 128000
+max_input_tokens = 124000
+max_output_tokens = 4096
+"#,
+    )
+    .expect("config");
+    let mut config = smith_config::resolve::resolve(
+        &smith_config::resolve::ResolveRequest::new(project.path()).with_home_dir(home.path()),
+    )
+    .expect("resolution")
+    .config;
+    config.persistence.enabled.value = false;
+    for surface in [
+        crate::factory::HostSurface::Terminal,
+        crate::factory::HostSurface::Headless,
+    ] {
+        let module = ModuleSpec {
+            id: ModuleId::parse("commands/user/audit").unwrap(),
+            revision: ModuleRevision::parse("reviewed-content").unwrap(),
+            provenance: ModuleProvenance::UserManifest("user:commands/audit.md".into()),
+            trust: ModuleTrust::ContentOnly,
+            contributions: vec![Contribution::Command {
+                name: "audit".into(),
+            }],
+            requested_capabilities: CapabilitySet::new(),
+            granted_capabilities: CapabilitySet::new(),
+        };
+        let runtime = RuntimeRequest {
+            workspace: Some(Arc::new(
+                smith_host::ProjectWorkspace::new(project.path()).unwrap(),
+            )),
+            approval: Some(Arc::new(agent_runtime_core::approval::DenyAll)),
+            ..RuntimeRequest::new(config.clone(), surface)
+        };
+        let host = start_with_modules(
+            HostSessionRequest::new(runtime, project.path()),
+            vec![module.clone()],
+        )
+        .await
+        .expect("host with command evidence");
+        let record = host
+            .runtime()
+            .harness_modules()
+            .iter()
+            .find(|record| record.id == module.id)
+            .expect("command contribution survived host startup");
+        assert_eq!(record.provenance, module.provenance);
+        assert_eq!(record.trust, ModuleTrust::ContentOnly);
+        assert_eq!(record.contributions, module.contributions);
+        assert!(record.requested_capabilities.is_empty());
+        assert!(record.granted_capabilities.is_empty());
+        host.shutdown().await.expect("shutdown");
+    }
+}
+
 struct ShellShortcutFixture {
     home: tempfile::TempDir,
     _project: tempfile::TempDir,

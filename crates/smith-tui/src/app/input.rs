@@ -186,8 +186,7 @@ impl App {
 
         match (key.code, key.modifiers) {
             (KeyCode::Tab, _) if self.is_busy() && !self.composer.is_blank() => {
-                self.queue_current_ordinary_submission();
-                None
+                self.queue_current_ordinary_submission()
             }
             // At the empty idle point of action, Tab cycles only the
             // configured main-agent profiles. Overlay-specific Tab behavior was
@@ -603,15 +602,18 @@ impl App {
                 None
             }
             KeyCode::Tab | KeyCode::Down => {
-                let count = commands::matches(self.composer.text()).len();
+                let count =
+                    commands::matches_with(self.composer.text(), &self.command_catalog).len();
                 if count > 0
                     && let Some(Overlay::Palette { selected, .. }) = &mut self.overlay
                 {
                     // Tab completes the highlighted entry — the same one Enter
                     // acts on — while Down only moves the highlight.
                     if key.code == KeyCode::Tab {
-                        let command = commands::matches(self.composer.text())[*selected % count];
-                        self.composer.replace(commands::completion(command));
+                        let command =
+                            commands::matches_with(self.composer.text(), &self.command_catalog)
+                                [*selected % count];
+                        self.composer.replace(commands::completion_with(command));
                         self.overlay = None;
                     } else {
                         *selected = (*selected + 1) % count;
@@ -620,7 +622,7 @@ impl App {
                 None
             }
             KeyCode::BackTab | KeyCode::Up => {
-                let matches = commands::matches(self.composer.text());
+                let matches = commands::matches_with(self.composer.text(), &self.command_catalog);
                 if !matches.is_empty()
                     && let Some(Overlay::Palette { selected, .. }) = &mut self.overlay
                 {
@@ -633,23 +635,25 @@ impl App {
                     self.overlay = None;
                     return self.on_composer_key(key);
                 }
-                let matches = commands::matches(self.composer.text());
+                let matches = commands::matches_with(self.composer.text(), &self.command_catalog);
                 let selected = match &self.overlay {
                     Some(Overlay::Palette { selected, .. }) => *selected,
                     _ => return None,
                 };
                 let input = self.composer.text().to_owned();
-                match commands::parse(&input) {
-                    Ok(command) => self.dispatch_command(command),
-                    Err(message) if !commands::has_exact_name(&input) => {
+                match commands::parse_with(&input, &self.command_catalog) {
+                    Ok(command) => self.dispatch_parsed_input(command),
+                    Err(message)
+                        if !commands::has_exact_name_with(&input, &self.command_catalog) =>
+                    {
                         let Some(command) = matches.get(selected).copied() else {
                             if let Some(Overlay::Palette { error, .. }) = &mut self.overlay {
                                 *error = Some(message);
                             }
                             return None;
                         };
-                        let completed = commands::completion(command);
-                        match commands::parse(&completed) {
+                        let completed = commands::completion_with(command);
+                        match commands::parse_with(&completed, &self.command_catalog) {
                             Ok(command) => {
                                 // Tab's argument separator does not belong in accepted history.
                                 let completed = completed.trim_end().to_owned();
@@ -661,7 +665,7 @@ impl App {
                                 // original query so the draft remains intact.
                                 let original = input.clone();
                                 self.composer.replace(completed.clone());
-                                let action = self.dispatch_command(command);
+                                let action = self.dispatch_parsed_input(command);
                                 if self.composer.text() == completed {
                                     self.composer.replace(original);
                                 } else if let Some(Overlay::ResourcePicker {
@@ -766,17 +770,7 @@ impl App {
                 };
                 match self.prepare_ordinary_submission(&text) {
                     Ok(Some(submission)) => {
-                        let target = if self.is_busy() {
-                            SubmissionTarget::Steer {
-                                expected_turn: self.live_turn.active_turn.clone(),
-                            }
-                        } else {
-                            SubmissionTarget::WholeTurn
-                        };
-                        self.composer.record_current();
-                        self.composer.clear();
-                        self.follow_newest();
-                        return Some(Action::Submit { submission, target });
+                        return Some(self.submit_prepared(submission));
                     }
                     Ok(None) => {}
                     Err(error) => {
@@ -806,8 +800,8 @@ impl App {
                 // `/…` is a local command and never reaches the provider.
                 if text.starts_with('/') {
                     self.follow_newest();
-                    return match commands::parse(&text) {
-                        Ok(command) => self.dispatch_command(command),
+                    return match commands::parse_with(self.composer.text(), &self.command_catalog) {
+                        Ok(command) => self.dispatch_parsed_input(command),
                         Err(error) => {
                             self.transcript.push_error(error);
                             None
