@@ -35,6 +35,7 @@ pub(super) fn command(
 pub(crate) fn report(context: &SkillContext, index: &[SkillIndexEntry]) -> SkillsReport {
     let groups = [
         SmithSkillLayer::BuiltIn,
+        SmithSkillLayer::Plugin,
         SmithSkillLayer::User,
         SmithSkillLayer::Workspace,
         SmithSkillLayer::Session,

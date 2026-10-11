@@ -48,12 +48,14 @@ pub(super) fn resolution_request(selection: &Selection) -> Result<(PathBuf, Reso
     } else {
         SyntheticCacheSpendAuthority::Deny
     };
-    let request = ResolveRequest::new(&start)
-        .with_known_modules(crate::modules::known_modules())
-        .with_env(std::env::vars())
-        .with_cli(selection.overrides())
-        .with_session(selection.session_overrides())
-        .with_synthetic_cache_spend(authority);
+    let request = crate::plugins::with_known_plugins(
+        ResolveRequest::new(&start)
+            .with_known_modules(crate::modules::known_modules())
+            .with_env(std::env::vars())
+            .with_cli(selection.overrides())
+            .with_session(selection.session_overrides())
+            .with_synthetic_cache_spend(authority),
+    )?;
     let request = match &selection.advisor {
         Some(choice) => request.with_advisor_override(choice.clone()),
         None => request,

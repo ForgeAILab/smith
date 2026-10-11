@@ -493,6 +493,8 @@ pub(super) struct Contribution {
 pub struct Overrides {
     /// Module switches supplied by the host, keyed by module id.
     pub modules: BTreeMap<String, bool>,
+    /// Plugin switches supplied by the host, keyed by installed plugin name.
+    pub plugins: BTreeMap<String, bool>,
     /// Legacy image-tool switch, sharing selection with its declared module alias.
     pub image_generation_enabled: Option<bool>,
     /// Select a root agent mode by name.
@@ -599,6 +601,12 @@ impl Overrides {
 
         for (id, value) in &self.modules {
             push(&super::modules::enabled_key(id), SettingValue::Flag(*value));
+        }
+        for (name, value) in &self.plugins {
+            push(
+                &super::plugins::enabled_key(name),
+                SettingValue::Flag(*value),
+            );
         }
         if let Some(value) = self.image_generation_enabled {
             push("tools.image_generation.enabled", SettingValue::Flag(value));

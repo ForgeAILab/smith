@@ -50,6 +50,8 @@ pub enum LocalResult {
     Mcp(Box<McpReport>),
     /// Native module selection and mount outcomes.
     Modules(Box<crate::modules_report::ModulesReport>),
+    /// Installed plugin admission and component outcomes.
+    Plugins(Box<crate::plugins_report::PluginsReport>),
     /// Indexed skills, discovery problems, and local trust outcomes.
     Skills(Box<SkillsReport>),
     /// File command layers, discovery problems, and trust outcomes.
@@ -79,6 +81,7 @@ impl LocalResult {
             Self::Agent(report) => report.title(),
             Self::Mcp(_) => "mcp",
             Self::Modules(_) => "modules",
+            Self::Plugins(_) => "plugins",
             Self::Skills(_) => "skills",
             Self::Commands(_) => "commands",
             Self::Diff(report) => &report.title,
@@ -127,7 +130,7 @@ impl LocalResult {
                     LocalResultState::Info
                 }
             },
-            Self::Modules(_) => LocalResultState::Info,
+            Self::Modules(_) | Self::Plugins(_) => LocalResultState::Info,
             Self::Skills(report) => match report.as_ref() {
                 SkillsReport::Error(_) => LocalResultState::Error,
                 SkillsReport::Empty

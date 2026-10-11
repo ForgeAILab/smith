@@ -276,6 +276,7 @@ impl TuiLoop<'_> {
         // the epoch rules exist to prevent.
         if (self.remote_tools_pending || self.trusted_skill_pending)
             && self.pending_module_switch.is_none()
+            && self.pending_plugin_switch.is_none()
             && !self.app.is_busy()
             && !self.app.has_pending_input()
             && !self.app.has_pending_prompt()
@@ -284,6 +285,9 @@ impl TuiLoop<'_> {
             return Ok(Some(InteractiveExit::CapabilitiesChanged));
         }
         if let Some(exit) = super::module_switch_exit(&self.app, &mut self.pending_module_switch) {
+            return Ok(Some(exit));
+        }
+        if let Some(exit) = super::plugin_switch_exit(&self.app, &mut self.pending_plugin_switch) {
             return Ok(Some(exit));
         }
         // Re-read on the way to the screen rather than at each site

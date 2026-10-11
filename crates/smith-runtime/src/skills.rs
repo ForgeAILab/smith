@@ -3,7 +3,7 @@
 //! Agent Runtime owns descriptor-first retrieval and lazy materialization.
 //! Smith owns which sources may contribute privileged instructions. This
 //! module resolves one deterministic catalog in the product order
-//! `built-in < user < trusted workspace < session`, while retaining bounded
+//! `built-in < plugin < user < trusted workspace < session`, while retaining bounded
 //! metadata for untrusted workspace declarations without registering their
 //! bodies for activation.
 
@@ -11,6 +11,9 @@ mod discovery;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::path::PathBuf;
+
+use smith_plugin::{PathVariables, substitute_variables};
 use std::sync::Arc;
 
 use agent_runtime::ability::activation::{Activated, ActivationError};
@@ -22,11 +25,24 @@ use smith_config::trust::TrustStatus;
 
 pub use discovery::{DiscoveredSkill, DiscoveredSkills, SkillProblem, discover, discover_into};
 
+/// Converts inspected plugin metadata into the ordinary digest-pinned skill.
+/// The host verified the bundle and supplies the SHA-256 of these on-disk bytes.
+pub fn plugin_skill(component: &smith_plugin::SkillComponent, digest: [u8; 32]) -> Skill {
+    Skill::from_verified_file(
+        &component.name,
+        component.description.as_deref().unwrap_or(&component.name),
+        &component.path,
+        digest,
+    )
+}
+
 /// Smith's deterministic skill source layers, lowest precedence first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SmithSkillLayer {
     /// Shipped by Smith or its built-in packages.
     BuiltIn,
+    /// Namespaced content admitted by the host's plugin trust decision.
+    Plugin,
     /// Installed in the user's Smith profile.
     User,
     /// Supplied by the active project and gated by exact project trust.
@@ -40,6 +56,7 @@ impl SmithSkillLayer {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::BuiltIn => "built-in",
+            Self::Plugin => "plugin",
             Self::User => "user",
             Self::Workspace => "workspace",
             Self::Session => "session",
@@ -53,7 +70,7 @@ impl SmithSkillLayer {
             // Exact Smith-layer provenance remains on `SkillIndexEntry` and a
             // bounded descriptor tag; the neutral registry has no user/project
             // source variants.
-            Self::User | Self::Workspace | Self::Session => RegistrySource::Host,
+            Self::Plugin | Self::User | Self::Workspace | Self::Session => RegistrySource::Host,
         }
     }
 }
@@ -88,6 +105,7 @@ struct SkillDeclaration {
     layer: SmithSkillLayer,
     trust: TrustStatus,
     skill: Skill,
+    paths: Option<(PathBuf, PathBuf, PathBuf)>,
 }
 
 impl fmt::Debug for SkillDeclaration {
@@ -135,6 +153,22 @@ impl SmithSkillSources {
         self
     }
 
+    /// Adds a digest-pinned plugin skill and its activation-time path variables.
+    #[must_use]
+    pub fn with_plugin(mut self, skill: Skill, paths: PathVariables<'_>) -> Self {
+        self.declarations.push(SkillDeclaration {
+            layer: SmithSkillLayer::Plugin,
+            trust: TrustStatus::Trusted,
+            skill,
+            paths: Some((
+                paths.plugin_root.into(),
+                paths.plugin_data.into(),
+                paths.project_dir.into(),
+            )),
+        });
+        self
+    }
+
     /// Adds a user-profile skill.
     #[must_use]
     pub fn with_user(mut self, skill: Skill) -> Self {
@@ -165,6 +199,7 @@ impl SmithSkillSources {
             layer,
             trust,
             skill,
+            paths: None,
         });
     }
 
@@ -176,6 +211,7 @@ impl SmithSkillSources {
 
         for layer in [
             SmithSkillLayer::BuiltIn,
+            SmithSkillLayer::Plugin,
             SmithSkillLayer::User,
             SmithSkillLayer::Workspace,
             SmithSkillLayer::Session,
@@ -187,7 +223,11 @@ impl SmithSkillSources {
                 .collect::<Vec<_>>();
             declarations.sort_by(|left, right| left.skill.name.cmp(&right.skill.name));
             for declaration in declarations {
-                validate_name(&declaration.skill.name)?;
+                if layer == SmithSkillLayer::Plugin {
+                    validate_plugin_name(&declaration.skill.name)?;
+                } else {
+                    validate_name(&declaration.skill.name)?;
+                }
                 if !seen_by_layer.insert((layer, declaration.skill.name.clone())) {
                     return Err(RuntimeError::conflict(format!(
                         "skill `{}` is declared more than once in the {} source",
@@ -197,8 +237,9 @@ impl SmithSkillSources {
                 }
                 let admitted =
                     layer != SmithSkillLayer::Workspace || declaration.trust.allows_execution();
-                let ability =
+                let mut ability =
                     SmithSkillAbility::new(declaration.skill.clone(), layer, declaration.trust);
+                ability.paths = declaration.paths.clone();
                 index.push(SkillIndexEntry {
                     descriptor: ability.descriptor(),
                     layer,
@@ -244,6 +285,42 @@ impl ResolvedSmithSkills {
         &self.index
     }
 
+    /// Uses the same descriptor-first selection for the tool-free reviewer.
+    pub(crate) fn instructions_for(
+        &self,
+        query: &str,
+        budget: u32,
+    ) -> Result<Vec<String>, RuntimeError> {
+        use agent_runtime::capability::{ActivationBudget, CapabilityResolver, RoutingQuery};
+        use agent_runtime::registry::{RegistryBuilder, RegistryEntry, ViewFilter};
+        let mut builder = RegistryBuilder::new();
+        for ability in &self.abilities {
+            let descriptor = ability.descriptor();
+            builder.declare(RegistryEntry::new(descriptor.card().clone(), descriptor));
+        }
+        let registry = builder
+            .seal()
+            .map_err(|error| RuntimeError::conflict(error.to_string()))?;
+        let selected = CapabilityResolver::new().pre_activate(
+            &registry.view(&ViewFilter::new()),
+            &RoutingQuery::derive(query, Vec::<String>::new()),
+            ActivationBudget::new(0, 8).with_instruction_budget(budget),
+        );
+        let ids = selected.result().activated_ids();
+        self.abilities
+            .iter()
+            .filter(|ability| {
+                ids.iter()
+                    .any(|(id, _)| id == &ability.descriptor().card().id)
+            })
+            .map(|ability| match ability.materialize() {
+                Ok(Activated::SkillInstructions(body)) => Ok(body),
+                Ok(_) => Err(RuntimeError::config("skill did not supply instructions")),
+                Err(error) => Err(RuntimeError::config(error.to_string())),
+            })
+            .collect()
+    }
+
     pub(crate) fn abilities(&self) -> &[Arc<dyn Ability>] {
         &self.abilities
     }
@@ -254,6 +331,7 @@ struct SmithSkillAbility {
     skill: Skill,
     layer: SmithSkillLayer,
     trust: TrustStatus,
+    paths: Option<(PathBuf, PathBuf, PathBuf)>,
 }
 
 impl SmithSkillAbility {
@@ -262,13 +340,16 @@ impl SmithSkillAbility {
             skill: skill.with_registry_source(layer.registry_source()),
             layer,
             trust,
+            paths: None,
         }
     }
 
     fn trust_class(&self) -> TrustClass {
         match self.layer {
             SmithSkillLayer::BuiltIn => TrustClass::HostPolicy,
-            SmithSkillLayer::User | SmithSkillLayer::Session => TrustClass::UserContent,
+            SmithSkillLayer::Plugin | SmithSkillLayer::User | SmithSkillLayer::Session => {
+                TrustClass::UserContent
+            }
             SmithSkillLayer::Workspace if self.trust.allows_execution() => TrustClass::UserContent,
             SmithSkillLayer::Workspace => TrustClass::ExternalContent,
         }
@@ -327,8 +408,32 @@ impl Ability for SmithSkillAbility {
     }
 
     fn materialize(&self) -> Result<Activated, ActivationError> {
-        self.skill.materialize()
+        let activated = self.skill.materialize()?;
+        match (activated, &self.paths) {
+            (Activated::SkillInstructions(body), Some((root, data, project))) => {
+                Ok(Activated::SkillInstructions(substitute_variables(
+                    &body,
+                    PathVariables {
+                        plugin_root: root,
+                        plugin_data: data,
+                        project_dir: project,
+                    },
+                )))
+            }
+            (activated, _) => Ok(activated),
+        }
     }
+}
+
+fn validate_plugin_name(name: &str) -> Result<(), RuntimeError> {
+    let (plugin, component) = name
+        .split_once(':')
+        .ok_or_else(|| RuntimeError::config("plugin skill needs a namespace"))?;
+    for part in [plugin, component] {
+        smith_plugin::validate_name(part)
+            .map_err(|error| RuntimeError::config(error.to_string()))?;
+    }
+    Ok(())
 }
 
 fn validate_name(name: &str) -> Result<(), RuntimeError> {
@@ -358,7 +463,7 @@ const KEYWORD_STOPWORDS: &[&str] = &[
 
 fn skill_keywords(name: &str, description: &str) -> Vec<String> {
     let mut seen = BTreeSet::new();
-    name.split(['.', '_', '-'])
+    name.split(['.', '_', '-', ':'])
         .chain(
             description
                 .split(|character: char| !(character.is_ascii_alphanumeric() || character == '-')),
@@ -464,5 +569,97 @@ mod tests {
             .resolve()
             .unwrap_err();
         assert!(error.message.contains("more than once"));
+    }
+}
+
+#[cfg(test)]
+mod plugin_tests {
+    use super::{SmithSkillLayer, SmithSkillSources};
+    use agent_runtime::ability::Skill;
+    use agent_runtime::ability::activation::Activated;
+    use sha2::{Digest, Sha256};
+    use smith_plugin::PathVariables;
+    use std::fs;
+
+    #[test]
+    fn only_the_plugin_layer_accepts_a_single_namespace() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let paths = PathVariables {
+            plugin_root: &root,
+            plugin_data: &root,
+            project_dir: &root,
+        };
+        for name in ["tools:deploy", "tools:deploy:extra", ":deploy", "tools:"] {
+            let skill = Skill::inline(name, "Deploy", "Body");
+            assert!(
+                SmithSkillSources::new()
+                    .with_user(skill.clone())
+                    .resolve()
+                    .is_err()
+            );
+            assert!(
+                SmithSkillSources::new()
+                    .with_session(skill.clone())
+                    .resolve()
+                    .is_err()
+            );
+            assert_eq!(
+                SmithSkillSources::new()
+                    .with_plugin(skill, paths)
+                    .resolve()
+                    .is_ok(),
+                name == "tools:deploy"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_skill_substitution_follows_the_raw_byte_pin() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let path = root.join("SKILL.md");
+        let body = "Use ${CLAUDE_PLUGIN_ROOT}, ${CLAUDE_PLUGIN_DATA}, ${CLAUDE_PROJECT_DIR}";
+        fs::write(&path, body).unwrap();
+        let paths = PathVariables {
+            plugin_root: &root,
+            plugin_data: &root.join("data"),
+            project_dir: &root.join("project"),
+        };
+        let skill = Skill::from_verified_file(
+            "tools:deploy",
+            "Deploy",
+            &path,
+            Sha256::digest(body.as_bytes()).into(),
+        );
+        let resolved = SmithSkillSources::new()
+            .with_plugin(skill, paths)
+            .with_user(Skill::inline("deploy", "Deploy", "User instructions"))
+            .resolve()
+            .unwrap();
+        assert_eq!(
+            resolved
+                .index()
+                .iter()
+                .map(|entry| entry.layer)
+                .collect::<Vec<_>>(),
+            vec![SmithSkillLayer::Plugin, SmithSkillLayer::User]
+        );
+        let ability = resolved
+            .abilities()
+            .iter()
+            .find(|ability| ability.name() == "tools:deploy")
+            .unwrap();
+        assert_eq!(
+            ability.materialize().unwrap(),
+            Activated::SkillInstructions(format!(
+                "Use {}, {}, {}",
+                root.display(),
+                root.join("data").display(),
+                root.join("project").display()
+            ))
+        );
+        fs::write(&path, "Changed bytes").unwrap();
+        assert!(ability.materialize().is_err());
     }
 }

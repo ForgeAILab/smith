@@ -37,3 +37,34 @@ fn modules_has_one_discoverable_definition_and_a_typed_grammar() {
             .contains("/modules [ID on|off]")
     );
 }
+
+#[test]
+fn plugins_has_one_definition_and_no_install_actions() {
+    use super::PluginsAction;
+    assert_eq!(matches("plugins").len(), 1);
+    assert_eq!(
+        parse("/plugins").unwrap().command,
+        Command::Host(HostCommand::Plugins(PluginsAction::List))
+    );
+    for (word, enabled) in [("on", true), ("off", false)] {
+        assert_eq!(
+            parse(&format!("/plugins deploy-tools {word}"))
+                .unwrap()
+                .command,
+            Command::Host(HostCommand::Plugins(PluginsAction::Switch {
+                name: "deploy-tools".into(),
+                enabled
+            }))
+        );
+    }
+    for invalid in [
+        "/plugins add",
+        "/plugins update",
+        "/plugins remove",
+        "/plugins deploy-tools",
+        "/plugins deploy-tools maybe",
+        "/plugins deploy-tools off extra",
+    ] {
+        assert!(parse(invalid).is_err(), "{invalid}");
+    }
+}

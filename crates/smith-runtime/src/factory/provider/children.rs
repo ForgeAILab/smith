@@ -86,6 +86,10 @@ pub(in crate::factory) async fn prepare_advisor_route(
             .flatten()
             .map(|instructions| instructions.value.clone()),
         price,
+        plugins: request
+            .plugin_profiles
+            .get(&advisor.config.agent.profile.name)
+            .cloned(),
     })))
 }
 
@@ -220,6 +224,7 @@ pub(in crate::factory) async fn prepare_child_profile_routes(
                 read_only: agent_profile.posture.value.is_read_only(),
                 capabilities: agent_profile.capabilities.clone(),
                 execution,
+                plugins: request.plugin_profiles.get(&agent_profile.name).cloned(),
                 modules: route_request.modules.clone(),
                 module_context: super::super::modules::context(
                     &route_request,

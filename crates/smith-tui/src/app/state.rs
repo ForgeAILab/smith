@@ -244,6 +244,8 @@ pub enum Action {
     Command(HostCommand),
     /// Apply the confirmed module edit at the next safe boundary.
     SwitchModule(smith_client::commands::ModuleSwitchRequest),
+    /// A confirmed plugin enablement edit waiting for the safe boundary.
+    SwitchPlugin(smith_client::commands::PluginSwitchRequest),
     /// Apply the already-previewed last-turn undo.
     ApplyUndo,
     /// Record that the already-previewed undo was explicitly cancelled.

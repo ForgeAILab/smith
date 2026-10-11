@@ -279,6 +279,12 @@ pub(super) fn block_lines(
                     report, width, theme,
                 ));
             }
+            Block::Local(LocalResult::Plugins(report)) => {
+                lines.push(report_title("/plugins", theme));
+                lines.extend(super::local_reports::render_plugins_report(
+                    report, width, theme,
+                ));
+            }
             Block::Local(LocalResult::Skills(report)) => {
                 lines.push(Line::from(Span::styled(
                     "/skills",

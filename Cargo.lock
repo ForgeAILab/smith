@@ -3327,6 +3327,7 @@ version = "0.3.10"
 dependencies = [
  "agent-runtime",
  "agent-runtime-core",
+ "agent-runtime-mcp",
  "anyhow",
  "arboard",
  "async-trait",
@@ -3346,6 +3347,7 @@ dependencies = [
  "smith-module",
  "smith-module-budget-notice",
  "smith-module-image-generation",
+ "smith-plugin",
  "smith-runtime",
  "smith-test-module",
  "smith-tools",
@@ -3372,6 +3374,7 @@ dependencies = [
  "serde_json",
  "smith-config",
  "smith-module",
+ "smith-plugin",
  "smith-runtime",
  "tempfile",
  "time",
@@ -3461,6 +3464,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "smith-plugin"
+version = "0.3.10"
+dependencies = [
+ "fs2",
+ "serde",
+ "serde_json",
+ "smith-config",
+ "tempfile",
+ "thiserror 2.0.19",
+ "toml",
+]
+
+[[package]]
 name = "smith-runtime"
 version = "0.3.10"
 dependencies = [
@@ -3490,6 +3506,7 @@ dependencies = [
  "smith-module",
  "smith-module-budget-notice",
  "smith-module-image-generation",
+ "smith-plugin",
  "smith-tools",
  "syn 2.0.119",
  "tempfile",

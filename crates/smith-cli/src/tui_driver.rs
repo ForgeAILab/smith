@@ -56,6 +56,7 @@ pub(super) enum InteractiveExit {
     ),
     Reconfigure(SelectionCommand),
     ModuleSwitch(smith_client::commands::ModuleSwitchRequest),
+    PluginSwitch(smith_client::commands::PluginSwitchRequest),
     Connect(String),
     Disconnect(String),
 }
@@ -396,6 +397,7 @@ struct TuiLoop<'a> {
     remote_tools_pending: bool,
     trusted_skill_pending: bool,
     pending_module_switch: Option<smith_client::commands::ModuleSwitchRequest>,
+    pending_plugin_switch: Option<smith_client::commands::PluginSwitchRequest>,
     last_change_turn: Option<u64>,
     interactions: interaction::InteractionSurface,
     dirty: bool,
@@ -471,7 +473,7 @@ where
                 tui.on_spinner();
             }
 
-            _ = tui.frame.tick(), if tui.dirty || tui.remote_tools_pending || tui.trusted_skill_pending || tui.pending_module_switch.is_some() => {
+            _ = tui.frame.tick(), if tui.dirty || tui.remote_tools_pending || tui.trusted_skill_pending || tui.pending_module_switch.is_some() || tui.pending_plugin_switch.is_some() => {
                 if let Some(exit) = tui.on_frame(terminal).await? {
                     break exit;
                 }
@@ -577,6 +579,7 @@ impl<'a> TuiLoop<'a> {
             remote_tools_pending,
             trusted_skill_pending,
             pending_module_switch: None,
+            pending_plugin_switch: None,
             last_change_turn,
             interactions,
             dirty,
@@ -631,6 +634,18 @@ pub(super) fn module_switch_exit(
         return None;
     }
     pending.take().map(InteractiveExit::ModuleSwitch)
+}
+
+/// Keeps a confirmed plugin edit pending until the serving composition is idle.
+pub(super) fn plugin_switch_exit(
+    app: &App,
+    pending: &mut Option<smith_client::commands::PluginSwitchRequest>,
+) -> Option<InteractiveExit> {
+    if app.is_busy() || app.has_pending_input() || app.has_pending_prompt() || app.overlay.is_some()
+    {
+        return None;
+    }
+    pending.take().map(InteractiveExit::PluginSwitch)
 }
 
 /// Bounds a background task's command for compact, single-line display.

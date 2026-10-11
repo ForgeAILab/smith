@@ -1,0 +1,5 @@
+title: plugins
+state: Info
+body:
+no plugins are installed
+Install, update, or remove with `smith plugin …`; use `/plugins NAME on|off` to enable or disable.

@@ -8,7 +8,8 @@ pub(crate) mod fixture_support;
 mod tests;
 mod view;
 
-use view::{fixture_raw_and_view, fixture_record, fixture_screen};
+pub(crate) use view::fixture_record;
+use view::{fixture_raw_and_view, fixture_screen};
 
 async fn fixture_local_host(
     home: &std::path::Path,

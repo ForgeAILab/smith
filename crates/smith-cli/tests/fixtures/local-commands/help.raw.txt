@@ -26,6 +26,7 @@ Primary
 /agent [ID|resume ID] — List, inspect, or resume an existing agent
 /mcp [trust NAME] — Show MCP servers, or trust one so it may run
 /modules [ID on|off] — List modules or turn one on or off
+/plugins [NAME on|off] — List plugin bundles or turn one on or off
 /capabilities [deny ID|allow ID] — Show capabilities, or deny one for this session
 /skills [trust NAME] — Show indexed skills, or trust one this project ships
 /commands [trust NAME|reload] — Show file commands, trust one, or reload the catalog

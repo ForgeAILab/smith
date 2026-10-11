@@ -1043,6 +1043,29 @@ impl App {
         self.open_overlay(Overlay::Confirm(dialog));
     }
 
+    /// Reviews a user-layer plugin switch with no default confirmation.
+    pub fn confirm_plugin_switch(
+        &mut self,
+        request: smith_client::commands::PluginSwitchRequest,
+        preview: String,
+    ) {
+        let mut dialog = ConfirmDialog::new(
+            "switch plugin",
+            Tone::Warning,
+            preview.lines().map(str::to_owned).collect(),
+            "save and apply",
+            ConfirmOutcome::Action(Action::SwitchPlugin(request)),
+            ConfirmOutcome::Dismiss,
+        );
+        dialog.warning = Some((
+            "Only the user configuration changes. Higher layers may override it.".into(),
+            Tone::Warning,
+        ));
+        dialog.cancel_label = "leave unchanged".into();
+        dialog.hint = "y save and apply · n/esc leave unchanged".into();
+        self.open_overlay(Overlay::Confirm(dialog));
+    }
+
     /// Shows the MCP server invocation for a deliberate trust decision.
     pub fn confirm_mcp_trust(&mut self, server: impl Into<String>, content: impl Into<String>) {
         let server = server.into();

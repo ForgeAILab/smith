@@ -323,6 +323,16 @@ fn help_at_every_command_level_prints_usage_without_startup() {
         &["config", "explain", "model"][..],
         &["sessions"][..],
         &["sessions", "list"][..],
+        &["plugin"][..],
+        &["plugin", "add"][..],
+        &["plugin", "list"][..],
+        &["plugin", "update"][..],
+        &["plugin", "remove"][..],
+        &["plugin", "marketplace"][..],
+        &["plugin", "marketplace", "add"][..],
+        &["plugin", "marketplace", "list"][..],
+        &["plugin", "marketplace", "update"][..],
+        &["plugin", "marketplace", "remove"][..],
     ] {
         for help in ["help", "-h", "--help"] {
             let args = path.iter().copied().chain([help]).collect::<Vec<_>>();
@@ -1024,3 +1034,6 @@ max_output_tokens = 4096
     assert!(explanation.contains("[redacted]"), "{explanation}");
     assert!(!explanation.contains(KEY), "{explanation}");
 }
+
+#[path = "cli_contract/plugins.rs"]
+mod plugins;

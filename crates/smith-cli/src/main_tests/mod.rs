@@ -123,6 +123,7 @@ mod local_shell;
 #[allow(clippy::wildcard_imports)]
 mod mcp;
 mod modules;
+mod plugins;
 #[cfg(test)]
 #[allow(clippy::wildcard_imports)]
 mod rendering;

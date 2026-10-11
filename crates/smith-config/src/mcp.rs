@@ -171,3 +171,94 @@ fn summarize((name, value): (&String, &Sourced<McpValue>)) -> McpValueSummary {
         credential: value.value.credential().map(str::to_owned),
     }
 }
+
+/// Converts an already plugin-trusted declaration into the ordinary MCP path.
+/// Literal values are permitted in this user-owned source; references keep the
+/// same secret-resolution representation used by user configuration.
+pub fn resolve_plugin_server(
+    name: &str,
+    declaration: &crate::model::McpServerSection,
+    source: Source,
+) -> Result<ResolvedMcpServer, RuntimeError> {
+    let (plugin, server) = name
+        .split_once(':')
+        .ok_or_else(|| RuntimeError::config("plugin MCP server needs a namespace"))?;
+    if [plugin, server].iter().any(|part| {
+        part.is_empty()
+            || matches!(*part, "." | "..")
+            || part
+                .chars()
+                .any(|c| c.is_whitespace() || c.is_control() || matches!(c, ':' | '/' | '\\' | '@'))
+    }) {
+        return Err(RuntimeError::config("invalid plugin MCP server name"));
+    }
+    let sourced = |value| Sourced::new(value, source.clone());
+    let values = |map: &std::collections::BTreeMap<String, String>| -> Result<_, RuntimeError> {
+        map.iter()
+            .map(|(name, value)| {
+                let value = if crate::resolve::CREDENTIAL_SCHEMES
+                    .iter()
+                    .any(|scheme| value.starts_with(&format!("{scheme}:")))
+                {
+                    crate::credential::CredentialRef::parse(value)
+                        .map_err(|error| RuntimeError::config(error.to_string()))?;
+                    McpValue::Credential(value.clone())
+                } else {
+                    McpValue::Literal(agent_runtime_core::store::Secret::new(value))
+                };
+                Ok((name.clone(), Sourced::new(value, source.clone())))
+            })
+            .collect::<Result<std::collections::BTreeMap<_, _>, RuntimeError>>()
+    };
+    let transport = match (&declaration.command, &declaration.url) {
+        (Some(command), None)
+            if !command.trim().is_empty()
+                && declaration.headers.is_empty()
+                && declaration.credential.is_none() =>
+        {
+            ResolvedMcpTransport::Stdio {
+                command: sourced(command.clone()),
+                args: Some(Sourced::new(declaration.args.clone(), source.clone())),
+            }
+        }
+        (None, Some(url))
+            if (url.starts_with("http://") || url.starts_with("https://"))
+                && declaration.env.is_empty()
+                && declaration.args.is_empty() =>
+        {
+            if let Some(reference) = &declaration.credential {
+                crate::credential::CredentialRef::parse(reference)
+                    .map_err(|error| RuntimeError::config(error.to_string()))?;
+            }
+            ResolvedMcpTransport::StreamableHttp {
+                url: sourced(url.clone()),
+                credential: declaration.credential.clone().map(sourced),
+                headers: values(&declaration.headers)?,
+            }
+        }
+        _ => {
+            return Err(RuntimeError::config(
+                "plugin MCP declaration must name one usable stdio or HTTP transport",
+            ));
+        }
+    };
+    Ok(ResolvedMcpServer {
+        name: name.into(),
+        source: source.clone(),
+        transport,
+        env: values(&declaration.env)?,
+        enabled: Sourced::new(declaration.enabled.unwrap_or(true), source),
+    })
+}
+
+/// Provider-safe identity for a plugin server, preserving displayed names.
+/// Configured names pass through unchanged. The digest avoids ambiguous
+/// concatenations of plugin and server names, leaving room for remote tool
+/// names. The host refuses registry collisions.
+pub fn registry_server_name(name: &str) -> String {
+    if name.contains(':') {
+        format!("p_{}", &ContentDigest::of(name.as_bytes()).as_hex()[..16])
+    } else {
+        name.to_owned()
+    }
+}

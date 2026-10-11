@@ -203,6 +203,7 @@ pub struct SmithChildFactory {
 pub struct SmithChildRoute {
     pub(crate) modules: smith_module::ModuleComposition,
     pub(crate) module_context: smith_module::ModuleContext,
+    pub(crate) plugins: Option<crate::factory::PluginProfile>,
     pub(crate) provider: Arc<dyn Provider>,
     pub(crate) provider_name: String,
     pub(crate) provider_kind: String,
@@ -315,6 +316,7 @@ impl ChildRuntimeFactory for SmithChildFactory {
                 .map(|module| (module.module.id(), module.module.revision()))
                 .collect::<Vec<_>>(),
             "module_settings": format!("{:?}", route.modules.settings),
+            "plugin_revisions": route.plugins.as_ref().map(|plugins| plugins.modules.iter().map(|module| (module.id.as_str(), module.revision.as_str())).collect::<Vec<_>>()),
         }))
         .map_err(|error| {
             RuntimeError::new(
@@ -386,18 +388,33 @@ impl ChildRuntimeFactory for SmithChildFactory {
                 tools.push(tool.clone());
             }
         }
+        let plugin_tools = route
+            .plugins
+            .as_ref()
+            .map_or_else(Vec::new, |plugins| plugins.tools());
+        let plugin_names = plugin_tools
+            .iter()
+            .map(|tool| tool.spec().name)
+            .collect::<std::collections::BTreeSet<_>>();
+        tools.extend(
+            plugin_tools
+                .into_iter()
+                .filter(|tool| write_capable || tool.spec().effects.is_read_only()),
+        );
         tools.push(Arc::new(QuestionnaireTool::new()));
         tools.push(Arc::new(WriteTodosTool::new()));
         if let Some(store) = self.artifact_store.clone() {
             tools.push(Arc::new(route.tool_output_context.reader(store)));
         }
         let todo_component = Arc::new(TodoComponent::public());
-        let abilities = seal_tool_abilities(
-            tools
-                .iter()
-                .cloned()
-                .map(|tool| (tool, RegistrySource::BuiltIn)),
-        )
+        let abilities = seal_tool_abilities(tools.iter().cloned().map(|tool| {
+            let source = if plugin_names.contains(&tool.spec().name) {
+                RegistrySource::Provider
+            } else {
+                RegistrySource::BuiltIn
+            };
+            (tool, source)
+        }))
         .map_err(|error| RuntimeError::conflict(error.to_string()))?;
         let scope_inputs = ScopeInputs::new().with_identity(
             ScopeIdentity::new()
@@ -512,7 +529,12 @@ impl ChildRuntimeFactory for SmithChildFactory {
         for descriptor in abilities.descriptors() {
             builder = builder.tool_ability_descriptor(descriptor);
         }
-        for skill in self.skills.iter().cloned() {
+        let mut skills = self.skills.clone();
+        if let Some(plugins) = &route.plugins {
+            skills.retain(|skill| !skill.name().contains(':'));
+            skills.extend(plugins.skills.resolve()?.abilities().iter().cloned());
+        }
+        for skill in skills {
             builder = builder.ability(skill);
         }
         Ok(crate::factory::modules::apply(builder, &module_plan))

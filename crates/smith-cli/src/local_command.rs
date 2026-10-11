@@ -21,6 +21,7 @@ pub(crate) mod file_commands;
 mod goal;
 pub(super) mod mcp;
 mod modules;
+mod plugins;
 pub(super) mod recovery;
 mod review;
 pub(super) mod skills;
@@ -53,6 +54,7 @@ pub(super) async fn handle_local_command(
         HostCommand::Commands(action) => file_commands::command(commands, app, action),
         HostCommand::Mcp(action) => mcp::command(mcp, action),
         HostCommand::Modules(action) => modules::command(host, action),
+        HostCommand::Plugins(action) => plugins::command(host, commands, action),
         // The TUI turns `deny` and `allow` into a session rebuild before they
         // reach the host, so only the listing arrives here.
         HostCommand::Capabilities(_) => {
@@ -106,6 +108,10 @@ pub(super) enum CommandReport {
         request: smith_client::commands::ModuleSwitchRequest,
         preview: String,
     },
+    PluginSwitch {
+        request: smith_client::commands::PluginSwitchRequest,
+        preview: String,
+    },
     CommandTrust {
         name: String,
         content: String,
@@ -136,6 +142,7 @@ impl CommandReport {
             Self::SkillTrust { skill, content } => app.confirm_skill_trust(skill, content),
             Self::McpTrust { server, content } => app.confirm_mcp_trust(server, content),
             Self::ModuleSwitch { request, preview } => app.confirm_module_switch(request, preview),
+            Self::PluginSwitch { request, preview } => app.confirm_plugin_switch(request, preview),
             Self::CommandTrust {
                 name,
                 content,

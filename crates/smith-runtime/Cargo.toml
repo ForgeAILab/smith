@@ -17,6 +17,7 @@ agent-runtime-ability = { workspace = true, features = ["skill-files"] }
 agent-runtime-core = { workspace = true }
 agent-runtime-mcp = { workspace = true, features = ["http"] }
 smith-config = { workspace = true }
+smith-plugin = { workspace = true }
 smith-host = { workspace = true }
 smith-tools = { workspace = true }
 smith-module = { workspace = true }

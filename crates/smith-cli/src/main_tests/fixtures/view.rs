@@ -69,6 +69,9 @@ pub(super) fn fixture_raw_and_view(
                     LocalResult::Modules(report) => {
                         smith_client::modules_report::render_plain(report)
                     }
+                    LocalResult::Plugins(report) => {
+                        smith_client::plugins_report::render_plain(report)
+                    }
                     LocalResult::Skills(report) => {
                         smith_client::skills_report::render_plain(report)
                     }
@@ -126,6 +129,28 @@ pub(super) fn fixture_raw_and_view(
                             }
                         }
                         LocalResult::Modules(report)
+                    }
+                    LocalResult::Plugins(report) => {
+                        let mut report = report.clone();
+                        for row in &mut report.rows {
+                            row.source = normalizer.normalize(&row.source);
+                            row.enabled_source = normalizer.normalize(&row.enabled_source);
+                            row.digest = normalizer.normalize(&row.digest);
+                            if let smith_client::plugins_report::PluginState::Failed(reason) =
+                                &mut row.state
+                            {
+                                *reason = normalizer.normalize(reason);
+                            }
+                            for component in row.loaded.iter_mut().chain(&mut row.not_loaded) {
+                                if let Some(detail) = &mut component.detail {
+                                    *detail = normalizer.normalize(detail);
+                                }
+                            }
+                        }
+                        for unknown in &mut report.unknown {
+                            unknown.source = normalizer.normalize(&unknown.source);
+                        }
+                        LocalResult::Plugins(report)
                     }
                     LocalResult::Skills(report) => {
                         LocalResult::Skills(Box::new(fixture_skills_view(report, normalizer)))
@@ -729,7 +754,7 @@ pub(super) fn fixture_screen(app: &App, width: u16) -> String {
     format!("{}\n", rows.join("\n").trim_matches('\n'))
 }
 
-pub(super) fn fixture_record(name: &str, app: &App, normalizer: &mut fixture_support::Normalizer) {
+pub(crate) fn fixture_record(name: &str, app: &App, normalizer: &mut fixture_support::Normalizer) {
     // A grouped scenario may need replay to reach one report. Limit writes
     // during re-recording without changing the scenario or other goldens.
     if std::env::var_os("SMITH_UPDATE_FIXTURES").is_some_and(|value| value == "1")

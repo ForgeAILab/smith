@@ -22,6 +22,7 @@ pub mod mcp_report;
 pub mod message_report;
 pub mod modules_report;
 pub mod notice;
+pub mod plugins_report;
 pub use notice::{Notice, NoticeKind, NoticePersistence};
 pub mod recovery_report;
 pub mod review_report;

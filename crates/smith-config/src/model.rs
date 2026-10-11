@@ -268,6 +268,9 @@ pub struct ConfigFile {
     /// Module switches: `[modules.<id>]`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub modules: BTreeMap<String, ModuleSection>,
+    /// Installed plugin switches: `[plugins.<name>]`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugins: BTreeMap<String, PluginSection>,
     /// Built-in tool settings: `[tools]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<ToolsSection>,
@@ -424,6 +427,9 @@ pub struct ProfileSection {
     /// Profile-scoped module switches.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub modules: BTreeMap<String, ModuleSection>,
+    /// Profile-scoped plugin switches.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugins: BTreeMap<String, PluginSection>,
     /// Profile-scoped `[tools]` overrides.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<ToolsSection>,
@@ -434,6 +440,15 @@ pub struct ProfileSection {
 #[serde(deny_unknown_fields)]
 pub struct ModuleSection {
     /// Whether this module is selected. Omitted uses its declared default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+}
+
+/// One installed plugin's configuration switch.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginSection {
+    /// Whether this plugin is selected. Omitted uses its manifest default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
 }

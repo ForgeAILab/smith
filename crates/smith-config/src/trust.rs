@@ -531,6 +531,27 @@ impl TrustStore {
         self.persist()
     }
 
+    /// Forgets one artifact, preserving every other decision in the project.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the project cannot be canonicalized or the change persisted.
+    pub fn forget_executable(
+        &mut self,
+        project: &Path,
+        kind: ExecutableKind,
+        label: &str,
+    ) -> Result<(), RuntimeError> {
+        let key = project_key(project)?;
+        if let Some(records) = self.projects.get_mut(&key) {
+            records.retain(|record| record.kind != kind || record.label != label);
+            if records.is_empty() {
+                self.projects.remove(&key);
+            }
+        }
+        self.persist()
+    }
+
     /// Writes the whole file, then moves it into place.
     ///
     /// A partial trust file is worse than none — it would read as a set of

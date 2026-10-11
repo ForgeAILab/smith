@@ -59,6 +59,19 @@ pub struct SkillEntry {
     pub state: SkillState,
 }
 
+impl SkillEntry {
+    /// Bundle attribution for a namespaced plugin skill, empty for other layers.
+    pub fn attribution(&self, layer: SmithSkillLayer) -> String {
+        if layer == SmithSkillLayer::Plugin {
+            self.name
+                .split_once(':')
+                .map_or_else(String::new, |(plugin, _)| format!(" · plugin {plugin}"))
+        } else {
+            String::new()
+        }
+    }
+}
+
 /// Activation and trust outcomes, independent of display labels.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SkillState {
@@ -125,10 +138,11 @@ pub fn render_plain(report: &SkillsReport) -> String {
         lines.push(group.layer.as_str().to_owned());
         for entry in &group.entries {
             lines.push(format!(
-                "  {} · {} · {}",
+                "  {} · {} · {}{}",
                 entry.name,
                 entry.state.render_value(&entry.name),
                 entry.description,
+                entry.attribution(group.layer),
             ));
         }
     }

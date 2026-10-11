@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-11T01:38:05Z
-updated_at: 2026-10-11T01:44:10Z
+updated_at: 2026-10-11T03:59:02Z
 ---
 
 ## Why
@@ -41,7 +41,8 @@ that Smith can install, trust, enable, update, and remove as one unit.
   supported; npm sources are reported as unsupported.
 - Installing is a trust decision. Smith shows what the plugin would load
   (each skill and command, each MCP server's resolved command line or URL,
-  and what it carries but Smith will not load) with a digest of the content,
+  and what it carries but Smith will not load) with a digest of every file
+  in the plugin,
   and installs only after confirmation. The decision is bound to that
   digest. An update that changes content is shown as a change and confirmed
   again; until then the installed version keeps running.

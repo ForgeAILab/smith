@@ -426,6 +426,12 @@ pub fn resolve(spec: HarnessSpec) -> Result<ResolvedHarness, HarnessResolutionEr
         modules.push(trusted);
     }
     modules.extend(mcp_specs(&request)?);
+    if let Some(plugins) = request
+        .plugin_profiles
+        .get(&request.config.agent.profile.name)
+    {
+        modules.extend(plugins.modules.clone());
+    }
 
     let resolved = resolve_module_specs(modules, broker_running)?;
 
@@ -674,7 +680,10 @@ fn mcp_specs(request: &RuntimeRequest) -> Result<Vec<ModuleSpec>, HarnessResolut
         .reports()
         .into_iter()
         .map(|report| {
-            let prefix = format!("mcp__{}__", report.name);
+            let prefix = format!(
+                "mcp__{}__",
+                smith_config::mcp::registry_server_name(&report.name)
+            );
             let mut required = CapabilitySet::new();
             let server_tools = tools
                 .iter()
@@ -696,9 +705,15 @@ fn mcp_specs(request: &RuntimeRequest) -> Result<Vec<ModuleSpec>, HarnessResolut
                 server_tools.iter().map(|tool| tool.spec()),
             );
             Ok(ModuleSpec {
-                id: ModuleId::parse(format!("mcp/{}", report.name))?,
+                id: ModuleId::parse(format!(
+                    "mcp/{}",
+                    smith_config::mcp::registry_server_name(&report.name)
+                ))?,
                 revision: ModuleRevision::parse(revision)?,
-                provenance: ModuleProvenance::McpServer(report.name),
+                provenance: match report.name.split_once(':') {
+                    Some((plugin, _)) => ModuleProvenance::UserManifest(plugin.into()),
+                    None => ModuleProvenance::McpServer(report.name),
+                },
                 trust: ModuleTrust::TrustedMcp,
                 contributions,
                 requested_capabilities: required.clone(),
@@ -725,7 +740,10 @@ fn validate_module(
         ));
     }
     if module.trust == ModuleTrust::TrustedMcp
-        && !matches!(module.provenance, ModuleProvenance::McpServer(_))
+        && !matches!(
+            module.provenance,
+            ModuleProvenance::McpServer(_) | ModuleProvenance::UserManifest(_)
+        )
     {
         return Err(HarnessResolutionError::InvalidMcpTrust(
             module.id.as_str().to_owned(),

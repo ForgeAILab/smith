@@ -8,7 +8,12 @@
 //! [`smith_config::trust::Executable::from_file`]. This module reads the path
 //! as given and grants no authority to a project command.
 
+use std::collections::BTreeMap;
 use std::fs;
+
+use smith_plugin::{
+    CommandComponent, CommandSource, PathVariables, PluginInventory, substitute_variables,
+};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -45,6 +50,8 @@ pub const MAX_ARGUMENT_HINT_CHARS: usize = 128;
 /// The source of a file command, without any trust or shadowing decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CommandLayer {
+    /// Namespaced content trusted as part of an installed plugin.
+    Plugin,
     /// The user's state root.
     User,
     /// The project's `.smith/` state root.
@@ -55,6 +62,7 @@ impl CommandLayer {
     /// The stable label used by command surfaces.
     pub const fn label(self) -> &'static str {
         match self {
+            Self::Plugin => "plugin",
             Self::User => "user",
             Self::Project => "project",
         }
@@ -76,6 +84,24 @@ pub struct FileCommand {
     pub path: PathBuf,
     /// Identity of the complete file, including frontmatter.
     pub content: ContentDigest,
+}
+
+impl FileCommand {
+    /// Bundle attribution, available only for the plugin source layer.
+    pub fn plugin_name(&self) -> Option<&str> {
+        if self.layer != CommandLayer::Plugin {
+            return None;
+        }
+        self.name.split_once(':').map(|(plugin, _)| plugin)
+    }
+
+    /// Source attribution for help and command listings.
+    pub fn source_label(&self) -> String {
+        self.plugin_name().map_or_else(
+            || self.layer.label().to_owned(),
+            |plugin| format!("plugin {plugin}"),
+        )
+    }
 }
 
 /// A command file Smith found and could not use, kept for a surface to show.
@@ -177,6 +203,44 @@ pub struct CatalogEntry {
 pub struct CommandCatalog {
     entries: Vec<CatalogEntry>,
     problems: Vec<CommandProblem>,
+    plugins: BTreeMap<String, PluginCommand>,
+}
+
+#[derive(Debug, Clone)]
+struct PluginCommand {
+    component: CommandComponent,
+    root: PathBuf,
+    data: PathBuf,
+    project: PathBuf,
+}
+
+impl PluginCommand {
+    fn load(&self) -> Result<LoadedCommand, String> {
+        match &self.component.source {
+            CommandSource::File(path) => {
+                let canonical = path.canonicalize().map_err(|error| error.to_string())?;
+                if !canonical.starts_with(&self.root) {
+                    return Err("command escapes its plugin root".into());
+                }
+                let name = self
+                    .component
+                    .name
+                    .split_once(':')
+                    .map(|(_, name)| name)
+                    .ok_or_else(|| "plugin command needs a namespace".to_owned())?;
+                read_command_inner(&canonical, Some(name))
+            }
+            CommandSource::Inline(text) => load_text(text),
+        }
+    }
+
+    fn paths(&self) -> PathVariables<'_> {
+        PathVariables {
+            plugin_root: &self.root,
+            plugin_data: &self.data,
+            project_dir: &self.project,
+        }
+    }
 }
 
 impl CommandCatalog {
@@ -242,6 +306,79 @@ impl CommandCatalog {
         catalog
     }
 
+    /// Adds namespaced commands admitted by the host's plugin trust decision.
+    /// File and inline bodies use the ordinary prompt reader and expansion path.
+    pub fn with_plugin(mut self, inventory: &PluginInventory, paths: PathVariables<'_>) -> Self {
+        for item in inventory
+            .not_loaded
+            .iter()
+            .filter(|item| item.kind == "commands")
+        {
+            self.problems.push(CommandProblem {
+                name: item.name.clone(),
+                layer: CommandLayer::Plugin,
+                path: item
+                    .path
+                    .as_ref()
+                    .map_or_else(|| inventory.root.clone(), |path| inventory.root.join(path)),
+                reason: item.reason.clone(),
+            });
+        }
+        for component in &inventory.commands {
+            let binding = PluginCommand {
+                component: component.clone(),
+                root: paths.plugin_root.into(),
+                data: paths.plugin_data.into(),
+                project: paths.project_dir.into(),
+            };
+            let loaded = if component
+                .name
+                .starts_with(&format!("{}:", inventory.manifest.name))
+            {
+                validate_invocation_name(&component.name).and_then(|()| binding.load())
+            } else {
+                Err("plugin command must use its manifest namespace".into())
+            };
+            match loaded {
+                Ok(loaded) if loaded.content == component.digest => {
+                    self.entries.push(CatalogEntry {
+                        command: FileCommand {
+                            name: component.name.clone(),
+                            layer: CommandLayer::Plugin,
+                            description: component
+                                .description
+                                .clone()
+                                .unwrap_or(loaded.description),
+                            argument_hint: component.argument_hint.clone().or(loaded.argument_hint),
+                            path: match &component.source {
+                                CommandSource::File(path) => path.clone(),
+                                CommandSource::Inline(_) => {
+                                    inventory.root.join(".claude-plugin/plugin.json")
+                                }
+                            },
+                            content: component.digest.clone(),
+                        },
+                        state: CommandState::Runnable,
+                    });
+                    self.plugins.insert(component.name.clone(), binding);
+                }
+                result => {
+                    self.problems.push(CommandProblem {
+                        name: component.name.clone(),
+                        layer: CommandLayer::Plugin,
+                        path: inventory.root.clone(),
+                        reason: result
+                            .err()
+                            .unwrap_or_else(|| "content changed during discovery".into()),
+                    });
+                }
+            }
+        }
+        self.entries
+            .sort_by(|a, b| a.command.name.cmp(&b.command.name));
+        self
+    }
+
     /// All declarations, including withheld and shadowed entries.
     pub fn entries(&self) -> &[CatalogEntry] {
         &self.entries
@@ -297,7 +434,17 @@ impl CommandCatalog {
         let entry = self
             .resolve(name)
             .ok_or_else(|| refuse("command is not in the catalog".to_owned()))?;
-        let loaded = read_command(&entry.command.path).map_err(refuse)?;
+        let plugin = self.plugins.get(name);
+        let loaded = match plugin {
+            Some(plugin) => plugin.load(),
+            None => read_command(&entry.command.path),
+        }
+        .map_err(refuse)?;
+        if plugin.is_some() && loaded.content != entry.command.content {
+            return Err(refuse(
+                "plugin command content changed; rebuild and confirm the plugin again".into(),
+            ));
+        }
         if entry.command.layer == CommandLayer::Project {
             let project =
                 project.ok_or_else(|| refuse("project root is unavailable".to_owned()))?;
@@ -307,8 +454,12 @@ impl CommandCatalog {
                 return Err(refuse(state.reason(name)));
             }
         }
+        let body = match plugin {
+            Some(plugin) => substitute_variables(&loaded.body, plugin.paths()),
+            None => loaded.body,
+        };
         Ok(PreparedCommand {
-            prompt: expand(loaded.body.trim(), arguments).trim().to_owned(),
+            prompt: expand(body.trim(), arguments).trim().to_owned(),
             name: name.to_owned(),
             layer: entry.command.layer,
         })
@@ -347,6 +498,7 @@ fn layer_order(layer: CommandLayer) -> u8 {
     match layer {
         CommandLayer::Project => 0,
         CommandLayer::User => 1,
+        CommandLayer::Plugin => 2,
     }
 }
 
@@ -372,6 +524,7 @@ fn project_state(
 pub fn contribution_modules(catalog: &CommandCatalog) -> Vec<ModuleSpec> {
     catalog
         .runnable()
+        .filter(|entry| entry.command.layer != CommandLayer::Plugin)
         .map(|entry| {
             let command = &entry.command;
             let layer = command.layer.label();
@@ -493,12 +646,21 @@ pub fn discover_layer(root: &Path, layer: CommandLayer) -> LayerDiscovery {
 /// Returns a refusal reason for an invalid or reserved name, unreadable or
 /// oversized file, non-UTF-8 content, malformed frontmatter, or an empty body.
 pub fn read_command(path: &Path) -> Result<LoadedCommand, String> {
-    let name = path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .ok_or_else(|| "its file stem is not a UTF-8 command name".to_owned())?;
-    validate_name(name)?;
-    if is_reserved_name(name) {
+    read_command_inner(path, None)
+}
+
+fn read_command_inner(path: &Path, plugin_name: Option<&str>) -> Result<LoadedCommand, String> {
+    let name = match plugin_name {
+        Some(name) => name,
+        None => path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .ok_or_else(|| "its file stem is not a UTF-8 command name".to_owned())?,
+    };
+    if plugin_name.is_none() {
+        validate_name(name)?;
+    }
+    if plugin_name.is_none() && is_reserved_name(name) {
         return Err(format!(
             "its name `{name}` is reserved for a built-in command"
         ));
@@ -536,6 +698,14 @@ pub fn read_command(path: &Path) -> Result<LoadedCommand, String> {
              file stem; rename the file or the field so they agree"
         ));
     }
+    load_text(text)
+}
+
+fn load_text(text: &str) -> Result<LoadedCommand, String> {
+    if text.len() as u64 > MAX_BODY_BYTES {
+        return Err(size_problem(text.len() as u64));
+    }
+    let front_matter = parse_front_matter(text)?;
     if front_matter.body.trim().is_empty() {
         return Err("it has no prompt body after its frontmatter".to_owned());
     }
@@ -556,7 +726,7 @@ pub fn read_command(path: &Path) -> Result<LoadedCommand, String> {
         description,
         argument_hint: front_matter.argument_hint,
         body: front_matter.body.to_owned(),
-        content: ContentDigest::of(&bytes),
+        content: ContentDigest::of(text.as_bytes()),
     })
 }
 
@@ -577,6 +747,19 @@ pub fn validate_name(name: &str) -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+/// Validates typed command names, allowing a single plugin namespace.
+/// Disk discovery continues to require an unprefixed file stem.
+pub fn validate_invocation_name(name: &str) -> Result<(), String> {
+    if let Some((plugin, command)) = name.split_once(':') {
+        for part in [plugin, command] {
+            smith_plugin::validate_name(part).map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    } else {
+        validate_name(name)
+    }
 }
 
 /// Whether a name exactly equals a built-in command's name.

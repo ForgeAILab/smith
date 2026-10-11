@@ -38,6 +38,8 @@
                  [trust NAME]
   /modules       List modules or turn one on or off
                  [ID on|off]
+  /plugins       List plugin bundles or turn one on or off
+                 [NAME on|off]
   /capabilities  Show capabilities, or deny one for this session
                  [deny ID|allow ID]
   /skills        Show indexed skills, or trust one this project ships
@@ -92,8 +94,6 @@
   @                         Complete files and agents; @@ sends a literal @
   !                         Run a local shell command; !! sends a literal !
   //                        Send text with a leading slash
-
-
 
 
 

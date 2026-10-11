@@ -18,7 +18,9 @@ mod fold;
 mod output;
 mod run_flow;
 
+#[cfg(test)]
 pub(crate) use file_commands::prepare_prompt;
+pub(crate) use file_commands::prepare_prompt_with_config;
 use run_flow::run_with_io;
 
 /// Version of Smith's result/event wrappers, independent of runtime events.

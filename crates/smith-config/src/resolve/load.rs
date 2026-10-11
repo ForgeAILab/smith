@@ -23,14 +23,23 @@ pub fn resolve(request: &ResolveRequest) -> Result<Resolution, ConfigError> {
 
     let mut declared = Declarations::default();
     let mut file_layers: Vec<Vec<Contribution>> = Vec::new();
+    let mut unknown_plugins = Vec::new();
     let defaults = built_in_defaults(&layout.user_dir);
     declared.absorb(&defaults, Layer::BuiltIn, None);
     let mut built_in = contributions_of(&defaults, Layer::BuiltIn, None)?;
     super::modules::normalize_aliases(&mut built_in, &request.known_modules)?;
     built_in.extend(super::modules::defaults(&request.known_modules));
+    built_in.extend(super::plugins::defaults(&request.known_plugins));
     file_layers.push(built_in);
     for file in &layout.files {
         let mut loaded = load(&file.path, file.layer)?;
+        super::plugins::report_file_plugins(
+            &loaded.file,
+            file.layer,
+            &file.path,
+            &request.known_plugins,
+            &mut unknown_plugins,
+        );
         super::modules::validate_file_modules(
             &loaded.file,
             file.layer,
@@ -42,7 +51,20 @@ pub fn resolve(request: &ResolveRequest) -> Result<Resolution, ConfigError> {
         file_layers.push(loaded.contributions);
     }
 
-    let mut env = env_contributions(&request.env, &request.known_modules)?;
+    let mut env = env_contributions(&request.env, &request.known_modules, &request.known_plugins)?;
+    super::plugins::report_environment(&request.env, &request.known_plugins, &mut unknown_plugins);
+    super::plugins::report_overrides(
+        &request.cli,
+        Layer::CommandLine,
+        &request.known_plugins,
+        &mut unknown_plugins,
+    );
+    super::plugins::report_overrides(
+        &request.session,
+        Layer::SessionOverride,
+        &request.known_plugins,
+        &mut unknown_plugins,
+    );
     super::modules::normalize_aliases(&mut env, &request.known_modules)?;
     super::modules::validate_overrides(&request.cli, Layer::CommandLine, &request.known_modules)?;
     super::modules::validate_overrides(
@@ -85,7 +107,7 @@ pub fn resolve(request: &ResolveRequest) -> Result<Resolution, ConfigError> {
     super::modules::legacy_defaults(&mut provenance, &request.known_modules);
     super::modules::mirror_aliases(&mut provenance, &request.known_modules);
 
-    let config = extract(
+    let mut config = extract(
         &provenance,
         layout.user_dir.clone(),
         selected,
@@ -93,6 +115,7 @@ pub fn resolve(request: &ResolveRequest) -> Result<Resolution, ConfigError> {
         agent_profiles,
         request,
     )?;
+    config.unknown_plugins = unknown_plugins;
     let cache_miss_notices = required_flag(&provenance, "cache.miss_notices")?;
     Ok(Resolution {
         layout,
@@ -500,7 +523,7 @@ pub(super) struct Declarations {
 }
 
 impl Declarations {
-    fn absorb(&mut self, file: &ConfigFile, layer: Layer, path: Option<&Path>) {
+    pub(super) fn absorb(&mut self, file: &ConfigFile, layer: Layer, path: Option<&Path>) {
         for name in file.agent_modes.keys() {
             let key = join_key(&["agent_modes", name]);
             self.agent_modes
@@ -1148,6 +1171,7 @@ const HOST_ENV_VARIABLES: &[&str] = &["SMITH_LOG"];
 pub(super) fn env_contributions(
     env: &BTreeMap<String, String>,
     known: &[KnownModule],
+    plugins: &[KnownPlugin],
 ) -> Result<Vec<Contribution>, ConfigError> {
     let mut claimed: BTreeMap<String, Vec<(&str, &str)>> = BTreeMap::new();
     for (name, value) in env {
@@ -1157,7 +1181,8 @@ pub(super) fn env_contributions(
         }
         let setting = setting_for_env(&upper)
             .map(|key| canonical_setting_key(key).to_owned())
-            .or_else(|| super::modules::setting_for_module_env(&upper, known));
+            .or_else(|| super::modules::setting_for_module_env(&upper, known))
+            .or_else(|| super::plugins::setting_for_plugin_env(&upper, plugins));
         match setting {
             Some(key) => claimed
                 .entry(key)
@@ -1197,7 +1222,7 @@ pub(super) fn env_contributions(
         }
         let (name, raw) = hits[0];
         let source = Source::environment(name);
-        let kind = if key.starts_with("modules.") {
+        let kind = if key.starts_with("modules.") || key.starts_with("plugins.") {
             ValueKind::Flag
         } else {
             kind_of(&key)

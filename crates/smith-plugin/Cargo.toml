@@ -1,0 +1,21 @@
+[package]
+name = "smith-plugin"
+description = "Plugin bundle inspection, sources, and filesystem storage for Smith."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+smith-config = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+fs2 = { workspace = true }

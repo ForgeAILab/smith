@@ -378,6 +378,9 @@ pub struct RuntimeRequest {
     pub change_recorder: Option<Arc<smith_tools::ChangeRecorder>>,
     /// Smith-owned, descriptor-first skill sources.
     pub skills: SmithSkillSources,
+    /// Host-admitted plugin content for each resolved profile, including child
+    /// and advisor routes. An absent entry preserves ordinary host inheritance.
+    pub plugin_profiles: BTreeMap<String, PluginProfile>,
     /// Optional Smith-owned bounded memory policy and records.
     pub memory: Option<Arc<SmithMemorySource>>,
     /// Optional semantic-summary policy. Standard persistent hosts install
@@ -457,6 +460,7 @@ impl RuntimeRequest {
             background_services: None,
             change_recorder: None,
             skills: crate::built_in_skills::built_in_sources(),
+            plugin_profiles: BTreeMap::new(),
             memory: None,
             semantic_summary: None,
             built_in_tools: true,
@@ -481,6 +485,39 @@ impl RuntimeRequest {
             event_buffer: DEFAULT_EVENT_BUFFER,
             shutdown_timeout_ms: DEFAULT_SHUTDOWN_TIMEOUT_MS,
         }
+    }
+}
+
+/// Digest-admitted plugin inputs for one host-resolved profile.
+#[derive(Debug, Clone, Default)]
+pub struct PluginProfile {
+    /// Namespaced skill declarations for this profile only.
+    pub skills: SmithSkillSources,
+    /// Supervisor retaining this profile's plugin connections.
+    pub mcp: Option<Arc<crate::mcp::McpSupervisor>>,
+    /// Displayed server names selecting plugin tools from the supervisor.
+    pub servers: BTreeSet<String>,
+    /// User-manifest composition evidence, granting no new capabilities.
+    pub modules: Vec<crate::harness::ModuleSpec>,
+}
+
+impl PluginProfile {
+    pub(crate) fn tools(&self) -> Vec<Arc<dyn Tool>> {
+        let prefixes = self
+            .servers
+            .iter()
+            .map(|name| format!("mcp__{}__", smith_config::mcp::registry_server_name(name)))
+            .collect::<Vec<_>>();
+        self.mcp.as_ref().map_or_else(Vec::new, |mcp| {
+            mcp.tools()
+                .into_iter()
+                .filter(|tool| {
+                    prefixes
+                        .iter()
+                        .any(|prefix| tool.spec().name.starts_with(prefix))
+                })
+                .collect()
+        })
     }
 }
 
@@ -586,6 +623,8 @@ pub struct RuntimePolicy {
     pub max_output_tokens: Option<u32>,
     /// The registered tool names, in registration order.
     pub tools: Vec<String>,
+    /// Effective plugin enablement used by this serving composition.
+    pub plugins: BTreeMap<String, smith_config::resolve::ResolvedPlugin>,
     /// Resolved activatable skill names in deterministic order.
     pub skills: Vec<String>,
     /// Installed memory source revision.

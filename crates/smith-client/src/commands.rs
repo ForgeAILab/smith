@@ -121,6 +121,31 @@ pub enum ModulesAction {
     },
 }
 
+/// A confirmed plugin edit tied to the exact preview and user-file bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginSwitchRequest {
+    /// Installed bundle name.
+    pub name: String,
+    /// Requested user-file value.
+    pub enabled: bool,
+    /// Host-owned identity of the previewed edit.
+    pub fingerprint: String,
+}
+
+/// Typed installed-plugin listing and reviewed enablement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginsAction {
+    /// List installed states and components.
+    List,
+    /// Preview one user-layer enablement edit.
+    Switch {
+        /// Installed plugin name, checked by the host.
+        name: String,
+        /// Requested enablement.
+        enabled: bool,
+    },
+}
+
 /// Typed local MCP server control.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpAction {
@@ -273,10 +298,15 @@ impl MenuRow<'_> {
     }
 
     /// File source layer; built-ins have no layer label.
-    pub fn layer_label(&self) -> Option<&'static str> {
+    pub fn layer_label(&self) -> Option<&str> {
         match self {
             Self::BuiltIn(_) => None,
-            Self::File(entry) => Some(entry.command.layer.label()),
+            Self::File(entry) => Some(
+                entry
+                    .command
+                    .plugin_name()
+                    .unwrap_or(entry.command.layer.label()),
+            ),
         }
     }
 }
@@ -552,6 +582,17 @@ command_registry! {
         advanced: false,
         grammar: ArgumentGrammar::Subcommand(parse_modules),
         usage_example: "/modules image-generation off",
+        complete_without_value: true,
+    },
+    /// List installed bundles or review their enablement.
+    Host Plugins(PluginsAction) => CommandSpec {
+        name: "plugins",
+        argument_hint: "[NAME on|off]",
+        description: "List plugin bundles or turn one on or off",
+        requires_idle: false,
+        advanced: false,
+        grammar: ArgumentGrammar::Subcommand(parse_plugins),
+        usage_example: "/plugins deploy-tools off",
         complete_without_value: true,
     },
     /// Show what the session can use, or narrow it for this session.
@@ -905,6 +946,18 @@ fn parse_modules(argument: Option<String>, second: Option<String>) -> Result<Com
     Ok(Command::Host(HostCommand::Modules(action)))
 }
 
+fn parse_plugins(argument: Option<String>, second: Option<String>) -> Result<Command, String> {
+    let action = match (argument, second.as_deref()) {
+        (None, None) => PluginsAction::List,
+        (Some(name), Some("on" | "off")) => PluginsAction::Switch {
+            name,
+            enabled: second.as_deref() == Some("on"),
+        },
+        _ => return Err("usage: /plugins [NAME on|off]".into()),
+    };
+    Ok(Command::Host(HostCommand::Plugins(action)))
+}
+
 fn parse_mcp(argument: Option<String>, second: Option<String>) -> Result<Command, String> {
     match (argument.as_deref(), second) {
         (None, _) => Ok(Command::Host(HostCommand::Mcp(McpAction::List))),
@@ -1086,7 +1139,7 @@ pub fn help_with(catalog: &CommandCatalog) -> HelpReport {
             argument_hint: entry.command.argument_hint.clone().unwrap_or_default(),
             description: format!(
                 "{} · {}",
-                entry.command.layer.label(),
+                entry.command.source_label(),
                 entry.command.description
             ),
         })

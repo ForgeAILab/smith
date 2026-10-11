@@ -20,6 +20,8 @@ mod logging;
 mod login_progress;
 mod mcp;
 mod modules;
+mod plugin_command;
+mod plugins;
 mod resources;
 mod runtime_host;
 mod screen_runner;
@@ -102,6 +104,10 @@ async fn execute(command: Command) -> Result<u8> {
             print_setup_outcome(outcome, &mut std::io::stdout().lock())?;
             Ok(0)
         }
+        Command::Plugin(action) => {
+            plugin_command::run(action)?;
+            Ok(0)
+        }
         Command::Run(args) => run_command(args).await,
     }
 }
@@ -174,10 +180,11 @@ async fn run_command(mut args: RunArgs) -> Result<u8> {
         Some(prompt) => {
             let prompt = {
                 let prepared = config_command::prepare(&args.selection)?;
-                headless::prepare_prompt(
+                headless::prepare_prompt_with_config(
                     &prompt,
                     &prepared.resolution.layout.user_dir,
                     &prepared.project,
+                    &prepared.resolution.config,
                 )?
             };
             let started = start_host(

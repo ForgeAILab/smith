@@ -19,6 +19,7 @@ itself, which the runtime deliberately ships as traits only:
 | `smith-host` | Prepared approval/question brokers and the project workspace boundary |
 | `smith-runtime` | The single runtime factory, harness policy, checkpoints, artifacts, snapshots, and event journal |
 | `smith-module` | Value-returning compiled module contracts and mount planning |
+| `smith-plugin` | Claude Code bundle inspection, sources, digest verification, and user storage |
 | `crates/modules/*` | Optional image-generation and budget-notice modules |
 | `smith-tools` | The coding tools: `read`, `list`, `search`, `edit`, `shell` |
 | `smith-tui` | Transcript, status, composer, theme, key map, and rendering |
@@ -78,6 +79,13 @@ user-config switch and applies it at a safe boundary; `smith config modules`
 prints the same listing without a session. Default builds include both
 first-party modules, and `--no-default-features` builds retain the core tools.
 See [`docs/modules.md`](docs/modules.md) for the contract and contributor steps.
+
+Installable plugins bundle namespaced skills, prompt commands, and MCP servers
+in the Claude Code layout. `smith plugin add` reviews every component and a digest
+of every plugin file before installation and trust; `/plugins` lists admission
+states and previews user-config enablement changes. Hooks are listed and do not
+run. Local directories, git sources, and marketplaces are supported. See
+[`docs/plugins.md`](docs/plugins.md) for installation and authoring.
 
 When ordinary session persistence and protected checkpoints are both
 available, delegated children are durable addressable sessions. `@child-1

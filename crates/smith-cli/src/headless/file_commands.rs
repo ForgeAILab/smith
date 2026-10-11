@@ -2,16 +2,36 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Result};
-use smith_client::file_commands::{CommandCatalog, InvocationRefusal, validate_name};
+#[cfg(test)]
+use anyhow::Context;
+use anyhow::Result;
+use smith_client::file_commands::{CommandCatalog, InvocationRefusal, validate_invocation_name};
 use smith_config::trust::TrustStore;
 
 /// Discovers and expands commands before constructing the unattended host.
+#[cfg(test)]
 pub(crate) fn prepare_prompt(prompt: &str, user_root: &Path, project: &Path) -> Result<String> {
     let trust = TrustStore::open(user_root)
         .map_err(|error| anyhow::anyhow!("{error}"))
         .context("reading command trust")?;
     let catalog = CommandCatalog::discover(Some(user_root), Some(project), &trust);
+    Ok(expand_prompt(prompt, &catalog, Some(project), &trust)?)
+}
+
+/// Production expansion uses the same profile-selected active plugins as startup.
+pub(crate) fn prepare_prompt_with_config(
+    prompt: &str,
+    user_root: &Path,
+    project: &Path,
+    config: &smith_config::resolve::ResolvedConfig,
+) -> Result<String> {
+    let trust = TrustStore::open(user_root)?;
+    let plugins = crate::plugins::PluginCatalog::discover(user_root)?.resolve(config, project)?;
+    let catalog = plugins.commands(CommandCatalog::discover(
+        Some(user_root),
+        Some(project),
+        &trust,
+    ));
     Ok(expand_prompt(prompt, &catalog, Some(project), &trust)?)
 }
 
@@ -29,7 +49,7 @@ fn expand_prompt(
     };
     let end = text.find(char::is_whitespace).unwrap_or(text.len());
     let name = &text[..end];
-    if validate_name(name).is_err() || catalog.resolve(name).is_none() {
+    if validate_invocation_name(name).is_err() || catalog.resolve(name).is_none() {
         return Ok(prompt.to_owned());
     }
     let arguments = text[end..].trim_start();

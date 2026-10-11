@@ -58,6 +58,15 @@ pub struct McpServer {
     pub values: Vec<McpValue>,
 }
 
+impl McpServer {
+    /// Bundle attribution retained by the namespaced server identity.
+    pub fn attribution(&self) -> String {
+        self.name
+            .split_once(':')
+            .map_or_else(String::new, |(plugin, _)| format!(" · plugin {plugin}"))
+    }
+}
+
 /// Connection and trust outcomes, independent of display labels.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpServerState {
@@ -152,11 +161,12 @@ pub fn render_plain(report: &McpReport) -> String {
     let mut lines = Vec::new();
     for server in servers {
         lines.push(format!(
-            "{} · {} · {} · {}",
+            "{} · {} · {} · {}{}",
             server.name,
             server.transport,
             server.state.render_value(&server.name),
             server.source,
+            server.attribution(),
         ));
         for rejected in &server.rejected {
             lines.push(format!("  refused a tool: {rejected}"));

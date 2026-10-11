@@ -316,6 +316,7 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
             .iter()
             .map(|tool| tool.spec().name)
             .collect(),
+        plugins: config.plugins.clone(),
         skills: prompt
             .skills
             .abilities()
@@ -545,6 +546,10 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
                     // An inheriting child is the parent's run narrowed, so it
                     // runs turns wherever the parent's do.
                     execution,
+                    plugins: request
+                        .plugin_profiles
+                        .get(&config.agent.profile.name)
+                        .cloned(),
                     modules: request.modules.clone(),
                     module_context: child_module_context,
                 },

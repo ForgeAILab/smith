@@ -789,6 +789,8 @@ pub(super) fn extract(
         mcp,
         image_generation,
         modules: super::modules::extract_modules(provenance, &request.known_modules)?,
+        plugins: super::plugins::extract_plugins(provenance, &request.known_plugins)?,
+        unknown_plugins: Vec::new(),
     })
 }
 

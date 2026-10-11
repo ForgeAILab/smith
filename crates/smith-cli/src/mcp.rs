@@ -29,6 +29,7 @@ pub(super) struct McpContext {
     supervisor: Arc<McpSupervisor>,
     servers: BTreeMap<String, ResolvedMcpServer>,
     trust: Mutex<TrustStore>,
+    plugin_servers: BTreeMap<String, ResolvedMcpServer>,
     project: PathBuf,
 }
 
@@ -48,31 +49,57 @@ impl McpContext {
     /// Returns `None` when nothing is declared: a project with no `[mcp]` table
     /// must behave exactly as it did before this existed, down to spawning no
     /// task and opening no trust file.
+    #[cfg(test)]
     pub(super) fn start(
         config: &ResolvedConfig,
         user_dir: &Path,
         project: &Path,
         credentials: Option<smith_config::credential::CredentialResolver>,
     ) -> anyhow::Result<Option<Arc<Self>>> {
-        if config.mcp.servers.is_empty() {
+        Self::start_with_plugins(config, user_dir, project, credentials, BTreeMap::new())
+    }
+
+    pub(super) fn start_with_plugins(
+        config: &ResolvedConfig,
+        user_dir: &Path,
+        project: &Path,
+        credentials: Option<smith_config::credential::CredentialResolver>,
+        plugin_servers: BTreeMap<String, ResolvedMcpServer>,
+    ) -> anyhow::Result<Option<Arc<Self>>> {
+        let mut mcp = config.mcp.clone();
+        mcp.servers.extend(plugin_servers.clone());
+        if mcp.servers.is_empty() {
             return Ok(None);
         }
         let trust = TrustStore::open(user_dir).map_err(|error| anyhow::anyhow!("{error}"))?;
         let options = McpOptions::new(project)
+            .with_plugin_servers(plugin_servers.clone())
             .with_credentials(credentials)
             .with_max_output_bytes(
                 usize::try_from(config.limits.tool_output_limit_bytes.value).unwrap_or(usize::MAX),
             );
-        let supervisor = McpSupervisor::plan(&config.mcp, &trust, options)
+        let supervisor = McpSupervisor::plan(&mcp, &trust, options)
             .map_err(|error| anyhow::anyhow!("{error}"))?;
         supervisor.connect();
 
         Ok(Some(Arc::new(Self {
             supervisor,
-            servers: config.mcp.servers.clone(),
+            servers: mcp.servers,
+            plugin_servers,
             trust: Mutex::new(trust),
             project: project.to_path_buf(),
         })))
+    }
+
+    /// Reuse connections only while declarations and plugin admission agree.
+    pub(super) fn matches(
+        &self,
+        config: &ResolvedConfig,
+        plugins: &BTreeMap<String, ResolvedMcpServer>,
+    ) -> bool {
+        let mut servers = config.mcp.servers.clone();
+        servers.extend(plugins.clone());
+        self.servers == servers && self.plugin_servers == *plugins
     }
 
     /// The supervisor a runtime composes its remote tools from.
@@ -93,6 +120,12 @@ impl McpContext {
     /// Renders what the user is being asked to authorize, without recording
     /// anything.
     pub(super) fn confirmation(&self, name: &str) -> Result<String, String> {
+        if self.plugin_servers.contains_key(name) {
+            return Err(format!(
+                "plugin `{}` owns this server's trust; confirm the plugin instead",
+                name.split(':').next().unwrap_or(name)
+            ));
+        }
         let server = self.declared(name)?;
         let status = self
             .trust
@@ -109,6 +142,12 @@ impl McpContext {
     /// happened on the strength of an unsaved decision would run again
     /// unattended on the next start.
     pub(super) fn trust(&self, name: &str) -> Result<ContentDigest, String> {
+        if self.plugin_servers.contains_key(name) {
+            return Err(format!(
+                "plugin `{}` owns this server's trust; confirm the plugin instead",
+                name.split(':').next().unwrap_or(name)
+            ));
+        }
         let server = self.declared(name)?;
         let executable = mcp::executable(server);
         self.trust

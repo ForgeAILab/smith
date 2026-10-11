@@ -160,6 +160,11 @@ pub(super) async fn start_host(
             profile.posture.source, profile.name, profile.name,
         );
     }
+    let plugins = crate::plugins::PluginCatalog::discover(&resolution.layout.user_dir)?
+        .resolve(&resolution.config, &project)?;
+    for diagnostic in plugins.diagnostics() {
+        eprintln!("{diagnostic}");
+    }
     let mut runtime = preflight_request(&resolution, &project, surface, Some(catalog.clone()))
         .context("rooting the project workspace")?;
     runtime.capability_denials = selection.capability_denials.clone();
@@ -168,7 +173,7 @@ pub(super) async fn start_host(
     // the Smith *host*, which is the only layer that knows a user state root, a
     // project root, and the decisions recorded about them.
     let (skills, skill_context) = crate::skills::SkillContext::compose(
-        std::mem::take(&mut runtime.skills),
+        plugins.skills(std::mem::take(&mut runtime.skills))?,
         &resolution.layout.user_dir,
         &project,
     )
@@ -180,10 +185,45 @@ pub(super) async fn start_host(
             &resolution.layout.user_dir,
             &project,
         )
+        .and_then(|commands| commands.with_plugins(&resolution.config))
         .map_err(|error| anyhow::anyhow!("{error}"))
         .context("discovering commands")?,
     );
     let command_modules = smith_client::file_commands::contribution_modules(&commands.catalog());
+
+    // Connections start here, beside the rest of session start, and nothing
+    // below waits for them: a server that takes a minute to install itself
+    // must not be able to delay the prompt.
+    let plugin_servers = plugins.mcp_servers();
+    let mut retired_mcp = None;
+    let mcp = match mcp {
+        Some(context) if context.matches(&resolution.config, &plugin_servers) => Some(context),
+        previous => {
+            retired_mcp = previous;
+            crate::mcp::McpContext::start_with_plugins(
+                &resolution.config,
+                &resolution.layout.user_dir,
+                &project,
+                runtime.credentials.clone(),
+                plugin_servers,
+            )
+            .context("planning the declared MCP servers")?
+        }
+    };
+    if let Some(context) = &mcp {
+        runtime.mcp = Some(context.supervisor());
+    }
+
+    let root_plugins = plugins.profile(
+        &resolution.config,
+        &resolution.layout.user_dir,
+        &project,
+        runtime.credentials.clone(),
+        mcp.as_ref(),
+    )?;
+    runtime
+        .plugin_profiles
+        .insert(agents.profile.name.clone(), root_plugins);
     let persistence_redactor = DefaultRedactor::new();
     runtime.persistence_redactor = Some(persistence_redactor.clone());
     for profile in agents
@@ -226,6 +266,18 @@ pub(super) async fn start_host(
         ) {
             catalog_sources.push(source);
         }
+        let child_plugins = crate::plugins::PluginCatalog::discover(&resolution.layout.user_dir)?
+            .resolve(&child_resolution.config, &project)?;
+        let profile_plugins = child_plugins.profile(
+            &child_resolution.config,
+            &resolution.layout.user_dir,
+            &project,
+            runtime.credentials.clone(),
+            mcp.as_ref(),
+        )?;
+        runtime
+            .plugin_profiles
+            .insert(profile.name.clone(), profile_plugins);
         runtime.child_profiles.push(ChildProfileRequest {
             config: child_resolution.config,
             catalog_sources,
@@ -267,28 +319,24 @@ pub(super) async fn start_host(
         ) {
             catalog_sources.push(source);
         }
+        let advisor_plugins = crate::plugins::PluginCatalog::discover(&resolution.layout.user_dir)?
+            .resolve(&advisor_resolution.config, &project)?;
+        let profile_plugins = advisor_plugins.profile(
+            &advisor_resolution.config,
+            &resolution.layout.user_dir,
+            &project,
+            runtime.credentials.clone(),
+            mcp.as_ref(),
+        )?;
+        runtime.plugin_profiles.insert(
+            advisor_resolution.config.agent.profile.name.clone(),
+            profile_plugins,
+        );
         runtime.advisor_profile = Some(AdvisorProfileRequest {
             config: advisor_resolution.config,
             catalog_sources,
             provider: None,
         });
-    }
-
-    // Connections start here, beside the rest of session start, and nothing
-    // below waits for them: a server that takes a minute to install itself
-    // must not be able to delay the prompt.
-    let mcp = match mcp {
-        Some(context) => Some(context),
-        None => crate::mcp::McpContext::start(
-            &resolution.config,
-            &resolution.layout.user_dir,
-            &project,
-            runtime.credentials.clone(),
-        )
-        .context("planning the declared MCP servers")?,
-    };
-    if let Some(context) = &mcp {
-        runtime.mcp = Some(context.supervisor());
     }
 
     let mut approvals = None;
@@ -398,18 +446,27 @@ pub(super) async fn start_host(
     // server slower than the grace still cannot delay the prompt: the wait
     // ends, the session starts without it, and its tools join at the next idle
     // boundary.
+    let budget = Duration::from_millis(match surface {
+        HostSurface::Terminal => INTERACTIVE_MCP_GRACE_MS,
+        HostSurface::Headless | HostSurface::Child => {
+            smith_runtime::mcp::DEFAULT_STARTUP_TIMEOUT_MS
+        }
+    });
+    let mut supervisors = request
+        .runtime
+        .plugin_profiles
+        .values()
+        .filter_map(|profile| profile.mcp.clone())
+        .collect::<Vec<_>>();
     if let Some(context) = &mcp {
-        let budget = match surface {
-            HostSurface::Terminal => INTERACTIVE_MCP_GRACE_MS,
-            HostSurface::Headless | HostSurface::Child => {
-                smith_runtime::mcp::DEFAULT_STARTUP_TIMEOUT_MS
-            }
-        };
-        context
-            .supervisor()
-            .settle(Duration::from_millis(budget))
-            .await;
+        supervisors.push(context.supervisor());
     }
+    futures_util::future::join_all(
+        supervisors
+            .iter()
+            .map(|supervisor| supervisor.settle(budget)),
+    )
+    .await;
     let host = Box::pin(smith_runtime::host::start_with_modules(
         request,
         command_modules,
@@ -421,6 +478,12 @@ pub(super) async fn start_host(
         .await
         .map_err(|error| anyhow::anyhow!("{error}"))
         .context("listing project sessions")?;
+
+    // Only retire the old connections after composition succeeds. A failed
+    // reconfigure leaves the previous session's MCP basis available for rollback.
+    if let Some(retired) = retired_mcp {
+        retired.supervisor().shutdown().await;
+    }
 
     Ok(StartedHost {
         host,
@@ -597,6 +660,10 @@ async fn run_interactive_hosts(
         smith_config::user_config::CommittedConfigEdit,
         smith_client::commands::ModuleSwitchRequest,
     )> = None;
+    let mut plugin_change: Option<(
+        smith_config::user_config::CommittedConfigEdit,
+        smith_client::commands::PluginSwitchRequest,
+    )> = None;
     let mut mcp: Option<Arc<crate::mcp::McpContext>> = None;
     let mut app = None;
     // Initialize after raw mode is entered, then retain input through host
@@ -613,6 +680,14 @@ async fn run_interactive_hosts(
         .await
         {
             Ok(started) => started,
+            Err(error) if plugin_change.is_some() => {
+                let (committed, _) = plugin_change.take().expect("pending plugin edit");
+                committed
+                    .rollback()
+                    .context("rolling back the plugin enablement")?;
+                host_notice = Some(format!("plugin enablement rolled back · {error:#}"));
+                continue;
+            }
             Err(error) if module_change.is_some() => {
                 let (committed, _) = module_change.take().expect("pending module edit");
                 committed
@@ -656,6 +731,18 @@ async fn run_interactive_hosts(
                 .get(&request.id)
                 .map(|resolved| {
                     crate::modules::switch_outcome(&request.id, request.enabled, resolved)
+                });
+            committed.accept();
+        }
+        if let Some((committed, request)) = plugin_change.take() {
+            host_notice = started
+                .host
+                .runtime()
+                .policy()
+                .plugins
+                .get(&request.name)
+                .map(|resolved| {
+                    crate::plugins::switch_outcome(&request.name, request.enabled, resolved)
                 });
             committed.accept();
         }
@@ -727,7 +814,7 @@ async fn run_interactive_hosts(
                 catalog: catalog.clone(),
                 mcp: mcp.clone(),
                 skills,
-                commands,
+                commands: commands.clone(),
                 capability_denials: args.selection.capability_denials.clone(),
             },
             PresentationOptions {
@@ -827,6 +914,22 @@ async fn run_interactive_hosts(
                 resume = Some(current_session);
                 frozen_catalog = None;
                 continue;
+            }
+            InteractiveExit::PluginSwitch(request) => {
+                resume = Some(current_session);
+                frozen_catalog = Some(catalog);
+                let report = commands.plugins_report().map_err(anyhow::Error::msg);
+                let committed = report.and_then(|report| {
+                    crate::plugins::commit_switch(
+                        &host.runtime().policy().user_dir,
+                        &report,
+                        &request,
+                    )
+                });
+                match committed {
+                    Ok(committed) => plugin_change = Some((committed, request)),
+                    Err(error) => host_notice = Some(format!("plugin unchanged · {error:#}")),
+                }
             }
             InteractiveExit::ModuleSwitch(request) => {
                 resume = Some(current_session);

@@ -8,10 +8,12 @@ mod harness;
 mod load;
 mod mcp;
 mod modules;
+mod plugins;
 mod provenance;
 mod provider;
 mod types;
 
 pub use load::{env_name, inspect, resolve};
+pub use plugins::{PluginSelection, resolve_plugin_selection};
 pub use provenance::*;
 pub use types::*;

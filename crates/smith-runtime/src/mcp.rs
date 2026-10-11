@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use agent_runtime_core::cancel::{CancelReason, Cancellation};
 use agent_runtime_core::error::RuntimeError;
 use agent_runtime_core::tool::{Tool, ToolEffects};
 use agent_runtime_mcp::{
@@ -124,6 +125,9 @@ pub struct McpOptions {
     /// There is intentionally no Smith configuration deserializer for these
     /// records: repository and server content cannot create a narrower grant.
     pub reviewed_tool_policies: Vec<SmithMcpToolPolicy>,
+    /// Exact declarations admitted by the host's digest-bound plugin decision.
+    /// Matching the full declaration prevents a name alone from granting trust.
+    pub plugin_servers: BTreeMap<String, ResolvedMcpServer>,
 }
 
 /// One host-owned narrow MCP classification bound to exact reviewed identity.
@@ -170,6 +174,7 @@ impl McpOptions {
             startup_timeout: Duration::from_millis(DEFAULT_STARTUP_TIMEOUT_MS),
             max_output_bytes: agent_runtime_mcp::config::DEFAULT_MAX_OUTPUT_BYTES,
             reviewed_tool_policies: Vec::new(),
+            plugin_servers: BTreeMap::new(),
         }
     }
 
@@ -182,6 +187,12 @@ impl McpOptions {
     /// Bounds how much text one remote call contributes to the transcript.
     pub fn with_max_output_bytes(mut self, bytes: usize) -> Self {
         self.max_output_bytes = bytes;
+        self
+    }
+
+    /// Supplies exact plugin declarations whose bundle trust the host verified.
+    pub fn with_plugin_servers(mut self, servers: BTreeMap<String, ResolvedMcpServer>) -> Self {
+        self.plugin_servers = servers;
         self
     }
 
@@ -258,6 +269,7 @@ pub struct McpSupervisor {
     options: McpOptions,
     servers: Mutex<BTreeMap<String, ServerSlot>>,
     changes: tokio::sync::watch::Sender<u64>,
+    retired: Cancellation,
 }
 
 impl std::fmt::Debug for McpSupervisor {
@@ -295,7 +307,13 @@ impl McpSupervisor {
     ) -> Result<Arc<Self>, RuntimeError> {
         let mut servers = BTreeMap::new();
         for server in mcp.servers.values() {
-            let admission = admit(server, trust, &options.project)?;
+            let admission = if server.enabled.value
+                && options.plugin_servers.get(&server.name) == Some(server)
+            {
+                McpAdmission::Connect
+            } else {
+                admit(server, trust, &options.project)?
+            };
             let state = match admission {
                 McpAdmission::Connect => McpState::Connecting,
                 McpAdmission::Disabled => McpState::Disabled,
@@ -323,6 +341,7 @@ impl McpSupervisor {
             options,
             servers: Mutex::new(servers),
             changes: tokio::sync::watch::Sender::new(0),
+            retired: Cancellation::new(),
         }))
     }
 
@@ -333,6 +352,7 @@ impl McpSupervisor {
             options: McpOptions::new(project),
             servers: Mutex::new(BTreeMap::new()),
             changes: tokio::sync::watch::Sender::new(0),
+            retired: Cancellation::new(),
         })
     }
 
@@ -463,6 +483,9 @@ impl McpSupervisor {
     /// teardown: retiring it underneath an in-flight call would turn a clean
     /// exit into a failed turn.
     pub async fn shutdown(&self) {
+        self.retired.cancel(CancelReason::Host(
+            "MCP supervisor retired at a safe boundary".into(),
+        ));
         let connections: Vec<Arc<McpConnection>> = {
             let mut servers = self.servers.lock().expect("supervisor state");
             servers
@@ -482,7 +505,12 @@ impl McpSupervisor {
     }
 
     async fn connect_one(self: Arc<Self>, server: ResolvedMcpServer) {
-        let config = match self.server_config(&server).await {
+        let configured = tokio::select! {
+            biased;
+            _ = self.retired.cancelled() => return,
+            configured = self.server_config(&server) => configured,
+        };
+        let config = match configured {
             Ok(config) => config,
             Err(reason) => {
                 self.record_failure(&server.name, reason);
@@ -490,9 +518,17 @@ impl McpSupervisor {
             }
         };
 
-        match self.connector.connect(&config).await {
+        let connected = tokio::select! {
+            biased;
+            _ = self.retired.cancelled() => return,
+            connected = self.connector.connect(&config) => connected,
+        };
+        match connected {
             Ok(connected) => {
                 let mut servers = self.servers.lock().expect("supervisor state");
+                if self.retired.is_cancelled() {
+                    return;
+                }
                 if let Some(slot) = servers.get_mut(&server.name) {
                     slot.report.state = McpState::Connected {
                         tools: connected.tools.len(),
@@ -538,7 +574,10 @@ impl McpSupervisor {
                 headers: self.headers(credential.as_ref(), headers).await?,
             },
         };
-        let mut config = McpServerConfig::new(server.name.clone(), transport);
+        let mut config = McpServerConfig::new(
+            smith_config::mcp::registry_server_name(&server.name),
+            transport,
+        );
         // Smith supplies its own explicit host floor even though the shared
         // package currently has the same conservative default. This keeps the
         // product boundary reviewable and prevents an upstream default change

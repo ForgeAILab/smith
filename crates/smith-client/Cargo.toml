@@ -17,6 +17,7 @@ chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 smith-config = { workspace = true }
+smith-plugin = { workspace = true }
 smith-runtime = { workspace = true }
 smith-module = { workspace = true }
 time = { workspace = true }

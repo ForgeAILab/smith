@@ -474,3 +474,27 @@ fn confirmed_module_switch_waits_for_work_and_confirmation_to_finish() {
         Some(super::InteractiveExit::ModuleSwitch(applied)) if applied == request));
     assert!(pending.is_none());
 }
+
+#[test]
+fn confirmed_plugin_switch_waits_for_work_and_confirmation_to_finish() {
+    use smith_client::commands::PluginSwitchRequest;
+    use smith_tui::status::Activity;
+    let mut app = smith_tui::App::new("model", "project");
+    let request = PluginSwitchRequest {
+        name: "deploy-tools".into(),
+        enabled: false,
+        fingerprint: "reviewed-edit".into(),
+    };
+    let mut pending = Some(request.clone());
+    app.status.activity = Activity::Working;
+    assert!(super::plugin_switch_exit(&app, &mut pending).is_none());
+    assert_eq!(pending.as_ref(), Some(&request));
+    app.status.activity = Activity::Idle;
+    app.confirm_plugin_switch(request.clone(), "reviewed preview".into());
+    assert!(super::plugin_switch_exit(&app, &mut pending).is_none());
+    assert_eq!(pending.as_ref(), Some(&request));
+    app.overlay = None;
+    assert!(matches!(super::plugin_switch_exit(&app, &mut pending),
+        Some(super::InteractiveExit::PluginSwitch(applied)) if applied == request));
+    assert!(pending.is_none());
+}

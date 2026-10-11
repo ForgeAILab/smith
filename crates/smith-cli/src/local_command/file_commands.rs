@@ -18,12 +18,14 @@ pub(crate) struct CommandContext {
     user_root: PathBuf,
     project: PathBuf,
     catalog: Mutex<CommandCatalog>,
+    plugin_config: Option<smith_config::resolve::ResolvedConfig>,
 }
 
 impl CommandContext {
     pub(crate) fn discover(user_root: &Path, project: &Path) -> Result<Self, String> {
         let trust = TrustStore::open(user_root).map_err(|error| error.message)?;
         Ok(Self {
+            plugin_config: None,
             user_root: user_root.to_path_buf(),
             project: project.to_path_buf(),
             catalog: Mutex::new(CommandCatalog::discover(
@@ -32,6 +34,16 @@ impl CommandContext {
                 &trust,
             )),
         })
+    }
+
+    /// Binds plugin discovery to this session's resolved profile.
+    pub(crate) fn with_plugins(
+        mut self,
+        config: &smith_config::resolve::ResolvedConfig,
+    ) -> Result<Self, String> {
+        self.plugin_config = Some(config.clone());
+        self.reload()?;
+        Ok(self)
     }
 
     pub(crate) fn catalog(&self) -> CommandCatalog {
@@ -44,9 +56,35 @@ impl CommandContext {
 
     pub(crate) fn reload(&self) -> Result<CommandCatalog, String> {
         let trust = self.trust_store()?;
-        let catalog = CommandCatalog::discover(Some(&self.user_root), Some(&self.project), &trust);
+        let mut catalog =
+            CommandCatalog::discover(Some(&self.user_root), Some(&self.project), &trust);
+        if let Some(config) = &self.plugin_config {
+            let plugins = crate::plugins::PluginCatalog::discover(&self.user_root)
+                .and_then(|catalog| catalog.resolve(config, &self.project))
+                .map_err(|error| error.to_string())?;
+            catalog = plugins.commands(catalog);
+        }
         *self.catalog.lock().expect("command catalog") = catalog.clone();
         Ok(catalog)
+    }
+
+    pub(crate) fn plugins_report(
+        &self,
+    ) -> Result<smith_client::plugins_report::PluginsReport, String> {
+        let Some(config) = &self.plugin_config else {
+            return Ok(smith_client::plugins_report::PluginsReport::default());
+        };
+        crate::plugins::PluginCatalog::discover(&self.user_root)
+            .and_then(|catalog| catalog.resolve(config, &self.project))
+            .and_then(|plugins| {
+                plugins.report(
+                    &self.user_root,
+                    &config.plugins,
+                    &config.unknown_plugins,
+                    &self.project,
+                )
+            })
+            .map_err(|error| error.to_string())
     }
 
     /// File reads and trust checks happen here, before ordinary input handling.
@@ -67,6 +105,15 @@ impl CommandContext {
 
     fn decide(&self, name: &str) -> Result<(Executable, TrustStatus), String> {
         let catalog = self.catalog();
+        if catalog
+            .resolve(name)
+            .is_some_and(|entry| entry.command.layer == CommandLayer::Plugin)
+        {
+            return Err(format!(
+                "plugin `{}` owns this command's trust",
+                name.split(':').next().unwrap_or(name)
+            ));
+        }
         let entry = catalog.entries().iter()
             .find(|entry| entry.command.name == name && entry.command.layer == CommandLayer::Project)
             .ok_or_else(|| {

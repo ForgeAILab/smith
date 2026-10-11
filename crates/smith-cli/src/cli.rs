@@ -8,6 +8,9 @@ use std::path::PathBuf;
 use smith_config::model::{ApprovalMode, BackgroundExit};
 use smith_config::resolve::Overrides;
 
+mod plugin;
+pub(crate) use plugin::{MarketplaceAction, PluginAction};
+
 /// The command selected by process arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Command {
@@ -30,6 +33,8 @@ pub(crate) enum Command {
         /// The project whose session partition to inspect.
         selection: Selection,
     },
+    /// Manage user-owned plugin bundles without starting a session.
+    Plugin(PluginAction),
     /// Enter guided user-scoped provider/model setup.
     Setup(SetupArgs),
     /// Print command help.
@@ -233,6 +238,7 @@ impl ParseError {
 pub(crate) fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, ParseError> {
     let args = VecDeque::from_iter(args);
     match args.front().and_then(|arg| arg.to_str()) {
+        Some("plugin") => plugin::parse(args),
         Some("config") => parse_config(args),
         Some("sessions") => parse_sessions(args),
         Some("setup") => parse_setup(args),
@@ -641,6 +647,14 @@ USAGE:
   smith config explain <KEY> [SELECTION OPTIONS]
   smith config modules [SELECTION OPTIONS]
   smith sessions list [SELECTION OPTIONS]
+  smith plugin add <SOURCE> [--yes]
+  smith plugin list
+  smith plugin update [NAME] [--yes]
+  smith plugin remove <NAME> [--delete-data]
+  smith plugin marketplace add <SOURCE>
+  smith plugin marketplace list
+  smith plugin marketplace update [NAME]
+  smith plugin marketplace remove <NAME>
   smith setup [--project <PATH>]
   smith setup add-provider [--project <PATH>]
   smith setup add-model [--provider <NAME>] [--project <PATH>]
@@ -674,6 +688,13 @@ SELECTION OPTIONS:
   --provider, --model, --effort, --context-window, --approval, --yolo,
   --background-exit, and --allow-synthetic-cache-spend as described above.
   -h, --help                    Print help at either command level
+
+PLUGIN OPTIONS:
+      --yes                     Confirm the printed inventory and trust its digest
+      --delete-data             Also delete the removed plugin’s data directory
+  Sources: local path, github:owner/repo[#ref], git URL, or name@marketplace.
+  Installation and updates require a terminal confirmation or --yes.
+  -h, --help                    Print help at any plugin command level
 
 SETUP OPTIONS:
       --project <PATH>          Project used for post-setup preflight

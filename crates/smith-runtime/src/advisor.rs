@@ -67,6 +67,9 @@ pub struct AdvisorRoute {
     pub instructions: Option<String>,
     /// Advisor model's catalog rates, used only by presentation accounting.
     pub price: Option<smith_config::catalog::CatalogModelCost>,
+    /// Host-admitted content for this reviewer profile. Reviewer calls remain
+    /// tool-free; only budget-selected skill instructions enter their context.
+    pub plugins: Option<crate::factory::PluginProfile>,
 }
 
 /// One review result with provider usage retained for separate session accounting.
@@ -174,7 +177,31 @@ impl AdvisorRoute {
             };
             return usage.finish(Err(RuntimeError::tool(reason)), ctx.output_limit);
         }
-        let system = Message::system(self.system_prompt());
+        let mut prompt = self.system_prompt();
+        if let Some(plugins) = &self.plugins {
+            let query = history
+                .iter()
+                .rev()
+                .find(|message| message.role == Role::User)
+                .map(|message| format!("{:?}", message.content))
+                .unwrap_or_default();
+            let instructions = plugins.skills.resolve().and_then(|skills| {
+                skills.instructions_for(
+                    &query,
+                    self.context_policy.capability_budget.unwrap_or(1_024),
+                )
+            });
+            match instructions {
+                Ok(instructions) => {
+                    for body in instructions {
+                        prompt.push_str("\n\n");
+                        prompt.push_str(&body);
+                    }
+                }
+                Err(error) => return usage.finish(Err(error), ctx.output_limit),
+            }
+        }
+        let system = Message::system(prompt);
         let input_budget =
             ContextBudget::from_limits(&self.model_profile.limits, &self.context_policy)
                 .input_budget
@@ -597,6 +624,7 @@ mod tests {
             output_budget: resolve_output_budget(128_000, 4_096, Some(128), None, 0)
                 .expect("output budget"),
             instructions: None,
+            plugins: None,
             price: None,
         }
     }

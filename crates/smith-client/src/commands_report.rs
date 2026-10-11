@@ -46,18 +46,22 @@ pub struct CommandGroup {
 impl CommandsReport {
     /// Captures every declaration and discovery problem without reading files.
     pub fn from_catalog(catalog: &CommandCatalog) -> Self {
-        let groups = [CommandLayer::Project, CommandLayer::User]
-            .into_iter()
-            .filter_map(|layer| {
-                let entries = catalog
-                    .entries()
-                    .iter()
-                    .filter(|entry| entry.command.layer == layer)
-                    .cloned()
-                    .collect::<Vec<_>>();
-                (!entries.is_empty()).then_some(CommandGroup { layer, entries })
-            })
-            .collect::<Vec<_>>();
+        let groups = [
+            CommandLayer::Project,
+            CommandLayer::User,
+            CommandLayer::Plugin,
+        ]
+        .into_iter()
+        .filter_map(|layer| {
+            let entries = catalog
+                .entries()
+                .iter()
+                .filter(|entry| entry.command.layer == layer)
+                .cloned()
+                .collect::<Vec<_>>();
+            (!entries.is_empty()).then_some(CommandGroup { layer, entries })
+        })
+        .collect::<Vec<_>>();
         let problems = catalog.problems().to_vec();
         if groups.is_empty() && problems.is_empty() {
             Self::Empty
@@ -81,10 +85,14 @@ pub fn render_plain(report: &CommandsReport) -> String {
                 lines.push(group.layer.label().to_owned());
                 for entry in &group.entries {
                     lines.push(format!(
-                        "  /{} · {} · {}",
+                        "  /{} · {} · {}{}",
                         entry.command.name,
                         entry.state.reason(&entry.command.name),
-                        entry.command.description
+                        entry.command.description,
+                        entry
+                            .command
+                            .plugin_name()
+                            .map_or_else(String::new, |plugin| format!(" · plugin {plugin}"))
                     ));
                 }
             }

@@ -3,8 +3,9 @@
 ### Requirement: Plugin installation is hash-bound trust
 
 Smith MUST NOT load a plugin's content until the user has confirmed an
-inventory of what it would load, shown with a digest covering the manifest,
-every loaded component file, and its resolved MCP declarations. The decision
+inventory of what it would load, shown with a digest covering every file
+in the plugin directory, so that a script an MCP server runs is covered as
+well as the declaration that runs it. The decision
 SHALL be bound to that digest. When installed content no longer matches the
 recorded digest, the plugin MUST be withheld and reported as changed until
 confirmed again. Plugin content covered by a plugin confirmation MUST NOT

@@ -51,11 +51,12 @@ pub(super) fn render_mcp_report(
     for server in servers {
         lines.extend(render_mcp_text(
             &format!(
-                "{} · {} · {} · {}",
+                "{} · {} · {} · {}{}",
                 server.name,
                 server.transport,
                 server.state.render_value(&server.name),
                 server.source,
+                server.attribution(),
             ),
             width,
             theme,
@@ -151,7 +152,7 @@ pub(super) fn render_skills_report(
                     entry.state.render_value(&entry.name),
                 ),
                 &entry.description,
-                "",
+                &entry.attribution(group.layer),
                 width,
                 theme,
             ));

@@ -618,3 +618,15 @@ pub(super) fn render_modules_report(
     }
     lines
 }
+
+pub(super) fn render_plugins_report(
+    report: &smith_client::plugins_report::PluginsReport,
+    width: u16,
+    theme: Theme,
+) -> Vec<Line<'static>> {
+    reports::text(
+        &smith_client::plugins_report::render_plain(report),
+        width,
+        theme.style(Tone::Default),
+    )
+}

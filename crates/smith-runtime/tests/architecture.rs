@@ -11,6 +11,8 @@ use toml::{Table, Value};
 
 #[path = "architecture/modules.rs"]
 mod modules;
+#[path = "architecture/plugins.rs"]
+mod plugins;
 
 #[test]
 fn the_full_runtime_facade_is_used_only_by_composition_and_module_contracts() {

@@ -278,6 +278,9 @@ mod tests {
     include!("picker_startup.rs");
     include!("list_rows.rs");
     include!("informational.rs");
+    mod plugins_report {
+        include!("plugins_report.rs");
+    }
     mod modules_report {
         include!("modules_report.rs");
     }

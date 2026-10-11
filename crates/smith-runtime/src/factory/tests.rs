@@ -235,6 +235,8 @@ fn resolved_config() -> ResolvedConfig {
         approval: approval_config(ApprovalMode::Ask),
         background: background(),
         mcp: Default::default(),
+        plugins: Default::default(),
+        unknown_plugins: Default::default(),
         image_generation: image_generation(),
     }
 }
@@ -679,6 +681,8 @@ fn an_absent_request_budget_is_derived_and_shared_with_context_policy() {
         approval: approval_config(ApprovalMode::Ask),
         background: background(),
         mcp: Default::default(),
+        plugins: Default::default(),
+        unknown_plugins: Default::default(),
         image_generation: image_generation(),
     };
 
@@ -819,6 +823,8 @@ fn reserves_that_consume_the_whole_window_fail_instead_of_planning() {
         approval: approval_config(ApprovalMode::Ask),
         background: background(),
         mcp: Default::default(),
+        plugins: Default::default(),
+        unknown_plugins: Default::default(),
         image_generation: image_generation(),
     };
 
@@ -863,6 +869,8 @@ fn compaction_watermarks_are_derived_from_the_enforced_input_budget() {
         approval: approval_config(ApprovalMode::Ask),
         background: background(),
         mcp: Default::default(),
+        plugins: Default::default(),
+        unknown_plugins: Default::default(),
         image_generation: image_generation(),
     };
 
@@ -909,6 +917,8 @@ async fn scoped_auto_approval_is_shared_factory_policy_and_falls_back() {
         approval: approval_config(ApprovalMode::Ask),
         background: background(),
         mcp: Default::default(),
+        plugins: Default::default(),
+        unknown_plugins: Default::default(),
         image_generation: image_generation(),
     };
     config.approval.auto.push(sourced(auto_rule(

@@ -63,11 +63,22 @@ pub struct KnownModule {
     pub legacy_enabled_key: Option<String>,
 }
 
+/// Host-supplied installed plugin metadata, independent of plugin contracts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnownPlugin {
+    /// Installed name used in `plugins.<name>.enabled`.
+    pub name: String,
+    /// Manifest selection, or true when the manifest omits `defaultEnabled`.
+    pub default_enabled: bool,
+}
+
 /// Everything resolution needs that comes from outside this crate.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ResolveRequest {
     /// Catalog of module ids accepted by this binary, including modules not built.
     pub known_modules: Vec<KnownModule>,
+    /// Installed plugins whose switches can affect this run.
+    pub known_plugins: Vec<KnownPlugin>,
     /// Where the project walk starts, usually the working directory.
     pub start_dir: PathBuf,
     /// The user root that holds `.smith`. Injected so tests never read or
@@ -113,6 +124,12 @@ impl ResolveRequest {
     /// Supplies the host's module catalog without depending on runtime types.
     pub fn with_known_modules(mut self, modules: Vec<KnownModule>) -> Self {
         self.known_modules = modules;
+        self
+    }
+
+    /// Supplies installed plugins without depending on plugin implementation types.
+    pub fn with_known_plugins(mut self, plugins: Vec<KnownPlugin>) -> Self {
+        self.known_plugins = plugins;
         self
     }
 
@@ -265,8 +282,28 @@ pub struct ResolvedConfig {
     pub mcp: ResolvedMcp,
     /// Every known module, with selection provenance and build availability.
     pub modules: BTreeMap<String, ResolvedModule>,
+    /// Every installed plugin, with selection provenance.
+    pub plugins: BTreeMap<String, ResolvedPlugin>,
+    /// Settings naming uninstalled plugins, retained for listing diagnostics.
+    pub unknown_plugins: Vec<UnknownPlugin>,
     /// Provenance-carrying configuration for the image-generation tool.
     pub image_generation: ResolvedImageGeneration,
+}
+
+/// One resolved installed plugin selection. Trust remains a host decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedPlugin {
+    /// Effective switch with ordinary layered provenance.
+    pub enabled: Sourced<bool>,
+}
+
+/// A plugin setting that cannot affect a run because the plugin is not installed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownPlugin {
+    /// Uninstalled plugin named by the setting.
+    pub name: String,
+    /// Where the setting was supplied, including an optional profile prefix.
+    pub source: Source,
 }
 
 /// One resolved module selection. Mounting remains a runtime decision.

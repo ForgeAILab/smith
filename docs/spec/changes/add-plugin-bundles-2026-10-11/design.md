@@ -45,8 +45,10 @@ by an unprefixed name. MCP servers are named `plugin:server`.
 
 ### Trust is per plugin version, bound to a content digest
 
-The digest covers the manifest, every loaded component file, and the
-resolved MCP declarations. It is recorded under the existing
+The digest covers every file in the plugin directory (version-control
+metadata excluded), not only the files Smith loads: an MCP server's
+`server.js` is as much a part of what the user trusted as the declaration
+that launches it. It is recorded under the existing
 `ExecutableKind::Extension` kind. Component-level trust prompts (per skill,
 per MCP server) are not shown again for plugin content: the plugin
 confirmation already displayed them. A file changed on disk after install
@@ -112,6 +114,24 @@ them unchanged.
 2. Store and sources: local path first, then git, then marketplaces.
 3. Wire plugin layers into skills, commands, and MCP.
 4. Surfaces: `smith plugin …`, `/plugins`.
+
+## Found during implementation
+
+- Plugin MCP servers are displayed as `plugin:server`, but their registry
+  name is `p_` plus 16 hex characters of a SHA-256, because the registry's
+  name grammar cannot carry a colon. Colliding registry names are refused.
+- A failed safe-boundary rebuild keeps the previous MCP supervisor running;
+  it is retired only after the new composition succeeds.
+- `smith plugin add` for an installed plugin behaves as an update, and an
+  update over a locally edited install discards the edits on confirmation
+  and says so.
+- Plugin install trust is recorded in the existing trust store under the
+  extension kind, keyed by the plugin store root.
+- Plugin management resolves plugin switches without needing a provider, so
+  `smith plugin list` works on a fresh install.
+- Open: a plugin installed from a relative path inside a git-backed
+  marketplace does not record the marketplace's ref and commit on its own
+  install record; they stay on the marketplace record.
 
 ## Open Questions
 

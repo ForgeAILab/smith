@@ -117,7 +117,7 @@ impl TuiLoop<'_> {
             Action::Reconfigure(command) => return self.on_reconfigure(command).await,
             Action::Command(command) => self.on_command(command).await,
             Action::SwitchModule(request) => {
-                if self.pending_module_switch.is_some() {
+                if self.pending_module_switch.is_some() || self.pending_plugin_switch.is_some() {
                     self.app.push_notice(NoticeKind::CommandRefused,
                         "/modules already has a confirmed switch waiting for the safe boundary; retry after it applies");
                 } else {
@@ -125,6 +125,18 @@ impl TuiLoop<'_> {
                     self.app.push_notice(
                         NoticeKind::Local,
                         "module switch confirmed; waiting for the next safe boundary",
+                    );
+                }
+            }
+            Action::SwitchPlugin(request) => {
+                if self.pending_plugin_switch.is_some() || self.pending_module_switch.is_some() {
+                    self.app.push_notice(NoticeKind::CommandRefused,
+                        "/plugins already has a confirmed switch waiting for the safe boundary; retry after it applies");
+                } else {
+                    self.pending_plugin_switch = Some(request);
+                    self.app.push_notice(
+                        NoticeKind::Local,
+                        "plugin switch confirmed; waiting for the next safe boundary",
                     );
                 }
             }

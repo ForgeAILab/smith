@@ -861,3 +861,25 @@ fn modules_dispatch_locally_and_confirmation_has_no_default_action() {
     }
     assert!(!app.transcript.blocks().iter().any(|block| matches!(block, Block::User { .. })));
 }
+
+
+#[test]
+fn plugins_dispatch_locally_and_confirmation_has_no_default_action() {
+    use smith_client::commands::{PluginSwitchRequest, PluginsAction};
+    let mut app = app();
+    type_text(&mut app, "/plugins");
+    assert_eq!(app.on_key(key(KeyCode::Enter)), Some(Action::Command(HostCommand::Plugins(PluginsAction::List))));
+    for enabled in [false, true] {
+        let request = PluginSwitchRequest { name: "deploy-tools".into(), enabled, fingerprint: "reviewed-edit".into() };
+        app.confirm_plugin_switch(request.clone(), "destination: user config\nplugins.deploy-tools.enabled = false".into());
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert!(matches!(app.overlay, Some(Overlay::Confirm(_))));
+        elapse_prompt_guard(&mut app);
+        assert_eq!(app.on_key(key(KeyCode::Char('n'))), None);
+        assert!(app.overlay.is_none());
+        app.confirm_plugin_switch(request.clone(), "destination: user config".into());
+        elapse_prompt_guard(&mut app);
+        assert_eq!(app.on_key(key(KeyCode::Char('y'))), Some(Action::SwitchPlugin(request)));
+    }
+    assert!(!app.transcript.blocks().iter().any(|block| matches!(block, Block::User { .. })));
+}
