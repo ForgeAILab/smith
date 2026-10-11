@@ -4,7 +4,8 @@
 
 The WASM component host SHALL live in its own crate, compiled only when the
 `wasm-modules` cargo feature of `smith-cli` is enabled, and no other
-workspace crate MAY depend on a WASM engine. The host crate MUST depend on
+workspace crate MAY take a WASM engine, or the host crate, as a production
+dependency. A test-only dependency on the host crate is permitted. The host crate MUST depend on
 the module contract crate and MUST NOT depend on `smith-tui` or `smith-cli`.
 A build without the feature MUST compile, run, and report WASM modules as
 not supported in that build. Architecture tests SHALL check these rules from
@@ -18,6 +19,7 @@ manifests.
 
 #### Scenario: Engine dependency leaks
 
-- **GIVEN** a contributor adds a WASM engine dependency to `smith-runtime`
+- **GIVEN** a contributor adds a WASM engine as a production dependency of
+  `smith-runtime`
 - **WHEN** the architecture tests run
 - **THEN** they fail naming the crate and the dependency
