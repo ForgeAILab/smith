@@ -788,6 +788,7 @@ pub(super) fn extract(
         background,
         mcp,
         image_generation,
+        modules: super::modules::extract_modules(provenance, &request.known_modules)?,
     })
 }
 

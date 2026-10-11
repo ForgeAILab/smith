@@ -55,6 +55,7 @@ pub(super) enum InteractiveExit {
         Option<Box<smith_client::cache::CacheTurnSummary>>,
     ),
     Reconfigure(SelectionCommand),
+    ModuleSwitch(smith_client::commands::ModuleSwitchRequest),
     Connect(String),
     Disconnect(String),
 }
@@ -388,6 +389,7 @@ struct TuiLoop<'a> {
     composed_remote_tools: usize,
     remote_tools_pending: bool,
     trusted_skill_pending: bool,
+    pending_module_switch: Option<smith_client::commands::ModuleSwitchRequest>,
     last_change_turn: Option<u64>,
     interactions: interaction::InteractionSurface,
     dirty: bool,
@@ -463,7 +465,7 @@ where
                 tui.on_spinner();
             }
 
-            _ = tui.frame.tick(), if tui.dirty || tui.remote_tools_pending || tui.trusted_skill_pending => {
+            _ = tui.frame.tick(), if tui.dirty || tui.remote_tools_pending || tui.trusted_skill_pending || tui.pending_module_switch.is_some() => {
                 if let Some(exit) = tui.on_frame(terminal).await? {
                     break exit;
                 }
@@ -566,6 +568,7 @@ impl<'a> TuiLoop<'a> {
             composed_remote_tools,
             remote_tools_pending,
             trusted_skill_pending,
+            pending_module_switch: None,
             last_change_turn,
             interactions,
             dirty,
@@ -608,6 +611,18 @@ pub(super) fn reconfigure_exit(app: &mut App, command: SessionControl) -> Option
         SessionControl::Disconnect(provider) => Some(InteractiveExit::Disconnect(provider)),
         SessionControl::Account(_) => None,
     }
+}
+
+/// Keeps a confirmed module edit pending until the serving composition is idle.
+pub(super) fn module_switch_exit(
+    app: &App,
+    pending: &mut Option<smith_client::commands::ModuleSwitchRequest>,
+) -> Option<InteractiveExit> {
+    if app.is_busy() || app.has_pending_input() || app.has_pending_prompt() || app.overlay.is_some()
+    {
+        return None;
+    }
+    pending.take().map(InteractiveExit::ModuleSwitch)
 }
 
 /// Bounds a background task's command for compact, single-line display.
@@ -739,6 +754,39 @@ pub(super) async fn run_scripted_tui(
     )
     .await
     .context("scripted loop did not reach an exit")?
+}
+
+/// Folds a host event batch through the production handler without terminal I/O.
+#[cfg(all(test, feature = "module-budget-notice"))]
+pub(super) async fn fold_scripted_runtime_event(
+    host: &HostSession,
+    project: &std::path::Path,
+    resources: &InteractiveResources,
+    app: App,
+    event: EventEnvelope,
+) -> App {
+    let mut keys = futures_util::stream::pending();
+    let mut tui = TuiLoop::new(
+        app,
+        TuiRunInputs {
+            keys: &mut keys,
+            host,
+            project,
+            approvals: None,
+            interactions: None,
+            rotations: None,
+            accounts: ActiveAccounts::ephemeral(),
+            credential_pool: None,
+            agents: &resources.agents,
+            catalog: &resources.catalog,
+            inventory: &resources.inventory,
+            theme: Theme::new().without_color().without_motion(),
+            mcp: None,
+            skills: resources.skills.clone(),
+        },
+    );
+    assert!(tui.on_runtime_event(Some(event)).await.is_none());
+    tui.app
 }
 
 fn change_notice(set: &smith_tools::TurnChangeSet) -> Option<String> {

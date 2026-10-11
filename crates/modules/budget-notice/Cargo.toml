@@ -1,0 +1,24 @@
+[package]
+name = "smith-module-budget-notice"
+description = "Context pressure notice and live status for Smith modules."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+agent-runtime = { workspace = true }
+agent-runtime-core = { workspace = true }
+smith-module = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+agent-runtime-testkit = { workspace = true }
+tokio = { workspace = true }

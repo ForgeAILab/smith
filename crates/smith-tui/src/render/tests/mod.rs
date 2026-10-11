@@ -22,16 +22,16 @@ mod tests {
     use crossterm::event::{
         KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
-    use smith_runtime::client::{
-        EstimationConfidence, PlanItemProjection, PlanItemStatus, PlanSensitivity,
-        SmithEvent as EventEnvelope, SmithEventKind as RuntimeEvent, TurnFinish,
-    };
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
     use ratatui::style::{Color, Modifier};
     use smith_client::NoticeKind;
     use smith_client::status_report::{StatusGoal, StatusReport};
+    use smith_runtime::client::{
+        EstimationConfidence, PlanItemProjection, PlanItemStatus, PlanSensitivity,
+        SmithEvent as EventEnvelope, SmithEventKind as RuntimeEvent, TurnFinish,
+    };
     use unicode_width::UnicodeWidthStr;
 
     use crate::questionnaire::{QuestionnaireChoice, QuestionnaireForm, QuestionnaireQuestion};
@@ -278,4 +278,10 @@ mod tests {
     include!("picker_startup.rs");
     include!("list_rows.rs");
     include!("informational.rs");
+    mod modules_report {
+        include!("modules_report.rs");
+    }
+    mod module_status {
+        include!("module_status.rs");
+    }
 }

@@ -199,7 +199,7 @@ impl HostSessionRequest {
 pub struct HostSession {
     runtime: SmithRuntime,
     session: SessionHandle,
-    image_history_registration: crate::image_history::SessionImageRegistration,
+    session_history_registration: crate::session_history::SessionHistoryRegistration,
     client: crate::client::SmithSession,
     display_redactor: DefaultRedactor,
     journal: Option<Arc<EventJournal>>,
@@ -750,7 +750,7 @@ impl HostSession {
         if let Some(store) = &self.snapshot_store {
             store.close().await;
         }
-        self.image_history_registration.unregister();
+        self.session_history_registration.unregister();
 
         // Background tasks are session-owned, process-group work, not runtime
         // state: nothing else stops them. Signal every running task before

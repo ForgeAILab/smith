@@ -16,9 +16,13 @@ async fn fixture_local_host(
     provider: Arc<dyn agent_runtime_core::provider::Provider>,
     sources: smith_runtime::skills::SmithSkillSources,
 ) -> HostSession {
-    let config = resolve(&ResolveRequest::new(project).with_home_dir(home))
-        .expect("resolution")
-        .config;
+    let config = resolve(
+        &ResolveRequest::new(project)
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(home),
+    )
+    .expect("resolution")
+    .config;
     let runtime = RuntimeRequest {
         workspace: Some(Arc::new(ProjectWorkspace::new(project).expect("workspace"))),
         approval: Some(Arc::new(agent_runtime_core::approval::AllowAll)),

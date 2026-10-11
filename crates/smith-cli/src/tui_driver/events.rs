@@ -111,6 +111,8 @@ impl TuiLoop<'_> {
                         _ => {}
                     }
                 }
+                self.app
+                    .set_module_status(smith_client::status::module_status(self.host.runtime()));
                 self.dirty = true;
             }
             None => {
@@ -273,12 +275,16 @@ impl TuiLoop<'_> {
         // swapping the ability set underneath a running turn is what
         // the epoch rules exist to prevent.
         if (self.remote_tools_pending || self.trusted_skill_pending)
+            && self.pending_module_switch.is_none()
             && !self.app.is_busy()
             && !self.app.has_pending_input()
             && !self.app.has_pending_prompt()
             && self.app.overlay.is_none()
         {
             return Ok(Some(InteractiveExit::CapabilitiesChanged));
+        }
+        if let Some(exit) = super::module_switch_exit(&self.app, &mut self.pending_module_switch) {
+            return Ok(Some(exit));
         }
         // Re-read on the way to the screen rather than at each site
         // that could change it: the pool also moves on its own — a

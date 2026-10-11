@@ -29,6 +29,45 @@ use crate::format::{compact_tokens, format_usd, plural};
 
 use crate::cache::{CacheLifecycleSummary, CachePrice, CacheProjection, CacheTurnSummary};
 
+/// Optional emphasis for a module's presentation-only status item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModuleStatusSeverity {
+    /// Informational state.
+    Info,
+    /// Attention requested.
+    Warning,
+    /// A module reports a failure.
+    Error,
+}
+
+/// Plain module status data; interactive clients own display bounds and styling.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleStatusItem {
+    /// Stable contribution identity, independent of its current label.
+    pub name: String,
+    /// Self-contained meaning that remains readable without color.
+    pub label: String,
+    /// Optional presentation emphasis.
+    pub severity: Option<ModuleStatusSeverity>,
+}
+
+/// Projects live runtime module status for interactive presentation.
+pub fn module_status(runtime: &smith_runtime::factory::SmithRuntime) -> Vec<ModuleStatusItem> {
+    runtime
+        .module_status()
+        .into_iter()
+        .map(|item| ModuleStatusItem {
+            name: item.name().to_owned(),
+            label: item.label().to_owned(),
+            severity: item.severity().map(|severity| match severity {
+                smith_module::StatusSeverity::Info => ModuleStatusSeverity::Info,
+                smith_module::StatusSeverity::Warning => ModuleStatusSeverity::Warning,
+                smith_module::StatusSeverity::Error => ModuleStatusSeverity::Error,
+            }),
+        })
+        .collect()
+}
+
 /// How a displayed quantity was obtained.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Confidence {

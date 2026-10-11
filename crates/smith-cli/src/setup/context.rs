@@ -9,6 +9,7 @@ pub(super) async fn setup_context(
 ) -> Result<SetupContext> {
     let start = canonical_start(selection.project.as_deref())?;
     let request = ResolveRequest::new(&start)
+        .with_known_modules(crate::modules::known_modules())
         .with_env(std::env::vars())
         .with_cli(selection.overrides());
     let (layout, resolution) = match inspect(&request) {

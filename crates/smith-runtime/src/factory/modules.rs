@@ -17,35 +17,58 @@ use crate::harness::{
 };
 use crate::transport::ReqwestTransport;
 
+/// Computes the same mount outcomes as runtime construction without requiring
+/// an approval surface or constructing a runtime, session, or persistence.
+pub async fn module_report(
+    request: &RuntimeRequest,
+) -> Result<Vec<smith_module::ModuleReport>, FactoryError> {
+    super::provider::validate_pool_references(request)?;
+    let prepared = super::provider::prepare(request).await?;
+    let provider = super::provider::construct_runtime(
+        request,
+        prepared.adapter,
+        prepared.endpoint,
+        prepared.secret,
+        &prepared.profile.profile,
+        &prepared.reasoning,
+        prepared.command.map(|command| command.provider),
+    )?;
+    Ok(prepare(
+        request,
+        provider.image_binding,
+        prepared.profile.profile.limits.max_input_tokens,
+        request.semantic_summary.is_some(),
+        Arc::new(crate::session_history::LiveSessionHistory::default()),
+    )?
+    .report)
+}
+
 pub(super) fn prepare(
     request: &RuntimeRequest,
     image_binding: Option<ImageBinding>,
     max_input_tokens: u32,
     semantic_summary_enabled: bool,
+    session_history: Arc<crate::session_history::LiveSessionHistory>,
 ) -> Result<MountPlan, FactoryError> {
     if request.modules.compiled.is_empty() && request.modules.known.is_empty() {
         return Ok(MountPlan::default());
     }
-    let context = ModuleContext {
-        settings: ModuleSettings::new(),
-        user_dir: request.config.user_dir.clone(),
-        posture: if request.config.agent.active_posture().is_read_only() {
-            ModulePosture::ReadOnly
-        } else {
-            ModulePosture::ReadWrite
-        },
-        transport: Arc::new(
-            ReqwestTransport::new(request.transport.clone()).map_err(FactoryError::Transport)?,
-        ),
+    let context = context(
+        request,
         image_binding,
-        semantic_summary_enabled,
         max_input_tokens,
-        built_in_tools: request.built_in_tools,
-    };
+        semantic_summary_enabled,
+        session_history,
+    )?;
     let mut plan = mount_modules(&request.modules, &context);
+    enforce_posture(&mut plan, context.posture);
+    Ok(plan)
+}
+
+pub(crate) fn enforce_posture(plan: &mut MountPlan, posture: ModulePosture) {
     // Trusted modules receive the posture, but the host still enforces it at
     // registration, just as it does for trusted embedding tools.
-    if context.posture == ModulePosture::ReadOnly {
+    if posture == ModulePosture::ReadOnly {
         for module in &mut plan.mounted {
             module
                 .contributions
@@ -57,7 +80,65 @@ pub(super) fn prepare(
                 });
         }
     }
-    Ok(plan)
+}
+
+pub(super) fn context(
+    request: &RuntimeRequest,
+    image_binding: Option<ImageBinding>,
+    max_input_tokens: u32,
+    semantic_summary_enabled: bool,
+    session_history: Arc<crate::session_history::LiveSessionHistory>,
+) -> Result<ModuleContext, FactoryError> {
+    Ok(ModuleContext {
+        settings: ModuleSettings::new(),
+        user_dir: request.config.user_dir.clone(),
+        posture: if request.config.agent.active_posture().is_read_only() {
+            ModulePosture::ReadOnly
+        } else {
+            ModulePosture::ReadWrite
+        },
+        transport: Arc::new(
+            ReqwestTransport::new(request.transport.clone()).map_err(FactoryError::Transport)?,
+        ),
+        image_binding,
+        session_history: Some(session_history),
+        semantic_summary_enabled,
+        max_input_tokens,
+        built_in_tools: request.built_in_tools,
+    })
+}
+
+pub(super) fn for_config(
+    composition: &smith_module::ModuleComposition,
+    config: &smith_config::resolve::ResolvedConfig,
+) -> smith_module::ModuleComposition {
+    let mut modules = composition.clone();
+    for (id, module) in &config.modules {
+        if module.enabled.value {
+            modules.enabled.insert(id.clone());
+        } else {
+            modules.enabled.remove(id);
+        }
+    }
+    modules.settings.insert(
+        "image-generation".into(),
+        [
+            (
+                "model".into(),
+                smith_module::SettingValue::String(config.image_generation.model.value.clone()),
+            ),
+            (
+                "quality".into(),
+                smith_module::SettingValue::String(config.image_generation.quality.value.clone()),
+            ),
+            (
+                "size".into(),
+                smith_module::SettingValue::String(config.image_generation.size.value.clone()),
+            ),
+        ]
+        .into(),
+    );
+    modules
 }
 
 pub(super) fn tools(plan: &MountPlan) -> Vec<(Arc<dyn Tool>, RegistrySource)> {
@@ -107,9 +188,9 @@ fn module_spec(module: &MountedModule) -> Result<ModuleSpec, FactoryError> {
             ModuleContribution::Command(command) => Contribution::Command {
                 name: command.name.clone(),
             },
-            ModuleContribution::StatusItem(item) => Contribution::StatusItem {
-                name: item.name().to_owned(),
-            },
+            ModuleContribution::StatusItem { name, .. } => {
+                Contribution::StatusItem { name: name.clone() }
+            }
         })
         .collect();
     let (id, provenance) = match &module.descriptor.origin {
@@ -137,7 +218,7 @@ fn module_spec(module: &MountedModule) -> Result<ModuleSpec, FactoryError> {
     })
 }
 
-pub(super) fn apply(mut builder: RuntimeBuilder, plan: &MountPlan) -> RuntimeBuilder {
+pub(crate) fn apply(mut builder: RuntimeBuilder, plan: &MountPlan) -> RuntimeBuilder {
     for contribution in plan.mounted.iter().flat_map(|module| &module.contributions) {
         builder = match contribution {
             ModuleContribution::Pipeline(component) => match component {
@@ -163,7 +244,7 @@ pub(super) fn apply(mut builder: RuntimeBuilder, plan: &MountPlan) -> RuntimeBui
             ModuleContribution::Observer { observer, .. } => builder.observer(observer.clone()),
             ModuleContribution::Tool(_)
             | ModuleContribution::Command(_)
-            | ModuleContribution::StatusItem(_) => builder,
+            | ModuleContribution::StatusItem { .. } => builder,
         };
     }
     builder

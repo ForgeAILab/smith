@@ -211,16 +211,18 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
             .map(|command| Arc::clone(&command.provider)),
     )?;
     let provider = provider_stage.provider;
-    let image_backend = provider_stage.image_backend;
-    let image_history = Arc::new(crate::image_history::SessionImageHistory::default());
+    let session_history = Arc::new(crate::session_history::LiveSessionHistory::default());
 
     let clock: Arc<dyn Clock> = request
         .clock
         .clone()
         .unwrap_or_else(|| Arc::new(SystemClock));
-    let child_profile_routes =
-        provider::prepare_child_profile_routes(&request, prompt.project_instructions.as_ref())
-            .await?;
+    let child_profile_routes = provider::prepare_child_profile_routes(
+        &request,
+        prompt.project_instructions.as_ref(),
+        session_history.clone(),
+    )
+    .await?;
     let advisor_route = provider::prepare_advisor_route(&request).await?;
     // Built from the exact same routes `SmithChildFactory.profile_routes`
     // resolves below, so the model-facing `agent` tool can never advertise or
@@ -242,22 +244,12 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         profile.profile.limits,
         clock.clone(),
     )?;
-    // Warns the model before the compaction boundary. Only meaningful when
-    // summarization is configured — without it there is no boundary to warn
-    // about, only the structural watermarks, which reclaim silently.
-    let budget_notice = semantic_summary.as_ref().and_then(|_| {
-        BudgetNoticeComponent::new(
-            u64::from(profile.profile.limits.max_input_tokens),
-            DEFAULT_NOTICE_THRESHOLD_TOKENS,
-        )
-        .ok()
-        .map(Arc::new)
-    });
     let module_plan = modules::prepare(
         &request,
-        provider_stage.image_binding,
+        provider_stage.image_binding.clone(),
         profile.profile.limits.max_input_tokens,
         semantic_summary.is_some(),
+        session_history.clone(),
     )?;
     crate::harness::record_mounted_modules(
         &mut harness_identity,
@@ -269,13 +261,16 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         &request,
         agent_tool_profiles,
         advisor_route,
-        image_backend,
-        image_history.clone(),
         modules::tools(&module_plan),
     )?;
+    if let Some(slot) = &capabilities.delegation_slot {
+        session_history.set_delegation(slot);
+    }
     let durability = persistence::prepare(&request).await?;
 
     let policy = assemble_policy(RuntimePolicy {
+        modules: config.modules.clone(),
+        user_dir: config.user_dir.clone(),
         harness: request.config.harness.clone(),
         agent_profile: agent_profile_name.clone(),
         agent_profile_revision: agent_profile.revision.clone(),
@@ -477,11 +472,6 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
             .history_projector(coordinator.clone())
             .turn_commit_hook(coordinator.clone());
     }
-    if let Some(component) = &budget_notice {
-        builder = builder
-            .context_contributor(component.clone())
-            .turn_commit_hook(component.clone());
-    }
     for descriptor in capabilities.abilities.descriptors() {
         builder = builder.tool_ability_descriptor(descriptor);
     }
@@ -524,6 +514,13 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         builder = builder.observer(observer);
     }
 
+    let child_module_context = modules::context(
+        &request,
+        provider_stage.image_binding,
+        profile.profile.limits.max_input_tokens,
+        semantic_summary.is_some(),
+        session_history.clone(),
+    )?;
     let builder = modules::apply(builder, &module_plan);
     let built = compose::runtime(builder)?;
     let delegation = delegation::assemble(capabilities.delegation_slot.clone().map(|slot| {
@@ -548,6 +545,8 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
                     // An inheriting child is the parent's run narrowed, so it
                     // runs turns wherever the parent's do.
                     execution,
+                    modules: request.modules.clone(),
+                    module_context: child_module_context,
                 },
                 profile_routes: child_profile_routes,
                 capability_limits: capability_limits.clone(),
@@ -585,6 +584,6 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         harness_report,
         mounted_modules: Arc::from(module_plan.mounted),
         module_report: Arc::from(module_plan.report),
-        image_history,
+        session_history,
     })
 }

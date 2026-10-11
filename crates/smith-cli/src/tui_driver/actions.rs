@@ -85,6 +85,18 @@ impl TuiLoop<'_> {
             // down and rebuilding it around a new selection.
             Action::Reconfigure(command) => return self.on_reconfigure(command).await,
             Action::Command(command) => self.on_command(command).await,
+            Action::SwitchModule(request) => {
+                if self.pending_module_switch.is_some() {
+                    self.app.push_notice(NoticeKind::CommandRefused,
+                        "/modules already has a confirmed switch waiting for the safe boundary; retry after it applies");
+                } else {
+                    self.pending_module_switch = Some(request);
+                    self.app.push_notice(
+                        NoticeKind::Local,
+                        "module switch confirmed; waiting for the next safe boundary",
+                    );
+                }
+            }
             Action::TrustMcpServer { server } => self.on_trust_mcp_server(server),
             Action::TrustSkill { skill: name } => self.on_trust_skill(name),
             Action::ApplyUndo => self.on_apply_undo(),

@@ -9,6 +9,9 @@ use syn::visit::{self, Visit};
 use syn::{Attribute, Item, Meta, Token, UseTree, Visibility};
 use toml::{Table, Value};
 
+#[path = "architecture/modules.rs"]
+mod modules;
+
 #[test]
 fn the_full_runtime_facade_is_used_only_by_composition_and_module_contracts() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -32,15 +35,17 @@ fn the_full_runtime_facade_is_used_only_by_composition_and_module_contracts() {
         }
     }
 
-    // The six shared pipeline traits are exposed only through the facade;
-    // the contract crate needs them without admitting another composition root.
+    // Modules consume shared pipeline and transport contracts through the
+    // facade without admitting another composition root.
     assert_eq!(
         owners,
         BTreeSet::from([
             "crates/smith-runtime".to_owned(),
-            "crates/smith-module".to_owned()
+            "crates/smith-module".to_owned(),
+            "crates/modules/image-generation".to_owned(),
+            "crates/modules/budget-notice".to_owned()
         ]),
-        "the facade is limited to runtime composition and the shared module pipeline contracts"
+        "the facade is limited to runtime composition, the contract, and the ported modules"
     );
 }
 

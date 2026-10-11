@@ -265,6 +265,9 @@ pub struct ConfigFile {
     /// Session persistence policy: `[persistence]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persistence: Option<PersistenceSection>,
+    /// Module switches: `[modules.<id>]`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub modules: BTreeMap<String, ModuleSection>,
     /// Built-in tool settings: `[tools]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<ToolsSection>,
@@ -418,9 +421,21 @@ pub struct ProfileSection {
     /// Profile-scoped `[cache]` overrides.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache: Option<CacheSection>,
+    /// Profile-scoped module switches.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub modules: BTreeMap<String, ModuleSection>,
     /// Profile-scoped `[tools]` overrides.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<ToolsSection>,
+}
+
+/// One module's configuration switch.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModuleSection {
+    /// Whether this module is selected. Omitted uses its declared default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
 }
 
 /// Built-in tool settings under `[tools]`.

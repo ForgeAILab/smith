@@ -7,6 +7,7 @@ mod agent;
 mod harness;
 mod load;
 mod mcp;
+mod modules;
 mod provenance;
 mod provider;
 mod types;

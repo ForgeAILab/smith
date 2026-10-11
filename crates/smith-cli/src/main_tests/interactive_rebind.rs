@@ -85,9 +85,21 @@ dialect = "openai-effort"
         resume: Option<SessionId>,
         overrides: Overrides,
     ) -> (HostSession, InteractiveResources) {
+        self.start_with_modules(resume, overrides, false, &[400])
+            .await
+    }
+
+    async fn start_with_modules(
+        &self,
+        resume: Option<SessionId>,
+        overrides: Overrides,
+        modular: bool,
+        input_usage: &[u64],
+    ) -> (HostSession, InteractiveResources) {
         let mut resolution = resolve(
             &ResolveRequest::new(self.project.path())
                 .with_home_dir(self.home.path())
+                .with_known_modules(crate::modules::known_modules())
                 .with_cli(overrides),
         )
         .expect("resolution");
@@ -105,17 +117,30 @@ dialect = "openai-effort"
         let provider = Arc::new(FakeProvider::new(
             &resolution.config.model.value,
             Capabilities::basic_streaming(),
-            vec![ScriptedStream::new(vec![
-                ProviderStreamEvent::TextDelta {
-                    text: "finished answer".to_owned(),
-                },
-                usage_event(400, 20),
-                ProviderStreamEvent::Finish {
-                    reason: FinishReason::Stop,
-                },
-            ])],
+            input_usage
+                .iter()
+                .map(|input| {
+                    ScriptedStream::new(vec![
+                        ProviderStreamEvent::TextDelta {
+                            text: "finished answer".to_owned(),
+                        },
+                        usage_event(*input, 20),
+                        ProviderStreamEvent::Finish {
+                            reason: FinishReason::Stop,
+                        },
+                    ])
+                })
+                .collect(),
         ));
+        let modules = if modular {
+            crate::modules::composition_from_resolved_config(&resolution.config)
+        } else {
+            Default::default()
+        };
         let runtime = RuntimeRequest {
+            modules,
+            semantic_summary: modular
+                .then(smith_runtime::summary::SmithSemanticSummaryConfig::standard),
             workspace: Some(Arc::new(
                 ProjectWorkspace::new(self.project.path()).expect("workspace"),
             )),
@@ -777,4 +802,123 @@ async fn input_during_model_rebuild_reaches_composer_in_order_and_quit_is_kept()
     .expect("queued quit");
     assert!(matches!(exit, InteractiveExit::Quit(..)));
     Box::pin(host.shutdown()).await.expect("shutdown");
+}
+
+#[cfg(feature = "module-budget-notice")]
+#[tokio::test]
+async fn module_rebind_removes_contributions_and_restores_the_original_composition() {
+    let fixture = Fixture::new();
+    let (host, resources) = Box::pin(fixture.start_with_modules(
+        None,
+        Overrides::default(),
+        true,
+        &[120_000, 400, 120_000],
+    ))
+    .await;
+    let evidence = host.runtime().harness_modules().to_vec();
+    let identity = host.runtime().harness_identity().clone();
+    let tools = host.runtime().policy().tools.clone();
+    let pipeline = crate::modules::tests::pipeline_fingerprint(host.runtime());
+    let mut previous = Box::pin(fixture.app(&host, &resources, None, None)).await;
+    assert!(previous.app.module_status().is_empty());
+    Box::pin(finish_turn(&host, "pressure")).await;
+    previous.app = Box::pin(crate::tui_driver::fold_scripted_runtime_event(
+        &host,
+        fixture.project.path(),
+        &resources,
+        previous.app,
+        event(RuntimeEvent::TurnCompleted {
+            finish: smith_runtime::client::TurnFinish::Completed,
+            visible_output: true,
+        }),
+    ))
+    .await;
+    assert_eq!(previous.app.module_status().len(), 1);
+    assert_eq!(previous.app.module_status()[0].name, "budget-notice");
+    Box::pin(finish_turn(&host, "pressure cleared")).await;
+
+    previous.app = Box::pin(crate::tui_driver::fold_scripted_runtime_event(
+        &host,
+        fixture.project.path(),
+        &resources,
+        previous.app,
+        event(RuntimeEvent::TurnCompleted {
+            finish: smith_runtime::client::TurnFinish::Completed,
+            visible_output: true,
+        }),
+    ))
+    .await;
+    assert!(previous.app.module_status().is_empty());
+
+    Box::pin(finish_turn(&host, "pressure again")).await;
+    previous.app = Box::pin(crate::tui_driver::fold_scripted_runtime_event(
+        &host,
+        fixture.project.path(),
+        &resources,
+        previous.app,
+        event(RuntimeEvent::TurnCompleted {
+            finish: smith_runtime::client::TurnFinish::Completed,
+            visible_output: true,
+        }),
+    ))
+    .await;
+    assert_eq!(previous.app.module_status().len(), 1);
+    let session = host.session().id().clone();
+    assert!(matches!(
+        reconfigure_exit(
+            &mut previous.app,
+            SessionControl::Reconfigure(SelectionCommand::Profile("review".into()))
+        ),
+        Some(InteractiveExit::Reconfigure(_))
+    ));
+    Box::pin(host.shutdown()).await.expect("shutdown");
+    let config_path = fixture.project.path().join(".smith/config.toml");
+    let original = std::fs::read_to_string(&config_path).expect("config");
+    std::fs::write(
+        &config_path,
+        format!("{original}\n[profiles.review.modules.budget-notice]\nenabled = false\n"),
+    )
+    .expect("off profile");
+    let (off, resources) = Box::pin(fixture.start_with_modules(
+        Some(session.clone()),
+        Overrides {
+            profile: Some("review".into()),
+            ..Overrides::default()
+        },
+        true,
+        &[400],
+    ))
+    .await;
+    let rebound = Box::pin(fixture.app(&off, &resources, Some(previous), None)).await;
+    assert!(rebound.app.module_status().is_empty());
+    assert!(
+        off.runtime()
+            .mounted_modules()
+            .iter()
+            .all(|module| module.descriptor.id != "budget-notice")
+    );
+    assert!(
+        off.runtime()
+            .harness_modules()
+            .iter()
+            .all(|module| module.id.as_str() != "smith/budget-notice")
+    );
+    assert_ne!(
+        pipeline,
+        crate::modules::tests::pipeline_fingerprint(off.runtime())
+    );
+    Box::pin(off.shutdown()).await.expect("shutdown");
+    let (on, resources) =
+        Box::pin(fixture.start_with_modules(Some(session), Overrides::default(), true, &[400]))
+            .await;
+    let rebound = Box::pin(fixture.app(&on, &resources, Some(rebound), None)).await;
+    assert_eq!(on.runtime().harness_modules(), evidence);
+    assert_eq!(on.runtime().harness_identity(), &identity);
+    assert_eq!(on.runtime().policy().tools, tools);
+    assert_eq!(
+        crate::modules::tests::pipeline_fingerprint(on.runtime()),
+        pipeline
+    );
+    assert!(rebound.app.module_status().is_empty());
+    Box::pin(on.shutdown()).await.expect("shutdown");
 }

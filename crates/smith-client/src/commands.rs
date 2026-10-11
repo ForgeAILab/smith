@@ -95,6 +95,31 @@ pub enum CapabilitiesAction {
     Allow(String),
 }
 
+/// A confirmed edit tied to the exact preview and user-file contents.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleSwitchRequest {
+    /// Module being switched.
+    pub id: String,
+    /// Requested user-file value.
+    pub enabled: bool,
+    /// Host-owned identity of the previewed edit.
+    pub fingerprint: String,
+}
+
+/// Typed module listing and reviewed user-configuration switching.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModulesAction {
+    /// List every known module and its mount outcome.
+    List,
+    /// Preview one user-layer switch before confirmation.
+    Switch {
+        /// Known module id, checked by the host.
+        id: String,
+        /// Requested user-layer value.
+        enabled: bool,
+    },
+}
+
 /// Typed local MCP server control.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpAction {
@@ -449,6 +474,17 @@ command_registry! {
         usage_example: "/mcp trust github",
         complete_without_value: false,
     },
+    /// List native modules or review a user-layer switch.
+    Host Modules(ModulesAction) => CommandSpec {
+        name: "modules",
+        argument_hint: "[ID on|off]",
+        description: "List modules or turn one on or off",
+        requires_idle: false,
+        advanced: false,
+        grammar: ArgumentGrammar::Subcommand(parse_modules),
+        usage_example: "/modules image-generation off",
+        complete_without_value: true,
+    },
     /// Show what the session can use, or narrow it for this session.
     Host Capabilities(CapabilitiesAction) => CommandSpec {
         name: "capabilities",
@@ -698,6 +734,18 @@ fn parse_agent(argument: Option<String>, second: Option<String>) -> Result<Comma
         },
     };
     Ok(Command::Host(HostCommand::Agent(action)))
+}
+
+fn parse_modules(argument: Option<String>, second: Option<String>) -> Result<Command, String> {
+    let action = match (argument, second.as_deref()) {
+        (None, None) => ModulesAction::List,
+        (Some(id), Some("on" | "off")) => ModulesAction::Switch {
+            id,
+            enabled: second.as_deref() == Some("on"),
+        },
+        _ => return Err("usage: /modules [ID on|off]".into()),
+    };
+    Ok(Command::Host(HostCommand::Modules(action)))
 }
 
 fn parse_mcp(argument: Option<String>, second: Option<String>) -> Result<Command, String> {
@@ -1200,3 +1248,7 @@ mod diagnostics_tests {
         assert!(parse("/status nonsense").is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "commands/module_tests.rs"]
+mod module_tests;

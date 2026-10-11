@@ -133,6 +133,7 @@ async fn seed_host_state(
     let previous_usage = app.status.session_usage();
     app.status = smith_tui::status::Status::new(policy.model.as_str(), project_label(project));
     app.set_cache_miss_notices(presentation.cache_miss_notices);
+    app.set_module_status(smith_client::status::module_status(host.runtime()));
     app.status
         .switch_model(Some(policy.provider_name.clone()), policy.model.as_str());
     app.status

@@ -552,12 +552,12 @@ pub async fn start(mut request: HostSessionRequest) -> Result<HostSession, HostS
         changes.clone(),
     );
 
-    let image_history_registration = runtime.image_history().register(session.clone());
+    let session_history_registration = runtime.session_history().register(session.clone());
     let client = crate::client::SmithSession::new(session.clone());
     Ok(HostSession {
         runtime,
         session,
-        image_history_registration,
+        session_history_registration,
         client,
         display_redactor: persistence_redactor,
         journal,

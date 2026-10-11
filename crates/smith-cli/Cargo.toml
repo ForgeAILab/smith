@@ -15,6 +15,11 @@ workspace = true
 name = "smith"
 path = "src/main.rs"
 
+[features]
+default = ["module-image-generation", "module-budget-notice"]
+module-image-generation = ["dep:smith-module-image-generation"]
+module-budget-notice = ["dep:smith-module-budget-notice"]
+
 [dependencies]
 agent-runtime-core = { workspace = true }
 anyhow = { workspace = true }
@@ -34,6 +39,8 @@ smith-client = { workspace = true }
 smith-host = { workspace = true }
 smith-runtime = { workspace = true }
 smith-module = { workspace = true }
+smith-module-image-generation = { workspace = true, optional = true }
+smith-module-budget-notice = { workspace = true, optional = true }
 smith-tools = { workspace = true }
 smith-tui = { workspace = true }
 time = { workspace = true }
@@ -45,6 +52,7 @@ uuid = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
+smith-test-module = { workspace = true }
 agent-runtime = { workspace = true }
 async-trait = { workspace = true }
 tempfile = { workspace = true }

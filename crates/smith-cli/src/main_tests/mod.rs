@@ -119,6 +119,7 @@ mod local_shell;
 #[cfg(test)]
 #[allow(clippy::wildcard_imports)]
 mod mcp;
+mod modules;
 #[cfg(test)]
 #[allow(clippy::wildcard_imports)]
 mod rendering;

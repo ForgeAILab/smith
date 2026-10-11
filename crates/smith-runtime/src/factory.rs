@@ -129,7 +129,6 @@ use crate::abilities::{INTERACTION_READY_CONFIG, seal_tool_abilities};
 use crate::advisor::{AdvisorRoute, AdvisorTool};
 use crate::authority::SmithToolAuthority;
 use crate::background_tasks::BackgroundServices;
-use crate::budget_notice::{BudgetNoticeComponent, DEFAULT_NOTICE_THRESHOLD_TOKENS};
 use crate::catalog::CatalogLayers;
 pub use crate::catalog::{LimitContribution, ProfileResolution};
 use crate::chatgpt::{
@@ -176,7 +175,7 @@ mod construction;
 mod context_policy;
 mod delegation;
 mod errors;
-mod modules;
+pub(crate) mod modules;
 mod persistence;
 mod provider;
 mod resolve;
@@ -514,6 +513,10 @@ pub struct AdvisorProfileRequest {
 /// secret — only values that are safe to display.
 #[derive(Clone, PartialEq)]
 pub struct RuntimePolicy {
+    /// Effective module switches, including the deciding written key and layer.
+    pub modules: BTreeMap<String, smith_config::resolve::ResolvedModule>,
+    /// User configuration directory used by reviewed module switches.
+    pub user_dir: PathBuf,
     /// The installed coding agent this run's turns execute on, when the
     /// profile selected one. Surfaces use it to offer the CLI's models rather
     /// than the provider catalog, and to label the turn.
@@ -664,7 +667,7 @@ pub struct SmithRuntime {
     harness_report: HarnessResolutionReport,
     mounted_modules: Arc<[smith_module::MountedModule]>,
     module_report: Arc<[smith_module::ModuleReport]>,
-    image_history: Arc<crate::image_history::SessionImageHistory>,
+    session_history: Arc<crate::session_history::LiveSessionHistory>,
 }
 
 impl SmithRuntime {
@@ -782,9 +785,33 @@ impl SmithRuntime {
         &self.module_report
     }
 
-    /// Canonical active-session image history used by `generate_image`.
-    pub(crate) fn image_history(&self) -> &Arc<crate::image_history::SessionImageHistory> {
-        &self.image_history
+    /// Current bounded status items, in module mount order then item name order.
+    pub fn module_status(&self) -> Vec<smith_module::StatusItem> {
+        let mut items = Vec::new();
+        for module in self.mounted_modules.iter() {
+            let mut sources = module
+                .contributions
+                .iter()
+                .filter_map(|contribution| match contribution {
+                    smith_module::ModuleContribution::StatusItem { name, source } => {
+                        Some((name, source))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            sources.sort_by_key(|(name, _)| *name);
+            items.extend(
+                sources
+                    .into_iter()
+                    .filter_map(|(_, source)| source.current()),
+            );
+        }
+        items
+    }
+
+    /// Canonical active-session history shared with mounted modules.
+    pub(crate) fn session_history(&self) -> &Arc<crate::session_history::LiveSessionHistory> {
+        &self.session_history
     }
 }
 
@@ -899,6 +926,7 @@ fn assemble_policy(policy: RuntimePolicy) -> PolicyStage {
 
 pub use construction::{build, preflight};
 pub use errors::FactoryError;
+pub use modules::module_report;
 
 /// Protocol-v1 migration adapter for trusted embedders that still construct a
 /// [`RuntimeRequest`] directly.

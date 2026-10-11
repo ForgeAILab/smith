@@ -66,6 +66,9 @@ pub(super) fn fixture_raw_and_view(
                     LocalResult::Goal(report) => smith_client::goal_report::render_plain(report),
                     LocalResult::Agent(report) => smith_client::agent_report::render_plain(report),
                     LocalResult::Mcp(report) => smith_client::mcp_report::render_plain(report),
+                    LocalResult::Modules(report) => {
+                        smith_client::modules_report::render_plain(report)
+                    }
                     LocalResult::Skills(report) => {
                         smith_client::skills_report::render_plain(report)
                     }
@@ -109,6 +112,17 @@ pub(super) fn fixture_raw_and_view(
                     }
                     LocalResult::Mcp(report) => {
                         LocalResult::Mcp(Box::new(fixture_mcp_view(report, normalizer)))
+                    }
+                    LocalResult::Modules(report) => {
+                        let mut report = report.clone();
+                        for row in &mut report.rows {
+                            if let Some(path) = &mut row.source.file {
+                                *path = std::path::PathBuf::from(
+                                    normalizer.normalize(&path.display().to_string()),
+                                );
+                            }
+                        }
+                        LocalResult::Modules(report)
                     }
                     LocalResult::Skills(report) => {
                         LocalResult::Skills(Box::new(fixture_skills_view(report, normalizer)))

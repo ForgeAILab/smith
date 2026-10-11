@@ -25,9 +25,13 @@ impl Fixture {
             LOCAL_COMMAND_CONFIG,
         )
         .expect("config");
-        let mut config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
-            .expect("resolution")
-            .config;
+        let mut config = resolve(
+            &ResolveRequest::new(project.path())
+                .with_known_modules(crate::modules::known_modules())
+                .with_home_dir(home.path()),
+        )
+        .expect("resolution")
+        .config;
         config.approval.mode.value = mode;
         config.persistence.enabled.value = persistent;
         let arguments = serde_json::json!({
@@ -423,10 +427,13 @@ async fn finished_shortcut_is_visible_after_resuming_the_host() {
     let session_id = fixture.host.session().id().clone();
     Box::pin(fixture.host.shutdown()).await.expect("shutdown");
 
-    let config =
-        resolve(&ResolveRequest::new(fixture.project.path()).with_home_dir(fixture._home.path()))
-            .expect("resume resolution")
-            .config;
+    let config = resolve(
+        &ResolveRequest::new(fixture.project.path())
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(fixture._home.path()),
+    )
+    .expect("resume resolution")
+    .config;
     let runtime = RuntimeRequest {
         provider: Some(fixture.provider.clone()),
         workspace: Some(Arc::new(

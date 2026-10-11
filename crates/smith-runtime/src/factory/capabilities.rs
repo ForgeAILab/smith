@@ -6,11 +6,9 @@ pub(super) fn prepare(
     request: &RuntimeRequest,
     agent_tool_profiles: Vec<AgentToolProfile>,
     advisor_route: Option<Arc<AdvisorRoute>>,
-    image_backend: Option<Arc<dyn smith_tools::ImageGenerationBackend>>,
-    image_history: Arc<crate::image_history::SessionImageHistory>,
     module_tools: Vec<(Arc<dyn Tool>, agent_runtime::registry::RegistrySource)>,
 ) -> Result<CapabilityStage, FactoryError> {
-    let mut tools = tools(request, image_backend, image_history);
+    let mut tools = tools(request);
     let (advisor, advisor_slot) = if advisor_eligible(request) {
         let route = advisor_route.ok_or_else(|| {
             FactoryError::Runtime(RuntimeError::config("advisor route was not prepared"))
@@ -111,11 +109,7 @@ pub(super) fn prepare(
 }
 
 /// The tools this run registers.
-pub(super) fn tools(
-    request: &RuntimeRequest,
-    image_backend: Option<Arc<dyn smith_tools::ImageGenerationBackend>>,
-    image_history: Arc<crate::image_history::SessionImageHistory>,
-) -> Vec<Arc<dyn Tool>> {
+pub(super) fn tools(request: &RuntimeRequest) -> Vec<Arc<dyn Tool>> {
     let read_only = request.config.agent.active_posture().is_read_only();
     let background = request
         .background_services
@@ -134,19 +128,6 @@ pub(super) fn tools(
     };
     if read_only {
         tools.retain(|tool| tool.spec().effects.is_read_only());
-    }
-    if !read_only
-        && request.config.image_generation.enabled.value
-        && let Some(backend) = image_backend
-    {
-        tools.push(Arc::new(smith_tools::GenerateImageTool::new(
-            backend,
-            image_history,
-            request.config.user_dir.join("generated_images"),
-            request.config.image_generation.model.value.clone(),
-            request.config.image_generation.quality.value.clone(),
-            request.config.image_generation.size.value.clone(),
-        )));
     }
     if questionnaire_eligible(request) {
         tools.push(Arc::new(QuestionnaireTool::new()));

@@ -1,3 +1,4 @@
+use std::fmt;
 use std::sync::Arc;
 
 use agent_runtime::harness::{
@@ -23,8 +24,13 @@ pub enum ModuleContribution {
     },
     /// Declaration only; command dispatch is host-owned.
     Command(SlashCommand),
-    /// Declaration only; clients own rendering.
-    StatusItem(StatusItem),
+    /// Live bounded declaration; clients own rendering.
+    StatusItem {
+        /// Stable evidence identity.
+        name: String,
+        /// Cheap, non-blocking source of the current declaration.
+        source: Arc<dyn StatusSource>,
+    },
 }
 
 /// The six shared harness seams, with no parallel execution contract.
@@ -77,6 +83,12 @@ pub struct SlashCommand {
     pub name: String,
     /// Short user-facing description.
     pub description: String,
+}
+
+/// Live status declaration, without a renderer or canonical state mutation.
+pub trait StatusSource: Send + Sync + fmt::Debug {
+    /// Returns the current bounded value; must be cheap and non-blocking.
+    fn current(&self) -> Option<StatusItem>;
 }
 
 /// Maximum Unicode scalar values in a contributed status label.

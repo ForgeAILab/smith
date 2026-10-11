@@ -273,6 +273,12 @@ pub(super) fn block_lines(
                 lines.push(Line::from(Span::styled("/mcp", theme.style(Tone::Command))));
                 lines.extend(render_mcp_report(report, width, theme));
             }
+            Block::Local(LocalResult::Modules(report)) => {
+                lines.push(report_title("/modules", theme));
+                lines.extend(super::local_reports::render_modules_report(
+                    report, width, theme,
+                ));
+            }
             Block::Local(LocalResult::Skills(report)) => {
                 lines.push(Line::from(Span::styled(
                     "/skills",

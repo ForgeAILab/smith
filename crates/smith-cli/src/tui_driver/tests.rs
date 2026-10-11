@@ -450,3 +450,27 @@ fn restored_synthetic_usage_stays_out_of_ordinary_turn_totals() {
         900
     );
 }
+
+#[test]
+fn confirmed_module_switch_waits_for_work_and_confirmation_to_finish() {
+    use smith_client::commands::ModuleSwitchRequest;
+    use smith_tui::status::Activity;
+    let mut app = smith_tui::App::new("model", "project");
+    let request = ModuleSwitchRequest {
+        id: "image-generation".into(),
+        enabled: false,
+        fingerprint: "reviewed-edit".into(),
+    };
+    let mut pending = Some(request.clone());
+    app.status.activity = Activity::Working;
+    assert!(super::module_switch_exit(&app, &mut pending).is_none());
+    assert_eq!(pending.as_ref(), Some(&request));
+    app.status.activity = Activity::Idle;
+    app.confirm_module_switch(request.clone(), "reviewed preview".into());
+    assert!(super::module_switch_exit(&app, &mut pending).is_none());
+    assert_eq!(pending.as_ref(), Some(&request));
+    app.overlay = None;
+    assert!(matches!(super::module_switch_exit(&app, &mut pending),
+        Some(super::InteractiveExit::ModuleSwitch(applied)) if applied == request));
+    assert!(pending.is_none());
+}

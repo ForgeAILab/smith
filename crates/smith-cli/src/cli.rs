@@ -20,6 +20,11 @@ pub(crate) enum Command {
         /// Selection flags that participate in resolution.
         selection: Selection,
     },
+    /// List known module choices and composition outcomes without a session.
+    ConfigModules {
+        /// Selection flags that participate in resolution.
+        selection: Selection,
+    },
     /// List persisted sessions for a project.
     SessionsList {
         /// The project whose session partition to inspect.
@@ -331,9 +336,15 @@ fn parse_config(mut args: VecDeque<OsString>) -> Result<Command, ParseError> {
         return Ok(Command::Help);
     }
     let action = required_text(args.pop_front(), "an action after `config`")?;
+    if action == "modules" {
+        return match parse_selection_only(args)? {
+            Some(selection) => Ok(Command::ConfigModules { selection }),
+            None => Ok(Command::Help),
+        };
+    }
     if action != "explain" {
         return Err(ParseError::new(format!(
-            "unknown config action `{action}`; expected `smith config explain <key>`"
+            "unknown config action `{action}`; expected `smith config explain <key>` or `smith config modules`"
         )));
     }
     if args.front().is_some_and(|arg| is_help(arg.to_str())) {
@@ -628,6 +639,7 @@ USAGE:
   smith -p <PROMPT|-> [OPTIONS]
   smith help
   smith config explain <KEY> [SELECTION OPTIONS]
+  smith config modules [SELECTION OPTIONS]
   smith sessions list [SELECTION OPTIONS]
   smith setup [--project <PATH>]
   smith setup add-provider [--project <PATH>]
@@ -658,7 +670,7 @@ RUN OPTIONS:
   -V, --version                 Print version
 
 SELECTION OPTIONS:
-  config explain and sessions list accept --project, --profile, --agent,
+  config explain, config modules and sessions list accept --project, --profile, --agent,
   --provider, --model, --effort, --context-window, --approval, --yolo,
   --background-exit, and --allow-synthetic-cache-spend as described above.
   -h, --help                    Print help at either command level

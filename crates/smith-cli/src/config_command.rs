@@ -1,4 +1,4 @@
-//! Configuration readiness, resolution, and explain commands.
+//! Configuration readiness, resolution, explain, and module listing commands.
 
 use std::path::PathBuf;
 
@@ -49,6 +49,7 @@ pub(super) fn resolution_request(selection: &Selection) -> Result<(PathBuf, Reso
         SyntheticCacheSpendAuthority::Deny
     };
     let request = ResolveRequest::new(&start)
+        .with_known_modules(crate::modules::known_modules())
         .with_env(std::env::vars())
         .with_cli(selection.overrides())
         .with_session(selection.session_overrides())
@@ -72,5 +73,27 @@ pub(super) fn explain_config(key: &str, selection: &Selection) -> Result<()> {
     for entry in explanation.overridden {
         println!("overrode: {} from {}", entry.value, entry.source);
     }
+    Ok(())
+}
+
+pub(super) async fn modules_report(
+    prepared: &Prepared,
+) -> Result<smith_client::modules_report::ModulesReport> {
+    let request = crate::runtime_host::preflight_request(
+        &prepared.resolution,
+        &prepared.project,
+        smith_runtime::factory::HostSurface::Headless,
+        None,
+    )?;
+    let outcomes = smith_runtime::factory::module_report(&request).await?;
+    let report =
+        smith_client::modules_report::module_report(&outcomes, &prepared.resolution.config.modules);
+    Ok(report)
+}
+
+pub(super) async fn list_modules(selection: &Selection) -> Result<()> {
+    let prepared = prepare(selection)?;
+    let report = modules_report(&prepared).await?;
+    println!("{}", smith_client::modules_report::render_plain(&report));
     Ok(())
 }

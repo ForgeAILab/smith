@@ -23,6 +23,8 @@
 //! and projected at context assembly, where it is not.
 
 use std::fmt;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use agent_runtime::context::{
     CacheClass, ContextFragment, ContextLane, ContextPosition, FragmentContent, FragmentKind,
@@ -38,6 +40,7 @@ use agent_runtime_core::store::{SessionStateSensitivity, VersionedSessionState};
 use agent_runtime_core::usage::{UsageRecord, UsageSource};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use smith_module::{StatusItem, StatusSeverity, StatusSource};
 
 /// Component identity and state namespace.
 pub(crate) const BUDGET_NOTICE_COMPONENT: &str = "smith.budget_notice";
@@ -58,6 +61,7 @@ struct NoticeState {
 pub(crate) struct BudgetNoticeComponent {
     input_budget_tokens: u64,
     threshold_tokens: u64,
+    active: Arc<AtomicBool>,
 }
 
 impl fmt::Debug for BudgetNoticeComponent {
@@ -89,6 +93,7 @@ impl BudgetNoticeComponent {
         Ok(Self {
             input_budget_tokens,
             threshold_tokens,
+            active: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -148,6 +153,8 @@ impl TurnCommitHook for BudgetNoticeComponent {
         };
         let value = serde_json::to_value(&state)
             .map_err(|error| RuntimeError::internal(format!("budget notice state: {error}")))?;
+        self.active
+            .store(remaining <= self.threshold_tokens, Ordering::Relaxed);
         Ok(TurnCommitPatch {
             state: Some(SessionStatePatch {
                 revision: Self::descriptor_value().revision().clone(),
@@ -168,15 +175,23 @@ impl ContextContributor for BudgetNoticeComponent {
 
     async fn contribute(&self, view: &ContextView) -> Result<ContextPatch, RuntimeError> {
         let Some(persisted) = &view.state else {
+            self.active.store(false, Ordering::Relaxed);
             return Ok(ContextPatch::default());
         };
-        let state = self.decode(persisted)?;
+        let state = match self.decode(persisted) {
+            Ok(state) => state,
+            Err(error) => {
+                self.active.store(false, Ordering::Relaxed);
+                return Err(error);
+            }
+        };
         if state.remaining_tokens > self.threshold_tokens {
+            self.active.store(false, Ordering::Relaxed);
             return Ok(ContextPatch::default());
         }
         let fragment = ContextFragment::new(
             "smith.budget-notice",
-            FragmentKind::DeveloperInstruction,
+            FragmentKind::Continuation,
             FragmentSource::Host,
             RegistryRevision::new("smith-budget-notice-v1"),
             FragmentContent::Text(Self::body(state.remaining_tokens)),
@@ -188,7 +203,20 @@ impl ContextContributor for BudgetNoticeComponent {
         .with_priority(100)
         .with_cache_class(CacheClass::Ephemeral)
         .with_sensitivity(Sensitivity::Internal);
+        self.active.store(true, Ordering::Relaxed);
         Ok(ContextPatch::new(vec![fragment]))
+    }
+}
+
+impl StatusSource for BudgetNoticeComponent {
+    fn current(&self) -> Option<StatusItem> {
+        self.active.load(Ordering::Relaxed).then(|| {
+            StatusItem::new(
+                "budget-notice",
+                "context near limit",
+                Some(StatusSeverity::Warning),
+            )
+        })
     }
 }
 
@@ -292,6 +320,48 @@ mod tests {
             FragmentContent::Text(body) => assert!(body.contains("4000"), "{body}"),
             other => panic!("expected text: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn live_status_tracks_commit_pressure_and_restored_context() {
+        use agent_runtime_core::clock::Timestamp;
+        use agent_runtime_core::event::TurnFinish;
+        use agent_runtime_core::ids::{SessionId, TurnId};
+
+        let component = BudgetNoticeComponent::new(100_000, 12_000).expect("valid");
+        assert!(component.current().is_none());
+        let mut commit = TurnCommitView {
+            session: SessionId::new("s"),
+            turn: TurnId::new("t"),
+            finish: TurnFinish::Completed,
+            provider_error_kind: None,
+            visible_output: true,
+            history: Arc::from([]),
+            state: None,
+            usage: Arc::from([attempt(UsageSource::ProviderAttempt, 88_000)]),
+            started_at: Timestamp(0),
+            committed_at: Timestamp(1),
+        };
+        let patch = component.after_commit(&commit).await.unwrap();
+        let item = component.current().expect("threshold arms status");
+        assert_eq!(item.name(), "budget-notice");
+        assert_eq!(item.severity(), Some(StatusSeverity::Warning));
+        assert_eq!(patch.state.unwrap().value, state(12_000).value);
+        commit.usage = Arc::from([attempt(UsageSource::ProviderAttempt, 10_000)]);
+        component.after_commit(&commit).await.unwrap();
+        assert!(component.current().is_none());
+        component
+            .contribute(&view(Some(state(4_000))))
+            .await
+            .unwrap();
+        assert!(component.current().is_some());
+        component
+            .contribute(&view(Some(state(50_000))))
+            .await
+            .unwrap();
+        assert!(component.current().is_none());
+        component.contribute(&view(None)).await.unwrap();
+        assert!(component.current().is_none());
     }
 
     #[tokio::test]

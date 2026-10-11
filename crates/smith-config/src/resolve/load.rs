@@ -25,18 +25,37 @@ pub fn resolve(request: &ResolveRequest) -> Result<Resolution, ConfigError> {
     let mut file_layers: Vec<Vec<Contribution>> = Vec::new();
     let defaults = built_in_defaults(&layout.user_dir);
     declared.absorb(&defaults, Layer::BuiltIn, None);
-    file_layers.push(contributions_of(&defaults, Layer::BuiltIn, None)?);
+    let mut built_in = contributions_of(&defaults, Layer::BuiltIn, None)?;
+    super::modules::normalize_aliases(&mut built_in, &request.known_modules)?;
+    built_in.extend(super::modules::defaults(&request.known_modules));
+    file_layers.push(built_in);
     for file in &layout.files {
-        let loaded = load(&file.path, file.layer)?;
+        let mut loaded = load(&file.path, file.layer)?;
+        super::modules::validate_file_modules(
+            &loaded.file,
+            file.layer,
+            &file.path,
+            &request.known_modules,
+        )?;
+        super::modules::normalize_aliases(&mut loaded.contributions, &request.known_modules)?;
         declared.absorb(&loaded.file, file.layer, Some(&file.path));
         file_layers.push(loaded.contributions);
     }
 
-    let env = env_contributions(&request.env)?;
+    let mut env = env_contributions(&request.env, &request.known_modules)?;
+    super::modules::normalize_aliases(&mut env, &request.known_modules)?;
+    super::modules::validate_overrides(&request.cli, Layer::CommandLine, &request.known_modules)?;
+    super::modules::validate_overrides(
+        &request.session,
+        Layer::SessionOverride,
+        &request.known_modules,
+    )?;
     let mut cli = request.cli.contributions(Layer::CommandLine);
     normalize_idle_compaction_aliases(&mut cli)?;
+    super::modules::normalize_aliases(&mut cli, &request.known_modules)?;
     let mut session = request.session.contributions(Layer::SessionOverride);
     normalize_idle_compaction_aliases(&mut session)?;
+    super::modules::normalize_aliases(&mut session, &request.known_modules)?;
 
     let agent_profiles = resolve_agent_profiles(&file_layers, &declared)?;
     let (selected, advisor_binding) = match &request.advisor_route {
@@ -63,6 +82,8 @@ pub fn resolve(request: &ResolveRequest) -> Result<Resolution, ConfigError> {
     provenance.extend(advisor_binding);
     apply_product_model_defaults(&mut provenance);
     apply_image_generation_defaults(&mut provenance);
+    super::modules::legacy_defaults(&mut provenance, &request.known_modules);
+    super::modules::mirror_aliases(&mut provenance, &request.known_modules);
 
     let config = extract(
         &provenance,
@@ -1126,19 +1147,33 @@ const HOST_ENV_VARIABLES: &[&str] = &["SMITH_LOG"];
 /// therefore the same-layer ambiguity this rejects.
 pub(super) fn env_contributions(
     env: &BTreeMap<String, String>,
+    known: &[KnownModule],
 ) -> Result<Vec<Contribution>, ConfigError> {
-    let mut claimed: BTreeMap<&str, Vec<(&str, &str)>> = BTreeMap::new();
+    let mut claimed: BTreeMap<String, Vec<(&str, &str)>> = BTreeMap::new();
     for (name, value) in env {
         let upper = name.to_uppercase();
         if !upper.starts_with(ENV_PREFIX) || HOST_ENV_VARIABLES.contains(&upper.as_str()) {
             continue;
         }
-        match setting_for_env(&upper) {
+        let setting = setting_for_env(&upper)
+            .map(|key| canonical_setting_key(key).to_owned())
+            .or_else(|| super::modules::setting_for_module_env(&upper, known));
+        match setting {
             Some(key) => claimed
-                .entry(canonical_setting_key(key))
+                .entry(key)
                 .or_default()
                 .push((name.as_str(), value.as_str())),
             None => {
+                if let Some(id) = upper
+                    .strip_prefix("SMITH_MODULES_")
+                    .and_then(|rest| rest.strip_suffix("_ENABLED"))
+                {
+                    return Err(super::modules::unknown_module(
+                        &id.to_ascii_lowercase(),
+                        Source::environment(name),
+                        known,
+                    ));
+                }
                 return Err(ConfigError::UnknownKey {
                     key: name.clone(),
                     source: Some(Source::environment(name.clone())),
@@ -1162,7 +1197,12 @@ pub(super) fn env_contributions(
         }
         let (name, raw) = hits[0];
         let source = Source::environment(name);
-        let value = parse_text(raw, kind_of(key), &source)?;
+        let kind = if key.starts_with("modules.") {
+            ValueKind::Flag
+        } else {
+            kind_of(&key)
+        };
+        let value = parse_text(raw, kind, &source)?;
         out.push(Contribution {
             key: key.to_owned(),
             value,

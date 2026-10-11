@@ -24,7 +24,6 @@ struct ImageBackendBinding {
 pub(super) struct ProviderStage {
     pub(super) provider: Arc<dyn Provider>,
     pub(super) image_binding: Option<smith_module::ImageBinding>,
-    pub(super) image_backend: Option<Arc<dyn smith_tools::ImageGenerationBackend>>,
 }
 
 pub(super) fn construct_runtime(
@@ -85,34 +84,8 @@ pub(super) fn construct_runtime(
             credentials: binding.credentials.clone(),
             chatgpt: binding.chatgpt,
         });
-    let image_backend =
-        if request.config.image_generation.enabled.value
-            && !request.config.agent.active_posture().is_read_only()
-            && request.built_in_tools
-        {
-            image_binding
-            .map(|binding| -> Result<Arc<dyn smith_tools::ImageGenerationBackend>, FactoryError> {
-                let transport = Arc::new(
-                    ReqwestTransport::new(request.transport.clone())
-                        .map_err(FactoryError::Transport)?,
-                )
-                    as Arc<dyn agent_runtime::provider::transport::HttpTransport>;
-                Ok(Arc::new(crate::image_api::ImagesApiBackend::new(
-                    binding.endpoint,
-                    transport,
-                    binding.target,
-                    binding.credentials,
-                    binding.chatgpt,
-                ))
-                    as Arc<dyn smith_tools::ImageGenerationBackend>)
-            })
-            .transpose()?
-        } else {
-            None
-        };
     Ok(ProviderStage {
         provider: credentials::apply_credential_pool(request, provider, pool),
-        image_backend,
         image_binding: module_image_binding,
     })
 }

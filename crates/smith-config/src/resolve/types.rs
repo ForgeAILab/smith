@@ -50,9 +50,24 @@ use crate::model::{
 
 use super::provenance::*;
 
+/// Host-supplied module metadata, independent of runtime contracts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnownModule {
+    /// Stable id used in `modules.<id>.enabled`.
+    pub id: String,
+    /// Selection when no layer supplies either spelling of the switch.
+    pub default_enabled: bool,
+    /// Whether the running binary contains this module's implementation.
+    pub compiled_in: bool,
+    /// Existing switch kept as an alias, such as `tools.image_generation.enabled`.
+    pub legacy_enabled_key: Option<String>,
+}
+
 /// Everything resolution needs that comes from outside this crate.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ResolveRequest {
+    /// Catalog of module ids accepted by this binary, including modules not built.
+    pub known_modules: Vec<KnownModule>,
     /// Where the project walk starts, usually the working directory.
     pub start_dir: PathBuf,
     /// The user root that holds `.smith`. Injected so tests never read or
@@ -92,6 +107,12 @@ impl ResolveRequest {
     /// Uses `home` as the user root instead of the operating system's.
     pub fn with_home_dir(mut self, home: impl Into<PathBuf>) -> Self {
         self.home_dir = Some(home.into());
+        self
+    }
+
+    /// Supplies the host's module catalog without depending on runtime types.
+    pub fn with_known_modules(mut self, modules: Vec<KnownModule>) -> Self {
+        self.known_modules = modules;
         self
     }
 
@@ -242,8 +263,26 @@ pub struct ResolvedConfig {
     pub background: ResolvedBackground,
     /// Declared Model Context Protocol servers.
     pub mcp: ResolvedMcp,
+    /// Every known module, with selection provenance and build availability.
+    pub modules: BTreeMap<String, ResolvedModule>,
     /// Provenance-carrying configuration for the image-generation tool.
     pub image_generation: ResolvedImageGeneration,
+}
+
+/// One resolved module selection. Mounting remains a runtime decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedModule {
+    /// Effective switch, retaining the key actually written by the user.
+    pub enabled: Sourced<bool>,
+    /// Whether this module's implementation is in the running binary.
+    pub compiled_in: bool,
+}
+
+impl ResolvedModule {
+    /// Selected but unavailable in this build; report it without mounting it.
+    pub fn on_but_not_built(&self) -> bool {
+        self.enabled.value && !self.compiled_in
+    }
 }
 
 /// Resolved image-generation tool settings.
@@ -999,6 +1038,15 @@ pub enum ConfigError {
         /// Known keys close enough to be worth suggesting.
         suggestions: Vec<String>,
     },
+    /// A module id absent from the host's catalog.
+    UnknownModule {
+        /// The id as written.
+        id: String,
+        /// Where the id was written.
+        source: Source,
+        /// All accepted ids, in deterministic order.
+        known_ids: Vec<String>,
+    },
     /// A key whose value cannot be used as written.
     InvalidValue {
         /// Where the value was written.
@@ -1092,6 +1140,19 @@ impl fmt::Display for ConfigError {
                 write!(f, " is not a known setting")?;
                 write_suggestions(f, suggestions)
             }
+            Self::UnknownModule {
+                id,
+                source,
+                known_ids,
+            } => write!(
+                f,
+                "{source} names unknown module `{id}`; known module ids: {}",
+                if known_ids.is_empty() {
+                    "(none)".to_owned()
+                } else {
+                    known_ids.join(", ")
+                }
+            ),
             Self::InvalidValue { source, message } => write!(f, "{source}: {message}"),
             Self::Ambiguous { key, sources } => {
                 write!(f, "`{key}` is set more than once in the same layer: ")?;

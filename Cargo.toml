@@ -5,6 +5,9 @@ members = [
     "crates/smith-host",
     "crates/smith-runtime",
     "crates/smith-module",
+    "crates/test-support/module-fixture",
+    "crates/modules/image-generation",
+    "crates/modules/budget-notice",
     "crates/smith-tools",
     "crates/smith-client",
     "crates/smith-tui",
@@ -24,6 +27,9 @@ smith-config = { path = "crates/smith-config", version = "0.3.10" }
 smith-host = { path = "crates/smith-host", version = "0.3.10" }
 smith-runtime = { path = "crates/smith-runtime", version = "0.3.10" }
 smith-module = { path = "crates/smith-module", version = "0.3.10" }
+smith-test-module = { path = "crates/test-support/module-fixture", version = "0.3.10" }
+smith-module-image-generation = { path = "crates/modules/image-generation", version = "0.3.10" }
+smith-module-budget-notice = { path = "crates/modules/budget-notice", version = "0.3.10" }
 smith-tools = { path = "crates/smith-tools", version = "0.3.10" }
 smith-client = { path = "crates/smith-client", version = "0.3.10" }
 smith-tui = { path = "crates/smith-tui", version = "0.3.10" }

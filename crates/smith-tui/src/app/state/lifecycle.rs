@@ -8,6 +8,7 @@ impl App {
             feedback: None,
             transcript_cache: RefCell::default(),
             status: Status::new(model, project),
+            module_status: Vec::new(),
             cache_miss_notices: false,
             composer: Composer::new(),
             overlay: None,
@@ -60,6 +61,16 @@ impl App {
             pending_input: PendingInputState::default(),
             last_cache_notice_turn: None,
         }
+    }
+
+    /// Replaces module status with the host's latest items, removing absent ones.
+    pub fn set_module_status(&mut self, items: Vec<ModuleStatusItem>) {
+        self.module_status = items;
+    }
+
+    /// Current host-projected module items, in deterministic display order.
+    pub fn module_status(&self) -> &[ModuleStatusItem] {
+        &self.module_status
     }
 
     /// Routes a notice to the place fixed by its kind.

@@ -18,6 +18,8 @@ itself, which the runtime deliberately ships as traits only:
 | `smith-config` | Layered configuration, provenance, credential references, and project trust |
 | `smith-host` | Prepared approval/question brokers and the project workspace boundary |
 | `smith-runtime` | The single runtime factory, harness policy, checkpoints, artifacts, snapshots, and event journal |
+| `smith-module` | Value-returning compiled module contracts and mount planning |
+| `crates/modules/*` | Optional image-generation and budget-notice modules |
 | `smith-tools` | The coding tools: `read`, `list`, `search`, `edit`, `shell` |
 | `smith-tui` | Transcript, status, composer, theme, key map, and rendering |
 | `smith-cli` | The `smith` binary, terminal host loop, and headless output contracts |
@@ -68,6 +70,14 @@ activation is intent-scoped: a read-only request does not advertise mutation
 merely because `edit` and `shell` are registered. Trusted skills, bounded memory, todo state,
 artifact offloading, and semantic summarization contribute through the same
 session-scoped harness pipeline.
+
+Optional compiled modules provide image generation and context-pressure
+notices. `/modules` lists their state, deciding configuration key and layer,
+and first-party or named third-party origin. `/modules <id> on|off` reviews a
+user-config switch and applies it at a safe boundary; `smith config modules`
+prints the same listing without a session. Default builds include both
+first-party modules, and `--no-default-features` builds retain the core tools.
+See [`docs/modules.md`](docs/modules.md) for the contract and contributor steps.
 
 When ordinary session persistence and protected checkpoints are both
 available, delegated children are durable addressable sessions. `@child-1

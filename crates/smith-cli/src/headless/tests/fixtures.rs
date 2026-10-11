@@ -11,6 +11,12 @@ const FORMATS: [OutputFormat; 3] = [
     OutputFormat::StreamJson,
 ];
 
+fn fixture_request(project: &std::path::Path, home: &std::path::Path) -> ResolveRequest {
+    ResolveRequest::new(project)
+        .with_known_modules(crate::modules::known_modules())
+        .with_home_dir(home)
+}
+
 // Keep the historical text recordings on disk while asserting current human
 // wording. JSON and JSONL fixtures still use exact, unmodified comparisons.
 fn compare_text_fixture(relative: &str, captured: &str) {
@@ -183,7 +189,7 @@ async fn rejected_submission(format: OutputFormat) {
     let config_dir = project.path().join(".smith");
     std::fs::create_dir_all(&config_dir).expect("a config directory");
     std::fs::write(config_dir.join("config.toml"), CONFIG).expect("a config");
-    let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+    let config = resolve(&fixture_request(project.path(), home.path()))
         .expect("resolved config")
         .config;
     let runtime = RuntimeRequest {
@@ -221,7 +227,7 @@ async fn empty_current_answer(format: OutputFormat) {
     let config_dir = project.path().join(".smith");
     std::fs::create_dir_all(&config_dir).expect("a config directory");
     std::fs::write(config_dir.join("config.toml"), CONFIG).expect("a config");
-    let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+    let config = resolve(&fixture_request(project.path(), home.path()))
         .expect("resolved config")
         .config;
     let provider = Arc::new(FakeProvider::new(
@@ -332,7 +338,7 @@ async fn goal_complete(format: OutputFormat) {
             ]),
         ],
     ));
-    let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+    let config = resolve(&fixture_request(project.path(), home.path()))
         .expect("resolved config")
         .config;
     assert!(config.persistence.enabled.value);
@@ -416,7 +422,7 @@ turn_time_limit_ms = 600000
         vec![ScriptedStream::new(tool), ScriptedStream::new(final_answer)],
     ));
 
-    let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+    let config = resolve(&fixture_request(project.path(), home.path()))
         .expect("resolved config")
         .config;
     let approval = Arc::new(HeadlessApproval::new());
@@ -520,7 +526,7 @@ async fn attempts_todos_artifacts(format: OutputFormat) {
             ]),
         ],
     ));
-    let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+    let config = resolve(&fixture_request(project.path(), home.path()))
         .expect("resolved config")
         .config;
     let runtime = RuntimeRequest {
@@ -589,7 +595,7 @@ async fn forced_question(format: OutputFormat) {
             ]),
         ],
     ));
-    let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+    let config = resolve(&fixture_request(project.path(), home.path()))
         .expect("resolved config")
         .config;
     let interaction = Arc::new(HeadlessInteraction::new());
@@ -664,7 +670,7 @@ async fn restored_question(format: OutputFormat) {
         ],
     ));
     let (interactive, mut requests) = InteractiveInteraction::new();
-    let first_config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+    let first_config = resolve(&fixture_request(project.path(), home.path()))
         .expect("resolved config")
         .config;
     let first_runtime = RuntimeRequest {
@@ -728,7 +734,7 @@ async fn restored_question(format: OutputFormat) {
         "recovered with unavailable interaction",
     ));
     let headless_interaction = Arc::new(HeadlessInteraction::new());
-    let recovery_config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+    let recovery_config = resolve(&fixture_request(project.path(), home.path()))
         .expect("resolved recovery config")
         .config;
     let recovery_runtime = RuntimeRequest {
@@ -773,7 +779,7 @@ async fn answered_turn(format: OutputFormat) {
     let project = tempfile::tempdir().expect("project");
     std::fs::create_dir_all(project.path().join(".smith")).expect("config directory");
     std::fs::write(project.path().join(".smith/config.toml"), CONFIG).expect("config");
-    let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+    let config = resolve(&fixture_request(project.path(), home.path()))
         .expect("resolved config")
         .config;
     let runtime = RuntimeRequest {

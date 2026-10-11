@@ -53,6 +53,7 @@ fn context() -> ModuleContext {
         posture: ModulePosture::ReadWrite,
         transport: Arc::new(ReplayTransport::single(Vec::new())),
         image_binding: None,
+        session_history: None,
         semantic_summary_enabled: false,
         max_input_tokens: 32_768,
         built_in_tools: true,

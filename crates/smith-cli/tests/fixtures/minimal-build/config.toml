@@ -1,0 +1,16 @@
+default_profile = "minimal"
+
+[profiles.minimal]
+provider = "local"
+model = "example-model"
+
+[providers.local]
+kind = "fake"
+
+[models."local/example-model"]
+context_tokens = 128000
+max_input_tokens = 124000
+max_output_tokens = 4096
+
+[persistence]
+enabled = false

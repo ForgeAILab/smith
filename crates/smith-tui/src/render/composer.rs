@@ -14,6 +14,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use smith_client::agent_report::turns_label;
+use smith_client::status::ModuleStatusSeverity;
 use smith_runtime::client::{PlanItemProjection, PlanItemStatus};
 use unicode_width::UnicodeWidthStr;
 
@@ -701,6 +702,15 @@ pub(super) fn draw_identity_footer_with_hint(
     let left_width = hint.width().saturating_add(2);
     let gap = usize::from(!hint.is_empty()) * 2;
     let budget = usize::from(area.width).saturating_sub(left_width + gap);
+    // Modules only use space beyond the complete built-in identity. If it
+    // already needs truncation, no module may take the space it yields.
+    let built_in_width: usize = identity.iter().map(|span| span.content.width()).sum();
+    append_module_status(
+        &mut identity,
+        app,
+        theme,
+        budget.saturating_sub(built_in_width),
+    );
     // Remove secondary identity from the right before touching the hint.
     // Even a model that cannot fit yields to actionable keys at 44 columns.
     let identity = truncate(identity, u16::try_from(budget).unwrap_or(u16::MAX));
@@ -712,6 +722,32 @@ pub(super) fn draw_identity_footer_with_hint(
     spans.push(Span::raw(" ".repeat(padding)));
     spans.extend(identity);
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn append_module_status(
+    spans: &mut Vec<Span<'static>>,
+    app: &App,
+    theme: Theme,
+    mut budget: usize,
+) {
+    let separator_width = glyph::SEPARATOR.width() + 2;
+    for item in &app.module_status {
+        if budget <= separator_width {
+            break;
+        }
+        let label = item.label.split_whitespace().collect::<Vec<_>>().join(" ");
+        if label.is_empty() {
+            continue;
+        }
+        let label = clip_line(label, budget - separator_width);
+        budget -= separator_width + label.width();
+        let tone = match item.severity {
+            None | Some(ModuleStatusSeverity::Info) => Tone::Default,
+            Some(ModuleStatusSeverity::Warning) => Tone::Warning,
+            Some(ModuleStatusSeverity::Error) => Tone::Danger,
+        };
+        push_segment(spans, theme, Span::styled(label, theme.style(tone)));
+    }
 }
 
 fn composer_hint(app: &App, width: u16) -> String {

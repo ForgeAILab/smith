@@ -839,3 +839,25 @@
         );
         assert!(app.transcript.is_empty());
     }
+
+
+#[test]
+fn modules_dispatch_locally_and_confirmation_has_no_default_action() {
+    use smith_client::commands::{ModuleSwitchRequest, ModulesAction};
+    let mut app = app();
+    type_text(&mut app, "/modules");
+    assert_eq!(app.on_key(key(KeyCode::Enter)), Some(Action::Command(HostCommand::Modules(ModulesAction::List))));
+    for enabled in [false, true] {
+        let request = ModuleSwitchRequest { id: "image-generation".into(), enabled, fingerprint: "reviewed-edit".into() };
+        app.confirm_module_switch(request.clone(), "destination: user config\nmodules.image-generation.enabled = false".into());
+        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
+        assert!(matches!(app.overlay, Some(Overlay::Confirm(_))));
+        elapse_prompt_guard(&mut app);
+        assert_eq!(app.on_key(key(KeyCode::Char('n'))), None);
+        assert!(app.overlay.is_none());
+        app.confirm_module_switch(request.clone(), "destination: user config".into());
+        elapse_prompt_guard(&mut app);
+        assert_eq!(app.on_key(key(KeyCode::Char('y'))), Some(Action::SwitchModule(request)));
+    }
+    assert!(!app.transcript.blocks().iter().any(|block| matches!(block, Block::User { .. })));
+}

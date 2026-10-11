@@ -458,6 +458,13 @@ impl Provenance {
         }
     }
 
+    /// Gives an alias the same complete explanation as its canonical key.
+    pub(super) fn mirror(&mut self, canonical: &str, alias: &str) {
+        if let Some(entries) = self.entries.get(canonical).cloned() {
+            self.entries.insert(alias.to_owned(), entries);
+        }
+    }
+
     pub(super) fn prepend(&mut self, contribution: Contribution) {
         self.entries.entry(contribution.key).or_default().insert(
             0,
@@ -484,6 +491,10 @@ pub(super) struct Contribution {
 /// argument parsing and fills this in.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Overrides {
+    /// Module switches supplied by the host, keyed by module id.
+    pub modules: BTreeMap<String, bool>,
+    /// Legacy image-tool switch, sharing selection with its declared module alias.
+    pub image_generation_enabled: Option<bool>,
     /// Select a root agent mode by name.
     pub agent: Option<String>,
     /// Select a profile by name.
@@ -586,6 +597,12 @@ impl Overrides {
             });
         };
 
+        for (id, value) in &self.modules {
+            push(&super::modules::enabled_key(id), SettingValue::Flag(*value));
+        }
+        if let Some(value) = self.image_generation_enabled {
+            push("tools.image_generation.enabled", SettingValue::Flag(value));
+        }
         if let Some(value) = &self.profile {
             push("profile", SettingValue::Text(value.clone()));
         }

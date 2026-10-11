@@ -21,7 +21,9 @@ pub(super) fn mcp_context(
     project: &std::path::Path,
 ) -> std::sync::Arc<crate::mcp::McpContext> {
     let resolution = smith_config::resolve::resolve(
-        &smith_config::resolve::ResolveRequest::new(project).with_home_dir(home),
+        &smith_config::resolve::ResolveRequest::new(project)
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(home),
     )
     .expect("a resolved project");
     crate::mcp::McpContext::start(
@@ -128,7 +130,9 @@ async fn granting_trust_records_the_decision_and_leaves_the_session_running() {
     let trust = smith_config::trust::TrustStore::open(home.path().join(".smith"))
         .expect("the persisted store");
     let resolution = smith_config::resolve::resolve(
-        &smith_config::resolve::ResolveRequest::new(project.path()).with_home_dir(home.path()),
+        &smith_config::resolve::ResolveRequest::new(project.path())
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(home.path()),
     )
     .expect("a resolved project");
     let server = &resolution.config.mcp.servers["github"];
@@ -152,7 +156,9 @@ async fn granting_trust_records_the_decision_and_leaves_the_session_running() {
 async fn a_project_declaring_no_server_gets_no_supervisor_and_no_trust_file() {
     let (home, project) = mcp_project("");
     let resolution = smith_config::resolve::resolve(
-        &smith_config::resolve::ResolveRequest::new(project.path()).with_home_dir(home.path()),
+        &smith_config::resolve::ResolveRequest::new(project.path())
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(home.path()),
     )
     .expect("a resolved project");
     assert!(resolution.config.mcp.servers.is_empty());

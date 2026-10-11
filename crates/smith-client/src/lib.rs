@@ -18,6 +18,7 @@ pub mod keymap;
 pub mod local_result;
 pub mod mcp_report;
 pub mod message_report;
+pub mod modules_report;
 pub mod notice;
 pub use notice::{Notice, NoticeKind, NoticePersistence};
 pub mod recovery_report;

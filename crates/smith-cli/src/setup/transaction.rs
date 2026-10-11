@@ -154,6 +154,7 @@ async fn preflight(context: &SetupContext) -> Result<(), (String, bool)> {
     let start = canonical_start(context.selection.project.as_deref())
         .map_err(|error| (error.to_string(), false))?;
     let request = ResolveRequest::new(&start)
+        .with_known_modules(crate::modules::known_modules())
         .with_env(std::env::vars())
         .with_cli(context.selection.overrides());
     let resolution = match inspect(&request) {

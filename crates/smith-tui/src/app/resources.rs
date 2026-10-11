@@ -988,9 +988,30 @@ impl App {
         self.open_overlay(Overlay::Confirm(dialog));
     }
 
-    /// Shows one MCP server's resolved invocation and content identity, with no
-    /// default action: a repository asking Smith to run a program is exactly
-    /// the decision that must never be made by pressing Enter.
+    /// Reviews a user-layer module switch with no default confirmation.
+    pub fn confirm_module_switch(
+        &mut self,
+        request: smith_client::commands::ModuleSwitchRequest,
+        preview: String,
+    ) {
+        let mut dialog = ConfirmDialog::new(
+            "switch module",
+            Tone::Warning,
+            preview.lines().map(str::to_owned).collect(),
+            "save and apply",
+            ConfirmOutcome::Action(Action::SwitchModule(request)),
+            ConfirmOutcome::Dismiss,
+        );
+        dialog.warning = Some((
+            "Only the user configuration changes. Higher layers may override it.".into(),
+            Tone::Warning,
+        ));
+        dialog.cancel_label = "leave unchanged".into();
+        dialog.hint = "y save and apply · n/esc leave unchanged".into();
+        self.open_overlay(Overlay::Confirm(dialog));
+    }
+
+    /// Shows the MCP server invocation for a deliberate trust decision.
     pub fn confirm_mcp_trust(&mut self, server: impl Into<String>, content: impl Into<String>) {
         let server = server.into();
         let mut body = vec![

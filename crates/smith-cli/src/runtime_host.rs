@@ -87,7 +87,7 @@ pub(super) fn preflight_request(
         workspace: Some(Arc::new(workspace)),
         credentials: Some(CredentialResolver::new(&resolution.layout.user_dir)),
         model_catalog: catalog.clone(),
-        modules: crate::modules::composition(),
+        modules: crate::modules::composition_from_resolved_config(&resolution.config),
         ..RuntimeRequest::new(resolution.config.clone(), surface)
     };
     if let Some(catalog) = catalog
@@ -578,6 +578,10 @@ async fn run_interactive_hosts(
     let mut advisor_change: Option<Option<AdvisorOverride>> = None;
     // Likewise the session's denials before a pending `/capabilities` change.
     let mut capability_change: Option<Vec<String>> = None;
+    let mut module_change: Option<(
+        smith_config::user_config::CommittedConfigEdit,
+        smith_client::commands::ModuleSwitchRequest,
+    )> = None;
     let mut mcp: Option<Arc<crate::mcp::McpContext>> = None;
     let mut app = None;
     // Initialize after raw mode is entered, then retain input through host
@@ -594,6 +598,14 @@ async fn run_interactive_hosts(
         .await
         {
             Ok(started) => started,
+            Err(error) if module_change.is_some() => {
+                let (committed, _) = module_change.take().expect("pending module edit");
+                committed
+                    .rollback()
+                    .context("rolling back the module switch")?;
+                host_notice = Some(format!("module switch rolled back · {error:#}"));
+                continue;
+            }
             Err(error)
                 if is_reasoning_startup_error(&error)
                     && reasoning_selection_is_recoverable(&args.selection, resume.is_some()) =>
@@ -620,6 +632,18 @@ async fn run_interactive_hosts(
             }
             Err(error) => return Err(error),
         };
+        if let Some((committed, request)) = module_change.take() {
+            host_notice = started
+                .host
+                .runtime()
+                .policy()
+                .modules
+                .get(&request.id)
+                .map(|resolved| {
+                    crate::modules::switch_outcome(&request.id, request.enabled, resolved)
+                });
+            committed.accept();
+        }
         if capability_change.take().is_some() {
             host_notice = Some(if args.selection.capability_denials.is_empty() {
                 "capabilities · no session denials".to_owned()
@@ -786,6 +810,18 @@ async fn run_interactive_hosts(
                 resume = Some(current_session);
                 frozen_catalog = None;
                 continue;
+            }
+            InteractiveExit::ModuleSwitch(request) => {
+                resume = Some(current_session);
+                frozen_catalog = Some(catalog);
+                match crate::modules::commit_switch(
+                    &host.runtime().policy().user_dir,
+                    host.runtime().module_report(),
+                    &request,
+                ) {
+                    Ok(committed) => module_change = Some((committed, request)),
+                    Err(error) => host_notice = Some(format!("module unchanged · {error:#}")),
+                }
             }
             InteractiveExit::Reconfigure(command) => {
                 frozen_catalog = matches!(

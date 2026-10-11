@@ -46,6 +46,8 @@ zeroize = { workspace = true }
 nix = { version = "0.31", default-features = false, features = ["signal"] }
 
 [dev-dependencies]
+smith-module-image-generation = { workspace = true }
+smith-module-budget-notice = { workspace = true }
 # The integration suite drives the supervisor through a fake connector, so it
 # needs the same binding functions production uses — and the same transports,
 # so a test cannot pass against a feature set production does not build.

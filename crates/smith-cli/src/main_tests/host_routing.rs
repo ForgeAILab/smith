@@ -112,9 +112,13 @@ async fn pending_user_admission_gate_beats_automatic_goal_continuation() {
         LOCAL_COMMAND_CONFIG,
     )
     .expect("config");
-    let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
-        .expect("resolution")
-        .config;
+    let config = resolve(
+        &ResolveRequest::new(project.path())
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(home.path()),
+    )
+    .expect("resolution")
+    .config;
     let provider = Arc::new(agent_runtime::provider::fake::FakeProvider::new(
         "example-model",
         agent_runtime_core::provider::Capabilities::basic_streaming(),
@@ -255,9 +259,13 @@ async fn exit_resume_hint_uses_user_history_even_when_the_provider_fails_before_
         LOCAL_COMMAND_CONFIG,
     )
     .expect("config");
-    let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
-        .expect("resolution")
-        .config;
+    let config = resolve(
+        &ResolveRequest::new(project.path())
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(home.path()),
+    )
+    .expect("resolution")
+    .config;
     let provider = Arc::new(FakeProvider::new(
         "example-model",
         Capabilities::basic_streaming(),

@@ -256,9 +256,13 @@ async fn informational_commands_append_inline_without_provider_history() {
         config_with_windows,
     )
     .expect("config");
-    let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
-        .expect("resolution")
-        .config;
+    let config = resolve(
+        &ResolveRequest::new(project.path())
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(home.path()),
+    )
+    .expect("resolution")
+    .config;
     let runtime = RuntimeRequest {
         workspace: Some(Arc::new(
             ProjectWorkspace::new(project.path()).expect("workspace"),

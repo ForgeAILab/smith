@@ -227,7 +227,9 @@ async fn anthropic_setup_publishes_a_native_provider_and_rolls_back_on_failure()
         written.models["anthropic/claude-test-only"].context_tokens,
         Some(64_000)
     );
-    let request = ResolveRequest::new(project.path()).with_home_dir(root.path());
+    let request = ResolveRequest::new(project.path())
+        .with_known_modules(crate::modules::known_modules())
+        .with_home_dir(root.path());
     let ConfigReadiness::Ready(resolution) = inspect(&request) else {
         panic!("the published native provider must be locally runnable");
     };

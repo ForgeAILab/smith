@@ -50,6 +50,9 @@
   /mcp           Show MCP servers, or trust
                  one so it may run
                  [trust NAME]
+  /modules       List modules or turn one on
+                 or off
+                 [ID on|off]
   /capabilities  Show capabilities, or deny
                  one for this session
                  [deny ID|allow ID]
@@ -140,9 +143,6 @@
                       literal !
   //                  Send text with a
                       leading slash
-
-
-
 
 
 

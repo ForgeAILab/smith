@@ -20,6 +20,7 @@ use agent_runtime_core::steer::SteerReceipt;
 use agent_runtime_core::usage::CounterKind;
 use smith_client::agent_report::{AgentSnapshot, ChildState as ReportChildState};
 use smith_client::recovery_report::RestoreReport;
+use smith_client::status::ModuleStatusItem;
 use smith_client::{Notice, NoticeKind, NoticePersistence};
 use smith_host::approval::ApprovalPrompt;
 use smith_host::rotation::RotationPrompt;
@@ -218,6 +219,8 @@ pub enum Action {
     /// Execute a local product command without sending composer text to the
     /// provider.
     Command(HostCommand),
+    /// Apply the confirmed module edit at the next safe boundary.
+    SwitchModule(smith_client::commands::ModuleSwitchRequest),
     /// Apply the already-previewed last-turn undo.
     ApplyUndo,
     /// Record that the already-previewed undo was explicitly cancelled.
@@ -754,6 +757,8 @@ pub struct App {
     pub(crate) transcript_cache: RefCell<crate::render::TranscriptCache>,
     /// Header status.
     pub status: Status,
+    /// Presentation-only module items, in the host's deterministic order.
+    pub(crate) module_status: Vec<ModuleStatusItem>,
     /// Whether significant local cache-miss notices are enabled.
     pub cache_miss_notices: bool,
     /// The input buffer.

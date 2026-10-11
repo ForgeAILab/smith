@@ -87,6 +87,10 @@ async fn execute(command: Command) -> Result<u8> {
             explain_config(&key, &selection)?;
             Ok(0)
         }
+        Command::ConfigModules { selection } => {
+            config_command::list_modules(&selection).await?;
+            Ok(0)
+        }
         Command::SessionsList { selection } => {
             list_sessions(&selection).await?;
             Ok(0)

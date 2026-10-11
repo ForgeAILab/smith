@@ -8,7 +8,9 @@ use super::{
 
 pub(super) async fn run_checkpoint_key_setup(project: Option<PathBuf>) -> Result<SetupOutcome> {
     let start = canonical_start(project.as_deref())?;
-    let request = ResolveRequest::new(&start).with_env(std::env::vars());
+    let request = ResolveRequest::new(&start)
+        .with_known_modules(crate::modules::known_modules())
+        .with_env(std::env::vars());
     let context = match inspect(&request) {
         ConfigReadiness::Ready(resolution) => CheckpointSetupContext {
             user_dir: resolution.layout.user_dir.clone(),

@@ -1,60 +1,27 @@
-//! Active-session access to canonical conversation images.
+//! Recent images selected from the host's live canonical history.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::Arc;
 
-use agent_runtime::runtime::SessionHandle;
 use agent_runtime_core::content::{ContentPart, Message};
 use agent_runtime_core::error::RuntimeError;
 use agent_runtime_core::ids::SessionId;
+use smith_module::SessionHistory;
 use smith_tools::{MAX_RECENT_IMAGE_DATA_URL_BYTES, RecentImageSource};
 
-/// Maps active root sessions to their canonical history without copying image
-/// data into a second cache. Resumed sessions register their restored handle.
-#[derive(Debug, Default)]
-pub(crate) struct SessionImageHistory {
-    sessions: Mutex<HashMap<String, SessionHandle>>,
-}
+#[derive(Debug)]
+pub(crate) struct ConversationImages(pub(crate) Arc<dyn SessionHistory>);
 
-impl SessionImageHistory {
-    /// Registers one live or resumed session until the returned lease drops or
-    /// is explicitly unregistered during host shutdown.
-    pub(crate) fn register(self: &Arc<Self>, session: SessionHandle) -> SessionImageRegistration {
-        let key = session.id().as_str().to_owned();
-        self.sessions
-            .lock()
-            .expect("image-history registry lock poisoned")
-            .insert(key.clone(), session);
-        SessionImageRegistration {
-            registry: Arc::downgrade(self),
-            key,
-            active: AtomicBool::new(true),
-        }
-    }
-
-    fn unregister(&self, key: &str) {
-        self.sessions
-            .lock()
-            .expect("image-history registry lock poisoned")
-            .remove(key);
-    }
-}
-
-impl RecentImageSource for SessionImageHistory {
+impl RecentImageSource for ConversationImages {
     fn recent_images(
         &self,
         session: &SessionId,
         count: usize,
     ) -> Result<Vec<String>, RuntimeError> {
-        let handle = self
-            .sessions
-            .lock()
-            .expect("image-history registry lock poisoned")
-            .get(session.as_str())
-            .cloned()
-            .ok_or_else(|| RuntimeError::not_found("this session has no active image history"))?;
-        let mut images = handle.with_history(|history| collect_recent_images(history, count))?;
+        let mut result = Ok(Vec::new());
+        self.0.with_history(session, &mut |history| {
+            result = collect_recent_images(history, count);
+        })?;
+        let mut images = result?;
         if images.len() < count {
             return Err(RuntimeError::tool(format!(
                 "requested {count} recent image(s), but this session has only {}",
@@ -63,31 +30,6 @@ impl RecentImageSource for SessionImageHistory {
         }
         images.reverse();
         Ok(images)
-    }
-}
-
-/// Removes one session from recent-image lookup on shutdown or drop.
-#[derive(Debug)]
-pub(crate) struct SessionImageRegistration {
-    registry: Weak<SessionImageHistory>,
-    key: String,
-    active: AtomicBool,
-}
-
-impl SessionImageRegistration {
-    /// Removes the registered history source. Safe to call more than once.
-    pub(crate) fn unregister(&self) {
-        if self.active.swap(false, Ordering::AcqRel)
-            && let Some(registry) = self.registry.upgrade()
-        {
-            registry.unregister(&self.key);
-        }
-    }
-}
-
-impl Drop for SessionImageRegistration {
-    fn drop(&mut self) {
-        self.unregister();
     }
 }
 

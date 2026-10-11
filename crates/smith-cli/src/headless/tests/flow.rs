@@ -34,7 +34,9 @@ mode = "deny"
     let config_dir = project.path().join(".smith");
     std::fs::create_dir_all(&config_dir).expect("configuration directory");
     std::fs::write(config_dir.join("config.toml"), CONFIG).expect("configuration");
-    let resolve_request = ResolveRequest::new(project.path()).with_home_dir(home.path());
+    let resolve_request = ResolveRequest::new(project.path())
+        .with_known_modules(crate::modules::known_modules())
+        .with_home_dir(home.path());
     let config = resolve(&resolve_request).expect("main config").config;
     let advisor_config = resolve(
         &resolve_request.with_advisor_route(
@@ -243,9 +245,13 @@ max_output_tokens = 4096
     let config_dir = project.path().join(".smith");
     std::fs::create_dir_all(&config_dir).expect("a config directory");
     std::fs::write(config_dir.join("config.toml"), CONFIG).expect("a config");
-    let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
-        .expect("resolved config")
-        .config;
+    let config = resolve(
+        &ResolveRequest::new(project.path())
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(home.path()),
+    )
+    .expect("resolved config")
+    .config;
     let provider = Arc::new(SpawnWaitAnswerProvider::default());
     let runtime = RuntimeRequest {
         workspace: Some(Arc::new(
@@ -332,9 +338,13 @@ max_output_tokens = 4096
     let config_dir = project.path().join(".smith");
     std::fs::create_dir_all(&config_dir).expect("a config directory");
     std::fs::write(config_dir.join("config.toml"), CONFIG).expect("a config");
-    let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
-        .expect("resolved config")
-        .config;
+    let config = resolve(
+        &ResolveRequest::new(project.path())
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(home.path()),
+    )
+    .expect("resolved config")
+    .config;
     let runtime = RuntimeRequest {
         workspace: Some(Arc::new(
             ProjectWorkspace::new(project.path()).expect("a workspace"),
@@ -419,9 +429,13 @@ max_output_tokens = 4096
     let config_dir = project.path().join(".smith");
     std::fs::create_dir_all(&config_dir).expect("a config directory");
     std::fs::write(config_dir.join("config.toml"), CONFIG).expect("a config");
-    let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
-        .expect("resolved config")
-        .config;
+    let config = resolve(
+        &ResolveRequest::new(project.path())
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(home.path()),
+    )
+    .expect("resolved config")
+    .config;
     let provider = Arc::new(FakeProvider::new(
         "example-model",
         Capabilities::basic_streaming(),
@@ -558,9 +572,13 @@ max_output_tokens = 4096
             ]),
         ],
     ));
-    let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
-        .expect("resolved config")
-        .config;
+    let config = resolve(
+        &ResolveRequest::new(project.path())
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(home.path()),
+    )
+    .expect("resolved config")
+    .config;
     assert!(config.persistence.enabled.value);
     let runtime = RuntimeRequest {
         workspace: Some(Arc::new(
@@ -707,9 +725,13 @@ turn_time_limit_ms = 600000
         vec![ScriptedStream::new(tool), ScriptedStream::new(final_answer)],
     ));
 
-    let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
-        .expect("resolved config")
-        .config;
+    let config = resolve(
+        &ResolveRequest::new(project.path())
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(home.path()),
+    )
+    .expect("resolved config")
+    .config;
     let approval = Arc::new(HeadlessApproval::new());
     let runtime = RuntimeRequest {
         workspace: Some(Arc::new(
@@ -882,9 +904,13 @@ max_output_tokens = 4096
             ]),
         ],
     ));
-    let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
-        .expect("resolved config")
-        .config;
+    let config = resolve(
+        &ResolveRequest::new(project.path())
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(home.path()),
+    )
+    .expect("resolved config")
+    .config;
     let runtime = RuntimeRequest {
         workspace: Some(Arc::new(
             ProjectWorkspace::new(project.path()).expect("a workspace"),
@@ -1030,9 +1056,13 @@ max_output_tokens = 4096
             ]),
         ],
     ));
-    let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
-        .expect("resolved config")
-        .config;
+    let config = resolve(
+        &ResolveRequest::new(project.path())
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(home.path()),
+    )
+    .expect("resolved config")
+    .config;
     let interaction = Arc::new(HeadlessInteraction::new());
     let runtime = RuntimeRequest {
         workspace: Some(Arc::new(
@@ -1144,9 +1174,13 @@ max_output_tokens = 4096
         ],
     ));
     let (interactive, mut requests) = InteractiveInteraction::new();
-    let first_config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
-        .expect("resolved config")
-        .config;
+    let first_config = resolve(
+        &ResolveRequest::new(project.path())
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(home.path()),
+    )
+    .expect("resolved config")
+    .config;
     let first_runtime = RuntimeRequest {
         workspace: Some(Arc::new(
             ProjectWorkspace::new(project.path()).expect("a workspace"),
@@ -1199,9 +1233,13 @@ max_output_tokens = 4096
         "recovered with unavailable interaction",
     ));
     let headless_interaction = Arc::new(HeadlessInteraction::new());
-    let recovery_config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
-        .expect("resolved recovery config")
-        .config;
+    let recovery_config = resolve(
+        &ResolveRequest::new(project.path())
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(home.path()),
+    )
+    .expect("resolved recovery config")
+    .config;
     let recovery_runtime = RuntimeRequest {
         workspace: Some(Arc::new(
             ProjectWorkspace::new(project.path()).expect("a workspace"),
@@ -1285,10 +1323,13 @@ max_output_tokens = 4096
         "resumed after the exact restored answer",
     ));
     let (interactive, mut requests) = InteractiveInteraction::new();
-    let interactive_config =
-        resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
-            .expect("resolved interactive config")
-            .config;
+    let interactive_config = resolve(
+        &ResolveRequest::new(project.path())
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(home.path()),
+    )
+    .expect("resolved interactive config")
+    .config;
     let interactive_runtime = RuntimeRequest {
         workspace: Some(Arc::new(
             ProjectWorkspace::new(project.path()).expect("a workspace"),

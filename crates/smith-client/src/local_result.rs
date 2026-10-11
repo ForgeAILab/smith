@@ -47,6 +47,8 @@ pub enum LocalResult {
     Agent(Box<AgentReport>),
     /// MCP server snapshots and local trust outcomes.
     Mcp(Box<McpReport>),
+    /// Native module selection and mount outcomes.
+    Modules(Box<crate::modules_report::ModulesReport>),
     /// Indexed skills, discovery problems, and local trust outcomes.
     Skills(Box<SkillsReport>),
     /// Classified Git patches or the last Smith turn's recovery preview.
@@ -73,6 +75,7 @@ impl LocalResult {
             Self::Goal(_) => "goal",
             Self::Agent(report) => report.title(),
             Self::Mcp(_) => "mcp",
+            Self::Modules(_) => "modules",
             Self::Skills(_) => "skills",
             Self::Diff(report) => &report.title,
             Self::Review(report) => report.title(),
@@ -120,6 +123,7 @@ impl LocalResult {
                     LocalResultState::Info
                 }
             },
+            Self::Modules(_) => LocalResultState::Info,
             Self::Skills(report) => match report.as_ref() {
                 SkillsReport::Error(_) => LocalResultState::Error,
                 SkillsReport::Empty

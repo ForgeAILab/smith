@@ -9,11 +9,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use agent_runtime::provider::transport::HttpTransport;
+use agent_runtime_core::content::Message;
+use agent_runtime_core::error::RuntimeError;
+use agent_runtime_core::ids::SessionId;
 use agent_runtime_core::provider_credential::{ProviderCredentialSource, ProviderCredentialTarget};
 
 pub use contributions::{
     MAX_STATUS_LABEL_CHARS, ModuleContribution, PipelineComponent, SlashCommand, StatusItem,
-    StatusSeverity,
+    StatusSeverity, StatusSource,
 };
 pub use planner::{
     ModuleBlockReason, ModuleReport, ModuleState, MountPlan, MountedModule, mount_modules,
@@ -55,6 +58,17 @@ pub struct ImageBinding {
     pub chatgpt: bool,
 }
 
+/// Read-only access to canonical history of live or resumed host sessions.
+/// Visitors borrow history only for the duration of the call.
+pub trait SessionHistory: Send + Sync + fmt::Debug {
+    /// Visits canonical messages without maintaining a second history cache.
+    fn with_history(
+        &self,
+        session: &SessionId,
+        visitor: &mut dyn FnMut(&[Message]),
+    ) -> Result<(), RuntimeError>;
+}
+
 /// Named host facts and services needed to mount one module.
 #[derive(Clone)]
 pub struct ModuleContext {
@@ -68,6 +82,8 @@ pub struct ModuleContext {
     pub transport: Arc<dyn HttpTransport>,
     /// Selected provider image route, if supported.
     pub image_binding: Option<ImageBinding>,
+    /// Read-only canonical history service for recent conversation inputs.
+    pub session_history: Option<Arc<dyn SessionHistory>>,
     /// Whether the host installed semantic summaries for this composition.
     pub semantic_summary_enabled: bool,
     /// Resolved input ceiling for context-pressure components.
@@ -83,6 +99,7 @@ impl fmt::Debug for ModuleContext {
             .field("setting_keys", &self.settings.keys().collect::<Vec<_>>())
             .field("posture", &self.posture)
             .field("has_image_binding", &self.image_binding.is_some())
+            .field("has_session_history", &self.session_history.is_some())
             .field("semantic_summary_enabled", &self.semantic_summary_enabled)
             .field("max_input_tokens", &self.max_input_tokens)
             .field("built_in_tools", &self.built_in_tools)

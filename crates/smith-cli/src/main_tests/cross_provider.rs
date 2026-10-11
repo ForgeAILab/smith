@@ -46,6 +46,7 @@ max_output_tokens = 4096
     ) -> HostSession {
         let mut config = resolve(
             &ResolveRequest::new(self.project.path())
+                .with_known_modules(crate::modules::known_modules())
                 .with_home_dir(self.home.path())
                 .with_cli(overrides),
         )

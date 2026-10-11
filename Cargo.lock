@@ -3344,7 +3344,10 @@ dependencies = [
  "smith-config",
  "smith-host",
  "smith-module",
+ "smith-module-budget-notice",
+ "smith-module-image-generation",
  "smith-runtime",
+ "smith-test-module",
  "smith-tools",
  "smith-tui",
  "tempfile",
@@ -3368,6 +3371,7 @@ dependencies = [
  "serde",
  "serde_json",
  "smith-config",
+ "smith-module",
  "smith-runtime",
  "tempfile",
  "time",
@@ -3426,6 +3430,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "smith-module-budget-notice"
+version = "0.3.10"
+dependencies = [
+ "agent-runtime",
+ "agent-runtime-core",
+ "agent-runtime-testkit",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "smith-module",
+ "tokio",
+]
+
+[[package]]
+name = "smith-module-image-generation"
+version = "0.3.10"
+dependencies = [
+ "agent-runtime",
+ "agent-runtime-core",
+ "agent-runtime-testkit",
+ "async-trait",
+ "base64 0.22.1",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "smith-module",
+ "smith-tools",
+ "tokio",
+]
+
+[[package]]
 name = "smith-runtime"
 version = "0.3.10"
 dependencies = [
@@ -3453,6 +3488,8 @@ dependencies = [
  "smith-config",
  "smith-host",
  "smith-module",
+ "smith-module-budget-notice",
+ "smith-module-image-generation",
  "smith-tools",
  "syn 2.0.119",
  "tempfile",
@@ -3463,6 +3500,13 @@ dependencies = [
  "url",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "smith-test-module"
+version = "0.3.10"
+dependencies = [
+ "smith-module",
 ]
 
 [[package]]

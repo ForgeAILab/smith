@@ -15,8 +15,12 @@ fn profile_picker_detail_contains_only_placement_model_and_provenance() {
         ),
     )
     .expect("config");
-    let resolution = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
-        .expect("resolution");
+    let resolution = resolve(
+        &ResolveRequest::new(project.path())
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(home.path()),
+    )
+    .expect("resolution");
     let inventory = smith_config::inventory::local_inventory(&resolution, AVAILABLE_ADAPTER_KINDS)
         .expect("local inventory");
     let resources = runtime_resources(
@@ -203,9 +207,13 @@ async fn saved_child_sessions_are_hidden_from_both_resume_pickers_and_listing_fo
         LOCAL_COMMAND_CONFIG,
     )
     .expect("config");
-    let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
-        .expect("resolution")
-        .config;
+    let config = resolve(
+        &ResolveRequest::new(project.path())
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(home.path()),
+    )
+    .expect("resolution")
+    .config;
     let provider = Arc::new(FakeProvider::new(
         "example-model",
         Capabilities::basic_streaming(),
@@ -501,8 +509,12 @@ fn anthropic_effort_resources_keep_the_ladder_and_disable_thinking_off() {
     "#,
     )
     .expect("config");
-    let resolution = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
-        .expect("resolution");
+    let resolution = resolve(
+        &ResolveRequest::new(project.path())
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(home.path()),
+    )
+    .expect("resolution");
     let inventory = smith_config::inventory::local_inventory(&resolution, AVAILABLE_ADAPTER_KINDS)
         .expect("local inventory");
     let reasoning = smith_runtime::reasoning::ReasoningRuntimePolicy {
@@ -598,8 +610,12 @@ fn model_resources_show_named_context_windows_and_the_active_choice() {
     "#,
     )
     .expect("config");
-    let resolution = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
-        .expect("resolution");
+    let resolution = resolve(
+        &ResolveRequest::new(project.path())
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(home.path()),
+    )
+    .expect("resolution");
     let inventory = smith_config::inventory::local_inventory(&resolution, AVAILABLE_ADAPTER_KINDS)
         .expect("local inventory");
     let resources = runtime_resources(
@@ -718,8 +734,12 @@ fn catalog_inventory_becomes_searchable_resource_metadata_with_disabled_reasons(
         ),
     )
     .expect("config");
-    let resolution = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
-        .expect("resolution");
+    let resolution = resolve(
+        &ResolveRequest::new(project.path())
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(home.path()),
+    )
+    .expect("resolution");
     let inventory =
         local_inventory_with_catalog(&resolution, AVAILABLE_ADAPTER_KINDS, Some(&snapshot))
             .expect("catalog inventory");
@@ -936,8 +956,12 @@ fn grok_shaped_catalog_limits_are_selectable_unless_an_explicit_reserve_conflict
             ),
         )
         .expect("config");
-        let resolution = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
-            .expect("resolution");
+        let resolution = resolve(
+            &ResolveRequest::new(project.path())
+                .with_known_modules(crate::modules::known_modules())
+                .with_home_dir(home.path()),
+        )
+        .expect("resolution");
         let inventory =
             local_inventory_with_catalog(&resolution, AVAILABLE_ADAPTER_KINDS, Some(&snapshot))
                 .expect("catalog inventory");
@@ -1022,8 +1046,12 @@ fn installed_agent_models_render_once_and_their_profiles_stay_selectable() {
     "#,
     )
     .expect("config");
-    let resolution = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
-        .expect("resolution");
+    let resolution = resolve(
+        &ResolveRequest::new(project.path())
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(home.path()),
+    )
+    .expect("resolution");
     let inventory = smith_config::inventory::local_inventory(&resolution, AVAILABLE_ADAPTER_KINDS)
         .expect("local inventory");
     let resources = runtime_resources(

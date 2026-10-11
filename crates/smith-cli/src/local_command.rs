@@ -19,6 +19,7 @@ pub(super) mod diagnostics;
 mod diff;
 mod goal;
 pub(super) mod mcp;
+mod modules;
 pub(super) mod recovery;
 mod review;
 pub(super) mod skills;
@@ -48,6 +49,7 @@ pub(super) async fn handle_local_command(
             skills::command(skills, host.runtime().skill_index(), action)
         }
         HostCommand::Mcp(action) => mcp::command(mcp, action),
+        HostCommand::Modules(action) => modules::command(host, action),
         // The TUI turns `deny` and `allow` into a session rebuild before they
         // reach the host, so only the listing arrives here.
         HostCommand::Capabilities(_) => {
@@ -89,8 +91,18 @@ pub(super) enum CommandReport {
     Append(LocalResult),
     Inspect(Box<AgentSnapshot>),
     Parent,
-    SkillTrust { skill: String, content: String },
-    McpTrust { server: String, content: String },
+    SkillTrust {
+        skill: String,
+        content: String,
+    },
+    McpTrust {
+        server: String,
+        content: String,
+    },
+    ModuleSwitch {
+        request: smith_client::commands::ModuleSwitchRequest,
+        preview: String,
+    },
     ReviewConfirmation(ReviewPreview),
     UndoConfirmation(RecoveryPreview),
     RedoConfirmation(RecoveryPreview),
@@ -115,6 +127,7 @@ impl CommandReport {
             }
             Self::SkillTrust { skill, content } => app.confirm_skill_trust(skill, content),
             Self::McpTrust { server, content } => app.confirm_mcp_trust(server, content),
+            Self::ModuleSwitch { request, preview } => app.confirm_module_switch(request, preview),
             Self::ReviewConfirmation(preview) => app.confirm_review(preview),
             Self::UndoConfirmation(preview) => app.confirm_undo(preview),
             Self::RedoConfirmation(preview) => app.confirm_redo(preview),

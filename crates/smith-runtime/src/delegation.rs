@@ -201,6 +201,8 @@ pub struct SmithChildFactory {
 /// One fully preflighted provider/model/profile route available to children.
 #[derive(Debug, Clone)]
 pub struct SmithChildRoute {
+    pub(crate) modules: smith_module::ModuleComposition,
+    pub(crate) module_context: smith_module::ModuleContext,
     pub(crate) provider: Arc<dyn Provider>,
     pub(crate) provider_name: String,
     pub(crate) provider_kind: String,
@@ -307,6 +309,12 @@ impl ChildRuntimeFactory for SmithChildFactory {
             "workspace_root": self.workspace.root(),
             "read_only": route.read_only,
             "execution": route.execution.label(),
+            "modules": route.modules.enabled,
+            "module_revisions": route.modules.compiled.iter()
+                .filter(|module| route.modules.enabled.contains(module.module.id()))
+                .map(|module| (module.module.id(), module.module.revision()))
+                .collect::<Vec<_>>(),
+            "module_settings": format!("{:?}", route.modules.settings),
         }))
         .map_err(|error| {
             RuntimeError::new(
@@ -356,11 +364,28 @@ impl ChildRuntimeFactory for SmithChildFactory {
         let write_capable = !route.read_only
             && spec.tools == ToolViewScope::All
             && !matches!(spec.workspace, WorkspacePolicy::ReadOnlyView);
+        let mut module_context = route.module_context.clone();
+        module_context.posture = if write_capable {
+            smith_module::ModulePosture::ReadWrite
+        } else {
+            smith_module::ModulePosture::ReadOnly
+        };
+        let mut module_plan = smith_module::mount_modules(&route.modules, &module_context);
+        crate::factory::modules::enforce_posture(&mut module_plan, module_context.posture);
         let mut tools = if write_capable {
             smith_tools::all()
         } else {
             smith_tools::read_only()
         };
+        for contribution in module_plan
+            .mounted
+            .iter()
+            .flat_map(|module| &module.contributions)
+        {
+            if let smith_module::ModuleContribution::Tool(tool) = contribution {
+                tools.push(tool.clone());
+            }
+        }
         tools.push(Arc::new(QuestionnaireTool::new()));
         tools.push(Arc::new(WriteTodosTool::new()));
         if let Some(store) = self.artifact_store.clone() {
@@ -490,7 +515,7 @@ impl ChildRuntimeFactory for SmithChildFactory {
         for skill in self.skills.iter().cloned() {
             builder = builder.ability(skill);
         }
-        Ok(builder)
+        Ok(crate::factory::modules::apply(builder, &module_plan))
     }
 }
 

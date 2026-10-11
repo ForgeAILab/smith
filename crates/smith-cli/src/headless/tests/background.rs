@@ -293,6 +293,7 @@ async fn configured_background_exit_waits_for_terminal_state_and_flag_stop_wins(
         };
         let config = resolve(
             &ResolveRequest::new(project.path())
+                .with_known_modules(crate::modules::known_modules())
                 .with_home_dir(home.path())
                 .with_cli(run.selection.overrides()),
         )
@@ -352,9 +353,13 @@ async fn default_error_policy_fails_a_headless_run_with_a_running_background_tas
     let config_dir = project.path().join(".smith");
     std::fs::create_dir_all(&config_dir).expect("a config directory");
     std::fs::write(config_dir.join("config.toml"), BACKGROUND_EXIT_CONFIG).expect("a config");
-    let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
-        .expect("resolved config")
-        .config;
+    let config = resolve(
+        &ResolveRequest::new(project.path())
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(home.path()),
+    )
+    .expect("resolved config")
+    .config;
     let runtime = RuntimeRequest {
         workspace: Some(Arc::new(
             ProjectWorkspace::new(project.path()).expect("a workspace"),
@@ -421,9 +426,13 @@ async fn configured_wait_policy_lets_a_headless_run_finish_after_its_background_
         format!("{BACKGROUND_EXIT_CONFIG}\n[background]\nexit_policy = \"wait\"\n"),
     )
     .expect("a configured wait policy");
-    let config = resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
-        .expect("resolved config")
-        .config;
+    let config = resolve(
+        &ResolveRequest::new(project.path())
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(home.path()),
+    )
+    .expect("resolved config")
+    .config;
     let policy = background_exit_policy(None, Some(config.background.exit_policy.value));
     let runtime = RuntimeRequest {
         workspace: Some(Arc::new(

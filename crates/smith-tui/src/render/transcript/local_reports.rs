@@ -564,3 +564,45 @@ fn context_category_style(kind: ContextCategoryKind) -> (&'static str, Tone) {
         ContextCategoryKind::Reserve => (glyph::CONTEXT_RESERVE, Tone::Dim),
     }
 }
+
+pub(super) fn render_modules_report(
+    report: &smith_client::modules_report::ModulesReport,
+    width: u16,
+    theme: Theme,
+) -> Vec<Line<'static>> {
+    use smith_client::modules_report::{origin_label, state_label};
+    let mut lines = Vec::new();
+    for row in &report.rows {
+        let tone = match &row.state {
+            smith_client::modules_report::ModuleState::Failed { .. } => Tone::Danger,
+            smith_client::modules_report::ModuleState::Blocked { .. } => Tone::Warning,
+            _ => Tone::Default,
+        };
+        lines.extend(reports::text(
+            &format!(
+                "{} · {} · {}",
+                row.id,
+                state_label(&row.state),
+                origin_label(&row.origin)
+            ),
+            width,
+            theme.style(tone),
+        ));
+        lines.extend(reports::text(
+            &row.description,
+            width,
+            theme.style(Tone::Default),
+        ));
+        lines.extend(reports::text(
+            &format!(
+                "{} ← {} · {}",
+                row.source.key,
+                row.source.layer.label(),
+                row.source
+            ),
+            width,
+            theme.style(Tone::Default),
+        ));
+    }
+    lines
+}

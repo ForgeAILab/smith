@@ -50,6 +50,7 @@ pub(in crate::factory) async fn prepare_advisor_route(
     route_request.persistence_redactor = request.persistence_redactor.clone();
     route_request.provider = advisor.provider.clone();
     route_request.built_in_tools = false;
+    route_request.modules = super::super::modules::for_config(&request.modules, &advisor.config);
     super::validate_pool_references(&route_request)?;
     let prepared = super::prepare(&route_request).await?;
     let price = route_request.model_catalog.as_ref().and_then(|catalog| {
@@ -91,11 +92,13 @@ pub(in crate::factory) async fn prepare_advisor_route(
 pub(in crate::factory) async fn prepare_child_profile_routes(
     request: &RuntimeRequest,
     project_instructions: Option<&ProjectInstructionsSnapshot>,
+    session_history: Arc<crate::session_history::LiveSessionHistory>,
 ) -> Result<BTreeMap<String, SmithChildRoute>, FactoryError> {
     let mut routes = BTreeMap::new();
     for child in &request.child_profiles {
         let mut route_request = RuntimeRequest::new(child.config.clone(), HostSurface::Child);
         route_request.project_instructions = project_instructions.cloned();
+        route_request.modules = super::super::modules::for_config(&request.modules, &child.config);
         route_request.workspace = request.workspace.clone();
         route_request.approval = request.approval.clone();
         route_request.credentials = request.credentials.clone();
@@ -133,6 +136,7 @@ pub(in crate::factory) async fn prepare_child_profile_routes(
         // This is a per-route rebuild, which starts from the route's own
         // configuration rather than the session's live pool.
         let route_pool = credentials::credential_pool_for(&route_request);
+        let mut image_binding = None;
         let provider = adapter::construct(
             adapter,
             &route_request,
@@ -144,7 +148,7 @@ pub(in crate::factory) async fn prepare_child_profile_routes(
                 pool: route_pool.as_ref(),
                 command: command.map(|command| command.provider),
             },
-            None,
+            Some(&mut image_binding),
         )?;
         let provider = crate::response::apply_response_policy(
             provider,
@@ -205,7 +209,7 @@ pub(in crate::factory) async fn prepare_child_profile_routes(
                 provider_kind,
                 cache_endpoint_identity,
                 model,
-                model_profile: profile.profile,
+                model_profile: profile.profile.clone(),
                 context_policy,
                 tool_output_context: ToolOutputContextPolicy::from_config(&route_request.config),
                 loop_config,
@@ -216,6 +220,19 @@ pub(in crate::factory) async fn prepare_child_profile_routes(
                 read_only: agent_profile.posture.value.is_read_only(),
                 capabilities: agent_profile.capabilities.clone(),
                 execution,
+                modules: route_request.modules.clone(),
+                module_context: super::super::modules::context(
+                    &route_request,
+                    image_binding.map(|binding| smith_module::ImageBinding {
+                        endpoint: binding.endpoint,
+                        target: binding.target,
+                        credentials: binding.credentials,
+                        chatgpt: binding.chatgpt,
+                    }),
+                    profile.profile.limits.max_input_tokens,
+                    request.semantic_summary.is_some() && request.artifact_store.is_some(),
+                    session_history.clone(),
+                )?,
             },
         );
         if replaced.is_some() {
