@@ -87,6 +87,13 @@ async fn execute(command: Command) -> Result<u8> {
             println!("smith {}", env!("CARGO_PKG_VERSION"));
             Ok(0)
         }
+        Command::WasmEngineDiagnostic => {
+            #[cfg(feature = "wasm-modules")]
+            println!("{}", smith_wasm_host::diagnostic()?);
+            #[cfg(not(feature = "wasm-modules"))]
+            println!("WASM modules are not supported in this build");
+            Ok(0)
+        }
         Command::ConfigExplain { key, selection } => {
             explain_config(&key, &selection)?;
             Ok(0)

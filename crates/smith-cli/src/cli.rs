@@ -41,6 +41,8 @@ pub(crate) enum Command {
     Help,
     /// Print the binary version.
     Version,
+    /// Hidden component-engine diagnostic used by the dependency-cost gate.
+    WasmEngineDiagnostic,
 }
 
 /// Which guided setup path was requested.
@@ -404,6 +406,7 @@ fn parse_run(mut args: VecDeque<OsString>) -> Result<Command, ParseError> {
         match flag.as_str() {
             "help" | "--help" | "-h" => return Ok(Command::Help),
             "--version" | "-V" => return Ok(Command::Version),
+            "--wasm-engine-diagnostic" => return Ok(Command::WasmEngineDiagnostic),
             "-p" | "--prompt" => {
                 let value = value(&flag, inline, &mut args)?;
                 let prompt = required_text(Some(value), "a UTF-8 prompt after `-p`")?;

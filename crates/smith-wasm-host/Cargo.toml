@@ -1,0 +1,16 @@
+[package]
+name = "smith-wasm-host"
+description = "Versioned WASM component interface and engine for Smith modules."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+smith-module = { workspace = true }
+wasmtime = { workspace = true }

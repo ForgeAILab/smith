@@ -6,9 +6,9 @@ completed_at:
 
 ## 1. Interface and host
 
-- [ ] 1.1 Define the `smith:module@0.1.0` WIT package: types, the `host`
+- [x] 1.1 Define the `smith:module@0.1.0` WIT package: types, the `host`
   import interface, and the single `module` world.
-- [ ] 1.2 Add `crates/smith-wasm-host` behind the `wasm-modules` feature
+- [x] 1.2 Add `crates/smith-wasm-host` behind the `wasm-modules` feature
   with a pinned `wasmtime`; measure stripped release size and cold build
   time with and without the feature and record both in `design.md`. Stop
   and report if either budget is exceeded.

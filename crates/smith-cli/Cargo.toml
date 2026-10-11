@@ -16,9 +16,10 @@ name = "smith"
 path = "src/main.rs"
 
 [features]
-default = ["module-image-generation", "module-budget-notice"]
+default = ["module-image-generation", "module-budget-notice", "wasm-modules"]
 module-image-generation = ["dep:smith-module-image-generation"]
 module-budget-notice = ["dep:smith-module-budget-notice"]
+wasm-modules = ["dep:smith-wasm-host"]
 
 [dependencies]
 agent-runtime-core = { workspace = true }
@@ -40,6 +41,7 @@ smith-client = { workspace = true }
 smith-host = { workspace = true }
 smith-runtime = { workspace = true }
 smith-module = { workspace = true }
+smith-wasm-host = { workspace = true, optional = true }
 smith-module-image-generation = { workspace = true, optional = true }
 smith-module-budget-notice = { workspace = true, optional = true }
 smith-tools = { workspace = true }
