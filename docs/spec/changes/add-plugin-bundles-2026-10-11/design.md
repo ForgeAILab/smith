@@ -26,8 +26,9 @@ MCP servers have declarative config, hash-bound trust, and lazy connection.
 ### Read the Claude Code layout, do not define a new one
 
 Smith reads `.claude-plugin/plugin.json` and the standard directories. A
-`.smith-plugin/plugin.json`, when present, is read instead, so an author can
-ship Smith-specific fields without breaking other tools. Unknown manifest
+`.smith-plugin/plugin.json`, when present, overlays it key by key, and is
+the only place Smith-specific keys go, so an author can ship them without
+tripping another tool's manifest validation. Unknown manifest
 keys are ignored, as Claude Code does.
 
 - Why: an existing catalogue on day one, and authors target one format.

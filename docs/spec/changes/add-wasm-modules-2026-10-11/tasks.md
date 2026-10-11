@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-11T01:38:05Z
-updated_at: 2026-10-11T01:38:05Z
+updated_at: 2026-10-11T01:44:09Z
 completed_at:
 ---
 
@@ -23,7 +23,8 @@ completed_at:
   `mount`, inactive and failed outcomes.
 - [ ] 2.2 Tool contributions as `Arc<dyn Tool>` with declared effects, under
   the conservative authority rule used for MCP tools.
-- [ ] 2.3 Status items served from a host-side cache.
+- [ ] 2.3 Status items refreshed after each call into the module and served
+  to clients from a host-side cache.
 - [ ] 2.4 Context-contributor and tool-output-processor contributions with
   bounded patches; a failing component contributes nothing.
 - [ ] 2.5 `ModuleTrust::Sandboxed` in `harness.rs`, evidence, and listings.
@@ -40,7 +41,7 @@ completed_at:
 
 ## 4. Packaging and surfaces
 
-- [ ] 4.1 `smith.modules` in the plugin manifest; the `.wasm` bytes and
+- [ ] 4.1 `modules` in the `.smith-plugin/plugin.json` overlay; the `.wasm` bytes and
   capability request in the plugin digest and install inventory.
 - [ ] 4.2 A capability added by an update invalidates trust and is shown.
 - [ ] 4.3 `/modules` and `/plugins` show sandboxed modules with granted

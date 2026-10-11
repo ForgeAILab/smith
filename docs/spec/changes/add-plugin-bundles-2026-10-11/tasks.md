@@ -1,14 +1,14 @@
 ---
 created_at: 2026-10-11T01:38:05Z
-updated_at: 2026-10-11T01:38:05Z
+updated_at: 2026-10-11T01:44:10Z
 completed_at:
 ---
 
 ## 1. Plugin model
 
 - [ ] 1.1 Add `crates/smith-plugin`: manifest parsing for
-  `.claude-plugin/plugin.json` and `.smith-plugin/plugin.json`, with unknown
-  keys ignored and path rules (`./` prefix, containment, existence).
+  `.claude-plugin/plugin.json` with a `.smith-plugin/plugin.json` overlay,
+  unknown keys ignored and path rules (`./` prefix, containment, existence).
 - [ ] 1.2 Standard-layout scan producing an inventory: loaded components
   (skills, commands, MCP servers) and recognised-but-not-loaded components
   with a reason each.

@@ -5,8 +5,9 @@
 Smith SHALL treat a directory in the Claude Code plugin layout as an
 installable plugin: an optional `.claude-plugin/plugin.json` manifest plus
 components in their standard locations. A `.smith-plugin/plugin.json`, when
-present, MUST be read instead of the Claude Code manifest. Unknown manifest
-keys MUST be ignored. A manifest path that is not `./`-relative, resolves
+present, SHALL overlay the Claude Code manifest: its keys replace the same
+keys there, and Smith-specific keys MUST appear only in that file. Unknown
+manifest keys MUST be ignored. A manifest path that is not `./`-relative, resolves
 outside the plugin root, or does not exist MUST make that component fail to
 load without failing the plugin.
 

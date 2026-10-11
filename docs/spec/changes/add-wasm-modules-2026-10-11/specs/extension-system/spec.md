@@ -149,6 +149,84 @@ agent-loop semantics.
 - **THEN** both tools are registered through the same registry path
 - **AND** both modules appear in the same module listing with their tier
 
+### Requirement: Pi-like initial contribution points
+
+The extension API SHALL support tools, harness pipeline components,
+event observers, commands, declarative status-line items, and MCP
+registration. A sandboxed WASM module SHALL be limited to the contribution
+kinds of the interface version it was built against. Provider registration,
+permission-gate replacement, path protection, compaction policy, keyboard
+shortcuts, and replacement of a built-in tool MUST be available only to
+trusted compiled-in modules and MUST NOT be offered to a sandboxed module.
+Executable contributions MUST adapt to Agent Runtime's shared provider,
+tool, ability, registry, context, and event contracts rather than a
+Smith-local parallel contract.
+
+#### Scenario: Extension adds a tool and status item
+
+- **GIVEN** a trusted extension registers `deploy` and a declarative deployment
+  status item
+- **WHEN** initialization completes
+- **THEN** the agent may call the namespaced tool according to its permissions
+- **AND** the TUI renders the status contribution without giving the extension
+  direct renderer memory access
+
+#### Scenario: Extension replaces a built-in
+
+- **GIVEN** an extension requests replacement of a built-in tool
+- **WHEN** replacement was not explicitly trusted and configured
+- **THEN** Smith rejects the conflicting registration
+
+#### Scenario: Sandboxed module names a built-in tool
+
+- **GIVEN** a WASM module contributes a tool with the name of a built-in
+- **WHEN** the module is mounted
+- **THEN** that contribution is refused and reported
+- **AND** the built-in tool is unchanged
+
+### Requirement: Native registration is trusted embedding only
+
+In-process Rust provider, tool, and host-service registration SHALL be
+classified as a trusted native embedding tier and MUST NOT be described or
+configured as sandboxed user plugin execution. A module crate that a build
+adds to the compiled-in module list SHALL be trusted native, and when it is
+not part of Smith's own source it MUST be recorded and listed with a
+third-party provenance naming its crate. User-installed executable
+extensions that are not compiled in MUST run in the sandboxed WASM component
+host; Smith MUST NOT load user-installed native code.
+
+#### Scenario: Embedder supplies an in-process tool
+
+- **GIVEN** a trusted host supplies an `Arc<dyn Tool>` during harness resolution
+- **WHEN** Smith composes the runtime
+- **THEN** composition evidence labels the module trusted native
+- **AND** Smith makes no claim that syscalls from that code are mediated
+
+#### Scenario: User manifest requests native loading
+
+- **GIVEN** a user-installed extension manifest requests an in-process native
+  library
+- **WHEN** Smith resolves the module
+- **THEN** Smith rejects the unsupported execution tier
+- **AND** directs the extension to the WASM component host
+
+#### Scenario: Declarative panel is rendered
+
+- **GIVEN** an external extension contributes bounded declarative panel data
+- **WHEN** a client renders it
+- **THEN** the extension receives no renderer memory or runtime handle
+- **AND** presentation failure cannot mutate canonical session state
+
+#### Scenario: Third-party crate is compiled in
+
+- **GIVEN** a build adds a module crate that is not part of Smith's source
+  to the compiled-in module list
+- **WHEN** Smith composes the runtime with that module mounted
+- **THEN** composition evidence labels it trusted native with third-party
+  provenance naming the crate
+- **AND** every module listing marks it as third-party
+- **AND** Smith makes no claim that its code is mediated
+
 ## REMOVED Requirements
 
 ### Requirement: Versioned subprocess extension protocol

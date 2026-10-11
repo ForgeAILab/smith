@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-11T01:38:05Z
-updated_at: 2026-10-11T01:38:05Z
+updated_at: 2026-10-11T01:44:09Z
 ---
 
 ## Why
@@ -36,7 +36,7 @@ those.
   store in the plugin's data directory, and read access to recent session
   history.
 - A WASM module ships inside a plugin bundle. `.smith-plugin/plugin.json`
-  names the `.wasm` file and the capabilities it requests. Install, trust,
+  (the Smith overlay manifest) names the `.wasm` file and the capabilities it requests. Install, trust,
   enable, update, and remove are the plugin's; the install confirmation
   shows the requested capabilities, and a new capability on update
   invalidates trust.
@@ -74,4 +74,6 @@ those.
   capability brokers), `crates/smith-cli` (feature, catalog), `examples/`.
 - New dependencies: `wasmtime` and `wasmtime-wasi` (large; see `design.md`
   for the size budget and the measurement task), `wit-bindgen` for the SDK.
-- Depends on `add-module-kernel` and `add-plugin-bundles`.
+- Depends on `add-module-kernel` and `add-plugin-bundles`, and archives
+  after both: its MODIFIED "Native registration is trusted embedding only"
+  block is written against the text `add-module-kernel` introduces.

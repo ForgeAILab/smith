@@ -116,22 +116,22 @@ phase and the turn continues.
 ### Instances
 
 One instance per module per session, created at mount and dropped at the
-safe-boundary rebuild. Calls into one instance are serialized. `status` is
-answered from a value cached by the host after each call, so rendering never
-enters the guest.
+safe-boundary rebuild. Calls into one instance are serialized. The host calls
+`status` after `mount` and after each call into the module and caches the
+result, so rendering reads the cache and never enters the guest.
 
 ### Packaging through the plugin bundle
 
 ```json
-{ "name": "deploy-tools",
-  "smith": { "modules": [ { "wasm": "./module.wasm",
-      "capabilities": { "network": ["api.example.com"],
-                        "workspace_read": true } } ] } }
+{ "modules": [ { "wasm": "./module.wasm",
+    "capabilities": { "network": ["api.example.com"],
+                      "workspace_read": true } } ] }
 ```
 
-in `.smith-plugin/plugin.json` (or under a `smith` key of the Claude Code
-manifest, which Claude Code ignores). The plugin digest covers the `.wasm`
-bytes and the capability request. Other tools reading the same plugin see an
+in `.smith-plugin/plugin.json`, the overlay file `add-plugin-bundles`
+reserves for Smith-specific keys. Nothing is added to the Claude Code
+manifest. The plugin digest covers the `.wasm` bytes and the capability
+request. Other tools reading the same plugin see an
 ordinary content plugin.
 
 ### Dependency cost and the feature flag
