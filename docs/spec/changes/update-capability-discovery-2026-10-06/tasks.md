@@ -44,7 +44,7 @@ completed_at:
   is absent from tools, listing, and search.
 - [x] 4.2 Replay the 2026-10-06 prompt ("scan <host>") against the fake
   provider: `shell` is in the first request's tool list.
-- [ ] 4.3 Live tmux walkthrough on the real config: browse, activate a skill
+- [x] 4.3 Live tmux walkthrough on the real config: browse, activate a skill
   by name, deny `tool:shell` for the session, confirm it leaves the list.
-- [ ] 4.4 Cache A/B against the previous release, since the tool list
+- [x] 4.4 Cache A/B against the previous release, since the tool list
   changed.
