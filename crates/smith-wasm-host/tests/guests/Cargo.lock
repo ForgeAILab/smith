@@ -173,14 +173,14 @@ dependencies = [
 
 [[package]]
 name = "smith-conformance-guest"
-version = "0.3.10"
+version = "0.4.0"
 dependencies = [
  "smith-module-sdk",
 ]
 
 [[package]]
 name = "smith-fixture-componentize"
-version = "0.3.10"
+version = "0.4.0"
 dependencies = [
  "wat",
  "wit-component",
@@ -188,7 +188,7 @@ dependencies = [
 
 [[package]]
 name = "smith-module-sdk"
-version = "0.3.10"
+version = "0.4.0"
 dependencies = [
  "wit-bindgen",
 ]

@@ -20,7 +20,7 @@ members = [
 exclude = ["crates/smith-wasm-host/tests/guests", "examples/wasm-module-hello"]
 
 [workspace.package]
-version = "0.3.10"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
@@ -28,23 +28,23 @@ repository = "https://github.com/ForgeAILab/smith"
 authors = ["Smith contributors"]
 
 [workspace.dependencies]
-smith-config = { path = "crates/smith-config", version = "0.3.10" }
-smith-host = { path = "crates/smith-host", version = "0.3.10" }
-smith-runtime = { path = "crates/smith-runtime", version = "0.3.10" }
-smith-module = { path = "crates/smith-module", version = "0.3.10" }
-smith-module-sdk = { path = "crates/smith-module-sdk", version = "0.3.10" }
+smith-config = { path = "crates/smith-config", version = "0.4.0" }
+smith-host = { path = "crates/smith-host", version = "0.4.0" }
+smith-runtime = { path = "crates/smith-runtime", version = "0.4.0" }
+smith-module = { path = "crates/smith-module", version = "0.4.0" }
+smith-module-sdk = { path = "crates/smith-module-sdk", version = "0.4.0" }
 jsonschema = { version = "=0.28.3", default-features = false }
 wit-bindgen = { version = "=0.46.0", default-features = false, features = ["macros", "realloc", "std"] }
-smith-wasm-host = { path = "crates/smith-wasm-host", version = "0.3.10" }
+smith-wasm-host = { path = "crates/smith-wasm-host", version = "0.4.0" }
 # Patched LTS compatible with Rust 1.88; measured features only (see WASM design gate).
 wasmtime = { version = "=36.0.18", default-features = false, features = ["component-model", "cranelift", "runtime", "std"] }
-smith-plugin = { path = "crates/smith-plugin", version = "0.3.10" }
-smith-test-module = { path = "crates/test-support/module-fixture", version = "0.3.10" }
-smith-module-image-generation = { path = "crates/modules/image-generation", version = "0.3.10" }
-smith-module-budget-notice = { path = "crates/modules/budget-notice", version = "0.3.10" }
-smith-tools = { path = "crates/smith-tools", version = "0.3.10" }
-smith-client = { path = "crates/smith-client", version = "0.3.10" }
-smith-tui = { path = "crates/smith-tui", version = "0.3.10" }
+smith-plugin = { path = "crates/smith-plugin", version = "0.4.0" }
+smith-test-module = { path = "crates/test-support/module-fixture", version = "0.4.0" }
+smith-module-image-generation = { path = "crates/modules/image-generation", version = "0.4.0" }
+smith-module-budget-notice = { path = "crates/modules/budget-notice", version = "0.4.0" }
+smith-tools = { path = "crates/smith-tools", version = "0.4.0" }
+smith-client = { path = "crates/smith-client", version = "0.4.0" }
+smith-tui = { path = "crates/smith-tui", version = "0.4.0" }
 
 # The shared runtime. Smith depends on one immutable, reviewed runtime source
 # revision. Local sibling-checkout development uses the git-ignored
