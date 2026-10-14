@@ -314,17 +314,6 @@ fn headless_interrupt_cancels_call_and_stops_harness_process_group() {
         let run = recorded_run(process.finish(Some(&record)), &record);
         assert_eq!(run.output.status.code(), Some(1), "{:?}", run.output);
         assert_eq!(result(&run)["status"], "cancelled", "{:?}", run.output);
-        assert_eq!(
-            run.record["wire"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|entry| entry["direction"] == "sent"
-                    && entry["frame"]["method"] == "tools/call")
-                .count(),
-            1,
-            "the CLI never sends its scripted second call after interruption"
-        );
         cleaned(&endpoint);
         assert!(log_lines(&log).is_empty());
         assert_eq!(log_lines(&log.with_extension("started.jsonl")).len(), 1);
@@ -347,6 +336,51 @@ fn headless_interrupt_cancels_call_and_stops_harness_process_group() {
             "{diagnostics}; journal events in order: {}; snapshot: {snapshot}",
             describe(&journal)
         );
+        for (source, events) in [("streamed", &observed), ("journal", &journal)] {
+            assert!(
+                events.iter().all(|event| {
+                    !(matches!(
+                        event["payload"]["event"].as_str(),
+                        Some("tool_call_requested" | "tool_call_completed")
+                    ) && event["payload"]["name"] == COUNT)
+                }),
+                "counting tool was dispatched after interruption ({source}); {saved_diagnostics}"
+            );
+        }
+        let wire = run.record["wire"].as_array().unwrap();
+        let calls = wire
+            .iter()
+            .filter(|entry| {
+                entry["direction"] == "sent" && entry["frame"]["method"] == "tools/call"
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            calls.first().expect("slow wire call")["frame"]["params"]["name"],
+            SLOW,
+            "the first call is the interrupted slow tool; {saved_diagnostics}"
+        );
+        assert!(
+            calls.len() <= 2,
+            "at most the two scripted calls are sent; {saved_diagnostics}"
+        );
+        if let Some(call) = calls.get(1) {
+            assert_eq!(
+                call["frame"]["params"]["name"], COUNT,
+                "the second call is the counting tool; {saved_diagnostics}"
+            );
+            assert!(
+                wire.iter()
+                    .filter(|entry| {
+                        entry["direction"] == "received"
+                            && entry["frame"]["id"] == call["frame"]["id"]
+                    })
+                    .all(|entry| {
+                        entry["frame"].get("error").is_some()
+                            || entry["frame"]["result"]["isError"] == true
+                    }),
+                "any reply to the counting call must be an error; {saved_diagnostics}"
+            );
+        }
         let completed = observed.iter().find(|event| {
             event["payload"]["event"] == "tool_call_completed" && event["payload"]["name"] == SLOW
         });
