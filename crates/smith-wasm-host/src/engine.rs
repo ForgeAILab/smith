@@ -55,7 +55,7 @@ impl WasmEngine {
             .precompile_compatibility_hash()
             .hash(&mut compatibility);
         let key = format!(
-            "{:x}-36.0.17-{:016x}",
+            "{:x}-36.0.18-{:016x}",
             Sha256::digest(bytes),
             compatibility.finish()
         );

@@ -37,7 +37,7 @@ jsonschema = { version = "=0.28.3", default-features = false }
 wit-bindgen = { version = "=0.46.0", default-features = false, features = ["macros", "realloc", "std"] }
 smith-wasm-host = { path = "crates/smith-wasm-host", version = "0.3.10" }
 # Patched LTS compatible with Rust 1.88; measured features only (see WASM design gate).
-wasmtime = { version = "=36.0.17", default-features = false, features = ["component-model", "cranelift", "runtime", "std"] }
+wasmtime = { version = "=36.0.18", default-features = false, features = ["component-model", "cranelift", "runtime", "std"] }
 smith-plugin = { path = "crates/smith-plugin", version = "0.3.10" }
 smith-test-module = { path = "crates/test-support/module-fixture", version = "0.3.10" }
 smith-module-image-generation = { path = "crates/modules/image-generation", version = "0.3.10" }

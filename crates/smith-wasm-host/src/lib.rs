@@ -46,7 +46,7 @@ pub fn diagnostic() -> wasmtime::Result<&'static str> {
             "unexpected component diagnostic result",
         ));
     }
-    Ok("wasmtime 36.0.17; smith:module@0.1.0; component-model; epoch interruption")
+    Ok("wasmtime 36.0.18; smith:module@0.1.0; component-model; epoch interruption")
 }
 
 #[cfg(test)]
