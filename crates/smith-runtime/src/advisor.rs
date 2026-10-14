@@ -1,10 +1,10 @@
 //! Tool-free review of the live canonical conversation through a separate profile.
 
 use std::collections::BTreeMap;
-use std::fmt::Write;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+use agent_runtime::agent::external::BackendToolObservations;
 use agent_runtime::context::{CharRatioSizer, ContextBudget, ContextPolicy, RequestSizer};
 use agent_runtime::harness::{
     ComponentDescriptor, ToolViewContext, ToolViewPatch, ToolViewResolver, TurnCommitHook,
@@ -14,9 +14,9 @@ use agent_runtime::registry::RegistryRevision;
 use agent_runtime::runtime::SessionHandle;
 use agent_runtime_core::cancel::{CancelReason, Cancellation};
 use agent_runtime_core::catalog::ResolvedModelProfile;
-use agent_runtime_core::content::{ContentPart, Message, Role};
+use agent_runtime_core::content::{Message, Role};
 use agent_runtime_core::error::RuntimeError;
-use agent_runtime_core::ids::{AttemptId, RequestId, SessionId, ToolCallId};
+use agent_runtime_core::ids::{AttemptId, RequestId, SessionId};
 use agent_runtime_core::provider::{
     FinishReason, ModelId, Provider, ProviderAttemptPurpose, ProviderCallContext, ProviderRequest,
     ProviderStreamEvent, ToolChoice,
@@ -31,6 +31,11 @@ use futures_util::StreamExt;
 use smith_config::output_budget::OutputBudget;
 
 use crate::reasoning::ReasoningRuntimePolicy;
+
+mod transcript;
+#[cfg(test)]
+use transcript::render_transcript;
+use transcript::render_transcript_with_observations;
 
 /// Model-facing name of the root reviewer tool.
 pub const ADVISOR_TOOL_NAME: &str = "advisor";
@@ -154,6 +159,17 @@ impl AdvisorRoute {
         ctx: &InvocationContext,
         recorder: Option<&AdvisorTool>,
     ) -> AdvisorResponse {
+        self.consult_observed(history, &BackendToolObservations::default(), ctx, recorder)
+            .await
+    }
+
+    async fn consult_observed(
+        &self,
+        history: &[Message],
+        observations: &BackendToolObservations,
+        ctx: &InvocationContext,
+        recorder: Option<&AdvisorTool>,
+    ) -> AdvisorResponse {
         let request_id = RequestId::new(format!("advisor-{}-{}", ctx.request, ctx.call_id));
         let attempt_id = AttemptId::new(format!("advisor-{}-{}", ctx.request, ctx.call_id));
         let mut usage = AdvisorUsage {
@@ -207,8 +223,9 @@ impl AdvisorRoute {
                 .input_budget
                 .saturating_sub(self.context_policy.max_estimated_slack.unwrap_or(0));
         let sizer = CharRatioSizer::new();
-        let transcript = match render_transcript(
+        let transcript = match render_transcript_with_observations(
             history,
+            observations,
             input_budget.saturating_sub(sizer.size_message(&system)),
             &ctx.call_id,
         ) {
@@ -476,107 +493,12 @@ impl Tool for AdvisorTool {
             .outcome);
         };
         let history = session.history();
-        let response = self.route.consult_recorded(&history, ctx, Some(self)).await;
+        let observations = session.backend_tool_observations();
+        let response = self
+            .route
+            .consult_observed(&history, &observations, ctx, Some(self))
+            .await;
         Ok(response.outcome)
-    }
-}
-
-fn render_parts(parts: &[ContentPart], rendered: &mut String, current_call_id: &ToolCallId) {
-    for part in parts {
-        match part {
-            ContentPart::Text { text } => {
-                rendered.push_str(text);
-                rendered.push('\n');
-            }
-            ContentPart::Image { .. } => rendered.push_str("[image omitted]\n"),
-            ContentPart::Reasoning { .. } => {}
-            ContentPart::ToolCall(call) => {
-                let current = if &call.id == current_call_id {
-                    " — this is the consultation you are answering now"
-                } else {
-                    ""
-                };
-                let _ = writeln!(
-                    rendered,
-                    "Tool call: {} {}{current}",
-                    call.name, call.arguments
-                );
-            }
-            ContentPart::ToolResult(result) => {
-                let error = if result.is_error { " [error]" } else { "" };
-                let _ = writeln!(rendered, "Tool result: {}{error}", result.name);
-                render_parts(&result.content, rendered, current_call_id);
-            }
-        }
-    }
-}
-
-/// Renders one data-framed message, retaining the first user task and newest message.
-fn render_transcript(
-    history: &[Message],
-    input_budget: u32,
-    current_call_id: &ToolCallId,
-) -> Result<String, RuntimeError> {
-    let sizer = CharRatioSizer::new();
-    // Price each block separately without framing. Summing rounded estimates
-    // conservatively bounds the single user message, and lets trimming stay
-    // linear in transcript size rather than re-rendering it for every drop.
-    let block_sizer = sizer.with_message_framing_tokens(0);
-    let rendered = history
-        .iter()
-        .map(|message| {
-            let role = match message.role {
-                Role::System => "System",
-                Role::User => "User",
-                Role::Assistant => "Assistant",
-                Role::Tool => "Tool",
-            };
-            let mut text = format!("{role}:\n");
-            render_parts(&message.content, &mut text, current_call_id);
-            text.push('\n');
-            text
-        })
-        .collect::<Vec<_>>();
-    let costs = rendered
-        .iter()
-        .map(|text| block_sizer.size_message(&Message::user(text)))
-        .collect::<Vec<_>>();
-    let mut cost = costs.iter().map(|cost| u64::from(*cost)).sum::<u64>();
-    let framing = sizer.size_message(&Message::user(format!(
-        "{TRANSCRIPT_OPEN}{TRANSCRIPT_CLOSE}"
-    )));
-    let keep_prefix = history
-        .iter()
-        .position(|message| message.role == Role::User)
-        .map_or(0, |index| index + 1);
-    let mut omitted = 0;
-    loop {
-        let marker = if omitted == 0 {
-            String::new()
-        } else {
-            format!("[{omitted} earlier messages omitted]\n\n")
-        };
-        let marker_cost = block_sizer.size_message(&Message::user(&marker));
-        if cost + u64::from(framing) + u64::from(marker_cost) <= u64::from(input_budget) {
-            let mut transcript = TRANSCRIPT_OPEN.to_owned();
-            for text in &rendered[..keep_prefix] {
-                transcript.push_str(text);
-            }
-            transcript.push_str(&marker);
-            for text in &rendered[keep_prefix + omitted..] {
-                transcript.push_str(text);
-            }
-            transcript.push_str(TRANSCRIPT_CLOSE);
-            return Ok(transcript);
-        }
-        let next = keep_prefix + omitted;
-        if next >= history.len().saturating_sub(1) {
-            return Err(RuntimeError::tool(
-                "advisor input budget cannot fit the first user task and latest message",
-            ));
-        }
-        cost = cost.saturating_sub(u64::from(costs[next]));
-        omitted += 1;
     }
 }
 
@@ -589,7 +511,7 @@ mod tests {
     use agent_runtime::registry::RegistryRevision;
     use agent_runtime::runtime::{RuntimeBuilder, StartSession};
     use agent_runtime_core::clock::{Deadline, SystemClock};
-    use agent_runtime_core::content::UserInput;
+    use agent_runtime_core::content::{ContentPart, UserInput};
     use agent_runtime_core::content::{ToolCall, ToolResultBlock};
     use agent_runtime_core::event::RuntimeEvent;
     use agent_runtime_core::ids::{SessionId, ToolCallId};
@@ -627,6 +549,299 @@ mod tests {
             plugins: None,
             price: None,
         }
+    }
+
+    fn harness_history() -> Vec<Message> {
+        vec![
+            Message::user("Earlier task"),
+            Message::assistant(vec![ContentPart::text("Earlier answer")]),
+            Message::user("Review the cancellation path"),
+            Message::assistant(vec![
+                ContentPart::text("I will inspect the implementation."),
+                ContentPart::ToolCall(ToolCall {
+                    id: ToolCallId::new("bridge-agent"),
+                    name: "agent".into(),
+                    arguments: serde_json::json!({"action": "spawn"}),
+                }),
+            ]),
+            Message::tool_result(ToolResultBlock {
+                call_id: ToolCallId::new("bridge-agent"),
+                name: "agent".into(),
+                content: vec![ContentPart::text("Child started")],
+                is_error: false,
+            }),
+            Message::assistant(vec![
+                ContentPart::text("I need a review."),
+                ContentPart::ToolCall(ToolCall {
+                    id: context().call_id,
+                    name: "advisor".into(),
+                    arguments: serde_json::json!({}),
+                }),
+            ]),
+        ]
+    }
+
+    fn observation(
+        id: &str,
+        name: &str,
+        kind: agent_runtime::agent::external::BackendToolObservationKind,
+        detail: serde_json::Value,
+    ) -> agent_runtime::agent::external::BackendToolObservation {
+        agent_runtime::agent::external::BackendToolObservation {
+            id: id.into(),
+            name: name.into(),
+            kind,
+            detail,
+        }
+    }
+
+    fn harness_observations() -> BackendToolObservations {
+        use agent_runtime::agent::external::BackendToolObservationKind::{
+            BridgedCall, Invocation, Outcome,
+        };
+        BackendToolObservations {
+            entries: vec![
+                observation(
+                    "read-1",
+                    "Read",
+                    Invocation,
+                    serde_json::json!({"path":"src/lib.rs"}),
+                ),
+                observation(
+                    "read-1",
+                    "Read",
+                    Outcome { ok: true },
+                    serde_json::json!("file contents"),
+                ),
+                observation(
+                    "bridge-agent",
+                    "agent",
+                    BridgedCall,
+                    serde_json::Value::Null,
+                ),
+                observation(
+                    "bash-1",
+                    "Bash",
+                    Invocation,
+                    serde_json::json!({"command":"check"}),
+                ),
+                observation(
+                    "bash-1",
+                    "Bash",
+                    Outcome { ok: false },
+                    serde_json::json!("exit 1"),
+                ),
+                observation(
+                    "review-call",
+                    "advisor",
+                    BridgedCall,
+                    serde_json::Value::Null,
+                ),
+            ],
+            dropped: 0,
+        }
+    }
+
+    async fn captured_harness_request(
+        history: &[Message],
+        observations: &BackendToolObservations,
+    ) -> ProviderRequest {
+        let provider = Arc::new(FakeProvider::text_reply("Check cancellation."));
+        let response = tokio::time::timeout(
+            Duration::from_secs(2),
+            route(provider.clone()).consult_observed(history, observations, &context(), None),
+        )
+        .await
+        .expect("advisor completes");
+        assert!(!response.outcome.is_error);
+        assert_eq!(
+            response.outcome.value,
+            serde_json::json!("Check cancellation.")
+        );
+        let requests = provider.requests();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].tools.is_empty());
+        assert_eq!(requests[0].tool_choice, ToolChoice::None);
+        requests[0].clone()
+    }
+
+    #[tokio::test]
+    async fn harness_advisor_request_orders_cli_tools_and_canonical_bridge_rounds() {
+        let request = captured_harness_request(&harness_history(), &harness_observations()).await;
+        let body = concat!(
+            "User:\nEarlier task\n\n",
+            "Assistant:\nEarlier answer\n\n",
+            "User:\nReview the cancellation path\n\n",
+            "Assistant:\nI will inspect the implementation.\n",
+            "[tool run by the CLI itself, not dispatched by Smith] Read input: {\"path\":\"src/lib.rs\"}\n",
+            "[tool run by the CLI itself, not dispatched by Smith] Read succeeded output: \"file contents\"\n",
+            "Tool call: agent {\"action\":\"spawn\"}\n\n",
+            "Tool:\nTool result: agent\nChild started\n\n",
+            "Assistant:\nI need a review.\n",
+            "[tool run by the CLI itself, not dispatched by Smith] Bash input: {\"command\":\"check\"}\n",
+            "[tool run by the CLI itself, not dispatched by Smith] Bash failed output: \"exit 1\"\n",
+            "Tool call: advisor {} — this is the consultation you are answering now\n\n",
+        );
+        assert_eq!(
+            request.messages,
+            vec![
+                Message::system(ADVISOR_PROMPT),
+                Message::user(format!("{TRANSCRIPT_OPEN}{body}{TRANSCRIPT_CLOSE}"))
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn harness_advisor_without_own_tools_is_byte_identical_to_native_history() {
+        let history = harness_history();
+        for observations in [
+            BackendToolObservations::default(),
+            BackendToolObservations { entries: harness_observations().entries.into_iter().filter(|entry| entry.kind == agent_runtime::agent::external::BackendToolObservationKind::BridgedCall).collect(), dropped: 0 },
+        ] {
+            let request = captured_harness_request(&history, &observations).await;
+            let provider = Arc::new(FakeProvider::text_reply("Check cancellation."));
+            tokio::time::timeout(Duration::from_secs(2), route(provider.clone()).consult(&history, &context()))
+                .await.expect("native advisor completes");
+            assert_eq!(request.messages, provider.requests()[0].messages);
+            assert_eq!(request.messages[1].joined_text(), render_transcript(&history, 128_000, &context().call_id).expect("native rendering"));
+            assert!(!request.messages[1].joined_text().contains("tool run by the CLI"));
+        }
+    }
+
+    #[tokio::test]
+    async fn harness_advisor_reports_dropped_observations_at_the_missing_prefix() {
+        let mut observations = harness_observations();
+        observations.dropped = 7;
+        drop(observations.entries.drain(..2));
+        let request = captured_harness_request(&harness_history(), &observations).await;
+        let transcript = request.messages[1].joined_text();
+        assert!(transcript.contains("Assistant:\n[7 earlier CLI tool observations dropped]\nI will inspect the implementation."));
+        assert_eq!(
+            transcript.matches("CLI tool observations dropped").count(),
+            1
+        );
+        assert!(
+            transcript.find("[7 earlier CLI").unwrap()
+                < transcript.find("Tool call: agent").unwrap()
+        );
+        assert!(transcript.contains("Bash failed output: \"exit 1\""));
+    }
+
+    #[tokio::test]
+    async fn harness_advisor_dropped_markers_do_not_rewrite_an_earlier_turn() {
+        let mut history = harness_history();
+        history.remove(2);
+        let mut observations = harness_observations();
+        observations.dropped = 3;
+        drop(observations.entries.drain(..3));
+        let request = captured_harness_request(&history, &observations).await;
+        let transcript = request.messages[1].joined_text();
+        assert!(transcript.starts_with(&format!(
+            "{TRANSCRIPT_OPEN}User:\nEarlier task\n\nAssistant:\nEarlier answer\n\n"
+        )));
+        assert!(
+            transcript.contains(
+                "Assistant:\n[3 earlier CLI tool observations dropped]\nI need a review."
+            )
+        );
+        assert!(
+            transcript.find("CLI tool observations dropped").unwrap()
+                < transcript.find("Bash input:").unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn harness_advisor_reports_a_fully_evicted_log() {
+        let request = captured_harness_request(
+            &harness_history(),
+            &BackendToolObservations {
+                entries: Vec::new(),
+                dropped: 200,
+            },
+        )
+        .await;
+        let transcript = request.messages[1].joined_text();
+        assert!(
+            transcript.contains(
+                "Assistant:\n[200 earlier CLI tool observations dropped]\nI need a review."
+            )
+        );
+        assert!(transcript.contains("this is the consultation you are answering now"));
+    }
+
+    #[tokio::test]
+    async fn harness_advisor_observation_details_are_bounded_in_the_request() {
+        use agent_runtime::agent::external::BackendToolObservationKind::{Invocation, Outcome};
+        let mut observations = harness_observations();
+        observations.entries[0].detail = serde_json::json!("界".repeat(10_000) + "INPUT_TAIL");
+        observations.entries[1].detail = serde_json::json!("界".repeat(10_000) + "OUTPUT_TAIL");
+        assert_eq!(observations.entries[0].kind, Invocation);
+        assert_eq!(observations.entries[1].kind, Outcome { ok: true });
+        let request = captured_harness_request(&harness_history(), &observations).await;
+        let transcript = request.messages[1].joined_text();
+        assert_eq!(transcript.matches("…[truncated]").count(), 2);
+        for prefix in ["Read input: ", "Read succeeded output: "] {
+            let detail = transcript
+                .lines()
+                .find_map(|line| line.split_once(prefix).map(|(_, detail)| detail))
+                .expect("rendered detail");
+            assert!(detail.len() <= 8 * 1024);
+            assert!(detail.ends_with("…[truncated]"));
+        }
+        assert!(!transcript.contains("INPUT_TAIL"));
+        assert!(!transcript.contains("OUTPUT_TAIL"));
+    }
+
+    #[tokio::test]
+    async fn harness_advisor_budget_drops_observations_with_their_message() {
+        let mut history = harness_history();
+        history[3]
+            .content
+            .insert(0, ContentPart::text("OLD_EVIDENCE ".repeat(1_000)));
+        let observations = harness_observations();
+        let provider = Arc::new(FakeProvider::text_reply("advice"));
+        let mut route = route(provider.clone());
+        route.model_profile.limits.context_tokens = 1_000;
+        route.model_profile.limits.max_input_tokens = 900;
+        route.model_profile.limits.max_output_tokens = 128;
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            route.consult_observed(&history, &observations, &context(), None),
+        )
+        .await
+        .expect("advisor completes");
+        assert!(!result.outcome.is_error);
+        let requests = provider.requests();
+        let transcript = requests[0].messages[1].joined_text();
+        assert!(transcript.contains("User:\nEarlier task"));
+        assert!(transcript.contains("[3 earlier messages omitted]"));
+        assert!(!transcript.contains("OLD_EVIDENCE"));
+        assert!(!transcript.contains("Read input:"));
+        assert!(!transcript.contains("Read succeeded output:"));
+        assert!(transcript.contains("Bash failed output:"));
+        assert!(transcript.contains("this is the consultation you are answering now"));
+    }
+
+    #[test]
+    fn harness_observations_after_the_last_marker_follow_its_round() {
+        let mut history = harness_history();
+        history.pop();
+        let mut observations = harness_observations();
+        observations.entries.pop();
+        let transcript = render_transcript_with_observations(
+            &history,
+            &observations,
+            10_000,
+            &context().call_id,
+        )
+        .expect("transcript");
+        assert!(
+            transcript.find("Child started").unwrap() < transcript.find("Bash input:").unwrap()
+        );
+        assert!(
+            transcript.find("Bash input:").unwrap()
+                < transcript.find("Bash failed output:").unwrap()
+        );
     }
 
     #[tokio::test]

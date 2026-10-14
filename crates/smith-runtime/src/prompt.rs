@@ -154,6 +154,18 @@ Consult advisor before substantive work, when stuck or when results do not fit, 
 declaring the task complete. Give its advice serious weight. If evidence contradicts it, \
 consult once more, naming the conflict.";
 
+/// Only capability guidance crosses into a CLI-owned context, in this order.
+pub(crate) fn cli_bridge_instruction_fragments() -> [(&'static str, &'static str); 3] {
+    [
+        (
+            agent_runtime::harness::QUESTIONNAIRE_TOOL_NAME,
+            QUESTIONNAIRE,
+        ),
+        (crate::delegation::AGENT_TOOL_NAME, DELEGATION),
+        (crate::advisor::ADVISOR_TOOL_NAME, ADVISOR),
+    ]
+}
+
 const RESPONSE_STYLE: &str = "\
 Lead with the outcome. Be concise, concrete, and candid about uncertainty. Name changed \
 files, verification evidence, and remaining blockers when they materially help the user.";

@@ -43,6 +43,16 @@ pub(crate) enum Command {
     Version,
     /// Hidden component-engine diagnostic used by the dependency-cost gate.
     WasmEngineDiagnostic,
+    /// Hidden byte relay for a turn's private MCP socket.
+    McpRelay {
+        /// Absolute path of the turn's Unix socket.
+        socket: PathBuf,
+    },
+    /// Hidden lifetime supervisor for an installed harness.
+    HarnessSupervise {
+        program: OsString,
+        args: Vec<OsString>,
+    },
 }
 
 /// Which guided setup path was requested.
@@ -240,12 +250,40 @@ impl ParseError {
 pub(crate) fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, ParseError> {
     let args = VecDeque::from_iter(args);
     match args.front().and_then(|arg| arg.to_str()) {
+        Some("mcp-relay") => parse_mcp_relay(args),
+        Some("harness-supervise") => parse_harness_supervise(args),
         Some("plugin") => plugin::parse(args),
         Some("config") => parse_config(args),
         Some("sessions") => parse_sessions(args),
         Some("setup") => parse_setup(args),
         _ => parse_run(args),
     }
+}
+
+fn parse_mcp_relay(mut args: VecDeque<OsString>) -> Result<Command, ParseError> {
+    args.pop_front();
+    let socket = args
+        .pop_front()
+        .map(PathBuf::from)
+        .filter(|socket| socket.is_absolute() && args.is_empty())
+        .ok_or_else(|| ParseError::new("usage: smith mcp-relay <absolute-socket-path>"))?;
+    Ok(Command::McpRelay { socket })
+}
+
+fn parse_harness_supervise(mut args: VecDeque<OsString>) -> Result<Command, ParseError> {
+    args.pop_front();
+    let usage = || ParseError::new("usage: smith harness-supervise -- <program> [args...]");
+    if args.pop_front().as_deref() != Some(std::ffi::OsStr::new("--")) {
+        return Err(usage());
+    }
+    let program = args
+        .pop_front()
+        .filter(|arg| !arg.is_empty())
+        .ok_or_else(usage)?;
+    Ok(Command::HarnessSupervise {
+        program,
+        args: args.into(),
+    })
 }
 
 fn parse_setup(mut args: VecDeque<OsString>) -> Result<Command, ParseError> {
@@ -732,6 +770,45 @@ mod tests {
     #[test]
     fn no_arguments_selects_the_interactive_surface() {
         assert_eq!(command(&[]), Command::Run(RunArgs::default()));
+    }
+
+    #[test]
+    fn mcp_relay_requires_exactly_one_absolute_socket_path() {
+        assert_eq!(
+            command(&["mcp-relay", "/tmp/turn socket"]),
+            Command::McpRelay {
+                socket: PathBuf::from("/tmp/turn socket"),
+            }
+        );
+        for args in [
+            vec!["mcp-relay"],
+            vec!["mcp-relay", ""],
+            vec!["mcp-relay", "relative.sock"],
+            vec!["mcp-relay", "/tmp/turn.sock", "extra"],
+            vec!["mcp-relay", "/tmp/turn.sock", "--help"],
+        ] {
+            let error = parse(args.into_iter().map(OsString::from)).expect_err("relay usage");
+            assert_eq!(
+                error.to_string(),
+                "usage: smith mcp-relay <absolute-socket-path>"
+            );
+        }
+        assert!(!HELP.contains("mcp-relay"));
+        assert!(!HELP.contains("wasm-engine-diagnostic"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mcp_relay_preserves_non_utf8_socket_paths() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let socket = OsString::from_vec(b"/tmp/turn-\xff.sock".to_vec());
+        assert_eq!(
+            parse([OsString::from("mcp-relay"), socket.clone()]).expect("native path"),
+            Command::McpRelay {
+                socket: PathBuf::from(socket),
+            }
+        );
     }
 
     #[test]

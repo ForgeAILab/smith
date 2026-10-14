@@ -1,0 +1,10 @@
+{"type":"thread.started","thread_id":"01a1379c-2e08-7422-be9f-636d990192ad"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Ignoring malformed agent role definition: agent role `explorer` must define a description"}}
+{"type":"item.completed","item":{"id":"item_1","type":"error","message":"Ignoring malformed agent role definition: agent role `explorer` must define a description"}}
+{"type":"item.completed","item":{"id":"item_2","type":"error","message":"clamping SessionEnd hook timeout to 3s in /home/user/.codex/hooks.json"}}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"I\u2019ll look for the spike `fast_echo` tool and call it with `hello` if it\u2019s available."}}
+{"type":"item.started","item":{"id":"item_4","type":"mcp_tool_call","server":"spike","tool":"fast_echo","arguments":{"text":"hello"},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_4","type":"mcp_tool_call","server":"spike","tool":"fast_echo","arguments":{"text":"hello"},"result":null,"error":{"message":"MCP tool call requires approval, but approval policy is never"},"status":"failed"}}
+{"type":"item.completed","item":{"id":"item_5","type":"agent_message","text":"The call was refused. It returned exactly:\n\n```json\n{\"content\":[{\"type\":\"text\",\"text\":\"MCP tool call requires approval, but approval policy is never\"}],\"isError\":true}\n```\n\nThe spike tool description lists the marker word as `PINEAPPLE-7731`."}}
+{"type":"turn.completed","usage":{"input_tokens":99993,"cached_input_tokens":79232,"cache_write_input_tokens":0,"output_tokens":176,"reasoning_output_tokens":0}}

@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-13T22:40:43Z
-updated_at: 2026-10-14T05:35:52Z
+updated_at: 2026-10-14T22:52:12Z
 completed_at:
 ---
 
@@ -69,13 +69,13 @@ Built before the code they test.
 On a new branch from `d2752c1`. Each item lands with its layer 1 tests in
 `tests/external_agent.rs`.
 
-Done in a plain copy of the pinned source at
-`/Volumes/Data/codes/ai/agent-runtime-bridge-src`, under the runtime's own
-spec change `add-external-tool-dispatch-2026-10-13`. Its gate passes there:
+Landed as `db8dff2` on the runtime branch `feat/smith-external-tool-bridge`
+(one commit on `d2752c1`), under the runtime's own spec change
+`add-external-tool-dispatch-2026-10-13`. Its gate passes there:
 `cargo fmt --check`, clippy with all features and warnings denied, and
 1,304 tests across the workspace (2026-10-14). The
 checkpoint schema version and transition revision are unchanged, so saved
-sessions still resume. Not yet a branch or a commit: see 3.9.
+sessions still resume.
 
 - [x] 3.1 `ExternalToolBridge` on `ExternalTurnRequest`: `specs()` over the
   authorized view less the host's excluded names; `call()` into the turn.
@@ -120,11 +120,10 @@ sessions still resume. Not yet a branch or a commit: see 3.9.
   native provider turns share the path. Regression tests with a no-op and
   a blocking processor, for a provider turn and a bridged call. (Runtime
   task 1.8; `external_agent::execution::output_processing`, 11 tests.)
-- [ ] 3.9 Update the runtime's own spec and the `external.rs` and
+- [x] 3.9 Update the runtime's own spec and the `external.rs` and
   `external_turn.rs` module docs, which currently say an external turn
-  dispatches no tools. Run the runtime gate, push the branch. (Spec,
-  docs, and gate done in the copy. Open: apply the copy's diff to a
-  branch of the runtime repository and push it, which needs the owner.)
+  dispatches no tools. Run the runtime gate, push the branch.
+  (`feat/smith-external-tool-bridge` at `db8dff2`.)
 
 ## 4. Smith: bridge endpoint
 
@@ -134,7 +133,7 @@ Layer 2 and 3 tests land with each item.
   supervisor; smith-runtime no longer takes it from `current_exe()`, which
   names the wrong program in any process that embeds the runtime. Without
   it the turn runs unbridged and the CLI starts directly.
-- [ ] 4.1 Bump the six Agent Runtime pins and the lockfile.
+- [x] 4.1 Bump the six Agent Runtime pins and the lockfile. (`db8dff2`.)
 - [x] 4.2 Enable `rmcp`'s server feature for `smith-runtime`; confirm
   `cargo deny` and the dependency policy still pass.
 - [x] 4.3 A crate-private bridge module: bind a Unix socket in a fresh
@@ -320,4 +319,6 @@ Each item is a layer 4 test file driven by the stand-in.
   result field and signal handling.)
 - [ ] 8.5 The Smith gate with `--no-fail-fast` and an internal `TMPDIR`, a
   patch release, and the installed binary checked in a tmux session with a
-  real configuration.
+  real configuration. (Gate done 2026-10-14 on main at v0.4.0 plus this
+  change, no local patch: `--locked` build, clippy, `cargo deny --locked
+  check all`, and 2,680 tests pass. Open: the release and the tmux check.)

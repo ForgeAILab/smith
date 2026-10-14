@@ -327,6 +327,10 @@ pub struct RuntimeRequest {
     pub config: ResolvedConfig,
     /// Which presentation is composing this runtime.
     pub surface: HostSurface,
+    /// Host-supplied Smith binary implementing the hidden relay and supervisor.
+    /// Embedders leave this absent to run installed agents directly without a
+    /// capability bridge; their own executable need not implement Smith's CLI.
+    pub smith_executable: Option<PathBuf>,
     /// A complete product-instruction override. When absent, Smith's versioned
     /// prompt sections are composed through [`crate::prompt`].
     pub system_prompt: Option<String>,
@@ -447,6 +451,7 @@ impl RuntimeRequest {
         Self {
             config,
             surface,
+            smith_executable: None,
             system_prompt: None,
             project_instructions: None,
             workspace: None,

@@ -54,6 +54,9 @@ url = { workspace = true }
 uuid = { workspace = true }
 zeroize = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", default-features = false, features = ["signal"] }
+
 [dev-dependencies]
 agent-runtime-mcp = { workspace = true }
 smith-test-module = { workspace = true }

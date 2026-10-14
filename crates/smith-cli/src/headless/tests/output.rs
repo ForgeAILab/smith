@@ -338,6 +338,7 @@ fn machine_result_v2_compatibility_fixture_is_stable() {
         reasoning: None,
         cache: None,
         resume_capsule: None,
+        diagnostics: Vec::new(),
         error: None,
     };
 
@@ -390,6 +391,7 @@ fn approval_required_v2_compatibility_fixture_is_stable_and_redacted() {
         reasoning: None,
         cache: None,
         resume_capsule: None,
+        diagnostics: Vec::new(),
         error: None,
     };
 
@@ -442,6 +444,7 @@ fn interaction_required_v2_fixture_is_stable_and_content_free() {
         reasoning: None,
         cache: None,
         resume_capsule: None,
+        diagnostics: Vec::new(),
         error: None,
     };
     let actual = serde_json::to_value(result).expect("serializable result");
@@ -558,6 +561,7 @@ fn text_projection_reports_lifecycle_without_exposing_todo_or_argument_content()
         reasoning: None,
         cache: None,
         resume_capsule: None,
+        diagnostics: Vec::new(),
         error: None,
     };
     let mut stderr = Vec::new();
@@ -693,6 +697,7 @@ fn canonical_cache_fixture_matches_tui_final_stream_and_text_surfaces() {
         reasoning: None,
         cache: Some(CacheOutput::from_summary(&headless_summary, None)),
         resume_capsule: None,
+        diagnostics: Vec::new(),
         error: None,
     };
     let final_json = serde_json::to_value(&result).expect("final JSON");

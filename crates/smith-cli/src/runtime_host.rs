@@ -102,6 +102,8 @@ fn preflight_with_modules(
 ) -> Result<RuntimeRequest> {
     let workspace = ProjectWorkspace::new(project).map_err(|error| anyhow::anyhow!("{error}"))?;
     let mut request = RuntimeRequest {
+        // The runtime warns when a turn needs the missing Smith executable.
+        smith_executable: std::env::current_exe().ok(),
         workspace: Some(Arc::new(workspace)),
         credentials: Some(CredentialResolver::new(&resolution.layout.user_dir)),
         model_catalog: catalog.clone(),

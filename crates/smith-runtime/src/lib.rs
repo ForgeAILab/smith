@@ -26,6 +26,7 @@ pub(crate) mod catalog;
 pub mod chatgpt;
 pub mod checkpoint;
 pub(crate) mod cli_agent;
+pub(crate) mod cli_bridge;
 pub mod client;
 pub(crate) mod command_provider;
 pub mod delegation;

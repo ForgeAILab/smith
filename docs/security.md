@@ -22,6 +22,7 @@ arguments, and questionnaire answers cannot grant a permission.
 | Child session | Depth-one, scoped tool view, separate artifact ownership |
 | Trusted native module | In-process Rust with Smith's ambient process authority; never a sandbox |
 | MCP server | Explicitly trusted external process/service; unreviewed tools carry possible external-write and egress authority |
+| Installed coding agent | Runs its own tools under its own policy, unapproved by Smith; reaches Smith's tools only through a per-turn socket where every call is authorized and approved as usual |
 | User-installed executable plugin | Refused until the capability-brokered subprocess protocol exists |
 | Skill/declarative panel | Bounded content only; no executable authority or runtime/renderer handle |
 
@@ -267,6 +268,53 @@ Questionnaire answers resume task reasoning but grant no permission or
 remembered approval. Child agents inherit a scoped tool view, capacity and
 deadline limits, no nested delegation, and root-only direct questionnaire
 readiness by default.
+
+## Installed coding agents and the capability bridge
+
+A turn on an installed CLI (`cli/claude-code/...`, `cli/codex/...`) has two
+kinds of tool activity, and Smith vouches for only one.
+
+Tools the CLI runs itself are outside Smith's authority. Smith did not
+dispatch them, did not approve them, did not scope them to the workspace,
+and records them only as observations. `allow_own_tools` decides whether
+the CLI may write; it is owner-only configuration.
+
+Tools the CLI calls through the bridge are Smith tool calls. For each turn
+Smith binds a Unix socket in a fresh mode-`0700` directory under the
+shortest of `$XDG_RUNTIME_DIR`, `$TMPDIR`, and `/tmp`, sets the socket to
+`0600`, and refuses any connection whose peer is not the user running
+Smith. The CLI reaches it through `smith mcp-relay <socket>`, which copies
+bytes and does nothing else. Properties that hold:
+
+- The endpoint executes with Smith's authority, so every call goes through
+  the central executor: validation, authorization, the approval policy,
+  workspace enforcement, and the output bound. Nothing is pre-approved
+  because the CLI asked for it.
+- Only tools the session is authorized to use are listed, and a call naming
+  anything else is refused without being dispatched.
+- Nothing that authorizes a call appears in the CLI's argument list. The
+  socket path is not a credential; the directory mode and the peer check
+  are the access control.
+- MCP servers Smith declares are called by Smith on the CLI's behalf. Their
+  commands, addresses, and credentials are never written into the CLI's
+  arguments or configuration.
+- The endpoint stops accepting calls when its turn ends and its directory
+  is removed. A call that arrives late is refused.
+- A call the CLI abandons before it starts never runs, and an approval it
+  abandons is withdrawn: answering it later executes nothing. Smith sets
+  the CLI's own tool timeout to a week so the CLI does not give up on a
+  call the user is still deciding.
+- Interrupting a turn kills the CLI's whole process group, so a launcher
+  that wraps the real agent cannot leave it running. The CLI is started
+  under `smith harness-supervise`, a hidden subcommand that leads that
+  group and kills it when its pipe from Smith closes, so the CLI also stops
+  when Smith itself exits for any reason, including being killed.
+- A headless run offers the CLI no questionnaire, as it offers a native
+  session none, because nobody can answer it; no answer is ever invented.
+
+What this does not give you: the CLI's own tools are still unapproved, and
+another process running as the same user can connect to the socket while a
+turn is running, exactly as it could read Smith's session files.
 
 ## Residual risks and deployment responsibilities
 

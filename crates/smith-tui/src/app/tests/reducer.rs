@@ -514,3 +514,7 @@ mod stream_gaps;
 mod projections;
 #[path = "reducer/usage.rs"]
 mod usage;
+
+mod bridge {
+    include!("reducer/bridge.rs");
+}

@@ -52,6 +52,11 @@ d models". [models] declaration.
   smith.configuration.runtime-connections ·
 active · Smith configuration reference, sect
 ion "Runtime connections". actions.
+  smith.configuration.smith-s-tools-on-insta
+lled-coding-agents · active · Smith configur
+ation reference, section "Smith's tools on i
+nstalled coding agents". `[harness.<kind>] a
+llow_own_tools`.
   smith.headless · active · Outline of the S
 mith headless protocol reference for smith -
 p: input modes, text, json, and stream-json
@@ -141,6 +146,12 @@ h Agent Runtime's central executor.
 ling · active · Smith security threat model
 reference, section "Credentials and secret h
 andling". references.
+  smith.security.installed-coding-agents-and
+-the-capability-bridge · active · Smith secu
+rity threat model reference, section "Instal
+led coding agents and the capability bridge"
+. kinds of tool activity, and Smith vouches
+for only one.
   smith.security.persistence-and-recovery-at
 tacks · active · Smith security threat model
  reference, section "Persistence and recover
@@ -173,17 +184,6 @@ not loaded
   broken · it does not start with a --- fr
 ontmatter block declaring a description ·
 <HOME>/.smith/skills/broken/SKILL.md
-
-
-
-
-
-
-
-
-
-
-
 
 
 

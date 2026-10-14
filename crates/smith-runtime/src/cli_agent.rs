@@ -19,17 +19,19 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
-use std::process::Stdio;
 
-use agent_runtime::agent::external::{
-    ExternalAgentBackend, ExternalAgentEvent, ExternalSessionId, ExternalTurnRequest,
-    ExternalTurnStream,
-};
-use agent_runtime_core::error::{ErrorKind, RuntimeError};
-use agent_runtime_core::usage::{CounterKind, UsageDelta};
-use async_trait::async_trait;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
+use agent_runtime::agent::external::{ExternalAgentEvent, ExternalSessionId};
+
+mod claude;
+mod codex;
+#[cfg(test)]
+mod fixture_tests;
+mod invocation;
+#[cfg(all(test, unix))]
+mod process_tests;
+mod selection;
+
+pub(crate) use selection::turn_execution;
 
 /// Which installed coding agent a harness drives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +82,18 @@ pub(crate) struct CliAgentSettings {
     pub(crate) allow_own_tools: bool,
     /// Instructions appended to the CLI's own system prompt.
     pub(crate) instructions: Option<String>,
+    /// Running Smith binary used for the per-turn relay and process supervisor.
+    pub(crate) relay_executable: Option<PathBuf>,
+    /// Turn-scoped MCP relay whose calls Smith dispatches and the CLI echoes.
+    pub(crate) bridge: Option<BridgeInvocation>,
+}
+
+/// Relay declaration supplied by the bridge owner for one invocation.
+#[derive(Debug, Clone)]
+pub(crate) struct BridgeInvocation {
+    pub(crate) server: String,
+    pub(crate) relay_executable: PathBuf,
+    pub(crate) socket: PathBuf,
 }
 
 /// An external agent backend driving one installed CLI.
@@ -87,450 +101,18 @@ pub(crate) struct CliAgentSettings {
 pub(crate) struct CliAgentBackend {
     kind: CliAgentKind,
     settings: CliAgentSettings,
+    reported_omissions: std::sync::Mutex<Vec<crate::cli_bridge::BridgeOmission>>,
+    /// Repeated turns on an embedding host need only one missing-path warning.
+    warned_missing_executable: std::sync::atomic::AtomicBool,
+    #[cfg(test)]
+    spawn_override: Option<SpawnOverride>,
+    #[cfg(test)]
+    endpoint_base_override: Option<PathBuf>,
 }
 
-impl CliAgentBackend {
-    /// Builds a backend for a resolved harness.
-    pub(crate) fn new(kind: CliAgentKind, settings: CliAgentSettings) -> Self {
-        Self { kind, settings }
-    }
-
-    /// Builds the argv for one turn.
-    ///
-    /// The prompt is passed as an argument for Codex and on stdin for Claude,
-    /// matching what each CLI accepts in non-interactive mode.
-    fn argv(&self, prompt: &str, resume: Option<&str>) -> Vec<String> {
-        let mut args = Vec::new();
-        match self.kind {
-            CliAgentKind::ClaudeCode => {
-                args.push("-p".to_owned());
-                args.push(prompt.to_owned());
-                args.push("--output-format".to_owned());
-                args.push("stream-json".to_owned());
-                // stream-json requires --verbose in non-interactive mode.
-                args.push("--verbose".to_owned());
-                if self.settings.allow_own_tools {
-                    // The CLI still prompts by default, which would deadlock a
-                    // non-interactive run, so name a non-prompting mode.
-                    args.push("--permission-mode".to_owned());
-                    args.push("acceptEdits".to_owned());
-                } else {
-                    // An empty allow-list is how Claude is told to run without
-                    // tools at all, rather than trusting its default.
-                    args.push("--allowedTools".to_owned());
-                    args.push(String::new());
-                }
-                if let Some(model) = &self.settings.model {
-                    args.push("--model".to_owned());
-                    args.push(model.clone());
-                }
-                if let Some(instructions) = &self.settings.instructions {
-                    args.push("--append-system-prompt".to_owned());
-                    args.push(instructions.clone());
-                }
-                if let Some(session) = resume {
-                    args.push("--resume".to_owned());
-                    args.push(session.to_owned());
-                }
-            }
-            CliAgentKind::Codex => {
-                args.push("exec".to_owned());
-                if let Some(session) = resume {
-                    args.push("resume".to_owned());
-                    args.push(session.to_owned());
-                }
-                args.push("--json".to_owned());
-                // Smith already decided this directory is the workspace; the
-                // CLI's own git check would refuse to run outside a repo.
-                args.push("--skip-git-repo-check".to_owned());
-                args.push("-C".to_owned());
-                args.push(self.settings.cwd.display().to_string());
-                args.push("--sandbox".to_owned());
-                args.push(if self.settings.allow_own_tools {
-                    "workspace-write".to_owned()
-                } else {
-                    "read-only".to_owned()
-                });
-                if let Some(model) = &self.settings.model {
-                    args.push("-m".to_owned());
-                    args.push(model.clone());
-                }
-                args.push(prompt.to_owned());
-            }
-        }
-        args.extend(self.settings.args.iter().cloned());
-        args
-    }
-}
-
-#[async_trait]
-impl ExternalAgentBackend for CliAgentBackend {
-    async fn run_turn(
-        &self,
-        request: ExternalTurnRequest,
-    ) -> Result<ExternalTurnStream, RuntimeError> {
-        // A CLI takes one prompt string; non-text parts have no place to go,
-        // so they are dropped rather than silently misrepresented.
-        let prompt = request
-            .input
-            .parts
-            .iter()
-            .filter_map(agent_runtime_core::content::ContentPart::as_text)
-            .collect::<Vec<_>>()
-            .join("\n");
-        let resume = request.resume.as_ref().map(|id| id.as_str().to_owned());
-        let args = self.argv(&prompt, resume.as_deref());
-
-        let mut command = Command::new(&self.settings.executable);
-        command.args(&args);
-        command.current_dir(&self.settings.cwd);
-        // Inherited, not cleared: the CLI's own login lives here.
-        for (key, value) in &self.settings.env {
-            command.env(key, value);
-        }
-        command
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
-
-        let mut child = command.spawn().map_err(|error| {
-            RuntimeError::new(
-                ErrorKind::Config,
-                format!(
-                    "could not start `{}`: {error}",
-                    self.settings.executable.display()
-                ),
-            )
-        })?;
-        let stdout = child.stdout.take().ok_or_else(|| {
-            RuntimeError::new(ErrorKind::Provider, "CLI agent produced no stdout stream")
-        })?;
-
-        let kind = self.kind;
-        let cancel = request.cancel.clone();
-        let stream = async_stream::stream! {
-            let mut lines = BufReader::new(stdout).lines();
-            let mut state = TurnState::default();
-
-            loop {
-                let next = tokio::select! {
-                    _ = cancel.cancelled() => None,
-                    line = lines.next_line() => line.unwrap_or_default(),
-                };
-                let Some(line) = next else { break };
-                let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
-                    // A CLI may interleave non-JSON diagnostics; they are not
-                    // turn content and not a failure.
-                    continue;
-                };
-                for event in normalize(kind, &value, &mut state) {
-                    let terminal = event.is_terminal();
-                    yield event;
-                    if terminal {
-                        state.terminated = true;
-                        break;
-                    }
-                }
-                if state.terminated {
-                    break;
-                }
-            }
-
-            let _ = child.start_kill();
-
-            if !state.terminated {
-                // The stream ended without the CLI reporting a terminal
-                // result: a truncated run, not a completed one.
-                yield ExternalAgentEvent::Failed {
-                    message: "CLI agent exited before reporting a result".to_owned(),
-                };
-            }
-        };
-
-        Ok(Box::pin(stream))
-    }
-}
-
-/// Per-turn normalization state.
-#[derive(Debug, Default)]
-struct TurnState {
-    terminated: bool,
-    /// Tool items already reported as started, so the completed item that
-    /// follows resolves that row instead of opening a second one.
-    invoked: BTreeSet<String>,
-}
-
-/// Translates one CLI event into zero or more runtime events.
-fn normalize(
-    kind: CliAgentKind,
-    value: &serde_json::Value,
-    state: &mut TurnState,
-) -> Vec<ExternalAgentEvent> {
-    match kind {
-        CliAgentKind::ClaudeCode => normalize_claude(value),
-        CliAgentKind::Codex => normalize_codex(value, state),
-    }
-}
-
-fn string_field(value: &serde_json::Value, key: &str) -> Option<String> {
-    value.get(key)?.as_str().map(str::to_owned)
-}
-
-fn session_event(id: Option<String>) -> Option<ExternalAgentEvent> {
-    let session = ExternalSessionId::new(id?).ok()?;
-    Some(ExternalAgentEvent::SessionStarted { session })
-}
-
-fn normalize_claude(value: &serde_json::Value) -> Vec<ExternalAgentEvent> {
-    let mut events = Vec::new();
-    match value.get("type").and_then(serde_json::Value::as_str) {
-        Some("system") => {
-            if value.get("subtype").and_then(serde_json::Value::as_str) == Some("init") {
-                events.extend(session_event(string_field(value, "session_id")));
-            }
-        }
-        Some("assistant") => {
-            let content = value
-                .get("message")
-                .and_then(|message| message.get("content"))
-                .and_then(serde_json::Value::as_array);
-            for part in content.into_iter().flatten() {
-                match part.get("type").and_then(serde_json::Value::as_str) {
-                    Some("text") => {
-                        if let Some(text) = string_field(part, "text") {
-                            events.push(ExternalAgentEvent::Text { text });
-                        }
-                    }
-                    Some("thinking") => {
-                        if let Some(text) =
-                            string_field(part, "thinking").filter(|text| !text.is_empty())
-                        {
-                            events.push(ExternalAgentEvent::Reasoning { text });
-                        }
-                    }
-                    Some("tool_use") => {
-                        if let (Some(id), Some(name)) =
-                            (string_field(part, "id"), string_field(part, "name"))
-                        {
-                            events.push(ExternalAgentEvent::ToolInvoked {
-                                id,
-                                name,
-                                detail: part
-                                    .get("input")
-                                    .cloned()
-                                    .unwrap_or(serde_json::Value::Object(serde_json::Map::new())),
-                            });
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-        Some("user") => {
-            let content = value
-                .get("message")
-                .and_then(|message| message.get("content"))
-                .and_then(serde_json::Value::as_array);
-            for part in content.into_iter().flatten() {
-                if part.get("type").and_then(serde_json::Value::as_str) == Some("tool_result")
-                    && let Some(id) = string_field(part, "tool_use_id")
-                {
-                    {
-                        let failed = part
-                            .get("is_error")
-                            .and_then(serde_json::Value::as_bool)
-                            .unwrap_or(false);
-                        events.push(ExternalAgentEvent::ToolCompleted {
-                            id,
-                            ok: !failed,
-                            detail: part
-                                .get("content")
-                                .cloned()
-                                .unwrap_or(serde_json::Value::Object(serde_json::Map::new())),
-                        });
-                    }
-                }
-            }
-        }
-        Some("result") => {
-            if let Some(usage) = value.get("usage") {
-                events.push(ExternalAgentEvent::Usage {
-                    usage: claude_usage(usage),
-                });
-            }
-            // A failed Claude run can still exit zero, reporting the reason in
-            // `result`. Exit status alone is not a health signal.
-            let failed = value
-                .get("is_error")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-            if failed {
-                events.push(ExternalAgentEvent::Failed {
-                    message: string_field(value, "result")
-                        .unwrap_or_else(|| "CLI agent reported an error".to_owned()),
-                });
-            } else {
-                events.push(ExternalAgentEvent::Completed);
-            }
-        }
-        _ => {}
-    }
-    events
-}
-
-/// A Codex item's identity, which correlates its started and completed
-/// reports. An item without one cannot be correlated, so every such item
-/// shares one identity rather than opening rows nothing ever closes.
-fn codex_item_id(item: &serde_json::Value) -> String {
-    string_field(item, "id").unwrap_or_else(|| "item".to_owned())
-}
-
-/// The invocation event for one Codex tool item, or `None` when the item is
-/// not a tool.
-fn codex_tool_invocation(item: &serde_json::Value, id: &str) -> Option<ExternalAgentEvent> {
-    let name = match item.get("type").and_then(serde_json::Value::as_str)? {
-        name @ ("command_execution" | "file_change" | "mcp_tool_call") => name,
-        _ => return None,
-    };
-    Some(ExternalAgentEvent::ToolInvoked {
-        id: id.to_owned(),
-        name: name.to_owned(),
-        detail: item.clone(),
-    })
-}
-
-fn counter(value: &serde_json::Value, key: &str) -> u64 {
-    value
-        .get(key)
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0)
-}
-
-/// Claude reports `input_tokens` already exclusive of cache reads and writes,
-/// so the counters are copied straight across.
-fn claude_usage(usage: &serde_json::Value) -> UsageDelta {
-    let reasoning = usage
-        .get("output_tokens_details")
-        .map(|details| counter(details, "thinking_tokens"))
-        .unwrap_or(0);
-    UsageDelta::new()
-        .with(CounterKind::InputUncached, counter(usage, "input_tokens"))
-        .with(
-            CounterKind::InputCached,
-            counter(usage, "cache_read_input_tokens"),
-        )
-        .with(
-            CounterKind::CacheWrite,
-            counter(usage, "cache_creation_input_tokens"),
-        )
-        .with(CounterKind::Output, counter(usage, "output_tokens"))
-        .with(CounterKind::Reasoning, reasoning)
-}
-
-/// Codex reports `input_tokens` *inclusive* of the cached prefix, so the
-/// cached count is subtracted back out to keep the counters disjoint.
-fn codex_usage(usage: &serde_json::Value) -> UsageDelta {
-    let cached = counter(usage, "cached_input_tokens");
-    let input = counter(usage, "input_tokens").saturating_sub(cached);
-    UsageDelta::new()
-        .with(CounterKind::InputUncached, input)
-        .with(CounterKind::InputCached, cached)
-        .with(
-            CounterKind::CacheWrite,
-            counter(usage, "cache_write_input_tokens"),
-        )
-        .with(CounterKind::Output, counter(usage, "output_tokens"))
-        .with(
-            CounterKind::Reasoning,
-            counter(usage, "reasoning_output_tokens"),
-        )
-}
-
-fn normalize_codex(value: &serde_json::Value, state: &mut TurnState) -> Vec<ExternalAgentEvent> {
-    let mut events = Vec::new();
-    match value.get("type").and_then(serde_json::Value::as_str) {
-        Some("thread.started") => {
-            events.extend(session_event(string_field(value, "thread_id")));
-        }
-        // A command Codex is still running is reported as a started item
-        // first. Opening the row here is what makes a slow command visible
-        // while it runs rather than appearing, already finished, at the end.
-        Some("item.started") => {
-            let Some(item) = value.get("item") else {
-                return events;
-            };
-            let id = codex_item_id(item);
-            if let Some(invoked) = codex_tool_invocation(item, &id) {
-                state.invoked.insert(id);
-                events.push(invoked);
-            }
-        }
-        Some("item.completed") => {
-            let Some(item) = value.get("item") else {
-                return events;
-            };
-            let id = codex_item_id(item);
-            match item.get("type").and_then(serde_json::Value::as_str) {
-                Some("agent_message") => {
-                    if let Some(text) = string_field(item, "text") {
-                        events.push(ExternalAgentEvent::Text { text });
-                    }
-                }
-                Some("reasoning") => {
-                    if let Some(text) = string_field(item, "text") {
-                        events.push(ExternalAgentEvent::Reasoning { text });
-                    }
-                }
-                // The completed item carries the invocation as well as the
-                // outcome, so a tool whose start was never reported still
-                // gets its row -- just once, which is what the started set
-                // above is for.
-                Some("command_execution") | Some("file_change") | Some("mcp_tool_call") => {
-                    if !state.invoked.remove(&id)
-                        && let Some(invoked) = codex_tool_invocation(item, &id)
-                    {
-                        events.push(invoked);
-                    }
-                    let exit = item.get("exit_code").and_then(serde_json::Value::as_i64);
-                    events.push(ExternalAgentEvent::ToolCompleted {
-                        id,
-                        // Only a command reports an exit status; a file change
-                        // or an MCP call that completed at all succeeded.
-                        ok: exit.is_none_or(|exit| exit == 0),
-                        detail: item
-                            .get("aggregated_output")
-                            .cloned()
-                            .unwrap_or(serde_json::Value::Null),
-                    });
-                }
-                // `error` items also carry benign local warnings — a malformed
-                // agent-role file, a clamped hook timeout — so one must not
-                // fail the turn on its own. Only `turn.failed` is terminal.
-                _ => {}
-            }
-        }
-        Some("turn.completed") => {
-            if let Some(usage) = value.get("usage") {
-                events.push(ExternalAgentEvent::Usage {
-                    usage: codex_usage(usage),
-                });
-            }
-            events.push(ExternalAgentEvent::Completed);
-        }
-        Some("turn.failed") => {
-            let message = value
-                .get("error")
-                .and_then(|error| error.get("message"))
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("CLI agent reported a failed turn")
-                .to_owned();
-            events.push(ExternalAgentEvent::Failed { message });
-        }
-        _ => {}
-    }
-    events
-}
+/// Tests inspect the command passed by run_turn without a second supervisor.
+#[cfg(test)]
+type SpawnOverride = fn(&mut tokio::process::Command) -> std::io::Result<tokio::process::Child>;
 
 /// One resolved installed-agent selection, minus the directory a turn runs in.
 ///
@@ -547,34 +129,7 @@ pub(crate) struct CliAgentPlan {
     args: Vec<String>,
     env: BTreeMap<String, String>,
     allow_own_tools: bool,
-}
-
-impl CliAgentPlan {
-    /// Builds the backend that runs turns in `cwd`.
-    ///
-    /// `allow_own_tools` only narrows: a read-only run may withhold the CLI's
-    /// own tools, but no caller can grant what the owner did not configure.
-    pub(crate) fn backend(
-        &self,
-        cwd: PathBuf,
-        allow_own_tools: bool,
-    ) -> std::sync::Arc<dyn ExternalAgentBackend> {
-        let settings = CliAgentSettings {
-            executable: self.executable.clone(),
-            model: Some(self.model.clone()),
-            args: self.args.clone(),
-            cwd,
-            env: self.env.clone(),
-            allow_own_tools: self.allow_own_tools && allow_own_tools,
-            instructions: None,
-        };
-        std::sync::Arc::new(CliAgentBackend::new(self.kind, settings))
-    }
-
-    /// Stable label naming what this plan executes, for policy fingerprints.
-    pub(crate) fn label(&self) -> String {
-        format!("cli:{}/{}", self.kind.as_str(), self.model)
-    }
+    relay_executable: Option<PathBuf>,
 }
 
 /// What executes a turn for one resolved configuration.
@@ -602,315 +157,61 @@ pub(crate) enum TurnExecution {
     },
 }
 
-impl TurnExecution {
-    /// Stable label naming what executes a turn, for policy fingerprints.
-    pub(crate) fn label(&self) -> String {
-        match self {
-            Self::Provider => "provider".to_owned(),
-            Self::InstalledAgent(plan) => plan.label(),
-            Self::MissingProgram { kind, .. } => format!("cli-missing:{kind}"),
+/// Per-turn normalization state.
+#[derive(Debug, Default)]
+struct TurnState {
+    terminated: bool,
+    bridge_server: Option<String>,
+    /// Claude results carry only an id, so suppressed calls stay correlated
+    /// for the whole turn, including failed results.
+    suppressed: BTreeSet<String>,
+    /// Tool items already reported as started, so the completed item that
+    /// follows resolves that row instead of opening a second one.
+    invoked: BTreeSet<String>,
+}
+
+impl TurnState {
+    fn for_bridge(bridge: Option<&BridgeInvocation>) -> Self {
+        Self {
+            bridge_server: bridge.map(|bridge| bridge.server.clone()),
+            ..Self::default()
         }
     }
 }
 
-/// Reads what a resolved configuration says should execute its turns.
-pub(crate) fn turn_execution(config: &smith_config::resolve::ResolvedConfig) -> TurnExecution {
-    config
-        .harness
-        .as_ref()
-        .map_or(TurnExecution::Provider, selection)
+/// Translates one CLI event into zero or more runtime events.
+fn normalize(
+    kind: CliAgentKind,
+    value: &serde_json::Value,
+    state: &mut TurnState,
+) -> Vec<ExternalAgentEvent> {
+    match kind {
+        CliAgentKind::ClaudeCode => claude::normalize_claude(value, state),
+        CliAgentKind::Codex => codex::normalize_codex(value, state),
+    }
 }
 
-/// Resolves one installed-agent selection against this machine.
-fn selection(harness: &smith_config::resolve::ResolvedHarness) -> TurnExecution {
-    let Some(kind) = CliAgentKind::parse(&harness.kind.value) else {
-        return TurnExecution::Provider;
-    };
-    // Selecting `cli/claude-code/sonnet` should just work, so the executable
-    // is found on PATH unless the owner named one.
-    let executable = match &harness.executable {
-        Some(configured) => PathBuf::from(&configured.value),
-        None => match discover_program(&harness.program) {
-            Some(executable) => executable,
-            None => {
-                return TurnExecution::MissingProgram {
-                    model: smith_config::cli_agents::cli_model_id(
-                        &harness.kind.value,
-                        &harness.model.value,
-                    ),
-                    kind: harness.kind.value.clone(),
-                    program: harness.program.clone(),
-                };
-            }
-        },
-    };
-    TurnExecution::InstalledAgent(CliAgentPlan {
-        kind,
-        executable,
-        model: harness.model.value.clone(),
-        args: harness.args.clone(),
-        env: harness.env.clone(),
-        allow_own_tools: harness.allow_own_tools.value,
-    })
+fn string_field(value: &serde_json::Value, key: &str) -> Option<String> {
+    value.get(key)?.as_str().map(str::to_owned)
 }
 
-/// Finds an installed program on `PATH`.
-///
-/// A plain lookup rather than a shell resolution: the same rule the rest of
-/// Smith's process boundaries follow, so nothing a shell would expand can
-/// change which binary runs.
-fn discover_program(program: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|directory| directory.join(program))
-        .find(|candidate| is_executable_file(candidate))
+fn session_event(id: Option<String>) -> Option<ExternalAgentEvent> {
+    let session = ExternalSessionId::new(id?).ok()?;
+    Some(ExternalAgentEvent::SessionStarted { session })
 }
 
-fn is_executable_file(path: &std::path::Path) -> bool {
-    use std::os::unix::fs::PermissionsExt as _;
-    std::fs::metadata(path)
-        .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
+fn counter(value: &serde_json::Value, key: &str) -> u64 {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use smith_config::resolve::{ResolvedHarness, Source, Sourced};
-
-    fn settings(allow_own_tools: bool) -> CliAgentSettings {
-        CliAgentSettings {
-            executable: PathBuf::from("/usr/local/bin/agent"),
-            model: Some("a-model".to_owned()),
-            args: Vec::new(),
-            cwd: PathBuf::from("/repo"),
-            env: BTreeMap::new(),
-            allow_own_tools,
-            instructions: None,
-        }
-    }
-
-    fn harness(program: &str, executable: Option<&str>, allow_own_tools: bool) -> ResolvedHarness {
-        ResolvedHarness {
-            kind: Sourced::new("claude-code".to_owned(), Source::built_in("model")),
-            program: program.to_owned(),
-            model: Sourced::new("sonnet".to_owned(), Source::built_in("model")),
-            executable: executable
-                .map(|path| Sourced::new(path.to_owned(), Source::built_in("harness.executable"))),
-            args: Vec::new(),
-            allow_own_tools: Sourced::new(
-                allow_own_tools,
-                Source::built_in("harness.allow_own_tools"),
-            ),
-            env: BTreeMap::new(),
-        }
-    }
-
-    #[test]
-    fn an_agent_whose_program_is_not_installed_is_named_rather_than_run_on_the_provider() {
-        let execution = selection(&harness("smith-no-such-agent-program", None, false));
-        let TurnExecution::MissingProgram {
-            model,
-            kind,
-            program,
-        } = execution
-        else {
-            panic!("a missing program must not resolve to a runnable plan: {execution:?}");
-        };
-        assert_eq!(model, "cli/claude-code/sonnet");
-        assert_eq!(kind, "claude-code");
-        assert_eq!(program, "smith-no-such-agent-program");
-    }
-
-    #[test]
-    fn a_plan_narrows_the_cli_s_own_tools_but_never_widens_them() {
-        let TurnExecution::InstalledAgent(permitted) =
-            selection(&harness("claude", Some("/usr/local/bin/claude"), true))
-        else {
-            panic!("a configured executable needs no PATH lookup");
-        };
-        let TurnExecution::InstalledAgent(withheld) =
-            selection(&harness("claude", Some("/usr/local/bin/claude"), false))
-        else {
-            panic!("a configured executable needs no PATH lookup");
-        };
-
-        let allow_list = |plan: &CliAgentPlan, write_capable: bool| {
-            let backend = CliAgentBackend::new(
-                plan.kind,
-                CliAgentSettings {
-                    allow_own_tools: plan.allow_own_tools && write_capable,
-                    ..settings(false)
-                },
-            );
-            let args = backend.argv("hello", None);
-            args.iter().any(|arg| arg == "--permission-mode")
-        };
-
-        assert!(
-            allow_list(&permitted, true),
-            "a write-capable run keeps the tools the owner configured"
-        );
-        assert!(
-            !allow_list(&permitted, false),
-            "a read-only run must not receive the CLI's own tools"
-        );
-        assert!(
-            !allow_list(&withheld, true),
-            "no caller may grant tools the owner did not configure"
-        );
-    }
-
-    #[test]
-    fn claude_runs_without_its_own_tools_by_default() {
-        let backend = CliAgentBackend::new(CliAgentKind::ClaudeCode, settings(false));
-        let args = backend.argv("hello", None);
-        let allow = args.iter().position(|arg| arg == "--allowedTools");
-        assert_eq!(args[allow.expect("an explicit allow-list") + 1], "");
-        assert!(!args.iter().any(|arg| arg == "--permission-mode"));
-    }
-
-    #[test]
-    fn codex_runs_read_only_by_default_and_writes_only_when_permitted() {
-        let read_only = CliAgentBackend::new(CliAgentKind::Codex, settings(false));
-        let args = read_only.argv("hello", None);
-        let sandbox = args.iter().position(|arg| arg == "--sandbox");
-        assert_eq!(args[sandbox.expect("a sandbox mode") + 1], "read-only");
-
-        let writable = CliAgentBackend::new(CliAgentKind::Codex, settings(true));
-        let args = writable.argv("hello", None);
-        let sandbox = args.iter().position(|arg| arg == "--sandbox");
-        assert_eq!(
-            args[sandbox.expect("a sandbox mode") + 1],
-            "workspace-write"
-        );
-    }
-
-    #[test]
-    fn resuming_continues_each_cli_in_its_own_dialect() {
-        let claude = CliAgentBackend::new(CliAgentKind::ClaudeCode, settings(false));
-        let args = claude.argv("next", Some("session-1"));
-        let resume = args.iter().position(|arg| arg == "--resume");
-        assert_eq!(args[resume.expect("a resume flag") + 1], "session-1");
-
-        let codex = CliAgentBackend::new(CliAgentKind::Codex, settings(false));
-        let args = codex.argv("next", Some("thread-1"));
-        assert_eq!(args[0], "exec");
-        assert_eq!(args[1], "resume");
-        assert_eq!(args[2], "thread-1");
-    }
-
-    #[test]
-    fn claude_result_reporting_an_error_fails_even_with_a_clean_exit() {
-        let value = serde_json::json!({
-            "type": "result",
-            "subtype": "success",
-            "is_error": true,
-            "result": "Not logged in · Please run /login",
-            "usage": {"input_tokens": 1, "output_tokens": 0}
-        });
-        let events = normalize_claude(&value);
-        assert!(events.iter().any(|event| matches!(
-            event,
-            ExternalAgentEvent::Failed { message } if message.contains("Not logged in")
-        )));
-        assert!(
-            !events
-                .iter()
-                .any(|event| matches!(event, ExternalAgentEvent::Completed))
-        );
-    }
-
-    #[test]
-    fn a_codex_error_item_is_a_warning_not_a_failed_turn() {
-        let value = serde_json::json!({
-            "type": "item.completed",
-            "item": {"id": "item_0", "type": "error", "message": "clamping hook timeout"}
-        });
-        assert!(normalize_codex(&value, &mut TurnState::default()).is_empty());
-    }
-
-    #[test]
-    fn codex_command_execution_reports_both_invocation_and_outcome() {
-        let value = serde_json::json!({
-            "type": "item.completed",
-            "item": {
-                "id": "item_5",
-                "type": "command_execution",
-                "command": "/bin/zsh -lc 'cat config.txt'",
-                "aggregated_output": "version = 3\n",
-                "exit_code": 0,
-                "status": "completed"
-            }
-        });
-        let events = normalize_codex(&value, &mut TurnState::default());
-        assert!(matches!(events[0], ExternalAgentEvent::ToolInvoked { .. }));
-        assert!(matches!(
-            events[1],
-            ExternalAgentEvent::ToolCompleted { ok: true, .. }
-        ));
-    }
-
-    #[test]
-    fn a_codex_command_reported_as_started_opens_exactly_one_row() {
-        let mut state = TurnState::default();
-        let item = serde_json::json!({
-            "id": "item_7",
-            "type": "command_execution",
-            "command": "/bin/zsh -lc 'echo hi'",
-            "aggregated_output": "",
-            "exit_code": serde_json::Value::Null,
-            "status": "in_progress"
-        });
-        let started = normalize_codex(
-            &serde_json::json!({"type": "item.started", "item": item}),
-            &mut state,
-        );
-        assert!(matches!(
-            started.as_slice(),
-            [ExternalAgentEvent::ToolInvoked { name, .. }] if name == "command_execution"
-        ));
-
-        let mut completed_item = item;
-        completed_item["aggregated_output"] = serde_json::json!("hi\n");
-        completed_item["exit_code"] = serde_json::json!(0);
-        completed_item["status"] = serde_json::json!("completed");
-        let completed = normalize_codex(
-            &serde_json::json!({"type": "item.completed", "item": completed_item}),
-            &mut state,
-        );
-        assert!(
-            matches!(
-                completed.as_slice(),
-                [ExternalAgentEvent::ToolCompleted { ok: true, .. }]
-            ),
-            "the started row is resolved, not duplicated: {completed:?}"
-        );
-    }
-
-    #[test]
-    fn a_codex_file_change_completes_without_an_exit_status() {
-        let events = normalize_codex(
-            &serde_json::json!({
-                "type": "item.completed",
-                "item": {
-                    "id": "item_8",
-                    "type": "file_change",
-                    "changes": [{"path": "/repo/note.txt", "kind": "add"}],
-                    "status": "completed"
-                }
-            }),
-            &mut TurnState::default(),
-        );
-        assert!(matches!(
-            events.as_slice(),
-            [
-                ExternalAgentEvent::ToolInvoked { name, .. },
-                ExternalAgentEvent::ToolCompleted { ok: true, .. }
-            ] if name == "file_change"
-        ));
-    }
+    use super::claude::claude_usage;
+    use super::codex::codex_usage;
+    use agent_runtime_core::usage::CounterKind;
 
     #[test]
     fn each_cli_reports_cache_tokens_in_its_own_convention() {

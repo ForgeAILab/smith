@@ -866,38 +866,9 @@ fn record_projection(name: &str, result: &ResultEnvelope, events: &[EventEnvelop
     }
 }
 
-fn fixture_result() -> ResultEnvelope {
-    ResultEnvelope {
-        schema_version: OUTPUT_SCHEMA_VERSION,
-        kind: "result",
-        status: ResultStatus::Ok,
-        session_id: "session-fixture".into(),
-        turn_id: "turn-fixture".into(),
-        provider: "fixture-provider".into(),
-        model: "fixture-model".into(),
-        output: "answer".into(),
-        usage: UsageOutput {
-            current_turn: UsageDelta::new(),
-            session: UsageDelta::new(),
-            synthetic_cache: SyntheticUsageOutput::default(),
-            current_turn_provenance: UsageProvenance::Unknown,
-            session_provenance: UsageProvenance::Unknown,
-        },
-        lifecycle: LifecycleOutput::default(),
-        goal: None,
-        goal_continuation_turns: None,
-        artifacts: Vec::new(),
-        approval_required: None,
-        interaction_required: None,
-        recovery: None,
-        account: None,
-        background_exit: None,
-        reasoning: None,
-        cache: None,
-        resume_capsule: None,
-        error: None,
-    }
-}
+#[path = "fixtures/result.rs"]
+mod result;
+use result::fixture_result;
 
 #[test]
 fn fixtures_headless_output_cases() {
@@ -1039,6 +1010,7 @@ fn machine_result_v2() {
         reasoning: None,
         cache: None,
         resume_capsule: None,
+        diagnostics: Vec::new(),
         error: None,
     };
 
@@ -1085,6 +1057,7 @@ fn approval_required_v2() {
         reasoning: None,
         cache: None,
         resume_capsule: None,
+        diagnostics: Vec::new(),
         error: None,
     };
 
@@ -1123,6 +1096,7 @@ fn interaction_required_v2() {
         reasoning: None,
         cache: None,
         resume_capsule: None,
+        diagnostics: Vec::new(),
         error: None,
     };
     record_projection("interaction-required-v2", &result, &[]);
@@ -1277,6 +1251,7 @@ fn lifecycle_text() {
         reasoning: None,
         cache: None,
         resume_capsule: None,
+        diagnostics: Vec::new(),
         error: None,
     };
     let mut stderr = Vec::new();
@@ -1406,6 +1381,7 @@ fn canonical_cache() {
         reasoning: None,
         cache: Some(CacheOutput::from_summary(&headless_summary, None)),
         resume_capsule: None,
+        diagnostics: Vec::new(),
         error: None,
     };
     record_projection("canonical-cache", &result, &events);
@@ -1490,3 +1466,6 @@ fn approval_exit_status() {
     result.approval_required = Some(required.into());
     record_projection("approval-exit-status", &result, &[]);
 }
+
+#[path = "fixtures/diagnostics.rs"]
+mod diagnostics;

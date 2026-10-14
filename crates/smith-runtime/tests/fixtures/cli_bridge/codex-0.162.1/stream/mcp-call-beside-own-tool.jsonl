@@ -1,0 +1,12 @@
+{"type":"thread.started","thread_id":"01a1379d-5392-7db0-84e3-d8a065c8fb8c"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Ignoring malformed agent role definition: agent role `explorer` must define a description"}}
+{"type":"item.completed","item":{"id":"item_1","type":"error","message":"Ignoring malformed agent role definition: agent role `explorer` must define a description"}}
+{"type":"item.completed","item":{"id":"item_2","type":"error","message":"clamping SessionEnd hook timeout to 3s in /home/user/.codex/hooks.json"}}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"I\u2019ll run the shell command, then call Spike\u2019s `fast_echo` tool."}}
+{"type":"item.started","item":{"id":"item_4","type":"command_execution","command":"/bin/zsh -lc 'echo hi-from-shell'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_4","type":"command_execution","command":"/bin/zsh -lc 'echo hi-from-shell'","aggregated_output":"hi-from-shell\n","exit_code":0,"status":"completed"}}
+{"type":"item.started","item":{"id":"item_5","type":"mcp_tool_call","server":"spike","tool":"fast_echo","arguments":{"text":"beside"},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_5","type":"mcp_tool_call","server":"spike","tool":"fast_echo","arguments":{"text":"beside"},"result":{"content":[{"type":"text","text":"ECHO:beside"}],"structured_content":null},"error":null,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_6","type":"agent_message","text":"- Shell: `hi-from-shell`\n- Spike `fast_echo`: `ECHO:beside`"}}
+{"type":"turn.completed","usage":{"input_tokens":100591,"cached_input_tokens":79744,"cache_write_input_tokens":0,"output_tokens":123,"reasoning_output_tokens":0}}

@@ -30,7 +30,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e#d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75#db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75"
 dependencies = [
  "agent-runtime-ability",
  "agent-runtime-context",
@@ -55,7 +55,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-ability"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e#d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75#db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75"
 dependencies = [
  "agent-runtime-core",
  "agent-runtime-registry",
@@ -67,7 +67,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-context"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e#d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75#db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75"
 dependencies = [
  "agent-runtime-core",
  "agent-runtime-registry",
@@ -78,7 +78,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-core"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e#d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75#db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75"
 dependencies = [
  "agent-runtime-registry",
  "async-trait",
@@ -96,7 +96,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-mcp"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e#d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75#db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75"
 dependencies = [
  "agent-runtime-ability",
  "agent-runtime-core",
@@ -113,7 +113,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-provider"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e#d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75#db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75"
 dependencies = [
  "agent-runtime-core",
  "agent-runtime-registry",
@@ -132,7 +132,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-registry"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e#d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75#db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75"
 dependencies = [
  "serde",
 ]
@@ -140,7 +140,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-testkit"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e#d2752c1dcd5e728e6b1aa7a5f5cafe970e18c34e"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75#db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75"
 dependencies = [
  "agent-runtime",
  "agent-runtime-core",
@@ -1085,6 +1085,12 @@ name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
+
+[[package]]
+name = "dyn-clone"
+version = "1.0.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "either"
@@ -2660,6 +2666,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "pastey"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
+
+[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3269,9 +3281,11 @@ dependencies = [
  "chrono",
  "futures",
  "http",
+ "pastey",
  "pin-project-lite",
  "process-wrap",
  "reqwest",
+ "schemars",
  "serde",
  "serde_json",
  "sse-stream",
@@ -3280,6 +3294,7 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -3426,6 +3441,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "schemars"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab508826f74a77ca9d5aba6ff19b522583ee3eaf28a19384ff3d0e5835fadf6e"
+dependencies = [
+ "chrono",
+ "dyn-clone",
+ "ref-cast",
+ "schemars_derive",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "schemars_derive"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1c3a92094fa7d61aa124645844facb6b554dfc797136d0f5fd1f890e2bffc69"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_derive_internals",
+ "syn 3.0.3",
+]
+
+[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3501,6 +3542,17 @@ name = "serde_derive"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+]
+
+[[package]]
+name = "serde_derive_internals"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f852137cce035d6a4df67ccce505ff6b3e9fd3a10e3e52b24dc71e650bb1a9bd"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3657,6 +3709,7 @@ dependencies = [
  "futures-util",
  "ignore",
  "image",
+ "nix 0.31.3",
  "ratatui",
  "serde",
  "serde_json",
@@ -3826,6 +3879,7 @@ dependencies = [
  "keyring",
  "nix 0.31.3",
  "reqwest",
+ "rmcp",
  "rustix",
  "serde",
  "serde_json",

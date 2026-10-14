@@ -13,12 +13,14 @@ mod cli;
 mod config_command;
 mod connection;
 mod connection_review;
+mod harness_supervise;
 mod headless;
 mod interaction;
 mod local_command;
 mod logging;
 mod login_progress;
 mod mcp;
+mod mcp_relay;
 mod modules;
 mod plugin_command;
 mod plugins;
@@ -93,6 +95,13 @@ async fn execute(command: Command) -> Result<u8> {
             #[cfg(not(feature = "wasm-modules"))]
             println!("WASM modules are not supported in this build");
             Ok(0)
+        }
+        Command::McpRelay { socket } => {
+            mcp_relay::run(&socket)?;
+            Ok(0)
+        }
+        Command::HarnessSupervise { program, args } => {
+            harness_supervise::run(&program, &args).await
         }
         Command::ConfigExplain { key, selection } => {
             explain_config(&key, &selection)?;

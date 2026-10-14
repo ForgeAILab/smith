@@ -273,6 +273,9 @@ mod tests {
     include!("composer.rs");
     include!("composer_grammar.rs");
     include!("modal.rs");
+    mod bridge {
+        include!("bridge.rs");
+    }
     include!("interaction_defects.rs");
     include!("startup.rs");
     include!("picker_startup.rs");

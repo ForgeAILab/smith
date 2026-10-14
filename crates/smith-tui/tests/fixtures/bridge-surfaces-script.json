@@ -1,0 +1,1 @@
+[{"say":"before"},{"own_tool":{"name":"own_tool"}},{"call":{"tool":"agent","arguments":{"action":"list"}}},{"say":"after"}]

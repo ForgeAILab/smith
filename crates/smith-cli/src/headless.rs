@@ -17,6 +17,7 @@ mod file_commands;
 mod fold;
 mod output;
 mod run_flow;
+mod signals;
 
 #[cfg(test)]
 pub(crate) use file_commands::prepare_prompt;

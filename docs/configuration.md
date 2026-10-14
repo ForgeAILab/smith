@@ -466,6 +466,10 @@ rolling aliases—`cli/claude-code/opus`, `sonnet`, `fable`, and `haiku`—so an
 updated Claude executable resolves the alias to the current Claude release
 without requiring a new Smith release for every dated model.
 
+An installed agent can also use Smith's own capabilities, such as child
+agents and the advisor; see
+[Smith's tools on installed coding agents](#smiths-tools-on-installed-coding-agents).
+
 ### Local command model providers
 
 `command-jsonl` makes a trusted local bridge available through the same model
@@ -662,6 +666,62 @@ selection never initializes Keychain or Secret Service. If protected
 checkpoints already exist under the selected session root, changing sources
 refuses before modifying config; retire or resume that state deliberately
 before choosing another key.
+
+## Smith's tools on installed coding agents
+
+An installed agent keeps its own file and shell tools, governed by
+`[harness.<kind>] allow_own_tools`. Smith offers it what it does not have:
+the `agent` tool for child agents, the advisor, tools of the MCP servers
+Smith declares, plugin and module tools, skills, and, in an interactive
+session, the questionnaire. For
+each turn Smith serves these to the CLI as one MCP server named `smith` on a
+private Unix socket and declares that server in the CLI's arguments; the
+socket exists only while the turn runs. Nothing is added to the CLI's own
+configuration, and the CLI's own MCP servers are left alone.
+
+A tool the CLI calls this way is a Smith tool call. It passes the same
+approval policy, appears as an ordinary tool row, and is saved in the
+session; the CLI's own tools remain labelled as run by the CLI. What is
+offered follows the profile exactly as it does for a provider model:
+`delegation`, the advisor, posture, the child rules, and
+`capabilities.allow` / `capabilities.deny`. Smith's core coding tools
+(`read`, `list`, `search`, `edit`, `shell`, `task_output`, `task_stop`), the
+todo tool, and the goal tools are never offered; the CLI has its own.
+
+There is no separate switch. To run an installed agent without Smith's
+tools, deny them on its profile:
+
+```toml
+[profiles.plain-claude]
+model = "cli/claude-code/sonnet"
+
+[profiles.plain-claude.capabilities]
+deny = ["tool:*", "skill:*"]
+```
+
+With nothing left to offer, Smith starts no socket and invokes the CLI
+exactly as it did before this feature existed.
+
+Three things differ from a provider model and are worth knowing:
+
+- **Guidance is fixed per Claude Code conversation.** Smith tells the CLI
+  how to use its tools through the MCP server's instructions. Claude Code
+  records its instructions when a conversation starts, so if the offered
+  tools change later in the same conversation the tool list is still exact
+  but the guidance text is the one first delivered.
+- **Codex requires the bridge.** Smith marks its server required for Codex,
+  because Codex would otherwise start a turn without a server that is still
+  starting. If the bridge cannot start, the Codex turn fails and says so.
+  Claude Code runs the turn without Smith's tools and Smith reports that it
+  never connected.
+- **A finished turn stops the CLI at once.** Smith stops the CLI and
+  everything it started as soon as the turn has its result, and on
+  interrupt. Hooks the CLI would run after its final message do not run.
+  The CLI also stops if Smith itself exits for any reason, including
+  being killed: Smith starts it under a small supervisor that ends the
+  CLI's whole process group when Smith goes away. A headless run that
+  receives Ctrl-C, `SIGTERM`, or `SIGHUP` cancels its turn and reports
+  the `cancelled` result.
 
 ## Image generation
 

@@ -5,6 +5,12 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Command, Output};
+use std::time::Duration;
+
+// The shared helper also exposes the interactive bridge API to other suites.
+#[allow(dead_code)]
+#[path = "cli_contract/support.rs"]
+mod support;
 
 const FAKE_CONFIG: &str = r#"
 default_profile = "dev"
@@ -122,13 +128,14 @@ max_output_tokens = 4096
     }
 
     fn run_headless(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_smith"))
-            .args(args)
-            .current_dir(self.project.path())
-            .env_clear()
-            .env("HOME", self.home.path())
-            .output()
-            .expect("headless Smith process")
+        support::run_command(
+            Command::new(env!("CARGO_BIN_EXE_smith"))
+                .args(args)
+                .current_dir(self.project.path())
+                .env_clear()
+                .env("HOME", self.home.path()),
+            support::Deadline::after(Duration::from_secs(30)),
+        )
     }
 
     fn run_expect(&self, smith_args: &str, interaction: &str) -> Option<Output> {
@@ -159,7 +166,7 @@ max_output_tokens = 4096
              set result [wait]\n\
              exit [lindex $result 3]\n"
         );
-        Some(
+        Some(support::run_command(
             Command::new("/usr/bin/expect")
                 .args(["-c", &script])
                 .current_dir(self.project.path())
@@ -169,10 +176,9 @@ max_output_tokens = 4096
                 .env("TERM", "xterm-256color")
                 .env("TUI_TEST_BIN", env!("CARGO_BIN_EXE_smith"))
                 .env("ZAI_API_KEY", "test-only-no-network-key")
-                .env("OPENROUTER_API_KEY", "test-only-no-network-key")
-                .output()
-                .expect("expect-driven pseudo-terminal process"),
-        )
+                .env("OPENROUTER_API_KEY", "test-only-no-network-key"),
+            support::Deadline::after(Duration::from_secs(30)),
+        ))
     }
 }
 

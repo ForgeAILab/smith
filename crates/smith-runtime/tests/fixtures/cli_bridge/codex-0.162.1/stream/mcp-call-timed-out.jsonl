@@ -1,0 +1,10 @@
+{"type":"thread.started","thread_id":"01a1379d-538f-7e73-a791-50d8ef3267a9"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Ignoring malformed agent role definition: agent role `explorer` must define a description"}}
+{"type":"item.completed","item":{"id":"item_1","type":"error","message":"Ignoring malformed agent role definition: agent role `explorer` must define a description"}}
+{"type":"item.completed","item":{"id":"item_2","type":"error","message":"clamping SessionEnd hook timeout to 3s in /home/user/.codex/hooks.json"}}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"I\u2019ll call the tool once with `seconds: 25` and report its response exactly."}}
+{"type":"item.started","item":{"id":"item_4","type":"mcp_tool_call","server":"spike","tool":"slow_wait","arguments":{"seconds":25},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_4","type":"mcp_tool_call","server":"spike","tool":"slow_wait","arguments":{"seconds":25},"result":null,"error":{"message":"tool call error: tool call failed for `spike/slow_wait`\n\nCaused by:\n    timed out awaiting tools/call after 4s"},"status":"failed"}}
+{"type":"item.completed","item":{"id":"item_5","type":"agent_message","text":"```text\ntool call error: tool call failed for `spike/slow_wait`\n\nCaused by:\n    timed out awaiting tools/call after 4s\n```"}}
+{"type":"turn.completed","usage":{"input_tokens":99302,"cached_input_tokens":78848,"cache_write_input_tokens":0,"output_tokens":147,"reasoning_output_tokens":0}}

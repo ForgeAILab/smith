@@ -3,6 +3,7 @@
 use std::io::Write;
 use std::time::Duration;
 
+use agent_runtime_core::cancel::CancelReason;
 use agent_runtime_core::content::{Role, UserInput};
 use agent_runtime_core::usage::UsageDelta;
 use anyhow::{Context, Result};
@@ -24,6 +25,7 @@ use super::output::{
     account_output, activation_output, approval_diagnostic, child_session_outputs, outcome,
     recovery_output, terminal_error, write_json, write_text, write_text_projection,
 };
+use super::signals::{StopSignals, StopState, interrupt};
 use super::{HeadlessBrokers, INTERACTION_REQUIRED_EXIT, OUTPUT_SCHEMA_VERSION, Outcome};
 use crate::cli::OutputFormat;
 
@@ -35,6 +37,26 @@ pub(super) async fn run_with_io(
     background_exit: BackgroundExit,
     stdout: &mut impl Write,
     stderr: &mut impl Write,
+) -> Result<Outcome> {
+    let mut signals = StopSignals::new().context("installing headless signal handlers")?;
+    let stop = StopState::default();
+    tokio::select! {
+        biased;
+        _ = signals.watch(host, &stop) => unreachable!("signal watcher runs until exit"),
+        result = run_inner(host, prompt, format, brokers, background_exit, stdout, stderr, &stop) => result,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_inner(
+    host: &HostSession,
+    prompt: String,
+    format: OutputFormat,
+    brokers: HeadlessBrokers<'_>,
+    background_exit: BackgroundExit,
+    stdout: &mut impl Write,
+    stderr: &mut impl Write,
+    stop: &StopState,
 ) -> Result<Outcome> {
     let HeadlessBrokers {
         approval,
@@ -70,6 +92,11 @@ pub(super) async fn run_with_io(
         }
     };
     let turn_id = turn.id().clone();
+    // A signal during history loading may precede admission of this turn.
+    if stop.interrupted() && interrupt(host).is_err() {
+        // A queued turn has a cancellation token before it becomes current.
+        turn.interrupt(CancelReason::UserRequested);
+    }
     let mut fold = HeadlessFold::new(
         turn_id.clone(),
         cache_projection,
@@ -77,7 +104,20 @@ pub(super) async fn run_with_io(
         delivery_cursor_revision(host),
     );
 
-    while let Some(event) = events.next().await {
+    loop {
+        let event = tokio::select! {
+            biased;
+            _ = stop.changed() => {
+                // A root already finished may be waiting only for child
+                // delivery. Shutdown owns stopping that remaining work.
+                if fold.finish.is_some() {
+                    break;
+                }
+                continue;
+            },
+            event = events.next() => event,
+        };
+        let Some(event) = event else { break };
         fold.apply(&event);
 
         if format == OutputFormat::StreamJson
@@ -205,13 +245,17 @@ pub(super) async fn run_with_io(
             fold.last_attempt_error,
         )
     });
-    let (status, exit_code) = outcome(
-        fold.finish.as_ref(),
-        final_goal.as_ref(),
-        approval_required.as_ref(),
-        interaction_required.as_ref(),
-        error.as_ref(),
-    );
+    let (status, exit_code) = if stop.interrupted() {
+        (ResultStatus::Cancelled, 1)
+    } else {
+        outcome(
+            fold.finish.as_ref(),
+            final_goal.as_ref(),
+            approval_required.as_ref(),
+            interaction_required.as_ref(),
+            error.as_ref(),
+        )
+    };
 
     let result = ResultEnvelope {
         schema_version: OUTPUT_SCHEMA_VERSION,
@@ -241,6 +285,11 @@ pub(super) async fn run_with_io(
         reasoning: Some(ReasoningOutput::of(&host.runtime().policy().reasoning)),
         cache: fold.cache,
         resume_capsule,
+        diagnostics: if matches!(fold.finish, Some(TurnFinish::Completed)) {
+            fold.diagnostics
+        } else {
+            Vec::new()
+        },
         error: error.clone(),
     };
 
@@ -402,6 +451,7 @@ pub(super) async fn write_restored_interaction_required(
         reasoning: Some(ReasoningOutput::of(&host.runtime().policy().reasoning)),
         cache,
         resume_capsule,
+        diagnostics: Vec::new(),
         error: shutdown_error,
     };
 
@@ -486,6 +536,7 @@ pub(super) async fn write_submission_failure(
         reasoning: Some(ReasoningOutput::of(&host.runtime().policy().reasoning)),
         cache,
         resume_capsule,
+        diagnostics: Vec::new(),
         error: Some(error.clone()),
     };
 

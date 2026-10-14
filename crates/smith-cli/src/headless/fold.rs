@@ -25,6 +25,7 @@ pub(super) struct HeadlessFold {
     pub(super) turn_usage: UsageDelta,
     pub(super) cache: Option<CacheOutput>,
     pub(super) last_error: Option<String>,
+    pub(super) diagnostics: Vec<String>,
     pub(super) last_attempt_error: Option<String>,
     pub(super) last_sequence: Option<u64>,
     pub(super) sequence_error: Option<String>,
@@ -55,6 +56,7 @@ impl HeadlessFold {
             turn_usage: UsageDelta::new(),
             cache: None,
             last_error: None,
+            diagnostics: Vec::new(),
             last_attempt_error: None,
             last_sequence: None,
             sequence_error: None,
@@ -136,7 +138,11 @@ impl HeadlessFold {
                         notice: None,
                     });
                 }
-                RuntimeEvent::Error { error } => self.last_error = Some(error.to_string()),
+                RuntimeEvent::Error { error } => {
+                    let message = error.to_string();
+                    self.diagnostics.push(message.clone());
+                    self.last_error = Some(message);
+                }
                 // An attempt that ended in an error reports its own cause
                 // even when the retry loop then spends the attempt budget
                 // without a terminal error event; it is the only account of

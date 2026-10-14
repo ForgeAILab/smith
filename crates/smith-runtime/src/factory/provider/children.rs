@@ -101,6 +101,8 @@ pub(in crate::factory) async fn prepare_child_profile_routes(
     let mut routes = BTreeMap::new();
     for child in &request.child_profiles {
         let mut route_request = RuntimeRequest::new(child.config.clone(), HostSurface::Child);
+        // Child harnesses use the same host-owned Smith binary as the root.
+        route_request.smith_executable = request.smith_executable.clone();
         route_request.project_instructions = project_instructions.cloned();
         route_request.modules = super::super::modules::for_config(&request.modules, &child.config);
         route_request.workspace = request.workspace.clone();
@@ -202,7 +204,10 @@ pub(in crate::factory) async fn prepare_child_profile_routes(
         // here: one uninstallable child profile must not stop a session that
         // may never spawn it, and the route reports the real reason if it is
         // ever spawned.
-        let execution = crate::cli_agent::turn_execution(&route_request.config);
+        let execution = crate::cli_agent::turn_execution(
+            &route_request.config,
+            route_request.smith_executable.as_deref(),
+        );
         let route_key =
             crate::delegation::profile_route_key(&agent_profile.name, &agent_profile.revision);
         let replaced = routes.insert(

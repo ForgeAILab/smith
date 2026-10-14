@@ -2,7 +2,7 @@
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 use std::thread;
 use std::time::Duration;
 
@@ -22,7 +22,7 @@ max_input_tokens = 124000
 max_output_tokens = 4096
 "#;
 
-struct Fixture {
+pub(crate) struct Fixture {
     home: tempfile::TempDir,
     project: tempfile::TempDir,
 }
@@ -72,7 +72,10 @@ impl Fixture {
     }
 
     fn run(&self, args: &[&str]) -> Output {
-        self.command().args(args).output().expect("smith ran")
+        support::run_command(
+            self.command().args(args),
+            support::Deadline::after(Duration::from_secs(30)),
+        )
     }
 }
 
@@ -408,19 +411,15 @@ fn configured_interactive_launch_without_a_terminal_refuses_before_provider_or_s
         ),
     );
     let fixture = Fixture::with_config(&config);
-    let mut child = fixture
-        .command()
-        .env("ACME_API_KEY", "fixture-key")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("smith spawned");
-    let write = child.stdin.take().expect("piped stdin").write_all(b"hi\n");
-    if let Err(error) = write {
+    let mut child = support::Process::spawn(
+        fixture.command().env("ACME_API_KEY", "fixture-key"),
+        support::Deadline::after(Duration::from_secs(30)),
+    );
+    if let Err(error) = child.write_stdin(b"hi\n", "interactive input") {
         assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe, "{error}");
     }
-    let output = child.wait_with_output().expect("smith completed");
+    child.close_stdin();
+    let output = child.finish(None);
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert!(output.stdout.is_empty(), "{output:?}");
     let diagnostic = String::from_utf8(output.stderr).expect("UTF-8 diagnostic");
@@ -534,24 +533,17 @@ fn stream_json_is_json_lines_with_a_terminal_result_after_shutdown() {
 #[test]
 fn stdin_prompt_keeps_machine_stdout_clean() {
     let fixture = Fixture::new();
-    let mut child = fixture
-        .command()
-        .args(["-p", "-", "--output-format", "json"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("smith spawned");
-    {
-        use std::io::Write;
-        child
-            .stdin
-            .take()
-            .expect("stdin")
-            .write_all(b"hello from stdin")
-            .expect("prompt written");
-    }
-    let output = child.wait_with_output().expect("smith completed");
+    let mut child = support::Process::spawn(
+        fixture
+            .command()
+            .args(["-p", "-", "--output-format", "json"]),
+        support::Deadline::after(Duration::from_secs(30)),
+    );
+    child
+        .write_stdin(b"hello from stdin", "stdin prompt")
+        .expect("prompt written");
+    child.close_stdin();
+    let output = child.finish(None);
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
     assert_eq!(json(&output)["status"], "ok");
@@ -676,21 +668,22 @@ fn an_invocation_effort_overrides_a_profiles_effort_all_the_way_to_the_wire() {
     let server = thread::spawn(move || serve_one_openai_request(listener));
     let fixture = Fixture::with_config(&effort_ladder_config(address));
 
-    let output = fixture
-        .command()
-        .args([
-            "-p",
-            "hello",
-            "--profile",
-            "prod",
-            "--effort",
-            "high",
-            "--output-format",
-            "json",
-        ])
-        .env("ACME_API_KEY", "sk-effort-contract")
-        .output()
-        .expect("smith ran");
+    let output = support::run_command(
+        fixture
+            .command()
+            .args([
+                "-p",
+                "hello",
+                "--profile",
+                "prod",
+                "--effort",
+                "high",
+                "--output-format",
+                "json",
+            ])
+            .env("ACME_API_KEY", "sk-effort-contract"),
+        support::Deadline::after(Duration::from_secs(30)),
+    );
     let request = String::from_utf8_lossy(&server.join().expect("provider server")).into_owned();
 
     assert!(
@@ -720,12 +713,13 @@ fn without_the_flag_the_profiles_effort_is_unchanged() {
     let server = thread::spawn(move || serve_one_openai_request(listener));
     let fixture = Fixture::with_config(&effort_ladder_config(address));
 
-    let output = fixture
-        .command()
-        .args(["-p", "hello", "--output-format", "json"])
-        .env("ACME_API_KEY", "sk-effort-contract")
-        .output()
-        .expect("smith ran");
+    let output = support::run_command(
+        fixture
+            .command()
+            .args(["-p", "hello", "--output-format", "json"])
+            .env("ACME_API_KEY", "sk-effort-contract"),
+        support::Deadline::after(Duration::from_secs(30)),
+    );
     let request = String::from_utf8_lossy(&server.join().expect("provider server")).into_owned();
 
     assert!(
@@ -947,12 +941,13 @@ max_output_tokens = 4096
 "#
     );
     let fixture = Fixture::with_config(&config);
-    let output = fixture
-        .command()
-        .args(["-p", "hello", "--output-format", "json"])
-        .env("ACME_API_KEY", KEY)
-        .output()
-        .expect("smith ran");
+    let output = support::run_command(
+        fixture
+            .command()
+            .args(["-p", "hello", "--output-format", "json"])
+            .env("ACME_API_KEY", KEY),
+        support::Deadline::after(Duration::from_secs(30)),
+    );
     let request = server.join().expect("provider server");
 
     assert!(
@@ -1037,3 +1032,51 @@ max_output_tokens = 4096
 
 #[path = "cli_contract/plugins.rs"]
 mod plugins;
+
+#[cfg(unix)]
+#[path = "cli_contract/mcp_relay.rs"]
+mod mcp_relay;
+
+#[path = "cli_contract/support.rs"]
+mod support;
+
+#[cfg(unix)]
+#[path = "cli_contract/stand_in.rs"]
+mod stand_in;
+
+#[cfg(unix)]
+#[path = "cli_contract/bridge.rs"]
+mod bridge;
+
+#[cfg(unix)]
+#[path = "cli_contract/bridge_advisor.rs"]
+mod bridge_advisor;
+#[cfg(unix)]
+#[path = "cli_contract/bridge_agents.rs"]
+mod bridge_agents;
+#[cfg(unix)]
+#[path = "cli_contract/bridge_extensions.rs"]
+mod bridge_extensions;
+#[cfg(unix)]
+#[path = "cli_contract/bridge_failures.rs"]
+mod bridge_failures;
+#[cfg(unix)]
+#[path = "cli_contract/bridge_outputs.rs"]
+mod bridge_outputs;
+#[cfg(unix)]
+#[path = "cli_contract/bridge_persistence.rs"]
+mod bridge_persistence;
+#[cfg(unix)]
+#[path = "cli_contract/bridge_skills.rs"]
+mod bridge_skills;
+#[cfg(unix)]
+#[path = "cli_contract/bridge_surfaces.rs"]
+mod bridge_surfaces;
+
+#[cfg(unix)]
+#[path = "cli_contract/harness_supervise.rs"]
+mod harness_supervise;
+
+#[cfg(unix)]
+#[path = "cli_contract/bridge_approvals.rs"]
+mod bridge_approvals;

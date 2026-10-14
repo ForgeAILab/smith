@@ -32,6 +32,7 @@ globset = { workspace = true }
 keyring = { workspace = true }
 fs2 = { workspace = true }
 reqwest = { workspace = true }
+rmcp = { workspace = true }
 rustix = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -47,6 +48,7 @@ zeroize = { workspace = true }
 nix = { version = "0.31", default-features = false, features = ["signal"] }
 
 [dev-dependencies]
+rmcp = { workspace = true, features = ["client"] }
 smith-wasm-host = { workspace = true }
 smith-module-image-generation = { workspace = true }
 smith-module-budget-notice = { workspace = true }

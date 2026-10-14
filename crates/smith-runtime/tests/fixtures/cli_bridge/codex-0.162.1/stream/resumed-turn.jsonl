@@ -1,0 +1,10 @@
+{"type":"thread.started","thread_id":"01a1379d-5385-7600-bb84-58af570e3d0c"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Ignoring malformed agent role definition: agent role `explorer` must define a description"}}
+{"type":"item.completed","item":{"id":"item_1","type":"error","message":"Ignoring malformed agent role definition: agent role `explorer` must define a description"}}
+{"type":"item.completed","item":{"id":"item_2","type":"error","message":"clamping SessionEnd hook timeout to 3s in /home/user/.codex/hooks.json"}}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"I\u2019ll check the current spike instructions and call `fast_echo` with `two`."}}
+{"type":"item.started","item":{"id":"item_4","type":"mcp_tool_call","server":"spike","tool":"fast_echo","arguments":{"text":"two"},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_4","type":"mcp_tool_call","server":"spike","tool":"fast_echo","arguments":{"text":"two"},"result":{"content":[{"type":"text","text":"ECHO:two"}],"structured_content":null},"error":null,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_5","type":"agent_message","text":"The current marker word is `MANGO-2`.\n\n`fast_echo` returned `ECHO:two`."}}
+{"type":"turn.completed","usage":{"input_tokens":200929,"cached_input_tokens":179456,"cache_write_input_tokens":0,"output_tokens":226,"reasoning_output_tokens":0}}

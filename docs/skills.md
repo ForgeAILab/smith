@@ -97,6 +97,19 @@ project's trust.
 project-relative path and the content digest, records the decision, and the
 session picks the skill up at the next idle boundary without restarting.
 
+### Skills on an installed coding agent
+
+When a turn runs on an installed CLI (`cli/claude-code/...`,
+`cli/codex/...`), the CLI owns its context and Smith cannot place a skill's
+body in it. The CLI finds skills with `registry.search` and activates one
+with `registry.activate`, both offered as tools of the `smith` MCP server,
+and the activation result carries the instruction text. Trust and content
+pinning are unchanged: an untrusted or edited skill fails activation with
+the same error and returns no text. The discovery tools are offered only
+when the session is authorized for at least one skill. Smith's built-in
+reference skills count, so a default session always has them; deny
+`skill:*` on the profile to leave them out.
+
 ## File commands
 
 A file command is a Markdown prompt template that you invoke by name. Smith

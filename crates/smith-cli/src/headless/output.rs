@@ -93,6 +93,10 @@ pub(super) struct ResultEnvelope {
     pub(super) resume_capsule: Option<smith_runtime::resume_capsule::RedactedResumeCapsule>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) error: Option<String>,
+    /// Runtime errors in a successfully completed turn are diagnostics, not
+    /// terminal failures. Empty runs retain their existing result shape.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) diagnostics: Vec<String>,
 }
 
 /// Redaction-safe projection of the run's reasoning selection.
@@ -642,7 +646,7 @@ pub(super) fn write_text_projection(
     writer: &mut impl Write,
     result: &ResultEnvelope,
 ) -> Result<()> {
-    let mut lines = Vec::new();
+    let mut lines = result.diagnostics.clone();
     if let Some(parent_state) = result.lifecycle.parent_state {
         lines.push(format!("parent: {parent_state}"));
     }

@@ -1,0 +1,10 @@
+{"type":"runtime_event","event":{"payload":{"event":"turn_started"}}}
+{"type":"runtime_event","event":{"payload":{"event":"external_session_started","session":"cli-session"}}}
+{"type":"runtime_event","event":{"payload":{"event":"external_text","text":"before"}}}
+{"type":"runtime_event","event":{"payload":{"event":"external_tool_invoked","id":"cli-call","name":"Bash","detail":{"command":"echo hi-from-bash","description":"own_tool"}}}}
+{"type":"runtime_event","event":{"payload":{"event":"external_tool_completed","id":"cli-call","ok":true,"detail":"hi-from-bash"}}}
+{"type":"runtime_event","event":{"payload":{"event":"tool_call_requested","call":"smith-call","name":"agent","argument_keys":["action"],"argument_fingerprint":"<FINGERPRINT>"}}}
+{"type":"runtime_event","event":{"payload":{"event":"tool_call_completed","call":"smith-call","name":"agent","is_error":false}}}
+{"type":"runtime_event","event":{"payload":{"event":"external_text","text":"after"}}}
+{"type":"runtime_event","event":{"payload":{"event":"turn_completed","finish":{"outcome":"completed"}}}}
+{"type":"result","status":"ok","output":"after"}

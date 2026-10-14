@@ -27,6 +27,8 @@ rompt-cache miss notices". cache.miss_notices.
 tion "Providers, credentials, and models". [models] declaration.
   smith.configuration.runtime-connections · active · Smith configuration reference, section "Runtime
  connections". actions.
+  smith.configuration.smith-s-tools-on-installed-coding-agents · active · Smith configuration refere
+nce, section "Smith's tools on installed coding agents". [harness.<kind>] allow_own_tools.
   smith.headless · active · Outline of the Smith headless protocol reference for smith -p: input mod
 es, text, json, and stream-json output formats, event framing, exit behavior, and resuming sessions
 non-interactively. Activate before scripting or integrating smith -p, then activate the section it n
@@ -74,6 +76,9 @@ section "Authorization and tool execution". All executable tools pass through Ag
 l executor.
   smith.security.credentials-and-secret-handling · active · Smith security threat model reference, s
 ection "Credentials and secret handling". references.
+  smith.security.installed-coding-agents-and-the-capability-bridge · active · Smith security threat
+model reference, section "Installed coding agents and the capability bridge". kinds of tool activity
+, and Smith vouches for only one.
   smith.security.persistence-and-recovery-attacks · active · Smith security threat model reference,
 section "Persistence and recovery attacks". conversation content.
   smith.security.provider-and-prompt-injection-risks · active · Smith security threat model referenc
@@ -93,11 +98,6 @@ aries
 not loaded
   broken · it does not start with a --- frontmatter block declaring a description · <HOME>/.smit
 h/skills/broken/SKILL.md
-
-
-
-
-
 
 
 

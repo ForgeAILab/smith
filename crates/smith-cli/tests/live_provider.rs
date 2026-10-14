@@ -3,11 +3,14 @@
 //! This test is ignored by default because it performs network I/O and spends
 //! provider quota. See the Smith README for the required environment.
 
-use std::process::Stdio;
+use std::process::Command;
 use std::time::Duration;
 
 use serde_json::Value;
-use tokio::process::Command;
+// Only process capture is used here; the helper also serves bridge contracts.
+#[allow(dead_code)]
+#[path = "cli_contract/support.rs"]
+mod support;
 
 const API_KEY_ENV: &str = "SMITH_LIVE_API_KEY";
 const CHILD_API_KEY_ENV: &str = "AGENT_RUNTIME_LIVE_API_KEY";
@@ -116,20 +119,14 @@ tool_output_limit_bytes = 16384
     let prompt = "Use the read tool to inspect live-proof.txt, then tell me in one concise sentence \
          what value the file contains.";
     let mut command = Command::new(env!("CARGO_BIN_EXE_smith"));
-    command
-        .current_dir(project.path())
-        .args([
-            "-p",
-            prompt,
-            "--output-format",
-            "stream-json",
-            "--approval",
-            "allow-all",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
+    command.current_dir(project.path()).args([
+        "-p",
+        prompt,
+        "--output-format",
+        "stream-json",
+        "--approval",
+        "allow-all",
+    ]);
     for (name, _) in
         std::env::vars_os().filter(|(name, _)| name.to_string_lossy().starts_with("SMITH_"))
     {
@@ -139,11 +136,11 @@ tool_output_limit_bytes = 16384
         .env(CHILD_API_KEY_ENV, &live.api_key)
         .env("SMITH_PERSISTENCE_ENABLED", "false");
 
-    let child = command.spawn().expect("the Smith live process started");
-    let output = tokio::time::timeout(PROCESS_TIMEOUT, child.wait_with_output())
-        .await
-        .expect("the Smith live process exceeded its 150-second outer deadline")
-        .expect("the Smith live process completed");
+    let output = tokio::task::spawn_blocking(move || {
+        support::run_command(&mut command, support::Deadline::after(PROCESS_TIMEOUT))
+    })
+    .await
+    .expect("bounded Smith live process capture");
 
     let stdout = String::from_utf8(output.stdout).expect("live stdout was UTF-8 JSON Lines");
     let stderr = String::from_utf8(output.stderr).expect("live stderr was UTF-8");

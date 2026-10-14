@@ -544,7 +544,9 @@ impl ChildRuntimeFactory for SmithChildFactory {
             .turn_commit_hook(todo_component)
             .clock(self.clock.clone());
         if let Some(backend) = external_agent {
-            builder = builder.external_agent(backend);
+            builder = builder
+                .external_agent(backend)
+                .external_excluded_tools(crate::cli_bridge::excluded_tool_names());
         }
         if let Some(identity) = route.cache_endpoint_identity.as_ref() {
             builder = builder.cache_endpoint_identity(identity.clone());

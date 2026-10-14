@@ -1,0 +1,4 @@
+stdout:
+answer
+stderr:
+smith: Config: Claude Code did not load Smith's tools for this turn

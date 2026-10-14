@@ -201,6 +201,12 @@ post-response limit, so reported usage may overshoot it by one request.
 
 It reports prior process-owned work and never claims that it restarted.
 
+`diagnostics` is omitted when empty. It is an array of bounded strings for
+problems that did not stop the turn, such as an installed coding agent that
+never connected to the tools Smith offered it. A turn that reports
+diagnostics still has `status: "ok"`. Text mode writes each one to stderr
+with the `smith:` prefix.
+
 ## Smith client protocol and stream envelopes
 
 Presentation surfaces consume Smith client protocol v1; the minimum supported
@@ -303,6 +309,11 @@ An approval-required payload contains only redaction-safe prepared evidence:
 Argument values, edit bodies, commands, credentials, and tool output are not
 included. The call is denied/fails closed unless the process was launched with
 an explicit trusted automation policy such as `--approval allow-all`.
+
+A run that receives `SIGINT`, `SIGTERM`, or `SIGHUP` cancels its turn, lets
+the normal shutdown save the session, and ends with the `cancelled` result
+and exit status 1. A second signal exits at once with status 1 and no
+result.
 
 An interaction-required payload contains `request_id` and `question_count`
 only. Prompt text, choices, staged answers, and sensitive content remain in the

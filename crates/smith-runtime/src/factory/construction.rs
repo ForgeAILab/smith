@@ -377,7 +377,8 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
     // is still resolved and still supplies model identity and the limits the
     // runtime enforces before any work runs; it is simply never called to
     // produce a turn.
-    let execution = crate::cli_agent::turn_execution(&request.config);
+    let execution =
+        crate::cli_agent::turn_execution(&request.config, request.smith_executable.as_deref());
     if let crate::cli_agent::TurnExecution::MissingProgram {
         model,
         kind,
@@ -442,7 +443,9 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
     // A harness replaces how a turn is executed, leaving every other piece of
     // the composition above in place.
     if let crate::cli_agent::TurnExecution::InstalledAgent(plan) = &execution {
-        builder = builder.external_agent(plan.backend(PathBuf::from(workspace.root()), true));
+        builder = builder
+            .external_agent(plan.backend(PathBuf::from(workspace.root()), true))
+            .external_excluded_tools(crate::cli_bridge::excluded_tool_names());
     }
     if let Some(identity) = cache_endpoint_identity.as_ref() {
         builder = builder.cache_endpoint_identity(identity.clone());
