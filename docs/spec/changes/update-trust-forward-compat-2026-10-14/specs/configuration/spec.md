@@ -46,6 +46,14 @@ malformed file MUST still fail loudly.
 - **THEN** the persisted file holds exactly one record for that kind and label
 - **AND** that record is the new decision
 
+#### Scenario: Forgetting an artifact removes records that are not understood
+
+- **GIVEN** a trust file holding a record of a known kind and label that this
+  Smith does not understand
+- **WHEN** the user forgets the artifact with that kind and label
+- **THEN** the persisted file holds no record for that kind and label
+- **AND** records for other kinds and labels are unchanged
+
 #### Scenario: Version mismatch is still refused
 
 - **GIVEN** a trust file whose `version` is not one this Smith supports

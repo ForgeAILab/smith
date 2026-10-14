@@ -373,7 +373,40 @@ pub struct TrustRecord {
 struct TrustFile {
     version: u32,
     #[serde(default)]
-    projects: BTreeMap<String, Vec<TrustRecord>>,
+    projects: BTreeMap<String, Vec<serde_json::Value>>,
+}
+
+/// Raw records retain fields a newer Smith understands, while the typed
+/// decisions alone can authorize execution and be exposed to callers.
+#[derive(Debug, Default, Clone)]
+struct ProjectTrust {
+    raw: Vec<serde_json::Value>,
+    understood: Vec<TrustRecord>,
+}
+
+impl ProjectTrust {
+    fn from_raw(raw: Vec<serde_json::Value>) -> Self {
+        let understood = raw
+            .iter()
+            .filter_map(|value| serde_json::from_value(value.clone()).ok())
+            .collect();
+        Self { raw, understood }
+    }
+
+    /// Matching the persisted name also removes decisions this Smith cannot
+    /// parse, so replacing or forgetting an artifact leaves no stale record.
+    fn remove(&mut self, kind: ExecutableKind, label: &str) -> Result<(), RuntimeError> {
+        let persisted_kind = serde_json::to_value(kind).map_err(|err| {
+            RuntimeError::config(format!("trust decisions cannot be written: {err}"))
+        })?;
+        self.raw.retain(|record| {
+            record.get("kind") != Some(&persisted_kind)
+                || record.get("label").and_then(serde_json::Value::as_str) != Some(label)
+        });
+        self.understood
+            .retain(|record| record.kind != kind || record.label != label);
+        Ok(())
+    }
 }
 
 /// Every executable-trust decision the user has made.
@@ -383,7 +416,7 @@ struct TrustFile {
 #[derive(Debug, Clone)]
 pub struct TrustStore {
     path: PathBuf,
-    projects: BTreeMap<String, Vec<TrustRecord>>,
+    projects: BTreeMap<String, ProjectTrust>,
 }
 
 impl TrustStore {
@@ -394,9 +427,11 @@ impl TrustStore {
     ///
     /// # Errors
     ///
-    /// Fails when a trust file exists but cannot be read or understood. That is
+    /// Fails when a trust file exists but cannot be read or is malformed. That is
     /// deliberately loud: silently continuing with an empty store would either
     /// re-prompt for everything or, worse, look like a fresh machine.
+    /// Records from a newer Smith are preserved but authorize nothing unless
+    /// this Smith understands them.
     pub fn open(root: impl Into<PathBuf>) -> Result<Self, RuntimeError> {
         let path = root.into().join(FILE_NAME);
         let projects = match fs::read(&path) {
@@ -421,7 +456,29 @@ impl TrustStore {
                         file.version
                     )));
                 }
-                file.projects
+                let mut projects = BTreeMap::new();
+                for (key, raw) in file.projects {
+                    for record in &raw {
+                        if !record.is_object()
+                            || record
+                                .get("kind")
+                                .and_then(serde_json::Value::as_str)
+                                .is_none()
+                            || record
+                                .get("label")
+                                .and_then(serde_json::Value::as_str)
+                                .is_none()
+                        {
+                            return Err(RuntimeError::config(format!(
+                                "the trust file `{}` is not readable as trust decisions: \
+                                 a record must be an object with string kind and label fields",
+                                path.display()
+                            )));
+                        }
+                    }
+                    projects.insert(key, ProjectTrust::from_raw(raw));
+                }
+                projects
             }
         };
 
@@ -459,7 +516,7 @@ impl TrustStore {
         let Some(record) = self
             .projects
             .get(&key)
-            .and_then(|records| find(records, executable))
+            .and_then(|records| find(&records.understood, executable))
         else {
             return Ok(TrustStatus::Untrusted);
         };
@@ -494,18 +551,17 @@ impl TrustStore {
             digest: executable.digest.clone(),
             decision,
         };
+        let raw = serde_json::to_value(&record).map_err(|err| {
+            RuntimeError::config(format!("trust decisions cannot be written: {err}"))
+        })?;
         let records = self.projects.entry(key).or_default();
-        match records
-            .iter_mut()
-            .find(|existing| existing.kind == record.kind && existing.label == record.label)
-        {
-            Some(existing) => *existing = record,
-            None => records.push(record),
-        }
+        records.remove(record.kind, &record.label)?;
+        records.raw.push(raw);
+        records.understood.push(record);
         self.persist()
     }
 
-    /// Every decision recorded for `project`.
+    /// Every decision this Smith understands for `project`.
     ///
     /// # Errors
     ///
@@ -515,7 +571,7 @@ impl TrustStore {
         Ok(self
             .projects
             .get(&key)
-            .map_or(&[][..], |records| records.as_slice()))
+            .map_or(&[][..], |records| records.understood.as_slice()))
     }
 
     /// Forgets every decision recorded for `project`, so the next run asks
@@ -544,8 +600,8 @@ impl TrustStore {
     ) -> Result<(), RuntimeError> {
         let key = project_key(project)?;
         if let Some(records) = self.projects.get_mut(&key) {
-            records.retain(|record| record.kind != kind || record.label != label);
-            if records.is_empty() {
+            records.remove(kind, label)?;
+            if records.raw.is_empty() {
                 self.projects.remove(&key);
             }
         }
@@ -559,7 +615,11 @@ impl TrustStore {
     fn persist(&self) -> Result<(), RuntimeError> {
         let file = TrustFile {
             version: SCHEMA_VERSION,
-            projects: self.projects.clone(),
+            projects: self
+                .projects
+                .iter()
+                .map(|(key, records)| (key.clone(), records.raw.clone()))
+                .collect(),
         };
         let body = serde_json::to_vec_pretty(&file).map_err(|err| {
             RuntimeError::config(format!("trust decisions cannot be written: {err}"))
@@ -668,6 +728,397 @@ mod tests {
         let state = tempfile::tempdir().expect("a state root");
         let store = TrustStore::open(state.path()).expect("an empty store");
         (project, state, store)
+    }
+
+    fn write_trust_fixture(project: &Path, state: &Path, fixture: &str) {
+        let key = serde_json::to_string(&project_key(project).expect("a project key"))
+            .expect("a JSON key");
+        fs::write(
+            state.join("trust.json"),
+            fixture.replace(r#""PROJECT""#, &key),
+        )
+        .expect("the trust file");
+    }
+
+    fn read_trust_file(state: &Path) -> serde_json::Value {
+        serde_json::from_slice(&fs::read(state.join("trust.json")).expect("the trust file"))
+            .expect("a JSON trust file")
+    }
+
+    #[test]
+    fn a_trust_file_with_an_unknown_kind_keeps_the_known_decision() {
+        let (project, state, _store) = project();
+        let fixture = r#"{
+            "version": 1,
+            "projects": {
+                "PROJECT": [
+                    {
+                        "kind": "future_kind", "label": ".smith/commands/review.md",
+                        "digest": "d0f6dd9ed43f03abc6178e4dc5b9b89d7e88842c991f0196352850cba730a865",
+                        "decision": "allow"
+                    },
+                    {
+                        "kind": "hook", "label": ".smith/commands/review.md",
+                        "digest": "d0f6dd9ed43f03abc6178e4dc5b9b89d7e88842c991f0196352850cba730a865",
+                        "decision": "deny"
+                    }
+                ]
+            }
+        }"#;
+        write_trust_fixture(project.path(), state.path(), fixture);
+
+        let store = TrustStore::open(state.path()).expect("the store with a newer kind");
+        let executable = Executable::from_file(
+            project.path(),
+            ExecutableKind::Hook,
+            &project.path().join(".smith/commands/review.md"),
+        )
+        .expect("project content");
+        assert_eq!(
+            store.status(project.path(), &executable).expect("a status"),
+            TrustStatus::Denied
+        );
+        let records = store.records(project.path()).expect("understood decisions");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].kind, ExecutableKind::Hook);
+        assert_eq!(records[0].decision, TrustDecision::Deny);
+    }
+
+    #[test]
+    fn an_unknown_kind_cannot_authorize_any_known_kind() {
+        let (project, state, _store) = project();
+        let fixture = r#"{
+            "version": 1,
+            "projects": {
+                "PROJECT": [{
+                    "kind": "future_kind", "label": ".smith/commands/review.md",
+                    "digest": "d0f6dd9ed43f03abc6178e4dc5b9b89d7e88842c991f0196352850cba730a865",
+                    "decision": "allow"
+                }]
+            }
+        }"#;
+        write_trust_fixture(project.path(), state.path(), fixture);
+        let store = TrustStore::open(state.path()).expect("the store with a newer kind");
+        assert!(store.records(project.path()).expect("decisions").is_empty());
+
+        for kind in [
+            ExecutableKind::Extension,
+            ExecutableKind::Hook,
+            ExecutableKind::CredentialHelper,
+            ExecutableKind::ShellSetting,
+            ExecutableKind::McpServer,
+            ExecutableKind::Skill,
+            ExecutableKind::SlashCommand,
+        ] {
+            let executable = Executable::from_file(
+                project.path(),
+                kind,
+                &project.path().join(".smith/commands/review.md"),
+            )
+            .expect("project content");
+            assert_eq!(
+                store.status(project.path(), &executable).expect("a status"),
+                TrustStatus::Untrusted,
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn records_with_unknown_decisions_or_invalid_fields_leave_artifacts_untrusted() {
+        let (project, state, _store) = project();
+        let fixture = r#"{
+            "version": 1,
+            "projects": {
+                "PROJECT": [
+                    {"kind": "hook", "label": "unknown", "digest": "old", "decision": "allow_once"},
+                    {"kind": "hook", "label": "missing_digest", "decision": "allow"},
+                    {"kind": "hook", "label": "mistyped_digest", "digest": 42, "decision": "deny"},
+                    {"kind": "hook", "label": "missing_decision", "digest": "old"},
+                    {"kind": "hook", "label": "mistyped_decision", "digest": "old", "decision": true}
+                ]
+            }
+        }"#;
+        write_trust_fixture(project.path(), state.path(), fixture);
+        let store = TrustStore::open(state.path()).expect("the store with unparsed decisions");
+        assert!(store.records(project.path()).expect("decisions").is_empty());
+
+        for label in [
+            "unknown",
+            "missing_digest",
+            "mistyped_digest",
+            "missing_decision",
+            "mistyped_decision",
+        ] {
+            for digest in [ContentDigest("old".into()), ContentDigest::of(b"new")] {
+                let executable = Executable::new(ExecutableKind::Hook, label, digest);
+                assert_eq!(
+                    store.status(project.path(), &executable).expect("a status"),
+                    TrustStatus::Untrusted,
+                    "{label}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn recording_an_unrelated_decision_preserves_every_existing_field_and_value() {
+        let (project, state, _store) = project();
+        let fixture = r#"{
+            "version": 1,
+            "projects": {
+                "PROJECT": [
+                    {
+                        "kind": "future_kind", "label": "future",
+                        "digest": "future_digest", "decision": "allow",
+                        "extra": {"flags": [true, null, 3], "text": "preserve me"}
+                    },
+                    {
+                        "kind": "slash_command", "label": ".smith/commands/review.md",
+                        "digest": "d0f6dd9ed43f03abc6178e4dc5b9b89d7e88842c991f0196352850cba730a865",
+                        "decision": "allow", "extra": ["known", {"future": false}]
+                    },
+                    {"kind": "hook", "label": "unknown_decision", "digest": "old", "decision": "allow_once"},
+                    {"kind": "hook", "label": "missing_digest", "decision": "allow", "extra": 7}
+                ]
+            }
+        }"#;
+        write_trust_fixture(project.path(), state.path(), fixture);
+        let before = read_trust_file(state.path());
+        let mut store = TrustStore::open(state.path()).expect("the mixed store");
+        let path = project.path().join(".smith/commands/review.md");
+        let command = Executable::from_file(project.path(), ExecutableKind::SlashCommand, &path)
+            .expect("project content");
+        assert_eq!(store.records(project.path()).expect("decisions").len(), 1);
+        assert_eq!(
+            store.status(project.path(), &command).expect("a status"),
+            TrustStatus::Trusted
+        );
+        let hook = Executable::from_file(project.path(), ExecutableKind::Hook, &path)
+            .expect("project content");
+        store
+            .record(project.path(), &hook, TrustDecision::Deny)
+            .expect("recorded");
+
+        let after = read_trust_file(state.path());
+        let key = project_key(project.path()).expect("a project key");
+        let original = before["projects"][&key]
+            .as_array()
+            .expect("original records");
+        let persisted = after["projects"][&key]
+            .as_array()
+            .expect("persisted records");
+        assert_eq!(persisted.len(), original.len() + 1);
+        assert_eq!(&persisted[..original.len()], original.as_slice());
+        let reopened = TrustStore::open(state.path()).expect("the persisted store");
+        assert_eq!(
+            reopened.records(project.path()).expect("decisions").len(),
+            2
+        );
+        assert_eq!(
+            reopened.status(project.path(), &command).expect("a status"),
+            TrustStatus::Trusted
+        );
+        assert_eq!(
+            reopened.status(project.path(), &hook).expect("a status"),
+            TrustStatus::Denied
+        );
+    }
+
+    #[test]
+    fn recording_a_decision_replaces_all_records_with_its_persisted_kind_and_label() {
+        let (project, state, _store) = project();
+        for fixture in [
+            r#"{
+                "version": 1,
+                "projects": {
+                    "PROJECT": [{
+                        "kind": "slash_command", "label": ".smith/commands/review.md",
+                        "digest": "old", "decision": "allow_once", "extra": true
+                    }]
+                }
+            }"#,
+            r#"{
+                "version": 1,
+                "projects": {
+                    "PROJECT": [
+                        {"kind": "slash_command", "label": ".smith/commands/review.md", "digest": "old", "decision": "allow_once", "extra": true},
+                        {"kind": "slash_command", "label": ".smith/commands/review.md", "digest": "old", "decision": "allow", "extra": false}
+                    ]
+                }
+            }"#,
+        ] {
+            write_trust_fixture(project.path(), state.path(), fixture);
+            let mut store =
+                TrustStore::open(state.path()).expect("the store with an unknown decision");
+            let command = Executable::from_file(
+                project.path(),
+                ExecutableKind::SlashCommand,
+                &project.path().join(".smith/commands/review.md"),
+            )
+            .expect("project content");
+            store
+                .record(project.path(), &command, TrustDecision::Deny)
+                .expect("replaced");
+
+            let expected = TrustRecord {
+                kind: command.kind(),
+                label: command.label().into(),
+                digest: command.digest().clone(),
+                decision: TrustDecision::Deny,
+            };
+            assert_eq!(
+                store.records(project.path()).expect("decisions"),
+                std::slice::from_ref(&expected)
+            );
+            let persisted = read_trust_file(state.path());
+            let key = project_key(project.path()).expect("a project key");
+            assert_eq!(
+                persisted["projects"][&key].as_array().expect("records"),
+                &[serde_json::to_value(expected).expect("a serialized decision")]
+            );
+            let reopened = TrustStore::open(state.path()).expect("the replaced store");
+            assert_eq!(
+                reopened.records(project.path()).expect("decisions").len(),
+                1
+            );
+            assert_eq!(
+                reopened.status(project.path(), &command).expect("a status"),
+                TrustStatus::Denied
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_trust_files_still_fail_loudly() {
+        let (project, state, _store) = project();
+        for fixture in [
+            r#"{"version":1,"projects":{"PROJECT":[null]}}"#,
+            r#"{"version":1,"projects":{"PROJECT":[[]]}}"#,
+            r#"{"version":1,"projects":{"PROJECT":["record"]}}"#,
+            r#"{"version":1,"projects":{"PROJECT":[{"label":"hook"}]}}"#,
+            r#"{"version":1,"projects":{"PROJECT":[{"kind":42,"label":"hook"}]}}"#,
+            r#"{"version":1,"projects":{"PROJECT":[{"kind":"hook"}]}}"#,
+            r#"{"version":1,"projects":{"PROJECT":[{"kind":"hook","label":null}]}}"#,
+            r#"{"version":1,"projects":{"PROJECT":{}}}"#,
+            "not JSON",
+        ] {
+            write_trust_fixture(project.path(), state.path(), fixture);
+            let err = TrustStore::open(state.path()).expect_err("an unreadable trust file");
+            assert_eq!(err.kind, ErrorKind::Config);
+            assert!(
+                err.to_string()
+                    .contains("is not readable as trust decisions"),
+                "{fixture}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_trust_file_with_a_different_version_is_still_refused() {
+        let (project, state, _store) = project();
+        let fixture =
+            r#"{"version":2,"projects":{"PROJECT":[{"kind":"future_kind","label":"future"}]}}"#;
+        write_trust_fixture(project.path(), state.path(), fixture);
+        let err = TrustStore::open(state.path()).expect_err("an unsupported version");
+        assert_eq!(err.kind, ErrorKind::Config);
+        assert!(
+            err.to_string()
+                .contains("has version 2, which this Smith does not understand")
+        );
+    }
+
+    #[test]
+    fn forgetting_an_artifact_removes_unparsed_decisions_by_the_persisted_kind_name() {
+        let (project, state, _store) = project();
+        let fixture = r#"{
+            "version": 1,
+            "projects": {
+                "PROJECT": [
+                    {"kind": "slash_command", "label": "review", "digest": "old", "decision": "allow_once"},
+                    {"kind": "slash_command", "label": "review", "digest": "old", "decision": "allow"},
+                    {"kind": "slash_command", "label": "other", "decision": "allow"},
+                    {"kind": "skill", "label": "review", "digest": "old", "decision": "deny"},
+                    {"kind": "future_kind", "label": "review", "extra": true}
+                ]
+            }
+        }"#;
+        write_trust_fixture(project.path(), state.path(), fixture);
+        let before = read_trust_file(state.path());
+        let mut store = TrustStore::open(state.path()).expect("the mixed store");
+        store
+            .forget_executable(project.path(), ExecutableKind::SlashCommand, "review")
+            .expect("forgotten");
+        let records = store.records(project.path()).expect("decisions");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].kind, ExecutableKind::Skill);
+
+        let after = read_trust_file(state.path());
+        let key = project_key(project.path()).expect("a project key");
+        assert_eq!(
+            after["projects"][&key]
+                .as_array()
+                .expect("remaining records")
+                .as_slice(),
+            &before["projects"][&key]
+                .as_array()
+                .expect("original records")[2..]
+        );
+        let mut reopened = TrustStore::open(state.path()).expect("the persisted store");
+        reopened
+            .forget_executable(project.path(), ExecutableKind::SlashCommand, "other")
+            .expect("the unparsed decision forgotten");
+        reopened
+            .forget_executable(project.path(), ExecutableKind::Skill, "review")
+            .expect("the understood decision forgotten");
+        assert!(
+            reopened
+                .records(project.path())
+                .expect("decisions")
+                .is_empty()
+        );
+        assert_eq!(
+            read_trust_file(state.path())["projects"][&key]
+                .as_array()
+                .expect("future record")
+                .len(),
+            1
+        );
+        reopened
+            .forget(project.path())
+            .expect("the project forgotten");
+        assert!(
+            read_trust_file(state.path())["projects"]
+                .get(&key)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn forgetting_a_project_removes_its_understood_and_unparsed_decisions_only() {
+        let (project, state, _store) = project();
+        let fixture = r#"{
+            "version": 1,
+            "projects": {
+                "PROJECT": [
+                    {"kind": "hook", "label": "review", "digest": "old", "decision": "allow"},
+                    {"kind": "future_kind", "label": "future", "extra": true}
+                ],
+                "another_project": [{"kind": "future_kind", "label": "keep", "extra": [1, 2]}]
+            }
+        }"#;
+        write_trust_fixture(project.path(), state.path(), fixture);
+        let before = read_trust_file(state.path());
+        let mut store = TrustStore::open(state.path()).expect("the mixed store");
+        store.forget(project.path()).expect("the project forgotten");
+        assert!(store.records(project.path()).expect("decisions").is_empty());
+        let after = read_trust_file(state.path());
+        let key = project_key(project.path()).expect("a project key");
+        assert!(after["projects"].get(&key).is_none());
+        assert_eq!(
+            after["projects"]["another_project"],
+            before["projects"]["another_project"]
+        );
     }
 
     #[test]

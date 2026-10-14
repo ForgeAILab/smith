@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-14T12:55:57Z
-updated_at: 2026-10-14T12:55:57Z
+updated_at: 2026-10-14T13:26:31Z
 ---
 
 ## Why
@@ -37,6 +37,9 @@ is added.
 - A new decision replaces any existing record with the same `kind` and
   `label` strings, whether or not that record was understood. A kind and
   label pair never has two records.
+- Forgetting one artifact removes every record with its `kind` and `label`,
+  whether or not it was understood. Forgetting a project removes all of that
+  project's records.
 - The following stay fatal, as now: a file that is not JSON, a `version` other
   than 1, a project entry that is not a list, and a record that is not an
   object with string `kind` and `label` fields.
@@ -55,4 +58,5 @@ is added.
 
 - Affected specs: `configuration`
 - Affected code: `crates/smith-config/src/trust.rs` (`TrustFile`,
-  `TrustStore::{open, status, record, records, persist}`, `find`)
+  `TrustStore::{open, status, record, records, forget, forget_executable,
+  persist}`, `find`)
