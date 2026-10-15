@@ -80,8 +80,10 @@ branch base). The runtime branch lands and is pushed before Smith bumps pins.
 
 - [x] 8.1 Smith gate (`--no-fail-fast`, clippy 1.88, `--no-default-features`
       steps).
-- [ ] 8.2 Live: docs lookup on ChatGPT (hosted), Anthropic (hosted), and GLM
-      with Brave.
+- [x] 8.2 Live: docs lookup on ChatGPT (hosted) and GLM (DuckDuckGo, then
+      `web_fetch`); see `docs/qa/live-2026-10-15-web/`. Anthropic hosted and
+      Brave were not run live (no native Anthropic provider configured, no
+      Brave key); their fixture tests cover them.
 
 ## 9. Live-run follow-ups (2026-10-15)
 
