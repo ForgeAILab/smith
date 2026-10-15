@@ -876,7 +876,7 @@ fn hosted_search_rows_deduplicate_bound_hosts_and_restore_from_activity() {
     let mut app = App::new("model", "/repo");
     app.transcript.push_user("research");
     app.transcript
-        .push_hosted_search(Some("Rust docs"), &sources);
+        .push_hosted_search(None, Some("Rust docs"), &sources);
     let screen = render(&app, 100, 20, Theme::new().without_color());
     assert!(
         screen.contains("Web Search(\"Rust docs\") · hosted"),
@@ -892,9 +892,141 @@ fn hosted_search_rows_deduplicate_bound_hosts_and_restore_from_activity() {
         &[],
         &[RestoredHostedSearch {
             anchor: 1,
+            action: None,
             query: Some("Rust docs".into()),
             sources,
         }],
     );
     assert_eq!(app.transcript.blocks(), restored.blocks());
+}
+
+#[test]
+fn hosted_open_page_row_agrees_live_and_after_resume() {
+    use crate::transcript::RestoredHostedSearch;
+    use agent_runtime_core::content::Message;
+    use smith_runtime::client::SmithHostedSearchAction;
+
+    for url in [
+        Some("https://blog.rust-lang.org/2026/10/01/Rust-1.99.0/"),
+        None,
+    ] {
+        let action = SmithHostedSearchAction::OpenPage {
+            url: url.map(str::to_owned),
+        };
+        let mut live = App::new("model", "/repo");
+        live.transcript.push_user("research");
+        live.apply(&event(RuntimeEvent::HostedSearch {
+            action: Some(action.clone()),
+            query: None,
+            sources: Vec::new(),
+        }));
+        let screen = render(&live, 100, 20, Theme::new().without_color());
+        let label = url.map_or_else(
+            || "Open Page · hosted".into(),
+            |url| format!("Open Page({url}) · hosted"),
+        );
+        assert!(screen.contains(&label), "{screen}");
+        assert!(!screen.contains("Web Search"), "{screen}");
+        let mut restored = App::new("model", "/repo");
+        restored.transcript.replace_from_history_with_activity(
+            &[Message::user("research")],
+            &[],
+            &[RestoredHostedSearch {
+                anchor: 1,
+                action: Some(action),
+                query: None,
+                sources: Vec::new(),
+            }],
+        );
+        assert_eq!(live.transcript.blocks(), restored.transcript.blocks());
+        assert_eq!(
+            screen,
+            render(&restored, 100, 20, Theme::new().without_color())
+        );
+    }
+}
+
+#[test]
+fn hosted_find_in_page_row_shows_pattern_and_optional_page_url() {
+    use smith_runtime::client::SmithHostedSearchAction;
+
+    for url in [Some("https://blog.rust-lang.org/releases/"), None] {
+        let mut app = App::new("model", "/repo");
+        app.apply(&event(RuntimeEvent::HostedSearch {
+            action: Some(SmithHostedSearchAction::FindInPage {
+                url: url.map(str::to_owned),
+                pattern: Some("Rust docs".into()),
+            }),
+            query: None,
+            sources: Vec::new(),
+        }));
+        let screen = render(&app, 100, 20, Theme::new().without_color());
+        assert!(
+            screen.contains("Find in Page(\"Rust docs\") · hosted"),
+            "{screen}"
+        );
+        assert_eq!(
+            screen.contains("https://blog.rust-lang.org/releases/"),
+            url.is_some(),
+            "{screen}"
+        );
+        assert!(!screen.contains("Web Search"), "{screen}");
+    }
+}
+
+#[test]
+fn hosted_search_without_query_keeps_hosts_without_empty_quotes() {
+    use smith_runtime::client::SmithHostedSource;
+
+    let mut app = App::new("model", "/repo");
+    app.apply(&event(RuntimeEvent::HostedSearch {
+        action: None,
+        query: None,
+        sources: vec![SmithHostedSource {
+            title: None,
+            url: "https://docs.rs/serde/".into(),
+        }],
+    }));
+    let screen = render(&app, 100, 20, Theme::new().without_color());
+    assert!(screen.contains("Web Search · hosted"), "{screen}");
+    assert!(screen.contains("docs.rs"), "{screen}");
+    assert!(!screen.contains("Web Search(\"\")"), "{screen}");
+}
+
+#[test]
+fn hosted_page_actions_bound_and_strip_controls_like_queries() {
+    use crate::transcript::Block;
+    use smith_runtime::client::SmithHostedSearchAction;
+
+    let raw = format!("\u{1b}\n\r\u{200b}{}", "é".repeat(450));
+    let expected = "é".repeat(400);
+    let mut app = App::new("model", "/repo");
+    for action in [
+        SmithHostedSearchAction::OpenPage {
+            url: Some(raw.clone()),
+        },
+        SmithHostedSearchAction::FindInPage {
+            url: Some(raw.clone()),
+            pattern: Some(raw.clone()),
+        },
+    ] {
+        app.transcript
+            .push_hosted_search(Some(&action), Some(&raw), &[]);
+        let Block::HostedSearch {
+            action: Some(bounded),
+            query,
+            ..
+        } = app.transcript.blocks().last().unwrap()
+        else {
+            panic!("hosted page row");
+        };
+        assert_eq!(query, &expected);
+        match bounded {
+            SmithHostedSearchAction::OpenPage { url } => assert_eq!(url.as_ref(), Some(&expected)),
+            SmithHostedSearchAction::FindInPage { url, pattern } => {
+                assert_eq!(url.as_ref(), Some(&expected));
+                assert_eq!(pattern.as_ref(), Some(&expected));
+            }
+        }
+    }
 }

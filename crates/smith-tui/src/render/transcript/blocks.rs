@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use smith_client::NoticeKind;
+use smith_runtime::client::SmithHostedSearchAction;
 use smith_tools::{ToolCallDisplay, tool_display_label};
 
 use crate::status::render_elapsed;
@@ -200,13 +201,37 @@ pub(super) fn block_lines(
                 }
             }
 
-            Block::HostedSearch { query, hosts } => {
+            Block::HostedSearch {
+                action,
+                query,
+                hosts,
+            } => {
+                let (label, detail) = match action {
+                    Some(SmithHostedSearchAction::OpenPage { url }) => (
+                        url.as_deref()
+                            .filter(|url| !url.is_empty())
+                            .map_or_else(|| "Open Page".into(), |url| format!("Open Page({url})")),
+                        "",
+                    ),
+                    Some(SmithHostedSearchAction::FindInPage { url, pattern }) => (
+                        format!("Find in Page({:?})", pattern.as_deref().unwrap_or_default()),
+                        url.as_deref().unwrap_or_default(),
+                    ),
+                    None => (
+                        if query.is_empty() {
+                            "Web Search".into()
+                        } else {
+                            format!("Web Search({query:?})")
+                        },
+                        hosts.as_str(),
+                    ),
+                };
                 lines.push(Line::from(Span::styled(
-                    format!("{} Web Search({query:?}) · hosted", glyph::TOOL),
+                    format!("{} {label} · hosted", glyph::TOOL),
                     theme.style(Tone::Heading),
                 )));
-                if !hosts.is_empty() {
-                    lines.extend(nested_result_lines(hosts, expanded, width, theme));
+                if !detail.is_empty() {
+                    lines.extend(nested_result_lines(detail, expanded, width, theme));
                 }
             }
             Block::Error { message } => {

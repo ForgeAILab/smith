@@ -158,8 +158,10 @@ pub enum Block {
         /// [`Transcript::enrich_tool_call`].
         enrichment: Vec<String>,
     },
-    /// A provider-executed search, independent of function tool calls.
+    /// A provider-executed search or page step, independent of function tool calls.
     HostedSearch {
+        /// Bounded page action, absent for a plain search.
+        action: Option<smith_runtime::client::SmithHostedSearchAction>,
         /// Bounded query text.
         query: String,
         /// Deduplicated, bounded source host summary.
@@ -240,14 +242,16 @@ impl PartialEq for Block {
             }
             (
                 Self::HostedSearch {
+                    action: a1,
                     query: q1,
                     hosts: h1,
                 },
                 Self::HostedSearch {
+                    action: a2,
                     query: q2,
                     hosts: h2,
                 },
-            ) => q1 == q2 && h1 == h2,
+            ) => a1 == a2 && q1 == q2 && h1 == h2,
             (Self::Error { message: m1 }, Self::Error { message: m2 }) => m1 == m2,
             (Self::Notice { kind: s1, text: t1 }, Self::Notice { kind: s2, text: t2 }) => {
                 s1 == s2 && t1 == t2
@@ -258,11 +262,13 @@ impl PartialEq for Block {
     }
 }
 
-/// A hosted search restored from the event journal at a history boundary.
+/// A hosted search or page step restored from the journal at a history boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestoredHostedSearch {
     /// History index before which this row is inserted.
     pub anchor: usize,
+    /// Page action, absent for a plain search.
+    pub action: Option<smith_runtime::client::SmithHostedSearchAction>,
     /// Query reported by the provider.
     pub query: Option<String>,
     /// Public source metadata.
@@ -439,14 +445,32 @@ impl Transcript {
     /// Records a hosted-search activity row without inventing a tool call.
     pub fn push_hosted_search(
         &mut self,
+        action: Option<&smith_runtime::client::SmithHostedSearchAction>,
         query: Option<&str>,
         sources: &[smith_runtime::client::SmithHostedSource],
     ) {
-        let query = limits::bound_result_preview(query.unwrap_or_default())
-            .unwrap_or_default()
-            .chars()
-            .take(400)
-            .collect();
+        use smith_runtime::client::SmithHostedSearchAction;
+
+        let bound = |text: &str| {
+            limits::bound_result_preview(text)
+                .unwrap_or_default()
+                .chars()
+                .filter(|character| !character.is_control())
+                .take(400)
+                .collect::<String>()
+        };
+        let action = action.map(|action| match action {
+            SmithHostedSearchAction::OpenPage { url } => SmithHostedSearchAction::OpenPage {
+                url: url.as_deref().map(bound),
+            },
+            SmithHostedSearchAction::FindInPage { url, pattern } => {
+                SmithHostedSearchAction::FindInPage {
+                    url: url.as_deref().map(bound),
+                    pattern: pattern.as_deref().map(bound),
+                }
+            }
+        });
+        let query = bound(query.unwrap_or_default());
         let mut hosts = Vec::new();
         for source in sources {
             // Sources are public provider metadata; retain only their host.
@@ -471,7 +495,11 @@ impl Transcript {
         }
         let hosts = limits::bound_result_preview(&hosts.join(", ")).unwrap_or_default();
         self.close_open();
-        self.push_block(Block::HostedSearch { query, hosts });
+        self.push_block(Block::HostedSearch {
+            action,
+            query,
+            hosts,
+        });
     }
 
     /// Records a requested tool call.

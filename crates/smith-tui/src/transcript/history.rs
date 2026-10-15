@@ -44,7 +44,11 @@ impl Transcript {
         for (anchor, message) in history.iter().enumerate() {
             while hosted.peek().is_some_and(|search| search.anchor == anchor) {
                 let search = hosted.next().expect("anchored hosted search");
-                self.push_hosted_search(search.query.as_deref(), &search.sources);
+                self.push_hosted_search(
+                    search.action.as_ref(),
+                    search.query.as_deref(),
+                    &search.sources,
+                );
             }
             while shortcuts
                 .peek()
@@ -128,7 +132,11 @@ impl Transcript {
             }
         }
         for search in hosted {
-            self.push_hosted_search(search.query.as_deref(), &search.sources);
+            self.push_hosted_search(
+                search.action.as_ref(),
+                search.query.as_deref(),
+                &search.sources,
+            );
         }
         for shortcut in shortcuts {
             self.push_saved_shell_shortcut(shortcut);

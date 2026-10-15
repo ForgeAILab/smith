@@ -368,6 +368,7 @@ mod tests {
     #[tokio::test]
     async fn hosted_search_keeps_its_order_when_reasoning_is_reclassified() {
         let search = ProviderStreamEvent::HostedSearch {
+            action: None,
             query: Some("rust docs".into()),
             sources: Vec::new(),
         };

@@ -276,7 +276,8 @@ fn append_usage(usage: &Value, events: &mut Vec<ProviderStreamEvent>) {
 }
 
 // The runtime's hosted citation helper is crate-private. Keep its deterministic
-// span ordering, URL deduplication, escaping and character-to-byte conversion.
+// span ordering, URL deduplication (including existing links), escaping and
+// character-to-byte conversion mirrored here.
 fn rendered_output(item: &Value) -> String {
     let mut output = String::new();
     for part in item["content"].as_array().into_iter().flatten() {
@@ -311,6 +312,14 @@ fn rendered_output(item: &Value) -> String {
             if !seen.insert(source.url.clone()) {
                 continue;
             }
+            let url = source
+                .url
+                .replace(' ', "%20")
+                .replace('(', "%28")
+                .replace(')', "%29");
+            if text.contains(&source.url) || text.contains(&url) {
+                continue;
+            }
             output.push_str(&text[cursor..end]);
             cursor = end;
             let host = source
@@ -328,11 +337,6 @@ fn rendered_output(item: &Value) -> String {
                 .replace('\\', "\\\\")
                 .replace('[', "\\[")
                 .replace(']', "\\]");
-            let url = source
-                .url
-                .replace(' ', "%20")
-                .replace('(', "%28")
-                .replace(')', "%29");
             output.push_str(&format!(" [{title}]({url})"));
         }
         output.push_str(&text[cursor..]);
@@ -357,14 +361,57 @@ fn hosted_item(
         Some("web_search_call") => {
             state.buffer_text = true;
             if state.searches.insert(index) {
+                let action = &item["action"];
+                let url = || action.get("url").and_then(Value::as_str).map(str::to_owned);
+                let (action, query, sources) = match action.get("type").and_then(Value::as_str) {
+                    Some("open_page") => (
+                        Some(HostedSearchAction::OpenPage { url: url() }),
+                        None,
+                        Vec::new(),
+                    ),
+                    Some("find_in_page" | "find") => (
+                        Some(HostedSearchAction::FindInPage {
+                            url: url(),
+                            pattern: action
+                                .get("pattern")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned),
+                        }),
+                        None,
+                        Vec::new(),
+                    ),
+                    _ => {
+                        let query = action
+                            .get("query")
+                            .and_then(Value::as_str)
+                            .filter(|query| !query.is_empty())
+                            .map(str::to_owned)
+                            .or_else(|| {
+                                let queries = action
+                                    .get("queries")
+                                    .and_then(Value::as_array)
+                                    .into_iter()
+                                    .flatten()
+                                    .filter_map(Value::as_str)
+                                    .filter(|query| !query.is_empty())
+                                    .collect::<Vec<_>>()
+                                    .join("; ");
+                                (!queries.is_empty()).then_some(queries)
+                            });
+                        let sources = action
+                            .get("sources")
+                            .and_then(Value::as_array)
+                            .into_iter()
+                            .flatten()
+                            .filter_map(source)
+                            .collect();
+                        (None, query, sources)
+                    }
+                };
                 events.push(ProviderStreamEvent::HostedSearch {
-                    query: item["action"]["query"].as_str().map(str::to_owned),
-                    sources: item["action"]["sources"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(source)
-                        .collect(),
+                    action,
+                    query,
+                    sources,
                 });
                 state.saw_semantic = true;
             }

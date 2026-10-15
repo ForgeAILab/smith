@@ -124,6 +124,27 @@ pub struct SmithHostedSource {
     pub url: String,
 }
 
+/// What a provider-hosted search step did when it was not a search.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SmithHostedSearchAction {
+    /// Opened a page.
+    OpenPage {
+        /// Page URL, when the provider reported one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+    },
+    /// Searched for text within a page.
+    FindInPage {
+        /// Page URL, when the provider reported one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+        /// Text sought, when the provider reported it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pattern: Option<String>,
+    },
+}
+
 /// Smith-owned event envelope. `schema_version` preserves the canonical wire
 /// value for existing machine-output compatibility; the Smith protocol version
 /// is negotiated with [`SMITH_CLIENT_PROTOCOL_VERSION`].
@@ -201,8 +222,11 @@ impl SmithEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum SmithEventKind {
-    /// A provider-hosted web search and its public sources.
+    /// A provider-hosted web search or page step and its public sources.
     HostedSearch {
+        /// Page action, absent for a plain search.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        action: Option<SmithHostedSearchAction>,
         /// Query, when the provider reported one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         query: Option<String>,
@@ -689,6 +713,7 @@ mod tests {
 
         assert_projections!(
             HostedSearch {
+                action: None,
                 query: Some("rust docs".into()),
                 sources: vec![agent_runtime_core::provider::HostedSource {
                     title: Some("Rust".into()),
@@ -1010,6 +1035,7 @@ mod tests {
             Some(TurnId::new("turn")),
             Timestamp::ZERO,
             RuntimeEvent::HostedSearch {
+                action: None,
                 query: Some("rust docs".into()),
                 sources: vec![
                     agent_runtime_core::provider::HostedSource {
@@ -1027,6 +1053,7 @@ mod tests {
         assert_eq!(
             projected.payload,
             SmithEventKind::HostedSearch {
+                action: None,
                 query: Some("rust docs".into()),
                 sources: vec![
                     SmithHostedSource {
@@ -1049,10 +1076,84 @@ mod tests {
         assert_eq!(
             kind,
             SmithEventKind::HostedSearch {
+                action: None,
                 query: None,
                 sources: Vec::new(),
             }
         );
+    }
+
+    #[test]
+    fn hosted_search_projection_preserves_page_actions_and_optional_fields() {
+        use agent_runtime_core::provider::HostedSearchAction;
+
+        for (action, expected) in [
+            (
+                HostedSearchAction::OpenPage {
+                    url: Some("https://blog.rust-lang.org/releases/".into()),
+                },
+                SmithHostedSearchAction::OpenPage {
+                    url: Some("https://blog.rust-lang.org/releases/".into()),
+                },
+            ),
+            (
+                HostedSearchAction::OpenPage { url: None },
+                SmithHostedSearchAction::OpenPage { url: None },
+            ),
+            (
+                HostedSearchAction::FindInPage {
+                    url: Some("https://docs.rs/".into()),
+                    pattern: Some("Rust".into()),
+                },
+                SmithHostedSearchAction::FindInPage {
+                    url: Some("https://docs.rs/".into()),
+                    pattern: Some("Rust".into()),
+                },
+            ),
+            (
+                HostedSearchAction::FindInPage {
+                    url: None,
+                    pattern: None,
+                },
+                SmithHostedSearchAction::FindInPage {
+                    url: None,
+                    pattern: None,
+                },
+            ),
+        ] {
+            let canonical = CanonicalEvent::new(
+                1,
+                EventId::new("event"),
+                SessionId::new("session"),
+                Some(TurnId::new("turn")),
+                Timestamp::ZERO,
+                RuntimeEvent::HostedSearch {
+                    action: Some(action),
+                    query: None,
+                    sources: Vec::new(),
+                },
+            );
+            let projected = SmithEvent::project(&canonical).unwrap();
+            assert_eq!(
+                projected.payload,
+                SmithEventKind::HostedSearch {
+                    action: Some(expected),
+                    query: None,
+                    sources: Vec::new(),
+                }
+            );
+            assert_eq!(
+                serde_json::to_string(&projected).unwrap(),
+                serde_json::to_string(&canonical).unwrap()
+            );
+        }
+        for wire in [
+            serde_json::json!({"type":"open_page"}),
+            serde_json::json!({"type":"find_in_page"}),
+        ] {
+            let action: SmithHostedSearchAction = serde_json::from_value(wire.clone()).unwrap();
+            assert_eq!(serde_json::to_value(action).unwrap(), wire);
+        }
     }
 
     #[test]

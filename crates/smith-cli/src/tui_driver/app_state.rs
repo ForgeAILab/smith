@@ -52,10 +52,15 @@ pub(super) async fn seed_app(
                         anchor = anchors.next();
                     }
                 }
-                smith_runtime::client::SmithEventKind::HostedSearch { query, sources } => {
+                smith_runtime::client::SmithEventKind::HostedSearch {
+                    action,
+                    query,
+                    sources,
+                } => {
                     if let Some(anchor) = anchor {
                         hosted.push(smith_tui::transcript::RestoredHostedSearch {
                             anchor,
+                            action,
                             query,
                             sources,
                         });

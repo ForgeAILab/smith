@@ -17,10 +17,11 @@ use agent_runtime_core::cancel::Cancellation;
 use agent_runtime_core::clock::{Clock, Deadline, SystemClock, Timestamp};
 use agent_runtime_core::content::{ContentPart, Message, Role};
 use agent_runtime_core::provider::{
-    AuthKind, Capabilities, FinishReason, HostedSource, HostedTool, ModelDescriptor, ModelId,
-    PromptCacheControl, Provider, ProviderCacheBehavior, ProviderCacheContract,
-    ProviderCallContext, ProviderError, ProviderErrorKind, ProviderRequest, ProviderStream,
-    ProviderStreamEvent, RateLimitSnapshot, RateLimitWindow, ReasoningSupport, ToolChoice,
+    AuthKind, Capabilities, FinishReason, HostedSearchAction, HostedSource, HostedTool,
+    ModelDescriptor, ModelId, PromptCacheControl, Provider, ProviderCacheBehavior,
+    ProviderCacheContract, ProviderCallContext, ProviderError, ProviderErrorKind, ProviderRequest,
+    ProviderStream, ProviderStreamEvent, RateLimitSnapshot, RateLimitWindow, ReasoningSupport,
+    ToolChoice,
 };
 use agent_runtime_core::provider_credential::{
     CredentialInvalidation, ProviderAuthRejection, ProviderCredentialError,

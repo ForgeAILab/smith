@@ -383,6 +383,7 @@ mod tests {
             Capabilities::basic_streaming(),
             vec![ScriptedStream::new(vec![
                 ProviderStreamEvent::HostedSearch {
+                    action: None,
                     query: Some("ignored query".into()),
                     sources: Vec::new(),
                 },

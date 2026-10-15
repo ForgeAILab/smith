@@ -851,6 +851,7 @@ mod tests {
         for failed in [false, true] {
             let mut advice_events = vec![
                 ProviderStreamEvent::HostedSearch {
+                    action: None,
                     query: Some("ignored query".into()),
                     sources: Vec::new(),
                 },

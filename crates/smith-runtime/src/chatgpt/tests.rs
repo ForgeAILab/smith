@@ -969,7 +969,7 @@ fn hosted_search_stream_renders_unicode_citations_and_deduplicates_completed_ite
         1
     );
     assert!(events.iter().any(
-        |event| matches!(event, ProviderStreamEvent::HostedSearch { query: Some(query), sources }
+        |event| matches!(event, ProviderStreamEvent::HostedSearch { action: None, query: Some(query), sources }
         if query == "Rust docs" && sources[0].url == "https://docs.rs/a")
     ));
     let rendered = events
@@ -993,4 +993,159 @@ fn hosted_search_stream_renders_unicode_citations_and_deduplicates_completed_ite
             reason: FinishReason::Stop
         })
     ));
+}
+
+#[test]
+fn hosted_search_stream_normalizes_page_actions_and_query_lists() {
+    let url = "https://blog.rust-lang.org/releases/";
+    for (action, expected_action, expected_query) in [
+        (
+            json!({"type":"open_page","url":url,"query":"ignored","sources":[{"url":url}]}),
+            Some(HostedSearchAction::OpenPage {
+                url: Some(url.into()),
+            }),
+            None,
+        ),
+        (
+            json!({"type":"open_page"}),
+            Some(HostedSearchAction::OpenPage { url: None }),
+            None,
+        ),
+        (
+            json!({"type":"find_in_page","url":url,"pattern":"Rust","query":"ignored","sources":[{"url":url}]}),
+            Some(HostedSearchAction::FindInPage {
+                url: Some(url.into()),
+                pattern: Some("Rust".into()),
+            }),
+            None,
+        ),
+        (
+            json!({"type":"find","url":url,"pattern":"Rust"}),
+            Some(HostedSearchAction::FindInPage {
+                url: Some(url.into()),
+                pattern: Some("Rust".into()),
+            }),
+            None,
+        ),
+        (
+            json!({"type":"find_in_page"}),
+            Some(HostedSearchAction::FindInPage {
+                url: None,
+                pattern: None,
+            }),
+            None,
+        ),
+        (
+            json!({"type":"search","queries":["a","b"]}),
+            None,
+            Some("a; b"),
+        ),
+        (
+            json!({"type":"search","query":"","queries":["", "a", null, "b"]}),
+            None,
+            Some("a; b"),
+        ),
+        (
+            json!({"type":"search","query":"single","queries":["a","b"]}),
+            None,
+            Some("single"),
+        ),
+        (json!({"queries":["a","b"]}), None, Some("a; b")),
+        (
+            json!({"type":"unknown","queries":["a","b"]}),
+            None,
+            Some("a; b"),
+        ),
+        (json!({"type":"search","queries":[""]}), None, None),
+    ] {
+        let item = json!({"type":"web_search_call","action":action});
+        let mut state = StreamState::default();
+        let mut events = Vec::new();
+        for wire in [
+            json!({"type":"response.output_item.done","output_index":0,"item":item}),
+            json!({"type":"response.completed","response":{"output":[item]}}),
+        ] {
+            events.extend(decode_event(&wire.to_string(), &mut state).unwrap());
+        }
+        let searches = events
+            .iter()
+            .filter(|event| matches!(event, ProviderStreamEvent::HostedSearch { .. }))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            searches,
+            vec![&ProviderStreamEvent::HostedSearch {
+                action: expected_action,
+                query: expected_query.map(str::to_owned),
+                sources: Vec::new(),
+            }]
+        );
+    }
+}
+
+#[test]
+fn hosted_search_citation_keeps_existing_links_and_appends_other_sources() {
+    let url = "https://blog.rust-lang.org/releases/";
+    let text = "([blog.rust-lang.org](https://blog.rust-lang.org/releases/))";
+    for other_source in [false, true] {
+        let mut annotations = vec![json!({
+            "type":"url_citation","start_index":0,"end_index":text.chars().count(),
+            "url":url,"title":"The Rust Release Announcements"
+        })];
+        annotations.push(annotations[0].clone());
+        if other_source {
+            annotations.push(json!({
+                "type":"url_citation","start_index":0,"end_index":text.chars().count(),
+                "url":"https://www.rust-lang.org/","title":"Rust"
+            }));
+        }
+        let wire = json!({"type":"response.output_item.done","output_index":1,"item":{
+            "type":"message","content":[{"type":"output_text","text":text,"annotations":annotations}]
+        }});
+        let mut state = StreamState {
+            buffer_text: true,
+            ..Default::default()
+        };
+        let events = decode_event(&wire.to_string(), &mut state).unwrap();
+        let rendered = events
+            .iter()
+            .filter_map(|event| match event {
+                ProviderStreamEvent::TextDelta { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        let expected = if other_source {
+            format!("{text} [Rust](https://www.rust-lang.org/)")
+        } else {
+            text.to_owned()
+        };
+        assert_eq!(rendered, expected);
+        assert_eq!(rendered.matches(url).count(), 1);
+    }
+}
+
+#[test]
+fn hosted_search_citation_recognizes_raw_and_escaped_urls_per_text_part() {
+    for text in [
+        "See https://example.com/a (b).",
+        "See [source](https://example.com/a%20%28b%29).",
+    ] {
+        let citation = json!({"type":"url_citation","start_index":0,"end_index":3,
+            "url":"https://example.com/a (b)","title":"Source"});
+        let wire = json!({"type":"response.output_item.done","item":{
+            "type":"message","content":[
+                {"type":"output_text","text":text,"annotations":[citation]},
+                {"type":"output_text","text":"More.","annotations":[citation]}
+            ]
+        }});
+        let mut state = StreamState {
+            buffer_text: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            decode_event(&wire.to_string(), &mut state).unwrap(),
+            vec![ProviderStreamEvent::TextDelta {
+                text: format!("{text}Mor [Source](https://example.com/a%20%28b%29)e.")
+            }]
+        );
+    }
 }

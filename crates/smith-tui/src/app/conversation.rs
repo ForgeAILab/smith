@@ -96,9 +96,13 @@ impl ConversationMut<'_> {
     /// are true, and neither belongs in the other's code.
     pub(super) fn apply(&mut self, event: &RuntimeEvent) -> bool {
         match event {
-            RuntimeEvent::HostedSearch { query, sources } => {
+            RuntimeEvent::HostedSearch {
+                action,
+                query,
+                sources,
+            } => {
                 self.transcript
-                    .push_hosted_search(query.as_deref(), sources);
+                    .push_hosted_search(action.as_ref(), query.as_deref(), sources);
             }
             RuntimeEvent::ProviderAttemptStarted {
                 request, attempt, ..

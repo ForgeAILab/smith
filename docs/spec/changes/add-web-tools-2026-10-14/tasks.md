@@ -88,11 +88,11 @@ branch base). The runtime branch lands and is pushed before Smith bumps pins.
 - [x] 9.1 DuckDuckGo: POST the form without a User-Agent, fall back once to
       the lite endpoint, drop results that point at DuckDuckGo, update the
       live drift canary; fixture tests for both endpoints and the fallback.
-- [ ] 9.2 Runtime: hosted-search events carry the action (search, open
+- [x] 9.2 Runtime: hosted-search events carry the action (search, open
       page, find in page) with URL and pattern; the query falls back to
       `queries`; citations are not appended when the cited span already
       links the URL. Runtime gate; push; bump the Smith pins.
-- [ ] 9.3 Smith ChatGPT adapter mirrors 9.2; the Smith event, live and
+- [x] 9.3 Smith ChatGPT adapter mirrors 9.2; the Smith event, live and
       resumed transcript blocks, and headless output carry the action;
       `Open Page(<url>) · hosted` and `Find in Page("<pattern>") · hosted`
       rows.
