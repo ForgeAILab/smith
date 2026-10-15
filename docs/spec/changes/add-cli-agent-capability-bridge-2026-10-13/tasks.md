@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-13T22:40:43Z
-updated_at: 2026-10-14T22:52:12Z
+updated_at: 2026-10-15T03:08:05Z
 completed_at:
 ---
 
@@ -296,17 +296,23 @@ Each item is a layer 4 test file driven by the stand-in.
 
 ## 8. Verification and documentation
 
-- [ ] 8.1 Opt-in live tests against installed `claude` and `codex`: spawn a
+- [x] 8.1 Opt-in live tests against installed `claude` and `codex`: spawn a
   provider child and read its result; call a remote MCP tool behind an
   approval; activate a skill; call the advisor; resume and confirm the
   bridge is still offered. (`live_cli_bridge` `*_live_flow`. Passed
   2026-10-14 on Claude Code 2.1.299 and Codex 0.162.1: a bridged `agent`
   call, skill search and activation, resume with the bridge offered again.
-  The child and advisor steps are written but opt-in, `LIVE_CHILD_MODEL`
-  and `LIVE_ADVISOR=1`, because they spend the owner's configured models;
-  not yet run. A remote tool behind an approval cannot be answered in a
-  headless live run; the stand-in suite covers it with the real endpoint
-  and relay.)
+  Child step passed 2026-10-14 on main `1106510` with
+  `LIVE_CHILD_MODEL=zai/glm-5.3`, Claude Code 2.1.300 and Codex 0.162.1,
+  after three fixes to the never-run step: a profile name over the
+  32-character limit, `--approval deny` refusing the spawn (turn two now
+  uses `allow-all` only when the child step is on), and a provider-qualified
+  id written as the profile's bare `model`. `LIVE_ADVISOR=1` needs an
+  advisor in the owner's config, which has none, so the advisor and the
+  remote tool behind an approval were checked in tmux instead (8.5): both
+  CLIs, a scratch project with `advisor = "zai/glm-5.3"` and a stdio MCP
+  server; the tool ran once, only after approval; resume re-offered the
+  bridge.)
 - [x] 8.2 The drift canary: each installed CLI still accepts the flags and
   keys Smith passes and still prints the 1.7 shapes. No model call.
   (`live_cli_bridge` `*_drift_canary`, opt-in. Passed 2026-10-14 against
@@ -321,4 +327,9 @@ Each item is a layer 4 test file driven by the stand-in.
   patch release, and the installed binary checked in a tmux session with a
   real configuration. (Gate done 2026-10-14 on main at v0.4.0 plus this
   change, no local patch: `--locked` build, clippy, `cargo deny --locked
-  check all`, and 2,680 tests pass. Open: the release and the tmux check.)
+  check all`, and 2,680 tests pass. Tmux check done 2026-10-14 with a
+  debug build of main `1106510` and the owner's real config, on
+  `cli/claude-code/haiku` and `cli/codex/gpt-6-astra`: `/mcp trust`, an
+  approved remote MCP call, a `zai/glm-5.3` child, the advisor, `/quit`
+  and `--resume`; findings in `docs/qa/live-2026-10-14/findings.md`. The
+  installed binary is still v0.4.0. Open: the release.)

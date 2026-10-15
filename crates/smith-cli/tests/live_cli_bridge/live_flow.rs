@@ -89,11 +89,13 @@ done
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn smith_turn(
     cli: &Installed,
     path: &LivePath,
     project: &Path,
     model: &str,
+    approval: &str,
     prompt: &str,
     resume: Option<&str>,
     deadline: Instant,
@@ -109,7 +111,7 @@ fn smith_turn(
             "--model",
             &format!("cli/{}/{model}", cli.kind.kind()),
             "--approval",
-            "deny",
+            approval,
             "--output-format",
             "stream-json",
             "-p",
@@ -441,11 +443,15 @@ pub(super) fn live_flow(kind: Kind) {
             cli.context);
         // agent.spawn accepts profile, not model. Bind the requested model in
         // this disposable project only, retaining the owner's providers/logins.
-        let profile = format!("live-bridge-child-{}", uuid::Uuid::new_v4().simple());
+        let profile = format!("live-child-{}", &uuid::Uuid::new_v4().simple().to_string()[..12]);
+        let model = &child.config.model.value;
+        let model = model
+            .strip_prefix(&format!("{}/", child.config.provider.name.value))
+            .unwrap_or(model);
         fs::create_dir(project.path().join(".smith")).expect("temporary project config directory");
         fs::write(project.path().join(".smith/config.toml"), format!(
             "[profiles.{profile}]\nprovider = {}\nmodel = {}\nposture = \"review\"\nuse = [\"child\"]\n",
-            json!(child.config.provider.name.value), json!(child.config.model.value)
+            json!(child.config.provider.name.value), json!(model)
         )).expect("temporary child-only profile");
         profile
     });
@@ -503,6 +509,7 @@ pub(super) fn live_flow(kind: Kind) {
         &path,
         project.path(),
         &model,
+        "deny",
         &first_prompt,
         None,
         deadline,
@@ -588,11 +595,19 @@ pub(super) fn live_flow(kind: Kind) {
         second_prompt.push_str(" Then call smith MCP advisor {} once and report its answer.");
     }
     second_prompt.push_str(" No other tools except tool search to discover smith tools.");
+    // A spawn always requires approval, and headless cannot answer one. Using
+    // allow-all here widens only Smith-governed bridge calls in this disposable
+    // project; the CLI's own tools follow allow_own_tools.
     let second = smith_turn(
         &cli,
         &path,
         project.path(),
         &model,
+        if child_profile.is_some() {
+            "allow-all"
+        } else {
+            "deny"
+        },
         &second_prompt,
         Some(&smith),
         deadline,
