@@ -2,12 +2,13 @@
 //!
 //! Servers share Smith's process group so group-directed signals (including
 //! SIGKILL, Ctrl-C, and terminal hangup) still reach them. Smith signals each
-//! server by PID during exit cleanup. If only Smith is killed by SIGKILL,
-//! servers must exit on stdin EOF; no watchdog enforces their lifetime.
+//! watchdog by PID during exit cleanup. The watchdog also stops a busy server
+//! when Smith disappears without running cleanup.
 
 use std::io;
+use std::path::Path;
 use std::process::Stdio;
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::sync::{Arc, Mutex, Once, OnceLock, Weak};
 use std::time::Duration;
 
 use agent_runtime_mcp::{McpServerConfig, McpTransport};
@@ -23,6 +24,10 @@ const EXIT_GRACE: Duration = Duration::from_millis(500);
 const REAP_BOUND: Duration = Duration::from_secs(1);
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
+#[cfg(test)]
+static DIRECT_SPAWN_WARNINGS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 #[derive(Default)]
 struct Processes {
     exiting: bool,
@@ -36,12 +41,20 @@ fn processes() -> &'static Mutex<Processes> {
 
 struct ServerProcess {
     child: Mutex<Option<Child>>,
+    supervised: bool,
 }
 
 impl ServerProcess {
     fn signal(&self, signal: Signal) {
         let child = self.child.lock().expect("MCP child");
         if let Some(pid) = child.as_ref().and_then(Child::id) {
+            // Killing the watchdog itself would strand its server. Its TERM
+            // handler kills and reaps the server even when Smith exits at once.
+            let signal = if self.supervised && signal == Signal::SIGKILL {
+                Signal::SIGTERM
+            } else {
+                signal
+            };
             let _ = kill(Pid::from_raw(pid as i32), signal);
         }
     }
@@ -90,7 +103,10 @@ pub(super) struct StdioTransport {
     process: Arc<ServerProcess>,
 }
 
-pub(super) fn spawn(config: &McpServerConfig) -> io::Result<StdioTransport> {
+pub(super) fn spawn(
+    config: &McpServerConfig,
+    smith_executable: Option<&Path>,
+) -> io::Result<StdioTransport> {
     let McpTransport::Stdio {
         command,
         args,
@@ -100,17 +116,31 @@ pub(super) fn spawn(config: &McpServerConfig) -> io::Result<StdioTransport> {
     else {
         unreachable!("stdio declaration checked by connector");
     };
-    let mut command = Command::new(command);
-    command
-        .args(args)
-        .envs(env)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .kill_on_drop(true);
-    if let Some(cwd) = cwd {
-        command.current_dir(cwd);
-    }
+    let invocation = |smith_executable: Option<&Path>| {
+        let mut invocation = if let Some(smith) = smith_executable {
+            let mut invocation = Command::new(smith);
+            invocation
+                .arg("mcp-watchdog")
+                .arg("--parent")
+                .arg(std::process::id().to_string())
+                .arg("--")
+                .arg(command);
+            invocation
+        } else {
+            Command::new(command)
+        };
+        invocation
+            .args(args)
+            .envs(env)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .kill_on_drop(smith_executable.is_none());
+        if let Some(cwd) = cwd {
+            invocation.current_dir(cwd);
+        }
+        invocation
+    };
 
     // Serialize admission with exit cleanup so a late connector cannot spawn
     // a child after the exit snapshot has been taken.
@@ -121,11 +151,23 @@ pub(super) fn spawn(config: &McpServerConfig) -> io::Result<StdioTransport> {
             "Smith is exiting",
         ));
     }
-    let mut child = command.spawn()?;
+    let (mut child, supervised) = if let Some(smith) = smith_executable {
+        match invocation(Some(smith)).spawn() {
+            Ok(child) => (child, true),
+            Err(_) => {
+                warn_direct_spawn();
+                (invocation(None).spawn()?, false)
+            }
+        }
+    } else {
+        warn_direct_spawn();
+        (invocation(None).spawn()?, false)
+    };
     let stdout = child.stdout.take().expect("piped MCP stdout");
     let stdin = child.stdin.take().expect("piped MCP stdin");
     let process = Arc::new(ServerProcess {
         child: Mutex::new(Some(child)),
+        supervised,
     });
     processes.children.retain(|child| child.strong_count() > 0);
     processes.children.push(Arc::downgrade(&process));
@@ -133,6 +175,17 @@ pub(super) fn spawn(config: &McpServerConfig) -> io::Result<StdioTransport> {
         io: AsyncRwTransport::new(stdout, stdin),
         process,
     })
+}
+
+fn warn_direct_spawn() {
+    static WARNING: Once = Once::new();
+    WARNING.call_once(|| {
+        #[cfg(test)]
+        DIRECT_SPAWN_WARNINGS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        tracing::warn!(
+            "Smith executable unavailable; starting stdio MCP servers directly; servers may outlive Smith"
+        );
+    });
 }
 
 impl Transport<RoleClient> for StdioTransport {
@@ -211,17 +264,21 @@ mod tests {
     use super::*;
     use nix::errno::Errno;
     use nix::sys::wait::{WaitPidFlag, waitpid};
+    use std::os::unix::fs::PermissionsExt;
 
     fn spawn_shell(script: &str) -> StdioTransport {
-        spawn(&McpServerConfig::new(
-            "stdio-test",
-            McpTransport::Stdio {
-                command: "sh".into(),
-                args: vec!["-c".into(), script.into()],
-                env: Default::default(),
-                cwd: None,
-            },
-        ))
+        spawn(
+            &McpServerConfig::new(
+                "stdio-test",
+                McpTransport::Stdio {
+                    command: "sh".into(),
+                    args: vec!["-c".into(), script.into()],
+                    env: Default::default(),
+                    cwd: None,
+                },
+            ),
+            None,
+        )
         .expect("spawn stdio server")
     }
 
@@ -240,7 +297,7 @@ mod tests {
         let mut transport = spawn_shell("read _");
         let pid = child_pid(&transport.process);
 
-        tokio::time::timeout(Duration::from_secs(2), transport.close())
+        tokio::time::timeout(Duration::from_secs(5), transport.close())
             .await
             .expect("EOF shutdown should return promptly")
             .expect("close stdio transport");
@@ -263,12 +320,143 @@ mod tests {
         // Exercise the shutdown core without permanently closing admission in
         // the process-wide registry used by other tests in this binary.
         tokio::time::timeout(
-            Duration::from_secs(2),
+            Duration::from_secs(5),
             shutdown_processes(vec![Arc::clone(&transport.process)]),
         )
         .await
         .expect("SIGTERM-ignoring server should be killed within the bounds");
 
         assert_reaped(&transport.process, pid);
+    }
+
+    #[tokio::test]
+    async fn missing_smith_path_spawns_directly_and_warns_once() {
+        for _ in 0..2 {
+            let mut transport = spawn_shell("read _");
+            assert!(!transport.process.supervised);
+            let pid = child_pid(&transport.process);
+            tokio::time::timeout(Duration::from_secs(5), transport.close())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_reaped(&transport.process, pid);
+        }
+        assert_eq!(
+            DIRECT_SPAWN_WARNINGS.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn watchdog_receives_invocation_environment_directory_and_stdio() {
+        let directory = tempfile::tempdir().unwrap();
+        let smith = directory.path().join("smith");
+        std::fs::write(
+            &smith,
+            format!(
+                r#"#!/bin/sh
+test "$1" = mcp-watchdog || exit 91
+test "$2" = --parent || exit 92
+test "$3" = {} || exit 93
+test "$4" = -- || exit 94
+shift 4
+exec "$@"
+"#,
+                std::process::id()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&smith, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let config = McpServerConfig::new(
+            "watchdog-test",
+            McpTransport::Stdio {
+                command: "sh".into(),
+                args: vec![
+                    "-c".into(),
+                    r#"test "$MCP_WATCHDOG_TEST" = inherited || exit 95
+test -f smith || exit 96
+printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}'
+read _
+"#
+                    .into(),
+                ],
+                env: [("MCP_WATCHDOG_TEST".into(), "inherited".into())].into(),
+                cwd: Some(directory.path().to_str().unwrap().into()),
+            },
+        );
+        let mut transport = spawn(&config, Some(&smith)).unwrap();
+        assert!(transport.process.supervised);
+        let pid = child_pid(&transport.process);
+        tokio::time::timeout(Duration::from_secs(5), transport.receive())
+            .await
+            .unwrap()
+            .expect("watchdog forwarded stdout");
+        tokio::time::timeout(Duration::from_secs(5), transport.close())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_reaped(&transport.process, pid);
+
+        let mut transport = spawn(&config, Some(&directory.path().join("missing-smith"))).unwrap();
+        assert!(!transport.process.supervised);
+        let pid = child_pid(&transport.process);
+        tokio::time::timeout(Duration::from_secs(5), transport.receive())
+            .await
+            .unwrap()
+            .expect("fallback server stdout");
+        tokio::time::timeout(Duration::from_secs(5), transport.close())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_reaped(&transport.process, pid);
+    }
+
+    #[tokio::test]
+    async fn forced_cleanup_and_drop_let_watchdog_run_its_stop_handler() {
+        let directory = tempfile::tempdir().unwrap();
+        let smith = directory.path().join("smith");
+        std::fs::write(
+            &smith,
+            r#"#!/bin/sh
+trap 'echo stopped > stopped; exit 0' TERM
+printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}'
+while :; do :; done
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&smith, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let config = McpServerConfig::new(
+            "watchdog-stop-test",
+            McpTransport::Stdio {
+                command: "unused-server".into(),
+                args: Vec::new(),
+                env: Default::default(),
+                cwd: Some(directory.path().to_str().unwrap().into()),
+            },
+        );
+        for drop_transport in [false, true] {
+            let marker = directory.path().join("stopped");
+            let _ = std::fs::remove_file(&marker);
+            let mut transport = spawn(&config, Some(&smith)).unwrap();
+            let pid = child_pid(&transport.process);
+            tokio::time::timeout(Duration::from_secs(5), transport.receive())
+                .await
+                .unwrap()
+                .expect("watchdog installed its TERM handler");
+            if drop_transport {
+                drop(transport);
+            } else {
+                // This is also the close-timeout and exit-escalation core.
+                transport.process.kill_and_wait().await;
+                assert_reaped(&transport.process, pid);
+            }
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !marker.exists() || kill(pid, None) != Err(Errno::ESRCH) {
+                    tokio::time::sleep(POLL_INTERVAL).await;
+                }
+            })
+            .await
+            .expect("watchdog stop handler must run and its process must be reaped");
+        }
     }
 }

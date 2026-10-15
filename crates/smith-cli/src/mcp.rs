@@ -72,7 +72,14 @@ impl McpContext {
             return Ok(None);
         }
         let trust = TrustStore::open(user_dir).map_err(|error| anyhow::anyhow!("{error}"))?;
+        // A unit-test executable cannot dispatch the private watchdog command.
+        let smith_executable = if cfg!(test) {
+            None
+        } else {
+            std::env::current_exe().ok()
+        };
         let options = McpOptions::new(project)
+            .with_smith_executable(smith_executable)
             .with_plugin_servers(plugin_servers.clone())
             .with_credentials(credentials)
             .with_max_output_bytes(

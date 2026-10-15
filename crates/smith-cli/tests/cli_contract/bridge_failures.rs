@@ -12,6 +12,9 @@ use std::time::Duration;
 const SLOW: &str = "mcp__docs__slow_count";
 const COUNT: &str = "mcp__docs__count";
 
+#[path = "bridge_failures/mcp_watchdog.rs"]
+mod mcp_watchdog;
+
 #[test]
 fn abandoning_an_executing_call_keeps_one_effect_and_committed_result() {
     for codex in [false, true] {
@@ -571,10 +574,9 @@ fn killing_smith_mid_turn_stops_harness_and_child_without_graceful_shutdown() {
         let parent = u32::try_from(values["stand_in_pid"].as_u64().unwrap()).unwrap();
         let child = u32::try_from(values["child_pid"].as_u64().unwrap()).unwrap();
         let _cleanup = HarnessCleanup::new(parent);
-        while !log.with_extension("started.jsonl").exists() {
-            fixture.deadline.remaining("call in flight before SIGKILL");
-            thread::sleep(Duration::from_millis(5));
-        }
+        let server = wait_counting_pid(&log, fixture.deadline);
+        let _mcp_cleanup = McpCleanup { pid: server };
+        assert!(live(server, fixture.deadline), "busy MCP server is running");
         assert!(live(parent, fixture.deadline) && live(child, fixture.deadline));
         let smith_pid = process.id();
         assert!(
@@ -588,8 +590,8 @@ fn killing_smith_mid_turn_stops_harness_and_child_without_graceful_shutdown() {
         );
         let stopped = Deadline::after(Duration::from_secs(5));
         loop {
-            stopped.remaining("SIGKILL supervisor must stop the harness and its child");
-            if !live(parent, stopped) && !live(child, stopped) {
+            stopped.remaining("SIGKILL watchdogs must stop the harness, its child, and MCP server");
+            if !live(parent, stopped) && !live(child, stopped) && !live(server, stopped) {
                 break;
             }
             thread::sleep(Duration::from_millis(5));

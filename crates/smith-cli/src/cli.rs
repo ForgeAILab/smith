@@ -53,6 +53,12 @@ pub(crate) enum Command {
         program: OsString,
         args: Vec<OsString>,
     },
+    /// Hidden lifetime watchdog for a stdio MCP server.
+    McpWatchdog {
+        parent: u32,
+        program: OsString,
+        args: Vec<OsString>,
+    },
 }
 
 /// Which guided setup path was requested.
@@ -252,6 +258,7 @@ pub(crate) fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command,
     match args.front().and_then(|arg| arg.to_str()) {
         Some("mcp-relay") => parse_mcp_relay(args),
         Some("harness-supervise") => parse_harness_supervise(args),
+        Some("mcp-watchdog") => parse_mcp_watchdog(args),
         Some("plugin") => plugin::parse(args),
         Some("config") => parse_config(args),
         Some("sessions") => parse_sessions(args),
@@ -281,6 +288,32 @@ fn parse_harness_supervise(mut args: VecDeque<OsString>) -> Result<Command, Pars
         .filter(|arg| !arg.is_empty())
         .ok_or_else(usage)?;
     Ok(Command::HarnessSupervise {
+        program,
+        args: args.into(),
+    })
+}
+
+fn parse_mcp_watchdog(mut args: VecDeque<OsString>) -> Result<Command, ParseError> {
+    args.pop_front();
+    let usage =
+        || ParseError::new("usage: smith mcp-watchdog --parent <pid> -- <program> [args...]");
+    if args.pop_front().as_deref() != Some(std::ffi::OsStr::new("--parent")) {
+        return Err(usage());
+    }
+    let parent = args
+        .pop_front()
+        .and_then(|value| value.to_str()?.parse::<u32>().ok())
+        .filter(|pid| *pid > 0 && *pid <= i32::MAX as u32)
+        .ok_or_else(usage)?;
+    if args.pop_front().as_deref() != Some(std::ffi::OsStr::new("--")) {
+        return Err(usage());
+    }
+    let program = args
+        .pop_front()
+        .filter(|arg| !arg.is_empty())
+        .ok_or_else(usage)?;
+    Ok(Command::McpWatchdog {
+        parent,
         program,
         args: args.into(),
     })
@@ -770,6 +803,31 @@ mod tests {
     #[test]
     fn no_arguments_selects_the_interactive_surface() {
         assert_eq!(command(&[]), Command::Run(RunArgs::default()));
+    }
+
+    #[test]
+    fn mcp_watchdog_requires_parent_separator_and_program() {
+        assert_eq!(
+            command(&["mcp-watchdog", "--parent", "123", "--", "server", "--flag"]),
+            Command::McpWatchdog {
+                parent: 123,
+                program: "server".into(),
+                args: vec!["--flag".into()],
+            }
+        );
+        for args in [
+            vec!["mcp-watchdog"],
+            vec!["mcp-watchdog", "--parent", "0", "--", "server"],
+            vec!["mcp-watchdog", "--parent", "-1", "--", "server"],
+            vec!["mcp-watchdog", "--parent", "2147483648", "--", "server"],
+            vec!["mcp-watchdog", "--parent", "bad", "--", "server"],
+            vec!["mcp-watchdog", "--parent", "123", "server"],
+            vec!["mcp-watchdog", "--parent", "123", "--"],
+            vec!["mcp-watchdog", "--parent", "123", "--", ""],
+        ] {
+            assert!(parse(args.into_iter().map(OsString::from)).is_err());
+        }
+        assert!(!HELP.contains("mcp-watchdog"));
     }
 
     #[test]

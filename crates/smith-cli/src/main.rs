@@ -22,6 +22,7 @@ mod logging;
 mod login_progress;
 mod mcp;
 mod mcp_relay;
+mod mcp_watchdog;
 mod modules;
 mod plugin_command;
 mod plugins;
@@ -107,6 +108,11 @@ async fn execute(command: Command) -> Result<u8> {
         Command::HarnessSupervise { program, args } => {
             harness_supervise::run(&program, &args).await
         }
+        Command::McpWatchdog {
+            parent,
+            program,
+            args,
+        } => mcp_watchdog::run(parent, &program, &args).await,
         Command::ConfigExplain { key, selection } => {
             explain_config(&key, &selection)?;
             Ok(0)

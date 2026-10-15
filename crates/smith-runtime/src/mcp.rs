@@ -118,6 +118,8 @@ pub struct McpServerReport {
 pub struct McpOptions {
     /// The canonical project trust decisions are recorded against.
     pub project: PathBuf,
+    /// Smith binary used to supervise stdio servers; embeddings may omit it.
+    pub smith_executable: Option<PathBuf>,
     /// How a configured credential reference becomes a secret.
     pub credentials: Option<CredentialResolver>,
     /// How long a platform credential lookup may wait for access.
@@ -158,6 +160,7 @@ impl std::fmt::Debug for McpOptions {
         formatter
             .debug_struct("McpOptions")
             .field("project", &self.project)
+            .field("smith_executable", &self.smith_executable)
             .field("has_credentials", &self.credentials.is_some())
             .field("credential_timeout_ms", &self.credential_timeout_ms)
             .field("startup_timeout", &self.startup_timeout)
@@ -175,6 +178,7 @@ impl McpOptions {
     pub fn new(project: impl Into<PathBuf>) -> Self {
         Self {
             project: project.into(),
+            smith_executable: None,
             credentials: None,
             credential_timeout_ms: 10_000,
             startup_timeout: Duration::from_millis(DEFAULT_STARTUP_TIMEOUT_MS),
@@ -187,6 +191,12 @@ impl McpOptions {
     /// Supplies the resolver that turns a credential reference into a secret.
     pub fn with_credentials(mut self, credentials: Option<CredentialResolver>) -> Self {
         self.credentials = credentials;
+        self
+    }
+
+    /// Supplies the Smith binary hosting the private MCP watchdog.
+    pub fn with_smith_executable(mut self, executable: Option<PathBuf>) -> Self {
+        self.smith_executable = executable;
         self
     }
 
@@ -240,19 +250,38 @@ pub struct ClientConnector;
 #[async_trait]
 impl McpConnector for ClientConnector {
     async fn connect(&self, config: &McpServerConfig) -> Result<McpConnected, McpError> {
+        WatchdogConnector {
+            smith_executable: None,
+        }
+        .connect(config)
+        .await
+    }
+}
+
+#[derive(Debug)]
+struct WatchdogConnector {
+    #[cfg_attr(not(unix), allow(dead_code))]
+    smith_executable: Option<PathBuf>,
+}
+
+#[async_trait]
+impl McpConnector for WatchdogConnector {
+    async fn connect(&self, config: &McpServerConfig) -> Result<McpConnected, McpError> {
         #[cfg(unix)]
-        let connection = match &config.transport {
-            McpTransport::Stdio { .. } => {
-                let transport = stdio::spawn(config).map_err(|error| McpError::Startup {
-                    server: config.name.clone(),
-                    reason: error.to_string(),
-                })?;
-                McpClient::new()
-                    .connect_over(config.name.clone(), transport, config.startup_timeout)
-                    .await?
-            }
-            _ => McpClient::new().connect(config).await?,
-        };
+        let connection =
+            match &config.transport {
+                McpTransport::Stdio { .. } => {
+                    let transport = stdio::spawn(config, self.smith_executable.as_deref())
+                        .map_err(|error| McpError::Startup {
+                            server: config.name.clone(),
+                            reason: error.to_string(),
+                        })?;
+                    McpClient::new()
+                        .connect_over(config.name.clone(), transport, config.startup_timeout)
+                        .await?
+                }
+                _ => McpClient::new().connect(config).await?,
+            };
         #[cfg(not(unix))]
         let connection = McpClient::new().connect(config).await?;
         let advertised = connection.list_tools().await?;
@@ -320,7 +349,10 @@ impl McpSupervisor {
         trust: &TrustStore,
         options: McpOptions,
     ) -> Result<Arc<Self>, RuntimeError> {
-        Self::planned_with(mcp, trust, options, Arc::new(ClientConnector))
+        let connector = Arc::new(WatchdogConnector {
+            smith_executable: options.smith_executable.clone(),
+        });
+        Self::planned_with(mcp, trust, options, connector)
     }
 
     /// [`Self::plan`], reaching servers through `connector`.
