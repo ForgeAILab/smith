@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-15T09:41:45Z
-updated_at: 2026-10-15T09:41:45Z
+updated_at: 2026-10-15T10:21:59Z
 ---
 
 ## Why
@@ -15,7 +15,9 @@ running until its call finishes and it reads the closed input.
 The owner asked for all three on 2026-10-15: "/quit should quit right away
 without confirmation as user typed", "we should have some hard limit on the
 timeout as well" (answered: total exit time, and MCP servers after SIGKILL).
-That request is the approval for this change.
+The owner chose the behavior; the 10 s value, the 2 s MCP reserve, the
+watchdog design, and the TUI's new SIGTERM/SIGHUP handling are
+implementation choices recorded in `design.md` for the owner to review.
 
 ## What Changes
 
