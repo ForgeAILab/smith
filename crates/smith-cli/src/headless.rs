@@ -17,7 +17,7 @@ mod file_commands;
 mod fold;
 mod output;
 mod run_flow;
-mod signals;
+pub(crate) mod signals;
 
 #[cfg(unix)]
 pub(crate) use signals::shutdown_stdio_servers;

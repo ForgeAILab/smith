@@ -112,14 +112,6 @@ fn confirmation_cases() -> Vec<ConfirmationCase> {
             accept: None,
             cancel: None,
         },
-        ConfirmationCase {
-            title: "exit",
-            tone: Tone::Warning,
-            warning: Some("quit with work in progress?"),
-            label: "quit",
-            accept: Some(Action::Quit),
-            cancel: None,
-        },
     ]
 }
 
@@ -159,10 +151,6 @@ async fn open_confirmation_case(
             let pending = tokio::spawn(async move { policy.decide(&request).await });
             app.present_rotation(requests.recv().await.expect("rotation offer"));
             return Some(pending);
-        }
-        10 => {
-            app.status.activity = crate::status::Activity::Working;
-            app.request_exit();
         }
         _ => unreachable!("enumerated confirmation kind"),
     }
@@ -211,7 +199,7 @@ async fn every_confirmation_preserves_its_labels_scrolls_and_has_guarded_decisio
             assert_eq!(
                 dialog.accept_tone,
                 match index {
-                    0..=2 | 10 => Tone::Danger,
+                    0..=2 => Tone::Danger,
                     3 | 4 => Tone::Warning,
                     _ => Tone::Accent,
                 }
@@ -222,13 +210,12 @@ async fn every_confirmation_preserves_its_labels_scrolls_and_has_guarded_decisio
                     3 => "leave untrusted",
                     4 => "leave withheld",
                     9 => "stay",
-                    10 => "keep working",
                     _ => "cancel",
                 }
             );
-            assert_eq!(dialog.cancel_key, if index == 10 { "n" } else { "n/esc" });
+            assert_eq!(dialog.cancel_key, "n/esc");
             assert_ne!(dialog.body.last().map(String::as_str), Some(""));
-            // The child, exit, and rotation sources have short authored bodies;
+            // The child and rotation sources have short authored bodies;
             // exercise the same viewport with long content for these too.
             if index >= 6 {
                 dialog.body.extend(long_body.lines().map(str::to_owned));
@@ -302,10 +289,7 @@ async fn every_confirmation_preserves_its_labels_scrolls_and_has_guarded_decisio
                 case.title
             );
             assert!(app.overlay.is_none());
-            assert_eq!(
-                app.should_quit,
-                index == 10 && decision == KeyCode::Char('y')
-            );
+            assert!(!app.should_quit);
             if let Some(rotation) = rotation {
                 assert_eq!(
                     rotation.await.expect("rotation decision"),
@@ -446,19 +430,35 @@ fn confirmation_decisions_present_the_next_prompt() {
 }
 
 #[tokio::test]
-async fn exit_confirmation_retains_the_approval_and_questionnaire_lines() {
+async fn quit_cancels_visible_and_queued_prompts_and_retains_the_stopped_work() {
     let mut app = app();
-    app.present_approval(prompt("shell").await);
+    app.apply(&event(RuntimeEvent::TurnStarted));
+    let (approval, decision) =
+        pending_prompt_with("shell", serde_json::json!({"command": "build"})).await;
+    let (queued, queued_decision) =
+        pending_prompt_with("shell", serde_json::json!({"command": "test"})).await;
+    app.present_approval(approval);
+    app.present_approval(queued);
     app.present_questionnaire(questionnaire_form("question", Deadline::never()));
-    app.request_exit();
-    elapse_prompt_guard(&mut app);
-    app.on_key(key(KeyCode::Char('n')));
-    app.on_key(key(KeyCode::Esc));
-    let screen = confirmation_screen(&mut app, 100, 40);
-    assert!(screen.contains("quit with work in progress?"), "{screen}");
-    assert!(screen.contains("· an approval is pending"), "{screen}");
-    assert!(screen.contains("· a questionnaire is pending"), "{screen}");
-    assert!(screen.contains("y quit   n keep working"), "{screen}");
+    assert_eq!(app.request_exit(), Some(Action::Quit));
+    assert!(app.should_quit);
+    assert!(app.overlay.is_none());
+    assert_eq!(app.queued_prompt_count(), 0);
+    assert_eq!(
+        decision.await.expect("cancelled approval"),
+        ApprovalDecision::Cancelled
+    );
+    assert_eq!(
+        queued_decision.await.expect("cancelled queued approval"),
+        ApprovalDecision::Cancelled
+    );
+    assert!(
+        matches!(app.take_questionnaire_resolution(), Some((id, QuestionnaireResolution::Cancelled)) if id == "question")
+    );
+    assert_eq!(
+        app.stopped_work.as_deref(),
+        Some("the running turn, 2 approvals, 1 questionnaire")
+    );
 }
 
 #[test]

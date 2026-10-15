@@ -342,22 +342,19 @@ fn recovery_and_trust_confirmations_ignore_typing_until_the_quiet_boundary() {
 }
 
 #[tokio::test]
-async fn an_approval_queued_after_exit_requires_a_new_quiet_window() {
+async fn quitting_during_an_approvals_quiet_window_cancels_it_immediately() {
     let mut app = app();
-    let clock = prompt_clock(&mut app);
-    app.present_approval(prompt("shell").await);
-    clock.advance(500);
-    assert_eq!(app.request_exit(), None);
-    app.on_key(key(KeyCode::Char('n')));
-    assert!(matches!(&app.overlay, Some(Overlay::Confirm(dialog)) if dialog.title == "exit"));
-    app.present_approval(prompt("shell").await);
-    clock.advance(500);
-    app.on_key(key(KeyCode::Char('n')));
-    assert_eq!(app.on_key(key(KeyCode::Char('a'))), None);
-    assert!(matches!(app.overlay, Some(Overlay::Approval { .. })));
-    clock.advance(500);
-    app.on_key(key(KeyCode::Esc));
+    prompt_clock(&mut app);
+    let (approval, decision) =
+        pending_prompt_with("shell", serde_json::json!({"command": "build"})).await;
+    app.present_approval(approval);
+    assert_eq!(app.request_exit(), Some(Action::Quit));
+    assert!(app.should_quit);
     assert!(app.overlay.is_none());
+    assert_eq!(
+        decision.await.expect("cancelled approval"),
+        ApprovalDecision::Cancelled
+    );
 }
 
 #[test]

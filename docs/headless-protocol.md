@@ -313,7 +313,12 @@ an explicit trusted automation policy such as `--approval allow-all`.
 
 A run that receives `SIGINT`, `SIGTERM`, or `SIGHUP` cancels its turn, lets
 the normal shutdown save the session, and ends with the `cancelled` result
-and exit status 1. A second signal exits at once with status 1 and no
+and exit status 1. One fixed process-wide 10 s exit deadline starts at the first
+signal, or when a headless run starts host shutdown. Host shutdown uses the
+remaining time with 2 s reserved for MCP cleanup; if it times out, the terminal
+result reports `exit deadline reached`. At 10 s a backstop restores the
+terminal, kills remaining stdio MCP servers, reports the deadline on stderr,
+and exits with status 1. A second signal exits at once with status 1 and no
 result.
 
 An interaction-required payload contains `request_id` and `question_count`

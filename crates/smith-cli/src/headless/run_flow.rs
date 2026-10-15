@@ -41,7 +41,7 @@ pub(super) async fn run_with_io(
     let mut signals = match StopSignals::new().context("installing headless signal handlers") {
         Ok(signals) => signals,
         Err(error) => {
-            let _ = host.shutdown().await;
+            let _ = crate::exit_deadline::shutdown_host(host).await;
             return Err(error);
         }
     };
@@ -53,7 +53,7 @@ pub(super) async fn run_with_io(
             let result = run_inner(host, prompt, format, brokers, background_exit, stdout, stderr, &stop).await;
             // Also cover early rendering/submission errors. Shutdown is
             // idempotent when the normal result path already drained it.
-            let _ = host.shutdown().await;
+            let _ = crate::exit_deadline::shutdown_host(host).await;
             result
         } => result,
     }
@@ -155,7 +155,7 @@ async fn run_inner(
             && let Err(error) =
                 writeln!(stderr, "smith: {}", notice.text).and_then(|()| stderr.flush())
         {
-            let _ = host.shutdown().await;
+            let _ = crate::exit_deadline::shutdown_host(host).await;
             return Err(error).context("writing hosted-search notice");
         }
         let policy = host.runtime().policy();
@@ -168,7 +168,7 @@ async fn run_inner(
         ) {
             let written = writeln!(stderr, "smith: {}", notice.text).and_then(|()| stderr.flush());
             if let Err(error) = written {
-                let _ = host.shutdown().await;
+                let _ = crate::exit_deadline::shutdown_host(host).await;
                 return Err(error).context("writing image-input notice");
             }
         }
@@ -183,7 +183,7 @@ async fn run_inner(
                 },
             )
         {
-            let _ = host.shutdown().await;
+            let _ = crate::exit_deadline::shutdown_host(host).await;
             return Err(error);
         }
         let observed_delivery = fold.observed_delivery_revision;
@@ -218,7 +218,10 @@ async fn run_inner(
     let (background_exit_error, background_exit_output) =
         apply_background_exit_policy(host.background_tasks(), session.id(), background_exit).await;
 
-    let shutdown_error = host.shutdown().await.err().map(|error| error.to_string());
+    let shutdown_error = crate::exit_deadline::shutdown_host(host)
+        .await
+        .err()
+        .map(|error| error.to_string());
 
     // SessionShutdown is queued before shutdown returns. Include it in the
     // stream without risking an indefinite wait if a future runtime changes
@@ -616,7 +619,10 @@ pub(super) async fn shutdown_and_write_stream_tail(
     stdout: &mut impl Write,
 ) -> Result<(Option<String>, Option<CacheControllerSnapshot>)> {
     let mut events = (format == OutputFormat::StreamJson).then(|| host.client().events());
-    let shutdown_error = host.shutdown().await.err().map(|error| error.to_string());
+    let shutdown_error = crate::exit_deadline::shutdown_host(host)
+        .await
+        .err()
+        .map(|error| error.to_string());
 
     if let Some(events) = events.as_mut() {
         while let Ok(Some(event)) =

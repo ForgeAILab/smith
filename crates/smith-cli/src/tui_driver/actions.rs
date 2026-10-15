@@ -239,11 +239,18 @@ impl TuiLoop<'_> {
         }
     }
 
-    fn on_quit(&self) -> InteractiveExit {
+    pub(super) fn on_quit(&mut self) -> InteractiveExit {
+        crate::exit_deadline::start();
+        if !self.app.should_quit {
+            self.app.request_exit();
+        }
+        self.interactions.drain_answers(&mut self.app);
         InteractiveExit::Quit(
             Box::new(self.app.session_usage()),
             self.app.status.price().cloned(),
             self.app.status.cache_summary().map(Box::new),
+            self.app.stopped_work.clone(),
+            None,
         )
     }
 

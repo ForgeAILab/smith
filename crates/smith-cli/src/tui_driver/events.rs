@@ -145,11 +145,7 @@ impl TuiLoop<'_> {
                 self.dirty = true;
             }
             None => {
-                return Some(InteractiveExit::Quit(
-                    Box::new(self.app.session_usage()),
-                    self.app.status.price().cloned(),
-                    self.app.status.cache_summary().map(Box::new),
-                ));
+                return Some(self.on_quit());
             }
         }
         None
@@ -337,7 +333,7 @@ impl TuiLoop<'_> {
         // Same cadence as the account refresh above: the TUI never
         // reaches the registry itself, so this poll-on-redraw is the
         // only path by which a task's start or terminal state
-        // reaches operational status and the exit-confirm gate.
+        // reaches operational status and the exit summary.
         self.app.set_running_tasks(
             self.host
                 .background_tasks()
@@ -406,11 +402,7 @@ impl TuiLoop<'_> {
         self.host
             .set_goal_continuation_enabled(!self.app.should_defer_goal_continuation());
         if self.app.should_quit {
-            return Some(InteractiveExit::Quit(
-                Box::new(self.app.session_usage()),
-                self.app.status.price().cloned(),
-                self.app.status.cache_summary().map(Box::new),
-            ));
+            return Some(self.on_quit());
         }
         None
     }

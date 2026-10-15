@@ -317,10 +317,6 @@ impl App {
                 return match outcome {
                     ConfirmOutcome::Action(action) => {
                         match &action {
-                            Action::Quit => {
-                                self.cancel_pending_prompts();
-                                self.should_quit = true;
-                            }
                             Action::StartAgent { .. }
                             | Action::FollowUpAgent { .. }
                             | Action::ResumeAgent { .. } => {
@@ -377,9 +373,7 @@ impl App {
             .is_some_and(|previous| now.duration_since(previous) < FORCE_QUIT_WINDOW);
 
         if second_press {
-            self.cancel_pending_prompts();
-            self.should_quit = true;
-            return Some(Action::Quit);
+            return self.request_exit();
         }
 
         self.last_ctrl_c = Some(now);
@@ -464,58 +458,42 @@ impl App {
         }
     }
 
-    pub(super) fn request_exit(&mut self) -> Option<Action> {
-        if !self.has_live_work() {
-            self.cancel_pending_prompts();
-            self.should_quit = true;
-            return Some(Action::Quit);
-        }
+    /// Captures live work and cancels prompts before leaving the terminal.
+    pub fn request_exit(&mut self) -> Option<Action> {
+        self.stopped_work = self.live_work_summary();
+        self.cancel_pending_prompts();
+        self.should_quit = true;
+        Some(Action::Quit)
+    }
 
-        let mut body = vec![String::new()];
+    fn live_work_summary(&self) -> Option<String> {
+        let mut work = Vec::new();
         if self.is_busy() {
-            body.push("· a turn is still running".to_owned());
+            work.push("the running turn".to_owned());
         }
-        if self.pending_approval_count() > 0 {
-            body.push("· an approval is pending".to_owned());
+        for (count, label) in [
+            (self.pending_approval_count(), "approval"),
+            (self.pending_questionnaire_count(), "questionnaire"),
+        ] {
+            if count > 0 {
+                work.push(format!(
+                    "{count} {label}{}",
+                    if count == 1 { "" } else { "s" }
+                ));
+            }
         }
-        if self.pending_questionnaire_count() > 0 {
-            body.push("· a questionnaire is pending".to_owned());
-        }
-        if !self.running_tasks.is_empty() {
-            let ids = self
-                .running_tasks
+        work.extend(
+            self.running_tasks
                 .iter()
-                .map(|task| task.task_id.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            body.push(format!(
-                "· {} background {} running: {ids}",
-                self.running_tasks.len(),
-                if self.running_tasks.len() == 1 {
-                    "task"
-                } else {
-                    "tasks"
-                }
-            ));
-        }
-        let mut dialog = ConfirmDialog::new(
-            "exit",
-            crate::theme::Tone::Warning,
-            body,
-            "quit",
-            ConfirmOutcome::Action(Action::Quit),
-            ConfirmOutcome::Dismiss,
+                .map(|task| format!("background task {}", task.task_id)),
         );
-        dialog.warning = Some((
-            "quit with work in progress?".to_owned(),
-            crate::theme::Tone::Heading,
-        ));
-        dialog.accept_tone = crate::theme::Tone::Danger;
-        dialog.cancel_key = "n";
-        dialog.cancel_label = "keep working".to_owned();
-        dialog.hint = "y quit · n keep working".to_owned();
-        self.open_overlay(Overlay::Confirm(dialog));
-        None
+        work.extend(
+            self.children
+                .iter()
+                .filter(|(_, child)| child.is_live())
+                .map(|(id, _)| format!("child {id}")),
+        );
+        (!work.is_empty()).then(|| work.join(", "))
     }
 
     pub(super) fn cancel_pending_prompts(&mut self) {

@@ -7,9 +7,10 @@
 //! crash prints a readable backtrace instead of a scrambled one.
 
 use std::io::{Stdout, Write, stdout};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
-use crossterm::cursor::MoveTo;
+use crossterm::cursor::{MoveTo, Show};
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -18,6 +19,11 @@ use crossterm::terminal::{
 use ratatui::backend::CrosstermBackend;
 
 type Inner = ratatui::Terminal<CrosstermBackend<Stdout>>;
+
+/// Whether raw mode and the alternate screen are in effect, so exit paths that
+/// cannot reach the [`Terminal`] restore only what Smith changed. A headless
+/// run never enters, and must not have escape sequences written for it.
+static ENTERED: AtomicBool = AtomicBool::new(false);
 
 /// An entered terminal that restores global shell state on every exit path.
 pub(crate) struct Terminal {
@@ -91,6 +97,7 @@ pub(crate) fn enter() -> Result<Terminal> {
         let _ = disable_raw_mode();
         return Err(error.into());
     }
+    ENTERED.store(true, Ordering::SeqCst);
 
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -127,9 +134,35 @@ fn clear_screen(writer: &mut impl Write) -> std::io::Result<()> {
 
 /// Restores the terminal. Safe to call more than once.
 pub(crate) fn leave() -> Result<()> {
+    ENTERED.store(false, Ordering::SeqCst);
     leave_screen(&mut stdout())?;
     disable_raw_mode()?;
     Ok(())
+}
+
+/// Avoid stdio locks when the exit backstop runs beside a blocked runtime.
+pub(crate) fn restore_best_effort() {
+    if !ENTERED.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    let _ = disable_raw_mode();
+    #[cfg(unix)]
+    use std::os::fd::AsFd;
+    #[cfg(unix)]
+    if let Ok(mut output) = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/tty")
+        .or_else(|_| {
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .map(std::fs::File::from)
+        })
+    {
+        let _ = leave_screen(&mut output);
+    }
+    #[cfg(not(unix))]
+    let _ = leave_screen(&mut std::io::stderr());
 }
 
 /// Button presses (`1000`), drag motion while a button is held (`1002`), and
@@ -154,8 +187,8 @@ fn enter_screen(writer: &mut impl Write) -> std::io::Result<()> {
 }
 
 fn leave_screen(writer: &mut impl Write) -> std::io::Result<()> {
-    write!(writer, "{DISABLE_MOUSE}")?;
-    execute!(writer, DisableBracketedPaste, LeaveAlternateScreen)
+    write!(writer, "{DISABLE_MOUSE}\u{1b}[?1003l")?;
+    execute!(writer, DisableBracketedPaste, LeaveAlternateScreen, Show)
 }
 
 #[cfg(test)]
@@ -216,6 +249,8 @@ mod tests {
         let left = String::from_utf8(left).expect("ANSI is UTF-8");
         assert!(left.contains("\u{1b}[?2004l"), "{left:?}");
         assert!(left.contains("\u{1b}[?1049l"), "{left:?}");
+        assert!(left.contains("\u{1b}[?25h"), "{left:?}");
+        assert!(left.contains("?1003l"), "{left:?}");
         for code in ["1000", "1002", "1006"] {
             assert!(left.contains(&format!("?{code}l")), "{left:?}");
         }

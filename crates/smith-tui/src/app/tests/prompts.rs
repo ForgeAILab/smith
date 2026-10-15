@@ -24,8 +24,10 @@
         let mut busy = app();
         busy.apply(&event(RuntimeEvent::TurnStarted));
         type_text(&mut busy, "/quit");
-        assert_eq!(busy.on_key(key(KeyCode::Enter)), None);
-        assert!(matches!(busy.overlay, Some(Overlay::Confirm(_))));
+        assert_eq!(busy.on_key(key(KeyCode::Enter)), Some(Action::Quit));
+        assert!(busy.should_quit);
+        assert!(busy.overlay.is_none());
+        assert_eq!(busy.stopped_work.as_deref(), Some("the running turn"));
     }
 
     #[test]
@@ -88,20 +90,19 @@
     }
 
     #[tokio::test]
-    async fn an_explicit_exit_queues_behind_the_pending_approval() {
+    async fn an_explicit_exit_cancels_the_pending_approval_without_confirmation() {
         let mut app = app();
-        app.present_approval(prompt("shell").await);
-
-        assert_eq!(app.request_exit(), None);
-        assert!(matches!(app.overlay, Some(Overlay::Approval { .. })));
-        assert_eq!(app.queued_prompt_count(), 1);
-        elapse_prompt_guard(&mut app);
-        app.on_key(key(KeyCode::Char('n')));
-        assert!(matches!(&app.overlay, Some(Overlay::Confirm(dialog)) if dialog.title == "exit"));
-        elapse_prompt_guard(&mut app);
-        assert_eq!(app.on_key(key(KeyCode::Char('n'))), None);
+        let (approval, decision) =
+            pending_prompt_with("shell", serde_json::json!({"command": "build"})).await;
+        app.present_approval(approval);
+        assert_eq!(app.request_exit(), Some(Action::Quit));
         assert!(app.overlay.is_none());
-        assert!(!app.should_quit);
+        assert_eq!(app.queued_prompt_count(), 0);
+        assert!(app.should_quit);
+        assert_eq!(
+            decision.await.expect("cancelled approval"),
+            ApprovalDecision::Cancelled
+        );
     }
 
     #[tokio::test]

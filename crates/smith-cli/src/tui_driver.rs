@@ -51,11 +51,14 @@ pub(super) enum InteractiveExit {
     /// The session's usage, plus the price reference it was resolved against
     /// (if any) — carried out here because the exit report needs the identical
     /// reference `/status` read from during the session rather than a fresh
-    /// catalog lookup of its own.
+    /// catalog lookup of its own. The stopped work and shutdown diagnostic
+    /// also travel out so they can be printed after terminal restoration.
     Quit(
         Box<smith_client::status::SessionUsage>,
         Option<smith_client::status::PriceReference>,
         Option<Box<smith_client::cache::CacheTurnSummary>>,
+        Option<String>,
+        Option<String>,
     ),
     Reconfigure(SelectionCommand),
     ModuleSwitch(smith_client::commands::ModuleSwitchRequest),
@@ -248,76 +251,115 @@ pub(super) async fn run_interactive(
     resources: InteractiveResources,
     presentation: PresentationOptions,
 ) -> Result<(InteractiveExit, InteractiveApp)> {
-    let InteractiveApp {
-        app,
-        session,
-        binding,
-    } = prepare_interactive_app(host, project, &resources, &presentation, previous).await;
-    let InteractiveRequests {
-        keys,
-        approvals,
-        interactions,
-        rotations,
-        accounts,
-    } = requests;
-    let InteractiveResources {
-        agents,
-        catalog,
-        inventory,
-        credential_pool,
-        mcp,
-        skills,
-        commands,
-        ..
-    } = resources;
-    let theme =
-        crate::screen_runner::theme_from_flags(presentation.no_color, presentation.no_motion);
-    let mut run_result = run_tui(
-        terminal,
-        app,
-        TuiRunInputs {
+    let mut signals = match crate::headless::signals::StopSignals::new() {
+        Ok(signals) => signals,
+        Err(error) => {
+            let _ = crate::exit_deadline::shutdown_host(host).await;
+            return Err(error).context("installing terminal signal handlers");
+        }
+    };
+    let stop = crate::headless::signals::StopState::default();
+    let run = async {
+        let InteractiveApp {
+            app,
+            session,
+            binding,
+        } = prepare_interactive_app(host, project, &resources, &presentation, previous).await;
+        let InteractiveRequests {
             keys,
-            host,
-            project,
             approvals,
             interactions,
             rotations,
             accounts,
+        } = requests;
+        let InteractiveResources {
+            agents,
+            catalog,
+            inventory,
             credential_pool,
-            agents: &agents,
-            catalog: &catalog,
-            inventory: &inventory,
-            theme,
             mcp,
             skills,
             commands,
-        },
-    )
-    .await;
-    let shutdown_result = host
-        .shutdown()
-        .await
-        .map_err(|error| anyhow::anyhow!("{error}"))
+            ..
+        } = resources;
+        let theme =
+            crate::screen_runner::theme_from_flags(presentation.no_color, presentation.no_motion);
+        let mut run_result = run_tui(
+            terminal,
+            app,
+            TuiRunInputs {
+                keys,
+                host,
+                project,
+                approvals,
+                interactions,
+                rotations,
+                accounts,
+                credential_pool,
+                agents: &agents,
+                catalog: &catalog,
+                inventory: &inventory,
+                theme,
+                mcp,
+                skills,
+                commands,
+            },
+            &stop,
+        )
+        .await;
+        let exiting = matches!(&run_result, Ok((InteractiveExit::Quit(..), _)) | Err(_));
+        let shutdown_result = if exiting {
+            crate::exit_deadline::shutdown_host(host).await
+        } else {
+            tokio::select! {
+                result = host.shutdown() => result.map(|_| ()).map_err(|error| anyhow::anyhow!("{error}")),
+                _ = stop.changed() => crate::exit_deadline::shutdown_host(host).await,
+            }
+        }
         .context("shutting the session down");
 
-    if let Ok((InteractiveExit::Quit(usage, ..), _)) = &mut run_result {
-        let snapshot = host.snapshot();
-        usage.reconcile_synthetic_records(snapshot.usage.records());
-        usage.reconcile_advisor_records(snapshot.usage.records());
-        usage.reconcile_vision_records(snapshot.usage.records());
-    }
+        if stop.interrupted()
+            && let Ok((exit, app)) = &mut run_result
+            && !matches!(exit, InteractiveExit::Quit(..))
+        {
+            app.request_exit();
+            *exit = InteractiveExit::Quit(
+                Box::new(app.session_usage()),
+                app.status.price().cloned(),
+                app.status.cache_summary().map(Box::new),
+                app.stopped_work.clone(),
+                None,
+            );
+        }
 
-    shutdown_result?;
-    run_result.map(|(exit, app)| {
-        (
-            exit,
-            InteractiveApp {
-                app,
-                session,
-                binding,
-            },
-        )
-    })
+        if let Ok((InteractiveExit::Quit(usage, ..), _)) = &mut run_result {
+            let snapshot = host.snapshot();
+            usage.reconcile_synthetic_records(snapshot.usage.records());
+            usage.reconcile_advisor_records(snapshot.usage.records());
+            usage.reconcile_vision_records(snapshot.usage.records());
+        }
+
+        if let Ok((InteractiveExit::Quit(_, _, _, _, error), _)) = &mut run_result {
+            *error = shutdown_result.err().map(|error| format!("{error:#}"));
+        } else {
+            shutdown_result?;
+        }
+        run_result.map(|(exit, app)| {
+            (
+                exit,
+                InteractiveApp {
+                    app,
+                    session,
+                    binding,
+                },
+            )
+        })
+    };
+    tokio::select! {
+        biased;
+        _ = signals.watch(host, &stop) => unreachable!("signal watcher runs until exit"),
+        result = run => result,
+    }
 }
 
 /// Forwards one live child's own event stream into the client's single event
@@ -423,13 +465,15 @@ pub(super) async fn run_tui(
     terminal: &mut terminal::Terminal,
     app: App,
     inputs: TuiRunInputs<'_>,
+    stop: &crate::headless::signals::StopState,
 ) -> Result<(InteractiveExit, App)> {
-    run_tui_on(terminal.inner_mut(), TuiLoop::new(app, inputs)).await
+    run_tui_on(terminal.inner_mut(), TuiLoop::new(app, inputs), stop).await
 }
 
 async fn run_tui_on<B>(
     terminal: &mut ratatui::Terminal<B>,
     mut tui: TuiLoop<'_>,
+    stop: &crate::headless::signals::StopState,
 ) -> Result<(InteractiveExit, App)>
 where
     B: ratatui::backend::Backend,
@@ -437,8 +481,10 @@ where
 {
     let exit = loop {
         tokio::select! {
-            // Keyboard first: a provider flood must not starve cancellation.
+            // Stop signals and keyboard input must not be starved by a provider flood.
             biased;
+
+            _ = stop.changed() => break tui.on_quit(),
 
             Some(key) = tui.keys.next() => {
                 if let Some(exit) = tui.on_terminal_event(terminal, key).await? {
@@ -667,7 +713,7 @@ pub(super) fn plugin_switch_exit(
 /// Bounds a background task's command for compact, single-line display.
 ///
 /// The registry keeps the exact command for its own purposes; the footer and
-/// exit-confirm modal only need enough to recognize which task is which.
+/// exit summary only need enough to recognize which task is which.
 fn compact_command_hint(command: &str) -> String {
     const MAX_CHARS: usize = 60;
     let collapsed = command.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -790,7 +836,11 @@ pub(super) async fn run_scripted_tui(
     tui.remote_tools_pending = recompose;
     tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        run_tui_on(&mut terminal, tui),
+        run_tui_on(
+            &mut terminal,
+            tui,
+            &crate::headless::signals::StopState::default(),
+        ),
     )
     .await
     .context("scripted loop did not reach an exit")?

@@ -10,22 +10,22 @@ use tokio::signal::unix::{Signal, SignalKind, signal};
 use tokio::sync::Notify;
 
 #[derive(Default)]
-pub(super) struct StopState {
+pub(crate) struct StopState {
     interrupted: Cell<bool>,
     changed: Notify,
 }
 
 impl StopState {
-    pub(super) fn interrupted(&self) -> bool {
+    pub(crate) fn interrupted(&self) -> bool {
         self.interrupted.get()
     }
 
-    pub(super) async fn changed(&self) {
+    pub(crate) async fn changed(&self) {
         self.changed.notified().await;
     }
 }
 
-pub(super) struct StopSignals {
+pub(crate) struct StopSignals {
     #[cfg(unix)]
     interrupt: Signal,
     #[cfg(unix)]
@@ -35,7 +35,7 @@ pub(super) struct StopSignals {
 }
 
 impl StopSignals {
-    pub(super) fn new() -> Result<Self> {
+    pub(crate) fn new() -> Result<Self> {
         Ok(Self {
             #[cfg(unix)]
             interrupt: signal(SignalKind::interrupt())?,
@@ -46,11 +46,13 @@ impl StopSignals {
         })
     }
 
-    pub(super) async fn watch(&mut self, host: &HostSession, state: &StopState) {
+    pub(crate) async fn watch(&mut self, host: &HostSession, state: &StopState) {
         loop {
             self.next().await;
+            crate::exit_deadline::start();
             if state.interrupted.replace(true) {
                 // A second signal must not wait for tool cleanup or storage.
+                crate::terminal::restore_best_effort();
                 #[cfg(unix)]
                 smith_runtime::mcp::kill_stdio_servers();
                 std::process::exit(1);

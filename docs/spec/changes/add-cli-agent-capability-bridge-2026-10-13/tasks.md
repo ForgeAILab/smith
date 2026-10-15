@@ -387,7 +387,7 @@ anything else"). Findings are in `docs/qa/live-2026-10-14/findings.md`.
 
 Not in this section: the runtime conformance flake
 `session::one_shutdown_deadline_bounds_all_active_turns` (ForgeAILab/smith#4)
-needs an Agent Runtime commit and a pin move, so it goes with the runtime
-branch that becomes the release pin. The 5 s command-provider probe timeout
+and stopping a busy stdio MCP server after Smith is SIGKILLed are in
+`update-exit-bounds-2026-10-15`. The 5 s command-provider probe timeout
 was never observed to fail; the runtime already exposes
 `CommandLimits::with_probe_timeout` if it does.

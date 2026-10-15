@@ -709,6 +709,10 @@ pub(super) fn session_resume_hint(host: &HostSession) -> Option<String> {
 /// cleanup is best effort so a filesystem error never prevents the terminal
 /// surface from exiting.
 pub(super) async fn remove_empty_interactive_session(host: &HostSession) {
+    remove_empty_session(host, true).await;
+}
+
+async fn remove_empty_session(host: &HostSession, exiting: bool) {
     if !host
         .session()
         .history()
@@ -716,8 +720,17 @@ pub(super) async fn remove_empty_interactive_session(host: &HostSession) {
         .any(|message| message.role == agent_runtime_core::content::Role::User)
         && let Some(paths) = host.paths()
     {
-        let _ = host.shutdown().await;
-        let _ = paths.remove_session_files(host.session().id()).await;
+        let shutdown = if exiting {
+            crate::exit_deadline::shutdown_host(host).await
+        } else {
+            host.shutdown()
+                .await
+                .map(|_| ())
+                .map_err(|error| anyhow::anyhow!("{error}"))
+        };
+        if shutdown.is_ok() {
+            let _ = paths.remove_session_files(host.session().id()).await;
+        }
     }
 }
 
@@ -889,7 +902,7 @@ async fn run_interactive_hosts(
             match terminal::enter() {
                 Ok(entered) => *terminal = Some(entered),
                 Err(error) => {
-                    let _ = host.shutdown().await;
+                    let _ = crate::exit_deadline::shutdown_host(&host).await;
                     return Err(error).context("entering the alternate screen");
                 }
             }
@@ -931,7 +944,7 @@ async fn run_interactive_hosts(
         .await?;
         app = Some(retained);
         match exit {
-            InteractiveExit::Quit(usage, price, cache) => {
+            InteractiveExit::Quit(usage, price, cache, stopped, shutdown_error) => {
                 terminal.restore().context("restoring the terminal")?;
                 report_session_usage(
                     &host,
@@ -940,7 +953,14 @@ async fn run_interactive_hosts(
                     price.as_ref(),
                     cache.as_deref(),
                 );
+                if let Some(stopped) = stopped {
+                    println!("stopped: {stopped}");
+                }
                 remove_empty_interactive_session(&host).await;
+                if let Some(error) = shutdown_error {
+                    eprintln!("smith: {error}");
+                    return Ok(1);
+                }
                 return Ok(0);
             }
             // Keep the selection and identity while recomposing tools after
@@ -1067,7 +1087,7 @@ async fn run_interactive_hosts(
                     command,
                     SelectionCommand::NewSession | SelectionCommand::Resume(_)
                 ) {
-                    remove_empty_interactive_session(&host).await;
+                    remove_empty_session(&host, false).await;
                 }
                 if matches!(command, SelectionCommand::Advisor(_)) {
                     advisor_change = Some(args.selection.advisor.clone());

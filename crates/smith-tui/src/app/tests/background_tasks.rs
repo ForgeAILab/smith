@@ -37,7 +37,7 @@
     }
 
     #[test]
-    fn exit_confirmation_names_a_running_background_task_and_cancel_keeps_the_session_alive() {
+    fn quit_immediately_captures_a_running_background_task() {
         let mut app = app();
         app.set_running_tasks(vec![RunningTaskSummary {
             task_id: "task:7".to_owned(),
@@ -45,15 +45,25 @@
         }]);
 
         type_text(&mut app, "/quit");
-        assert_eq!(app.on_key(key(KeyCode::Enter)), None);
-        assert!(matches!(app.overlay, Some(Overlay::Confirm(_))));
-        assert!(!app.should_quit);
-
-        elapse_prompt_guard(&mut app);
-        assert_eq!(app.on_key(key(KeyCode::Char('n'))), None);
+        assert_eq!(app.on_key(key(KeyCode::Enter)), Some(Action::Quit));
         assert!(app.overlay.is_none());
-        assert!(!app.should_quit);
-        // Cancel leaves the task exactly as it was; nothing here touches the
-        // registry, which is the whole point of a TUI-only cancel path.
-        assert_eq!(app.running_tasks.len(), 1);
+        assert!(app.should_quit);
+        assert_eq!(app.stopped_work.as_deref(), Some("background task task:7"));
+    }
+
+    #[test]
+    fn quit_summary_names_live_children_and_omits_settled_children() {
+        let mut app = app();
+        app.restore_child("child-running", ChildState::Running, None);
+        app.restore_child("child-completed", ChildState::Completed, None);
+        assert_eq!(app.request_exit(), Some(Action::Quit));
+        assert_eq!(app.stopped_work.as_deref(), Some("child child-running"));
+    }
+
+    #[test]
+    fn idle_quit_has_no_stopped_work_line() {
+        let mut app = app();
+        assert_eq!(app.request_exit(), Some(Action::Quit));
+        assert!(app.should_quit);
+        assert!(app.stopped_work.is_none());
     }

@@ -757,7 +757,7 @@
     }
 
     #[test]
-    fn exit_confirmation_names_a_running_background_task_by_id() {
+    fn quitting_with_a_background_task_does_not_render_a_confirmation() {
         let mut app = App::new("gpt-5.3", "~/work/api");
         app.set_running_tasks(vec![crate::app::RunningTaskSummary {
             task_id: "task:7".to_owned(),
@@ -768,6 +768,9 @@
 
         let screen = render(&app, 74, 20, Theme::new().without_color());
         assert!(screen.contains("task:7"), "{screen}");
+        assert!(app.overlay.is_none());
+        assert!(app.should_quit);
+        assert_eq!(app.stopped_work.as_deref(), Some("background task task:7"));
     }
 
     async fn approval_evidence_prompt(

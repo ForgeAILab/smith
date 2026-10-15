@@ -780,8 +780,8 @@ expect {
     timeout { exit 124 }
     eof { exit 125 }
 }
-# The reply can be drawn while the turn is still working. /quit then asks for
-# confirmation by design; this streaming test exits only after completion.
+# The reply can be drawn while the turn is still working. This streaming
+# test waits for completion; the held-turn test below covers immediate quit.
 expect {
     -exact "Worked for" {}
     timeout { exit 121 }
@@ -898,8 +898,7 @@ fn command_jsonl_tui_honours_quit_typed_during_a_turn() {
     let fixture = Fixture::new();
     let process_log = fixture.configure_command_bridge();
     std::fs::write(process_log.with_extension("hold"), "").expect("hold the provider turn open");
-    // DESIGN.md's active-work exit policy requires an explicit y. Keep the
-    // turn running until that decision so completion cannot dismiss the prompt.
+    // Keep the provider held so only /quit can complete this process.
     let interaction = r#"
 expect {
     -exact "Ask Smith to do anything" {}
@@ -914,12 +913,10 @@ expect {
 }
 send -- "/quit\r"
 expect {
-    -exact "quit with work in progress?" {}
+    -exact "stopped: the running turn" {}
     timeout { exit 122 }
     eof { exit 125 }
 }
-sleep 1
-send -- "y"
 expect {
     -exact "TERMINAL_RESTORED" {}
     timeout { exit 124 }
@@ -935,9 +932,52 @@ expect {
         "screen: {screen}\nstderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(screen.contains("quit with work in progress?"), "{screen}");
+    assert!(!screen.contains("quit with work in progress?"), "{screen}");
+    assert!(screen.contains("stopped: the running turn"), "{screen}");
     assert!(screen.contains("TERMINAL_RESTORED"), "{screen}");
     assert!(!screen.contains("TERMINAL_DAMAGED"), "{screen}");
+    let session = screen
+        .split("resume with smith --resume ")
+        .nth(1)
+        .and_then(|tail| tail.split_whitespace().next())
+        .expect("saved session ID");
+    let sessions = fixture.home.path().join(".smith/sessions");
+    let journal = std::fs::read_dir(&sessions)
+        .expect("session projects")
+        .flat_map(|project| {
+            std::fs::read_dir(project.expect("project").path()).expect("session files")
+        })
+        .map(|file| file.expect("session file").path())
+        .find(|path| {
+            path.file_name().and_then(|name| name.to_str()) == Some(&format!("{session}.jsonl"))
+        })
+        .expect("saved journal");
+    let events = std::fs::read_to_string(journal)
+        .expect("saved journal")
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("journal record"))
+        .collect::<Vec<_>>();
+    assert!(
+        events.iter().any(
+            |record| record["event"]["payload"]["event"] == "turn_completed"
+                && record["event"]["payload"]["finish"]["outcome"] == "cancelled"
+        ),
+        "{events:?}"
+    );
+    std::fs::remove_file(process_log.with_extension("hold")).expect("release future turns");
+    let resumed = fixture.run_headless(&[
+        "--resume",
+        session,
+        "-p",
+        "continue",
+        "--output-format",
+        "json",
+    ]);
+    assert!(resumed.status.success(), "{resumed:?}");
+    let result: serde_json::Value =
+        serde_json::from_slice(&resumed.stdout).expect("resumed result");
+    assert_eq!(result["session_id"], session);
+    assert_eq!(result["status"], "ok");
 }
 
 #[test]

@@ -908,6 +908,8 @@ pub struct App {
     pub tick: u64,
     /// Set once the host loop should exit.
     pub should_quit: bool,
+    /// Work observed at quit, before prompt cancellation changes the live state.
+    pub stopped_work: Option<String>,
     /// Large pastes stored aside behind composer placeholders, oldest first.
     pub(super) pasted_chunks: Vec<PastedChunk>,
     /// Monotonic number for `[Pasted text #N …]` labels.

@@ -13,6 +13,7 @@ mod cli;
 mod config_command;
 mod connection;
 mod connection_review;
+mod exit_deadline;
 mod harness_supervise;
 mod headless;
 mod interaction;
@@ -70,7 +71,7 @@ async fn main() -> ExitCode {
 
     let result = execute(command).await;
     #[cfg(unix)]
-    headless::shutdown_stdio_servers().await;
+    let result = exit_deadline::finish().await.and(result);
     match result {
         Ok(code) => ExitCode::from(code),
         Err(error) => report_failure(&error, &mut std::io::stderr().lock()),

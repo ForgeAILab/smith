@@ -47,6 +47,7 @@ impl App {
             selection: None,
             tick: 0,
             should_quit: false,
+            stopped_work: None,
             pasted_chunks: Vec::new(),
             paste_counter: 0,
             image_attachments: Vec::new(),

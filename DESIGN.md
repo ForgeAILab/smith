@@ -98,7 +98,7 @@ one, in a session or before it, is the same inline list (see *Setup before the
 coding surface* and the resource-picker grammar). Modal overlays are reserved
 for consequential interaction:
 approval, provider-spend confirmation, agent-originated questionnaires,
-undo/revert confirmation, and exit confirmation. They are centered, max 72
+and undo/revert confirmation. They are centered, max 72
 columns wide and 60% of height, and drawn over the transcript. Read-only
 command information never opens a modal; it appends to the transcript. Only
 one interactive surface is visible at a time. Runtime-originated approvals and
@@ -338,7 +338,7 @@ are never replaced by another overlay. They queue in arrival order, and
 answering one opens the next. A picker, the palette, history search, or the
 shortcuts panel closes when a prompt arrives and cannot open over one. Every
 confirmation (undo, redo, revert, trust, review, child invocation, account
-switch, quit) uses one box: title, an optional warning, a body that scrolls
+switch) uses one box: title, an optional warning, a body that scrolls
 to its end with the arrow and page keys, `y` to accept, and `n` or Esc to
 cancel. Enter chooses neither.
 
@@ -586,7 +586,7 @@ menu, palette, and `/help`:
 | `/undo` | Preview the last fully attributable Smith turn and require explicit confirmation. |
 | `/redo` | Preview and explicitly confirm the newest exact undo/selective-revert forward patch. |
 | `/revert [FILE]` | Select one current file or hunk, preview it, and require explicit confirmation. |
-| `/quit` | Exit under the active-work policy. |
+| `/quit` | Exit immediately, cancel pending prompts, and stop active work without confirmation. |
 
 ### Inline local results
 
@@ -1175,9 +1175,10 @@ A background shell task is the quiet sibling of a monitor: it runs to
 completion silently, spools its output to disk, and reports exactly once — a
 terminal notice with a bounded tail through the same safe-boundary inbox.
 While one runs it stays visible rather than ambient: the identity footer and
-delegated-work panel list it by task ID, and the exit confirmation names it as
-active work. Ctrl+B moves a running foreground shell command to the background
-without killing it; Esc keeps its interrupt-and-kill meaning unchanged.
+delegated-work panel list it by task ID, and the exit summary names it on
+the `stopped:` line when quitting stops active work. Ctrl+B moves a running
+foreground shell command to the background without killing it; Esc keeps its
+interrupt-and-kill meaning unchanged.
 
 The root model may name one registered child-enabled agent profile per spawn,
 and it resolves through the same preflighted route a user-invoked `/agent
