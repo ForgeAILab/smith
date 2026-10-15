@@ -125,15 +125,18 @@ impl SecurityCheck for SmithToolAuthority {
         if host_filesystem_permission {
             if !matches!(
                 &request.resource,
-                SecurityResource::Other { kind, .. } if kind == HOST_SHELL_RESOURCE_KIND
+                SecurityResource::Other { kind, .. }
+                    if kind == HOST_SHELL_RESOURCE_KIND
+                        || (kind == "smith:image-files"
+                            && !request.requested.contains(&Permission::HostFsWrite))
             ) {
                 return SecurityCheckOutcome::Deny {
                     code: DecisionCode::other("smith.host_resource_mismatch"),
                 };
             }
-            // The shell is intentionally host-wide. It is never an exact
-            // workspace read and therefore always reaches the configured
-            // approval policy.
+            // The shell is intentionally host-wide, and image references may
+            // include Smith's generated-image directory. Neither is an exact
+            // workspace read, so both reach the configured approval policy.
             return SecurityCheckOutcome::RequireApproval {
                 constraints: GrantConstraints::unconstrained(),
             };
@@ -234,6 +237,50 @@ mod tests {
             Deadline::never(),
             SecurityEvidence::new(TrustClass::ExternalContent, Fingerprint::of("arguments")),
         )
+    }
+
+    #[tokio::test]
+    async fn image_host_reads_require_approval_without_granting_host_writes() {
+        let authority = SmithToolAuthority::new("/repo");
+        for permissions in [
+            vec![Permission::HostFsRead],
+            vec![
+                Permission::HostFsRead,
+                Permission::NetHttp,
+                Permission::DataEgress,
+            ],
+        ] {
+            let outcome = authority
+                .evaluate(
+                    &request(
+                        permissions,
+                        SecurityResource::other("smith:image-files", "view_image"),
+                    ),
+                    &Cancellation::new(),
+                )
+                .await;
+            assert!(matches!(
+                outcome,
+                SecurityCheckOutcome::RequireApproval { .. }
+            ));
+        }
+
+        for (permissions, kind) in [
+            (vec![Permission::HostFsRead], "unknown-host-resource"),
+            (vec![Permission::HostFsWrite], "smith:image-files"),
+            (
+                vec![Permission::HostFsRead, Permission::HostFsWrite],
+                "smith:image-files",
+            ),
+        ] {
+            let outcome = authority
+                .evaluate(
+                    &request(permissions, SecurityResource::other(kind, "view_image")),
+                    &Cancellation::new(),
+                )
+                .await;
+            assert!(matches!(outcome, SecurityCheckOutcome::Deny { .. }));
+        }
     }
 
     #[tokio::test]
