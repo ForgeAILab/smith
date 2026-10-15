@@ -374,6 +374,16 @@ anything else"). Findings are in `docs/qa/live-2026-10-14/findings.md`.
   then SIGKILL; a second signal kills first. Servers stay in Smith's
   process group. Tests: `bridge_failures::headless_*_stdio_mcp_server` for
   completion, SIGINT, SIGTERM/SIGHUP, and a second signal.)
+- [x] 9.7 `setup_pty::command_jsonl_provider_streams_a_turn_through_the_normal_tui`
+  no longer flakes. It failed once on macOS CI for this branch and 6 of
+  ~200 local runs, against 0 of ~190 on main. Cause: the test sent `/quit`
+  as soon as the reply text was drawn, which can still be inside the turn;
+  `/quit` during a turn opens the quit confirmation (DESIGN.md), and turn
+  completion cancels pending prompts, so Smith stayed open. The test now
+  waits for the turn to finish. Two regression tests, using a fixture hold
+  that keeps the turn open, prove that text typed mid-turn survives with
+  later input still working, and that `/quit` mid-turn goes through the
+  confirmation. 100/100 and 30/30 + 30/30 local runs. No product change.
 
 Not in this section: the runtime conformance flake
 `session::one_shutdown_deadline_bounds_all_active_turns` (ForgeAILab/smith#4)

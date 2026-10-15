@@ -66,6 +66,7 @@ if [ "$1" = "--smith-provider-probe" ]; then
 fi
 if [ "$1" = "--smith-provider-attempt" ]; then
   IFS= read -r request
+  while [ -e "${log%.log}.hold" ]; do sleep 0.01; done
   printf '%s\n' '{"protocol":"smith-command-provider","schema_version":1,"type":"text_delta","text":"Hello from the command bridge."}'
   printf '%s\n' '{"protocol":"smith-command-provider","schema_version":1,"type":"usage","input_tokens":12,"output_tokens":6}'
   printf '%s\n' '{"protocol":"smith-command-provider","schema_version":1,"type":"finish","reason":"stop"}'
@@ -779,6 +780,13 @@ expect {
     timeout { exit 124 }
     eof { exit 125 }
 }
+# The reply can be drawn while the turn is still working. /quit then asks for
+# confirmation by design; this streaming test exits only after completion.
+expect {
+    -exact "Worked for" {}
+    timeout { exit 121 }
+    eof { exit 125 }
+}
 send -- "/quit\r"
 expect {
     -exact "TERMINAL_RESTORED" {}
@@ -806,6 +814,130 @@ expect {
         "--smith-provider-probe\n--smith-provider-attempt\n",
         "the TUI uses one preflight process and one fresh process for the visible attempt"
     );
+}
+
+#[test]
+fn command_jsonl_tui_preserves_text_typed_during_a_turn_and_later_input() {
+    // Guarantee a working frame even on a fast machine. First let completion
+    // race input delivery; then prove the draft is editable before completion.
+    for wait_for_draft in [false, true] {
+        let fixture = Fixture::new();
+        let process_log = fixture.configure_command_bridge();
+        std::fs::write(process_log.with_extension("hold"), "")
+            .expect("hold the provider turn open");
+        let during_turn = if wait_for_draft {
+            r#"
+expect {
+    -exact "zqx" {}
+    timeout { exit 122 }
+    eof { exit 125 }
+}
+"#
+        } else {
+            ""
+        };
+        let interaction = r#"
+expect {
+    -exact "Ask Smith to do anything" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+send -- "hello\r"
+expect {
+    -exact "Working" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+send -- "zqx"
+DURING_TURN
+file delete -- command-processes.hold
+expect {
+    -exact "Worked for" {}
+    timeout { exit 121 }
+    eof { exit 125 }
+}
+sleep 1
+# Prefixing after completion forces all four composer cells to change, so the
+# assertion checks retained text even when ratatui otherwise draws only diffs.
+send -- "\001v"
+expect {
+    -exact "vzqx" {}
+    timeout { exit 123 }
+    eof { exit 125 }
+}
+send -- "\005\025/quit\r"
+expect {
+    -exact "TERMINAL_RESTORED" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+"#
+        .replace("DURING_TURN", during_turn);
+        let Some(output) = fixture.run_expect("--no-color --no-motion", &interaction) else {
+            return;
+        };
+        let screen = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "wait_for_draft={wait_for_draft}\nscreen: {screen}\nstderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(screen.contains("vzqx"), "{screen}");
+        assert!(screen.contains("TERMINAL_RESTORED"), "{screen}");
+        assert!(!screen.contains("TERMINAL_DAMAGED"), "{screen}");
+        assert_eq!(
+            std::fs::read_to_string(process_log).expect("process log"),
+            "--smith-provider-probe\n--smith-provider-attempt\n",
+            "editing a draft must not submit another provider turn"
+        );
+    }
+}
+
+#[test]
+fn command_jsonl_tui_honours_quit_typed_during_a_turn() {
+    let fixture = Fixture::new();
+    let process_log = fixture.configure_command_bridge();
+    std::fs::write(process_log.with_extension("hold"), "").expect("hold the provider turn open");
+    // DESIGN.md's active-work exit policy requires an explicit y. Keep the
+    // turn running until that decision so completion cannot dismiss the prompt.
+    let interaction = r#"
+expect {
+    -exact "Ask Smith to do anything" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+send -- "hello\r"
+expect {
+    -exact "Working" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+send -- "/quit\r"
+expect {
+    -exact "quit with work in progress?" {}
+    timeout { exit 122 }
+    eof { exit 125 }
+}
+sleep 1
+send -- "y"
+expect {
+    -exact "TERMINAL_RESTORED" {}
+    timeout { exit 124 }
+    eof { exit 125 }
+}
+"#;
+    let Some(output) = fixture.run_expect("--no-color --no-motion", interaction) else {
+        return;
+    };
+    let screen = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "screen: {screen}\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(screen.contains("quit with work in progress?"), "{screen}");
+    assert!(screen.contains("TERMINAL_RESTORED"), "{screen}");
+    assert!(!screen.contains("TERMINAL_DAMAGED"), "{screen}");
 }
 
 #[test]
