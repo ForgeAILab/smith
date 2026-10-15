@@ -29,12 +29,13 @@ On Unix, Smith starts declared and plugin stdio MCP servers under a small
 watchdog that never loads configuration. Servers inherit Smith's process
 group and communicate over the same stdin and stdout pipes. On normal exit
 Smith sends SIGTERM to the watchdog and allows 500 ms before bounded cleanup.
-The watchdog stops its server with SIGTERM followed by SIGKILL after 300 ms
-if needed, and reaps it. It also watches its parent PID, so even a busy server stops
-if Smith is SIGKILLed. Closing a connection on reconfigure still gives the
-server up to 3 s to exit before forced cleanup, while connections held by an
-in-flight call remain usable. Embeddings without an injected Smith executable
-start servers directly and warn once; those servers may outlive their host.
+The watchdog stops its server with SIGTERM, then SIGKILL after 300 ms if
+needed, and reaps it. It also watches Smith's process ID, so a busy server
+stops within about half a second even when Smith is SIGKILLed. Closing a
+connection on reconfigure still gives the server up to 3 s to exit before
+forced cleanup, while connections held by an in-flight call remain usable.
+Embeddings without an injected Smith executable start servers directly and
+warn once; those servers may outlive their host.
 
 The reserved process protocol maps tool, skill, command, redaction-safe
 observer, and declarative-panel contributions into bounded messages. It must
