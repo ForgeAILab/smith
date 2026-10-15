@@ -12,8 +12,10 @@ mod plugins;
 mod provenance;
 mod provider;
 mod types;
+mod vision;
 
 pub use load::{env_name, inspect, resolve};
 pub use plugins::{PluginSelection, resolve_plugin_selection};
 pub use provenance::*;
 pub use types::*;
+pub use vision::image_input;

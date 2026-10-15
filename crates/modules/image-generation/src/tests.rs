@@ -33,6 +33,8 @@ fn context() -> ModuleContext {
         user_dir: "user".into(),
         posture: ModulePosture::ReadWrite,
         transport: Arc::new(ReplayTransport::single(Vec::new())),
+        vision: None,
+        main_model_accepts_images: false,
         image_binding: Some(ImageBinding {
             endpoint: "https://api.openai.com/v1".into(),
             target: ProviderCredentialTarget::new("openai").unwrap(),

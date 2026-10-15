@@ -361,7 +361,8 @@ fn image_effects(endpoint: &str, read_references: bool) -> ToolEffects {
         .with_data_egress_to(endpoint)
 }
 
-fn resolve_reference_path(
+/// Resolves a confined workspace or generated-image reference before approval.
+pub fn resolve_reference_path(
     raw: &str,
     ctx: &PreparationContext,
     workspace: &smith_host::workspace::ProjectWorkspace,
@@ -401,7 +402,8 @@ fn expand_generated_tilde(raw: &str, generated_root: &Path) -> PathBuf {
     PathBuf::from(raw)
 }
 
-fn canonical_generated_root(root: &Path) -> Result<PathBuf, RuntimeError> {
+/// Validates the generated-image root without creating it.
+pub fn canonical_generated_root(root: &Path) -> Result<PathBuf, RuntimeError> {
     if root
         .symlink_metadata()
         .is_ok_and(|metadata| metadata.file_type().is_symlink())
@@ -423,7 +425,8 @@ fn canonical_generated_root(root: &Path) -> Result<PathBuf, RuntimeError> {
     }
 }
 
-fn read_reference(
+/// Reads a bounded image reference after approval, rechecking confinement.
+pub fn read_reference(
     path: &str,
     workspace: &smith_host::workspace::ProjectWorkspace,
     generated_root: &Path,
@@ -483,7 +486,8 @@ fn read_reference(
     Ok(bytes)
 }
 
-fn image_mime(bytes: &[u8]) -> Result<&'static str, RuntimeError> {
+/// Identifies a supported image reference from its magic bytes.
+pub fn image_mime(bytes: &[u8]) -> Result<&'static str, RuntimeError> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         Ok("image/png")
     } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {

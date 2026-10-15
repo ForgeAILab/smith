@@ -668,6 +668,86 @@ fn canonical_tool_calls_are_resolved_by_stable_id_without_exposing_arguments() {
 }
 
 #[test]
+fn tool_result_text_preserves_text_and_image_order_without_image_data() {
+    use agent_runtime_core::content::ToolResultBlock;
+
+    let result = ToolResultBlock {
+        call_id: ToolCallId::new("screenshot"),
+        name: "mcp__desktop__get_window_state".to_owned(),
+        content: vec![
+            ContentPart::text("Screenshot TOP_SECRET_RESULT"),
+            ContentPart::Image {
+                url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABaAAAAOE".to_owned(),
+                detail: Some("high".to_owned()),
+            },
+            ContentPart::text("[image omitted: image/png, 12 MiB, over limit]"),
+            ContentPart::Image {
+                url: "data:image/gif;base64,R0lGODlhAgADAA==".to_owned(),
+                detail: None,
+            },
+            ContentPart::text("Tail of result"),
+        ],
+        is_error: false,
+    };
+    let redactor = DefaultRedactor::new().with_secret("TOP_SECRET_RESULT");
+    let expected = "Screenshot [redacted]\n[image/png 1440×900]\n[image omitted: image/png, 12 MiB, over limit]\n[image/gif 2×3]\nTail of result";
+    assert_eq!(
+        redacted_result_text(&result, &redactor).as_deref(),
+        Some(expected)
+    );
+    let history = vec![Message::tool_result(result.clone())];
+    assert_eq!(
+        tool_result_text_from_history(&history, &result.call_id, &redactor).as_deref(),
+        Some(expected),
+        "live and child lookup use the same preview as resume"
+    );
+    let ContentPart::Text { text } = &result.content[0] else {
+        panic!("expected canonical text");
+    };
+    assert!(text.contains("TOP_SECRET_RESULT"));
+}
+
+#[test]
+fn tool_result_text_includes_image_only_results() {
+    let result = agent_runtime_core::content::ToolResultBlock {
+        call_id: ToolCallId::new("image-only"),
+        name: "generate_image".to_owned(),
+        content: vec![ContentPart::Image {
+            url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABaAAAAOE".to_owned(),
+            detail: None,
+        }],
+        is_error: false,
+    };
+    assert_eq!(
+        redacted_result_text(&result, &DefaultRedactor::new()).as_deref(),
+        Some("[image/png 1440×900]")
+    );
+}
+
+#[test]
+fn tool_result_text_uses_mime_only_when_image_dimensions_are_unknown() {
+    let result = agent_runtime_core::content::ToolResultBlock {
+        call_id: ToolCallId::new("unknown-images"),
+        name: "mcp__desktop__get_window_state".to_owned(),
+        content: vec![
+            ContentPart::Image {
+                url: "data:image/jpeg;base64,invalid!".to_owned(),
+                detail: None,
+            },
+            ContentPart::Image {
+                url: "https://example.com/PRIVATE_IMAGE_URL.png".to_owned(),
+                detail: None,
+            },
+        ],
+        is_error: false,
+    };
+    assert_eq!(
+        redacted_result_text(&result, &DefaultRedactor::new()).as_deref(),
+        Some("[image/jpeg]\n[image]")
+    );
+}
+
+#[test]
 fn only_terminal_children_are_removed_from_ephemeral_recovery() {
     let child = ChildId::new("child-1");
     let spawned = RuntimeEvent::ChildSpawned {

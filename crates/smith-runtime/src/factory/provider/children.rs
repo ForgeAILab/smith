@@ -93,10 +93,107 @@ pub(in crate::factory) async fn prepare_advisor_route(
     })))
 }
 
+/// Resolves a tool-free vision provider only for a text-only active model.
+pub(in crate::factory) async fn prepare_vision_route(
+    request: &RuntimeRequest,
+    accounting: Arc<crate::vision::VisionAccounting>,
+) -> Result<Option<crate::vision::VisionRoute>, FactoryError> {
+    if request.config.model_image_input.value == smith_config::resolve::ImageInput::Accepts
+        || !request.built_in_tools
+        || request.config.agent.active_posture().is_read_only()
+        || !request.modules.enabled.contains("vision")
+        || !request
+            .modules
+            .compiled
+            .iter()
+            .any(|module| module.module.id() == "vision")
+    {
+        return Ok(None);
+    }
+    let Some(selected) = &request.config.agent.profile.vision else {
+        return Ok(None);
+    };
+    let vision =
+        request
+            .vision_profile
+            .as_ref()
+            .ok_or_else(|| FactoryError::MissingHostPolicy {
+                what: "resolved vision profile",
+                message: format!(
+                    "resolve vision target `{}` before composition",
+                    selected.value
+                ),
+            })?;
+    let matches_selection = match &selected.value {
+        AdvisorTarget::Profile(name) => vision.config.agent.profile.name == *name,
+        AdvisorTarget::Model { provider, model } => {
+            vision.config.provider.name.value == *provider && vision.config.model.value == *model
+        }
+    };
+    if !matches_selection
+        || vision.config.model_image_input.value != smith_config::resolve::ImageInput::Accepts
+    {
+        return Err(FactoryError::Runtime(RuntimeError::config(
+            "the resolved vision route must match the selection and accept image input",
+        )));
+    }
+    let mut route_request = Box::new(RuntimeRequest::new(
+        vision.config.clone(),
+        HostSurface::Child,
+    ));
+    route_request.workspace = request.workspace.clone();
+    route_request.approval = request.approval.clone();
+    route_request.credentials = request.credentials.clone();
+    route_request.transport = request.transport.clone();
+    route_request.credential_timeout_ms = request.credential_timeout_ms;
+    route_request.catalog_sources = vision.catalog_sources.clone();
+    route_request.model_catalog = request.model_catalog.clone();
+    route_request.persistence_redactor = request.persistence_redactor.clone();
+    route_request.provider = vision.provider.clone();
+    route_request.built_in_tools = false;
+    super::validate_pool_references(&route_request)?;
+    let prepared = super::prepare(&route_request).await?;
+    let price = route_request.model_catalog.as_ref().and_then(|catalog| {
+        smith_config::catalog::catalog_provider_for(
+            &prepared.provider_kind,
+            prepared.endpoint.as_deref(),
+        )
+        .and_then(|provider| catalog.provider(provider))
+        .and_then(|provider| provider.models.get(prepared.model.as_str()))
+        .and_then(|model| model.cost)
+    });
+    let endpoint = match prepared.endpoint.clone() {
+        Some(endpoint) => endpoint,
+        None => adapter::endpoint(&route_request.config.provider, None)?,
+    };
+    let provider = super::construct_runtime(
+        &route_request,
+        prepared.adapter,
+        prepared.endpoint,
+        prepared.secret,
+        &prepared.profile.profile,
+        &prepared.reasoning,
+        prepared.command.map(|command| command.provider),
+    )?
+    .provider;
+    Ok(Some(crate::vision::VisionRoute {
+        binding: smith_module::VisionBinding {
+            provider,
+            provider_name: prepared.provider_name,
+            model: prepared.model,
+            endpoint,
+            output_token_cap: prepared.output_budget.request_tokens.min(1024),
+            usage: accounting,
+        },
+        price,
+    }))
+}
+
 pub(in crate::factory) async fn prepare_child_profile_routes(
     request: &RuntimeRequest,
     project_instructions: Option<&ProjectInstructionsSnapshot>,
     session_history: Arc<crate::session_history::LiveSessionHistory>,
+    vision_accounting: Arc<crate::vision::VisionAccounting>,
 ) -> Result<BTreeMap<String, SmithChildRoute>, FactoryError> {
     let mut routes = BTreeMap::new();
     for child in &request.child_profiles {
@@ -105,6 +202,7 @@ pub(in crate::factory) async fn prepare_child_profile_routes(
         route_request.smith_executable = request.smith_executable.clone();
         route_request.project_instructions = project_instructions.cloned();
         route_request.modules = super::super::modules::for_config(&request.modules, &child.config);
+        route_request.vision_profile = child.vision_profile.clone();
         route_request.workspace = request.workspace.clone();
         route_request.approval = request.approval.clone();
         route_request.credentials = request.credentials.clone();
@@ -114,6 +212,11 @@ pub(in crate::factory) async fn prepare_child_profile_routes(
         route_request.model_catalog = request.model_catalog.clone();
         route_request.persistence_redactor = request.persistence_redactor.clone();
 
+        let vision = Box::pin(prepare_vision_route(
+            &route_request,
+            vision_accounting.clone(),
+        ))
+        .await?;
         let PreparedFactoryInputs {
             provider_name,
             provider_kind,
@@ -239,6 +342,7 @@ pub(in crate::factory) async fn prepare_child_profile_routes(
                         credentials: binding.credentials,
                         chatgpt: binding.chatgpt,
                     }),
+                    vision.map(|vision| vision.binding),
                     profile.profile.limits.max_input_tokens,
                     request.semantic_summary.is_some() && request.artifact_store.is_some(),
                     session_history.clone(),

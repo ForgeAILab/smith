@@ -485,3 +485,90 @@ async fn missing_resume_summary_artifact_does_not_abort_exact_cold_resume() {
     assert!(summary.provenance.summary_artifact.is_none());
     resumed.shutdown().await.expect("clean shutdown");
 }
+
+#[tokio::test]
+async fn model_switch_projects_images_and_restores_them_when_switching_back() {
+    use agent_runtime_core::content::ContentPart;
+
+    const IMAGE: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
+    let fixture = Fixture::with_config(&format!(
+        "{}\n[models.\"local/text-model\"]\ncontext_tokens = 128000\nmax_input_tokens = 124000\nmax_output_tokens = 4096\ninput_modalities = [\"text\"]\n",
+        CONFIG.replace(
+            "context_tokens = 128000",
+            "input_modalities = [\"text\", \"image\"]\ncontext_tokens = 128000"
+        ),
+    ));
+    let mut session_id: Option<SessionId> = None;
+    for (index, model) in ["example-model", "text-model", "example-model"]
+        .into_iter()
+        .enumerate()
+    {
+        let config = resolve(
+            &ResolveRequest::new(fixture.project.path())
+                .with_home_dir(fixture.home.path())
+                .with_cli(Overrides {
+                    model: Some(model.into()),
+                    ..Overrides::default()
+                }),
+        )
+        .expect("the selected model resolves")
+        .config;
+        let provider = Arc::new(FakeProvider::new(
+            model,
+            Capabilities::basic_streaming(),
+            vec![ScriptedStream::new(vec![
+                ProviderStreamEvent::TextDelta {
+                    text: "seen".into(),
+                },
+                ProviderStreamEvent::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ])],
+        ));
+        let mut request = fixture.request_with_config(config, HostSurface::Headless);
+        request.runtime.provider = Some(provider.clone());
+        if let Some(id) = &session_id {
+            request = request.resume(id.clone());
+        }
+        let host = start(request).await.expect("the rebuilt session");
+        session_id = Some(host.session().id().clone());
+        let input = if index == 0 {
+            UserInput {
+                parts: vec![
+                    ContentPart::text("Remember this image"),
+                    ContentPart::Image {
+                        url: IMAGE.into(),
+                        detail: Some("high".into()),
+                    },
+                ],
+            }
+        } else {
+            UserInput::text("Describe the earlier image")
+        };
+        host.session()
+            .run(input)
+            .await
+            .expect("the selected model's turn succeeds");
+        let requests = provider.requests();
+        assert_eq!(requests.len(), 1);
+        let wire = serde_json::to_string(&requests[0].messages).expect("request messages");
+        if model == "text-model" {
+            assert!(!wire.contains("data:image/"), "{wire}");
+            assert!(
+                wire.contains("image/png 1×1 not included in this request]"),
+                "{wire}"
+            );
+        } else {
+            assert!(wire.contains(IMAGE), "{wire}");
+            assert!(!wire.contains("not included in this request]"), "{wire}");
+        }
+        assert!(
+            serde_json::to_string(&host.session().history())
+                .expect("canonical history")
+                .contains(IMAGE)
+        );
+        host.shutdown()
+            .await
+            .expect("save before the next model switch");
+    }
+}

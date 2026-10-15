@@ -148,6 +148,16 @@ async fn seed_host_state(
                 )
             })
         }));
+    app.status
+        .set_vision_price(host.runtime().vision_route().and_then(|vision| {
+            host.runtime().vision_price().map(|price| {
+                smith_client::status::PriceReference::from_catalog(
+                    &vision.provider_name,
+                    vision.model.as_str(),
+                    price,
+                )
+            })
+        }));
     app.status.set_agent(policy.agent_profile.clone());
     app.status.approval_mode = Some(policy.approval_mode.as_str().to_owned());
     // Labels the turn as executed by an installed CLI, and switches the model

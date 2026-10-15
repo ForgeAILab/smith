@@ -173,7 +173,7 @@ impl<'de> Deserialize<'de> for AdvisorSelection {
             Value::Target(target) => Ok(Self::Target(target)),
             Value::Flag(false) => Ok(Self::Disabled),
             Value::Flag(true) => Err(serde::de::Error::custom(
-                "`advisor` must be a profile name, `provider/model`, or `false`, not `true`",
+                "selection must be a profile name, `provider/model`, or `false`, not `true`",
             )),
         }
     }
@@ -187,6 +187,9 @@ impl Serialize for AdvisorSelection {
         }
     }
 }
+
+/// A vision model selection, using the same value grammar as an advisor.
+pub type VisionSelection = AdvisorSelection;
 
 /// One named root-agent mode.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -226,6 +229,9 @@ pub struct ConfigFile {
     /// Default advisor for main profiles without their own selection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub advisor: Option<AdvisorSelection>,
+    /// Default vision model for main profiles without their own selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision: Option<VisionSelection>,
     /// Stable order used by idle-composer profile cycling.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile_order: Option<Vec<String>>,
@@ -250,7 +256,7 @@ pub struct ConfigFile {
     /// Installed coding agents a profile may run its turns on.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub harness: BTreeMap<String, HarnessSection>,
-    /// Model limits keyed `"<provider>/<model>"`: `[models."acme/example-model"]`.
+    /// Model metadata keyed `"<provider>/<model>"`: `[models."acme/example-model"]`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub models: BTreeMap<String, ModelSection>,
     /// Default reasoning selection for the active provider/model.
@@ -378,6 +384,9 @@ pub struct ProfileSection {
     /// Advisor profile name, `provider/model`, or `false`, inherited through `extends`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub advisor: Option<AdvisorSelection>,
+    /// Vision profile name, `provider/model`, or `false`, inherited through `extends`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision: Option<VisionSelection>,
     /// The name of a provider declared in `[providers.<name>]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
@@ -723,13 +732,16 @@ impl ReasoningOnlyBehavior {
     }
 }
 
-/// Enforceable limits for one `"<provider>/<model>"` pair.
+/// Limits and capability metadata for one `"<provider>/<model>"` pair.
 ///
 /// Each field is independently optional because a catalog source may supply
 /// the rest. Smith supplies none of them by default.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelSection {
+    /// Accepted input modalities, overriding catalog metadata for this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_modalities: Option<Vec<crate::catalog::CatalogModality>>,
     /// Total context window, in tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_tokens: Option<u32>,
@@ -867,6 +879,9 @@ pub struct ContextSection {
     /// of replayed inline. This is a byte threshold, not an exact token budget.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_output_inline_bytes: Option<u32>,
+    /// Number of recent images retained by the request image window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inline_images: Option<u32>,
     /// Tokens held back for the model's response.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_reserve: Option<u32>,

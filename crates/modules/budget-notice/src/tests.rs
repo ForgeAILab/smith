@@ -13,6 +13,8 @@ fn context() -> ModuleContext {
         user_dir: "user".into(),
         posture: ModulePosture::ReadWrite,
         transport: Arc::new(ReplayTransport::single(Vec::new())),
+        vision: None,
+        main_model_accepts_images: false,
         image_binding: None,
         session_history: None,
         semantic_summary_enabled: true,

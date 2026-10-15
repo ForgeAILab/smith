@@ -155,6 +155,7 @@ async fn preflight(context: &SetupContext) -> Result<(), (String, bool)> {
         .map_err(|error| (error.to_string(), false))?;
     let request = crate::plugins::with_known_plugins(
         ResolveRequest::new(&start)
+            .with_catalog(context.catalog.clone())
             .with_known_modules(crate::modules::known_modules())
             .with_env(std::env::vars())
             .with_cli(context.selection.overrides()),

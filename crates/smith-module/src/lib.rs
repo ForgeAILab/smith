@@ -65,6 +65,29 @@ pub struct ImageBinding {
     pub chatgpt: bool,
 }
 
+/// Session accounting for separately attributed vision provider work.
+pub trait VisionUsageRecorder: agent_runtime::harness::TurnCommitHook {
+    /// Retains reported usage, including partial usage from interrupted calls.
+    fn record(&self, session: &SessionId, record: agent_runtime_core::usage::UsageRecord);
+}
+
+/// Tool-free vision route resolved independently of the main model.
+#[derive(Debug, Clone)]
+pub struct VisionBinding {
+    /// Constructed provider, including credentials and response policy.
+    pub provider: Arc<dyn agent_runtime_core::provider::Provider>,
+    /// Provider identity for usage attribution.
+    pub provider_name: String,
+    /// Selected image-input model.
+    pub model: agent_runtime_core::provider::ModelId,
+    /// Exact provider endpoint declared to the approval gate.
+    pub endpoint: String,
+    /// Maximum requested output tokens for one answer.
+    pub output_token_cap: u32,
+    /// Host-owned session usage accounting.
+    pub usage: Arc<dyn VisionUsageRecorder>,
+}
+
 /// Read-only access to canonical history of live or resumed host sessions.
 /// Visitors borrow history only for the duration of the call.
 pub trait SessionHistory: Send + Sync + fmt::Debug {
@@ -95,6 +118,10 @@ pub struct ModuleContext {
     pub http: Option<Arc<dyn ModuleHttp>>,
     /// Selected provider image route, if supported.
     pub image_binding: Option<ImageBinding>,
+    /// Separate vision route, only resolved for a text-only main model.
+    pub vision: Option<VisionBinding>,
+    /// Whether the active main model accepts image input at this composition.
+    pub main_model_accepts_images: bool,
     /// Read-only canonical history service for recent conversation inputs.
     pub session_history: Option<Arc<dyn SessionHistory>>,
     /// Whether the host installed semantic summaries for this composition.
@@ -112,6 +139,8 @@ impl fmt::Debug for ModuleContext {
             .field("setting_keys", &self.settings.keys().collect::<Vec<_>>())
             .field("posture", &self.posture)
             .field("has_image_binding", &self.image_binding.is_some())
+            .field("has_vision", &self.vision.is_some())
+            .field("main_model_accepts_images", &self.main_model_accepts_images)
             .field("has_session_history", &self.session_history.is_some())
             .field("semantic_summary_enabled", &self.semantic_summary_enabled)
             .field("max_input_tokens", &self.max_input_tokens)

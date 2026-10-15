@@ -32,7 +32,8 @@ use agent_runtime_core::cancel::{CancelReason, Cancellation};
 use agent_runtime_core::error::RuntimeError;
 use agent_runtime_core::tool::{Tool, ToolEffects};
 use agent_runtime_mcp::{
-    McpClient, McpConnection, McpError, McpServerConfig, McpTool, McpToolPolicyKey, McpTransport,
+    McpClient, McpConnection, McpError, McpImageOptions, McpServerConfig, McpTool,
+    McpToolPolicyKey, McpTransport,
 };
 use async_trait::async_trait;
 use smith_config::credential::{CredentialRef, CredentialResolver};
@@ -239,12 +240,15 @@ impl McpConnector for ClientConnector {
         let tools = bindings
             .into_iter()
             .map(|binding| {
-                Arc::new(McpTool::new(
-                    connection.clone(),
-                    binding,
-                    config.request_timeout,
-                    config.max_output_bytes,
-                )) as Arc<dyn Tool>
+                Arc::new(
+                    McpTool::new(
+                        connection.clone(),
+                        binding,
+                        config.request_timeout,
+                        config.max_output_bytes,
+                    )
+                    .with_image_options(McpImageOptions::default().with_default_detail("high")),
+                ) as Arc<dyn Tool>
             })
             .collect();
         Ok(McpConnected {

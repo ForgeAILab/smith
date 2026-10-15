@@ -120,3 +120,63 @@ async fn the_shared_factory_compacts_optional_history_before_an_over_budget_turn
 
     session.shutdown().await.expect("a clean shutdown");
 }
+
+#[tokio::test]
+async fn configured_image_window_projects_old_history_and_exempts_new_user_images() {
+    use agent_runtime_core::content::{ContentPart, Message};
+
+    const IMAGE: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
+    let fixture = Fixture::new(&format!(
+        "{}\n[context]\ninline_images = 2\n",
+        FAKE_CONFIG.replace(
+            "context_tokens = 128000",
+            "input_modalities = [\"text\", \"image\"]\ncontext_tokens = 128000"
+        ),
+    ));
+    let image = || ContentPart::Image {
+        url: IMAGE.into(),
+        detail: Some("high".into()),
+    };
+    let history = (0..4)
+        .map(|index| {
+            let mut message = Message::user(format!("earlier screenshot {index}"));
+            message.content.push(image());
+            message
+        })
+        .collect();
+    let provider = Arc::new(FakeProvider::text_reply("seen"));
+    let mut runtime = request(&fixture, HostSurface::Headless);
+    runtime.provider = Some(provider.clone());
+    let smith = factory::build_request(runtime).await.expect("a runtime");
+    let session = smith
+        .runtime()
+        .start_session(StartSession::new().with_history(history))
+        .await
+        .expect("a session");
+    session
+        .run(UserInput {
+            parts: vec![ContentPart::text("new screenshot"), image()],
+        })
+        .await
+        .expect("a turn");
+    let requests = provider.requests();
+    let wire = serde_json::to_string(&requests[0].messages).expect("provider messages");
+    assert_eq!(
+        wire.matches(IMAGE).count(),
+        3,
+        "two historical images plus the newest user's image: {wire}"
+    );
+    assert_eq!(
+        wire.matches("not included in this request]").count(),
+        2,
+        "{wire}"
+    );
+    assert_eq!(
+        serde_json::to_string(&session.history())
+            .expect("canonical history")
+            .matches(IMAGE)
+            .count(),
+        5
+    );
+    session.shutdown().await.expect("clean shutdown");
+}

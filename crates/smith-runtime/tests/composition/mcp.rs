@@ -34,6 +34,7 @@ mode = "ask"
 #[derive(Debug)]
 struct StubRemoteTool {
     binding: agent_runtime_mcp::RemoteToolBinding,
+    image: bool,
 }
 
 #[async_trait]
@@ -47,6 +48,18 @@ impl Tool for StubRemoteTool {
         _prepared: PreparedToolCall,
         _ctx: &InvocationContext,
     ) -> Result<ToolOutcome, RuntimeError> {
+        if self.image {
+            return Ok(ToolOutcome {
+                value: serde_json::Value::Null,
+                content: agent_runtime_core::tool::ToolContent::inline(vec![
+                    agent_runtime_core::content::ContentPart::Image {
+                        url: SCREENSHOT.to_owned(),
+                        detail: Some("high".into()),
+                    },
+                ]),
+                is_error: false,
+            });
+        }
         Ok(ToolOutcome::text(format!(
             "{} answered {}",
             self.binding.server, self.binding.remote_name
@@ -59,6 +72,8 @@ impl Tool for StubRemoteTool {
 enum FakeServer {
     /// Advertises these tools immediately.
     Advertises(Vec<agent_runtime_mcp::RemoteTool>),
+    /// Returns an inline PNG from the advertised tools.
+    Images(Vec<agent_runtime_mcp::RemoteTool>),
     /// Refuses to start.
     Fails(String),
     /// Accepts the dial and never finishes becoming ready.
@@ -93,12 +108,13 @@ impl smith_runtime::mcp::McpConnector for FakeConnector {
                 server: config.name.clone(),
                 reason: reason.clone(),
             }),
-            Some(FakeServer::Advertises(advertised)) => {
+            Some(FakeServer::Advertises(advertised) | FakeServer::Images(advertised)) => {
+                let image = matches!(self.servers.get(&config.name), Some(FakeServer::Images(_)));
                 let (bindings, rejected) = agent_runtime_mcp::client::bind_all(config, advertised);
                 Ok(smith_runtime::mcp::McpConnected {
                     tools: bindings
                         .into_iter()
-                        .map(|binding| Arc::new(StubRemoteTool { binding }) as Arc<dyn Tool>)
+                        .map(|binding| Arc::new(StubRemoteTool { binding, image }) as Arc<dyn Tool>)
                         .collect(),
                     rejected,
                     connection: None,
@@ -739,4 +755,83 @@ async fn a_remote_server_this_build_can_reach_fails_loudly_rather_than_silently(
         !reason.contains("feature"),
         "the `http` transport must be compiled in, not reported as unavailable: {reason}"
     );
+}
+
+// A one-pixel PNG, kept inline just like a connected server's screenshot.
+const SCREENSHOT: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
+
+#[tokio::test]
+async fn text_only_main_receives_an_mcp_image_as_a_placeholder() {
+    // The fake text-only profile exercises the same planner boundary as a
+    // command provider, while keeping this test independent of subprocesses.
+    let mut fixture = McpFixture::new(
+        &MCP_ASK_CONFIG.replace(
+            "context_tokens = 128000",
+            "input_modalities = [\"text\"]\ncontext_tokens = 128000",
+        ),
+        "[mcp.servers.screen]\ncommand = \"screen-mcp\"\n",
+    );
+    fixture.trust_all();
+    let supervisor = fixture.supervise(FakeConnector::new([(
+        "screen",
+        FakeServer::Images(vec![agent_runtime_mcp::RemoteTool::new("capture")]),
+    )]));
+    fixture.settled(&supervisor).await;
+    let mut activate = tool_call_fragments(
+        0,
+        "activate",
+        "registry.activate",
+        r#"{"ids":["tool:mcp__screen__capture"]}"#,
+    );
+    activate.push(ProviderStreamEvent::Finish {
+        reason: FinishReason::ToolCalls,
+    });
+    let mut capture = tool_call_fragments(0, "capture", "mcp__screen__capture", "{}");
+    capture.push(ProviderStreamEvent::Finish {
+        reason: FinishReason::ToolCalls,
+    });
+    let provider = Arc::new(FakeProvider::new(
+        "example-model",
+        Capabilities::basic_streaming(),
+        vec![
+            ScriptedStream::new(activate),
+            ScriptedStream::new(capture),
+            ScriptedStream::new(vec![ProviderStreamEvent::Finish {
+                reason: FinishReason::Stop,
+            }]),
+        ],
+    ));
+    let mut runtime = request(&fixture.fixture, HostSurface::Headless);
+    runtime.provider = Some(provider.clone());
+    runtime.approval = Some(Arc::new(agent_runtime_core::approval::AllowAll));
+    runtime.mcp = Some(supervisor.clone());
+    let smith = factory::build_request(runtime).await.expect("a runtime");
+    let session = smith
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .expect("a session");
+    session
+        .run(UserInput::text("Capture the screen"))
+        .await
+        .expect("a successful tool loop");
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 3);
+    let wire = serde_json::to_string(&requests[2].messages).expect("provider messages");
+    let digest = format!("{:x}", Sha256::digest(SCREENSHOT.as_bytes()));
+    assert!(
+        wire.contains(&format!(
+            "[image {}: image/png 1×1 not included in this request]",
+            &digest[..8]
+        )),
+        "{wire}"
+    );
+    assert!(!wire.contains("data:image/"), "{wire}");
+    assert!(
+        serde_json::to_string(&session.history())
+            .expect("history")
+            .contains(SCREENSHOT)
+    );
+    session.shutdown().await.expect("clean shutdown");
+    supervisor.shutdown().await;
 }

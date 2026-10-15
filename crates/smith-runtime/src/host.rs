@@ -198,6 +198,7 @@ impl HostSessionRequest {
 #[derive(Debug)]
 pub struct HostSession {
     runtime: SmithRuntime,
+    model_image_input: smith_config::resolve::ImageInput,
     session: SessionHandle,
     session_history_registration: crate::session_history::SessionHistoryRegistration,
     client: crate::client::SmithSession,
@@ -284,6 +285,11 @@ impl HostSession {
     /// The Smith runtime composition record.
     pub fn runtime(&self) -> &SmithRuntime {
         &self.runtime
+    }
+
+    /// Image-input support before runtime layering supplies text-only defaults.
+    pub fn model_image_input(&self) -> smith_config::resolve::ImageInput {
+        self.model_image_input
     }
 
     /// The on-disk paths when persistence is enabled.

@@ -1,6 +1,7 @@
 //! The explicit build catalog and resolved module composition.
 
 #[cfg(any(
+    feature = "module-vision",
     feature = "module-image-generation",
     feature = "module-budget-notice",
     feature = "wasm-modules"
@@ -9,6 +10,7 @@ use std::sync::Arc;
 
 use smith_config::resolve::{KnownModule, ResolvedConfig};
 #[cfg(any(
+    not(feature = "module-vision"),
     not(feature = "module-image-generation"),
     not(feature = "module-budget-notice")
 ))]
@@ -18,6 +20,11 @@ use smith_module::{CompiledModule, ModuleComposition, ModuleOrigin, SettingValue
 /// The single compiled-in list, with one feature gate per first-party module.
 fn compiled_modules() -> Vec<CompiledModule> {
     Vec::from([
+        #[cfg(feature = "module-vision")]
+        CompiledModule {
+            module: Arc::new(smith_module_vision::VisionModule),
+            origin: ModuleOrigin::FirstParty,
+        },
         #[cfg(feature = "module-image-generation")]
         CompiledModule {
             module: Arc::new(smith_module_image_generation::ImageGenerationModule),
@@ -33,6 +40,14 @@ fn compiled_modules() -> Vec<CompiledModule> {
 
 pub(super) fn composition() -> ModuleComposition {
     let known = Vec::from([
+        #[cfg(not(feature = "module-vision"))]
+        ModuleDescriptor {
+            id: "vision".into(),
+            description: "Ask a vision model about one image".into(),
+            default_enabled: true,
+            origin: ModuleOrigin::FirstParty,
+            compiled_in: false,
+        },
         #[cfg(not(feature = "module-image-generation"))]
         ModuleDescriptor {
             id: "image-generation".into(),

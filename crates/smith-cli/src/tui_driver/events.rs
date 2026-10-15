@@ -39,10 +39,25 @@ impl TuiLoop<'_> {
                             continue;
                         }
                     }
+                    let policy = self.host.runtime().policy();
+                    if let Some(notice) = self.app.image_input_notices.observe(
+                        &envelope,
+                        self.session.id().as_str(),
+                        &policy.provider_name,
+                        policy.model.as_str(),
+                        self.host.model_image_input(),
+                    ) {
+                        self.app.push_notice(notice.kind, notice.text);
+                    }
                     if turn_completed && self.host.runtime().advisor_route().is_some() {
                         self.app
                             .status
                             .reconcile_advisor_records(self.host.snapshot().usage.records());
+                    }
+                    if turn_completed && self.host.runtime().vision_route().is_some() {
+                        self.app
+                            .status
+                            .reconcile_vision_records(self.host.snapshot().usage.records());
                     }
                     if turn_completed
                         && let Some(set) = self.host.changes().latest()

@@ -75,6 +75,8 @@ pub struct KnownPlugin {
 /// Everything resolution needs that comes from outside this crate.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ResolveRequest {
+    /// Frozen endpoint-bound catalog metadata, supplied before credential lookup.
+    pub catalog: Option<std::sync::Arc<crate::catalog::CatalogSnapshot>>,
     /// Catalog of module ids accepted by this binary, including modules not built.
     pub known_modules: Vec<KnownModule>,
     /// Installed plugins whose switches can affect this run.
@@ -106,6 +108,15 @@ pub struct ResolveRequest {
 }
 
 impl ResolveRequest {
+    /// Supplies a frozen catalog for image-input resolution and vision validation.
+    pub fn with_catalog(
+        mut self,
+        catalog: std::sync::Arc<crate::catalog::CatalogSnapshot>,
+    ) -> Self {
+        self.catalog = Some(catalog);
+        self
+    }
+
     /// A request that walks up from `start_dir` with no environment or
     /// overrides.
     pub fn new(start_dir: impl Into<PathBuf>) -> Self {
@@ -249,6 +260,10 @@ pub struct ResolvedConfig {
     pub harness: Option<ResolvedHarness>,
     /// The selected model.
     pub model: Sourced<String>,
+    /// Image-input support before runtime layering supplies text-only defaults.
+    pub model_image_input: Sourced<ImageInput>,
+    /// Accepted input modalities before runtime layering, absent without metadata.
+    pub model_input_modalities: Option<Sourced<Vec<crate::catalog::CatalogModality>>>,
     /// The generation cap asked of the provider.
     pub max_output_tokens: Option<Sourced<u32>>,
     /// Configured limits for the selected `"<provider>/<model>"` pair.
@@ -618,6 +633,8 @@ pub struct ResolvedModelReasoning {
 /// Resolved context policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedContext {
+    /// Number of recent images retained by the request image window.
+    pub inline_images: Sourced<u32>,
     /// Serialized tool-outcome offload threshold, independent of capture limits.
     pub tool_output_inline_bytes: Sourced<u32>,
     /// Tokens held back for the response. Model-dependent, so it has no
@@ -759,6 +776,20 @@ pub enum AdvisorOverride {
     Target(AdvisorTarget),
 }
 
+/// Image-input support before runtime defaults fill missing metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageInput {
+    /// Metadata explicitly advertises image input.
+    Accepts,
+    /// Metadata excludes image input, or the provider requires text only.
+    TextOnly,
+    /// No source supplied input-modality metadata.
+    Unknown,
+}
+
+/// What a `vision` setting names, sharing advisor target parsing.
+pub type VisionTarget = AdvisorTarget;
+
 /// What an `advisor` setting names.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AdvisorTarget {
@@ -865,6 +896,8 @@ pub struct ResolvedAgentProfile {
     /// Effective advisor; unset and explicit `false` resolve to none.
     /// The provenance ledger retains an explicit `false` and its source.
     pub advisor: Option<Sourced<AdvisorTarget>>,
+    /// Effective vision model; unset and explicit `false` resolve to none.
+    pub vision: Option<Sourced<VisionTarget>>,
     /// Placements where the profile is selectable.
     pub uses: Sourced<Vec<ProfileUse>>,
     /// Effective provider preference, when declared or inherited.
@@ -889,6 +922,7 @@ impl fmt::Debug for ResolvedAgentProfile {
             .field("has_instructions", &self.instructions.is_some())
             .field("delegation", &self.delegation)
             .field("advisor", &self.advisor)
+            .field("vision", &self.vision)
             .field("uses", &self.uses)
             .field("provider", &self.provider)
             .field("model", &self.model)

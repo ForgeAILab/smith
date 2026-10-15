@@ -21,7 +21,7 @@ use smith_host::{
 };
 use smith_runtime::factory::{
     AVAILABLE_ADAPTER_KINDS, AdvisorProfileRequest, ChildProfileRequest, FactoryError, HostSurface,
-    RuntimeRequest,
+    RuntimeRequest, VisionProfileRequest,
 };
 use smith_runtime::host::{HostSession, HostSessionError, HostSessionRequest};
 use smith_runtime::journal::DefaultRedactor;
@@ -32,7 +32,7 @@ use smith_runtime::rotation::SharedPool;
 use smith_runtime::session::SessionListing;
 
 use crate::cli::{RunArgs, Selection};
-use crate::config_command::{prepare, resolution_request};
+use crate::config_command::{prepare_with_catalog, resolution_request_with_catalog};
 use crate::tui_driver::{
     InteractiveExit, InteractiveRequests, InteractiveResources, PresentationOptions,
     run_interactive,
@@ -110,6 +110,19 @@ fn preflight_with_modules(
         modules: crate::modules::composition_from_resolved_config(&resolution.config),
         ..RuntimeRequest::new(resolution.config.clone(), surface)
     };
+    let mut vision_request = smith_config::resolve::ResolveRequest::new(project)
+        .with_known_modules(crate::modules::known_modules())
+        .with_env(std::env::vars());
+    if let Some(home) = resolution.layout.user_dir.parent() {
+        vision_request = vision_request.with_home_dir(home);
+    }
+    if let Some(catalog) = catalog.clone() {
+        vision_request = vision_request.with_catalog(catalog);
+    }
+    request.vision_profile = resolve_vision_profile(
+        &request.config,
+        crate::plugins::with_known_plugins(vision_request)?,
+    )?;
     if let Some(catalog) = catalog
         && let Some(source) = runtime_catalog_source(
             &catalog,
@@ -163,34 +176,29 @@ async fn start_host_with_modules(
     mcp: Option<Arc<crate::mcp::McpContext>>,
     sessions: &crate::modules::ModuleSessions,
 ) -> Result<StartedHost> {
-    let prepared = prepare(selection)?;
+    let had_frozen_catalog = frozen_catalog.is_some();
+    let prepared = prepare_with_catalog(selection, frozen_catalog)?;
     let project = prepared.project;
     let resolution = prepared.resolution;
     let cache_miss_notices = resolution.cache_miss_notices.value;
-    let catalog = match frozen_catalog {
-        Some(catalog) => catalog,
-        None => {
-            let loader = CatalogLoader::production(&resolution.layout.user_dir)
-                .map_err(|error| anyhow::anyhow!("{error}"))
-                .context("preparing the provider model catalog")?;
-            let allow_refresh = smith_config::catalog::catalog_provider_for(
-                &resolution.config.provider.kind.value,
-                resolution
-                    .config
-                    .provider
-                    .base_url
-                    .as_ref()
-                    .map(|value| value.value.as_str()),
-            )
-            .is_some();
-            loader
-                .prepare(allow_refresh)
-                .await
-                .map_err(|error| anyhow::anyhow!("{error}"))
-                .context("preparing the provider model catalog")?
-                .snapshot
-        }
-    };
+    let catalog = prepared.catalog;
+    if !had_frozen_catalog
+        && smith_config::catalog::catalog_provider_for(
+            &resolution.config.provider.kind.value,
+            resolution
+                .config
+                .provider
+                .base_url
+                .as_ref()
+                .map(|value| value.value.as_str()),
+        )
+        .is_some()
+    {
+        CatalogLoader::production(&resolution.layout.user_dir)
+            .map_err(|error| anyhow::anyhow!("{error}"))
+            .context("preparing the provider model catalog")?
+            .refresh_if_stale(&catalog);
+    }
     let inventory =
         local_inventory_with_catalog(&resolution, AVAILABLE_ADAPTER_KINDS, Some(&catalog))
             .map_err(|error| anyhow::anyhow!("{error}"))
@@ -305,8 +313,9 @@ async fn start_host_with_modules(
         // all.
         child_selection.effort = None;
         child_selection.context_window_flag = None;
-        let (_, child_request) = resolution_request(&child_selection)?;
-        let child_resolution = resolve(&child_request.with_profile_use(ProfileUse::Child))
+        let (_, child_request) =
+            resolution_request_with_catalog(&child_selection, Some(catalog.clone()))?;
+        let child_resolution = resolve(&child_request.clone().with_profile_use(ProfileUse::Child))
             .map_err(|error| anyhow::anyhow!("{error}"))
             .with_context(|| format!("resolving child profile `{}`", profile.name))?;
         let mut catalog_sources = Vec::new();
@@ -337,7 +346,9 @@ async fn start_host_with_modules(
         runtime
             .plugin_profiles
             .insert(profile.name.clone(), profile_plugins);
+        let vision_profile = resolve_vision_profile(&child_resolution.config, child_request)?;
         runtime.child_profiles.push(ChildProfileRequest {
+            vision_profile,
             config: child_resolution.config,
             catalog_sources,
         });
@@ -360,7 +371,8 @@ async fn start_host_with_modules(
         advisor_selection.effort = None;
         advisor_selection.context_window_flag = None;
         advisor_selection.advisor = None;
-        let (_, advisor_request) = resolution_request(&advisor_selection)?;
+        let (_, advisor_request) =
+            resolution_request_with_catalog(&advisor_selection, Some(catalog.clone()))?;
         let advisor_resolution = resolve(&advisor_request.with_advisor_route(advisor.clone()))
             .map_err(|error| anyhow::anyhow!("{error}"))
             .with_context(|| format!("resolving advisor `{}`", advisor.value))?;
@@ -1171,6 +1183,46 @@ pub(super) fn read_prompt(reader: impl Read) -> Result<String> {
         anyhow::bail!("stdin did not contain a prompt");
     }
     Ok(prompt)
+}
+
+/// Resolves vision through the advisor target path, without main overrides.
+fn resolve_vision_profile(
+    config: &smith_config::resolve::ResolvedConfig,
+    mut request: smith_config::resolve::ResolveRequest,
+) -> Result<Option<Box<VisionProfileRequest>>> {
+    if config.model_image_input.value == smith_config::resolve::ImageInput::Accepts {
+        return Ok(None);
+    }
+    let Some(vision) = &config.agent.profile.vision else {
+        return Ok(None);
+    };
+    request.cli = Default::default();
+    request.session = Default::default();
+    request.advisor_override = None;
+    let resolution = resolve(&request.clone().with_advisor_route(vision.clone()))
+        .map_err(|error| anyhow::anyhow!("{error}"))
+        .with_context(|| format!("resolving vision `{}`", vision.value))?;
+    let mut catalog_sources = Vec::new();
+    if let Some(catalog) = &request.catalog
+        && let Some(source) = runtime_catalog_source(
+            catalog,
+            &resolution.config.provider.name.value,
+            &resolution.config.provider.kind.value,
+            resolution
+                .config
+                .provider
+                .base_url
+                .as_ref()
+                .map(|url| url.value.as_str()),
+        )
+    {
+        catalog_sources.push(source);
+    }
+    Ok(Some(Box::new(VisionProfileRequest {
+        config: resolution.config,
+        catalog_sources,
+        provider: None,
+    })))
 }
 
 #[cfg(test)]

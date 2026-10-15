@@ -79,6 +79,7 @@ async fn run_inner(
 
     let session = host.session();
     let mut events = host.client().events();
+    let mut image_input_notices = smith_client::notice::ImageInputNotices::default();
     let mut cache_projection = CacheProjection::default();
     if let Ok(history) = host.client_timeline_events().await {
         cache_projection.replay(history);
@@ -119,6 +120,21 @@ async fn run_inner(
         };
         let Some(event) = event else { break };
         fold.apply(&event);
+
+        let policy = host.runtime().policy();
+        if let Some(notice) = image_input_notices.observe(
+            &event,
+            session.id().as_str(),
+            &policy.provider_name,
+            policy.model.as_str(),
+            host.model_image_input(),
+        ) {
+            let written = writeln!(stderr, "smith: {}", notice.text).and_then(|()| stderr.flush());
+            if let Err(error) = written {
+                let _ = host.shutdown().await;
+                return Err(error).context("writing image-input notice");
+            }
+        }
 
         if format == OutputFormat::StreamJson
             && let Err(error) = write_json(

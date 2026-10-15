@@ -29,6 +29,8 @@ use crate::format::{compact_tokens, format_usd, plural};
 
 use crate::cache::{CacheLifecycleSummary, CachePrice, CacheProjection, CacheTurnSummary};
 
+const VISION_USAGE_PURPOSE: &str = "vision";
+
 /// Optional emphasis for a module's presentation-only status item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModuleStatusSeverity {
@@ -138,16 +140,18 @@ impl Default for TurnUsage {
 
 impl TurnUsage {
     /// Adds root output, including failed attempts, without counting rollups
-    /// or separately attributed cache and advisor work a second time.
+    /// or separately attributed cache, advisor, and vision work a second time.
     pub fn record(&mut self, record: &UsageRecord) {
         if !matches!(
             record.source,
             UsageSource::ProviderAttempt | UsageSource::ExternalAgent
-        ) || record.provenance.purpose.as_deref() == Some(ADVISOR_USAGE_PURPOSE)
-            || record
-                .provenance
-                .attempt_purpose
-                .is_some_and(|purpose| purpose.is_synthetic_cache())
+        ) || matches!(
+            record.provenance.purpose.as_deref(),
+            Some(ADVISOR_USAGE_PURPOSE | VISION_USAGE_PURPOSE)
+        ) || record
+            .provenance
+            .attempt_purpose
+            .is_some_and(|purpose| purpose.is_synthetic_cache())
         {
             return;
         }
@@ -376,6 +380,8 @@ pub struct Status {
     synthetic_by_purpose: BTreeMap<ProviderAttemptPurpose, BTreeMap<CounterKind, u64>>,
     advisor_totals: BTreeMap<CounterKind, u64>,
     advisor_price: Option<PriceReference>,
+    vision_totals: BTreeMap<CounterKind, u64>,
+    vision_price: Option<PriceReference>,
     /// Turns that produced provider usage this session.
     turns: u32,
     /// The active provider/model's catalog price, resolved once by
@@ -412,6 +418,8 @@ impl Status {
             synthetic_by_purpose: BTreeMap::new(),
             advisor_totals: BTreeMap::new(),
             advisor_price: None,
+            vision_totals: BTreeMap::new(),
+            vision_price: None,
             turns: 0,
             price: None,
         }
@@ -499,10 +507,15 @@ impl Status {
     /// Routes one canonical Runtime usage record without allowing synthetic
     /// cache work to masquerade as a root/user turn.
     pub fn record_usage_record(&mut self, record: &UsageRecord) {
-        if record.provenance.purpose.as_deref() == Some(ADVISOR_USAGE_PURPOSE) {
+        let separate_totals = match record.provenance.purpose.as_deref() {
+            Some(ADVISOR_USAGE_PURPOSE) => Some(&mut self.advisor_totals),
+            Some(VISION_USAGE_PURPOSE) => Some(&mut self.vision_totals),
+            _ => None,
+        };
+        if let Some(totals) = separate_totals {
             self.usage_reported |= !record.delta.is_empty();
             for (kind, value) in record.delta.iter() {
-                *self.advisor_totals.entry(kind).or_default() += value;
+                *totals.entry(kind).or_default() += value;
             }
             return;
         }
@@ -529,6 +542,15 @@ impl Status {
         let mut usage = self.session_usage();
         usage.reconcile_advisor_records(records);
         self.advisor_totals = usage.advisor_totals;
+        self.usage_reported = usage.reported;
+    }
+
+    /// Reconciles vision counters after a terminal event, including reported
+    /// usage from an interruption that bypassed canonical commit hooks.
+    pub fn reconcile_vision_records(&mut self, records: &[UsageRecord]) {
+        let mut usage = self.session_usage();
+        usage.reconcile_vision_records(records);
+        self.vision_totals = usage.vision_totals;
         self.usage_reported = usage.reported;
     }
 
@@ -586,6 +608,8 @@ impl Status {
             totals: self.totals.clone(),
             advisor_totals: self.advisor_totals.clone(),
             advisor_price: self.advisor_price.clone(),
+            vision_totals: self.vision_totals.clone(),
+            vision_price: self.vision_price.clone(),
             synthetic_totals: self.synthetic_totals.clone(),
             synthetic_by_purpose: self.synthetic_by_purpose.clone(),
             compactions: self.capabilities.compactions,
@@ -641,6 +665,11 @@ impl Status {
     /// Sets the advisor model's own catalog reference for session spend.
     pub fn set_advisor_price(&mut self, price: Option<PriceReference>) {
         self.advisor_price = price;
+    }
+
+    /// Sets the vision model's own catalog reference for session spend.
+    pub fn set_vision_price(&mut self, price: Option<PriceReference>) {
+        self.vision_price = price;
     }
 
     /// The resolved price reference, when the catalog prices this session's

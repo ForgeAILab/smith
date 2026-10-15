@@ -55,6 +55,7 @@ pub mod skills;
 pub mod summary;
 pub mod tool_output;
 pub mod transport;
+mod vision;
 pub mod xai;
 
 /// Structured direct-child spawn outcome exposed through Smith's composition

@@ -50,14 +50,14 @@ pub fn runtime_catalog_source(
             })
             .with_revision(snapshot.source_revision.clone());
         record.retrieved = Some(Timestamp(snapshot.retrieved_at_ms));
-        record.input_modalities = Some(
+        record.input_modalities = (!model.input_modalities.is_empty()).then(|| {
             model
                 .input_modalities
                 .iter()
                 .copied()
                 .map(runtime_modality)
-                .collect(),
-        );
+                .collect()
+        });
         record.output_modalities = Some(
             model
                 .output_modalities
@@ -71,7 +71,7 @@ pub fn runtime_catalog_source(
     Some(Arc::new(source))
 }
 
-fn runtime_modality(modality: CatalogModality) -> Modality {
+pub(crate) fn runtime_modality(modality: CatalogModality) -> Modality {
     match modality {
         CatalogModality::Text => Modality::Text,
         CatalogModality::Image => Modality::Image,

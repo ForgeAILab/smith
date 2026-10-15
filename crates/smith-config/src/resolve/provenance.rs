@@ -116,6 +116,7 @@ pub(super) const SETTINGS: &[(&str, ValueKind)] = &[
     ("context.reasoning_reserve", ValueKind::Integer),
     ("context_window", ValueKind::Text),
     ("context.tool_output_inline_bytes", ValueKind::Integer),
+    ("context.inline_images", ValueKind::Integer),
     ("limits.max_retries", ValueKind::Integer),
     ("limits.max_tool_steps", ValueKind::Integer),
     ("limits.tool_output_limit_bytes", ValueKind::Integer),
@@ -409,7 +410,9 @@ impl Provenance {
     /// unset, while a key Smith has never heard of reads as the typo it is.
     pub fn explain(&self, key: &str) -> Result<Explanation, ConfigError> {
         let absent = || {
-            if key == "advisor" || SETTINGS.iter().any(|(setting, _)| *setting == key) {
+            if matches!(key, "advisor" | "vision" | "input_modalities")
+                || SETTINGS.iter().any(|(setting, _)| *setting == key)
+            {
                 ConfigError::MissingSetting {
                     key: key.to_owned(),
                     message: "no layer supplied a value".to_owned(),

@@ -86,7 +86,7 @@ fn executable(name: &str, digest: &ContentDigest) -> Executable {
     Executable::new(ExecutableKind::Extension, name, digest.clone())
 }
 
-/// Adds every installed plugin to a CLI request, including withheld plugins.
+/// Supplies frozen model metadata and every installed plugin to a CLI request.
 pub(crate) fn with_known_plugins(request: ResolveRequest) -> Result<ResolveRequest> {
     let user_root = match &request.home_dir {
         Some(home) => home.join(".smith"),
@@ -94,6 +94,11 @@ pub(crate) fn with_known_plugins(request: ResolveRequest) -> Result<ResolveReque
     };
     let catalog = PluginCatalog::discover(&user_root)?;
     let mut request = request;
+    if request.catalog.is_none() {
+        request = request.with_catalog(
+            smith_runtime::model_catalog::CatalogLoader::production(&user_root)?.snapshot()?,
+        );
+    }
     request.known_modules.extend(
         catalog
             .entries

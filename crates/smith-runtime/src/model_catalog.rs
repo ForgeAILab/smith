@@ -266,6 +266,38 @@ impl CatalogLoader {
         self
     }
 
+    /// Loads the reviewed snapshot for synchronous configuration resolution.
+    ///
+    /// Uses the same validated cache and embedded fallback as [`Self::prepare`],
+    /// without scheduling network work.
+    pub fn snapshot(&self) -> Result<Arc<CatalogSnapshot>, CatalogError> {
+        use std::io::Read;
+
+        let seed = parse_snapshot(self.seed.as_bytes())
+            .map_err(|error| CatalogError::InvalidSeed(error.to_string()))?;
+        let cached = std::fs::File::open(&self.cache_path).ok().and_then(|file| {
+            let mut bytes = Vec::new();
+            file.take((MAX_NORMALIZED_CATALOG_BYTES + 1) as u64)
+                .read_to_end(&mut bytes)
+                .ok()?;
+            parse_snapshot(&bytes).ok()
+        });
+        Ok(Arc::new(cached.unwrap_or(seed)))
+    }
+
+    /// Schedules refresh of a frozen snapshot when it has aged out.
+    ///
+    /// The caller keeps using this snapshot until the next host composition.
+    pub fn refresh_if_stale(&self, snapshot: &CatalogSnapshot) -> bool {
+        let stale = self
+            .clock
+            .now()
+            .as_millis()
+            .saturating_sub(snapshot.retrieved_at_ms)
+            >= self.max_age_ms;
+        stale && schedule_refresh(self.clone(), snapshot.clone())
+    }
+
     /// Loads a frozen last-good/embedded snapshot and optionally refreshes later.
     pub async fn prepare(&self, allow_refresh: bool) -> Result<PreparedCatalog, CatalogError> {
         let seed = parse_snapshot(self.seed.as_bytes())
@@ -278,14 +310,7 @@ impl CatalogLoader {
             Some(snapshot) => (snapshot, CatalogLoadOrigin::LastGoodCache),
             None => (seed, CatalogLoadOrigin::Embedded),
         };
-        let stale = self
-            .clock
-            .now()
-            .as_millis()
-            .saturating_sub(snapshot.retrieved_at_ms)
-            >= self.max_age_ms;
-        let refresh_scheduled =
-            allow_refresh && stale && schedule_refresh(self.clone(), snapshot.clone());
+        let refresh_scheduled = allow_refresh && self.refresh_if_stale(&snapshot);
         Ok(PreparedCatalog {
             snapshot: Arc::new(snapshot),
             origin,
@@ -505,6 +530,7 @@ async fn publish_atomic(path: &Path, snapshot: &CatalogSnapshot) -> Result<(), C
 
 mod parsing;
 mod runtime_source;
+pub(crate) use runtime_source::runtime_modality;
 
 use parsing::{normalize_remote, parse_snapshot, valid_revision};
 pub use runtime_source::runtime_catalog_source;

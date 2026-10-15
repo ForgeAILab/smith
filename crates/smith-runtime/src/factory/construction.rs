@@ -217,10 +217,17 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         .clock
         .clone()
         .unwrap_or_else(|| Arc::new(SystemClock));
+    let vision_accounting = Arc::new(crate::vision::VisionAccounting::default());
+    let vision = Box::pin(provider::prepare_vision_route(
+        &request,
+        vision_accounting.clone(),
+    ))
+    .await?;
     let child_profile_routes = provider::prepare_child_profile_routes(
         &request,
         prompt.project_instructions.as_ref(),
         session_history.clone(),
+        vision_accounting.clone(),
     )
     .await?;
     let advisor_route = provider::prepare_advisor_route(&request).await?;
@@ -247,6 +254,7 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
     let module_plan = modules::prepare(
         &request,
         provider_stage.image_binding.clone(),
+        vision.as_ref().map(|vision| vision.binding.clone()),
         profile.profile.limits.max_input_tokens,
         semantic_summary.is_some(),
         session_history.clone(),
@@ -500,7 +508,7 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
             || store.clone(),
             |advisor| advisor.accounting_store(store.clone()),
         );
-        builder = builder.session_store(store);
+        builder = builder.session_store(vision_accounting.store(store));
     }
     if let Some(store) = durability.root_store.clone() {
         builder = builder.checkpoint_store(store);
@@ -521,6 +529,7 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
     let child_module_context = modules::context(
         &request,
         provider_stage.image_binding,
+        vision.as_ref().map(|vision| vision.binding.clone()),
         profile.profile.limits.max_input_tokens,
         semantic_summary.is_some(),
         session_history.clone(),
@@ -575,7 +584,10 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
                 workspace,
                 clock,
                 artifact_store: request.artifact_store.clone(),
-                session_store: request.session_store.clone(),
+                session_store: request
+                    .session_store
+                    .clone()
+                    .map(|store| vision_accounting.store(store)),
                 checkpoint_store: durability.child_store,
                 skills: prompt.skills.abilities().to_vec(),
                 memory: prompt.memory,
@@ -598,6 +610,8 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         delegation: delegation.delegation,
         advisor_slot: capabilities.advisor_slot,
         advisor: capabilities.advisor,
+        vision_accounting,
+        vision,
         goal_component: capabilities.goal,
         background_services: request.background_services,
         harness_identity,

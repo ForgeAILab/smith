@@ -12,6 +12,7 @@ use crate::cli::Selection;
 pub(super) struct Prepared {
     pub(super) resolution: Resolution,
     pub(super) project: PathBuf,
+    pub(super) catalog: std::sync::Arc<smith_config::catalog::CatalogSnapshot>,
 }
 
 pub(super) fn inspect_selection(selection: &Selection) -> Result<ConfigReadiness> {
@@ -20,7 +21,18 @@ pub(super) fn inspect_selection(selection: &Selection) -> Result<ConfigReadiness
 }
 
 pub(super) fn prepare(selection: &Selection) -> Result<Prepared> {
-    let (start, request) = resolution_request(selection)?;
+    prepare_with_catalog(selection, None)
+}
+
+pub(super) fn prepare_with_catalog(
+    selection: &Selection,
+    catalog: Option<std::sync::Arc<smith_config::catalog::CatalogSnapshot>>,
+) -> Result<Prepared> {
+    let (start, request) = resolution_request_with_catalog(selection, catalog)?;
+    let catalog = request
+        .catalog
+        .clone()
+        .expect("host supplies a frozen catalog");
     let resolution = resolve(&request)
         .map_err(|error| anyhow::anyhow!("{error}"))
         .context("resolving Smith configuration")?;
@@ -28,10 +40,18 @@ pub(super) fn prepare(selection: &Selection) -> Result<Prepared> {
     Ok(Prepared {
         resolution,
         project,
+        catalog,
     })
 }
 
 pub(super) fn resolution_request(selection: &Selection) -> Result<(PathBuf, ResolveRequest)> {
+    resolution_request_with_catalog(selection, None)
+}
+
+pub(super) fn resolution_request_with_catalog(
+    selection: &Selection,
+    catalog: Option<std::sync::Arc<smith_config::catalog::CatalogSnapshot>>,
+) -> Result<(PathBuf, ResolveRequest)> {
     let start = match &selection.project {
         Some(project) => project.clone(),
         None => std::env::current_dir().context("reading the current directory")?,
@@ -48,14 +68,16 @@ pub(super) fn resolution_request(selection: &Selection) -> Result<(PathBuf, Reso
     } else {
         SyntheticCacheSpendAuthority::Deny
     };
-    let request = crate::plugins::with_known_plugins(
-        ResolveRequest::new(&start)
-            .with_known_modules(crate::modules::known_modules())
-            .with_env(std::env::vars())
-            .with_cli(selection.overrides())
-            .with_session(selection.session_overrides())
-            .with_synthetic_cache_spend(authority),
-    )?;
+    let mut request = ResolveRequest::new(&start)
+        .with_known_modules(crate::modules::known_modules())
+        .with_env(std::env::vars())
+        .with_cli(selection.overrides())
+        .with_session(selection.session_overrides())
+        .with_synthetic_cache_spend(authority);
+    if let Some(catalog) = catalog {
+        request = request.with_catalog(catalog);
+    }
+    let request = crate::plugins::with_known_plugins(request)?;
     let request = match &selection.advisor {
         Some(choice) => request.with_advisor_override(choice.clone()),
         None => request,
@@ -85,7 +107,7 @@ pub(super) async fn modules_report(
         &prepared.resolution,
         &prepared.project,
         smith_runtime::factory::HostSurface::Headless,
-        None,
+        Some(prepared.catalog.clone()),
     )?;
     let outcomes = smith_runtime::factory::module_report(&request).await?;
     let report =

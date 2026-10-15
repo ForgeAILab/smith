@@ -1,8 +1,10 @@
 //! Client-neutral notice labels and placement.
 
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 
-use smith_runtime::client::BudgetCategory;
+use smith_config::resolve::ImageInput;
+use smith_runtime::client::{BudgetCategory, SmithEvent, SmithEventKind};
 
 use crate::format::compact_tokens;
 
@@ -202,6 +204,57 @@ pub struct Notice {
     pub text: String,
 }
 
+/// Presentation-only memory of missing image-input metadata notices.
+///
+/// Retain this across runtime rebuilds so a model change can introduce a new
+/// notice without repeating one for the same session and model.
+#[derive(Debug, Default)]
+pub struct ImageInputNotices {
+    reported: BTreeSet<(String, String, String)>,
+}
+
+impl ImageInputNotices {
+    /// Reports the first root-session plan that replaces an image on a model
+    /// whose image-input metadata is unknown. Older plans without the count
+    /// carry no evidence that an image was replaced.
+    pub fn observe(
+        &mut self,
+        event: &SmithEvent,
+        root_session: &str,
+        provider: &str,
+        model: &str,
+        image_input: ImageInput,
+    ) -> Option<Notice> {
+        if event.session.as_str() != root_session || image_input != ImageInput::Unknown {
+            return None;
+        }
+        let SmithEventKind::ContextPlanned {
+            images_text_only: Some(count),
+            ..
+        } = &event.payload
+        else {
+            return None;
+        };
+        if *count == 0
+            || !self.reported.insert((
+                root_session.to_owned(),
+                provider.to_owned(),
+                model.to_owned(),
+            ))
+        {
+            return None;
+        }
+        Some(Notice {
+            kind: NoticeKind::Provider,
+            text: format!(
+                "{provider}/{model} has no image-input metadata, so images are sent as \
+                 placeholders. Set [models.\"{provider}/{model}\"] input_modalities = \
+                 [\"text\", \"image\"] if it accepts images."
+            ),
+        })
+    }
+}
+
 /// Which token budget failed, with the requested and allowed counts.
 pub fn budget_failure_text(
     category: BudgetCategory,
@@ -219,3 +272,6 @@ pub fn budget_failure_text(
         compact_tokens(u64::from(limit_tokens)),
     )
 }
+
+#[cfg(test)]
+mod tests;

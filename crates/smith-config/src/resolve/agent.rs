@@ -110,9 +110,9 @@ pub(super) fn profile_contributions(
                 let Some(rest) = contribution.key.strip_prefix(&prefix) else {
                     continue;
                 };
-                // Advisor explain retains every file and inheritance source.
+                // Selection explain retains every file and inheritance source.
                 // Other settings preserve their existing winner-only behavior.
-                if rest == "advisor" {
+                if matches!(rest, "advisor" | "vision") {
                     own.entry(rest.to_owned())
                         .or_default()
                         .push(contribution.clone());
@@ -156,7 +156,7 @@ pub(super) fn profile_contributions(
         stack.pop();
 
         for (key, contributions) in own {
-            if key == "advisor" {
+            if matches!(key.as_str(), "advisor" | "vision") {
                 winners.entry(key).or_default().extend(contributions);
             } else {
                 winners.insert(key, contributions);
@@ -186,6 +186,7 @@ pub(super) fn profile_contributions(
 pub(super) fn resolve_agent_profiles(
     file_layers: &[Vec<Contribution>],
     declared: &Declarations,
+    request: &ResolveRequest,
 ) -> Result<BTreeMap<String, ResolvedAgentProfile>, ConfigError> {
     let mut global = Provenance::default();
     for layer in file_layers {
@@ -232,6 +233,7 @@ pub(super) fn resolve_agent_profiles(
                 instructions: None,
                 delegation,
                 advisor,
+                vision: model_selection(&global, name, "vision")?,
                 uses,
                 provider: None,
                 model: None,
@@ -279,6 +281,7 @@ pub(super) fn resolve_agent_profiles(
                 instructions: None,
                 delegation,
                 advisor: None,
+                vision: None,
                 uses,
                 provider: None,
                 model: None,
@@ -291,6 +294,16 @@ pub(super) fn resolve_agent_profiles(
     }
     for profile in profiles.values() {
         validate_advisor(profile.advisor.as_ref(), &profiles, declared)?;
+        validate_vision(
+            profile.vision.as_ref(),
+            &profiles,
+            declared,
+            &global,
+            request,
+        )?;
+    }
+    for profile in profiles.values_mut() {
+        profile.revision = with_vision(profile.revision.clone(), profile.vision.as_ref());
     }
     Ok(profiles)
 }
@@ -358,6 +371,15 @@ pub(super) fn resolved_profile(
         },
         name,
     )?;
+    let vision = model_selection(
+        if effective.winner("vision").is_none() && uses.value.contains(&ProfileUse::Main) {
+            global
+        } else {
+            effective
+        },
+        name,
+        "vision",
+    )?;
     let provider = text(effective, "provider")?;
     let model = text(effective, "model")?;
     let capabilities = ResolvedCapabilityLimits {
@@ -386,6 +408,7 @@ pub(super) fn resolved_profile(
         instructions,
         delegation,
         advisor,
+        vision,
         uses,
         provider,
         model,
@@ -478,12 +501,20 @@ fn advisor_selection(
     provenance: &Provenance,
     profile: &str,
 ) -> Result<Option<Sourced<AdvisorTarget>>, ConfigError> {
-    let Some(entry) = provenance.winner("advisor") else {
+    model_selection(provenance, profile, "advisor")
+}
+
+fn model_selection(
+    provenance: &Provenance,
+    profile: &str,
+    key: &str,
+) -> Result<Option<Sourced<AdvisorTarget>>, ConfigError> {
+    let Some(entry) = provenance.winner(key) else {
         return Ok(None);
     };
     let invalid = || ConfigError::InvalidValue {
         source: entry.source.clone(),
-        message: "`advisor` must be a profile name, `provider/model`, or `false`".to_owned(),
+        message: format!("`{key}` must be a profile name, `provider/model`, or `false`"),
     };
     match &entry.value {
         SettingValue::Text(value) => match AdvisorTarget::parse(value).ok_or_else(invalid)? {
@@ -491,12 +522,10 @@ fn advisor_selection(
                 if entry.source.layer == Layer::Profile {
                     return Err(ConfigError::InvalidValue {
                         source: entry.source.clone(),
-                        message: format!(
-                            "profile `{profile}` cannot select itself as its `advisor`"
-                        ),
+                        message: format!("profile `{profile}` cannot select itself as its `{key}`"),
                     });
                 }
-                // A top-level default never assigns a profile as its own advisor.
+                // A top-level default never assigns a profile as its own target.
                 Ok(None)
             }
             target => Ok(Some(Sourced::new(target, entry.source.clone()))),
@@ -545,6 +574,69 @@ fn validate_advisor(
             })
         }
     }
+}
+
+/// Validates vision independently of whether the main model accepts images.
+fn validate_vision(
+    vision: Option<&Sourced<VisionTarget>>,
+    profiles: &BTreeMap<String, ResolvedAgentProfile>,
+    declared: &Declarations,
+    global: &Provenance,
+    request: &ResolveRequest,
+) -> Result<(), ConfigError> {
+    validate_advisor(vision, profiles, declared)?;
+    let Some(vision) = vision else {
+        return Ok(());
+    };
+    let (provider, model) = match &vision.value {
+        VisionTarget::Model { provider, model } => (provider.clone(), model.clone()),
+        VisionTarget::Profile(name) => {
+            let profile = &profiles[name];
+            let provider = profile.provider.clone().or(text(global, "provider")?);
+            let model = profile.model.clone().or(text(global, "model")?);
+            match (provider, model) {
+                (Some(provider), Some(model)) => (provider.value, model.value),
+                _ => {
+                    return Err(ConfigError::InvalidValue {
+                        source: vision.source.clone(),
+                        message: format!(
+                            "vision profile `{name}` must resolve a provider and model that accept image input"
+                        ),
+                    });
+                }
+            }
+        }
+    };
+    let binding = Sourced::new(
+        AdvisorTarget::Model {
+            provider: provider.clone(),
+            model: model.clone(),
+        },
+        vision.source.clone(),
+    );
+    validate_advisor(Some(&binding), profiles, declared)?;
+    let input = super::vision::model_input(global, &provider, &model, request.catalog.as_deref())?;
+    if input.image.value != ImageInput::Accepts {
+        return Err(ConfigError::InvalidValue {
+            source: vision.source.clone(),
+            message: format!("vision model `{provider}/{model}` does not accept image input"),
+        });
+    }
+    Ok(())
+}
+
+/// Preserves existing profile revisions when no vision model is selected.
+fn with_vision(revision: String, vision: Option<&Sourced<VisionTarget>>) -> String {
+    let Some(vision) = vision else {
+        return revision;
+    };
+    let mut digest = Sha256::new();
+    digest.update(revision.as_bytes());
+    digest.update(b"\0vision\0");
+    digest.update(vision.value.to_string().as_bytes());
+    digest.update([0]);
+    digest.update(vision.source.to_string().as_bytes());
+    format!("{:x}", digest.finalize())
 }
 
 /// Selects the profile an advisor route resolves, or the binding a model
@@ -727,6 +819,19 @@ pub(super) fn extract(
         request.advisor_route.is_some(),
         request.advisor_override.as_ref(),
     )?;
+    validate_vision(
+        agent.profile.vision.as_ref(),
+        &agent.profiles,
+        declared,
+        provenance,
+        request,
+    )?;
+    let input = super::vision::model_input(
+        provenance,
+        &provider_name.value,
+        &model.value,
+        request.catalog.as_deref(),
+    )?;
     let provider = resolve_provider(provenance, provider_name)?;
     let model_limits = resolve_model_limits(provenance, &provider.name.value, &model.value)?;
     let context_window = text(provenance, "context_window")?;
@@ -774,6 +879,8 @@ pub(super) fn extract(
         provider,
         harness,
         model,
+        model_image_input: input.image,
+        model_input_modalities: input.modalities,
         max_output_tokens: optional_u32(provenance, "max_output_tokens")?,
         model_limits,
         context_window,
@@ -892,6 +999,11 @@ pub(super) fn resolve_agent(
         provenance,
         selected_profile.map_or(active.value.as_str(), |selected| selected.value.as_str()),
     )?;
+    let default_vision = model_selection(
+        provenance,
+        selected_profile.map_or(active.value.as_str(), |selected| selected.value.as_str()),
+        "vision",
+    )?;
     let mut profile = match selected_profile {
         Some(selected) => profiles
             .get(&selected.value)
@@ -913,30 +1025,38 @@ pub(super) fn resolve_agent(
                 instructions: None,
                 delegation: Sourced::new(true, active.source.clone()),
                 advisor: default_advisor.clone(),
+                vision: default_vision.clone(),
                 uses: Sourced::new(vec![ProfileUse::Main], active.source.clone()),
                 provider: None,
                 model: None,
                 capabilities: ResolvedCapabilityLimits::default(),
-                revision: agent_profile_revision(
-                    &active.value,
-                    &modes
-                        .get(&active.value)
-                        .expect("resolved active agent is declared")
-                        .posture,
-                    modes
-                        .get(&active.value)
-                        .and_then(|mode| mode.description.as_ref()),
-                    None,
-                    &Sourced::new(true, active.source.clone()),
-                    default_advisor.as_ref(),
-                    &Sourced::new(vec![ProfileUse::Main], active.source.clone()),
-                    None,
-                    None,
-                    true,
+                revision: with_vision(
+                    agent_profile_revision(
+                        &active.value,
+                        &modes
+                            .get(&active.value)
+                            .expect("resolved active agent is declared")
+                            .posture,
+                        modes
+                            .get(&active.value)
+                            .and_then(|mode| mode.description.as_ref()),
+                        None,
+                        &Sourced::new(true, active.source.clone()),
+                        default_advisor.as_ref(),
+                        &Sourced::new(vec![ProfileUse::Main], active.source.clone()),
+                        None,
+                        None,
+                        true,
+                    ),
+                    default_vision.as_ref(),
                 ),
                 legacy: true,
             }),
     };
+    // A run without a named profile uses the top-level selection.
+    if selected_profile.is_none() {
+        profile.vision = default_vision;
+    }
     // Any configured profile may advise, whatever its placements.
     if !advisor_route && !profile.supports(profile_use) {
         return Err(ConfigError::InvalidValue {
@@ -980,20 +1100,23 @@ pub(super) fn resolve_agent(
     // advisor naming the session's own binding would only consult itself.
     if profile.advisor != effective_advisor {
         profile.advisor = effective_advisor;
-        profile.revision = with_capability_limits(
-            agent_profile_revision(
-                &profile.name,
-                &profile.posture,
-                profile.description.as_ref(),
-                profile.instructions.as_ref(),
-                &profile.delegation,
-                profile.advisor.as_ref(),
-                &profile.uses,
-                profile.provider.as_ref(),
-                profile.model.as_ref(),
-                profile.legacy,
+        profile.revision = with_vision(
+            with_capability_limits(
+                agent_profile_revision(
+                    &profile.name,
+                    &profile.posture,
+                    profile.description.as_ref(),
+                    profile.instructions.as_ref(),
+                    &profile.delegation,
+                    profile.advisor.as_ref(),
+                    &profile.uses,
+                    profile.provider.as_ref(),
+                    profile.model.as_ref(),
+                    profile.legacy,
+                ),
+                &profile.capabilities,
             ),
-            &profile.capabilities,
+            profile.vision.as_ref(),
         );
     }
     validate_advisor(profile.advisor.as_ref(), &profiles, declared)?;

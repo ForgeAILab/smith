@@ -30,7 +30,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75#db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=76708b840681eeb51d527c01a9be8c01d1ebf754#76708b840681eeb51d527c01a9be8c01d1ebf754"
 dependencies = [
  "agent-runtime-ability",
  "agent-runtime-context",
@@ -55,7 +55,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-ability"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75#db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=76708b840681eeb51d527c01a9be8c01d1ebf754#76708b840681eeb51d527c01a9be8c01d1ebf754"
 dependencies = [
  "agent-runtime-core",
  "agent-runtime-registry",
@@ -67,18 +67,20 @@ dependencies = [
 [[package]]
 name = "agent-runtime-context"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75#db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=76708b840681eeb51d527c01a9be8c01d1ebf754#76708b840681eeb51d527c01a9be8c01d1ebf754"
 dependencies = [
  "agent-runtime-core",
  "agent-runtime-registry",
+ "base64 0.22.1",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
 name = "agent-runtime-core"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75#db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=76708b840681eeb51d527c01a9be8c01d1ebf754#76708b840681eeb51d527c01a9be8c01d1ebf754"
 dependencies = [
  "agent-runtime-registry",
  "async-trait",
@@ -96,7 +98,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-mcp"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75#db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=76708b840681eeb51d527c01a9be8c01d1ebf754#76708b840681eeb51d527c01a9be8c01d1ebf754"
 dependencies = [
  "agent-runtime-ability",
  "agent-runtime-core",
@@ -113,7 +115,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-provider"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75#db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=76708b840681eeb51d527c01a9be8c01d1ebf754#76708b840681eeb51d527c01a9be8c01d1ebf754"
 dependencies = [
  "agent-runtime-core",
  "agent-runtime-registry",
@@ -132,7 +134,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-registry"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75#db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=76708b840681eeb51d527c01a9be8c01d1ebf754#76708b840681eeb51d527c01a9be8c01d1ebf754"
 dependencies = [
  "serde",
 ]
@@ -140,7 +142,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-testkit"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75#db8dff2b6699fe629441f3bd8de0ec2e6ad8ac75"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=76708b840681eeb51d527c01a9be8c01d1ebf754#76708b840681eeb51d527c01a9be8c01d1ebf754"
 dependencies = [
  "agent-runtime",
  "agent-runtime-core",
@@ -3720,6 +3722,7 @@ dependencies = [
  "smith-module",
  "smith-module-budget-notice",
  "smith-module-image-generation",
+ "smith-module-vision",
  "smith-plugin",
  "smith-runtime",
  "smith-test-module",
@@ -3845,6 +3848,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "smith-module-vision"
+version = "0.4.0"
+dependencies = [
+ "agent-runtime",
+ "agent-runtime-core",
+ "agent-runtime-testkit",
+ "async-trait",
+ "base64 0.22.1",
+ "futures-util",
+ "serde_json",
+ "sha2",
+ "smith-host",
+ "smith-module",
+ "smith-tools",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "smith-plugin"
 version = "0.4.0"
 dependencies = [
@@ -3889,6 +3911,7 @@ dependencies = [
  "smith-module",
  "smith-module-budget-notice",
  "smith-module-image-generation",
+ "smith-module-vision",
  "smith-plugin",
  "smith-tools",
  "smith-wasm-host",

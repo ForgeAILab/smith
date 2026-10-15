@@ -183,6 +183,7 @@ pub(in crate::resolve) fn resolve_context(
     // inactivity timer can be constructed downstream.
     let idle_compaction_ms = cache.inactivity_limit_ms.clone();
     Ok(ResolvedContext {
+        inline_images: bounded_u32(provenance, "context.inline_images", 1, 100)?,
         tool_output_inline_bytes: bounded_u32(
             provenance,
             "context.tool_output_inline_bytes",

@@ -54,6 +54,8 @@ fn context(root: &std::path::Path, transport: Arc<ReplayTransport>) -> ModuleCon
         user_dir: root.join("host"),
         posture: ModulePosture::ReadWrite,
         transport,
+        vision: None,
+        main_model_accepts_images: false,
         image_binding: None,
         session_history: None,
         semantic_summary_enabled: false,

@@ -65,7 +65,17 @@ pub(super) fn redacted_result_text(
     let text = result
         .content
         .iter()
-        .filter_map(ContentPart::as_text)
+        .filter_map(|part| match part {
+            ContentPart::Text { text } => Some(text.clone()),
+            ContentPart::Image { url, .. } => {
+                let header = smith_tools::describe_image_url(url);
+                Some(match header.dimensions {
+                    Some((width, height)) => format!("[{} {width}×{height}]", header.mime),
+                    None => format!("[{}]", header.mime),
+                })
+            }
+            _ => None,
+        })
         .collect::<Vec<_>>()
         .join("\n");
     if text.trim().is_empty() {

@@ -334,7 +334,9 @@ pub(super) fn context_policy(
     if let Some(slack) = max_estimated_slack {
         policy = policy.with_max_estimated_slack(slack);
     }
-    policy
+    policy.with_image_window(agent_runtime::context::ImageWindow {
+        inline: config.context.inline_images.value,
+    })
 }
 
 /// The capability budget for a model whose configuration does not name one.

@@ -793,6 +793,8 @@ pub struct App {
     pub(crate) module_status: Vec<ModuleStatusItem>,
     /// Whether significant local cache-miss notices are enabled.
     pub cache_miss_notices: bool,
+    /// Missing image-input metadata notices already shown for this session.
+    pub image_input_notices: smith_client::notice::ImageInputNotices,
     /// The input buffer.
     pub composer: Composer,
     /// Host-discovered file metadata; no file reads happen in the app.

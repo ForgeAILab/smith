@@ -74,6 +74,26 @@ pub(in crate::factory) async fn prepare(
         record.revision = Some("smith-command-provider-1".to_owned());
         layers = layers.with_provider_local(record);
     }
+    // Command adapters accept only text, even when a model override says otherwise.
+    let input_modalities = if adapter == Adapter::CommandJsonl {
+        Some(vec![Modality::Text])
+    } else {
+        config
+            .model_input_modalities
+            .as_ref()
+            .filter(|modalities| modalities.source.layer != smith_config::resolve::Layer::BuiltIn)
+            .map(|modalities| {
+                modalities
+                    .value
+                    .iter()
+                    .copied()
+                    .map(crate::model_catalog::runtime_modality)
+                    .collect()
+            })
+    };
+    if let Some(modalities) = input_modalities {
+        layers = layers.with_input_modalities(modalities);
+    }
     let trusted = trusted_model(&provider_name, model.as_str());
     let active_choice = context_window.active.as_ref();
     let selected_trusted = active_choice

@@ -75,6 +75,13 @@ pub(crate) fn run_with(
             }
         }
         PluginAction::List => {
+            if request.catalog.is_none() {
+                request = request.with_catalog(
+                    smith_runtime::model_catalog::CatalogLoader::production(&user_root)?
+                        .snapshot()?,
+                );
+            }
+
             let catalog = PluginCatalog::discover(&user_root)?;
             request.known_plugins = catalog.known_plugins();
             let report = match inspect(&request) {

@@ -824,6 +824,8 @@
             input_budget_tokens: 10_000,
             reserved_tokens: 2_000,
             confidence: EstimationConfidence::Estimated,
+            images_text_only: None,
+            images_windowed: None,
         }));
 
         let plan = app.status.context_plan.as_ref().expect("context plan");

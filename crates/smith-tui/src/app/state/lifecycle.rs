@@ -10,6 +10,7 @@ impl App {
             status: Status::new(model, project),
             module_status: Vec::new(),
             cache_miss_notices: false,
+            image_input_notices: Default::default(),
             composer: Composer::new(),
             command_catalog: smith_client::file_commands::CommandCatalog::empty(),
             overlay: None,

@@ -164,6 +164,8 @@ mod tests {
             input_budget_tokens: 100_000,
             reserved_tokens: 28_000,
             confidence: EstimationConfidence::Exact,
+            images_text_only: None,
+            images_windowed: None,
         }));
         app.apply(&event(RuntimeEvent::Usage {
             record: UsageRecord {

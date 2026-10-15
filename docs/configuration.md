@@ -306,6 +306,56 @@ new declaration claiming the same name is an error—Smith never picks one by
 map or file order. Existing `[profiles]` without the new fields remain
 main-only build profiles.
 
+## Vision model for text-only agents
+
+A vision model answers questions about images for a text-only main model.
+It takes the same values as `advisor`: a profile name,
+`"<provider>/<model>"`, or `false`. A profile selection uses that profile's
+settings; a model reference uses top-level settings and its model entry.
+Top-level `vision` supplies the default for main-enabled profiles; a profile's
+own value, inherited through `extends`, wins, and `vision = false` disables it.
+
+```toml
+vision = "google/gemini-3-flash"
+
+[profiles.code]
+provider = "remote"
+model = "vendor/working-model"
+
+[profiles.private]
+extends = "code"
+vision = false
+```
+
+The selected model must accept image input from catalog metadata or an
+explicit `input_modalities` override. Smith rejects an unusable selection at
+load time before credential lookup, even when the main model already accepts
+images. Unknown profiles, undeclared providers, and explicit profile
+self-references are errors, as for `advisor`; a top-level default naming the
+active profile is skipped. `smith config explain vision` reports the winner
+and every overridden source.
+
+When the main model is text-only, the `vision` module offers `view_image` to
+ask about one image and return a text answer. A main model that accepts images
+leaves that module inactive. Image bytes are sent to the selected vision
+provider, subject to approval.
+
+`[models."<provider>/<model>"] input_modalities` overrides the catalog's
+accepted input modalities independently of model limits. The accepted names
+are `text`, `image`, `audio`, `video`, and `document`:
+
+```toml
+[models."local/qwen-vl"]
+input_modalities = ["text", "image"]
+```
+
+With no input-modality metadata, Smith treats the model as text-only and
+keeps the metadata state unknown. An explicit list without `image`, including
+an empty list, excludes images. Command-JSONL providers always remain
+text-only, regardless of an override. `smith config explain input_modalities`
+reports the active model's winning source; the full
+`models."local/qwen-vl".input_modalities` key can also be explained.
+
 ## Project instructions and context identity
 
 After configuration resolves the canonical project root, a standard TUI or
@@ -361,6 +411,8 @@ enabled = true
 effort = "high"
 
 [profiles.work.context]
+tool_output_inline_bytes = 8192
+inline_images = 10
 output_reserve = 4096
 reasoning_reserve = 0
 max_estimated_slack = 256
@@ -1020,6 +1072,8 @@ reserve, or estimated-count slack.
 
 | Key | Built-in default | Meaning |
 | --- | ---: | --- |
+| `context.tool_output_inline_bytes` | `8192` | Serialized tool-output offload threshold, range 256–1048576 bytes |
+| `context.inline_images` | `10` | Recent-image window size, range 1–100 |
 | `context.reasoning_reserve` | `0` | Continuation/reasoning reserve |
 | `context.capability_budget` | derived | Tokens activated tool schemas and skill instructions share |
 | `context.compaction_high_watermark_percent` | `85` | Pressure trigger |
@@ -1052,6 +1106,16 @@ reserve, or estimated-count slack.
 | `reasoning.enabled` | provider/model default | Explicit thinking state when supported |
 | `reasoning.effort` | provider/model default | Exact advertised effort when supported |
 | `background.max_monitors` | `8` | Reserved process-monitor capacity |
+
+`[context] tool_output_inline_bytes` controls when serialized tool output is
+stored as an artifact. `[context] inline_images` independently sets the recent
+image window, default 10, range 1–100. The window advances in batches, retaining
+between that count and twice that count minus one; images in the newest user
+message are always included and do not count toward the window. A text-only
+model receives image placeholders. Both settings support profile overrides
+and the usual configuration layers; `smith config explain context.inline_images`
+shows the winning source and overridden values. Out-of-range values fail at
+load time.
 
 The compaction low watermark must be below the high watermark. Reserves must
 leave a positive input budget. Numeric limits are validated before any provider

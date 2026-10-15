@@ -38,6 +38,7 @@ pub mod change;
 pub mod display;
 pub mod edit;
 pub mod image;
+pub mod image_header;
 pub mod list;
 pub mod read;
 pub mod read_state;
@@ -64,6 +65,7 @@ pub use image::{
     MAX_GENERATED_PNG_BYTES, MAX_RECENT_IMAGE_DATA_URL_BYTES, MAX_REFERENCE_BYTES,
     RecentImageSource,
 };
+pub use image_header::{ImageHeader, describe_image_url};
 pub use list::ListTool;
 pub use read::ReadTool;
 pub use read_state::{ReadDefect, ReadObservation, ReadRecorder};

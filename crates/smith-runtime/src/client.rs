@@ -238,6 +238,12 @@ pub enum SmithEventKind {
         input_budget_tokens: u32,
         reserved_tokens: u32,
         confidence: EstimationConfidence,
+        /// Images replaced because the model does not accept image input.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        images_text_only: Option<u32>,
+        /// Images replaced because they fall outside the inline window.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        images_windowed: Option<u32>,
     },
     ContextCompacted {
         context: Fingerprint,
@@ -640,6 +646,23 @@ mod tests {
                         "{:?} projected to Unknown",
                         canonical.payload,
                     );
+                    if let RuntimeEvent::ContextPlanned {
+                        images_text_only,
+                        images_windowed,
+                        ..
+                    } = canonical.payload
+                    {
+                        let SmithEventKind::ContextPlanned {
+                            images_text_only: projected_text_only,
+                            images_windowed: projected_windowed,
+                            ..
+                        } = projected.payload
+                        else {
+                            panic!("context plan was not preserved");
+                        };
+                        assert_eq!(projected_text_only, Some(images_text_only));
+                        assert_eq!(projected_windowed, Some(images_windowed));
+                    }
                 }
             };
         }
@@ -701,6 +724,8 @@ mod tests {
                 reserved_tokens: 100,
                 confidence: EstimationConfidence::Exact,
                 capability_overflow_tokens: None,
+                images_text_only: 2,
+                images_windowed: 3,
             },
             ContextCompacted {
                 context: Fingerprint::of("context"),

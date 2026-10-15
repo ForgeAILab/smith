@@ -20,9 +20,9 @@ use agent_runtime_core::tool::{PreparedToolCall, ToolCallDisplay, ToolEffects};
 use futures_util::StreamExt;
 use smith_config::model::{AutoApprovalOperation, CacheMaintenanceMode, ProfileUse};
 use smith_config::resolve::{
-    AutoApprovalRule, ResolvedAgent, ResolvedAgentMode, ResolvedAgentProfile, ResolvedCachePolicy,
-    ResolvedChildAgents, ResolvedCommandProvider, ResolvedContext, Source, Sourced,
-    SyntheticCacheSpendAuthority,
+    AutoApprovalRule, Layer, ResolvedAgent, ResolvedAgentMode, ResolvedAgentProfile,
+    ResolvedCachePolicy, ResolvedChildAgents, ResolvedCommandProvider, ResolvedContext, Source,
+    Sourced, SyntheticCacheSpendAuthority,
 };
 use smith_host::{HeadlessApproval, ProjectWorkspace};
 
@@ -197,6 +197,7 @@ exit 2
 
 fn context(output_reserve: Option<u32>, reasoning_reserve: u32) -> ResolvedContext {
     ResolvedContext {
+        inline_images: sourced(10),
         tool_output_inline_bytes: sourced(8 * 1024),
         output_reserve: output_reserve.map(sourced),
         reasoning_reserve: sourced(reasoning_reserve),
@@ -222,6 +223,8 @@ fn resolved_config() -> ResolvedConfig {
         provider: provider(KIND_FAKE, None),
         harness: None,
         model: sourced("example-model".to_owned()),
+        model_image_input: sourced(smith_config::resolve::ImageInput::Unknown),
+        model_input_modalities: None,
         max_output_tokens: None,
         context_window: None,
         model_limits: Default::default(),
@@ -377,6 +380,10 @@ async fn command_factory_preflights_and_streams_through_the_shared_provider() {
     let workspace_root = tempfile::tempdir().expect("a workspace");
     let executable = executable_fixture(workspace_root.path(), "example-model");
     let mut config = command_config(executable);
+    config.model_input_modalities = Some(sourced(vec![
+        smith_config::catalog::CatalogModality::Text,
+        smith_config::catalog::CatalogModality::Image,
+    ]));
     config.provider.command.as_mut().unwrap().env.insert(
         "BRIDGE_TOKEN".to_owned(),
         sourced(McpValue::Credential("env:BRIDGE_TOKEN_SOURCE".to_owned())),
@@ -668,6 +675,8 @@ fn an_absent_request_budget_is_derived_and_shared_with_context_policy() {
         provider: provider(KIND_FAKE, None),
         harness: None,
         model: sourced("example-model".to_owned()),
+        model_image_input: sourced(smith_config::resolve::ImageInput::Unknown),
+        model_input_modalities: None,
         max_output_tokens: None,
         context_window: None,
         model_limits: Default::default(),
@@ -810,6 +819,8 @@ fn reserves_that_consume_the_whole_window_fail_instead_of_planning() {
         provider: provider(KIND_FAKE, None),
         harness: None,
         model: sourced("example-model".to_owned()),
+        model_image_input: sourced(smith_config::resolve::ImageInput::Unknown),
+        model_input_modalities: None,
         max_output_tokens: None,
         context_window: None,
         model_limits: Default::default(),
@@ -856,6 +867,8 @@ fn compaction_watermarks_are_derived_from_the_enforced_input_budget() {
         provider: provider(KIND_FAKE, None),
         harness: None,
         model: sourced("example-model".to_owned()),
+        model_image_input: sourced(smith_config::resolve::ImageInput::Unknown),
+        model_input_modalities: None,
         max_output_tokens: None,
         context_window: None,
         model_limits: Default::default(),
@@ -904,6 +917,8 @@ async fn scoped_auto_approval_is_shared_factory_policy_and_falls_back() {
         provider: provider(KIND_FAKE, None),
         harness: None,
         model: sourced("example-model".to_owned()),
+        model_image_input: sourced(smith_config::resolve::ImageInput::Unknown),
+        model_input_modalities: None,
         max_output_tokens: None,
         context_window: None,
         model_limits: Default::default(),
@@ -1332,6 +1347,7 @@ fn agent(posture: AgentPosture) -> ResolvedAgent {
         instructions: None,
         delegation: sourced(true),
         advisor: None,
+        vision: None,
         uses: sourced(vec![ProfileUse::Main]),
         provider: None,
         model: None,
@@ -1375,3 +1391,57 @@ fn background() -> smith_config::resolve::ResolvedBackground {
 }
 
 mod modules;
+
+#[test]
+fn context_policy_uses_the_resolved_image_window() {
+    let mut config = resolved_config();
+    config.context.inline_images = sourced(3);
+    let profile = profile(ModelLimits::new(128_000, 124_000, 4_096));
+    let budget = effective_output_budget(&config, &profile).expect("output budget");
+    assert_eq!(
+        context_policy(&config, &profile.limits, &budget).image_window,
+        Some(agent_runtime::context::ImageWindow { inline: 3 }),
+    );
+}
+
+#[tokio::test]
+async fn configured_input_modalities_override_the_catalog_field_only() {
+    let mut config = resolved_config();
+    config.model_input_modalities = Some(Sourced::new(
+        vec![
+            smith_config::catalog::CatalogModality::Text,
+            smith_config::catalog::CatalogModality::Image,
+        ],
+        Source::file(
+            Layer::ProjectFile,
+            "/repo/.smith/config.toml",
+            "models.\"acme/example-model\".input_modalities",
+        ),
+    ));
+    let mut record = ModelRecord::new().with_limits(ModelLimits::new(128_000, 124_000, 4_096));
+    record.input_modalities = Some(vec![Modality::Text]);
+    let source = agent_runtime_core::catalog::StaticSource::new(
+        "fixture",
+        agent_runtime_core::catalog::CatalogSource::CachedRemote,
+    )
+    .for_provider(config.provider.name.value.clone())
+    .with_model("example-model", record);
+    let mut request = RuntimeRequest::new(config, HostSurface::Headless);
+    request.catalog_sources.push(Arc::new(source));
+    let prepared = prepare_factory_inputs(&request)
+        .await
+        .expect("configured profile");
+    assert_eq!(
+        prepared.profile.profile.input_modalities,
+        [Modality::Text, Modality::Image]
+    );
+    assert_eq!(
+        prepared.profile.profile.limits,
+        ModelLimits::new(128_000, 124_000, 4_096)
+    );
+    request.config.model_input_modalities = None;
+    let prepared = prepare_factory_inputs(&request)
+        .await
+        .expect("catalog profile");
+    assert_eq!(prepared.profile.profile.input_modalities, [Modality::Text]);
+}

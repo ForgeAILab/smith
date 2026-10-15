@@ -33,7 +33,6 @@ use smith_config::setup::{
 use smith_config::user_config::{prepare_checkpoint_key_source_removal, prepare_user_config_edit};
 use smith_runtime::checkpoint::{CheckpointKeyProvider, ConfiguredCheckpointKeyProvider};
 use smith_runtime::factory::{self, AVAILABLE_ADAPTER_KINDS, FactoryError, HostSurface};
-use smith_runtime::model_catalog::CatalogLoader;
 use smith_tui::picker::ResourceEntry;
 use smith_tui::setup::{
     ResolveModelLimits, ResolvedModelLimits, SetupApp, SetupCredential, SetupEffect, SetupEntry,

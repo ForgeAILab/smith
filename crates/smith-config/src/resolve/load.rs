@@ -79,7 +79,7 @@ pub fn resolve(request: &ResolveRequest) -> Result<Resolution, ConfigError> {
     normalize_idle_compaction_aliases(&mut session)?;
     super::modules::normalize_aliases(&mut session, &request.known_modules)?;
 
-    let agent_profiles = resolve_agent_profiles(&file_layers, &declared)?;
+    let agent_profiles = resolve_agent_profiles(&file_layers, &declared, request)?;
     let (selected, advisor_binding) = match &request.advisor_route {
         None => (
             select_profile(&file_layers, &env, &cli, &session, &declared)?,
@@ -104,6 +104,7 @@ pub fn resolve(request: &ResolveRequest) -> Result<Resolution, ConfigError> {
     provenance.extend(advisor_binding);
     apply_product_model_defaults(&mut provenance);
     apply_image_generation_defaults(&mut provenance);
+    super::vision::explain_model_input(&mut provenance, request.catalog.as_deref())?;
     super::modules::legacy_defaults(&mut provenance, &request.known_modules);
     super::modules::mirror_aliases(&mut provenance, &request.known_modules);
 
@@ -450,6 +451,7 @@ pub(super) fn built_in_defaults(user_dir: &Path) -> ConfigFile {
         ]),
         context: Some(ContextSection {
             tool_output_inline_bytes: Some(8 * 1024),
+            inline_images: Some(10),
             reasoning_reserve: Some(0),
             compaction_high_watermark_percent: Some(85),
             compaction_low_watermark_percent: Some(60),

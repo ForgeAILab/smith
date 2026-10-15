@@ -1,6 +1,6 @@
 use super::{
-    AVAILABLE_ADAPTER_KINDS, CatalogLoader, ConfigReadiness, Context, Path, PathBuf,
-    ResolveRequest, Result, Selection, SetupContext, SetupMode, inspect,
+    AVAILABLE_ADAPTER_KINDS, ConfigReadiness, Context, Path, PathBuf, ResolveRequest, Result,
+    Selection, SetupContext, SetupMode, inspect,
 };
 
 pub(super) async fn setup_context(
@@ -25,16 +25,10 @@ pub(super) async fn setup_context(
     if matches!(mode, SetupMode::FirstRun) && resolution.is_some() {
         anyhow::bail!("Smith is already configured; run `smith setup` to add or change a choice");
     }
-    let catalog = CatalogLoader::production(&layout.user_dir)
-        .map_err(|error| anyhow::anyhow!(error))
-        .context("preparing the provider model catalog")?
-        // Setup consumes only the embedded/last-good reviewed snapshot. It
-        // never refreshes Models.dev while a credential is being handled.
-        .prepare(false)
-        .await
-        .map_err(|error| anyhow::anyhow!(error))
-        .context("loading the provider model catalog")?
-        .snapshot;
+    let catalog = request
+        .catalog
+        .clone()
+        .expect("host supplies a frozen catalog");
     let inventory = resolution
         .as_ref()
         .map(|resolution| {

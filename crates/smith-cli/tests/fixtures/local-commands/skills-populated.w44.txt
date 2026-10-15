@@ -57,6 +57,11 @@ lled-coding-agents · active · Smith configur
 ation reference, section "Smith's tools on i
 nstalled coding agents". `[harness.<kind>] a
 llow_own_tools`.
+  smith.configuration.vision-model-for-text-
+only-agents · active · Smith configuration r
+eference, section "Vision model for text-onl
+y agents". A vision model answers questions
+about images for a text-only main model.
   smith.headless · active · Outline of the S
 mith headless protocol reference for smith -
 p: input modes, text, json, and stream-json
@@ -184,11 +189,6 @@ not loaded
   broken · it does not start with a --- fr
 ontmatter block declaring a description ·
 <HOME>/.smith/skills/broken/SKILL.md
-
-
-
-
-
 
 
 

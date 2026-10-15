@@ -436,6 +436,8 @@ pub struct RuntimeRequest {
     pub child_profiles: Vec<ChildProfileRequest>,
     /// Fully resolved advisor profile, required when the root selects an advisor.
     pub advisor_profile: Option<AdvisorProfileRequest>,
+    /// Resolved vision target, used only while the active main model is text-only.
+    pub vision_profile: Option<Box<VisionProfileRequest>>,
     /// Capability patterns the session denied on top of its profile's limits.
     pub capability_denials: Vec<String>,
     /// The runtime's event broadcast buffer.
@@ -486,6 +488,7 @@ impl RuntimeRequest {
             model_catalog: None,
             child_profiles: Vec::new(),
             advisor_profile: None,
+            vision_profile: None,
             capability_denials: Vec::new(),
             event_buffer: DEFAULT_EVENT_BUFFER,
             shutdown_timeout_ms: DEFAULT_SHUTDOWN_TIMEOUT_MS,
@@ -531,6 +534,8 @@ impl PluginProfile {
 /// One child-enabled profile resolved through the normal Smith configuration path.
 #[derive(Debug, Clone)]
 pub struct ChildProfileRequest {
+    /// This child profile's independently resolved vision target.
+    pub vision_profile: Option<Box<VisionProfileRequest>>,
     /// Profile-selected, provenance-carrying child configuration.
     pub config: ResolvedConfig,
     /// Catalog layers applicable to that profile's provider/model.
@@ -543,6 +548,17 @@ pub struct AdvisorProfileRequest {
     /// Profile-selected, provenance-carrying advisor configuration.
     pub config: ResolvedConfig,
     /// Catalog layers applicable to the advisor's provider/model.
+    pub catalog_sources: Vec<Arc<dyn ModelCatalogSource>>,
+    /// Optional provider injection for deterministic tests and trusted embedders.
+    pub provider: Option<Arc<dyn Provider>>,
+}
+
+/// One vision target resolved through the ordinary profile or model path.
+#[derive(Debug, Clone)]
+pub struct VisionProfileRequest {
+    /// Provenance-carrying configuration for the selected vision model.
+    pub config: ResolvedConfig,
+    /// Catalog layers applicable to this provider and model.
     pub catalog_sources: Vec<Arc<dyn ModelCatalogSource>>,
     /// Optional provider injection for deterministic tests and trusted embedders.
     pub provider: Option<Arc<dyn Provider>>,
@@ -706,6 +722,8 @@ pub struct SmithRuntime {
     delegation: Option<SmithDelegation>,
     advisor_slot: Option<Arc<std::sync::OnceLock<agent_runtime::runtime::SessionHandle>>>,
     advisor: Option<Arc<AdvisorTool>>,
+    vision_accounting: Arc<crate::vision::VisionAccounting>,
+    vision: Option<crate::vision::VisionRoute>,
     goal_component: Option<Arc<GoalComponent>>,
     background_services: Option<BackgroundServices>,
     harness_identity: HarnessIdentity,
@@ -732,7 +750,19 @@ impl SmithRuntime {
         self.advisor.as_ref().map(|advisor| advisor.route())
     }
 
-    /// Canonical session state plus reported advisor usage awaiting a commit
+    /// Root vision binding resolved independently of the main model.
+    pub fn vision_route(&self) -> Option<&smith_module::VisionBinding> {
+        self.vision.as_ref().map(|vision| &vision.binding)
+    }
+
+    /// Independently resolved vision catalog rates; absent for uncatalogued models.
+    pub fn vision_price(&self) -> Option<&smith_config::catalog::CatalogModelCost> {
+        self.vision
+            .as_ref()
+            .and_then(|vision| vision.price.as_ref())
+    }
+
+    /// Canonical session state plus reported advisor and vision usage awaiting a commit
     /// hook, including interruptions that bypass Runtime's terminal hooks.
     pub fn accounted_snapshot(
         &self,
@@ -742,6 +772,7 @@ impl SmithRuntime {
         if let Some(advisor) = &self.advisor {
             advisor.account_snapshot(&mut snapshot);
         }
+        self.vision_accounting.account_snapshot(&mut snapshot);
         snapshot
     }
 

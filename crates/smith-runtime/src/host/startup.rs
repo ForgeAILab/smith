@@ -577,6 +577,7 @@ pub async fn start_with_modules(
     let client = crate::client::SmithSession::new(session.clone());
     Ok(HostSession {
         runtime,
+        model_image_input: config.model_image_input.value,
         session,
         session_history_registration,
         client,

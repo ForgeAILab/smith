@@ -927,3 +927,96 @@ mod fixtures;
 mod invocation;
 
 mod wasm;
+
+#[test]
+fn resolution_metadata_reuses_one_catalog_for_main_child_and_advisor() {
+    use smith_config::catalog::CatalogModality;
+    use smith_config::model::ProfileUse;
+    use smith_config::resolve::{ImageInput, Overrides};
+
+    let home = tempfile::tempdir().expect("user root");
+    let project = tempfile::tempdir().expect("project");
+    let snapshot: smith_config::catalog::CatalogSnapshot =
+        serde_json::from_str(smith_runtime::model_catalog::EMBEDDED_MODELS_DEV_SEED)
+            .expect("embedded catalog");
+    let model = snapshot
+        .provider("google")
+        .expect("Google catalog")
+        .models
+        .values()
+        .find(|model| model.input_modalities.contains(&CatalogModality::Image))
+        .expect("a catalog vision model")
+        .id
+        .clone();
+    std::fs::create_dir(project.path().join(".smith")).expect("config directory");
+    std::fs::write(
+        project.path().join(".smith/config.toml"),
+        format!(
+            r#"
+default_profile = "dev"
+vision = "google/{model}"
+advisor = "reviewer"
+[profiles.dev]
+provider = "google"
+model = "{model}"
+[profiles.worker]
+provider = "google"
+model = "{model}"
+vision = "google/{model}"
+use = ["child"]
+[profiles.reviewer]
+provider = "google"
+model = "{model}"
+[providers.google]
+kind = "gemini-interactions"
+"#
+        ),
+    )
+    .expect("configuration");
+    let request =
+        with_known_plugins(ResolveRequest::new(project.path()).with_home_dir(home.path()))
+            .expect("host resolution metadata");
+    let catalog = request.catalog.clone().expect("frozen catalog");
+    let request =
+        with_known_plugins(request.with_catalog(catalog.clone())).expect("reuse frozen metadata");
+    assert!(Arc::ptr_eq(request.catalog.as_ref().unwrap(), &catalog));
+    let main = resolve(&request).expect("main validates catalog-only vision");
+    let child = resolve(
+        &request
+            .clone()
+            .with_cli(Overrides {
+                profile: Some("worker".into()),
+                ..Overrides::default()
+            })
+            .with_profile_use(ProfileUse::Child),
+    )
+    .expect("child validates catalog-only vision");
+    let advisor = resolve(
+        &request.with_advisor_route(
+            main.config
+                .agent
+                .profile
+                .advisor
+                .clone()
+                .expect("advisor target"),
+        ),
+    )
+    .expect("advisor validates catalog-only vision");
+    for resolution in [main, child, advisor] {
+        assert_eq!(
+            resolution.config.model_image_input.value,
+            ImageInput::Accepts
+        );
+        assert!(resolution.config.agent.profile.vision.is_some());
+        let key = format!("models.\"google/{model}\".input_modalities");
+        assert!(
+            resolution
+                .provenance
+                .explain(&key)
+                .expect("explanation")
+                .source
+                .key
+                .starts_with("catalog google@")
+        );
+    }
+}

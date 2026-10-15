@@ -26,6 +26,8 @@ fn turn_output_flow_counts_attempts_without_inventing_or_double_counting_usage()
     record.source = UsageSource::ProviderAttempt;
     record.provenance.purpose = Some(ADVISOR_USAGE_PURPOSE.to_owned());
     usage.record(&record);
+    record.provenance.purpose = Some(VISION_USAGE_PURPOSE.to_owned());
+    usage.record(&record);
     record.provenance.purpose = None;
     record.provenance.attempt_purpose = Some(ProviderAttemptPurpose::CacheKeepalive);
     usage.record(&record);
@@ -169,6 +171,120 @@ fn advisor_usage_has_separate_totals_and_uses_its_own_model_prices() {
         SessionCost {
             micro_usd: 100,
             label: CostLabel::Estimated
+        }
+    );
+}
+
+#[test]
+fn vision_usage_has_separate_totals_and_uses_its_own_model_prices() {
+    use agent_runtime_core::usage::{Provenance, UsageSource};
+
+    let mut status = Status::new("main", "/repo");
+    let main_price = PriceReference {
+        provider: "main-provider".into(),
+        model: "main".into(),
+        table: PriceTable {
+            input: Some(1_000_000),
+            output: Some(2_000_000),
+            cache_read: Some(100_000),
+            cache_write: Some(2_000_000),
+        },
+    };
+    let vision_price = PriceReference {
+        provider: "vision-provider".into(),
+        model: "eyes".into(),
+        table: PriceTable {
+            input: Some(10_000_000),
+            output: Some(20_000_000),
+            cache_read: Some(1_000_000),
+            cache_write: Some(20_000_000),
+        },
+    };
+    status.set_price(Some(main_price.clone()));
+    status.set_vision_price(Some(vision_price));
+    status.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 100));
+    let record = UsageRecord {
+        source: UsageSource::SemanticSummary,
+        provenance: Provenance {
+            purpose: Some(VISION_USAGE_PURPOSE.into()),
+            failed: true,
+            ..Provenance::default()
+        },
+        delta: UsageDelta::new()
+            .with(CounterKind::InputUncached, 50)
+            .with(CounterKind::InputCached, 20)
+            .with(CounterKind::CacheWrite, 5)
+            .with(CounterKind::Output, 10),
+    };
+    status.record_usage_record(&record);
+    // Output-only vision usage still contributes without altering root context.
+    let output_only = UsageRecord {
+        delta: UsageDelta::new().with(CounterKind::Output, 5),
+        ..record.clone()
+    };
+    status.record_usage_record(&output_only);
+    let mut usage = status.session_usage();
+    assert_eq!(usage.total_tokens(), 100);
+    assert_eq!(usage.merged_total_tokens(), 190);
+    assert_eq!(usage.turns, 0);
+    assert_eq!(status.context, TokenCount::reported(100));
+    assert!(usage.render().expect("usage").contains("  vision:"));
+    assert_eq!(
+        SessionCost::compute(&usage, &main_price),
+        SessionCost {
+            micro_usd: 1_020,
+            label: CostLabel::Exact
+        }
+    );
+    assert_eq!(
+        main_price.render_sources(&usage),
+        "main-provider/main · vision vision-provider/eyes"
+    );
+    let records = [record, output_only];
+    status.reconcile_vision_records(&records);
+    assert_eq!(status.session_usage(), usage);
+    usage.reconcile_vision_records(&records);
+    usage.reconcile_vision_records(&records);
+    assert_eq!(
+        usage.merged_total_tokens(),
+        190,
+        "reconciliation counts once"
+    );
+    usage.vision_price = None;
+    assert_eq!(
+        SessionCost::compute(&usage, &main_price),
+        SessionCost {
+            micro_usd: 100,
+            label: CostLabel::Estimated
+        }
+    );
+}
+
+#[test]
+fn vision_only_usage_retains_a_price_when_the_main_model_is_unpriced() {
+    let mut status = Status::new("main", "/repo");
+    status.set_vision_price(Some(PriceReference {
+        provider: "vision-provider".into(),
+        model: "eyes".into(),
+        ..priced(10_000_000, 20_000_000, 1_000_000, 20_000_000)
+    }));
+    status.record_usage_record(&UsageRecord {
+        source: UsageSource::SemanticSummary,
+        provenance: agent_runtime_core::usage::Provenance {
+            purpose: Some(VISION_USAGE_PURPOSE.into()),
+            ..Default::default()
+        },
+        delta: UsageDelta::new().with(CounterKind::Output, 10),
+    });
+    let usage = status.session_usage();
+    assert!(!usage.is_empty());
+    assert_eq!(status.context, TokenCount::UNKNOWN);
+    let price = usage.cost_price(status.price()).expect("vision price");
+    assert_eq!(
+        SessionCost::compute(&usage, price),
+        SessionCost {
+            micro_usd: 200,
+            label: CostLabel::Exact,
         }
     );
 }

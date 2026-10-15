@@ -46,6 +46,7 @@ fn the_full_runtime_facade_is_used_only_by_composition_and_module_contracts() {
             "crates/smith-module".to_owned(),
             "crates/smith-wasm-host".to_owned(),
             "crates/modules/image-generation".to_owned(),
+            "crates/modules/vision".to_owned(),
             "crates/modules/budget-notice".to_owned()
         ]),
         "the facade is limited to runtime composition, the contract, and the ported modules"

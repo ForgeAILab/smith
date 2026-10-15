@@ -97,6 +97,10 @@ pub struct SessionUsage {
     pub advisor_totals: BTreeMap<CounterKind, u64>,
     /// Independently resolved advisor rates; absence leaves its spend unpriced.
     pub advisor_price: Option<PriceReference>,
+    /// Vision provider counters, disjoint from ordinary root and child work.
+    pub vision_totals: BTreeMap<CounterKind, u64>,
+    /// Independently resolved vision rates; absence leaves its spend unpriced.
+    pub vision_price: Option<PriceReference>,
     /// Context compactions observed.
     pub compactions: u32,
     /// Tokens those compactions reclaimed.
@@ -126,7 +130,11 @@ impl SessionUsage {
         active: Option<&'a PriceReference>,
     ) -> Option<&'a PriceReference> {
         if self.bindings.is_empty() {
-            return active;
+            return active.or_else(|| {
+                self.vision_price
+                    .as_ref()
+                    .filter(|_| !self.vision_totals.is_empty())
+            });
         }
         let retained = self
             .bindings
@@ -140,6 +148,11 @@ impl SessionUsage {
                     .as_ref()
                     .filter(|_| !self.advisor_totals.is_empty())
             })
+            .or_else(|| {
+                self.vision_price
+                    .as_ref()
+                    .filter(|_| !self.vision_totals.is_empty())
+            })
     }
 
     /// Whether anything at all was observed, including a delegated-only
@@ -149,6 +162,7 @@ impl SessionUsage {
             && self.turns == 0
             && self.synthetic_totals.is_empty()
             && self.advisor_totals.is_empty()
+            && self.vision_totals.is_empty()
             && self.delegated_totals.is_empty()
             && self.cache_miss_count == 0
             && self.cache_rebilled_tokens == 0
@@ -173,6 +187,7 @@ impl SessionUsage {
             + self.delegated_totals.values().copied().sum::<u64>()
             + self.synthetic_totals.values().copied().sum::<u64>()
             + self.advisor_totals.values().copied().sum::<u64>()
+            + self.vision_totals.values().copied().sum::<u64>()
     }
 
     /// Replaces the synthetic bucket from Runtime's final canonical usage
@@ -208,6 +223,19 @@ impl SessionUsage {
                 self.reported |= !record.delta.is_empty();
                 for (kind, value) in record.delta.iter() {
                     *self.advisor_totals.entry(kind).or_default() += value;
+                }
+            }
+        }
+    }
+
+    /// Replaces vision counters from the durable ledger after shutdown.
+    pub fn reconcile_vision_records(&mut self, records: &[UsageRecord]) {
+        self.vision_totals.clear();
+        for record in records {
+            if record.provenance.purpose.as_deref() == Some(VISION_USAGE_PURPOSE) {
+                self.reported |= !record.delta.is_empty();
+                for (kind, value) in record.delta.iter() {
+                    *self.vision_totals.entry(kind).or_default() += value;
                 }
             }
         }
@@ -250,13 +278,17 @@ impl SessionUsage {
         if self.delegated_totals.is_empty()
             && self.synthetic_totals.is_empty()
             && self.advisor_totals.is_empty()
+            && self.vision_totals.is_empty()
         {
             return Some(root_line);
         }
 
         let merged = merge_counter_totals(
             &merge_counter_totals(&self.totals, &self.delegated_totals),
-            &merge_counter_totals(&self.synthetic_totals, &self.advisor_totals),
+            &merge_counter_totals(
+                &merge_counter_totals(&self.synthetic_totals, &self.advisor_totals),
+                &self.vision_totals,
+            ),
         );
         let mut merged_line = format!(
             "total · {}",
@@ -292,6 +324,12 @@ impl SessionUsage {
             lines.push(format!(
                 "  advisor: {}",
                 render_counter_parts(&self.advisor_totals, mark).join(" · ")
+            ));
+        }
+        if !self.vision_totals.is_empty() {
+            lines.push(format!(
+                "  vision: {}",
+                render_counter_parts(&self.vision_totals, mark).join(" · ")
             ));
         }
         Some(lines.join("\n"))
@@ -479,6 +517,14 @@ impl PriceReference {
                 None => sources.push_str(" · advisor price unknown"),
             }
         }
+        if !usage.vision_totals.is_empty() {
+            match &usage.vision_price {
+                Some(vision) => {
+                    sources.push_str(&format!(" · vision {}/{}", vision.provider, vision.model))
+                }
+                None => sources.push_str(" · vision price unknown"),
+            }
+        }
         sources
     }
 }
@@ -603,6 +649,19 @@ impl SessionCost {
                     *kind,
                     *tokens,
                     &advisor_price.table,
+                    &mut micro_usd,
+                    &mut all_priced,
+                );
+            } else if *tokens > 0 {
+                all_priced = false;
+            }
+        }
+        for (kind, tokens) in &usage.vision_totals {
+            if let Some(vision_price) = &usage.vision_price {
+                accumulate_price(
+                    *kind,
+                    *tokens,
+                    &vision_price.table,
                     &mut micro_usd,
                     &mut all_priced,
                 );

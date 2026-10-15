@@ -47,6 +47,10 @@ impl Fixture {
     }
     fn prepared(&self) -> crate::config_command::Prepared {
         crate::config_command::Prepared {
+            catalog: std::sync::Arc::new(
+                serde_json::from_str(smith_runtime::model_catalog::EMBEDDED_MODELS_DEV_SEED)
+                    .expect("embedded catalog"),
+            ),
             resolution: resolve(&self.request()).unwrap(),
             project: self.project.path().into(),
         }
@@ -243,7 +247,7 @@ async fn headless_listing_matches_runtime_module_outcomes_without_a_session() {
     let report = crate::config_command::modules_report(&prepared)
         .await
         .unwrap();
-    assert_eq!(report.rows.len(), 2);
+    assert_eq!(report.rows.len(), 3);
     for row in &report.rows {
         let state = if !prepared.resolution.config.modules[&row.id].compiled_in {
             smith_module::ModuleState::NotBuilt
@@ -253,6 +257,8 @@ async fn headless_listing_matches_runtime_module_outcomes_without_a_session() {
             smith_module::ModuleState::Inactive {
                 reason: if row.id == "image-generation" {
                     "the active provider has no image binding".into()
+                } else if row.id == "vision" {
+                    "no vision model is configured".into()
                 } else {
                     "semantic summaries are disabled".into()
                 },
@@ -479,7 +485,11 @@ fn higher_layers_are_named_without_claiming_the_user_switch_took_effect() {
     }
 }
 
-#[cfg(not(any(feature = "module-image-generation", feature = "module-budget-notice")))]
+#[cfg(not(any(
+    feature = "module-image-generation",
+    feature = "module-budget-notice",
+    feature = "module-vision"
+)))]
 #[tokio::test]
 async fn minimal_build_starts_a_session_with_core_tools_and_no_optional_modules() {
     let fixture = Fixture::new();
@@ -590,4 +600,84 @@ async fn module_command_previews_before_writing_and_refuses_unknown_ids() {
         assert!(!fixture.user_dir().join("config.toml").exists());
     }
     host.shutdown().await.unwrap();
+}
+
+#[cfg(feature = "module-vision")]
+#[tokio::test]
+async fn model_palette_rebuild_mounts_vision_and_module_listing_uses_the_same_binding() {
+    let fixture = Fixture::new();
+    fixture.project_config(&format!(
+        r#"vision = "camera/eyes"
+{LOCAL_COMMAND_CONFIG}
+
+[providers.camera]
+kind = "openai-compatible"
+base_url = "https://vision.example/v1"
+[models."camera/eyes"]
+context_tokens = 32000
+max_input_tokens = 30000
+max_output_tokens = 2048
+input_modalities = ["text", "image"]
+
+[models."local/eyes"]
+context_tokens = 32000
+max_input_tokens = 30000
+max_output_tokens = 2048
+input_modalities = ["text", "image"]
+"#
+    ));
+    fixture.user_config("[persistence]\nenabled = false\n");
+    let catalog = fixture.prepared().catalog;
+    let mut selection = crate::cli::Selection {
+        project: Some(fixture.project.path().into()),
+        model: Some("eyes".into()),
+        provider: Some("local".into()),
+        ..Default::default()
+    };
+    let mut resume = None;
+    for (model, expected) in [("eyes", false), ("example-model", true), ("eyes", false)] {
+        crate::runtime_host::apply_palette_command(
+            &mut selection,
+            &mut resume,
+            "same-session".into(),
+            smith_client::commands::SelectionCommand::Model {
+                provider: Some("local".into()),
+                model: model.into(),
+            },
+        );
+        assert_eq!(resume.as_deref(), Some("same-session"));
+        let resolution = resolve(
+            &fixture
+                .request()
+                .with_cli(selection.overrides())
+                .with_catalog(catalog.clone()),
+        )
+        .unwrap();
+        let mut request = crate::runtime_host::preflight_request(
+            &resolution,
+            fixture.project.path(),
+            HostSurface::Headless,
+            Some(catalog.clone()),
+        )
+        .unwrap();
+        assert_eq!(request.vision_profile.is_some(), expected);
+        request.approval = Some(Arc::new(agent_runtime_core::approval::DenyAll));
+        let harness =
+            smith_runtime::harness::resolve(smith_runtime::harness::HarnessSpec::trusted(request))
+                .unwrap();
+        let runtime = smith_runtime::factory::build(harness).await.unwrap();
+        assert_eq!(
+            runtime.abilities().names().contains(&"view_image"),
+            expected
+        );
+        let report = crate::config_command::modules_report(&crate::config_command::Prepared {
+            resolution,
+            project: fixture.project.path().into(),
+            catalog: catalog.clone(),
+        })
+        .await
+        .unwrap();
+        let row = report.rows.iter().find(|row| row.id == "vision").unwrap();
+        assert_eq!(row.state == smith_module::ModuleState::Mounted, expected);
+    }
 }

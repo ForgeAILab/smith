@@ -62,6 +62,7 @@ mode = "allow-all"
         ..RuntimeRequest::new(root.config, HostSurface::Terminal)
     };
     request.child_profiles.push(ChildProfileRequest {
+        vision_profile: None,
         config: child.config,
         catalog_sources: Vec::new(),
     });
@@ -189,6 +190,7 @@ mode = "allow-all"
         ..RuntimeRequest::new(root.config, HostSurface::Terminal)
     };
     request.child_profiles.push(ChildProfileRequest {
+        vision_profile: None,
         config: child.config,
         catalog_sources: Vec::new(),
     });

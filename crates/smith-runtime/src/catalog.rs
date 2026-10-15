@@ -128,6 +128,17 @@ impl CatalogLayers {
         self.push(CONFIGURED_SOURCE, CatalogSource::Explicit, record)
     }
 
+    /// Adds configured input modalities without changing the limit offers.
+    #[must_use]
+    pub(crate) fn with_input_modalities(
+        self,
+        modalities: Vec<agent_runtime_core::catalog::Modality>,
+    ) -> Self {
+        let mut record = ModelRecord::new();
+        record.input_modalities = Some(modalities);
+        self.push(CONFIGURED_SOURCE, CatalogSource::Explicit, record)
+    }
+
     /// Adds a provider-local layer: adapter introspection, or metadata the
     /// provider itself publishes locally.
     #[must_use]

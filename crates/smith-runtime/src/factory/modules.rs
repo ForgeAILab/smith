@@ -36,6 +36,12 @@ pub async fn module_report(
     Ok(prepare(
         request,
         provider.image_binding,
+        Box::pin(super::provider::prepare_vision_route(
+            request,
+            Arc::new(crate::vision::VisionAccounting::default()),
+        ))
+        .await?
+        .map(|vision| vision.binding),
         prepared.profile.profile.limits.max_input_tokens,
         request.semantic_summary.is_some(),
         Arc::new(crate::session_history::LiveSessionHistory::default()),
@@ -46,6 +52,7 @@ pub async fn module_report(
 pub(super) fn prepare(
     request: &RuntimeRequest,
     image_binding: Option<ImageBinding>,
+    vision: Option<smith_module::VisionBinding>,
     max_input_tokens: u32,
     semantic_summary_enabled: bool,
     session_history: Arc<crate::session_history::LiveSessionHistory>,
@@ -69,6 +76,7 @@ pub(super) fn prepare(
     let context = context(
         request,
         image_binding,
+        vision,
         max_input_tokens,
         semantic_summary_enabled,
         session_history,
@@ -148,6 +156,7 @@ pub(crate) fn enforce_posture(plan: &mut MountPlan, posture: ModulePosture) {
 pub(super) fn context(
     request: &RuntimeRequest,
     image_binding: Option<ImageBinding>,
+    vision: Option<smith_module::VisionBinding>,
     max_input_tokens: u32,
     semantic_summary_enabled: bool,
     session_history: Arc<crate::session_history::LiveSessionHistory>,
@@ -171,6 +180,9 @@ pub(super) fn context(
         transport: transport.clone(),
         http: Some(transport),
         image_binding,
+        vision,
+        main_model_accepts_images: request.config.model_image_input.value
+            == smith_config::resolve::ImageInput::Accepts,
         session_history: Some(session_history),
         semantic_summary_enabled,
         max_input_tokens,

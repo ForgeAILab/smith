@@ -89,6 +89,7 @@ fn root_request_with_review_profile(
         ..RuntimeRequest::new(pf.root_config.clone(), HostSurface::Terminal)
     };
     request.child_profiles.push(ChildProfileRequest {
+        vision_profile: None,
         config: pf.review_child_config.clone(),
         catalog_sources: Vec::new(),
     });

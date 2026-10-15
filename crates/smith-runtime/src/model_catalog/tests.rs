@@ -758,3 +758,71 @@ fn concurrent_refresh_guard_deduplicates_one_cache_path() {
     drop(first);
     assert!(RefreshGuard::acquire(path).is_some());
 }
+
+#[tokio::test]
+async fn synchronous_snapshot_matches_offline_prepare_without_fetching() {
+    let directory = tempfile::tempdir().expect("cache directory");
+    let cache_path = directory.path().join("models-dev-v1.json");
+    let cached =
+        normalize_remote(&remote_fixture(), 5_000, Some("cached-vision")).expect("catalog");
+    let fetcher = Arc::new(ScriptedFetcher::failing("must stay offline"));
+    let loader = CatalogLoader::new(
+        cache_path.clone(),
+        Arc::<str>::from(EMBEDDED_MODELS_DEV_SEED),
+        fetcher.clone(),
+        Arc::new(FixedClock(10_000)),
+    );
+    for bytes in [
+        serde_json::to_vec(&cached).expect("serialized catalog"),
+        b"invalid cache".to_vec(),
+        vec![b' '; MAX_NORMALIZED_CATALOG_BYTES + 1],
+    ] {
+        std::fs::write(&cache_path, bytes).expect("cache");
+        assert_eq!(
+            loader.snapshot().expect("sync snapshot"),
+            loader
+                .prepare(false)
+                .await
+                .expect("async snapshot")
+                .snapshot
+        );
+    }
+    std::fs::remove_file(&cache_path).expect("remove cache");
+    assert_eq!(
+        loader.snapshot().expect("embedded snapshot"),
+        loader
+            .prepare(false)
+            .await
+            .expect("async fallback")
+            .snapshot
+    );
+    assert_eq!(fetcher.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn empty_catalog_input_metadata_keeps_the_runtime_text_default() {
+    use agent_runtime_core::catalog::ModelCatalog;
+
+    let mut snapshot = normalize_remote(&remote_fixture(), 5_000, None).expect("catalog");
+    snapshot
+        .providers
+        .get_mut("openrouter")
+        .expect("provider")
+        .models
+        .get_mut("vendor/nested")
+        .expect("model")
+        .input_modalities
+        .clear();
+    let source = runtime_catalog_source(
+        &snapshot,
+        "router",
+        "openai-compatible",
+        Some("https://openrouter.ai/api/v1"),
+    )
+    .expect("catalog source");
+    let profile = agent_runtime_core::catalog::LayeredModelCatalog::new()
+        .with_source(source)
+        .resolve("router", &ModelId::new("vendor/nested"))
+        .expect("profile");
+    assert_eq!(profile.input_modalities, [Modality::Text]);
+}

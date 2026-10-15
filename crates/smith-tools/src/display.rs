@@ -54,6 +54,10 @@ impl ToolCallDisplay {
             "Read" => {
                 let mut count = 0usize;
                 for line in output.lines().filter(|line| !line.trim().is_empty()) {
+                    // Image descriptions must remain visible in the preview.
+                    if line.starts_with("[image") && line.ends_with(']') {
+                        return None;
+                    }
                     if line.starts_with('[') && line.ends_with(']') {
                         continue;
                     }
@@ -169,6 +173,7 @@ pub fn project_tool_call_display(name: &str, arguments: &Value) -> Option<ToolCa
         "task_output" => project_task_output(arguments),
         "task_stop" => project_task_stop(arguments),
         "generate_image" => project_generate_image(arguments),
+        "view_image" => project_view_image(arguments),
         "registry.search" => project_registry_search(arguments),
         "registry.activate" => project_registry_activate(arguments),
         "agent" => project_agent(arguments),
@@ -190,6 +195,7 @@ pub fn tool_display_label(name: &str) -> Option<&'static str> {
         "task_output" => Some("Task Output"),
         "task_stop" => Some("Task Stop"),
         "generate_image" => Some("Generate Image"),
+        "view_image" => Some("View Image"),
         "registry.search" => Some("Registry Search"),
         "registry.activate" => Some("Activate"),
         _ => None,
@@ -208,6 +214,7 @@ pub fn has_tool_call_display_schema(name: &str) -> bool {
             | "task_output"
             | "task_stop"
             | "generate_image"
+            | "view_image"
             | "registry.search"
             | "registry.activate"
             | "agent"
@@ -404,6 +411,23 @@ fn project_generate_image(arguments: &Map<String, Value>) -> Option<ToolCallDisp
         qualifiers.push(format!("{count} recent image(s)"));
     }
     Some(display("Generate Image", target, qualifiers))
+}
+
+fn project_view_image(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
+    let target = match (arguments.get("image"), arguments.get("path")) {
+        (Some(image), None) => {
+            let image = image.as_str()?;
+            if image.len() != 8 || !image.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return None;
+            }
+            normalize_value(image)?
+        }
+        (None, Some(_)) => required_target(arguments, "path")?,
+        _ => return None,
+    };
+    let question = require_string_field(arguments, "question")?;
+    let question = normalize_value(question.lines().next()?)?;
+    Some(display("View Image", target, vec![question]))
 }
 
 /// The delegation tool (`agent`) is dispatched on its own tagged `action`
@@ -681,3 +705,73 @@ mod external;
 
 pub use delegation::{DelegationApprovalDisplay, project_delegation_approval_display};
 pub use external::{external_tool_result_text, project_external_tool_call_display};
+
+#[cfg(test)]
+mod view_image_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn view_image_projects_only_its_reviewed_target_and_first_question_line() {
+        for (key, target) in [("image", "3f9a2c1b"), ("path", "docs/mockup.png")] {
+            let mut arguments = json!({
+                "question": "Where is the Save button?\nPRIVATE SECOND LINE",
+                "unreviewed": "PRIVATE ARGUMENT"
+            });
+            arguments[key] = target.into();
+            let display = project_tool_call_display("view_image", &arguments).unwrap();
+            assert_eq!(
+                display.invocation(),
+                format!("View Image({target} · Where is the Save button?)")
+            );
+            assert_eq!(display.result_summary("Save is at (120, 90)."), None);
+        }
+        assert_eq!(tool_display_label("view_image"), Some("View Image"));
+        assert!(has_tool_call_display_schema("view_image"));
+    }
+
+    #[test]
+    fn view_image_arguments_are_bounded_and_control_free() {
+        let arguments = json!({
+            "path": "docs/\u{202e}mockup.png",
+            "question": format!("Where is {}?\nPRIVATE SECOND LINE", "x".repeat(200)),
+            "unreviewed": "PRIVATE ARGUMENT"
+        });
+        let display = project_tool_call_display("view_image", &arguments).unwrap();
+        assert_eq!(display.target(), "docs/ mockup.png");
+        assert_eq!(display.qualifiers()[0].chars().count(), MAX_VALUE_CHARS);
+        assert!(display.invocation().ends_with("…)"));
+        assert!(!display.invocation().contains("PRIVATE"));
+        assert!(!display.invocation().contains('\u{202e}'));
+        assert!(project_tool_call_display("mcp__remote__view_image", &arguments).is_none());
+    }
+
+    #[test]
+    fn view_image_malformed_calls_keep_the_protected_fallback() {
+        for arguments in [
+            json!({"image": "bad-id", "question": "Where?"}),
+            json!({"image": "3f9a2c1g", "question": "Where?"}),
+            json!({"image": 42, "question": "Where?"}),
+            json!({"image": "3f9a2c1b", "path": "x", "question": "Where?"}),
+            json!({"question": "Where?"}),
+            json!({"image": "3f9a2c1b"}),
+            json!({"path": "", "question": "Where?"}),
+            json!({"path": 42, "question": "Where?"}),
+            json!({"path": "x", "question": 42}),
+            json!({"path": "x", "question": "\nPRIVATE SECOND LINE"}),
+        ] {
+            assert!(project_tool_call_display("view_image", &arguments).is_none());
+        }
+    }
+
+    #[test]
+    fn read_summary_keeps_image_descriptions_visible() {
+        let display = project_tool_call_display("read", &json!({"path": "x"})).unwrap();
+        for image in ["[image]", "[image/png 1440×900]", "[image/jpeg]"] {
+            assert_eq!(
+                display.result_summary(&format!("1 screenshot\n{image}")),
+                None
+            );
+        }
+    }
+}

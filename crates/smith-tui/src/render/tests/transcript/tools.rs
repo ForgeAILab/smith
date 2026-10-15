@@ -534,3 +534,223 @@ fn user_shell_echo_and_runtime_call_are_one_row_with_a_nested_result() {
         assert!(!text.concat().contains("changes"));
     }
 }
+
+#[test]
+fn image_result_previews_match_live_and_resumed_remote_rows() {
+    // The host supplies these descriptions through its existing preview API.
+    let preview = "Desktop screenshot\n[image/png 1440×900]\n[image omitted: image/png, 12 MiB, over limit]\n[image/jpeg]\nTail of result";
+    let data_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABaAAAAOE";
+    let content = vec![
+        ContentPart::text("Desktop screenshot"),
+        ContentPart::Image {
+            url: data_url.to_owned(),
+            detail: Some("high".to_owned()),
+        },
+        ContentPart::text("[image omitted: image/png, 12 MiB, over limit]"),
+        ContentPart::Image {
+            url: "data:image/jpeg;base64,invalid!".to_owned(),
+            detail: None,
+        },
+        ContentPart::text("Tail of result"),
+    ];
+    let arguments = serde_json::json!({"token": "PRIVATE_REMOTE_ARGUMENT"});
+    let history = vec![
+        Message::assistant(vec![ContentPart::ToolCall(ToolCall {
+            id: ToolCallId::new("screenshot"),
+            name: "mcp__desktop__get_window_state".to_owned(),
+            arguments: arguments.clone(),
+        })]),
+        Message::tool_result(ToolResultBlock {
+            call_id: ToolCallId::new("screenshot"),
+            name: "mcp__desktop__get_window_state".to_owned(),
+            content: content.clone(),
+            is_error: false,
+        }),
+    ];
+    let mut live = App::new("m", "p");
+    live.apply(&event(RuntimeEvent::ToolCallRequested {
+        call: ToolCallId::new("screenshot"),
+        name: "mcp__desktop__get_window_state".to_owned(),
+        argument_keys: vec!["token".to_owned()],
+        argument_fingerprint: agent_runtime_registry::Fingerprint::of("arguments"),
+        arguments: None,
+    }));
+    live.apply(&event(RuntimeEvent::ToolCallCompleted {
+        call: ToolCallId::new("screenshot"),
+        name: "mcp__desktop__get_window_state".to_owned(),
+        is_error: false,
+    }));
+    live.set_tool_result_preview("screenshot", preview);
+    let mut resumed = App::new("m", "p");
+    resumed.transcript.replace_from_history(&history);
+    resumed.set_tool_result_preview("screenshot", preview);
+
+    for expanded in [false, true] {
+        live.work_details = expanded;
+        resumed.work_details = expanded;
+        let screen = render(
+            &live,
+            110,
+            24,
+            Theme::new().without_color().without_motion(),
+        );
+        assert_eq!(
+            screen,
+            render(
+                &resumed,
+                110,
+                24,
+                Theme::new().without_color().without_motion()
+            )
+        );
+        assert!(
+            screen.contains("mcp__desktop__get_window_state(arguments hidden)"),
+            "{screen}"
+        );
+        let text = screen.find("Desktop screenshot").expect("text excerpt");
+        let image = screen
+            .find("[image/png 1440×900]")
+            .expect("image dimensions");
+        let omitted = screen
+            .find("[image omitted: image/png, 12 MiB, over limit]")
+            .expect("ordinary placeholder text");
+        let unknown = screen.find("[image/jpeg]").expect("unknown dimensions");
+        assert!(
+            text < image && image < omitted && omitted < unknown,
+            "{screen}"
+        );
+        assert!(!screen.contains("PRIVATE_REMOTE_ARGUMENT"), "{screen}");
+        assert!(
+            !screen.contains(data_url) && !screen.contains("base64"),
+            "{screen}"
+        );
+        if expanded {
+            assert!(screen.contains("Tail of result"), "{screen}");
+        } else {
+            assert!(screen.contains("ctrl+o to expand"), "{screen}");
+        }
+    }
+}
+
+#[test]
+fn view_image_rows_show_progress_answers_and_errors_live_and_resumed() {
+    let theme = Theme::new().without_color().without_motion();
+    for (target_key, target) in [("image", "3f9a2c1b"), ("path", "docs/mockup.png")] {
+        for is_error in [false, true] {
+            let mut arguments = serde_json::json!({
+                "question": "Where is the Save button?\nPRIVATE SECOND LINE",
+                "unknown": "PRIVATE ARGUMENT"
+            });
+            arguments[target_key] = target.into();
+            let mut live = App::new("m", "p");
+            live.apply(&event(RuntimeEvent::ToolCallRequested {
+                call: ToolCallId::new("vision"),
+                name: "view_image".to_owned(),
+                argument_keys: vec![target_key.to_owned(), "question".to_owned()],
+                argument_fingerprint: agent_runtime_registry::Fingerprint::of("arguments"),
+                arguments: None,
+            }));
+            live.set_tool_display(
+                "vision",
+                smith_tools::project_tool_call_display("view_image", &arguments)
+                    .expect("reviewed image projection"),
+            );
+            let header = format!("View Image({target} · Where is the Save button?)");
+            let running = render(&live, 100, 20, theme);
+            assert!(
+                running.contains(&header) && running.contains("running 0s"),
+                "{running}"
+            );
+            assert!(!running.contains("PRIVATE"), "{running}");
+
+            let answer = if is_error {
+                "Vision provider error: request timed out".to_owned()
+            } else {
+                format!(
+                    "Save is at (120, 90).\n{}\nANSWER TAIL",
+                    "More detail.\n".repeat(10)
+                )
+            };
+            let content = vec![ContentPart::text(answer.clone())];
+            live.apply(&event(RuntimeEvent::ToolCallCompleted {
+                call: ToolCallId::new("vision"),
+                name: "view_image".to_owned(),
+                is_error,
+            }));
+            // Completion enrichment may run again from canonical arguments.
+            live.set_tool_display(
+                "vision",
+                smith_tools::project_tool_call_display("view_image", &arguments)
+                    .expect("reviewed image projection"),
+            );
+            live.set_tool_result_preview("vision", &answer);
+            let history = vec![
+                Message::assistant(vec![ContentPart::ToolCall(ToolCall {
+                    id: ToolCallId::new("vision"),
+                    name: "view_image".to_owned(),
+                    arguments: arguments.clone(),
+                })]),
+                Message::tool_result(ToolResultBlock {
+                    call_id: ToolCallId::new("vision"),
+                    name: "view_image".to_owned(),
+                    content,
+                    is_error,
+                }),
+            ];
+            let mut resumed = App::new("m", "p");
+            resumed.transcript.replace_from_history(&history);
+            let protected = render(&resumed, 100, 20, theme);
+            assert!(
+                !protected.contains(target) && !protected.contains("PRIVATE"),
+                "{protected}"
+            );
+            resumed.set_tool_display(
+                "vision",
+                smith_tools::project_tool_call_display("view_image", &arguments)
+                    .expect("reviewed image projection"),
+            );
+            resumed.set_tool_result_preview("vision", &answer);
+            let completed = render(&live, 100, 20, theme);
+            assert_eq!(completed, render(&resumed, 100, 20, theme));
+            assert!(completed.contains(&header), "{completed}");
+            assert!(
+                !completed.contains("running") && !completed.contains("PRIVATE"),
+                "{completed}"
+            );
+            if is_error {
+                assert!(completed.contains(" failed"), "{completed}");
+                assert!(
+                    completed.contains("Vision provider error: request timed out"),
+                    "{completed}"
+                );
+            } else {
+                assert!(completed.contains("Save is at (120, 90)."), "{completed}");
+                assert!(!completed.contains("ANSWER TAIL"), "{completed}");
+                assert!(completed.contains("ctrl+o to expand"), "{completed}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_reviewed_text_summary_does_not_hide_image_result_lines() {
+    let mut app = App::new("m", "p");
+    app.transcript.push_tool_call(
+        "image-read",
+        "read",
+        Some(&serde_json::json!({"path": "screenshot.png"})),
+        &[],
+    );
+    app.transcript
+        .complete_tool_call("image-read", ToolStatus::Ok);
+    app.set_tool_result_preview("image-read", "1 screenshot\n[image]");
+    let screen = render(&app, 100, 20, Theme::new().without_color());
+    assert!(
+        screen.contains("1 screenshot") && screen.contains("[image]"),
+        "{screen}"
+    );
+    assert!(
+        !screen.contains("Read 1 lines") && !screen.contains("https://"),
+        "{screen}"
+    );
+}

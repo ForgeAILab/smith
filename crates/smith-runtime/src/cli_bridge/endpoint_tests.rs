@@ -151,6 +151,13 @@ impl BridgeDispatch for FakeDispatch {
             Err(RuntimeError::approval("Smith denied this call"))
         } else if name == "fast_echo" && !arguments["text"].is_string() {
             Err(RuntimeError::tool("schema: text must be a string"))
+        } else if label == "image" {
+            let mut result = result(&name, "screenshot");
+            result.content.push(ContentPart::Image {
+                url: "data:image/png;base64,aGVsbG8=".into(),
+                detail: Some("high".into()),
+            });
+            Ok(result)
         } else {
             self.effects.fetch_add(1, Ordering::SeqCst);
             Ok(result(
@@ -482,6 +489,28 @@ async fn abandoned_queued_call_never_reaches_dispatcher() {
                 .collect::<Vec<_>>(),
             vec![json!("block"), json!("survivor")]
         );
+        endpoint.close().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn dispatched_image_reaches_the_harness_as_an_mcp_image_block() {
+    deadline(async {
+        let (dispatch, _events) = FakeDispatch::new();
+        let endpoint = bind_fake(dispatch);
+        let mut client = Client::connect(&endpoint).await;
+        client.initialize().await;
+        client.call(2, "fast_echo", json!({"text":"image"})).await;
+        let response = client.response(json!(2)).await;
+        assert_eq!(
+            response["result"]["content"],
+            json!([
+                {"type":"text", "text":"screenshot"},
+                {"type":"image", "mimeType":"image/png", "data":"aGVsbG8="}
+            ])
+        );
+        assert_eq!(response["result"]["isError"], false);
         endpoint.close().await;
     })
     .await;
