@@ -1,7 +1,7 @@
 ---
 created_at: 2026-10-13T22:40:43Z
-updated_at: 2026-10-15T04:48:58Z
-completed_at:
+updated_at: 2026-10-15T23:03:26Z
+completed_at: 2026-10-15T23:03:26Z
 ---
 
 Tests are written with the code they cover, in the layer `design.md` names
@@ -323,7 +323,7 @@ Each item is a layer 4 test file driven by the stand-in.
   bridge off), `docs/security.md` (the endpoint and its authority),
   `docs/skills.md`. (Also `docs/headless-protocol.md`: the `diagnostics`
   result field and signal handling.)
-- [ ] 8.5 The Smith gate with `--no-fail-fast` and an internal `TMPDIR`, a
+- [x] 8.5 The Smith gate with `--no-fail-fast` and an internal `TMPDIR`, a
   patch release, and the installed binary checked in a tmux session with a
   real configuration. (Gate done 2026-10-14 on main at v0.4.0 plus this
   change, no local patch: `--locked` build, clippy, `cargo deny --locked
@@ -332,7 +332,10 @@ Each item is a layer 4 test file driven by the stand-in.
   `cli/claude-code/haiku` and `cli/codex/gpt-6-astra`: `/mcp trust`, an
   approved remote MCP call, a `zai/glm-5.3` child, the advisor, `/quit`
   and `--resume`; findings in `docs/qa/live-2026-10-14/findings.md`. The
-  installed binary is still v0.4.0. Open: the release.)
+  installed binary is still v0.4.0. Released in v0.5.0 on 2026-10-15 as a
+  minor release (it shipped with web tools and vision); the installed
+  v0.5.0 binary read a file and exited on `/quit` mid-turn in 0.23 s with
+  `stopped: the running turn` in a tmux session on the real config.)
 
 ## 9. Follow-ups from the 2026-10-14 live checks
 

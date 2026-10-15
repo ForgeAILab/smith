@@ -1,7 +1,7 @@
 ---
 created_at: 2026-10-15T09:41:45Z
-updated_at: 2026-10-15T10:21:59Z
-completed_at:
+updated_at: 2026-10-15T23:03:26Z
+completed_at: 2026-10-15T23:03:26Z
 ---
 
 ## 1. `/quit` without confirmation
@@ -73,5 +73,6 @@ completed_at:
   server mid-call (`wait`, 120 s), SIGKILL to Smith left no server or
   watchdog 0.15 s later. Process tree was Smith → `mcp-watchdog --parent
   <smith>` → server, one process group.
-- [ ] 5.2 Close issue #4 with the commit references once the pin is on main
-  and CI there is green.
+- [x] 5.2 Close issue #4 with the commit references once the pin is on main
+  and CI there is green. (Closed 2026-10-15 after main `94368da` CI run
+  38815713776 passed; the fix is also on runtime main via PR #29.)
