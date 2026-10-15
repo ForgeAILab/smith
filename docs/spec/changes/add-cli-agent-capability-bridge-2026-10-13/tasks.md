@@ -333,3 +333,35 @@ Each item is a layer 4 test file driven by the stand-in.
   approved remote MCP call, a `zai/glm-5.3` child, the advisor, `/quit`
   and `--resume`; findings in `docs/qa/live-2026-10-14/findings.md`. The
   installed binary is still v0.4.0. Open: the release.)
+
+## 9. Follow-ups from the 2026-10-14 live checks
+
+Requested by the owner before any release ("we need that before we do
+anything else"). Findings are in `docs/qa/live-2026-10-14/findings.md`.
+
+- [ ] 9.1 The exit summary and usage provenance name a harness model
+  without the profile's provider: `cli/claude-code/haiku`, not
+  `zai/cli/claude-code/haiku`, matching the status bar.
+- [ ] 9.2 Interactive sessions name untrusted MCP servers once at start
+  with `/mcp trust <name>` (extension-system delta, "Interactive sessions
+  name untrusted servers"). Confirm headless runs already report them, as
+  the truth requirement "Untrusted servers are inert in non-interactive
+  runs" demands.
+- [ ] 9.3 The name-validation message reads correctly for every kind
+  ("a agent profile name" today).
+- [ ] 9.4 `mcp_relay::stdin_eof_half_closes_the_socket_and_drains_the_response`
+  no longer flakes on a loaded runner: its deadline covers starting the
+  `smith` binary, and a deadline failure reads as a deadline, not EAGAIN.
+  20 consecutive passes under load.
+- [ ] 9.5 `stand_in::abandonment_and_exit_can_wait_for_execution_evidence`
+  no longer depends on runner timing. 20 consecutive passes under load.
+- [ ] 9.6 A headless shutdown, including an interrupt during an MCP call,
+  leaves no Smith-declared stdio MCP server running. Tested with a
+  sleeping MCP tool; `design.md` updated.
+
+Not in this section: the runtime conformance flake
+`session::one_shutdown_deadline_bounds_all_active_turns` (ForgeAILab/smith#4)
+needs an Agent Runtime commit and a pin move, so it goes with the runtime
+branch that becomes the release pin. The 5 s command-provider probe timeout
+was never observed to fail; the runtime already exposes
+`CommandLimits::with_probe_timeout` if it does.

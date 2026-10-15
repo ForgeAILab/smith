@@ -40,3 +40,24 @@ bridge.
 - **GIVEN** an active module contributing `generate_image`
 - **WHEN** the CLI calls it through the bridge
 - **THEN** the call runs under that module's granted capabilities
+
+### Requirement: Interactive sessions name untrusted servers
+
+In an interactive session Smith SHALL tell the user, once when the session
+opens, which declared MCP servers are untrusted and how to trust each one.
+The notice MUST NOT spawn the server, prompt for trust, or delay the first
+prompt. Found by the 2026-10-14 live check: a harness turn searched the
+registry, found nothing, and could only tell the user to check the server.
+
+#### Scenario: Session opens with an untrusted project server
+
+- **GIVEN** a project declares an MCP server `docs` with no trust record
+- **WHEN** the user opens an interactive session
+- **THEN** the transcript shows one notice naming `docs` and `/mcp trust docs`
+- **AND** `docs` is not spawned until the user trusts it
+
+#### Scenario: Every declared server is trusted
+
+- **GIVEN** every declared MCP server has a trust record
+- **WHEN** the user opens an interactive session
+- **THEN** no untrusted-server notice is shown
