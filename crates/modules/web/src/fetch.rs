@@ -98,10 +98,13 @@ impl Resolver for SystemResolver {
 }
 
 pub(crate) fn client() -> reqwest::ClientBuilder {
+    client_without_user_agent().user_agent(USER_AGENT)
+}
+
+pub(crate) fn client_without_user_agent() -> reqwest::ClientBuilder {
     Client::builder()
         .redirect(Policy::none())
         .no_proxy()
-        .user_agent(USER_AGENT)
         .timeout(TIMEOUT)
 }
 
