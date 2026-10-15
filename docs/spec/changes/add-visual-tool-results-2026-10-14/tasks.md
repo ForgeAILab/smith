@@ -1,7 +1,7 @@
 ---
 created_at: 2026-10-14T23:48:06Z
-updated_at: 2026-10-15T01:28:48Z
-completed_at:
+updated_at: 2026-10-15T04:09:16Z
+completed_at: 2026-10-15T04:09:16Z
 ---
 
 Order matters: the runtime branch lands and is pushed before Smith bumps its
@@ -117,7 +117,7 @@ pins. R1 never ships without R2 (design D1).
 
 - [x] 7.1 Smith gate: `--no-fail-fast`, Rust 1.88 clippy, and CI's
       `--no-default-features` steps. Push a branch for CI before main.
-- [ ] 7.2 Live run against cmux-cua with a vision main model: screenshot,
+- [x] 7.2 Live run against cmux-cua with a vision main model: screenshot,
       locate, click, and confirm the window advance in `SMITH_LOG`.
-- [ ] 7.3 Live run against cmux-cua with GLM as main and a `vision` model,
+- [x] 7.3 Live run against cmux-cua with GLM as main and a `vision` model,
       using `view_image` to ground a click.
