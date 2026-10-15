@@ -29,9 +29,13 @@ Chat Completions and command providers SHALL report it unsupported.
 ### Requirement: Hosted search results are normalized
 
 An adapter SHALL turn the provider's hosted-search output into canonical
-hosted-search events that carry the query and the source titles and URLs. It
-SHALL render citations into the assistant text as Markdown links, and SHALL
-add the provider-reported search count to usage. Provider-opaque blocks
+hosted-search events that carry the query and the source titles and URLs.
+The query SHALL come from the provider's `queries` list when its deprecated
+single `query` is absent. A hosted step that opens a page or finds text in a
+page SHALL carry that action, its URL, and its pattern instead of an empty
+query. The adapter SHALL render citations into the assistant text as
+Markdown links, SHALL NOT append a link to a URL that the cited text block
+already contains, and SHALL add the provider-reported search count to usage. Provider-opaque blocks
 (encrypted content, hosted call ids, raw grounding payloads) SHALL NOT be
 stored in canonical history or replayed in later requests. A session that
 used hosted search MUST continue on another provider without errors.
@@ -44,6 +48,21 @@ used hosted search MUST continue on another provider without errors.
 - **THEN** one hosted-search event is emitted with the query and source URL
 - **AND** the assistant text holds the cited span followed by a Markdown link
 - **AND** no `web_search_call` item is kept in canonical history
+
+#### Scenario: Cited span already links its source
+
+- **GIVEN** output text `([blog.rust-lang.org](https://blog.rust-lang.org/releases/))`
+  whose `url_citation` annotation covers that span and cites the same URL
+- **WHEN** the adapter renders the citation
+- **THEN** the text is unchanged and holds that URL once
+
+#### Scenario: Hosted page-open step
+
+- **GIVEN** a `web_search_call` item whose action is
+  `{"type":"open_page","url":"https://blog.rust-lang.org/releases/"}`
+- **WHEN** the adapter processes it
+- **THEN** the hosted-search event carries the open-page action and that URL
+  and no query
 
 #### Scenario: Continue on another provider
 

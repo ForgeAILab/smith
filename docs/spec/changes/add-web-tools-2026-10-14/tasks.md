@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-15T00:44:35Z
-updated_at: 2026-10-15T05:19:04Z
+updated_at: 2026-10-15T08:52:34Z
 completed_at:
 ---
 
@@ -82,3 +82,19 @@ branch base). The runtime branch lands and is pushed before Smith bumps pins.
       steps).
 - [ ] 8.2 Live: docs lookup on ChatGPT (hosted), Anthropic (hosted), and GLM
       with Brave.
+
+## 9. Live-run follow-ups (2026-10-15)
+
+- [x] 9.1 DuckDuckGo: POST the form without a User-Agent, fall back once to
+      the lite endpoint, drop results that point at DuckDuckGo, update the
+      live drift canary; fixture tests for both endpoints and the fallback.
+- [ ] 9.2 Runtime: hosted-search events carry the action (search, open
+      page, find in page) with URL and pattern; the query falls back to
+      `queries`; citations are not appended when the cited span already
+      links the URL. Runtime gate; push; bump the Smith pins.
+- [ ] 9.3 Smith ChatGPT adapter mirrors 9.2; the Smith event, live and
+      resumed transcript blocks, and headless output carry the action;
+      `Open Page(<url>) · hosted` and `Find in Page("<pattern>") · hosted`
+      rows.
+- [ ] 9.4 Smith gate; live: free search on GLM returns results and the
+      ChatGPT hosted run shows page-open rows and no duplicated citation.

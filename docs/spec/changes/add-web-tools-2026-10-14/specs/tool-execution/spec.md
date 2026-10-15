@@ -66,8 +66,12 @@ that takes `query` (1 to 400 characters) and an optional `max_results`
 Tavily, or SearXNG) and return each result's title, URL, and snippet,
 labelled as external, untrusted content. Backend errors SHALL be tool errors
 that carry the backend name and HTTP status, without credentials. DuckDuckGo
-needs no key. A DuckDuckGo rate-limit or challenge page SHALL be reported as
-a tool error that names the keyed backends.
+needs no key. Smith SHALL query DuckDuckGo by POSTing the search form to its
+HTML endpoint without a User-Agent header, and SHALL retry once on its lite
+endpoint when the HTML endpoint answers with a challenge page, a non-200
+status, or a transport failure. Results that point back at DuckDuckGo (ads
+and internal links) SHALL be dropped. A rate-limit or challenge from both
+endpoints SHALL be reported as a tool error that names the keyed backends.
 
 #### Scenario: Brave backend on a text-only provider
 
@@ -84,9 +88,16 @@ a tool error that names the keyed backends.
 - **THEN** Smith queries DuckDuckGo with no key
 - **AND** returns titled results with unwrapped target URLs
 
+#### Scenario: DuckDuckGo lite fallback
+
+- **GIVEN** DuckDuckGo's HTML endpoint answers HTTP 202 with its challenge page
+- **WHEN** the agent searches
+- **THEN** Smith POSTs the query to the lite endpoint
+- **AND** returns the lite results with their direct URLs and snippets
+
 #### Scenario: DuckDuckGo rate-limits
 
-- **GIVEN** DuckDuckGo answers with its challenge page
+- **GIVEN** both DuckDuckGo endpoints answer with the challenge page
 - **WHEN** the agent searches
 - **THEN** the tool returns an error that DuckDuckGo rate-limited the
   request and names `brave`, `tavily`, and `searxng` as alternatives

@@ -121,7 +121,7 @@ enabled for the organization), `auto` falls back for the rest of the session.
 
 | Backend | Request | Auth |
 |---|---|---|
-| DuckDuckGo (free) | `GET https://html.duckduckgo.com/html/?q=` and parse `a.result__a` (unwrapping the `uddg` redirect) and `.result__snippet` | none |
+| DuckDuckGo (free) | `POST https://html.duckduckgo.com/html/` form `q=&b=` with no User-Agent; parse `a.result__a` (unwrapping the `uddg` redirect) and `.result__snippet`. On a challenge, non-200, or transport failure, `POST https://lite.duckduckgo.com/lite/` form `q=` and parse `a.result-link` with the next row's `td.result-snippet` | none |
 | Brave | `GET https://api.search.brave.com/res/v1/web/search?q=&count=` | `X-Subscription-Token` |
 | Tavily | `POST https://api.tavily.com/search` `{query, max_results}` | `Authorization: Bearer` |
 | SearXNG | `GET <url>/search?q=&format=json` | none (the instance must enable JSON) |
@@ -129,7 +129,11 @@ enabled for the organization), `auto` falls back for the rest of the session.
 All four normalize to `[{title, url, snippet}]`, at most 10 results.
 DuckDuckGo is best-effort: Smith detects its anomaly/challenge page and
 non-200 answers and returns a tool error that says it was rate-limited and
-names the keyed backends. It gets a fixture-based parser test, plus an opt-in
+names the keyed backends. The 2026-10-15 live run showed what triggers the
+challenge: a GET, or a POST that identifies itself (`Smith/…` or curl's
+User-Agent), gets HTTP 202 every time, while a POST with no User-Agent (or a
+browser one) gets results from both endpoints. Smith sends none rather than
+impersonating a browser. It gets a fixture-based parser test, plus an opt-in
 live test that catches layout drift, like the CLI drift canaries. Keys
 use the existing credential-reference path. A repository-layer config cannot
 set `searxng.url` or the backend, by the same rule that keeps repository
