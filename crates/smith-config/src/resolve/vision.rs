@@ -1,6 +1,8 @@
 //! Image-input metadata before runtime defaults, and early vision validation.
 
-use crate::catalog::{CatalogModality, CatalogModel, CatalogSnapshot, catalog_provider_for};
+use crate::catalog::{
+    CatalogModality, CatalogModel, CatalogSnapshot, modality_catalog_provider_for,
+};
 use crate::model::KIND_COMMAND_JSONL;
 
 use super::load::join_key;
@@ -83,7 +85,7 @@ pub(super) fn model_input(
         .transpose()?;
     let base_url = text(provenance, &format!("{scope}.base_url"))?;
     let catalog_provider =
-        catalog_provider_for(kind_value, base_url.as_ref().map(|url| url.value.as_str()));
+        modality_catalog_provider_for(kind_value, base_url.as_ref().map(|url| url.value.as_str()));
     let catalog_model = catalog_provider
         .and_then(|provider| catalog?.provider(provider))
         .and_then(|provider| provider.models.get(model));

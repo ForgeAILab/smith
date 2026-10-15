@@ -1390,6 +1390,7 @@ fn background() -> smith_config::resolve::ResolvedBackground {
     }
 }
 
+mod catalog_modalities;
 mod modules;
 
 #[test]

@@ -842,3 +842,70 @@ async fn live_chatgpt_responses() {
         }
     )));
 }
+
+fn tool_result_items(content: Vec<ContentPart>) -> Vec<Value> {
+    response_items(
+        &Message::tool_result(agent_runtime_core::content::ToolResultBlock {
+            call_id: ToolCallId::new("capture-1"),
+            name: "capture".into(),
+            is_error: false,
+            content,
+        }),
+        &BTreeMap::new(),
+    )
+    .expect("tool result encodes")
+}
+
+#[test]
+fn tool_result_text_only_is_byte_identical() {
+    let items = tool_result_items(vec![
+        ContentPart::text("first"),
+        ContentPart::text("second"),
+    ]);
+    let expected =
+        json!([{"type":"function_call_output","call_id":"capture-1","output":"first\nsecond"}]);
+    assert_eq!(
+        serde_json::to_vec(&items).unwrap(),
+        serde_json::to_vec(&expected).unwrap()
+    );
+    assert_eq!(tool_result_items(Vec::new())[0]["output"], "");
+}
+
+#[test]
+fn tool_result_images_and_text_preserve_content_order() {
+    let url = "data:image/png;base64,cGl4ZWxz";
+    let image = ContentPart::Image {
+        url: url.into(),
+        detail: Some("high".into()),
+    };
+    let items = tool_result_items(vec![
+        ContentPart::text("before"),
+        image,
+        ContentPart::text("after"),
+    ]);
+    assert_eq!(
+        items[0],
+        json!({
+            "type":"function_call_output", "call_id":"capture-1", "output":[
+                {"type":"input_text","text":"before"},
+                {"type":"input_image","image_url":url,"detail":"high"},
+                {"type":"input_text","text":"after"},
+            ],
+        })
+    );
+}
+
+#[test]
+fn tool_result_image_only_defaults_to_auto_detail() {
+    let url = "data:image/png;base64,cGl4ZWxz";
+    let items = tool_result_items(vec![ContentPart::Image {
+        url: url.into(),
+        detail: None,
+    }]);
+    assert_eq!(
+        items[0]["output"],
+        json!([
+            {"type":"input_image","image_url":url,"detail":"auto"},
+        ])
+    );
+}

@@ -1,5 +1,6 @@
 //! One-image questions for agents whose active model cannot accept images.
 
+mod guidance;
 mod history;
 mod tool;
 
@@ -56,6 +57,9 @@ impl Module for VisionModule {
             .clone()
             .ok_or_else(|| ModuleError("vision requires canonical session history".into()))?;
         Ok(Mounted::Contributions(vec![
+            ModuleContribution::Pipeline(PipelineComponent::ContextContributor(Arc::new(
+                guidance::VisionGuidance,
+            ))),
             ModuleContribution::Pipeline(PipelineComponent::TurnCommitHook(binding.usage.clone())),
             ModuleContribution::Tool(Arc::new(tool::ViewImageTool {
                 binding,

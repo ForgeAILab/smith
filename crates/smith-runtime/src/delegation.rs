@@ -526,7 +526,7 @@ impl ChildRuntimeFactory for SmithChildFactory {
             .workspace(workspace)
             .tools(tools)
             .live_ability_routing()
-            .pinned_abilities(crate::capability_limits::pinned_core())
+            .pinned_abilities(crate::capability_limits::pinned_core(&abilities))
             .scope_inputs(scope_inputs)
             .capability_resolver(Arc::new(CapabilityResolver::new()))
             .activation_policy(Arc::new(FailClosedPolicy))

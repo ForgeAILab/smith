@@ -206,6 +206,14 @@ fn keywords(name: &str) -> Vec<&'static str> {
             "logs",
             "progress",
         ],
+        "view_image" => vec![
+            "image",
+            "vision",
+            "screenshot",
+            "view",
+            "inspect",
+            "picture",
+        ],
         "task_stop" => vec!["task", "background", "stop", "kill", "terminate", "cancel"],
         AGENT_TOOL_NAME => vec![
             "agent",
@@ -655,6 +663,27 @@ mod tests {
         ) -> Result<agent_runtime_core::tool::ToolOutcome, agent_runtime_core::error::RuntimeError>
         {
             unreachable!("descriptor tests never invoke the host tool")
+        }
+    }
+
+    #[test]
+    fn image_queries_discover_view_image_through_registry_search() {
+        let mut tools = built_in_and_agent_tools();
+        tools.push(Arc::new(HostTool("view_image")));
+        let view = view_for(tools);
+        for query in ["image", "vision", "screenshot", "view image"] {
+            let result = CapabilityResolver::new().registry_search(
+                &view,
+                &RoutingQuery::derive(query, Vec::<String>::new()),
+                10,
+            );
+            assert!(
+                result
+                    .cards
+                    .iter()
+                    .any(|card| card.id == RegistryId::tool("view_image")),
+                "{query}: {result:?}"
+            );
         }
     }
 

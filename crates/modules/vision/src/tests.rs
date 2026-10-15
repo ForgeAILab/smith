@@ -194,3 +194,44 @@ async fn prepare_rejects_invalid_arguments_and_declares_exact_effects() {
     );
     assert!(tool.spec().description.contains("[image <id>:"));
 }
+
+#[tokio::test]
+async fn mounted_module_contributes_placeholder_guidance() {
+    use agent_runtime::context::{FragmentContent, FragmentKind};
+    use agent_runtime::harness::ContextView;
+    use agent_runtime::registry::Fingerprint;
+    use agent_runtime_core::ids::TurnId;
+
+    let Mounted::Contributions(contributions) = VisionModule.mount(&context()).unwrap() else {
+        panic!("vision mounts");
+    };
+    let contributor = contributions
+        .into_iter()
+        .find_map(|contribution| match contribution {
+            ModuleContribution::Pipeline(PipelineComponent::ContextContributor(component)) => {
+                Some(component)
+            }
+            _ => None,
+        })
+        .expect("mounted vision guidance");
+    let patch = contributor
+        .contribute(&ContextView {
+            session: SessionId::new("s"),
+            turn: TurnId::new("t"),
+            history: Arc::from([]),
+            activation: Fingerprint::of("fixture"),
+            state: None,
+        })
+        .await
+        .unwrap();
+    let [fragment] = patch.fragments.as_slice() else {
+        panic!("one guidance fragment");
+    };
+    assert_eq!(fragment.kind, FragmentKind::DeveloperInstruction);
+    let FragmentContent::Text(body) = &fragment.content else {
+        panic!("text guidance");
+    };
+    assert!(body.contains("[image <id>: …] placeholders"));
+    assert!(body.contains("calling view_image with that id as `image`"));
+    assert_eq!(body.lines().count(), 1);
+}

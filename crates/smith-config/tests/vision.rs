@@ -110,10 +110,161 @@ fn catalog() -> CatalogSnapshot {
     }
 }
 
+fn endpoint_catalog() -> CatalogSnapshot {
+    let mut snapshot = catalog();
+    for (provider, model) in [("openai", "gpt-5.6-luna"), ("xai", "grok-4")] {
+        let mut entry = catalog_model(&[
+            CatalogModality::Text,
+            CatalogModality::Image,
+            CatalogModality::Document,
+        ]);
+        entry.id = model.to_owned();
+        snapshot.providers.insert(
+            provider.to_owned(),
+            CatalogProvider {
+                id: provider.to_owned(),
+                name: provider.to_owned(),
+                models: BTreeMap::from([(model.to_owned(), entry)]),
+            },
+        );
+    }
+    snapshot
+}
+
 fn model(provider: &str, model: &str) -> VisionTarget {
     VisionTarget::Model {
         provider: provider.to_owned(),
         model: model.to_owned(),
+    }
+}
+
+#[test]
+fn image_input_uses_endpoint_catalog_bindings_and_preserves_local_identity() {
+    for (provider, kind, endpoint, model, catalog_provider, credential) in [
+        (
+            "chatgpt",
+            "chatgpt-responses",
+            Some(smith_config::setup::CHATGPT_ENDPOINT),
+            "gpt-5.6-luna",
+            "openai",
+            "authfile:chatgpt",
+        ),
+        (
+            "platform",
+            "openai-compatible",
+            Some(smith_config::catalog::OPENAI_ENDPOINT),
+            "gpt-5.6-luna",
+            "openai",
+            "file:must-not-be-read",
+        ),
+        (
+            "responses",
+            "openai-responses",
+            Some(smith_config::catalog::OPENAI_ENDPOINT),
+            "gpt-5.6-luna",
+            "openai",
+            "file:must-not-be-read",
+        ),
+        (
+            "grok",
+            "xai-responses",
+            Some(smith_config::setup::XAI_ENDPOINT),
+            "grok-4",
+            "xai",
+            "file:must-not-be-read",
+        ),
+        (
+            "gemini",
+            "gemini-interactions",
+            None,
+            "gemini-3-flash",
+            "google",
+            "file:must-not-be-read",
+        ),
+    ] {
+        let fixture = Fixture::new("", "", "");
+        let endpoint = endpoint.map_or_else(String::new, |url| format!("base_url = {url:?}\n"));
+        fixture.write_user(&format!(
+            "[providers.{provider}]\nkind = {kind:?}\n{endpoint}credential = {credential:?}\n"
+        ));
+        let resolution = resolve(
+            &fixture
+                .request()
+                .with_catalog(Arc::new(endpoint_catalog()))
+                .with_cli(Overrides {
+                    provider: Some(provider.to_owned()),
+                    model: Some(model.to_owned()),
+                    ..Overrides::default()
+                }),
+        )
+        .unwrap();
+        assert_eq!(resolution.config.provider.name.value, provider);
+        assert_eq!(resolution.config.model.value, model);
+        assert_eq!(
+            resolution.config.model_image_input.value,
+            ImageInput::Accepts,
+            "{provider}/{model}"
+        );
+        let source = &resolution.config.model_image_input.source;
+        assert!(
+            source
+                .key
+                .contains(&format!("{catalog_provider}@vision-test"))
+        );
+        assert_eq!(
+            &resolution
+                .provenance
+                .explain("input_modalities")
+                .unwrap()
+                .source,
+            source
+        );
+    }
+}
+
+#[test]
+fn chatgpt_vision_profile_validates_through_the_openai_catalog() {
+    let fixture = Fixture::new(
+        "vision = \"luna\"",
+        "",
+        "[profiles.luna]\nprovider = \"chatgpt\"\nmodel = \"gpt-5.6-luna\"",
+    );
+    fixture.write_user(&format!(
+        "[providers.chatgpt]\nkind = \"chatgpt-responses\"\nbase_url = {:?}\ncredential = \"authfile:chatgpt\"\n",
+        smith_config::setup::CHATGPT_ENDPOINT,
+    ));
+    let resolution = resolve(&fixture.request().with_catalog(Arc::new(endpoint_catalog())))
+        .expect("ChatGPT vision profile without credential access");
+    assert_eq!(
+        resolution.config.agent.profile.vision.unwrap().value,
+        VisionTarget::Profile("luna".to_owned())
+    );
+}
+
+#[test]
+fn image_input_stays_unknown_for_unmapped_endpoints_and_unknown_chatgpt_models() {
+    let fixture = Fixture::new("", "", "");
+    fixture.write_user(&format!(
+        "[providers.chatgpt]\nkind = \"chatgpt-responses\"\nbase_url = {:?}\ncredential = \"authfile:chatgpt\"\n",
+        smith_config::setup::CHATGPT_ENDPOINT,
+    ));
+    for (provider, model) in [("acme", "gpt-5.6-luna"), ("chatgpt", "unknown-model")] {
+        let resolution = resolve(
+            &fixture
+                .request()
+                .with_catalog(Arc::new(endpoint_catalog()))
+                .with_cli(Overrides {
+                    provider: Some(provider.to_owned()),
+                    model: Some(model.to_owned()),
+                    ..Overrides::default()
+                }),
+        )
+        .unwrap();
+        assert_eq!(
+            resolution.config.model_image_input.value,
+            ImageInput::Unknown
+        );
+        assert!(resolution.config.model_input_modalities.is_none());
     }
 }
 

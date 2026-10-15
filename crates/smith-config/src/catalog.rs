@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::model::{
-    KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE, KIND_OPENAI_RESPONSES, KIND_XAI_RESPONSES,
+    KIND_CHATGPT_RESPONSES, KIND_GEMINI_INTERACTIONS, KIND_OPENAI_COMPATIBLE,
+    KIND_OPENAI_RESPONSES, KIND_XAI_RESPONSES,
 };
 
 /// The only public origin Smith accepts provider model metadata from.
@@ -352,6 +353,21 @@ pub fn catalog_provider_for(kind: &str, base_url: Option<&str>) -> Option<&'stat
     }
 }
 
+/// Returns catalog metadata for input modalities at an exact binding.
+///
+/// ChatGPT and OpenAI Responses share OpenAI input modalities, without
+/// inheriting API prices, limits, inventory, or provider capabilities.
+pub fn modality_catalog_provider_for(kind: &str, base_url: Option<&str>) -> Option<&'static str> {
+    catalog_provider_for(kind, base_url).or_else(|| {
+        let endpoint = normalized_endpoint(base_url?)?;
+        match (kind, endpoint.as_str()) {
+            (KIND_CHATGPT_RESPONSES, crate::setup::CHATGPT_ENDPOINT)
+            | (KIND_OPENAI_RESPONSES, OPENAI_ENDPOINT) => Some(OPENAI_CATALOG_PROVIDER),
+            _ => None,
+        }
+    })
+}
+
 fn normalized_endpoint(raw: &str) -> Option<String> {
     let url = Url::parse(raw).ok()?;
     if !matches!(url.scheme(), "http" | "https")
@@ -476,6 +492,49 @@ mod tests {
             catalog_provider_for(KIND_OPENAI_COMPATIBLE, Some(GEMINI_ENDPOINT)),
             None
         );
+    }
+
+    #[test]
+    fn chatgpt_binding_requires_its_own_adapter_and_exact_endpoint() {
+        assert_eq!(
+            modality_catalog_provider_for(
+                KIND_CHATGPT_RESPONSES,
+                Some("https://CHATGPT.com/backend-api/codex/")
+            ),
+            Some(OPENAI_CATALOG_PROVIDER)
+        );
+        for kind in [KIND_CHATGPT_RESPONSES, KIND_OPENAI_RESPONSES] {
+            let endpoint = if kind == KIND_CHATGPT_RESPONSES {
+                crate::setup::CHATGPT_ENDPOINT
+            } else {
+                OPENAI_ENDPOINT
+            };
+            assert_eq!(catalog_provider_for(kind, Some(endpoint)), None);
+        }
+        assert!(
+            endpoint_context_windows(
+                KIND_CHATGPT_RESPONSES,
+                Some(crate::setup::CHATGPT_ENDPOINT),
+                "gpt-5.6-luna",
+            )
+            .is_none(),
+            "ChatGPT must retain its trusted context-window choices"
+        );
+        for (kind, endpoint) in [
+            (KIND_CHATGPT_RESPONSES, "https://custom.example.test/v1"),
+            (KIND_CHATGPT_RESPONSES, OPENAI_ENDPOINT),
+            (KIND_OPENAI_RESPONSES, crate::setup::CHATGPT_ENDPOINT),
+            (
+                KIND_CHATGPT_RESPONSES,
+                "https://chatgpt.com/backend-api/codex/other",
+            ),
+            (
+                KIND_CHATGPT_RESPONSES,
+                "https://chatgpt.com/backend-api/codex?key=secret",
+            ),
+        ] {
+            assert_eq!(modality_catalog_provider_for(kind, Some(endpoint)), None);
+        }
     }
 
     #[test]

@@ -438,7 +438,9 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         .workspace(workspace.clone())
         .tools(capabilities.tools.clone())
         .live_ability_routing()
-        .pinned_abilities(crate::capability_limits::pinned_core())
+        .pinned_abilities(crate::capability_limits::pinned_core(
+            &capabilities.abilities,
+        ))
         .scope_inputs(scope_inputs)
         .capability_resolver(Arc::new(CapabilityResolver::new()))
         .activation_policy(Arc::new(FailClosedPolicy))

@@ -242,6 +242,74 @@ fn runtime_source_preserves_local_alias_and_nested_model_identity() {
 }
 
 #[test]
+fn runtime_catalog_image_input_uses_endpoint_bindings() {
+    use agent_runtime_core::catalog::{LayeredModelCatalog, ModelCatalog};
+
+    let snapshot = parse_snapshot(EMBEDDED_MODELS_DEV_SEED.as_bytes()).unwrap();
+    for (provider, kind, endpoint, model) in [
+        (
+            "platform",
+            "openai-compatible",
+            Some(smith_config::catalog::OPENAI_ENDPOINT),
+            "gpt-5.6-luna",
+        ),
+        (
+            "grok",
+            "xai-responses",
+            Some(smith_config::setup::XAI_ENDPOINT),
+            "grok-4.20-0309-reasoning",
+        ),
+        ("gemini", "gemini-interactions", None, "gemini-3.6-flash"),
+    ] {
+        let source = runtime_catalog_source(&snapshot, provider, kind, endpoint)
+            .expect("endpoint-bound catalog source");
+        let profile = LayeredModelCatalog::new()
+            .with_source(source)
+            .resolve(provider, &ModelId::new(model))
+            .expect("catalog profile under the local provider identity");
+        assert!(
+            profile.input_modalities.contains(&Modality::Image),
+            "{provider}/{model} must retain catalog image input"
+        );
+    }
+}
+
+#[test]
+fn runtime_catalog_image_input_refuses_unmapped_endpoints_and_unknown_models() {
+    let snapshot = parse_snapshot(EMBEDDED_MODELS_DEV_SEED.as_bytes()).unwrap();
+    assert!(
+        runtime_catalog_source(
+            &snapshot,
+            "openai",
+            "openai-compatible",
+            Some("https://custom.example.test/v1"),
+        )
+        .is_none()
+    );
+    let source = runtime_catalog_source(
+        &snapshot,
+        "platform",
+        "openai-compatible",
+        Some(smith_config::catalog::OPENAI_ENDPOINT),
+    )
+    .unwrap();
+    assert!(
+        source
+            .lookup("platform", &ModelId::new("unknown-model"))
+            .is_none()
+    );
+    assert!(
+        runtime_catalog_source(
+            &snapshot,
+            "chatgpt",
+            "chatgpt-responses",
+            Some(smith_config::setup::CHATGPT_ENDPOINT),
+        )
+        .is_none()
+    );
+}
+
+#[test]
 fn native_gemini_catalog_binding_uses_the_fixed_endpoint_without_user_url() {
     let snapshot = parse_snapshot(EMBEDDED_MODELS_DEV_SEED.as_bytes()).unwrap();
     let source = runtime_catalog_source(&snapshot, "google", "gemini-interactions", None).unwrap();

@@ -635,3 +635,72 @@ async fn vision_route_uses_its_own_catalog_price() {
     assert_eq!(vision.model.as_str(), "eyes");
     assert_eq!(runtime.vision_price(), Some(&price));
 }
+
+#[tokio::test]
+async fn view_image_is_offered_with_placeholder_guidance_on_the_first_request() {
+    for surface in [HostSurface::Headless, HostSurface::Child] {
+        let fixture = Fixture::new(CONFIG);
+        let main = provider("worker", vec![ScriptedStream::new(stop_events("done"))]);
+        let mut request = fixture.request("worker", main.clone(), vision_provider());
+        request.surface = surface;
+        let host = start(HostSessionRequest::new(request, fixture.project.path()))
+            .await
+            .unwrap();
+        host.session().run(UserInput::text("hi")).await.unwrap();
+        let requests = main.requests();
+        assert!(
+            requests[0]
+                .tools
+                .iter()
+                .any(|tool| tool.name == "view_image")
+        );
+        let instructions = requests[0]
+            .messages
+            .iter()
+            .map(|message| message.joined_text())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            instructions.contains("Images shown as [image <id>: …] placeholders"),
+            "{instructions}"
+        );
+        assert!(instructions.contains("calling view_image with that id as `image`"));
+        host.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn registry_search_finds_view_image_by_image_vision_screenshot_and_view_image() {
+    for query in ["image", "vision", "screenshot", "view image"] {
+        let fixture = Fixture::new(CONFIG);
+        let main = provider(
+            "worker",
+            vec![
+                step("search", "registry.search", json!({"query":query})),
+                ScriptedStream::new(stop_events("done")),
+            ],
+        );
+        let host = start(HostSessionRequest::new(
+            fixture.request("worker", main, vision_provider()),
+            fixture.project.path(),
+        ))
+        .await
+        .unwrap();
+        host.session().run(UserInput::text("hi")).await.unwrap();
+        let history = host.session().history();
+        let result = history
+            .iter()
+            .flat_map(|message| &message.content)
+            .find_map(|part| match part {
+                ContentPart::ToolResult(result) if result.name == "registry.search" => Some(result),
+                _ => None,
+            })
+            .expect("registry search result");
+        assert!(!result.is_error, "{query}: {result:?}");
+        assert!(
+            format!("{:?}", result.content).contains("tool:view_image"),
+            "{query}: {result:?}"
+        );
+        host.shutdown().await.unwrap();
+    }
+}

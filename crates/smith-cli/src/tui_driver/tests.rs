@@ -498,3 +498,57 @@ fn confirmed_plugin_switch_waits_for_work_and_confirmation_to_finish() {
         Some(super::InteractiveExit::PluginSwitch(applied)) if applied == request));
     assert!(pending.is_none());
 }
+
+#[tokio::test]
+async fn chatgpt_subscription_price_stays_unknown_despite_openai_image_metadata() {
+    let home = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(project.path().join(".smith")).unwrap();
+    std::fs::write(
+        project.path().join(".smith/config.toml"),
+        r#"
+        default_profile = "luna"
+        [profiles.luna]
+        provider = "chatgpt"
+        model = "gpt-5.6-luna"
+        [providers.chatgpt]
+        kind = "fake"
+        [approval]
+        mode = "deny"
+    "#,
+    )
+    .unwrap();
+    let config = smith_config::resolve::resolve(
+        &smith_config::resolve::ResolveRequest::new(project.path()).with_home_dir(home.path()),
+    )
+    .unwrap()
+    .config;
+    let mut request = smith_runtime::factory::RuntimeRequest::new(
+        config,
+        smith_runtime::factory::HostSurface::Headless,
+    );
+    request.workspace = Some(std::sync::Arc::new(
+        smith_host::ProjectWorkspace::new(project.path()).unwrap(),
+    ));
+    let runtime = smith_runtime::factory::build(
+        smith_runtime::harness::resolve(smith_runtime::harness::HarnessSpec::trusted(request))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    let mut policy = runtime.policy().clone();
+    policy.provider_kind = smith_config::model::KIND_CHATGPT_RESPONSES.into();
+    policy.endpoint = Some(smith_config::setup::CHATGPT_ENDPOINT.into());
+    let catalog =
+        serde_json::from_str(smith_runtime::model_catalog::EMBEDDED_MODELS_DEV_SEED).unwrap();
+    assert!(
+        super::usage::resolve_catalog_price(
+            "openai",
+            policy.model.as_str(),
+            Some("openai"),
+            &catalog
+        )
+        .is_some()
+    );
+    assert!(super::usage::resolve_price(&policy, &catalog).is_none());
+}

@@ -71,12 +71,41 @@ pub(super) fn response_items(
                 ContentPart::ToolResult(result) => Some(json!({
                     "type": "function_call_output",
                     "call_id": result.call_id.as_str(),
-                    "output": result.content.iter().filter_map(ContentPart::as_text).collect::<Vec<_>>().join("\n"),
+                    "output": function_result_output(&result.content),
                 })),
                 _ => None,
             })
             .collect(),
     })
+}
+
+fn function_result_output(parts: &[ContentPart]) -> Value {
+    if !parts
+        .iter()
+        .any(|part| matches!(part, ContentPart::Image { .. }))
+    {
+        return Value::String(
+            parts
+                .iter()
+                .filter_map(ContentPart::as_text)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
+    Value::Array(
+        parts
+            .iter()
+            .filter_map(|part| match part {
+                ContentPart::Text { text } => Some(json!({"type": "input_text", "text": text})),
+                ContentPart::Image { url, detail } => Some(json!({
+                    "type": "input_image",
+                    "image_url": url,
+                    "detail": detail.as_deref().unwrap_or("auto"),
+                })),
+                _ => None,
+            })
+            .collect(),
+    )
 }
 
 pub(super) fn response_tool_names(

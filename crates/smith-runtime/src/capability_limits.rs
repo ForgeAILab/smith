@@ -1,5 +1,6 @@
 //! The always-active core tools and the capability limits a session runs under.
 
+use agent_runtime::ability::SealedAbilities;
 use agent_runtime::hub::ScopeInputs;
 use agent_runtime::registry::RegistryId;
 use agent_runtime_core::error::RuntimeError;
@@ -20,9 +21,15 @@ pub const CORE_TOOL_NAMES: [&str; 7] = [
     "task_stop",
 ];
 
-/// The core tools as registry ids for the runtime's pinned set.
-pub(crate) fn pinned_core() -> Vec<RegistryId> {
-    CORE_TOOL_NAMES.into_iter().map(RegistryId::tool).collect()
+/// Core tools and image inspection, when mounted, in the runtime's pinned set.
+pub(crate) fn pinned_core(abilities: &SealedAbilities) -> Vec<RegistryId> {
+    let registered = abilities.names();
+    CORE_TOOL_NAMES
+        .into_iter()
+        .chain(["view_image"])
+        .filter(|name| registered.contains(name))
+        .map(RegistryId::tool)
+        .collect()
 }
 
 /// Validated `<domain>:<name>` patterns limiting what a session may use.

@@ -74,6 +74,34 @@ pub(in crate::factory) async fn prepare(
         record.revision = Some("smith-command-provider-1".to_owned());
         layers = layers.with_provider_local(record);
     }
+    // This binding is only authority for input modalities. In particular,
+    // ChatGPT must retain its own limits and never inherit OpenAI API prices.
+    let catalog_modalities = request.model_catalog.as_deref().and_then(|snapshot| {
+        let provider = smith_config::catalog::modality_catalog_provider_for(
+            &provider_kind,
+            endpoint.as_deref(),
+        )?;
+        let model = snapshot.provider(provider)?.models.get(model.as_str())?;
+        (!model.input_modalities.is_empty()).then_some(model.input_modalities.as_slice())
+    });
+    let catalog_modalities = catalog_modalities.or_else(|| {
+        config
+            .model_input_modalities
+            .as_ref()
+            .filter(|modalities| modalities.source.layer == smith_config::resolve::Layer::BuiltIn)
+            .map(|modalities| modalities.value.as_slice())
+    });
+    if adapter != Adapter::CommandJsonl
+        && let Some(modalities) = catalog_modalities
+    {
+        layers = layers.with_catalog_input_modalities(
+            modalities
+                .iter()
+                .copied()
+                .map(crate::model_catalog::runtime_modality)
+                .collect(),
+        );
+    }
     // Command adapters accept only text, even when a model override says otherwise.
     let input_modalities = if adapter == Adapter::CommandJsonl {
         Some(vec![Modality::Text])
