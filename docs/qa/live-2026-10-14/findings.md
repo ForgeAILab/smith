@@ -87,13 +87,23 @@ tool. On `cli/claude-code/haiku`, then `cli/codex/gpt-6-astra`:
   offered again, the next call raised a new approval (count 2), the CLI
   recalled the earlier label, and the child was still listed as durable.
 
-Findings (not fixed):
+Findings, all fixed in `8c4e9af` (tasks 9.1-9.3) and rechecked in tmux on
+2026-10-15:
 
 1. The exit summary prices a CLI model under the profile's provider:
    `price unknown for zai/cli/claude-code/haiku` (and
-   `zai/cli/codex/gpt-6-astra`). Cosmetic.
+   `zai/cli/codex/gpt-6-astra`). Cosmetic. Now `price unknown for
+   cli/claude-code/haiku · advisor zai/glm-5.3`.
 2. A project MCP server that is declared but untrusted gives the CLI turn
    no hint. The model searched the registry, found nothing, and told the
    user to check the server; nothing pointed at `/mcp trust`. The welcome
-   screen does not mention untrusted servers either.
-3. The profile-name error reads "a agent profile name must contain ...".
+   screen does not mention untrusted servers either. Now the transcript
+   opens with "`docs` requires interactive trust — run `/mcp trust docs`",
+   once on start and once on `--resume`, and headless runs report it in
+   `diagnostics`.
+3. The profile-name error read "a agent profile name must contain ...".
+   Now "the agent profile name must contain ...".
+
+Also fixed in `8c4e9af`, found by the same checks or by CI that day: a busy
+declared stdio MCP server could outlive Smith (task 9.6), and two bridge
+tests flaked on the macOS runner (tasks 9.4, 9.5).
