@@ -3780,7 +3780,7 @@ dependencies = [
 
 [[package]]
 name = "smith-cli"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "agent-runtime",
  "agent-runtime-core",
@@ -3826,7 +3826,7 @@ dependencies = [
 
 [[package]]
 name = "smith-client"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "agent-runtime-core",
  "agent-runtime-registry",
@@ -3844,7 +3844,7 @@ dependencies = [
 
 [[package]]
 name = "smith-config"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "agent-runtime-core",
  "async-trait",
@@ -3867,7 +3867,7 @@ dependencies = [
 
 [[package]]
 name = "smith-host"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "agent-runtime-core",
  "agent-runtime-registry",
@@ -3886,7 +3886,7 @@ dependencies = [
 
 [[package]]
 name = "smith-module"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "agent-runtime",
  "agent-runtime-core",
@@ -3895,7 +3895,7 @@ dependencies = [
 
 [[package]]
 name = "smith-module-budget-notice"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "agent-runtime",
  "agent-runtime-core",
@@ -3909,7 +3909,7 @@ dependencies = [
 
 [[package]]
 name = "smith-module-image-generation"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "agent-runtime",
  "agent-runtime-core",
@@ -3926,14 +3926,14 @@ dependencies = [
 
 [[package]]
 name = "smith-module-sdk"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "wit-bindgen",
 ]
 
 [[package]]
 name = "smith-module-vision"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "agent-runtime",
  "agent-runtime-core",
@@ -3952,7 +3952,7 @@ dependencies = [
 
 [[package]]
 name = "smith-module-web"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "agent-runtime-core",
  "agent-runtime-testkit",
@@ -3974,7 +3974,7 @@ dependencies = [
 
 [[package]]
 name = "smith-plugin"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "fs2",
  "serde",
@@ -3988,7 +3988,7 @@ dependencies = [
 
 [[package]]
 name = "smith-runtime"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "agent-runtime",
  "agent-runtime-ability",
@@ -4035,14 +4035,14 @@ dependencies = [
 
 [[package]]
 name = "smith-test-module"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "smith-module",
 ]
 
 [[package]]
 name = "smith-tools"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "agent-runtime",
  "agent-runtime-core",
@@ -4065,7 +4065,7 @@ dependencies = [
 
 [[package]]
 name = "smith-tui"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "agent-runtime",
  "agent-runtime-core",
@@ -4088,7 +4088,7 @@ dependencies = [
 
 [[package]]
 name = "smith-wasm-host"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "agent-runtime",
  "agent-runtime-core",
