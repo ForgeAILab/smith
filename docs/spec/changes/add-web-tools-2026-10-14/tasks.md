@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-15T00:44:35Z
-updated_at: 2026-10-15T08:52:34Z
+updated_at: 2026-10-15T09:15:10Z
 completed_at:
 ---
 
@@ -96,5 +96,5 @@ branch base). The runtime branch lands and is pushed before Smith bumps pins.
       resumed transcript blocks, and headless output carry the action;
       `Open Page(<url>) · hosted` and `Find in Page("<pattern>") · hosted`
       rows.
-- [ ] 9.4 Smith gate; live: free search on GLM returns results and the
+- [x] 9.4 Smith gate; live: free search on GLM returns results and the
       ChatGPT hosted run shows page-open rows and no duplicated citation.

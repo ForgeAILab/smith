@@ -1,0 +1,40 @@
+  version number and the announcement URL from the search results.
+
+● I don't currently have a web_search tool staged — let me check the capability registry for it.
+
+● Found it. Activating web_search:
+
+● Activate(tool:web_search)
+  ⎿  {"already_available":["tool:web_search"],"available_on":"next_provider_request","rejected":[],"staged":[]
+     }
+
+● Web Search("latest stable Rust release announcement blog.rust-lang.org")
+  ⎿  8 results
+
+● One result indicates stable is now 1.99.1 — let me search specifically for its announcement to confirm.
+
+● Web Search("\"Rust 1.99.1\" announcement blog.rust-lang.org")
+  ⎿  0 results
+
+● approval · web_search allowed for this target for the session
+
+● Done — searched with web_search (per your instruction, no web_fetch or shell). Two searches, here's what the
+  results show:
+
+  Latest stable Rust: 1.99.1 — per releases.rs ("Stable: 1.99.1"), which is corroborated by an
+  internals.rust-lang.org thread on 1.99.1 pre-release testing.
+
+  Announcement URL from the search results: https://blog.rust-lang.org/2026/10/01/Rust-1.99.0/ — "Announcing
+  Rust 1.99.0", the most recent official release-announcement post that appeared. Rust point releases (like
+  1.99.1) typically don't get a dedicated blog post, and a targeted follow-up search for "Rust 1.99.1"
+  announcement blog.rust-lang.org returned zero results, so no 1.99.1 announcement URL surfaced in search.
+
+  So: stable version 1.99.1; announcement URL (for the latest minor release, 1.99.0):
+  https://blog.rust-lang.org/2026/10/01/Rust-1.99.0/. If you want the canonical latest-release page, the
+  search also surfaced the redirect https://blog.rust-lang.org/releases/latest.
+
+✻ Worked for 1m 18s
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> Ask Smith to do anything
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts                  zai/glm-5.3 · code · ask · /Volumes/Data/smith-live-web · ~99% ctx · CH 67%
