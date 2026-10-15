@@ -100,4 +100,6 @@ mod fixtures;
 mod flow;
 #[cfg(feature = "module-web")]
 mod hosted_search;
+#[cfg(unix)]
+mod mcp;
 mod output;

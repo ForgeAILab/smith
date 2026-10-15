@@ -1230,7 +1230,7 @@ pub(super) fn validate_agent_name(
         return Err(ConfigError::InvalidValue {
             source: source.clone(),
             message: format!(
-                "a {kind} name must contain 1 to 32 ASCII letters, digits, `-`, or `_`"
+                "the {kind} name must contain 1 to 32 ASCII letters, digits, `-`, or `_`"
             ),
         });
     }

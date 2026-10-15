@@ -68,7 +68,10 @@ async fn main() -> ExitCode {
         }
     };
 
-    match execute(command).await {
+    let result = execute(command).await;
+    #[cfg(unix)]
+    headless::shutdown_stdio_servers().await;
+    match result {
         Ok(code) => ExitCode::from(code),
         Err(error) => report_failure(&error, &mut std::io::stderr().lock()),
     }
@@ -226,6 +229,7 @@ async fn run_command(mut args: RunArgs) -> Result<u8> {
                     credential_pool: started.credential_pool.as_ref(),
                     cache_price,
                     cache_miss_notices: started.cache_miss_notices,
+                    mcp_trust_notices: &started.mcp_trust_notices,
                 },
                 headless::background_exit_policy(
                     args.selection.background_exit,

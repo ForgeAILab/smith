@@ -88,6 +88,10 @@ pub(super) async fn seed_app(
     if let Some(notice) = presentation.host_notice.as_ref() {
         app.transcript.push_notice(NoticeKind::Provider, notice);
     }
+    if !presentation.mcp_trust_notices.is_empty() {
+        app.transcript
+            .push_notice(NoticeKind::Mcp, presentation.mcp_trust_notices.join("\n"));
+    }
     if let Some(previous) = snapshot.manifests.last().map(|entry| &entry.manifest.model)
         && (previous.provider != policy.provider_name || previous.model != policy.model)
     {

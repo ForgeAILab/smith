@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-13T22:40:43Z
-updated_at: 2026-10-15T03:08:05Z
+updated_at: 2026-10-15T04:48:58Z
 completed_at:
 ---
 
@@ -339,25 +339,41 @@ Each item is a layer 4 test file driven by the stand-in.
 Requested by the owner before any release ("we need that before we do
 anything else"). Findings are in `docs/qa/live-2026-10-14/findings.md`.
 
-- [ ] 9.1 The exit summary and usage provenance name a harness model
+- [x] 9.1 The exit summary and usage provenance name a harness model
   without the profile's provider: `cli/claude-code/haiku`, not
-  `zai/cli/claude-code/haiku`, matching the status bar.
-- [ ] 9.2 Interactive sessions name untrusted MCP servers once at start
+  `zai/cli/claude-code/haiku`, matching the status bar. (Usage buckets,
+  the usage log, and `/status` drop the provider and price for a `cli/`
+  model; legacy logs restore. Checked in tmux 2026-10-15: `price unknown for
+  cli/claude-code/haiku · advisor zai/glm-5.3`.)
+- [x] 9.2 Interactive sessions name untrusted MCP servers once at start
   with `/mcp trust <name>` (extension-system delta, "Interactive sessions
   name untrusted servers"). Confirm headless runs already report them, as
   the truth requirement "Untrusted servers are inert in non-interactive
-  runs" demands.
-- [ ] 9.3 The name-validation message reads correctly for every kind
-  ("a agent profile name" today).
-- [ ] 9.4 `mcp_relay::stdin_eof_half_closes_the_socket_and_drains_the_response`
+  runs" demands. (Headless did not report them; it now does, in
+  `diagnostics` or on stderr for text output. Checked in tmux 2026-10-15:
+  one notice on start and one on `--resume`.)
+- [x] 9.3 The name-validation message reads correctly for every kind
+  ("a agent profile name" today). (Now "the {kind} name must contain ...";
+  the kinds are `agent profile`, `agent mode`, and `child agent`.)
+- [x] 9.4 `mcp_relay::stdin_eof_half_closes_the_socket_and_drains_the_response`
   no longer flakes on a loaded runner: its deadline covers starting the
   `smith` binary, and a deadline failure reads as a deadline, not EAGAIN.
-  20 consecutive passes under load.
-- [ ] 9.5 `stand_in::abandonment_and_exit_can_wait_for_execution_evidence`
+  20 consecutive passes under load. (30 s fixture deadline; socket timeouts
+  map to "deadline exceeded during <step>". 20/20 with all 14 cores
+  saturated.)
+- [x] 9.5 `stand_in::abandonment_and_exit_can_wait_for_execution_evidence`
   no longer depends on runner timing. 20 consecutive passes under load.
-- [ ] 9.6 A headless shutdown, including an interrupt during an MCP call,
+  (The stand-in was released as soon as the start file existed, which the
+  counting server creates before writing its record, so teardown could
+  kill the writer mid-record. The test now releases the stand-in only
+  after reading a complete record. 20/20 with all 14 cores saturated.)
+- [x] 9.6 A headless shutdown, including an interrupt during an MCP call,
   leaves no Smith-declared stdio MCP server running. Tested with a
-  sleeping MCP tool; `design.md` updated.
+  sleeping MCP tool; `design.md` updated. (Smith owns the stdio child and
+  terminates it at process exit, headless or TUI: SIGTERM, a short wait,
+  then SIGKILL; a second signal kills first. Servers stay in Smith's
+  process group. Tests: `bridge_failures::headless_*_stdio_mcp_server` for
+  completion, SIGINT, SIGTERM/SIGHUP, and a second signal.)
 
 Not in this section: the runtime conformance flake
 `session::one_shutdown_deadline_bounds_all_active_turns` (ForgeAILab/smith#4)

@@ -33,10 +33,11 @@ fn usage_bindings_are_attributed(record: &smith_client::usage_log::SessionUsageR
     record.schema_version == 5
         && !record.bindings.is_empty()
         && record.bindings.iter().all(|binding| {
-            binding
-                .provider
-                .as_deref()
-                .is_some_and(|provider| !provider.trim().is_empty())
+            (smith_config::cli_agents::parse_cli_model_id(&binding.model).is_some()
+                || binding
+                    .provider
+                    .as_deref()
+                    .is_some_and(|provider| !provider.trim().is_empty()))
                 && !binding.model.trim().is_empty()
                 && binding.model != "earlier models"
         })

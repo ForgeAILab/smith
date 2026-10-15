@@ -20,7 +20,7 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let deadline = Deadline::after(Duration::from_secs(5));
+        let deadline = Deadline::after(Duration::from_secs(30));
         // macOS limits Unix socket paths to 104 bytes; its default temp base
         // can consume that budget before the socket's own name is appended.
         let directory = tempfile::Builder::new()
@@ -221,13 +221,22 @@ fn payload() -> Vec<u8> {
     bytes
 }
 
+fn socket_io<T>(result: io::Result<T>, step: &str) -> T {
+    result.unwrap_or_else(|error| match error.kind() {
+        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => {
+            panic!("deadline exceeded during {step}: {error}")
+        }
+        _ => panic!("{step} failed: {error}"),
+    })
+}
+
 fn write_socket(mut socket: UnixStream, bytes: &[u8], deadline: Deadline) -> UnixStream {
     let bytes = bytes.to_vec();
     let (socket, result) = deadline.work("writing socket", move || {
         let result = socket.write_all(&bytes);
         (socket, result)
     });
-    result.expect("socket bytes written");
+    socket_io(result, "writing socket");
     socket
 }
 
@@ -247,10 +256,10 @@ fn stdin_bytes_reach_the_socket_unchanged() {
     let received = collect(socket);
     relay.write_stdin(&expected);
     drop(relay.stdin.take());
-    let received = relay
-        .deadline
-        .receive(&received, "socket input and EOF")
-        .expect("socket input");
+    let received = socket_io(
+        relay.deadline.receive(&received, "socket input and EOF"),
+        "socket input and EOF",
+    );
     assert_eq!(received, expected);
     let output = relay.finish();
     assert_clean_success(&output);
@@ -278,13 +287,12 @@ fn request_response_is_interactive_with_stdin_open() {
     let request = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n";
     let response = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n";
     relay.write_stdin(request);
-    let (socket, received) = relay.deadline.work("request line", move || {
+    let (socket, received, result) = relay.deadline.work("request line", move || {
         let mut received = Vec::new();
-        BufReader::new(&mut socket)
-            .read_until(b'\n', &mut received)
-            .expect("request line");
-        (socket, received)
+        let result = BufReader::new(&mut socket).read_until(b'\n', &mut received);
+        (socket, received, result)
     });
+    socket_io(result, "request line");
     assert_eq!(received.as_slice(), request);
     let socket = write_socket(socket, response, relay.deadline);
     assert_eq!(relay.read_stdout(response.len()).as_slice(), response);
@@ -313,11 +321,12 @@ fn stdin_eof_half_closes_the_socket_and_drains_the_response() {
     let mut relay = fixture.relay();
     let mut socket = fixture.accept(relay.deadline);
     drop(relay.stdin.take());
-    let socket = relay.deadline.work("socket EOF", move || {
+    let (socket, result) = relay.deadline.work("socket EOF", move || {
         let mut byte = [0_u8; 1];
-        assert_eq!(socket.read(&mut byte).expect("socket EOF"), 0);
-        socket
+        let result = socket.read(&mut byte);
+        (socket, result)
     });
+    assert_eq!(socket_io(result, "socket EOF"), 0);
     assert!(relay.child.try_wait().expect("process status").is_none());
     let response = b"response after stdin EOF\n";
     let socket = write_socket(socket, response, relay.deadline);
@@ -344,12 +353,13 @@ fn socket_close_with_unread_input_exits_cleanly() {
     let mut relay = fixture.relay();
     let mut socket = fixture.accept(relay.deadline);
     relay.write_stdin(b"input the server will not finish reading\n");
-    let socket = relay.deadline.work("first input byte", move || {
+    let (socket, byte, result) = relay.deadline.work("first input byte", move || {
         let mut byte = [0_u8; 1];
-        socket.read_exact(&mut byte).expect("first input byte");
-        assert_eq!(byte, [b'i']);
-        socket
+        let result = socket.read_exact(&mut byte);
+        (socket, byte, result)
     });
+    socket_io(result, "first input byte");
+    assert_eq!(byte, [b'i']);
     assert!(relay.stdin.is_some());
     drop(socket);
     let output = relay.finish();

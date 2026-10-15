@@ -140,6 +140,10 @@ fn untrusted_server_is_neither_listed_nor_callable() {
             {"list_tools":true}, {"call":{"tool":COUNT,"arguments":{"must_not_run":true}}}, {"say":"trust refused"}
         ]), None);
         successful(&run);
+        assert_eq!(
+            result(&run)["diagnostics"],
+            json!(["`docs` requires interactive trust — run `/mcp trust docs`"])
+        );
         assert!(
             run.record["tool_names"]
                 .as_array()

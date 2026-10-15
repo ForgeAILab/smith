@@ -1073,16 +1073,37 @@ fn wait_file_is_a_barrier_before_later_script_effects() {
 #[test]
 fn abandonment_and_exit_can_wait_for_execution_evidence() {
     for exit in [false, true] {
+        let deadline = Deadline::after(Duration::from_secs(30));
         let fixture = Fixture::new();
         let started = fixture.log.with_extension("started.jsonl");
+        let release = fixture.directory.path().join("release");
         let step = if exit {
             json!({"call_then_exit":{"tool":"slow_count","arguments":{"seconds":60},"code":7,
-                "started_file":started}})
+                "started_file":release}})
         } else {
             json!({"abandon":{"tool":"slow_count","arguments":{"seconds":60},"how":"cancel","after_ms":0,
-                "started_file":started}})
+                "started_file":release}})
         };
-        let run = fixture.run(&fixture.args(false, true, None), json!([step]));
+        let (mut command, record) = script_command(
+            fixture.directory.path(),
+            &fixture.args(false, true, None),
+            &json!([step]),
+        );
+        let process = Process::spawn(&mut command, deadline);
+        // File creation precedes the JSONL write. Release the stand-in only
+        // after a complete entry so teardown cannot kill the writer mid-record.
+        loop {
+            deadline.remaining("complete slow_count execution evidence");
+            if let Ok(entered) = std::fs::read_to_string(&started)
+                && entered.ends_with('\n')
+            {
+                serde_json::from_str::<Value>(entered.trim()).expect("execution evidence JSON");
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        std::fs::write(release, "continue").expect("release after execution evidence");
+        let run = super::support::recorded_run(process.finish(Some(&record)), &record);
         assert_eq!(run.output.status.code(), Some(if exit { 7 } else { 0 }));
         assert!(fixture.log().is_empty());
         let entered = std::fs::read_to_string(started).unwrap();

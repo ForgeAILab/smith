@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use smith_config::mcp::{self, McpConfirmation};
 use smith_config::resolve::{ResolvedConfig, ResolvedMcpServer};
 use smith_config::trust::{ContentDigest, TrustDecision, TrustStatus, TrustStore};
-use smith_runtime::mcp::{McpOptions, McpServerReport, McpSupervisor};
+use smith_runtime::mcp::{McpOptions, McpServerReport, McpState, McpSupervisor};
 
 /// Everything the `/mcp` command needs, owned for the life of the process.
 ///
@@ -112,6 +112,15 @@ impl McpContext {
         self.supervisor.reports()
     }
 
+    /// Trust guidance from settled admission state; never dials a server.
+    pub(super) fn trust_notices(&self) -> Vec<String> {
+        self.reports()
+            .into_iter()
+            .filter(|report| matches!(report.state, McpState::NeedsTrust(_)))
+            .map(|report| trust_notice(&report.name))
+            .collect()
+    }
+
     /// The resolved declaration used to name a server's credential references.
     pub(super) fn server(&self, name: &str) -> Option<&ResolvedMcpServer> {
         self.servers.get(name)
@@ -174,6 +183,16 @@ impl McpContext {
             }
         })
     }
+}
+
+pub(super) fn trust_notice(server: &str) -> String {
+    let guidance = match server.split_once(':') {
+        Some((plugin, _)) => {
+            format!("plugin `{plugin}` owns this server's trust; confirm the plugin instead")
+        }
+        None => format!("run `/mcp trust {server}`"),
+    };
+    format!("`{server}` requires interactive trust — {guidance}")
 }
 
 fn render_confirmation(confirmation: &McpConfirmation) -> String {

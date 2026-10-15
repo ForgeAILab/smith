@@ -301,6 +301,60 @@ fn matching_usage_log_restores_both_model_prices_and_keeps_the_active_binding() 
 }
 
 #[test]
+fn harness_usage_log_restores_provider_free_and_legacy_bindings() {
+    use smith_client::status::{CostLabel, SessionCost, Status};
+
+    let model = "cli/claude-code/haiku";
+    let mut observed = Status::new(model, "project");
+    observed.switch_model(Some("zai".into()), model);
+    observed.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 1_000));
+    observed.switch_model(Some("zai".into()), "glm-5.3");
+    observed.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 2_000));
+    let original = smith_client::usage_log::SessionUsageRecord::new(
+        "session",
+        observed.provider.clone(),
+        &observed.model,
+        "code",
+        &observed.session_usage(),
+    );
+    let mut external = root_record(1_000);
+    external.source = UsageSource::ExternalAgent;
+    let records = [external, root_record(2_000)];
+    for provider in [None, Some("zai".to_owned())] {
+        let mut logged = original.clone();
+        logged.bindings[0].provider = provider;
+        let mut status = Status::new(model, "project");
+        status.switch_model(Some("google".into()), model);
+        restore_usage_with_bindings(
+            &mut status,
+            &records,
+            Some(&logged),
+            [("zai", model), ("zai", "glm-5.3")],
+            |provider, model| {
+                assert_eq!(model, "glm-5.3");
+                Some(price(provider, model))
+            },
+        );
+        let usage = status.session_usage();
+        assert_eq!(usage.bindings.len(), 2);
+        assert_eq!(usage.bindings[0].provider, None);
+        assert_eq!(usage.bindings[0].model, model);
+        assert!(usage.bindings[0].price.is_none());
+        assert_eq!(usage.bindings[1].provider.as_deref(), Some("zai"));
+        assert_eq!(status.model, model);
+        assert_eq!(status.provider.as_deref(), Some("google"));
+        let retained = usage.cost_price(status.price()).expect("native price");
+        let cost = SessionCost::compute(&usage, retained);
+        assert_eq!(cost.micro_usd, 4_000);
+        assert_eq!(cost.label, CostLabel::Estimated);
+        assert_eq!(
+            retained.render_sources(&usage),
+            "price unknown for cli/claude-code/haiku · zai/glm-5.3 $0.004"
+        );
+    }
+}
+
+#[test]
 fn mismatched_or_v4_usage_log_falls_back_to_manifests() {
     let original = logged_usage();
     let mut mismatched = original.clone();

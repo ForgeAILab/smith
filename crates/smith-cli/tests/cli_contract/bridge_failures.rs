@@ -259,6 +259,126 @@ impl Drop for HarnessCleanup {
     }
 }
 
+struct McpCleanup {
+    pid: u32,
+}
+
+impl Drop for McpCleanup {
+    fn drop(&mut self) {
+        let pid = nix::unistd::Pid::from_raw(i32::try_from(self.pid).expect("MCP pid"));
+        let _ = nix::sys::signal::killpg(pid, nix::sys::signal::Signal::SIGKILL);
+        let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
+    }
+}
+
+fn wait_counting_pid(log: &Path, deadline: Deadline) -> u32 {
+    loop {
+        deadline.remaining("counting server entered its tool");
+        if let Ok(text) = std::fs::read_to_string(log.with_extension("started.jsonl"))
+            && let Some(pid) = text
+                .lines()
+                .find_map(|line| serde_json::from_str::<Value>(line).ok()?["pid"].as_u64())
+        {
+            return u32::try_from(pid).expect("counting server pid");
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn declared_stdio_shutdown(signals: &[nix::sys::signal::Signal]) {
+    let interrupt = !signals.is_empty();
+    let fixture = BridgeFixture::new(false, false);
+    let log = fixture.counting(true, false);
+    let arguments = json!({"seconds":if interrupt {60.0} else {0.1}});
+    let (script, record) = script_files(
+        fixture.smith.project.path(),
+        &json!([
+            {"call":{"tool":SLOW,"arguments":arguments}},
+            {"say":"counted before shutdown"}
+        ]),
+    );
+    let mut command = fixture.command(None, "allow-all");
+    command
+        .env("CLI_STAND_IN_SCRIPT", script)
+        .env("CLI_STAND_IN_RECORD", &record);
+    let process = Process::spawn(&mut command, fixture.deadline);
+    let pid = wait_counting_pid(&log, fixture.deadline);
+    let _cleanup = McpCleanup { pid };
+    if interrupt {
+        assert!(live(pid, fixture.deadline), "slow server is executing");
+        let server_pid = nix::unistd::Pid::from_raw(i32::try_from(pid).expect("MCP pid"));
+        let smith_pid = nix::unistd::Pid::from_raw(i32::try_from(process.id()).expect("Smith pid"));
+        assert_eq!(
+            nix::unistd::getpgid(Some(server_pid)).expect("MCP process group"),
+            nix::unistd::getpgid(Some(smith_pid)).expect("Smith process group"),
+            "the declared server shares Smith's process group, so group signals still reach it"
+        );
+        for signal in signals {
+            nix::sys::signal::kill(smith_pid, *signal).expect("interrupt sleeping MCP call");
+        }
+    }
+    // Process::finish kills Smith's fixture group. Assert the server is gone
+    // before that teardown, which otherwise masks the original stdio leak.
+    let stopped = Deadline::after(Duration::from_secs(5));
+    while live(process.id(), stopped) {
+        stopped.remaining("Smith exit after MCP call");
+        thread::sleep(Duration::from_millis(5));
+    }
+    while live(pid, stopped) {
+        stopped.remaining("declared stdio MCP server exit");
+        thread::sleep(Duration::from_millis(5));
+    }
+    let run = recorded_run(process.finish(Some(&record)), &record);
+    assert_eq!(
+        run.output.status.code(),
+        Some(i32::from(interrupt)),
+        "{:?}",
+        run.output
+    );
+    if signals.len() < 2 {
+        assert_eq!(
+            result(&run)["status"],
+            if interrupt { "cancelled" } else { "ok" }
+        );
+    }
+    if interrupt {
+        assert!(
+            log_lines(&log).is_empty(),
+            "interrupted tool never finished"
+        );
+    } else {
+        assert_eq!(log_lines(&log), [arguments]);
+    }
+}
+
+#[test]
+fn headless_interrupt_stops_declared_stdio_mcp_server() {
+    declared_stdio_shutdown(&[nix::sys::signal::Signal::SIGINT]);
+}
+
+#[test]
+fn headless_termination_signals_stop_declared_stdio_mcp_server() {
+    for signal in [
+        nix::sys::signal::Signal::SIGTERM,
+        nix::sys::signal::Signal::SIGHUP,
+    ] {
+        declared_stdio_shutdown(&[signal]);
+    }
+}
+
+#[test]
+fn headless_second_signal_stops_declared_stdio_mcp_server() {
+    declared_stdio_shutdown(&[
+        nix::sys::signal::Signal::SIGINT,
+        nix::sys::signal::Signal::SIGTERM,
+    ]);
+}
+
+#[test]
+fn headless_completion_stops_declared_stdio_mcp_server() {
+    declared_stdio_shutdown(&[]);
+}
+
 #[test]
 fn headless_interrupt_cancels_call_and_stops_harness_process_group() {
     for codex in [false, true] {

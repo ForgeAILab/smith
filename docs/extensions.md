@@ -18,6 +18,13 @@ unreviewed floor. A narrower classification must be a host-owned record bound
 to server identity, exact tool name, and schema revision. Honest destructive
 hints may raise risk but cannot replace the host floor.
 
+A declared MCP server starts only after its executable is trusted for the
+project, and until then it contributes no tools. When an interactive session
+opens or resumes, the transcript names each untrusted server once and points
+to `/mcp trust <name>`; a plugin's servers are trusted by confirming the
+plugin. A headless run leaves them stopped and reports the required trust in
+the result's `diagnostics`, or on stderr for text output.
+
 The reserved process protocol maps tool, skill, command, redaction-safe
 observer, and declarative-panel contributions into bounded messages. It must
 broker cancellation, lifecycle, filesystem handles, endpoint-scoped network,

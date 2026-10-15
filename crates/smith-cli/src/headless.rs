@@ -19,6 +19,9 @@ mod output;
 mod run_flow;
 mod signals;
 
+#[cfg(unix)]
+pub(crate) use signals::shutdown_stdio_servers;
+
 #[cfg(test)]
 pub(crate) use file_commands::prepare_prompt;
 pub(crate) use file_commands::prepare_prompt_with_config;
@@ -59,6 +62,8 @@ pub(crate) struct HeadlessBrokers<'a> {
     pub(crate) cache_price: Option<CachePrice>,
     /// Layered local notice policy.
     pub(crate) cache_miss_notices: bool,
+    /// Declared servers that cannot run until the user confirms trust.
+    pub(crate) mcp_trust_notices: &'a [String],
 }
 
 /// Applies the flag override before the resolved configuration and default.

@@ -323,9 +323,19 @@ artifact offloader is, so neither history nor the event stream recorded it.
 The runtime change now commits the cancellation result, bypassing the
 remaining processors, before the turn's terminal event (runtime task 1.8).
 
-Not addressed here: a headless shutdown does not close Smith-declared stdio
-MCP servers, so one busy in a call can outlive Smith briefly. That predates
-this change and applies to native sessions too.
+Found by the same work and fixed afterwards (task 9.6): a busy Smith-declared
+stdio MCP server could outlive Smith. Cancelling a call stops Smith's wait,
+not the server; the supervisor closes only connections no runtime still
+holds; and rmcp's child-process drop only schedules an asynchronous kill,
+which executor teardown does not finish. Smith now owns the stdio child: when
+the process exits (headless or TUI, after the session has shut down), it
+sends each server SIGTERM, waits briefly for it to exit, and kills it if it
+has not; a second signal kills the servers before the immediate exit. Servers
+stay in Smith's process group, so a signal sent to the group (a terminal
+hangup, or a kill of the whole group) still reaches them. Reconfigure still
+leaves alone a connection an in-flight call holds. If only Smith is killed by
+SIGKILL, a server still relies on exiting at stdin EOF; closing that gap would
+need a watchdog process.
 
 ### Codex resume takes its flags before the subcommand
 

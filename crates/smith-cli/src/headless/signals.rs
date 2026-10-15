@@ -1,4 +1,4 @@
-//! Headless-only signal handling, kept alive through persistence and shutdown.
+//! Headless cancellation and signal handling through process-exit cleanup.
 
 use std::cell::Cell;
 
@@ -51,6 +51,8 @@ impl StopSignals {
             self.next().await;
             if state.interrupted.replace(true) {
                 // A second signal must not wait for tool cleanup or storage.
+                #[cfg(unix)]
+                smith_runtime::mcp::kill_stdio_servers();
                 std::process::exit(1);
             }
             // Also used by the TUI's user interrupt. The normal turn driver
@@ -69,6 +71,25 @@ impl StopSignals {
         }
         #[cfg(not(unix))]
         std::future::pending::<()>().await;
+    }
+}
+
+#[cfg(unix)]
+pub(crate) async fn shutdown_stdio_servers() {
+    // Session persistence is already finished. Keep a final signal able to
+    // bypass the MCP grace period, including after the headless watcher ends.
+    let cleanup = smith_runtime::mcp::shutdown_stdio_servers();
+    if let Ok(mut signals) = StopSignals::new() {
+        tokio::select! {
+            biased;
+            _ = signals.next() => {
+                smith_runtime::mcp::kill_stdio_servers();
+                std::process::exit(1);
+            },
+            _ = cleanup => {},
+        }
+    } else {
+        cleanup.await;
     }
 }
 

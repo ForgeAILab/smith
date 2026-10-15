@@ -435,6 +435,51 @@ async fn disabled_and_profile_disabled_plugins_leave_no_composition_record() {
 }
 
 #[test]
+fn untrusted_plugin_mcp_notices_name_servers_and_require_plugin_confirmation() {
+    for state in ["untrusted", "denied", "changed", "trusted", "off"] {
+        let fixture = Fixture::new(matches!(state, "changed" | "trusted"));
+        match state {
+            "denied" => record_trust(
+                &fixture.user,
+                "deploy-tools",
+                &fixture.installed.digest,
+                TrustDecision::Deny,
+            )
+            .unwrap(),
+            "changed" => write(
+                &fixture.installed.install_directory,
+                "server.js",
+                "changed server bytes",
+            ),
+            "off" => write(
+                &fixture.user,
+                "config.toml",
+                "[plugins.deploy-tools]\nenabled = false\n",
+            ),
+            _ => {}
+        }
+        let config = fixture.config(None);
+        let plugins = fixture.active(&config);
+        let notices = plugins.mcp_trust_notices(&config);
+        if matches!(state, "trusted" | "off") {
+            assert!(notices.is_empty(), "{state}: {notices:?}");
+            continue;
+        }
+        assert!(
+            plugins.mcp_servers().is_empty(),
+            "unconfirmed servers stay inert"
+        );
+        assert_eq!(notices.len(), 1, "{state}: {notices:?}");
+        assert_eq!(
+            notices[0],
+            "`deploy-tools:local` requires interactive trust — plugin `deploy-tools` owns this server's trust; confirm the plugin instead",
+            "{state}"
+        );
+        assert!(!notices[0].contains("/mcp trust"));
+    }
+}
+
+#[test]
 fn admission_never_records_trust_and_denied_or_stale_decisions_withhold_everything() {
     let fixture = Fixture::new(false);
     let config = fixture.config(None);

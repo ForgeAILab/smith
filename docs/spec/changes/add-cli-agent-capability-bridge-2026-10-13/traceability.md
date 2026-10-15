@@ -52,8 +52,8 @@ listed too, against the tests that already cover them.
 | Smith-declared MCP servers reach a harness only through Smith | The CLI's invocation is inspected | 4 | `smith-cli / cli_contract::bridge_extensions::trusted_remote_call_executes_once_with_credential_kept_out_of_cli` |
 | Smith-declared MCP servers reach a harness only through Smith | An untrusted server | 4 | `smith-cli / cli_contract::bridge_extensions::untrusted_server_is_neither_listed_nor_callable` |
 | Smith-declared MCP servers reach a harness only through Smith | A module tool | 4 | `smith-cli / cli_contract::bridge_extensions::installed_module_tool_runs_under_confirmed_workspace_grants` |
-| Interactive sessions name untrusted servers | Session opens with an untrusted project server | 9 | _pending 9.2_ |
-| Interactive sessions name untrusted servers | Every declared server is trusted | 9 | _pending 9.2_ |
+| Interactive sessions name untrusted servers | Session opens with an untrusted project server | 9 | `smith-cli / main_tests::interactive_rebind::untrusted_mcp_notice_is_once_per_open_including_resume_without_spawning` |
+| Interactive sessions name untrusted servers | Every declared server is trusted | 9 | `smith-cli / main_tests::interactive_rebind::trusted_mcp_servers_have_no_interactive_trust_notice` |
 
 ## provider-runtime
 

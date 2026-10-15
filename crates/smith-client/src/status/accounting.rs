@@ -3,7 +3,7 @@ use super::*;
 /// cannot change their rates or measurement confidence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BindingUsage {
-    /// Absent when the host could not resolve a serving provider.
+    /// Absent for CLI agents or an unresolved serving provider.
     pub provider: Option<String>,
     /// Model identity, or a bounded explanation such as `earlier models`.
     pub model: String,
@@ -27,9 +27,16 @@ impl BindingUsage {
         model: impl Into<String>,
         price: Option<PriceReference>,
     ) -> Self {
+        let model = model.into();
+        // The CLI owns its billing; the profile's provider did not serve it.
+        let (provider, price) = if smith_config::cli_agents::parse_cli_model_id(&model).is_some() {
+            (None, None)
+        } else {
+            (provider, price)
+        };
         Self {
             provider,
-            model: model.into(),
+            model,
             totals: BTreeMap::new(),
             synthetic_by_purpose: BTreeMap::new(),
             reported: true,

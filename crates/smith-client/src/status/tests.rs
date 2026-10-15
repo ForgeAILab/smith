@@ -1001,6 +1001,86 @@ fn an_unpriced_root_binding_is_named_and_never_borrows_a_rate() {
 }
 
 #[test]
+fn harness_usage_omits_the_profile_provider_and_stays_unpriced() {
+    use agent_runtime_core::usage::Provenance;
+
+    for (provider, model) in [
+        ("zai", "cli/claude-code/haiku"),
+        ("google", "cli/claude-code/sonnet"),
+        ("zai", "cli/codex/gpt-6-astra"),
+    ] {
+        let mut status = Status::new(model, "project");
+        status.switch_model(Some(provider.to_owned()), model);
+        let reference = PriceReference {
+            provider: provider.to_owned(),
+            model: model.to_owned(),
+            ..priced(2_000_000, 8_000_000, 0, 0)
+        };
+        status.set_price(Some(reference.clone()));
+        status.record_usage_record(&UsageRecord {
+            source: UsageSource::ExternalAgent,
+            provenance: Provenance::default(),
+            delta: UsageDelta::new().with(CounterKind::InputUncached, 1_000_000),
+        });
+        let usage = status.session_usage();
+        assert_eq!(usage.bindings.len(), 1);
+        assert_eq!(usage.bindings[0].provider, None);
+        assert_eq!(usage.bindings[0].model, model);
+        assert!(usage.bindings[0].price.is_none());
+        assert!(usage.cost_price(status.price()).is_none());
+        assert_eq!(
+            reference.render_sources(&usage),
+            format!("price unknown for {model}")
+        );
+        let cost = SessionCost::compute(&usage, &reference);
+        assert_eq!(cost.micro_usd, 0);
+        assert_eq!(cost.label, CostLabel::Estimated);
+    }
+}
+
+#[test]
+fn harness_usage_keeps_native_child_and_advisor_prices_separate() {
+    let mut status = Status::new("cli/claude-code/haiku", "project");
+    status.switch_model(Some("zai".into()), "cli/claude-code/haiku");
+    status.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 1_000_000));
+    let native = PriceReference {
+        provider: "zai".into(),
+        model: "glm-5.3".into(),
+        ..priced(2_000_000, 0, 0, 0)
+    };
+    status.set_advisor_price(Some(native.clone()));
+    status.record_usage_record(&UsageRecord {
+        source: UsageSource::ProviderAttempt,
+        provenance: agent_runtime_core::usage::Provenance {
+            purpose: Some(ADVISOR_USAGE_PURPOSE.to_owned()),
+            ..Default::default()
+        },
+        delta: UsageDelta::new().with(CounterKind::InputUncached, 12_000),
+    });
+    let mut child = BindingUsage::new(Some("zai".into()), "glm-5.3", Some(native));
+    child.record(
+        &UsageDelta::new().with(CounterKind::InputUncached, 11_000),
+        true,
+    );
+    let mut usage = status.session_usage();
+    usage.bindings.push(child);
+    usage
+        .delegated_totals
+        .insert(CounterKind::InputUncached, 11_000);
+    usage.delegated_contributors = 1;
+    let price = usage
+        .cost_price(status.price())
+        .expect("native child price");
+    let cost = SessionCost::compute(&usage, price);
+    assert_eq!(cost.micro_usd, 46_000);
+    assert_eq!(cost.label, CostLabel::Estimated);
+    assert_eq!(
+        price.render_sources(&usage),
+        "price unknown for cli/claude-code/haiku · zai/glm-5.3 $0.022 · advisor zai/glm-5.3"
+    );
+}
+
+#[test]
 fn binding_confidence_survives_a_new_models_provider_report() {
     use agent_runtime_core::usage::Provenance;
     let mut status = bound_status("openai", "gpt-5.3", 2_000_000);

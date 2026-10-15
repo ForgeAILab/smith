@@ -34,7 +34,7 @@ pub const USAGE_RECORD_SCHEMA_VERSION: u32 = 5;
 /// Durable binding attribution without catalog prices or conversation content.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BindingUsageRecord {
-    /// Absent for usage whose serving binding could not be resolved.
+    /// Absent for CLI agents or an unresolved serving binding.
     pub provider: Option<String>,
     /// Serving model or the explanation for an unresolved binding.
     pub model: String,
@@ -49,7 +49,7 @@ pub struct SessionUsageRecord {
     pub schema_version: u32,
     /// Session identity.
     pub session: String,
-    /// Serving provider, when one resolved.
+    /// Serving provider, absent for CLI agents or unresolved bindings.
     pub provider: Option<String>,
     /// Model identity.
     pub model: String,
@@ -171,11 +171,14 @@ impl SessionUsageRecord {
         agent: impl Into<String>,
         usage: &SessionUsage,
     ) -> Self {
+        let model = model.into();
+        let provider =
+            provider.filter(|_| smith_config::cli_agents::parse_cli_model_id(&model).is_none());
         let mut record = Self {
             schema_version: USAGE_RECORD_SCHEMA_VERSION,
             session: session.into(),
             provider,
-            model: model.into(),
+            model,
             agent: agent.into(),
             turns: usage.turns,
             reported: usage.reported,
@@ -652,6 +655,37 @@ mod tests {
         let path = default_path(dir.path());
         std::fs::write(&path, format!("{legacy}\n")).expect("legacy log");
         assert_eq!(read_all(&path), vec![record]);
+    }
+
+    #[test]
+    fn harness_usage_records_omit_the_profile_provider() {
+        use crate::status::Status;
+        use agent_runtime_core::usage::UsageDelta;
+
+        for (provider, model) in [
+            ("zai", "cli/claude-code/haiku"),
+            ("google", "cli/claude-code/sonnet"),
+            ("zai", "cli/codex/gpt-6-astra"),
+        ] {
+            let mut status = Status::new(model, "project");
+            status.switch_model(Some(provider.to_owned()), model);
+            status.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 1_000));
+            let record = SessionUsageRecord::new(
+                "session",
+                Some(provider.to_owned()),
+                model,
+                "code",
+                &status.session_usage(),
+            );
+            assert_eq!(record.provider, None);
+            assert_eq!(record.model, model);
+            assert_eq!(record.bindings.len(), 1);
+            assert_eq!(record.bindings[0].provider, None);
+            assert_eq!(record.bindings[0].model, model);
+            let encoded = serde_json::to_string(&record).expect("encode");
+            let decoded: SessionUsageRecord = serde_json::from_str(&encoded).expect("decode");
+            assert_eq!(decoded, record);
+        }
     }
 
     #[test]

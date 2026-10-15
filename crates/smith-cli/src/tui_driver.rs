@@ -71,6 +71,7 @@ pub(super) struct PresentationOptions {
     /// A host-side outcome to confirm once the session is on screen: first-run
     /// setup's summary, or the result of an `/advisor` change.
     pub(super) host_notice: Option<String>,
+    pub(super) mcp_trust_notices: Vec<String>,
     pub(super) cache_miss_notices: bool,
 }
 

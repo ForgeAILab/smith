@@ -176,6 +176,9 @@ pub(super) fn render_status_cost(
     }
     let Some(price) = usage.cost_price(price) else {
         let (provider, model) = binding;
+        if smith_config::cli_agents::parse_cli_model_id(model).is_some() {
+            return format!("unknown · no price reference for {model}");
+        }
         return format!("unknown · no price reference for {provider}/{model}");
     };
     let cost = SessionCost::compute(usage, price);

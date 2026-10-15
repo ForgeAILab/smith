@@ -636,6 +636,35 @@ mod usage_binding_tests {
     }
 
     #[test]
+    fn harness_child_usage_omits_the_profile_provider_and_stays_unpriced() {
+        let mut app = App::new("glm-5.3", "project");
+        let root = price("zai", "glm-5.3", 2_000_000);
+        app.status.switch_model(Some("zai".into()), "glm-5.3");
+        app.status.set_price(Some(root.clone()));
+        app.status
+            .record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 1_000));
+        app.set_child_usage_binding(
+            "child",
+            Some(BindingUsage::new(
+                Some("google".into()),
+                "cli/claude-code/sonnet",
+                Some(price("google", "cli/claude-code/sonnet", 10_000_000)),
+            )),
+        );
+        child_usage(&mut app, "child", 100_000);
+        let usage = app.session_usage();
+        assert_eq!(usage.total_tokens(), 1_000);
+        assert_eq!(usage.delegated_totals[&CounterKind::InputUncached], 100_000);
+        let cost = SessionCost::compute(&usage, &root);
+        assert_eq!(cost.micro_usd, 2_000);
+        assert_eq!(cost.label, CostLabel::Estimated);
+        assert_eq!(
+            root.render_sources(&usage),
+            "zai/glm-5.3 $0.002 · price unknown for cli/claude-code/sonnet"
+        );
+    }
+
+    #[test]
     fn a_known_child_without_catalog_rates_is_named_without_root_rates() {
         let mut app = App::new("glm-5.3", "project");
         let root = price("zai", "glm-5.3", 2_000_000);

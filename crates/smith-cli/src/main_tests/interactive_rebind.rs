@@ -149,6 +149,13 @@ dialect = "openai-effort"
         } else {
             Default::default()
         };
+        let mcp = crate::mcp::McpContext::start(
+            &resolution.config,
+            &resolution.layout.user_dir,
+            self.project.path(),
+            None,
+        )
+        .expect("MCP context");
         let mut runtime = RuntimeRequest {
             modules,
             semantic_summary: modular
@@ -158,6 +165,7 @@ dialect = "openai-effort"
             )),
             approval: Some(Arc::new(agent_runtime_core::approval::AllowAll)),
             provider: Some(provider),
+            mcp: mcp.as_ref().map(|context| context.supervisor()),
             skills: sources,
             clock: Some(Arc::new(fixture_support::FixedClock)),
             ..RuntimeRequest::new(resolution.config, HostSurface::Terminal)
@@ -182,7 +190,7 @@ dialect = "openai-effort"
                 sessions: Vec::new(),
                 credential_pool: None,
                 catalog: self.catalog.clone(),
-                mcp: None,
+                mcp,
                 skills: Arc::new(skills),
                 commands: Arc::new(
                     local_command::file_commands::CommandContext::discover(
@@ -212,6 +220,10 @@ dialect = "openai-effort"
                 no_motion: true,
                 reasoning_notice,
                 host_notice: None,
+                mcp_trust_notices: resources
+                    .mcp
+                    .as_ref()
+                    .map_or_else(Vec::new, |context| context.trust_notices()),
                 cache_miss_notices: true,
             },
             previous,
@@ -433,6 +445,162 @@ fn assert_notice(app: &App, source: &str, expected: &str) {
         "{:?}",
         app.transcript.blocks().last(),
     );
+}
+
+fn mcp_notices(app: &App) -> Vec<&str> {
+    app.transcript
+        .blocks()
+        .iter()
+        .filter_map(|block| match block {
+            Block::Notice {
+                kind: NoticeKind::Mcp,
+                text,
+            } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn untrusted_mcp_notice_is_once_per_open_including_resume_without_spawning() {
+    let fixture = Fixture::new();
+    let marker = fixture.project.path().join("mcp-started");
+    let config_path = fixture.project.path().join(".smith/config.toml");
+    let config = std::fs::read_to_string(&config_path).expect("config");
+    let args = serde_json::json!(["-c", "touch \"$1\"", "mcp-test", marker]);
+    std::fs::write(
+        &config_path,
+        format!(
+            "{config}\n[mcp.servers.docs]\ncommand = \"/bin/sh\"\nargs = {args}\n\
+                 [mcp.servers.wiki]\ncommand = \"wiki-mcp\"\n"
+        ),
+    )
+    .expect("MCP config");
+
+    let (host, resources) = Box::pin(fixture.start(None, Overrides::default())).await;
+    let previous = Box::pin(fixture.app(&host, &resources, None, None)).await;
+    let notices = mcp_notices(&previous.app);
+    assert_eq!(notices.len(), 1, "one startup notice");
+    for server in ["docs", "wiki"] {
+        assert!(notices[0].contains(&format!("`{server}`")), "{notices:?}");
+        assert_eq!(
+            notices[0].matches(&format!("/mcp trust {server}")).count(),
+            1
+        );
+    }
+    assert!(previous.app.overlay.is_none(), "no trust prompt");
+    assert!(!marker.exists(), "untrusted server was spawned");
+    let startup_len = previous.app.transcript.len();
+    let startup_blocks = format!("{:?}", previous.app.transcript.blocks());
+    Box::pin(finish_turn(&host, "save this session")).await;
+    let session = host.session().id().clone();
+    Box::pin(host.shutdown()).await.expect("shutdown");
+
+    let (host, resources) = Box::pin(fixture.start(
+        Some(session.clone()),
+        Overrides {
+            model: Some("next-model".into()),
+            ..Overrides::default()
+        },
+    ))
+    .await;
+    let rebound = Box::pin(fixture.app(&host, &resources, Some(previous), None)).await;
+    assert_eq!(
+        format!("{:?}", &rebound.app.transcript.blocks()[..startup_len]),
+        startup_blocks
+    );
+    assert_eq!(
+        mcp_notices(&rebound.app).len(),
+        1,
+        "no repeat on model rebuild"
+    );
+    assert!(!marker.exists(), "rebuild spawned an untrusted server");
+    Box::pin(host.shutdown()).await.expect("shutdown");
+
+    let (host, resources) = Box::pin(fixture.start(Some(session), Overrides::default())).await;
+    let resumed = Box::pin(fixture.app(&host, &resources, None, None)).await;
+    assert_eq!(
+        mcp_notices(&resumed.app).len(),
+        1,
+        "one notice on cold resume"
+    );
+    assert!(mcp_notices(&resumed.app)[0].contains("/mcp trust docs"));
+    assert!(resumed.app.overlay.is_none());
+    assert!(!marker.exists(), "resume spawned an untrusted server");
+    assert!(
+        resources
+            .mcp
+            .as_ref()
+            .unwrap()
+            .supervisor()
+            .tools()
+            .is_empty()
+    );
+    let context = resources.mcp.as_ref().unwrap();
+    context.trust("docs").expect("explicit trust");
+    context.supervisor().settle(Duration::from_secs(5)).await;
+    assert!(
+        marker.exists(),
+        "the server starts only after explicit trust"
+    );
+    Box::pin(host.shutdown()).await.expect("shutdown");
+    context.supervisor().shutdown().await;
+}
+
+#[tokio::test]
+async fn trusted_mcp_servers_have_no_interactive_trust_notice() {
+    let fixture = Fixture::new();
+    let config_path = fixture.project.path().join(".smith/config.toml");
+    let config = std::fs::read_to_string(&config_path).expect("config");
+    std::fs::write(
+        &config_path,
+        format!("{config}\n[mcp.servers.docs]\ncommand = \"smith-mcp-notice-fixture\"\n"),
+    )
+    .expect("MCP config");
+    let resolution = resolve(
+        &ResolveRequest::new(fixture.project.path())
+            .with_known_modules(crate::modules::known_modules())
+            .with_home_dir(fixture.home.path()),
+    )
+    .expect("resolution");
+    smith_config::trust::TrustStore::open(&resolution.layout.user_dir)
+        .expect("trust store")
+        .record(
+            fixture.project.path(),
+            &smith_config::mcp::executable(&resolution.config.mcp.servers["docs"]),
+            smith_config::trust::TrustDecision::Allow,
+        )
+        .expect("trust decision");
+
+    let (host, resources) = Box::pin(fixture.start(None, Overrides::default())).await;
+    let app = Box::pin(fixture.app(&host, &resources, None, None)).await;
+    assert!(mcp_notices(&app.app).is_empty());
+    Box::pin(finish_turn(&host, "save this trusted session")).await;
+    let session = host.session().id().clone();
+    Box::pin(host.shutdown()).await.expect("shutdown");
+    resources
+        .mcp
+        .as_ref()
+        .unwrap()
+        .supervisor()
+        .shutdown()
+        .await;
+
+    let (host, resources) = Box::pin(fixture.start(Some(session), Overrides::default())).await;
+    let app = Box::pin(fixture.app(&host, &resources, None, None)).await;
+    assert!(
+        mcp_notices(&app.app).is_empty(),
+        "no notice on trusted resume"
+    );
+    Box::pin(host.shutdown()).await.expect("shutdown");
+    resources
+        .mcp
+        .as_ref()
+        .unwrap()
+        .supervisor()
+        .shutdown()
+        .await;
 }
 
 #[tokio::test]

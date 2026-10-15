@@ -38,12 +38,24 @@ pub(super) async fn run_with_io(
     stdout: &mut impl Write,
     stderr: &mut impl Write,
 ) -> Result<Outcome> {
-    let mut signals = StopSignals::new().context("installing headless signal handlers")?;
+    let mut signals = match StopSignals::new().context("installing headless signal handlers") {
+        Ok(signals) => signals,
+        Err(error) => {
+            let _ = host.shutdown().await;
+            return Err(error);
+        }
+    };
     let stop = StopState::default();
     tokio::select! {
         biased;
         _ = signals.watch(host, &stop) => unreachable!("signal watcher runs until exit"),
-        result = run_inner(host, prompt, format, brokers, background_exit, stdout, stderr, &stop) => result,
+        result = async {
+            let result = run_inner(host, prompt, format, brokers, background_exit, stdout, stderr, &stop).await;
+            // Also cover early rendering/submission errors. Shutdown is
+            // idempotent when the normal result path already drained it.
+            let _ = host.shutdown().await;
+            result
+        } => result,
     }
 }
 
@@ -65,6 +77,7 @@ async fn run_inner(
         credential_pool,
         cache_price,
         cache_miss_notices,
+        mcp_trust_notices,
     } = brokers;
     if let Some(restored) = host.restored_interaction() {
         let required = interaction
@@ -74,7 +87,15 @@ async fn run_inner(
                 request_id: restored.request_id().as_str().to_owned(),
                 question_count: restored.question_count(),
             });
-        return write_restored_interaction_required(host, format, required, stdout, stderr).await;
+        return write_restored_interaction_required(
+            host,
+            format,
+            required,
+            stdout,
+            stderr,
+            mcp_trust_notices.to_vec(),
+        )
+        .await;
     }
 
     let session = host.session();
@@ -90,7 +111,15 @@ async fn run_inner(
     let turn = match session.send(UserInput::text(prompt)) {
         Ok(turn) => turn,
         Err(error) => {
-            return write_submission_failure(host, format, stdout, stderr, error.to_string()).await;
+            return write_submission_failure(
+                host,
+                format,
+                stdout,
+                stderr,
+                error.to_string(),
+                mcp_trust_notices.to_vec(),
+            )
+            .await;
         }
     };
     let turn_id = turn.id().clone();
@@ -281,6 +310,10 @@ async fn run_inner(
         )
     };
 
+    let mut diagnostics = mcp_trust_notices.to_vec();
+    if matches!(fold.finish, Some(TurnFinish::Completed)) {
+        diagnostics.extend(fold.diagnostics);
+    }
     let result = ResultEnvelope {
         schema_version: OUTPUT_SCHEMA_VERSION,
         kind: "result",
@@ -309,11 +342,7 @@ async fn run_inner(
         reasoning: Some(ReasoningOutput::of(&host.runtime().policy().reasoning)),
         cache: fold.cache,
         resume_capsule,
-        diagnostics: if matches!(fold.finish, Some(TurnFinish::Completed)) {
-            fold.diagnostics
-        } else {
-            Vec::new()
-        },
+        diagnostics,
         error: error.clone(),
     };
 
@@ -427,6 +456,7 @@ pub(super) async fn write_restored_interaction_required(
     required: InteractionRequired,
     stdout: &mut impl Write,
     stderr: &mut impl Write,
+    diagnostics: Vec<String>,
 ) -> Result<Outcome> {
     let restored = host
         .restored_interaction()
@@ -475,7 +505,7 @@ pub(super) async fn write_restored_interaction_required(
         reasoning: Some(ReasoningOutput::of(&host.runtime().policy().reasoning)),
         cache,
         resume_capsule,
-        diagnostics: Vec::new(),
+        diagnostics,
         error: shutdown_error,
     };
 
@@ -510,6 +540,7 @@ pub(super) async fn write_submission_failure(
     stdout: &mut impl Write,
     stderr: &mut impl Write,
     submission_error: String,
+    diagnostics: Vec<String>,
 ) -> Result<Outcome> {
     let session = host.session();
     let final_goal = host.goal().ok().flatten();
@@ -560,7 +591,7 @@ pub(super) async fn write_submission_failure(
         reasoning: Some(ReasoningOutput::of(&host.runtime().policy().reasoning)),
         cache,
         resume_capsule,
-        diagnostics: Vec::new(),
+        diagnostics,
         error: Some(error.clone()),
     };
 

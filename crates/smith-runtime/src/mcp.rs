@@ -44,6 +44,11 @@ use smith_config::resolve::{
 };
 use smith_config::trust::{TrustStatus, TrustStore};
 
+#[cfg(unix)]
+mod stdio;
+#[cfg(unix)]
+pub use stdio::{kill_stdio_servers, shutdown_stdio_servers};
+
 /// How long a server has to become ready before it is written off.
 pub const DEFAULT_STARTUP_TIMEOUT_MS: u64 = 30_000;
 
@@ -235,7 +240,23 @@ pub struct ClientConnector;
 #[async_trait]
 impl McpConnector for ClientConnector {
     async fn connect(&self, config: &McpServerConfig) -> Result<McpConnected, McpError> {
-        let (connection, bindings, rejected) = McpClient::new().connect_and_bind(config).await?;
+        #[cfg(unix)]
+        let connection = match &config.transport {
+            McpTransport::Stdio { .. } => {
+                let transport = stdio::spawn(config).map_err(|error| McpError::Startup {
+                    server: config.name.clone(),
+                    reason: error.to_string(),
+                })?;
+                McpClient::new()
+                    .connect_over(config.name.clone(), transport, config.startup_timeout)
+                    .await?
+            }
+            _ => McpClient::new().connect(config).await?,
+        };
+        #[cfg(not(unix))]
+        let connection = McpClient::new().connect(config).await?;
+        let advertised = connection.list_tools().await?;
+        let (bindings, rejected) = agent_runtime_mcp::client::bind_all(config, &advertised);
         let connection = Arc::new(connection);
         let tools = bindings
             .into_iter()

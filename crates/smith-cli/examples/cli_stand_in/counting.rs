@@ -58,7 +58,7 @@ pub(crate) fn serve(args: &[String]) -> Result<()> {
                         .open(log.with_extension("started.jsonl"))?;
                     serde_json::to_writer(
                         &mut started,
-                        &json!({"tool":name,"arguments":arguments,
+                        &json!({"tool":name,"arguments":arguments,"pid":std::process::id(),
                         "authenticated":std::env::var("BRIDGE_TEST_TOKEN").ok().as_deref()
                             == Some("bridge-secret-must-not-reach-cli")}),
                     )?;

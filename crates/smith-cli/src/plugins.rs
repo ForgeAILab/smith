@@ -368,6 +368,31 @@ impl ActivePlugins {
             .collect()
     }
 
+    /// Name withheld servers without admitting their unconfirmed plugin.
+    pub(crate) fn mcp_trust_notices(&self, config: &ResolvedConfig) -> Vec<String> {
+        self.entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry.status,
+                    PluginStatus::Changed | PluginStatus::Untrusted(_)
+                )
+            })
+            .filter_map(|entry| {
+                let inventory = entry.inventory.as_ref()?;
+                let enabled = config
+                    .plugins
+                    .get(&entry.installed.name)
+                    .map_or(inventory.manifest.default_enabled, |plugin| {
+                        plugin.enabled.value
+                    });
+                enabled.then_some(inventory)
+            })
+            .flat_map(|inventory| &inventory.mcp_servers)
+            .map(|server| crate::mcp::trust_notice(&server.name))
+            .collect()
+    }
+
     /// Content evidence grants no capabilities. MCP evidence is supplied by
     /// the supervisor through the existing harness MCP-record path.
     pub(crate) fn modules(&self) -> Result<Vec<ModuleSpec>> {

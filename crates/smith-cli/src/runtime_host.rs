@@ -68,6 +68,8 @@ pub(super) struct StartedHost {
     pub(super) catalog: Arc<smith_config::catalog::CatalogSnapshot>,
     /// Declared MCP servers and their connections, when any are declared.
     pub(super) mcp: Option<Arc<crate::mcp::McpContext>>,
+    /// Trust guidance for declared servers, including withheld plugin servers.
+    pub(super) mcp_trust_notices: Vec<String>,
     /// The skills this composition indexed, and the files it refused.
     pub(super) skills: Arc<crate::skills::SkillContext>,
     /// File commands retained for this host composition.
@@ -283,6 +285,10 @@ async fn start_host_with_modules(
     if let Some(context) = &mcp {
         runtime.mcp = Some(context.supervisor());
     }
+    let mut mcp_trust_notices = mcp
+        .as_ref()
+        .map_or_else(Vec::new, |context| context.trust_notices());
+    mcp_trust_notices.extend(plugins.mcp_trust_notices(&resolution.config));
 
     let mut root_plugins = plugins.profile(
         &resolution.config,
@@ -583,6 +589,7 @@ async fn start_host_with_modules(
         sessions,
         catalog,
         mcp,
+        mcp_trust_notices,
         skills: skill_context,
         commands,
         cache_miss_notices,
@@ -868,6 +875,7 @@ async fn run_interactive_hosts(
             credential_pool,
             accounts,
             mcp: started_mcp,
+            mcp_trust_notices,
             skills,
             commands,
             cache_miss_notices,
@@ -916,6 +924,7 @@ async fn run_interactive_hosts(
                 no_motion: args.no_motion,
                 reasoning_notice: reasoning_notice.take(),
                 host_notice: host_notice.take(),
+                mcp_trust_notices,
                 cache_miss_notices,
             },
         )
@@ -1393,6 +1402,59 @@ mod tests {
             ),
             "~$2.000 estimated · openai/gpt-5.3 · advisor price unknown"
         );
+    }
+
+    #[test]
+    fn harness_cost_lines_omit_the_profile_provider() {
+        use agent_runtime_core::usage::UsageDelta;
+        use smith_client::status::{BindingUsage, Status};
+
+        for (provider, model) in [
+            ("zai", "cli/claude-code/haiku"),
+            ("google", "cli/claude-code/sonnet"),
+            ("zai", "cli/codex/gpt-6-astra"),
+        ] {
+            let mut status = Status::new(model, "project");
+            status.switch_model(Some(provider.to_owned()), model);
+            status.record_usage(&UsageDelta::new().with(CounterKind::InputUncached, 1_000));
+            let mut usage = status.session_usage();
+            assert_eq!(render_exit_cost_line(&usage, None), None);
+            assert_eq!(
+                crate::local_command::render_status_cost(&usage, None, (provider, model)),
+                format!("unknown · no price reference for {model}")
+            );
+
+            let native = PriceReference {
+                provider: "zai".into(),
+                model: "glm-5.3".into(),
+                ..price()
+            };
+            let mut child = BindingUsage::new(Some("zai".into()), "glm-5.3", Some(native.clone()));
+            child.record(
+                &UsageDelta::new().with(CounterKind::InputUncached, 11_000),
+                true,
+            );
+            usage.bindings.push(child);
+            usage
+                .delegated_totals
+                .insert(CounterKind::InputUncached, 11_000);
+            usage.delegated_contributors = 1;
+            usage
+                .advisor_totals
+                .insert(CounterKind::InputUncached, 12_000);
+            usage.advisor_price = Some(native);
+            let expected = format!(
+                "~$0.046 estimated · price unknown for {model} · zai/glm-5.3 $0.022 · advisor zai/glm-5.3"
+            );
+            assert_eq!(
+                render_exit_cost_line(&usage, None).as_deref(),
+                Some(expected.as_str())
+            );
+            assert_eq!(
+                crate::local_command::render_status_cost(&usage, None, (provider, model)),
+                expected
+            );
+        }
     }
 
     #[test]

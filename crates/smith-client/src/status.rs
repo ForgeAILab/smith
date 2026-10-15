@@ -645,6 +645,8 @@ impl Status {
     /// catalog carries no price entry for the active model — never a price
     /// substituted from another model, provider, or a hard-coded default.
     pub fn set_price(&mut self, price: Option<PriceReference>) {
+        let price =
+            price.filter(|_| smith_config::cli_agents::parse_cli_model_id(&self.model).is_none());
         if let Some(binding) = &mut self.active_binding {
             if !binding.has_usage() {
                 binding.price = price.clone();
