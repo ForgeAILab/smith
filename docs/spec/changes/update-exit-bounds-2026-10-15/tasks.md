@@ -65,4 +65,12 @@ completed_at:
 - [x] 5.1 `DESIGN.md` (modal list, confirmation list, `/quit` row,
   background task paragraph), `docs/headless-protocol.md` (exit deadline),
   `docs/extensions.md` (watchdog).
+- [x] 5.3 Live checks, debug build, owner's real config, `zai/glm-5.3`,
+  tmux 120x40 (2026-10-15): `/quit` during a streaming turn exited in 0.35 s
+  with `stopped: the running turn`, and the session resumed headless with
+  `status: ok`; SIGTERM to the TUI mid-turn exited in 0.17 s with the
+  summary and the terminal back in canonical mode; with a scratch stdio MCP
+  server mid-call (`wait`, 120 s), SIGKILL to Smith left no server or
+  watchdog 0.15 s later. Process tree was Smith → `mcp-watchdog --parent
+  <smith>` → server, one process group.
 - [ ] 5.2 Close issue #4 with the commit references once CI is green.
