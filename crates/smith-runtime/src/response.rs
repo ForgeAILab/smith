@@ -158,6 +158,7 @@ impl Stream for ReasoningOnlyTextStream {
                         }
                         ProviderStreamEvent::Finish { .. } => Action::Preserve,
                         ProviderStreamEvent::Usage { .. }
+                        | ProviderStreamEvent::HostedSearch { .. }
                         | ProviderStreamEvent::CacheObservation { .. }
                         | ProviderStreamEvent::RateLimit { .. }
                         | ProviderStreamEvent::Downgrade { .. }
@@ -359,6 +360,29 @@ mod tests {
                     text: "visible once".into()
                 },
                 usage,
+                finish(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn hosted_search_keeps_its_order_when_reasoning_is_reclassified() {
+        let search = ProviderStreamEvent::HostedSearch {
+            query: Some("rust docs".into()),
+            sources: Vec::new(),
+        };
+        let events = replay(
+            vec![reasoning("visible once", false), search.clone(), finish()],
+            Some(ReasoningOnlyBehavior::Text),
+        )
+        .await;
+        assert_eq!(
+            events,
+            vec![
+                ProviderStreamEvent::TextDelta {
+                    text: "visible once".into()
+                },
+                search,
                 finish(),
             ]
         );

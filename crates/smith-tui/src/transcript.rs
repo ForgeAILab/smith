@@ -158,6 +158,13 @@ pub enum Block {
         /// [`Transcript::enrich_tool_call`].
         enrichment: Vec<String>,
     },
+    /// A provider-executed search, independent of function tool calls.
+    HostedSearch {
+        /// Bounded query text.
+        query: String,
+        /// Deduplicated, bounded source host summary.
+        hosts: String,
+    },
     /// A structured error.
     Error {
         /// The redacted message.
@@ -231,6 +238,16 @@ impl PartialEq for Block {
                     && r1 == r2
                     && e1 == e2
             }
+            (
+                Self::HostedSearch {
+                    query: q1,
+                    hosts: h1,
+                },
+                Self::HostedSearch {
+                    query: q2,
+                    hosts: h2,
+                },
+            ) => q1 == q2 && h1 == h2,
             (Self::Error { message: m1 }, Self::Error { message: m2 }) => m1 == m2,
             (Self::Notice { kind: s1, text: t1 }, Self::Notice { kind: s2, text: t2 }) => {
                 s1 == s2 && t1 == t2
@@ -239,6 +256,17 @@ impl PartialEq for Block {
             _ => false,
         }
     }
+}
+
+/// A hosted search restored from the event journal at a history boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoredHostedSearch {
+    /// History index before which this row is inserted.
+    pub anchor: usize,
+    /// Query reported by the provider.
+    pub query: Option<String>,
+    /// Public source metadata.
+    pub sources: Vec<smith_runtime::client::SmithHostedSource>,
 }
 
 /// The ordered transcript.
@@ -406,6 +434,44 @@ impl Transcript {
             redacted: delta_redacted,
             open: true,
         });
+    }
+
+    /// Records a hosted-search activity row without inventing a tool call.
+    pub fn push_hosted_search(
+        &mut self,
+        query: Option<&str>,
+        sources: &[smith_runtime::client::SmithHostedSource],
+    ) {
+        let query = limits::bound_result_preview(query.unwrap_or_default())
+            .unwrap_or_default()
+            .chars()
+            .take(400)
+            .collect();
+        let mut hosts = Vec::new();
+        for source in sources {
+            // Sources are public provider metadata; retain only their host.
+            let Ok(url) = url::Url::parse(&source.url) else {
+                continue;
+            };
+            if !matches!(url.scheme(), "http" | "https") {
+                continue;
+            }
+            let Some(host) = url.host_str() else {
+                continue;
+            };
+            let host = host.to_ascii_lowercase();
+            if !hosts.contains(&host) {
+                hosts.push(host);
+            }
+        }
+        let extra = hosts.len().saturating_sub(5);
+        hosts.truncate(5);
+        if extra > 0 {
+            hosts.push(format!("+{extra} more"));
+        }
+        let hosts = limits::bound_result_preview(&hosts.join(", ")).unwrap_or_default();
+        self.close_open();
+        self.push_block(Block::HostedSearch { query, hosts });
     }
 
     /// Records a requested tool call.

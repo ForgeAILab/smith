@@ -100,7 +100,14 @@ pub(in crate::factory) async fn prepare_vision_route(
 ) -> Result<Option<crate::vision::VisionRoute>, FactoryError> {
     if request.config.model_image_input.value == smith_config::resolve::ImageInput::Accepts
         || !request.built_in_tools
-        || request.config.agent.active_posture().is_read_only()
+        || (request.config.agent.active_posture().is_read_only()
+            && !request
+                .config
+                .agent
+                .read_only_network_modules
+                .value
+                .iter()
+                .any(|id| id == "vision"))
         || !request.modules.enabled.contains("vision")
         || !request
             .modules
@@ -200,6 +207,7 @@ pub(in crate::factory) async fn prepare_child_profile_routes(
         let mut route_request = RuntimeRequest::new(child.config.clone(), HostSurface::Child);
         // Child harnesses use the same host-owned Smith binary as the root.
         route_request.smith_executable = request.smith_executable.clone();
+        route_request.web_search_session = request.web_search_session.clone();
         route_request.project_instructions = project_instructions.cloned();
         route_request.modules = super::super::modules::for_config(&request.modules, &child.config);
         route_request.vision_profile = child.vision_profile.clone();
@@ -275,6 +283,14 @@ pub(in crate::factory) async fn prepare_child_profile_routes(
             }
             None => provider,
         };
+        let web = super::super::web::prepare(
+            &route_request,
+            provider
+                .capabilities(&model)
+                .map(|caps| caps.hosted_web_search)
+                .unwrap_or(false),
+        )
+        .await;
         let agent_profile = &route_request.config.agent.profile;
         let prompt_context = DynamicPromptContext {
             project_instructions: project_instructions.cloned(),
@@ -316,6 +332,15 @@ pub(in crate::factory) async fn prepare_child_profile_routes(
         let replaced = routes.insert(
             route_key.clone(),
             SmithChildRoute {
+                hosted_tools: web.hosted,
+                web_diagnostic: web.diagnostic,
+                read_only_network_modules: route_request
+                    .config
+                    .agent
+                    .read_only_network_modules
+                    .value
+                    .clone(),
+                web_search_session: request.web_search_session.clone(),
                 provider,
                 provider_name,
                 provider_kind,
@@ -336,6 +361,7 @@ pub(in crate::factory) async fn prepare_child_profile_routes(
                 modules: route_request.modules.clone(),
                 module_context: super::super::modules::context(
                     &route_request,
+                    web.settings,
                     image_binding.map(|binding| smith_module::ImageBinding {
                         endpoint: binding.endpoint,
                         target: binding.target,

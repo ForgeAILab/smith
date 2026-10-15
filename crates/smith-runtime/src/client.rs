@@ -113,6 +113,17 @@ pub struct SmithUsage {
     pub record: UsageRecord,
 }
 
+/// Public source found by provider-hosted web search.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SmithHostedSource {
+    /// Source title, when the provider reported one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Source URL.
+    #[serde(default)]
+    pub url: String,
+}
+
 /// Smith-owned event envelope. `schema_version` preserves the canonical wire
 /// value for existing machine-output compatibility; the Smith protocol version
 /// is negotiated with [`SMITH_CLIENT_PROTOCOL_VERSION`].
@@ -190,6 +201,15 @@ impl SmithEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum SmithEventKind {
+    /// A provider-hosted web search and its public sources.
+    HostedSearch {
+        /// Query, when the provider reported one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+        /// Sources found by the search, empty when none were reported.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        sources: Vec<SmithHostedSource>,
+    },
     SessionStarted,
     TurnStarted,
     TurnSteerCommitted {
@@ -668,6 +688,13 @@ mod tests {
         }
 
         assert_projections!(
+            HostedSearch {
+                query: Some("rust docs".into()),
+                sources: vec![agent_runtime_core::provider::HostedSource {
+                    title: Some("Rust".into()),
+                    url: "https://doc.rust-lang.org/".into(),
+                }],
+            },
             SessionStarted,
             TurnStarted,
             TurnSteerCommitted {
@@ -971,6 +998,60 @@ mod tests {
                 error: RuntimeError::internal("failed"),
             },
             SessionShutdown,
+        );
+    }
+
+    #[test]
+    fn hosted_search_projection_preserves_sources_and_defaults() {
+        let canonical = CanonicalEvent::new(
+            1,
+            EventId::new("event"),
+            SessionId::new("session"),
+            Some(TurnId::new("turn")),
+            Timestamp::ZERO,
+            RuntimeEvent::HostedSearch {
+                query: Some("rust docs".into()),
+                sources: vec![
+                    agent_runtime_core::provider::HostedSource {
+                        title: Some("Rust".into()),
+                        url: "https://doc.rust-lang.org/".into(),
+                    },
+                    agent_runtime_core::provider::HostedSource {
+                        title: None,
+                        url: "https://docs.rs/".into(),
+                    },
+                ],
+            },
+        );
+        let projected = SmithEvent::project(&canonical).unwrap();
+        assert_eq!(
+            projected.payload,
+            SmithEventKind::HostedSearch {
+                query: Some("rust docs".into()),
+                sources: vec![
+                    SmithHostedSource {
+                        title: Some("Rust".into()),
+                        url: "https://doc.rust-lang.org/".into(),
+                    },
+                    SmithHostedSource {
+                        title: None,
+                        url: "https://docs.rs/".into(),
+                    },
+                ],
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&projected).unwrap(),
+            serde_json::to_value(&canonical).unwrap()
+        );
+        let kind: SmithEventKind =
+            serde_json::from_value(serde_json::json!({"event": "hosted_search"})).unwrap();
+        assert_eq!(
+            kind,
+            SmithEventKind::HostedSearch {
+                query: None,
+                sources: Vec::new(),
+            }
         );
     }
 

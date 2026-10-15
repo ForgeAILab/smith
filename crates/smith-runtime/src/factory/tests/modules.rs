@@ -1196,3 +1196,5 @@ async fn a_child_rebuild_omits_disabled_wasm_schemas_without_disabling_siblings(
         "parent or sibling failures must not hide a healthy child's tool"
     );
 }
+
+mod web;

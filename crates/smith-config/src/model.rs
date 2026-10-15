@@ -18,7 +18,7 @@
 //!
 //! Nothing in this module reads a secret, runs a command, or touches the
 //! network. A `credential` is a reference string whose *shape* is validated
-//! during resolution. An `api_key` is accepted only from user configuration
+//! during resolution. A provider `api_key` is accepted only from user configuration
 //! and is secret-bearing from deserialization onward.
 
 use std::collections::BTreeMap;
@@ -27,6 +27,10 @@ use std::fmt;
 use agent_runtime_core::store::Secret;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
+
+mod web;
+
+pub use web::{WebFetchSection, WebSearchBackend, WebSearchMode, WebSearchSection};
 
 /// A plaintext value present in owner-only user configuration.
 ///
@@ -241,6 +245,9 @@ pub struct ConfigFile {
     /// Stable order used by idle-composer agent cycling.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_order: Option<Vec<String>>,
+    /// User-owned policy for read-only agent postures: `[agent]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentSection>,
     /// Named root-agent modes: `[agent_modes.<name>]`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub agent_modes: BTreeMap<String, AgentModeSection>,
@@ -469,9 +476,24 @@ pub struct PluginSection {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ToolsSection {
+    /// Web fetch settings under `[tools.web_fetch]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_fetch: Option<WebFetchSection>,
+    /// Web search settings under `[tools.web_search]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_search: Option<WebSearchSection>,
     /// Image generation settings under `[tools.image_generation]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_generation: Option<ImageGenerationSection>,
+}
+
+/// User-owned policy for read-only agent postures.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentSection {
+    /// Reviewed network modules allowed in read-only postures; defaults to web and vision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_only_network_modules: Option<Vec<String>>,
 }
 
 /// Image-generation tool settings.
@@ -983,6 +1005,9 @@ pub struct AutoApprovalRuleSection {
     pub revision: u32,
     /// Module-qualified tool identity, for example `smith/edit`.
     pub tool: String,
+    /// Exact host resource for a web fetch, for example `web:docs.rs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<String>,
     /// Exact prepared operations this rule covers.
     pub operations: Vec<AutoApprovalOperation>,
     /// Maximum typed permissions the prepared call may request.

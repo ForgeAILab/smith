@@ -2,6 +2,49 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn web_fetch_summary_uses_only_the_final_response_header() {
+    let display =
+        project_tool_call_display("web_fetch", &json!({"url": "https://docs.rs/old"})).unwrap();
+    for header in [
+        "URL: https://docs.rs/serde/ | Status: 200 | Content-Type: text/html | Title: Serde",
+        "URL: https://docs.rs/serde/ | Status: 200 | Content-Type: text/html; charset=utf-8 | Title: Serde",
+    ] {
+        assert_eq!(
+            display.result_summary(&format!(
+                "{header}\n\nContent from https://docs.rs/serde/ (external, untrusted):\nbody"
+            )),
+            Some("200 text/html".to_owned())
+        );
+    }
+    for output in [
+        "request failed",
+        "https://docs.rs/serde/ | 200 | text/html",
+        "URL: https://docs.rs/serde/ | Status: 999 | Content-Type: text/html | Title: Serde",
+        "URL: https://docs.rs/serde/ | Status: 200 | Content-Type: PRIVATE | Title: Serde",
+        "URL: https://docs.rs/serde/ | Status: 200 | Content-Type: text/\u{202e}html | Title: Serde",
+        "body\nhttps://docs.rs/serde/ | 200 | text/html | Serde",
+    ] {
+        assert_eq!(display.result_summary(output), None);
+    }
+}
+
+#[test]
+fn web_search_summary_uses_the_reviewed_result_count_header() {
+    let display = project_tool_call_display("web_search", &json!({"query": "serde"})).unwrap();
+    for count in [0, 1, 5, 10] {
+        assert_eq!(
+            display.result_summary(&format!(
+                "{count} results\n\nContent from https://html.duckduckgo.com/html/ (external, untrusted):\nbody"
+            )),
+            Some(format!("{count} results"))
+        );
+    }
+    for output in ["", "request failed", "11 results", "body\n5 results"] {
+        assert_eq!(display.result_summary(output), None);
+    }
+}
+
+#[test]
 fn reviewed_labels_survive_protected_arguments() {
     for (name, label) in [
         ("shell", "Bash"),

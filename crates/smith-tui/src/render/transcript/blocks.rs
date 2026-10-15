@@ -200,6 +200,15 @@ pub(super) fn block_lines(
                 }
             }
 
+            Block::HostedSearch { query, hosts } => {
+                lines.push(Line::from(Span::styled(
+                    format!("{} Web Search({query:?}) · hosted", glyph::TOOL),
+                    theme.style(Tone::Heading),
+                )));
+                if !hosts.is_empty() {
+                    lines.extend(nested_result_lines(hosts, expanded, width, theme));
+                }
+            }
             Block::Error { message } => {
                 for (index, raw) in message.lines().enumerate() {
                     let marker = if index == 0 { glyph::ERROR } else { " " };
@@ -331,7 +340,10 @@ pub(super) fn block_lines(
                 lines.extend(render_message_report(report, width, theme));
             }
         }
-        if matches!(block, Block::User { .. } | Block::Notice { .. }) {
+        if matches!(
+            block,
+            Block::User { .. } | Block::Notice { .. } | Block::HostedSearch { .. }
+        ) {
             let rendered = lines
                 .drain(start..)
                 .flat_map(|line| hanging_lines(line, width, 2))

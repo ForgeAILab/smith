@@ -135,6 +135,7 @@ fn restore_logged_bindings(
         CounterKind::CacheWrite,
         CounterKind::Output,
         CounterKind::Reasoning,
+        CounterKind::WebSearchRequests,
     ];
     let mut bindings = Vec::new();
     for entry in &logged.bindings {

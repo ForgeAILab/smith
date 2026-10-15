@@ -52,6 +52,7 @@ rmcp = { workspace = true, features = ["client"] }
 smith-wasm-host = { workspace = true }
 smith-module-image-generation = { workspace = true }
 smith-module-vision = { workspace = true }
+smith-module-web = { workspace = true }
 smith-module-budget-notice = { workspace = true }
 # The integration suite drives the supervisor through a fake connector, so it
 # needs the same binding functions production uses — and the same transports,

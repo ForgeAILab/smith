@@ -4,7 +4,7 @@ use super::*;
 
 pub(in crate::factory) mod adapter;
 mod children;
-mod credentials;
+pub(super) mod credentials;
 mod resolution;
 
 pub(super) use adapter::{Adapter, PreparedCommandProvider};

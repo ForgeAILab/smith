@@ -39,6 +39,17 @@ impl TuiLoop<'_> {
                             continue;
                         }
                     }
+                    if self
+                        .app
+                        .hosted_search_notices
+                        .observe(&envelope, self.session.id().as_str())
+                        .is_some()
+                    {
+                        // The attempt ends before the root turn. Let the
+                        // terminal fold restore queued input, then leave the
+                        // old host before any new submission can be admitted.
+                        self.hosted_search_rebuild_pending = true;
+                    }
                     let policy = self.host.runtime().policy();
                     if let Some(notice) = self.app.image_input_notices.observe(
                         &envelope,
@@ -67,6 +78,9 @@ impl TuiLoop<'_> {
                     {
                         self.last_change_turn = Some(set.turn);
                         self.app.transcript.push_notice(NoticeKind::Changes, notice);
+                    }
+                    if turn_completed && self.hosted_search_rebuild_pending {
+                        return Some(InteractiveExit::HostedSearchUnavailable);
                     }
                     if let Some(submission) = self.app.take_ready_submission() {
                         dispatch_prepared_with_materialization(

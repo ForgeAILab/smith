@@ -335,6 +335,7 @@ pub(super) fn construct(
             // is told what the profile declared rather than a provider-wide
             // guess about every model the endpoint might serve.
             config.capabilities = profile.capabilities.clone();
+            config.capabilities.hosted_web_search = false;
             config.extra_headers = request
                 .config
                 .provider
@@ -378,6 +379,7 @@ pub(super) fn construct(
             // is told what the profile declared rather than a provider-wide
             // guess about every model the endpoint might serve.
             config.capabilities = profile.capabilities.clone();
+            config.capabilities.hosted_web_search = true;
             config.extra_headers = request
                 .config
                 .provider
@@ -421,6 +423,7 @@ pub(super) fn construct(
             // is told what the profile declared rather than a provider-wide
             // guess about every model the endpoint might serve.
             config.capabilities = profile.capabilities.clone();
+            config.capabilities.hosted_web_search = true;
             config.extra_headers = request
                 .config
                 .provider
@@ -520,6 +523,7 @@ pub(super) fn construct(
                 request.config.model.value.clone(),
             );
             config.capabilities = profile.capabilities.clone();
+            config.capabilities.hosted_web_search = true;
             // xAI runs an implicit prefix cache on its own: a repeated-prefix
             // session reports large cached reads with no request field asked
             // of the adapter. Declare it so cache planning and reporting
@@ -589,6 +593,7 @@ pub(super) fn construct(
                 request.config.model.value.clone(),
             );
             config.capabilities = profile.capabilities.clone();
+            config.capabilities.hosted_web_search = true;
             // Models.dev describes the model; the native adapter owns the
             // implicit prefix-cache behavior it actually drives.
             config.capabilities.prompt_cache = PromptCacheControl::Implicit;

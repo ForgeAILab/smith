@@ -242,6 +242,14 @@ pub(in crate::factory) async fn prepare(
             &model,
         )?,
     };
+    profile.profile.capabilities.hosted_web_search = matches!(
+        adapter,
+        Adapter::OpenAiResponses
+            | Adapter::ChatGptResponses
+            | Adapter::XaiResponses
+            | Adapter::AnthropicMessages
+            | Adapter::GeminiInteractions
+    );
     adapter::apply_adapter_cache_capability(
         adapter,
         endpoint.as_deref(),
@@ -297,7 +305,7 @@ pub(in crate::factory) async fn prepare(
         (None, Some(reference), None) => Some(credentials::secret(request, &reference).await?),
         _ => None,
     };
-    if adapter == Adapter::ChatGptResponses {
+    if adapter == Adapter::ChatGptResponses && request.provider.is_none() {
         let secret = secret.as_ref().ok_or(FactoryError::ChatGptAuth(
             crate::chatgpt::ChatGptAuthError::InvalidBundle,
         ))?;

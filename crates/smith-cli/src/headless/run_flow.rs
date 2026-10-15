@@ -79,6 +79,7 @@ async fn run_inner(
 
     let session = host.session();
     let mut events = host.client().events();
+    let mut hosted_search_notices = smith_client::notice::HostedSearchNotices::default();
     let mut image_input_notices = smith_client::notice::ImageInputNotices::default();
     let mut cache_projection = CacheProjection::default();
     if let Ok(history) = host.client_timeline_events().await {
@@ -121,6 +122,13 @@ async fn run_inner(
         let Some(event) = event else { break };
         fold.apply(&event);
 
+        if let Some(notice) = hosted_search_notices.observe(&event, session.id().as_str())
+            && let Err(error) =
+                writeln!(stderr, "smith: {}", notice.text).and_then(|()| stderr.flush())
+        {
+            let _ = host.shutdown().await;
+            return Err(error).context("writing hosted-search notice");
+        }
         let policy = host.runtime().policy();
         if let Some(notice) = image_input_notices.observe(
             &event,

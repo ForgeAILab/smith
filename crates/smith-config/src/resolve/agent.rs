@@ -819,6 +819,10 @@ pub(super) fn extract(
         request.advisor_route.is_some(),
         request.advisor_override.as_ref(),
     )?;
+    super::web::validate_read_only_network_modules(
+        &agent.read_only_network_modules,
+        &request.known_modules,
+    )?;
     validate_vision(
         agent.profile.vision.as_ref(),
         &agent.profiles,
@@ -895,6 +899,7 @@ pub(super) fn extract(
         background,
         mcp,
         image_generation,
+        web: super::web::resolve_web(provenance)?,
         modules: super::modules::extract_modules(provenance, &request.known_modules)?,
         plugins: super::plugins::extract_plugins(provenance, &request.known_plugins)?,
         unknown_plugins: Vec::new(),
@@ -1182,6 +1187,8 @@ pub(super) fn resolve_agent(
     };
 
     Ok(ResolvedAgent {
+        read_only_network_modules: list(provenance, "agent.read_only_network_modules")?
+            .ok_or_else(|| missing("agent.read_only_network_modules"))?,
         active,
         order,
         modes,

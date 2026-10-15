@@ -110,6 +110,7 @@ impl ApprovalPolicy for ScopedAutoApprove {
 #[derive(Debug)]
 pub(super) struct ScopedAutoApprovalRule {
     tool: String,
+    resource: Option<String>,
     operations: BTreeSet<String>,
     permission_ceiling: PermissionSet,
     max_risk: AutoApprovalRisk,
@@ -140,6 +141,7 @@ impl ScopedAutoApprovalRule {
         })?;
         Ok(Self {
             tool: rule.value.tool.clone(),
+            resource: rule.value.resource.clone(),
             operations: rule
                 .value
                 .operations
@@ -166,6 +168,9 @@ impl ScopedAutoApprovalRule {
         prepared: &agent_runtime_core::tool::PreparedToolCall,
         workspace_mount: &str,
     ) -> bool {
+        if self.tool == "smith/web_fetch" {
+            return self.matches_web_fetch(prepared);
+        }
         if self.tool != format!("smith/{}", prepared.tool())
             || self.is_expired()
             || categorically_ineligible(prepared)
@@ -199,6 +204,37 @@ impl ScopedAutoApprovalRule {
             })
             || !self.paths.is_match(segments.join("/"))
         {
+            return false;
+        }
+        self.consume_use()
+    }
+
+    fn matches_web_fetch(&self, prepared: &agent_runtime_core::tool::PreparedToolCall) -> bool {
+        if prepared.tool() != "web_fetch"
+            || self.is_expired()
+            || !prepared.effects().has_network()
+            || !prepared.effects().has_data_egress()
+            || prepared
+                .effects()
+                .permission_upper_bound()
+                .iter()
+                .any(|permission| {
+                    !matches!(permission, Permission::NetHttp | Permission::DataEgress)
+                })
+            || prepared.required_permissions().iter().any(|permission| {
+                !matches!(permission, Permission::NetHttp | Permission::DataEgress)
+            })
+            || !prepared
+                .required_permissions()
+                .is_subset(&self.permission_ceiling)
+            || self.max_risk < AutoApprovalRisk::Low
+        {
+            return false;
+        }
+        let SecurityResource::Other { kind, id } = prepared.resource() else {
+            return false;
+        };
+        if kind != "web" || self.resource.as_deref() != Some(format!("web:{id}").as_str()) {
             return false;
         }
         self.consume_use()

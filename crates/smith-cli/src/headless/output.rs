@@ -7,7 +7,7 @@ use agent_runtime_core::artifact::ArtifactRef;
 use agent_runtime_core::goal::{GoalProjection, GoalStatus};
 use agent_runtime_core::provider::ProviderAttemptPurpose;
 use agent_runtime_core::security::SecurityResource;
-use agent_runtime_core::usage::{UsageDelta, UsageRecord};
+use agent_runtime_core::usage::{CounterKind, UsageDelta, UsageRecord};
 use anyhow::{Context, Result};
 use serde::Serialize;
 use smith_client::agent_report::AgentSnapshot;
@@ -748,14 +748,15 @@ pub(super) fn write_text_projection(
 }
 
 pub(super) fn render_usage_delta(delta: &UsageDelta) -> String {
-    if delta.is_empty() {
+    let parts = delta
+        .iter()
+        .filter(|(kind, _)| *kind != CounterKind::WebSearchRequests)
+        .map(|(kind, value)| format!("{} {value}", smith_client::status::counter_label(kind)))
+        .collect::<Vec<_>>();
+    if parts.is_empty() {
         return "none".to_owned();
     }
-    delta
-        .iter()
-        .map(|(kind, value)| format!("{} {value}", smith_client::status::counter_label(kind)))
-        .collect::<Vec<_>>()
-        .join(" · ")
+    parts.join(" · ")
 }
 
 pub(super) fn approval_diagnostic(required: &ApprovalOutput) -> String {

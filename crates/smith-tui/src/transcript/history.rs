@@ -16,6 +16,22 @@ impl Transcript {
         history: &[Message],
         saved: &[RestoredShellShortcut],
     ) {
+        self.replace_from_history_with_activity(history, saved, &[]);
+    }
+
+    /// Restores event-only hosted activity alongside canonical history.
+    pub fn replace_from_history_with_activity(
+        &mut self,
+        history: &[Message],
+        saved: &[RestoredShellShortcut],
+        hosted: &[RestoredHostedSearch],
+    ) {
+        let mut hosted = hosted
+            .iter()
+            .filter(|search| search.anchor <= history.len())
+            .collect::<Vec<_>>();
+        hosted.sort_by_key(|search| search.anchor);
+        let mut hosted = hosted.into_iter().peekable();
         self.append_revision = self.append_revision.wrapping_add(1);
         self.blocks.clear();
         self.block_revisions.clear();
@@ -26,6 +42,10 @@ impl Transcript {
         shortcuts.sort_by_key(|shortcut| shortcut.anchor);
         let mut shortcuts = shortcuts.into_iter().peekable();
         for (anchor, message) in history.iter().enumerate() {
+            while hosted.peek().is_some_and(|search| search.anchor == anchor) {
+                let search = hosted.next().expect("anchored hosted search");
+                self.push_hosted_search(search.query.as_deref(), &search.sources);
+            }
             while shortcuts
                 .peek()
                 .is_some_and(|shortcut| shortcut.anchor == anchor)
@@ -106,6 +126,9 @@ impl Transcript {
                     }
                 }
             }
+        }
+        for search in hosted {
+            self.push_hosted_search(search.query.as_deref(), &search.sources);
         }
         for shortcut in shortcuts {
             self.push_saved_shell_shortcut(shortcut);

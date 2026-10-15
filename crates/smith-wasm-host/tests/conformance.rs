@@ -48,6 +48,7 @@ fn config(root: &std::path::Path) -> WasmModuleConfig {
 fn context(root: &std::path::Path, transport: Arc<ReplayTransport>) -> ModuleContext {
     ModuleContext {
         is_child_session: false,
+        web: None,
         http: Some(Arc::new(ReplayHttp(transport.clone()))),
         settings: BTreeMap::new(),
         workspace_root: Some(root.canonicalize().unwrap()),

@@ -1,6 +1,7 @@
 //! The explicit build catalog and resolved module composition.
 
 #[cfg(any(
+    feature = "module-web",
     feature = "module-vision",
     feature = "module-image-generation",
     feature = "module-budget-notice",
@@ -10,6 +11,7 @@ use std::sync::Arc;
 
 use smith_config::resolve::{KnownModule, ResolvedConfig};
 #[cfg(any(
+    not(feature = "module-web"),
     not(feature = "module-vision"),
     not(feature = "module-image-generation"),
     not(feature = "module-budget-notice")
@@ -20,6 +22,11 @@ use smith_module::{CompiledModule, ModuleComposition, ModuleOrigin, SettingValue
 /// The single compiled-in list, with one feature gate per first-party module.
 fn compiled_modules() -> Vec<CompiledModule> {
     Vec::from([
+        #[cfg(feature = "module-web")]
+        CompiledModule {
+            module: Arc::new(smith_module_web::WebModule),
+            origin: ModuleOrigin::FirstParty,
+        },
         #[cfg(feature = "module-vision")]
         CompiledModule {
             module: Arc::new(smith_module_vision::VisionModule),
@@ -40,6 +47,14 @@ fn compiled_modules() -> Vec<CompiledModule> {
 
 pub(super) fn composition() -> ModuleComposition {
     let known = Vec::from([
+        #[cfg(not(feature = "module-web"))]
+        ModuleDescriptor {
+            id: "web".into(),
+            description: "Fetch pages and search the web".into(),
+            default_enabled: true,
+            origin: ModuleOrigin::FirstParty,
+            compiled_in: false,
+        },
         #[cfg(not(feature = "module-vision"))]
         ModuleDescriptor {
             id: "vision".into(),

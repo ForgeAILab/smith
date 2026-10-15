@@ -87,15 +87,36 @@ pub(super) fn resolution_request_with_catalog(
 
 pub(super) fn explain_config(key: &str, selection: &Selection) -> Result<()> {
     let prepared = prepare(selection)?;
-    let explanation = prepared
-        .resolution
-        .provenance
-        .explain(key)
-        .map_err(|error| anyhow::anyhow!("{error}"))?;
-    println!("{} = {}", explanation.key, explanation.value);
-    println!("source: {}", explanation.source);
-    for entry in explanation.overridden {
-        println!("overrode: {} from {}", entry.value, entry.source);
+    let provenance = &prepared.resolution.provenance;
+    let keys: Vec<&str> = if matches!(key, "tools.web_search" | "tools.web_fetch") {
+        let prefix = format!("{key}.");
+        provenance
+            .keys()
+            .filter(|key| key.starts_with(&prefix))
+            .collect()
+    } else {
+        vec![key]
+    };
+    let diagnostic = prepared.resolution.config.web.search.diagnostic();
+    for key in keys {
+        // An unset credential or URL still has an actionable explanation.
+        if provenance.source(key).is_none() && diagnostic.is_some_and(|(setting, _)| setting == key)
+        {
+            continue;
+        }
+        let explanation = provenance
+            .explain(key)
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+        println!("{} = {}", explanation.key, explanation.value);
+        println!("source: {}", explanation.source);
+        for entry in explanation.overridden {
+            println!("overrode: {} from {}", entry.value, entry.source);
+        }
+    }
+    if let Some((setting, message)) = diagnostic
+        && (key == "tools.web_search" || key == setting || key == "tools.web_search.backend")
+    {
+        println!("diagnostic: {setting}: {message}");
     }
     Ok(())
 }

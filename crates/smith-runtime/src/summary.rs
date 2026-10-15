@@ -335,6 +335,7 @@ impl SummaryModel for SmithProviderSummaryModel {
                         ));
                     }
                     ProviderStreamEvent::ReasoningDelta { .. }
+                    | ProviderStreamEvent::HostedSearch { .. }
                     | ProviderStreamEvent::CacheObservation { .. }
                     | ProviderStreamEvent::RateLimit { .. }
                     | ProviderStreamEvent::Downgrade { .. }
@@ -381,6 +382,10 @@ mod tests {
             "model",
             Capabilities::basic_streaming(),
             vec![ScriptedStream::new(vec![
+                ProviderStreamEvent::HostedSearch {
+                    query: Some("ignored query".into()),
+                    sources: Vec::new(),
+                },
                 ProviderStreamEvent::TextDelta {
                     text: "bounded summary".into(),
                 },
@@ -414,6 +419,7 @@ mod tests {
         assert_eq!(response.usage.get(CounterKind::Output), 4);
         let request = &provider.requests()[0];
         assert!(request.tools.is_empty());
+        assert!(request.hosted_tools.is_empty());
         assert_eq!(request.tool_choice, ToolChoice::None);
         assert!(
             request.messages[0]

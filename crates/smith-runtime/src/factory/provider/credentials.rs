@@ -169,7 +169,7 @@ pub(in crate::factory) fn validate_pool_references(
     Ok(())
 }
 
-pub(super) async fn secret(
+pub(in crate::factory) async fn secret(
     request: &RuntimeRequest,
     reference: &str,
 ) -> Result<Secret, FactoryError> {

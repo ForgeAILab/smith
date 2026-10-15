@@ -909,3 +909,88 @@ fn tool_result_image_only_defaults_to_auto_detail() {
         ])
     );
 }
+
+#[test]
+fn hosted_search_declaration_uses_responses_wire_without_a_function_tool() {
+    let provider = ChatGptProvider::new(
+        ReplayTransport::single(Vec::new()),
+        ChatGptProviderConfig::new("main", Capabilities::basic_streaming(), "acct_test").unwrap(),
+        ProviderCredentialTarget::new("chatgpt").unwrap(),
+        Arc::new(StaticProviderCredentialSource::new(Secret::new(
+            "test-token",
+        ))),
+    );
+    let request = ProviderRequest::new(ModelId::new("main"), vec![Message::user("research")])
+        .with_hosted_tools(vec![HostedTool::WebSearch { max_uses: Some(3) }]);
+    let (payload, _) = provider
+        .build_payload(&request, &agent_runtime_core::ids::SessionId::new("s"))
+        .unwrap();
+    assert_eq!(payload["tools"], json!([{"type":"web_search"}]));
+    assert!(
+        payload["include"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("web_search_call.action.sources"))
+    );
+    assert!(
+        provider
+            .capabilities(&ModelId::new("main"))
+            .unwrap()
+            .hosted_web_search
+    );
+}
+
+#[test]
+fn hosted_search_stream_renders_unicode_citations_and_deduplicates_completed_items() {
+    let mut state = StreamState {
+        buffer_text: true,
+        ..Default::default()
+    };
+    let search = json!({"type":"web_search_call","id":"opaque-call-canary","encrypted_content":"opaque-canary",
+        "action":{"query":"Rust docs","sources":[{"url":"https://docs.rs/a","title":"Docs"}]}});
+    let text = json!({"type":"message","content":[{"type":"output_text","text":"éRust works.","annotations":[
+        {"type":"url_citation","start_index":0,"end_index":5,"title":"Docs","url":"https://docs.rs/a"},
+        {"type":"url_citation","start_index":6,"end_index":11,"url":"https://docs.rs/a"}]}]});
+    let mut events = Vec::new();
+    for wire in [
+        json!({"type":"response.output_item.added","output_index":0,"item":search}),
+        json!({"type":"response.output_item.done","output_index":0,"item":search}),
+        json!({"type":"response.output_text.delta","output_index":1,"delta":"éRust works."}),
+        json!({"type":"response.output_item.done","output_index":1,"item":text}),
+        json!({"type":"response.completed","response":{"output":[search,text],"usage":{"web_search_requests":2}}}),
+    ] {
+        events.extend(decode_event(&wire.to_string(), &mut state).unwrap());
+    }
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, ProviderStreamEvent::HostedSearch { .. }))
+            .count(),
+        1
+    );
+    assert!(events.iter().any(
+        |event| matches!(event, ProviderStreamEvent::HostedSearch { query: Some(query), sources }
+        if query == "Rust docs" && sources[0].url == "https://docs.rs/a")
+    ));
+    let rendered = events
+        .iter()
+        .filter_map(|event| match event {
+            ProviderStreamEvent::TextDelta { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<String>();
+    assert_eq!(rendered, "éRust [Docs](https://docs.rs/a) works.");
+    assert!(!format!("{events:?}").contains("opaque-canary"));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, ProviderStreamEvent::Usage { delta }
+        if delta.get(CounterKind::WebSearchRequests) == 2))
+    );
+    assert!(matches!(
+        events.last(),
+        Some(ProviderStreamEvent::Finish {
+            reason: FinishReason::Stop
+        })
+    ));
+}

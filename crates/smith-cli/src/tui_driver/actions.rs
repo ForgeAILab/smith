@@ -164,6 +164,10 @@ impl TuiLoop<'_> {
         target: SubmissionTarget,
     ) {
         self.host.set_goal_continuation_enabled(false);
+        if self.hosted_search_rebuild_pending {
+            self.app.queue_prepared(submission);
+            return;
+        }
         dispatch_prepared_with_materialization(
             &mut self.app,
             self.session,

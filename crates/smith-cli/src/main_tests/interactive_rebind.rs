@@ -96,6 +96,18 @@ dialect = "openai-effort"
         modular: bool,
         input_usage: &[u64],
     ) -> (HostSession, InteractiveResources) {
+        self.start_configured(resume, overrides, modular, input_usage, |_| {})
+            .await
+    }
+
+    async fn start_configured(
+        &self,
+        resume: Option<SessionId>,
+        overrides: Overrides,
+        modular: bool,
+        input_usage: &[u64],
+        configure: impl FnOnce(&mut RuntimeRequest),
+    ) -> (HostSession, InteractiveResources) {
         let mut resolution = resolve(
             &ResolveRequest::new(self.project.path())
                 .with_home_dir(self.home.path())
@@ -137,7 +149,7 @@ dialect = "openai-effort"
         } else {
             Default::default()
         };
-        let runtime = RuntimeRequest {
+        let mut runtime = RuntimeRequest {
             modules,
             semantic_summary: modular
                 .then(smith_runtime::summary::SmithSemanticSummaryConfig::standard),
@@ -150,6 +162,7 @@ dialect = "openai-effort"
             clock: Some(Arc::new(fixture_support::FixedClock)),
             ..RuntimeRequest::new(resolution.config, HostSurface::Terminal)
         };
+        configure(&mut runtime);
         let mut request = HostSessionRequest::new(runtime, self.project.path())
             .checkpoint_keys(Arc::new(TestCheckpointKeys))
             .reasoning_reset(true, true)
@@ -223,6 +236,194 @@ fn event(payload: RuntimeEvent) -> EventEnvelope {
         Timestamp::ZERO,
         payload,
     )
+}
+
+#[cfg(feature = "module-web")]
+fn web_provider(scripts: Vec<ScriptedStream>) -> Arc<FakeProvider> {
+    let mut capabilities = Capabilities::basic_streaming();
+    capabilities.hosted_web_search = true;
+    Arc::new(FakeProvider::new("example-model", capabilities, scripts))
+}
+
+#[cfg(feature = "module-web")]
+#[tokio::test]
+async fn hosted_search_rejection_rebuilds_once_before_the_next_tui_prompt() {
+    use agent_runtime_core::provider::{ProviderError, ProviderErrorKind};
+    use futures_util::StreamExt;
+
+    let fixture = Fixture::new();
+    let provider = web_provider(vec![ScriptedStream::new(vec![
+        ProviderStreamEvent::Error {
+            error: ProviderError::new(
+                ProviderErrorKind::Unsupported,
+                "hosted web search is not enabled for this account",
+            ),
+        },
+    ])]);
+    let (host, resources) =
+        Box::pin(
+            fixture.start_configured(None, Overrides::default(), true, &[], |runtime| {
+                runtime.provider = Some(provider.clone())
+            }),
+        )
+        .await;
+    let mut previous = Box::pin(fixture.app(&host, &resources, None, None)).await;
+    previous.app.composer.insert_str("research");
+    let mut keys = futures_util::stream::iter([
+        Ok(crossterm::event::Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        ))),
+        Ok(crossterm::event::Event::Paste("research again".into())),
+    ])
+    .chain(futures_util::stream::pending());
+    let (exit, app) = Box::pin(crate::tui_driver::run_scripted_tui(
+        &host,
+        fixture.project.path(),
+        &resources,
+        previous.app,
+        &mut keys,
+        false,
+    ))
+    .await
+    .expect("classified rejection leaves the serving loop");
+    assert!(matches!(exit, InteractiveExit::HostedSearchUnavailable));
+    assert!(!app.is_busy(), "rebuild waits for the root terminal");
+    assert_eq!(app.composer.text(), "research again");
+    assert_eq!(
+        provider.requests().len(),
+        1,
+        "the failed turn is not retried"
+    );
+    assert_eq!(provider.requests()[0].hosted_tools.len(), 1);
+    assert!(
+        !provider.requests()[0]
+            .tools
+            .iter()
+            .any(|tool| tool.name == "web_search")
+    );
+    previous.app = app;
+    let session = host.session().id().clone();
+    Box::pin(host.shutdown()).await.expect("shutdown");
+
+    // Start with fresh process-local routing memory: the journal alone must
+    // remember the rejection, as it does for a resumed headless invocation.
+    let mut activate = agent_runtime::provider::fake::tool_call_fragments(
+        0,
+        "activate",
+        "registry.activate",
+        r#"{"ids":["tool:web_search"]}"#,
+    );
+    activate.push(ProviderStreamEvent::Finish {
+        reason: FinishReason::ToolCalls,
+    });
+    let provider = web_provider(vec![
+        ScriptedStream::new(activate),
+        ScriptedStream::new(vec![ProviderStreamEvent::Finish {
+            reason: FinishReason::Stop,
+        }]),
+    ]);
+    let (host, resources) = Box::pin(fixture.start_configured(
+        Some(session.clone()),
+        Overrides::default(),
+        true,
+        &[],
+        |runtime| runtime.provider = Some(provider.clone()),
+    ))
+    .await;
+    let rebound = Box::pin(fixture.app(&host, &resources, Some(previous), None)).await;
+    assert_eq!(host.session().id(), &session);
+    assert_eq!(rebound.app.status.model, "example-model");
+    assert_eq!(rebound.app.status.provider.as_deref(), Some("local"));
+    assert!(
+        host.runtime()
+            .policy()
+            .tools
+            .iter()
+            .any(|tool| tool == "web_search")
+    );
+    assert_eq!(rebound.app.composer.text(), "research again");
+    let mut keys = futures_util::stream::iter([Ok(crossterm::event::Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))])
+    .chain(futures_util::stream::pending());
+    let (exit, _) = Box::pin(crate::tui_driver::run_scripted_tui(
+        &host,
+        fixture.project.path(),
+        &resources,
+        rebound.app,
+        &mut keys,
+        true,
+    ))
+    .await
+    .expect("backend turn completes without another fallback rebuild");
+    assert!(matches!(exit, InteractiveExit::CapabilitiesChanged));
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.hosted_tools.is_empty())
+    );
+    assert!(
+        requests[1]
+            .tools
+            .iter()
+            .any(|tool| tool.name == "web_search")
+    );
+    Box::pin(host.shutdown()).await.expect("shutdown");
+}
+
+#[cfg(feature = "module-web")]
+#[tokio::test]
+async fn other_provider_errors_do_not_rebuild_the_tui_hosted_search_route() {
+    use agent_runtime_core::provider::{ProviderError, ProviderErrorKind};
+    use futures_util::StreamExt;
+
+    for (kind, message) in [
+        (
+            ProviderErrorKind::Unsupported,
+            "another unsupported capability",
+        ),
+        (
+            ProviderErrorKind::BadRequest,
+            "hosted web search is not enabled for this account",
+        ),
+    ] {
+        let fixture = Fixture::new();
+        let provider = web_provider(vec![ScriptedStream::new(vec![
+            ProviderStreamEvent::Error {
+                error: ProviderError::new(kind, message),
+            },
+        ])]);
+        let (host, resources) =
+            Box::pin(
+                fixture.start_configured(None, Overrides::default(), true, &[], |runtime| {
+                    runtime.provider = Some(provider.clone())
+                }),
+            )
+            .await;
+        let mut previous = Box::pin(fixture.app(&host, &resources, None, None)).await;
+        previous.app.composer.insert_str("research");
+        let mut keys = futures_util::stream::iter([Ok(crossterm::event::Event::Key(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        ))])
+        .chain(futures_util::stream::pending());
+        let (exit, _) = Box::pin(crate::tui_driver::run_scripted_tui(
+            &host,
+            fixture.project.path(),
+            &resources,
+            previous.app,
+            &mut keys,
+            true,
+        ))
+        .await
+        .expect("unrelated error reaches the ordinary idle boundary");
+        assert!(matches!(exit, InteractiveExit::CapabilitiesChanged));
+        assert_eq!(provider.requests().len(), 1);
+        Box::pin(host.shutdown()).await.expect("shutdown");
+    }
 }
 
 fn assert_notice(app: &App, source: &str, expected: &str) {

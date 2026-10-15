@@ -43,6 +43,40 @@ pub enum SettingValue {
 /// Only the settings belonging to the module being mounted.
 pub type ModuleSettings = BTreeMap<String, SettingValue>;
 
+/// Resolved web settings, independent of the configuration layers.
+#[derive(Debug, Clone, Default)]
+pub struct WebSettings {
+    /// Whether fetches may connect to private and local addresses.
+    pub allow_private_networks: bool,
+    /// Backend route; absent selects keyless DuckDuckGo.
+    pub search: Option<SearchBackendConfig>,
+}
+
+/// Backend selection with credentials already resolved by the host.
+#[derive(Debug, Clone, Default)]
+pub enum SearchBackendConfig {
+    /// Search is off or handled by the provider.
+    Disabled,
+    /// Keyless, best-effort HTML search.
+    #[default]
+    DuckDuckGo,
+    /// Brave web search with its subscription token.
+    Brave {
+        /// Resolved token, absent when credential acquisition failed.
+        api_key: Option<agent_runtime_core::store::Secret>,
+    },
+    /// Tavily search with a bearer token.
+    Tavily {
+        /// Resolved token, absent when credential acquisition failed.
+        api_key: Option<agent_runtime_core::store::Secret>,
+    },
+    /// User-selected SearXNG instance with JSON search enabled.
+    SearXng {
+        /// Absolute instance URL, absent when not configured.
+        url: Option<String>,
+    },
+}
+
 /// Authority posture handed to native modules; it does not grant capabilities.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModulePosture {
@@ -120,6 +154,8 @@ pub struct ModuleContext {
     pub image_binding: Option<ImageBinding>,
     /// Separate vision route, only resolved for a text-only main model.
     pub vision: Option<VisionBinding>,
+    /// Resolved web route and private-network policy; absent uses defaults.
+    pub web: Option<WebSettings>,
     /// Whether the active main model accepts image input at this composition.
     pub main_model_accepts_images: bool,
     /// Read-only canonical history service for recent conversation inputs.
@@ -140,6 +176,7 @@ impl fmt::Debug for ModuleContext {
             .field("posture", &self.posture)
             .field("has_image_binding", &self.image_binding.is_some())
             .field("has_vision", &self.vision.is_some())
+            .field("has_web_settings", &self.web.is_some())
             .field("main_model_accepts_images", &self.main_model_accepts_images)
             .field("has_session_history", &self.session_history.is_some())
             .field("semantic_summary_enabled", &self.semantic_summary_enabled)

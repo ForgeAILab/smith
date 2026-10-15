@@ -15,7 +15,61 @@ pub(super) async fn seed_app(
     let policy = host.runtime().policy();
     let snapshot = host.snapshot();
     let mut app = App::new(policy.model.as_str(), project_label(project));
-    restore_transcript(host, &mut app, &snapshot.history);
+    let mut hosted = Vec::new();
+    if let Ok(events) = host.client_timeline_events().await {
+        let events = events
+            .into_iter()
+            .filter(|event| event.session.as_str() == host.session().id().as_str())
+            .collect::<Vec<_>>();
+        let is_boundary = |event: &smith_runtime::client::SmithEvent| {
+            matches!(
+                event.payload,
+                smith_runtime::client::SmithEventKind::TurnStarted
+                    | smith_runtime::client::SmithEventKind::TurnSteerCommitted { .. }
+            )
+        };
+        let boundaries = events.iter().filter(|event| is_boundary(event)).count();
+        let anchors = snapshot
+            .history
+            .iter()
+            .enumerate()
+            .filter(|(_, message)| message.role == agent_runtime_core::content::Role::User)
+            .map(|(index, _)| index + 1)
+            .collect::<Vec<_>>();
+        // Compaction can remove an old prefix of canonical history. Align
+        // retained turns from the end rather than relocating old activity.
+        let mut skipped = boundaries.saturating_sub(anchors.len());
+        let offset = anchors.len().saturating_sub(boundaries);
+        let mut anchors = anchors.into_iter().skip(offset);
+        let mut anchor = None;
+        for event in events {
+            match event.payload {
+                smith_runtime::client::SmithEventKind::TurnStarted
+                | smith_runtime::client::SmithEventKind::TurnSteerCommitted { .. } => {
+                    if skipped > 0 {
+                        skipped -= 1;
+                    } else {
+                        anchor = anchors.next();
+                    }
+                }
+                smith_runtime::client::SmithEventKind::HostedSearch { query, sources } => {
+                    if let Some(anchor) = anchor {
+                        hosted.push(smith_tui::transcript::RestoredHostedSearch {
+                            anchor,
+                            query,
+                            sources,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if hosted.is_empty() {
+        restore_transcript(host, &mut app, &snapshot.history);
+    } else {
+        super::restore_transcript_with_activity(host, &mut app, &snapshot.history, &hosted);
+    }
     seed_host_state(host, &mut app, project, resources, presentation).await;
     if policy.reasoning.has_override() {
         app.transcript.push_notice(

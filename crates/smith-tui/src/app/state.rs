@@ -793,6 +793,8 @@ pub struct App {
     pub(crate) module_status: Vec<ModuleStatusItem>,
     /// Whether significant local cache-miss notices are enabled.
     pub cache_miss_notices: bool,
+    /// Account-disabled hosted-search notices retained across rebuilds.
+    pub hosted_search_notices: smith_client::notice::HostedSearchNotices,
     /// Missing image-input metadata notices already shown for this session.
     pub image_input_notices: smith_client::notice::ImageInputNotices,
     /// The input buffer.

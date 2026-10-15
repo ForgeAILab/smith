@@ -275,3 +275,34 @@ pub fn budget_failure_text(
 
 #[cfg(test)]
 mod tests;
+
+/// Presentation memory of account-disabled hosted-search notices.
+#[derive(Debug, Default)]
+pub struct HostedSearchNotices {
+    reported: BTreeSet<String>,
+}
+
+impl HostedSearchNotices {
+    /// Reports a classified hosted-search rejection once per root session.
+    pub fn observe(&mut self, event: &SmithEvent, root_session: &str) -> Option<Notice> {
+        if event.session.as_str() != root_session {
+            return None;
+        }
+        let SmithEventKind::ProviderAttemptFinished {
+            error: Some(error), ..
+        } = &event.payload
+        else {
+            return None;
+        };
+        if error.kind != agent_runtime_core::provider::ProviderErrorKind::Unsupported
+            || error.message != "hosted web search is not enabled for this account"
+            || !self.reported.insert(root_session.to_owned())
+        {
+            return None;
+        }
+        Some(Notice {
+            kind: NoticeKind::Provider,
+            text: "Hosted web search is unavailable for this organization.".into(),
+        })
+    }
+}

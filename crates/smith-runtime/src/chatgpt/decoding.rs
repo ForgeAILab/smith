@@ -31,6 +31,10 @@ pub(super) fn push_utf8(
 
 #[derive(Default)]
 pub(super) struct StreamState {
+    pub(super) buffer_text: bool,
+    pub(super) text: BTreeMap<(u64, u64), String>,
+    pub(super) emitted_text: std::collections::BTreeSet<u64>,
+    pub(super) searches: std::collections::BTreeSet<u64>,
     pub(super) saw_semantic: bool,
     pub(super) saw_tool_call: bool,
     pub(super) terminal: bool,
@@ -57,9 +61,25 @@ pub(super) fn decode_event(
             if let Some(delta) = value.get("delta").and_then(Value::as_str)
                 && !delta.is_empty()
             {
-                events.push(ProviderStreamEvent::TextDelta {
-                    text: delta.to_owned(),
-                });
+                let index = value
+                    .get("output_index")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let content = value
+                    .get("content_index")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                if state.buffer_text {
+                    state
+                        .text
+                        .entry((index, content))
+                        .or_default()
+                        .push_str(delta);
+                } else {
+                    events.push(ProviderStreamEvent::TextDelta {
+                        text: delta.to_owned(),
+                    });
+                }
                 state.saw_semantic = true;
             }
         }
@@ -77,6 +97,9 @@ pub(super) fn decode_event(
         }
         "response.output_item.added" => {
             let item = value.get("item").unwrap_or(&Value::Null);
+            if item.get("type").and_then(Value::as_str) == Some("web_search_call") {
+                state.buffer_text = true;
+            }
             if item.get("type").and_then(Value::as_str) == Some("function_call") {
                 let index = value
                     .get("output_index")
@@ -123,6 +146,15 @@ pub(super) fn decode_event(
         }
         "response.output_item.done" => {
             let item = value.get("item").unwrap_or(&Value::Null);
+            hosted_item(
+                item,
+                value
+                    .get("output_index")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+                state,
+                &mut events,
+            );
             if item.get("type").and_then(Value::as_str) == Some("reasoning")
                 && let Some(signature) = item.get("encrypted_content").and_then(Value::as_str)
             {
@@ -138,6 +170,7 @@ pub(super) fn decode_event(
             }
         }
         "response.completed" => {
+            flush_hosted(&value, state, &mut events);
             if let Some(usage) = value.pointer("/response/usage") {
                 append_usage(usage, &mut events);
             }
@@ -151,6 +184,7 @@ pub(super) fn decode_event(
             state.terminal = true;
         }
         "response.incomplete" => {
+            flush_hosted(&value, state, &mut events);
             if let Some(usage) = value.pointer("/response/usage") {
                 append_usage(usage, &mut events);
             }
@@ -238,5 +272,147 @@ fn append_usage(usage: &Value, events: &mut Vec<ProviderStreamEvent>) {
     }
     if !delta.is_empty() {
         events.push(ProviderStreamEvent::Usage { delta });
+    }
+}
+
+// The runtime's hosted citation helper is crate-private. Keep its deterministic
+// span ordering, URL deduplication, escaping and character-to-byte conversion.
+fn rendered_output(item: &Value) -> String {
+    let mut output = String::new();
+    for part in item["content"].as_array().into_iter().flatten() {
+        if part["type"].as_str() != Some("output_text") {
+            continue;
+        }
+        let text = part["text"].as_str().unwrap_or_default();
+        let mut citations = part["annotations"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|annotation| {
+                if annotation["type"].as_str() != Some("url_citation") {
+                    return None;
+                }
+                let start = usize::try_from(annotation["start_index"].as_u64()?).ok()?;
+                let end = usize::try_from(annotation["end_index"].as_u64()?).ok()?;
+                if start > end || end > text.chars().count() {
+                    return None;
+                }
+                let offset = text
+                    .char_indices()
+                    .nth(end)
+                    .map_or(text.len(), |(offset, _)| offset);
+                Some((offset, source(annotation)?))
+            })
+            .collect::<Vec<_>>();
+        citations.sort_by_key(|(end, _)| *end);
+        let mut seen = std::collections::BTreeSet::new();
+        let mut cursor = 0;
+        for (end, source) in citations {
+            if !seen.insert(source.url.clone()) {
+                continue;
+            }
+            output.push_str(&text[cursor..end]);
+            cursor = end;
+            let host = source
+                .url
+                .split_once("://")
+                .map_or(source.url.as_str(), |(_, tail)| tail)
+                .split('/')
+                .next()
+                .unwrap_or(&source.url);
+            let title = source
+                .title
+                .as_deref()
+                .filter(|title| !title.is_empty())
+                .unwrap_or(host)
+                .replace('\\', "\\\\")
+                .replace('[', "\\[")
+                .replace(']', "\\]");
+            let url = source
+                .url
+                .replace(' ', "%20")
+                .replace('(', "%28")
+                .replace(')', "%29");
+            output.push_str(&format!(" [{title}]({url})"));
+        }
+        output.push_str(&text[cursor..]);
+    }
+    output
+}
+
+fn source(value: &Value) -> Option<HostedSource> {
+    Some(HostedSource {
+        url: value["url"].as_str()?.to_owned(),
+        title: value["title"].as_str().map(str::to_owned),
+    })
+}
+
+fn hosted_item(
+    item: &Value,
+    index: u64,
+    state: &mut StreamState,
+    events: &mut Vec<ProviderStreamEvent>,
+) {
+    match item["type"].as_str() {
+        Some("web_search_call") => {
+            state.buffer_text = true;
+            if state.searches.insert(index) {
+                events.push(ProviderStreamEvent::HostedSearch {
+                    query: item["action"]["query"].as_str().map(str::to_owned),
+                    sources: item["action"]["sources"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(source)
+                        .collect(),
+                });
+                state.saw_semantic = true;
+            }
+        }
+        Some("message") if state.buffer_text && state.emitted_text.insert(index) => {
+            let text = rendered_output(item);
+            if !text.is_empty() {
+                events.push(ProviderStreamEvent::TextDelta { text });
+                state.saw_semantic = true;
+            }
+        }
+        _ => {}
+    }
+}
+
+fn flush_hosted(value: &Value, state: &mut StreamState, events: &mut Vec<ProviderStreamEvent>) {
+    for (index, item) in value["response"]["output"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        hosted_item(item, index as u64, state, events);
+    }
+    if state.buffer_text {
+        for ((index, _), text) in &state.text {
+            if !state.emitted_text.contains(index) && !text.is_empty() {
+                events.push(ProviderStreamEvent::TextDelta { text: text.clone() });
+            }
+        }
+        let count = value
+            .pointer("/response/usage/web_search_requests")
+            .and_then(Value::as_u64)
+            .or_else(|| {
+                value
+                    .pointer("/response/usage/server_tool_use/web_search_requests")
+                    .and_then(Value::as_u64)
+            })
+            .or_else(|| {
+                value
+                    .pointer("/response/usage/server_side_tool_usage_details/web_search_calls")
+                    .and_then(Value::as_u64)
+            })
+            .or((!state.searches.is_empty()).then_some(state.searches.len() as u64));
+        if let Some(count) = count {
+            events.push(ProviderStreamEvent::Usage {
+                delta: UsageDelta::new().with(CounterKind::WebSearchRequests, count),
+            });
+        }
     }
 }

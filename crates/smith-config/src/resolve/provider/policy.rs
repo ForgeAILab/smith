@@ -1,4 +1,5 @@
 use super::*;
+use crate::model::AutoApprovalPermission;
 
 pub(in crate::resolve) fn resolve_model_limits(
     provenance: &Provenance,
@@ -361,13 +362,39 @@ fn validate_auto_approval_rule(
                 .to_owned(),
         ));
     }
-    if rule.tool != "smith/edit" {
+    let web_fetch = rule.tool == "smith/web_fetch";
+    if web_fetch {
+        let host = rule
+            .resource
+            .as_deref()
+            .and_then(|resource| resource.strip_prefix("web:"));
+        if !host.is_some_and(|host| {
+            !host.is_empty()
+                && url::Host::parse(host).is_ok()
+                && !host.contains(['*', '?', '/', '@', ':'])
+        }) || !rule.operations.is_empty()
+            || !rule.paths.is_empty()
+            || rule.permissions.iter().any(|permission| {
+                !matches!(
+                    permission,
+                    AutoApprovalPermission::NetHttp | AutoApprovalPermission::DataEgress
+                )
+            })
+        {
+            return Err(invalid("web-fetch rules require an exact `resource = \"web:<host>\"`, empty operations and paths, and only net.http/data.egress permissions".to_owned()));
+        }
+    } else if rule.resource.is_some() {
+        return Err(invalid(
+            "`resource` is supported only for smith/web_fetch".to_owned(),
+        ));
+    }
+    if rule.tool != "smith/edit" && !web_fetch {
         return Err(invalid(format!(
-            "automatic approval for `{}` is not supported; revision 1 permits only `smith/edit`",
+            "automatic approval for `{}` is not supported; revision 1 permits `smith/edit` and `smith/web_fetch`",
             rule.tool
         )));
     }
-    if rule.operations.is_empty() {
+    if rule.operations.is_empty() && !web_fetch {
         return Err(invalid(
             "automatic approval rule `operations` cannot be empty".to_owned(),
         ));
@@ -377,7 +404,7 @@ fn validate_auto_approval_rule(
             "automatic approval rule `permissions` cannot be empty".to_owned(),
         ));
     }
-    if rule.paths.is_empty() {
+    if rule.paths.is_empty() && !web_fetch {
         return Err(invalid(
             "automatic approval rule `paths` cannot be empty".to_owned(),
         ));
@@ -429,6 +456,7 @@ fn validate_auto_approval_rule(
         AutoApprovalRule {
             revision: rule.revision,
             tool: rule.tool,
+            resource: rule.resource,
             operations: rule.operations,
             permissions: rule.permissions,
             max_risk: rule.max_risk,

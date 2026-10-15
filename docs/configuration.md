@@ -1140,10 +1140,11 @@ expires_at = "2026-12-31T23:59:59Z" # optional
 max_uses = 50                        # optional
 ```
 
-Every field is matched against the immutable prepared call. Operation, mount,
-path, permissions, and derived risk must all fit. Host filesystem, arbitrary
-process, network, credential, external-service, data-egress, and unclassified
-authority are never eligible. There is deliberately no scoped host-shell rule;
+For edit rules, operation, mount, path, permissions, and derived risk must all
+fit the immutable prepared call. Host filesystem, arbitrary process, credential,
+external-service, and unclassified authority are never eligible. Network and
+data-egress authority are eligible only for the exact-host `web_fetch` rules
+described under [Web tools](#web-tools). There is deliberately no scoped host-shell rule;
 already-isolated automation must opt into explicit `allow-all`.
 
 ## Command-line selection
@@ -1177,3 +1178,94 @@ authority. `--yolo` is only a shorter explicit spelling of
 read-only posture. Likewise, only the explicit
 `--allow-synthetic-cache-spend` host flag grants adaptive cache-maintenance
 spend; no repository setting or environment variable can manufacture it.
+
+## Web tools
+
+Web tools let Smith read public pages and search for current information.
+
+`web_fetch` is available by default. It GETs one HTTP(S) URL, converts the main
+HTML content to Markdown, passes through text, JSON and XML, and returns images
+as image parts. Results identify their source and are labelled external,
+untrusted content. Downloads are bounded to 5 MiB, 30 seconds and five redirects.
+There is no JavaScript rendering, authenticated browsing or PDF extraction.
+
+Private, loopback, link-local and metadata destinations are refused on every
+redirect hop. To read a local documentation server, set this in user config:
+
+```toml
+[tools.web_fetch]
+allow_private_networks = true # default false; user scope only
+```
+
+Search is selected again whenever the runtime is composed, including `/model`
+changes. Each child profile uses its own provider's capabilities.
+
+```toml
+[tools.web_search]
+mode = "auto"          # auto | hosted | backend | off
+backend = "duckduckgo" # duckduckgo | brave | tavily | searxng
+# api_key = "env:BRAVE_API_KEY" # credential reference, never an inline key
+# searxng_url = "https://search.example.org"
+```
+
+| Mode | Search route |
+| --- | --- |
+| `auto` (default) | Hosted when supported; otherwise the configured backend, defaulting to DuckDuckGo |
+| `hosted` | Hosted when supported; otherwise no search, with a diagnostic |
+| `backend` | Configured backend, defaulting to DuckDuckGo |
+| `off` | No search; fetch remains available |
+
+Hosted search is supported by OpenAI and ChatGPT Responses, xAI Responses,
+Anthropic Messages and Gemini Interactions. OpenAI-compatible Chat Completions
+and command providers use backend search in `auto`. Hosted searches appear as
+`Web Search("query") · hosted` rows with source hosts; citations become links in
+the assistant's text. Hosted rows are restored from the session's event journal
+when it is enabled and available. Stream-json includes `hosted_search` events.
+
+Hosted search has a separate provider cost: Anthropic charges $10 per 1,000
+searches. To opt out of hosted search, set `mode = "backend"`; DuckDuckGo requires
+no key. If an organization disables hosted search, Smith reports it once. In
+`auto`, the session uses the backend at its next safe runtime rebuild (for
+example, `/model`); Smith does not automatically replay the failed turn.
+
+DuckDuckGo is a free, best-effort HTML backend with no official search API. Its
+layout can change and requests may be rate-limited or challenged. Such failures
+name `brave`, `tavily` and `searxng` as alternatives. Brave and Tavily require a
+resolvable `api_key` credential reference. SearXNG requires an absolute HTTP(S)
+`searxng_url` and an instance with JSON search enabled. Missing or unresolvable
+backend credentials leave search unavailable with a diagnostic; fetch still
+works. Keys use the same credential resolver as provider secrets.
+
+The backend, key, SearXNG URL and private-network option are user-scoped;
+repository configuration cannot redirect requests or grant network authority.
+The route `mode` may be set by repository configuration.
+
+Read-only postures keep reviewed network-read tools from these user-selected
+modules, still subject to approval:
+
+```toml
+[agent]
+read_only_network_modules = ["web", "vision"] # default
+# read_only_network_modules = [] # strict read-only tools only
+```
+
+This allows `web_fetch`, backend search and `view_image` while planning. Hosted
+search follows the `web` entry too. MCP and plugin tools cannot use this list to
+admit network access. Filesystem and external writes remain excluded.
+
+A prepared-call rule can approve one fetch host without approving others:
+
+```toml
+[[approval.auto]]
+revision = 1
+tool = "smith/web_fetch"
+resource = "web:docs.rs"
+operations = []
+permissions = ["net.http", "data.egress"]
+max_risk = "low"
+mount = "workspace"
+paths = []
+```
+
+The resource is an exact host identity, not a URL or wildcard. Requests for
+other hosts continue through the ordinary approval policy.

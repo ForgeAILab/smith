@@ -59,6 +59,7 @@ fn auto_rule(
     AutoApprovalRule {
         revision: 1,
         tool: "smith/edit".to_owned(),
+        resource: None,
         operations,
         permissions,
         max_risk: AutoApprovalRisk::Medium,
@@ -241,6 +242,7 @@ fn resolved_config() -> ResolvedConfig {
         plugins: Default::default(),
         unknown_plugins: Default::default(),
         image_generation: image_generation(),
+        web: web(),
     }
 }
 
@@ -693,6 +695,7 @@ fn an_absent_request_budget_is_derived_and_shared_with_context_policy() {
         plugins: Default::default(),
         unknown_plugins: Default::default(),
         image_generation: image_generation(),
+        web: web(),
     };
 
     // The small model ceiling is below every automatic bound.
@@ -837,6 +840,7 @@ fn reserves_that_consume_the_whole_window_fail_instead_of_planning() {
         plugins: Default::default(),
         unknown_plugins: Default::default(),
         image_generation: image_generation(),
+        web: web(),
     };
 
     let err = effective_output_budget(&config, &profile).expect_err("no room to plan");
@@ -885,6 +889,7 @@ fn compaction_watermarks_are_derived_from_the_enforced_input_budget() {
         plugins: Default::default(),
         unknown_plugins: Default::default(),
         image_generation: image_generation(),
+        web: web(),
     };
 
     let budget = effective_output_budget(&config, &profile).expect("an output budget");
@@ -935,6 +940,7 @@ async fn scoped_auto_approval_is_shared_factory_policy_and_falls_back() {
         plugins: Default::default(),
         unknown_plugins: Default::default(),
         image_generation: image_generation(),
+        web: web(),
     };
     config.approval.auto.push(sourced(auto_rule(
         vec![AutoApprovalOperation::Replace],
@@ -1356,6 +1362,7 @@ fn agent(posture: AgentPosture) -> ResolvedAgent {
         legacy: false,
     };
     ResolvedAgent {
+        read_only_network_modules: sourced(vec!["web".to_owned(), "vision".to_owned()]),
         active: sourced(name.clone()),
         order: sourced(vec![name.clone()]),
         modes: std::collections::BTreeMap::from([(
@@ -1446,3 +1453,21 @@ async fn configured_input_modalities_override_the_catalog_field_only() {
         .expect("catalog profile");
     assert_eq!(prepared.profile.profile.input_modalities, [Modality::Text]);
 }
+
+fn web() -> smith_config::resolve::ResolvedWeb {
+    use smith_config::resolve::{ResolvedWeb, ResolvedWebFetch, ResolvedWebSearch};
+
+    ResolvedWeb {
+        fetch: ResolvedWebFetch {
+            allow_private_networks: sourced(false),
+        },
+        search: ResolvedWebSearch {
+            mode: sourced(smith_config::model::WebSearchMode::Auto),
+            backend: sourced(smith_config::model::WebSearchBackend::DuckDuckGo),
+            api_key: None,
+            searxng_url: None,
+        },
+    }
+}
+
+mod web_policy;

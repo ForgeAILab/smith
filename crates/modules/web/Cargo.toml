@@ -1,0 +1,32 @@
+[package]
+name = "smith-module-web"
+description = "Bounded web fetches and backend search through Smith's module contract."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+agent-runtime-core = { workspace = true }
+smith-module = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+futures-util = { workspace = true }
+html5ever = { workspace = true }
+htmd = { workspace = true }
+markup5ever_rcdom = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+agent-runtime-testkit = { workspace = true }
+smith-host = { workspace = true }
+tempfile = { workspace = true }

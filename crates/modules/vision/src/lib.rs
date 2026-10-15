@@ -35,8 +35,6 @@ impl Module for VisionModule {
             Some("built-in tools are disabled")
         } else if context.main_model_accepts_images {
             Some("the active main model accepts images")
-        } else if context.posture == smith_module::ModulePosture::ReadOnly {
-            Some("vision is unavailable in read-only posture")
         } else if context.vision.is_none() {
             Some("no vision model is configured")
         } else {

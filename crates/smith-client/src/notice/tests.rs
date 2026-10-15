@@ -190,3 +190,31 @@ fn image_input_notice_accepts_older_plans_without_image_counts() {
             .is_none()
     );
 }
+
+#[test]
+fn hosted_search_rejection_notice_is_classified_and_once_per_session() {
+    use agent_runtime_core::ids::AttemptId;
+    use agent_runtime_core::provider::{FinishReason, ProviderError, ProviderErrorKind};
+    let mut notices = HostedSearchNotices::default();
+    let mut event = plan("root", None);
+    event.payload = SmithEventKind::ProviderAttemptFinished {
+        attempt: AttemptId::new("attempt"),
+        index: None,
+        max_attempts: None,
+        finish: FinishReason::Error,
+        retryable: false,
+        retry_delay_ms: None,
+        error: Some(ProviderError::new(
+            ProviderErrorKind::Unsupported,
+            "hosted web search is not enabled for this account",
+        )),
+    };
+    assert!(notices.observe(&event, "other-session").is_none());
+    let notice = notices.observe(&event, "root").unwrap();
+    assert_eq!(notice.kind, NoticeKind::Provider);
+    assert_eq!(
+        notice.text,
+        "Hosted web search is unavailable for this organization."
+    );
+    assert!(notices.observe(&event, "root").is_none());
+}

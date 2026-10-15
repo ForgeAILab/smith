@@ -272,6 +272,7 @@ impl AdvisorRoute {
                         return Err(RuntimeError::tool("advisor attempted a tool call"));
                     }
                     ProviderStreamEvent::ReasoningDelta { .. }
+                    | ProviderStreamEvent::HostedSearch { .. }
                     | ProviderStreamEvent::CacheObservation { .. }
                     | ProviderStreamEvent::RateLimit { .. }
                     | ProviderStreamEvent::Downgrade { .. }
@@ -661,6 +662,7 @@ mod tests {
         let requests = provider.requests();
         assert_eq!(requests.len(), 1);
         assert!(requests[0].tools.is_empty());
+        assert!(requests[0].hosted_tools.is_empty());
         assert_eq!(requests[0].tool_choice, ToolChoice::None);
         requests[0].clone()
     }
@@ -847,7 +849,13 @@ mod tests {
     #[tokio::test]
     async fn advisor_reported_usage_reaches_session_totals_and_events_even_on_failure() {
         for failed in [false, true] {
-            let mut advice_events = vec![usage_event(50, 10)];
+            let mut advice_events = vec![
+                ProviderStreamEvent::HostedSearch {
+                    query: Some("ignored query".into()),
+                    sources: Vec::new(),
+                },
+                usage_event(50, 10),
+            ];
             if failed {
                 advice_events.push(ProviderStreamEvent::Error {
                     error: ProviderError::new(ProviderErrorKind::Network, "review failed"),

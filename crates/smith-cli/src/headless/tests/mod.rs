@@ -98,4 +98,6 @@ mod background;
 mod file_commands;
 mod fixtures;
 mod flow;
+#[cfg(feature = "module-web")]
+mod hosted_search;
 mod output;

@@ -835,3 +835,24 @@ async fn text_only_main_receives_an_mcp_image_as_a_placeholder() {
     session.shutdown().await.expect("clean shutdown");
     supervisor.shutdown().await;
 }
+
+#[tokio::test]
+async fn web_plan_posture_excludes_unreviewed_mcp_network_tools() {
+    let config = MCP_ASK_CONFIG.replace("[profiles.dev]", "[profiles.dev]\nposture = \"plan\"");
+    let mut fixture = McpFixture::new(&config, "[mcp.servers.docs]\ncommand = \"docs-server\"\n");
+    fixture.trust_all();
+    let supervisor = fixture.supervise(FakeConnector::new([("docs", advertising(&["search"]))]));
+    fixture.settled(&supervisor).await;
+    let mut runtime = request(&fixture.fixture, HostSurface::Headless);
+    runtime.mcp = Some(supervisor);
+    runtime.approval = Some(Arc::new(smith_host::HeadlessApproval::new()));
+    let smith = factory::build_request(runtime).await.unwrap();
+    assert!(
+        !smith
+            .policy()
+            .tools
+            .iter()
+            .any(|name| name.starts_with("mcp__"))
+    );
+    assert!(!smith.policy().tools.iter().any(|name| name == "edit"));
+}

@@ -247,12 +247,14 @@ async fn headless_listing_matches_runtime_module_outcomes_without_a_session() {
     let report = crate::config_command::modules_report(&prepared)
         .await
         .unwrap();
-    assert_eq!(report.rows.len(), 3);
+    assert_eq!(report.rows.len(), 4);
     for row in &report.rows {
         let state = if !prepared.resolution.config.modules[&row.id].compiled_in {
             smith_module::ModuleState::NotBuilt
         } else if !prepared.resolution.config.modules[&row.id].enabled.value {
             smith_module::ModuleState::Off
+        } else if row.id == "web" {
+            smith_module::ModuleState::Mounted
         } else {
             smith_module::ModuleState::Inactive {
                 reason: if row.id == "image-generation" {

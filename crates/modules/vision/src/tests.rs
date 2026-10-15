@@ -57,6 +57,7 @@ fn context() -> ModuleContext {
         is_child_session: false,
         posture: ModulePosture::ReadWrite,
         transport: Arc::new(ReplayTransport::single(Vec::new())),
+        web: None,
         http: None,
         image_binding: None,
         main_model_accepts_images: false,
@@ -84,6 +85,14 @@ fn module_inactive_reasons_and_recomposition_follow_the_active_model() {
         VisionModule.mount(&context).unwrap(),
         Mounted::Contributions(_)
     ));
+    context.posture = ModulePosture::ReadOnly;
+    assert!(
+        matches!(
+            VisionModule.mount(&context).unwrap(),
+            Mounted::Contributions(_)
+        ),
+        "the host's reviewed-module policy decides read-only admission"
+    );
     context.main_model_accepts_images = true;
     let Mounted::Inactive { reason } = VisionModule.mount(&context).unwrap() else {
         panic!("inactive")

@@ -16,7 +16,8 @@ name = "smith"
 path = "src/main.rs"
 
 [features]
-default = ["module-vision", "module-image-generation", "module-budget-notice", "wasm-modules"]
+default = ["module-web", "module-vision", "module-image-generation", "module-budget-notice", "wasm-modules"]
+module-web = ["dep:smith-module-web"]
 module-vision = ["dep:smith-module-vision"]
 module-image-generation = ["dep:smith-module-image-generation"]
 module-budget-notice = ["dep:smith-module-budget-notice"]
@@ -43,6 +44,7 @@ smith-host = { workspace = true }
 smith-runtime = { workspace = true }
 smith-module = { workspace = true }
 smith-wasm-host = { workspace = true, optional = true }
+smith-module-web = { workspace = true, optional = true }
 smith-module-vision = { workspace = true, optional = true }
 smith-module-image-generation = { workspace = true, optional = true }
 smith-module-budget-notice = { workspace = true, optional = true }

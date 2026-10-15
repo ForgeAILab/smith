@@ -733,6 +733,103 @@ fn view_image_rows_show_progress_answers_and_errors_live_and_resumed() {
 }
 
 #[test]
+fn web_tool_rows_show_progress_summaries_and_errors_live_and_resumed() {
+    let theme = Theme::new().without_color().without_motion();
+    for (name, arguments, header, output, summary) in [
+        (
+            "web_fetch",
+            serde_json::json!({"url": "https://docs.rs/serde/", "unknown": "PRIVATE ARGUMENT"}),
+            "Web Fetch(docs.rs/serde/)",
+            "URL: https://docs.rs/serde/latest/ | Status: 200 | Content-Type: text/html; charset=utf-8 | Title: Serde\n\nContent from https://docs.rs/serde/latest/ (external, untrusted):\nFETCH BODY",
+            "200 text/html",
+        ),
+        (
+            "web_search",
+            serde_json::json!({"query": "serde derive", "max_results": 5, "unknown": "PRIVATE ARGUMENT"}),
+            "Web Search(\"serde derive\")",
+            "3 results\n\nContent from https://html.duckduckgo.com/html/ (external, untrusted):\nSEARCH BODY",
+            "3 results",
+        ),
+    ] {
+        for is_error in [false, true] {
+            let mut live = App::new("m", "p");
+            live.apply(&event(RuntimeEvent::ToolCallRequested {
+                call: ToolCallId::new("web"),
+                name: name.to_owned(),
+                argument_keys: Vec::new(),
+                argument_fingerprint: agent_runtime_registry::Fingerprint::of("arguments"),
+                arguments: None,
+            }));
+            live.set_tool_display(
+                "web",
+                smith_tools::project_tool_call_display(name, &arguments).unwrap(),
+            );
+            let running = render(&live, 120, 20, theme);
+            assert!(running.contains(header), "{running}");
+            assert!(running.contains("running 0s"), "{running}");
+            assert!(!running.contains("PRIVATE"), "{running}");
+
+            let output = if is_error {
+                "Web request failed: request timed out"
+            } else {
+                output
+            };
+            live.apply(&event(RuntimeEvent::ToolCallCompleted {
+                call: ToolCallId::new("web"),
+                name: name.to_owned(),
+                is_error,
+            }));
+            live.set_tool_result_preview("web", output);
+            let history = vec![
+                Message::assistant(vec![ContentPart::ToolCall(ToolCall {
+                    id: ToolCallId::new("web"),
+                    name: name.to_owned(),
+                    arguments: arguments.clone(),
+                })]),
+                Message::tool_result(ToolResultBlock {
+                    call_id: ToolCallId::new("web"),
+                    name: name.to_owned(),
+                    content: vec![ContentPart::text(output)],
+                    is_error,
+                }),
+            ];
+            let mut resumed = App::new("m", "p");
+            resumed.transcript.replace_from_history(&history);
+            resumed.set_tool_display(
+                "web",
+                smith_tools::project_tool_call_display(name, &arguments).unwrap(),
+            );
+            resumed.set_tool_result_preview("web", output);
+            for expanded in [false, true] {
+                live.work_details = expanded;
+                resumed.work_details = expanded;
+                let completed = render(&live, 120, 20, theme);
+                assert_eq!(completed, render(&resumed, 120, 20, theme));
+                assert!(completed.contains(header), "{completed}");
+                assert!(!completed.contains("PRIVATE"), "{completed}");
+                assert!(!completed.contains("running"), "{completed}");
+                if is_error {
+                    assert!(completed.contains(" failed"), "{completed}");
+                    assert!(completed.contains(output), "{completed}");
+                } else {
+                    if expanded {
+                        assert!(
+                            completed.contains(output.lines().next().unwrap()),
+                            "{completed}"
+                        );
+                        assert!(completed.contains("Content from"), "{completed}");
+                    } else {
+                        assert!(completed.contains(summary), "{completed}");
+                        assert!(!completed.contains("Content from"), "{completed}");
+                    }
+                    assert_eq!(completed.contains("BODY"), expanded, "{completed}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn a_reviewed_text_summary_does_not_hide_image_result_lines() {
     let mut app = App::new("m", "p");
     app.transcript.push_tool_call(
@@ -753,4 +850,51 @@ fn a_reviewed_text_summary_does_not_hide_image_result_lines() {
         !screen.contains("Read 1 lines") && !screen.contains("https://"),
         "{screen}"
     );
+}
+
+#[test]
+fn hosted_search_rows_deduplicate_bound_hosts_and_restore_from_activity() {
+    use crate::transcript::{RestoredHostedSearch, Transcript};
+    use agent_runtime_core::content::Message;
+    use smith_runtime::client::SmithHostedSource;
+    let sources = [
+        "docs.rs",
+        "rust-lang.org",
+        "docs.rs",
+        "a.test",
+        "b.test",
+        "c.test",
+        "d.test",
+        "e.test",
+    ]
+    .into_iter()
+    .map(|host| SmithHostedSource {
+        title: None,
+        url: format!("https://{host}/doc"),
+    })
+    .collect::<Vec<_>>();
+    let mut app = App::new("model", "/repo");
+    app.transcript.push_user("research");
+    app.transcript
+        .push_hosted_search(Some("Rust docs"), &sources);
+    let screen = render(&app, 100, 20, Theme::new().without_color());
+    assert!(
+        screen.contains("Web Search(\"Rust docs\") · hosted"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("docs.rs, rust-lang.org, a.test, b.test, c.test, +2 more"),
+        "{screen}"
+    );
+    let mut restored = Transcript::default();
+    restored.replace_from_history_with_activity(
+        &[Message::user("research")],
+        &[],
+        &[RestoredHostedSearch {
+            anchor: 1,
+            query: Some("Rust docs".into()),
+            sources,
+        }],
+    );
+    assert_eq!(app.transcript.blocks(), restored.blocks());
 }

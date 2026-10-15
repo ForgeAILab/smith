@@ -7,6 +7,81 @@ fn invocation(name: &str, arguments: Value) -> String {
         .invocation()
 }
 
+#[test]
+fn web_tools_project_only_reviewed_inputs() {
+    assert_eq!(
+        invocation(
+            "web_fetch",
+            json!({"url": "https://docs.rs/serde/", "unknown": "PRIVATE"})
+        ),
+        "Web Fetch(docs.rs/serde/)"
+    );
+    assert_eq!(
+        invocation(
+            "web_fetch",
+            json!({"url": "http://localhost:3000/docs?q=serde#intro"})
+        ),
+        "Web Fetch(localhost:3000/docs?q=serde)"
+    );
+    assert_eq!(
+        invocation(
+            "web_search",
+            json!({"query": "serde \"derive\"", "max_results": 5, "unknown": "PRIVATE"})
+        ),
+        "Web Search(\"serde \\\"derive\\\"\")"
+    );
+    for (name, label) in [("web_fetch", "Web Fetch"), ("web_search", "Web Search")] {
+        assert_eq!(tool_display_label(name), Some(label));
+        assert!(has_tool_call_display_schema(name));
+        assert!(project_tool_call_display(&format!("mcp__remote__{name}"), &json!({})).is_none());
+    }
+}
+
+#[test]
+fn web_tool_details_are_bounded_and_control_safe() {
+    for url in [
+        format!("https://docs.rs/serde/?q={}", "é".repeat(200)),
+        format!("https://docs.rs/{}", "x".repeat(200)),
+    ] {
+        let display = project_tool_call_display("web_fetch", &json!({"url": url})).unwrap();
+        assert_eq!(display.target().chars().count(), 119);
+        assert!(display.target().ends_with('…'));
+    }
+    let display = project_tool_call_display(
+        "web_search",
+        &json!({"query": format!("serde\n\u{202e}{}", "é".repeat(200))}),
+    )
+    .unwrap();
+    assert!(display.target().starts_with("\"serde "));
+    assert!(display.target().ends_with("…\""));
+    assert!(!display.target().contains(['\n', '\u{202e}']));
+}
+
+#[test]
+fn malformed_web_calls_keep_the_protected_fallback() {
+    for arguments in [
+        json!({}),
+        json!({"url": 42}),
+        json!({"url": "ftp://docs.rs/serde/"}),
+        json!({"url": "https:///serde/"}),
+        json!({"url": "https://user:secret@docs.rs/serde/"}),
+        json!({"url": "https://docs.rs/\u{202e}serde/"}),
+        json!({"url": "https://docs.rs/\nserde/"}),
+    ] {
+        assert!(project_tool_call_display("web_fetch", &arguments).is_none());
+    }
+    for arguments in [
+        json!({}),
+        json!({"query": 42}),
+        json!({"query": "  "}),
+        json!({"query": "serde", "max_results": 0}),
+        json!({"query": "serde", "max_results": 11}),
+        json!({"query": "serde", "max_results": "5"}),
+    ] {
+        assert!(project_tool_call_display("web_search", &arguments).is_none());
+    }
+}
+
 fn agent_invocation(name: &str, detail: Value) -> String {
     project_external_tool_call_display(name, &detail)
         .expect("the agent call should have a reviewed projection")

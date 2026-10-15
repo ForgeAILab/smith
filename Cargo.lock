@@ -30,7 +30,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=f0ade1f99f53f4695c1f7e39b5187aee5d2d92d8#f0ade1f99f53f4695c1f7e39b5187aee5d2d92d8"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=ae82287a18919ef48d4f47534e197d54f1ce24e8#ae82287a18919ef48d4f47534e197d54f1ce24e8"
 dependencies = [
  "agent-runtime-ability",
  "agent-runtime-context",
@@ -55,7 +55,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-ability"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=f0ade1f99f53f4695c1f7e39b5187aee5d2d92d8#f0ade1f99f53f4695c1f7e39b5187aee5d2d92d8"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=ae82287a18919ef48d4f47534e197d54f1ce24e8#ae82287a18919ef48d4f47534e197d54f1ce24e8"
 dependencies = [
  "agent-runtime-core",
  "agent-runtime-registry",
@@ -67,7 +67,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-context"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=f0ade1f99f53f4695c1f7e39b5187aee5d2d92d8#f0ade1f99f53f4695c1f7e39b5187aee5d2d92d8"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=ae82287a18919ef48d4f47534e197d54f1ce24e8#ae82287a18919ef48d4f47534e197d54f1ce24e8"
 dependencies = [
  "agent-runtime-core",
  "agent-runtime-registry",
@@ -80,7 +80,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-core"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=f0ade1f99f53f4695c1f7e39b5187aee5d2d92d8#f0ade1f99f53f4695c1f7e39b5187aee5d2d92d8"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=ae82287a18919ef48d4f47534e197d54f1ce24e8#ae82287a18919ef48d4f47534e197d54f1ce24e8"
 dependencies = [
  "agent-runtime-registry",
  "async-trait",
@@ -98,7 +98,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-mcp"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=f0ade1f99f53f4695c1f7e39b5187aee5d2d92d8#f0ade1f99f53f4695c1f7e39b5187aee5d2d92d8"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=ae82287a18919ef48d4f47534e197d54f1ce24e8#ae82287a18919ef48d4f47534e197d54f1ce24e8"
 dependencies = [
  "agent-runtime-ability",
  "agent-runtime-core",
@@ -115,7 +115,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-provider"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=f0ade1f99f53f4695c1f7e39b5187aee5d2d92d8#f0ade1f99f53f4695c1f7e39b5187aee5d2d92d8"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=ae82287a18919ef48d4f47534e197d54f1ce24e8#ae82287a18919ef48d4f47534e197d54f1ce24e8"
 dependencies = [
  "agent-runtime-core",
  "agent-runtime-registry",
@@ -134,7 +134,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-registry"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=f0ade1f99f53f4695c1f7e39b5187aee5d2d92d8#f0ade1f99f53f4695c1f7e39b5187aee5d2d92d8"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=ae82287a18919ef48d4f47534e197d54f1ce24e8#ae82287a18919ef48d4f47534e197d54f1ce24e8"
 dependencies = [
  "serde",
 ]
@@ -142,7 +142,7 @@ dependencies = [
 [[package]]
 name = "agent-runtime-testkit"
 version = "0.1.0"
-source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=f0ade1f99f53f4695c1f7e39b5187aee5d2d92d8#f0ade1f99f53f4695c1f7e39b5187aee5d2d92d8"
+source = "git+https://github.com/ForgeAILab/agent-runtime.git?rev=ae82287a18919ef48d4f47534e197d54f1ce24e8#ae82287a18919ef48d4f47534e197d54f1ce24e8"
 dependencies = [
  "agent-runtime",
  "agent-runtime-core",
@@ -1357,6 +1357,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 
 [[package]]
+name = "futf"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df420e2e84819663797d1ec6544b13c5be84629e7bb00dc960d6917db2987843"
+dependencies = [
+ "mac",
+ "new_debug_unreachable",
+]
+
+[[package]]
 name = "futures"
 version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1600,6 +1610,27 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
+name = "htmd"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4642ae72538a8d374109c5acf95c603732c736aace63c337ec2d3e42f7095854"
+dependencies = [
+ "html5ever",
+ "markup5ever_rcdom",
+]
+
+[[package]]
+name = "html5ever"
+version = "0.35.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "55d958c2f74b664487a2035fe1dadb032c48718a03b63f3ab0b8537db8549ed4"
+dependencies = [
+ "log",
+ "markup5ever",
+ "match_token",
+]
 
 [[package]]
 name = "http"
@@ -2189,6 +2220,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
+name = "mac"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c41e0c4fef86961ac6d6f8a82609f55f31b05e4fce149ac5710e439df7619ba4"
+
+[[package]]
 name = "mac_address"
 version = "1.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2205,6 +2242,40 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d640282b302c0bb0a2a8e0233ead9035e3bed871f0b7e81fe4a1ec829765db44"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "markup5ever"
+version = "0.35.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "311fe69c934650f8f19652b3946075f0fc41ad8757dbb68f1ca14e7900ecc1c3"
+dependencies = [
+ "log",
+ "tendril",
+ "web_atoms",
+]
+
+[[package]]
+name = "markup5ever_rcdom"
+version = "0.35.0+unofficial"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8bcd53df4748257345b8bc156d620340ce0f015ec1c7ef1cff475543888a31d"
+dependencies = [
+ "html5ever",
+ "markup5ever",
+ "tendril",
+ "xml5ever",
+]
+
+[[package]]
+name = "match_token"
+version = "0.35.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac84fd3f360fcc43dc5f5d186f02a94192761a080e8bc58621ad4d12296a58cf"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -2295,6 +2366,12 @@ dependencies = [
  "num-traits",
  "pxfm",
 ]
+
+[[package]]
+name = "new_debug_unreachable"
+version = "1.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "nix"
@@ -2840,6 +2917,12 @@ name = "powerfmt"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
+
+[[package]]
+name = "precomputed-hash"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "925383efa346730478fb4838dbe9137d2a47675ad789c546d150a6e1dd4ab31c"
 
 [[package]]
 name = "prettyplease"
@@ -3723,6 +3806,7 @@ dependencies = [
  "smith-module-budget-notice",
  "smith-module-image-generation",
  "smith-module-vision",
+ "smith-module-web",
  "smith-plugin",
  "smith-runtime",
  "smith-test-module",
@@ -3867,6 +3951,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "smith-module-web"
+version = "0.4.0"
+dependencies = [
+ "agent-runtime-core",
+ "agent-runtime-testkit",
+ "async-trait",
+ "base64 0.22.1",
+ "futures-util",
+ "htmd",
+ "html5ever",
+ "markup5ever_rcdom",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "smith-host",
+ "smith-module",
+ "tempfile",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "smith-plugin"
 version = "0.4.0"
 dependencies = [
@@ -3912,6 +4018,7 @@ dependencies = [
  "smith-module-budget-notice",
  "smith-module-image-generation",
  "smith-module-vision",
+ "smith-module-web",
  "smith-plugin",
  "smith-tools",
  "smith-wasm-host",
@@ -3976,6 +4083,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "unicode-width",
+ "url",
 ]
 
 [[package]]
@@ -4038,6 +4146,31 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "string_cache"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf776ba3fa74f83bf4b63c3dcbbf82173db2632ed8452cb2d891d33f459de70f"
+dependencies = [
+ "new_debug_unreachable",
+ "parking_lot",
+ "phf_shared",
+ "precomputed-hash",
+ "serde",
+]
+
+[[package]]
+name = "string_cache_codegen"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c711928715f1fe0fe509c53b43e993a9a557babc2d0a3567d0a3006f1ac931a0"
+dependencies = [
+ "phf_generator",
+ "phf_shared",
+ "proc-macro2",
+ "quote",
+]
 
 [[package]]
 name = "strsim"
@@ -4142,6 +4275,17 @@ dependencies = [
  "once_cell",
  "rustix",
  "windows-sys 0.60.2",
+]
+
+[[package]]
+name = "tendril"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d24a120c5fc464a3458240ee02c299ebcb9d67b5249c8848b09d639dca8d7bb0"
+dependencies = [
+ "futf",
+ "mac",
+ "utf-8",
 ]
 
 [[package]]
@@ -4651,6 +4795,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "utf-8"
+version = "0.7.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09cc8ee72d2a9becf2f2febe0205bbed8fc6615b7cb429ad062dc7b7ddd036a9"
+
+[[package]]
 name = "utf8_iter"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5141,6 +5291,18 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "web_atoms"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57ffde1dc01240bdf9992e3205668b235e59421fd085e8a317ed98da0178d414"
+dependencies = [
+ "phf",
+ "phf_codegen",
+ "string_cache",
+ "string_cache_codegen",
 ]
 
 [[package]]
@@ -5709,6 +5871,16 @@ checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
 dependencies = [
  "libc",
  "rustix",
+]
+
+[[package]]
+name = "xml5ever"
+version = "0.35.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee3f1e41afb31a75aef076563b0ad3ecc24f5bd9d12a72b132222664eb76b494"
+dependencies = [
+ "log",
+ "markup5ever",
 ]
 
 [[package]]

@@ -68,8 +68,12 @@ pub(super) fn prepare(
                 );
                 continue;
             }
-            tools.push(tool);
-            ability_sources.push(agent_runtime::registry::RegistrySource::Provider);
+            if !request.config.agent.active_posture().is_read_only()
+                || read_only_extension(tool.spec())
+            {
+                tools.push(tool);
+                ability_sources.push(agent_runtime::registry::RegistrySource::Provider);
+            }
         }
     }
 
@@ -191,4 +195,16 @@ pub(super) fn read_only_extension(spec: agent_runtime_core::tool::ToolSpec) -> b
             .permission_upper_bound
             .iter()
             .all(|permission| matches!(permission, Permission::FsRead | Permission::ClockRead))
+}
+
+/// Reviewed first-party network reads admitted by the user's posture policy.
+pub(super) fn read_only_network_extension(spec: agent_runtime_core::tool::ToolSpec) -> bool {
+    let allowed = |permission: &Permission| {
+        matches!(permission, Permission::NetHttp | Permission::DataEgress)
+            || (spec.name == "view_image" && matches!(permission, Permission::HostFsRead))
+    };
+    spec.effects.has_network()
+        && spec.effects.has_data_egress()
+        && spec.effects.permission_upper_bound().iter().all(allowed)
+        && spec.permission_upper_bound.iter().all(allowed)
 }

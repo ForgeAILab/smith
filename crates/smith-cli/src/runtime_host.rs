@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use smith_client::commands::{AdvisorChoice, SelectionCommand};
 use smith_config::credential::CredentialResolver;
 use smith_config::inventory::{SelectionInventory, local_inventory_with_catalog};
-use smith_config::model::{ApprovalMode, ProfileUse};
+use smith_config::model::{ApprovalMode, ProfileUse, WebSearchBackend, WebSearchMode};
 use smith_config::resolve::{
     AdvisorOverride, AdvisorTarget, Layer, Resolution, ResolvedAgent, resolve,
 };
@@ -74,6 +74,8 @@ pub(super) struct StartedHost {
     pub(super) commands: Arc<crate::local_command::file_commands::CommandContext>,
     /// Layered local cache-miss notice policy.
     pub(super) cache_miss_notices: bool,
+    /// Search preference retained for the outcome of a safe fallback rebuild.
+    web_search: (WebSearchMode, WebSearchBackend),
 }
 
 /// Common workspace, credential, and catalog basis for every preflight.
@@ -165,6 +167,7 @@ pub(super) async fn start_host(
         frozen_catalog,
         mcp,
         &crate::modules::ModuleSessions::default(),
+        Arc::new(smith_runtime::factory::WebSearchSession::default()),
     )
     .await
 }
@@ -176,12 +179,17 @@ async fn start_host_with_modules(
     frozen_catalog: Option<Arc<smith_config::catalog::CatalogSnapshot>>,
     mcp: Option<Arc<crate::mcp::McpContext>>,
     sessions: &crate::modules::ModuleSessions,
+    web_search_session: Arc<smith_runtime::factory::WebSearchSession>,
 ) -> Result<StartedHost> {
     let had_frozen_catalog = frozen_catalog.is_some();
     let prepared = prepare_with_catalog(selection, frozen_catalog)?;
     let project = prepared.project;
     let resolution = prepared.resolution;
     let cache_miss_notices = resolution.cache_miss_notices.value;
+    let web_search = (
+        resolution.config.web.search.mode.value,
+        resolution.config.web.search.backend.value,
+    );
     let catalog = prepared.catalog;
     if !had_frozen_catalog
         && smith_config::catalog::catalog_provider_for(
@@ -228,6 +236,7 @@ async fn start_host_with_modules(
         sessions,
     )
     .context("rooting the project workspace")?;
+    runtime.web_search_session = web_search_session;
     runtime.capability_denials = selection.capability_denials.clone();
     // Folded on here rather than inside the factory so that a direct embedder
     // still gets exactly the sources it supplied: discovery is a property of
@@ -577,6 +586,7 @@ async fn start_host_with_modules(
         skills: skill_context,
         commands,
         cache_miss_notices,
+        web_search,
     })
 }
 
@@ -741,12 +751,14 @@ async fn run_interactive_hosts(
     let mut app = None;
     let mut wasm_sessions = crate::modules::ModuleSessions::default();
     let mut wasm_session_id: Option<String> = None;
+    let mut web_search_session = Arc::new(smith_runtime::factory::WebSearchSession::default());
     // Initialize after raw mode is entered, then retain input through host
     // shutdown, startup retries, and embedded connection steps.
     let mut keys = None;
     loop {
         if wasm_session_id.as_deref() != resume.as_deref() {
             wasm_sessions = Default::default();
+            web_search_session = Arc::new(smith_runtime::factory::WebSearchSession::default());
         }
         let started = match start_host_with_modules(
             &args.selection,
@@ -755,6 +767,7 @@ async fn run_interactive_hosts(
             frozen_catalog.clone(),
             mcp.clone(),
             &wasm_sessions,
+            web_search_session.clone(),
         )
         .await
         {
@@ -858,6 +871,7 @@ async fn run_interactive_hosts(
             skills,
             commands,
             cache_miss_notices,
+            web_search,
             ..
         } = started;
         mcp = started_mcp;
@@ -920,9 +934,12 @@ async fn run_interactive_hosts(
                 remove_empty_interactive_session(&host).await;
                 return Ok(0);
             }
-            // The same identity, recomposed around the tools a server
-            // contributed after this session started.
-            InteractiveExit::CapabilitiesChanged => {
+            // Keep the selection and identity while recomposing tools after
+            // a connection change or an account-disabled search rejection.
+            InteractiveExit::CapabilitiesChanged | InteractiveExit::HostedSearchUnavailable => {
+                if matches!(exit, InteractiveExit::HostedSearchUnavailable) {
+                    host_notice = Some(hosted_search_fallback_notice(web_search.0, web_search.1));
+                }
                 resume = Some(current_session);
                 frozen_catalog = Some(catalog);
                 continue;
@@ -1055,6 +1072,18 @@ async fn run_interactive_hosts(
                 apply_palette_command(&mut args.selection, &mut resume, current_session, command);
             }
         }
+    }
+}
+
+fn hosted_search_fallback_notice(mode: WebSearchMode, backend: WebSearchBackend) -> String {
+    let unavailable = "Hosted web search is unavailable for this organization.";
+    if mode == WebSearchMode::Auto {
+        format!(
+            "{unavailable} Search switched to the {} backend for this session.",
+            backend.as_str(),
+        )
+    } else {
+        format!("{unavailable} Hosted search is disabled for this session.")
     }
 }
 
@@ -1235,6 +1264,18 @@ mod tests {
     use smith_client::status::{PriceReference, PriceTable, SessionUsage};
 
     use super::*;
+
+    #[test]
+    fn hosted_search_fallback_notice_names_the_session_backend() {
+        assert_eq!(
+            hosted_search_fallback_notice(WebSearchMode::Auto, WebSearchBackend::Brave),
+            "Hosted web search is unavailable for this organization. Search switched to the brave backend for this session."
+        );
+        assert_eq!(
+            hosted_search_fallback_notice(WebSearchMode::Hosted, WebSearchBackend::DuckDuckGo),
+            "Hosted web search is unavailable for this organization. Hosted search is disabled for this session."
+        );
+    }
 
     fn usage(reported: bool, tokens: &[(CounterKind, u64)]) -> SessionUsage {
         let mut totals = BTreeMap::new();

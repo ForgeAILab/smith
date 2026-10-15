@@ -73,6 +73,7 @@ pub(super) enum ValueKind {
 pub(super) const SETTINGS: &[(&str, ValueKind)] = &[
     ("agent", ValueKind::Text),
     ("agent_order", ValueKind::List),
+    ("agent.read_only_network_modules", ValueKind::List),
     ("profile_order", ValueKind::List),
     ("approval.auto_approve", ValueKind::List),
     ("approval.auto", ValueKind::Text),
@@ -132,6 +133,11 @@ pub(super) const SETTINGS: &[(&str, ValueKind)] = &[
     ("provider", ValueKind::Text),
     ("reasoning.effort", ValueKind::Text),
     ("reasoning.enabled", ValueKind::Flag),
+    ("tools.web_fetch.allow_private_networks", ValueKind::Flag),
+    ("tools.web_search.mode", ValueKind::Text),
+    ("tools.web_search.backend", ValueKind::Text),
+    ("tools.web_search.api_key", ValueKind::Text),
+    ("tools.web_search.searxng_url", ValueKind::Text),
     ("tools.image_generation.enabled", ValueKind::Flag),
     ("tools.image_generation.model", ValueKind::Text),
     ("tools.image_generation.quality", ValueKind::Text),
@@ -498,6 +504,8 @@ pub struct Overrides {
     pub modules: BTreeMap<String, bool>,
     /// Plugin switches supplied by the host, keyed by installed plugin name.
     pub plugins: BTreeMap<String, bool>,
+    /// Web-search route preference for this invocation or session.
+    pub web_search_mode: Option<crate::model::WebSearchMode>,
     /// Legacy image-tool switch, sharing selection with its declared module alias.
     pub image_generation_enabled: Option<bool>,
     /// Select a root agent mode by name.
@@ -609,6 +617,12 @@ impl Overrides {
             push(
                 &super::plugins::enabled_key(name),
                 SettingValue::Flag(*value),
+            );
+        }
+        if let Some(value) = self.web_search_mode {
+            push(
+                "tools.web_search.mode",
+                SettingValue::Text(value.as_str().to_owned()),
             );
         }
         if let Some(value) = self.image_generation_enabled {

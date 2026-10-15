@@ -15,6 +15,7 @@ built-in
   smith.configuration.runtime-connections · active · Smith configuration reference, section "Runtime connections". actions.
   smith.configuration.smith-s-tools-on-installed-coding-agents · active · Smith configuration reference, section "Smith's tools on installed coding agents". `[harness.<kind>] allow_own_tools`.
   smith.configuration.vision-model-for-text-only-agents · active · Smith configuration reference, section "Vision model for text-only agents". A vision model answers questions about images for a text-only main model.
+  smith.configuration.web-tools · active · Smith configuration reference, section "Web tools". Web tools let Smith read public pages and search for current information.
   smith.headless · active · Outline of the Smith headless protocol reference for smith -p: input modes, text, json, and stream-json output formats, event framing, exit behavior, and resuming sessions non-interactively. Activate before scripting or integrating smith -p, then activate the section it names.
   smith.headless.compatibility · active · Smith headless protocol reference, section "Compatibility". variants as unsupported rather than guessing.
   smith.headless.input-and-output-modes · active · Smith headless protocol reference, section "Input and output modes". Prompt stdin is read once, as bounded UTF-8, before the turn.

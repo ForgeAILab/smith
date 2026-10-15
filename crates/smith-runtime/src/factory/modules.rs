@@ -33,8 +33,18 @@ pub async fn module_report(
         &prepared.reasoning,
         prepared.command.map(|command| command.provider),
     )?;
+    let web = super::web::prepare(
+        request,
+        provider
+            .provider
+            .capabilities(&prepared.model)
+            .map(|caps| caps.hosted_web_search)
+            .unwrap_or(false),
+    )
+    .await;
     Ok(prepare(
         request,
+        &web,
         provider.image_binding,
         Box::pin(super::provider::prepare_vision_route(
             request,
@@ -51,6 +61,7 @@ pub async fn module_report(
 
 pub(super) fn prepare(
     request: &RuntimeRequest,
+    web: &super::web::WebRoute,
     image_binding: Option<ImageBinding>,
     vision: Option<smith_module::VisionBinding>,
     max_input_tokens: u32,
@@ -75,6 +86,7 @@ pub(super) fn prepare(
     }
     let context = context(
         request,
+        web.settings.clone(),
         image_binding,
         vision,
         max_input_tokens,
@@ -82,8 +94,13 @@ pub(super) fn prepare(
         session_history,
     )?;
     let mut plan = mount_modules(&composition, &context);
+    report_web_diagnostic(&mut plan, web.diagnostic.as_deref());
     apply_sandbox_authority(&mut plan);
-    enforce_posture(&mut plan, context.posture);
+    enforce_posture(
+        &mut plan,
+        context.posture,
+        &request.config.agent.read_only_network_modules.value,
+    );
     reject_sandbox_tool_collisions(&mut plan, request);
     reject_sandbox_pipeline_ordering(&mut plan);
     Ok(plan)
@@ -136,16 +153,24 @@ impl Tool for SandboxTool {
     }
 }
 
-pub(crate) fn enforce_posture(plan: &mut MountPlan, posture: ModulePosture) {
+pub(crate) fn enforce_posture(
+    plan: &mut MountPlan,
+    posture: ModulePosture,
+    network_modules: &[String],
+) {
     // Trusted modules receive the posture, but the host still enforces it at
     // registration, just as it does for trusted embedding tools.
     if posture == ModulePosture::ReadOnly {
         for module in &mut plan.mounted {
+            let reviewed = matches!(module.descriptor.origin, ModuleOrigin::FirstParty)
+                && network_modules.contains(&module.descriptor.id);
             module
                 .contributions
                 .retain(|contribution| match contribution {
                     ModuleContribution::Tool(tool) => {
                         super::capabilities::read_only_extension(tool.spec())
+                            || (reviewed
+                                && super::capabilities::read_only_network_extension(tool.spec()))
                     }
                     _ => true,
                 });
@@ -155,6 +180,7 @@ pub(crate) fn enforce_posture(plan: &mut MountPlan, posture: ModulePosture) {
 
 pub(super) fn context(
     request: &RuntimeRequest,
+    web: smith_module::WebSettings,
     image_binding: Option<ImageBinding>,
     vision: Option<smith_module::VisionBinding>,
     max_input_tokens: u32,
@@ -181,6 +207,7 @@ pub(super) fn context(
         http: Some(transport),
         image_binding,
         vision,
+        web: Some(web),
         main_model_accepts_images: request.config.model_image_input.value
             == smith_config::resolve::ImageInput::Accepts,
         session_history: Some(session_history),
@@ -551,5 +578,32 @@ impl agent_runtime::harness::ToolViewResolver for SandboxHealthView {
             deny,
             ..Default::default()
         })
+    }
+}
+
+#[derive(Debug)]
+struct WebSearchDiagnostic(String);
+
+impl smith_module::StatusSource for WebSearchDiagnostic {
+    fn current(&self) -> Option<smith_module::StatusItem> {
+        Some(smith_module::StatusItem::new(
+            "web-search-unavailable",
+            &self.0,
+            Some(smith_module::StatusSeverity::Warning),
+        ))
+    }
+}
+
+pub(crate) fn report_web_diagnostic(plan: &mut MountPlan, reason: Option<&str>) {
+    if let Some(reason) = reason
+        && let Some(module) = plan
+            .mounted
+            .iter_mut()
+            .find(|module| module.descriptor.id == "web")
+    {
+        module.contributions.push(ModuleContribution::StatusItem {
+            name: "web-search-unavailable".into(),
+            source: Arc::new(WebSearchDiagnostic(reason.into())),
+        });
     }
 }

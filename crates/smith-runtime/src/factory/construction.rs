@@ -251,8 +251,17 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         profile.profile.limits,
         clock.clone(),
     )?;
+    let web = web::prepare(
+        &request,
+        provider
+            .capabilities(&model)
+            .map(|caps| caps.hosted_web_search)
+            .unwrap_or(false),
+    )
+    .await;
     let module_plan = modules::prepare(
         &request,
+        &web,
         provider_stage.image_binding.clone(),
         vision.as_ref().map(|vision| vision.binding.clone()),
         profile.profile.limits.max_input_tokens,
@@ -406,12 +415,14 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
 
     let mut builder = RuntimeBuilder::new(model.clone())
         .provider(provider.clone())
+        .observer(request.web_search_session.clone())
         .provider_name(provider_name.clone())
         // The profile rather than the catalog: the run must plan against
         // exactly the limits validated above, and passing a catalog as well
         // would be dead weight because an explicit profile always outranks it.
         .model_profile(profile.profile.clone())
         .loop_config(loop_config.clone())
+        .hosted_tools(web.hosted.clone())
         .model_interceptor(Arc::new(ReasoningInterceptor::new(&reasoning)))
         .context_policy(context_policy.clone())
         .compactor(StructuralCompactor::new(compaction_policy))
@@ -530,6 +541,7 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
 
     let child_module_context = modules::context(
         &request,
+        web.settings,
         provider_stage.image_binding,
         vision.as_ref().map(|vision| vision.binding.clone()),
         profile.profile.limits.max_input_tokens,
@@ -555,6 +567,10 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         SmithDelegation {
             factory: Arc::new(SmithChildFactory {
                 default_route: SmithChildRoute {
+                    hosted_tools: web.hosted,
+                    web_diagnostic: web.diagnostic,
+                    read_only_network_modules: config.agent.read_only_network_modules.value.clone(),
+                    web_search_session: request.web_search_session.clone(),
                     provider,
                     provider_name,
                     provider_kind,

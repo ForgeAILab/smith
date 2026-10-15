@@ -1080,3 +1080,64 @@ mod harness_supervise;
 #[cfg(unix)]
 #[path = "cli_contract/bridge_approvals.rs"]
 mod bridge_approvals;
+
+#[test]
+fn config_explain_web_search_reports_missing_backend_configuration() {
+    for (backend, missing) in [
+        ("tavily", "tools.web_search.api_key"),
+        ("brave", "tools.web_search.api_key"),
+        ("searxng", "tools.web_search.searxng_url"),
+    ] {
+        let fixture = Fixture::new();
+        let user_dir = fixture.home.path().join(".smith");
+        std::fs::create_dir_all(&user_dir).expect("user config directory");
+        std::fs::write(
+            user_dir.join("config.toml"),
+            format!("[tools.web_search]\nbackend = \"{backend}\"\n"),
+        )
+        .expect("user config");
+        for key in ["tools.web_search", missing] {
+            let output = fixture.run(&["config", "explain", key]);
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let explanation = String::from_utf8(output.stdout).expect("UTF-8 explanation");
+            assert!(
+                explanation.contains(&format!("diagnostic: {missing}: missing")),
+                "{explanation}"
+            );
+            assert!(
+                explanation.contains("backend search is unavailable"),
+                "{explanation}"
+            );
+            if key == "tools.web_search" {
+                assert!(
+                    explanation.contains(&format!("tools.web_search.backend = {backend}")),
+                    "{explanation}"
+                );
+                assert!(
+                    explanation.contains("tools.web_search.mode = auto"),
+                    "{explanation}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn config_explain_web_fetch_reports_the_safe_default() {
+    let output = Fixture::new().run(&["config", "explain", "tools.web_fetch"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let explanation = String::from_utf8(output.stdout).expect("UTF-8 explanation");
+    assert!(
+        explanation.contains("tools.web_fetch.allow_private_networks = false"),
+        "{explanation}"
+    );
+    assert!(explanation.contains("built-in default"), "{explanation}");
+}

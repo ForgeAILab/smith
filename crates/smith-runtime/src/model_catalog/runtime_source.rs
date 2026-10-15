@@ -27,6 +27,7 @@ pub fn runtime_catalog_source(
             .with_capabilities(Capabilities {
                 streaming: true,
                 tools: model.tool_call,
+                hosted_web_search: false,
                 reasoning: if model.reasoning {
                     ReasoningSupport::Fixed
                 } else {

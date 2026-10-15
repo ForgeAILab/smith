@@ -303,6 +303,8 @@ pub struct ResolvedConfig {
     pub unknown_plugins: Vec<UnknownPlugin>,
     /// Provenance-carrying configuration for the image-generation tool.
     pub image_generation: ResolvedImageGeneration,
+    /// Provenance-carrying configuration for web fetch and search.
+    pub web: ResolvedWeb,
 }
 
 /// One resolved installed plugin selection. Trust remains a host decision.
@@ -338,6 +340,57 @@ impl ResolvedModule {
     /// Selected but unavailable in this build; report it without mounting it.
     pub fn on_but_not_built(&self) -> bool {
         self.enabled.value && !self.compiled_in
+    }
+}
+
+/// Resolved web-tool settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedWeb {
+    /// Web-fetch destination policy.
+    pub fetch: ResolvedWebFetch,
+    /// Web-search route and backend settings.
+    pub search: ResolvedWebSearch,
+}
+
+/// Resolved web-fetch destination policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedWebFetch {
+    /// Whether fetch may reach private destinations.
+    pub allow_private_networks: Sourced<bool>,
+}
+
+/// Resolved web-search settings. Secret lookup remains a runtime responsibility.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedWebSearch {
+    /// Route preference, re-evaluated for each runtime composition.
+    pub mode: Sourced<crate::model::WebSearchMode>,
+    /// Backend used outside the provider.
+    pub backend: Sourced<crate::model::WebSearchBackend>,
+    /// Credential locator, retained without retrieving its secret.
+    pub api_key: Option<Sourced<crate::credential::CredentialRef>>,
+    /// Absolute HTTP(S) URL of a SearXNG instance.
+    pub searxng_url: Option<Sourced<String>>,
+}
+
+impl ResolvedWebSearch {
+    /// Missing backend configuration, as a setting key and a safe explanation.
+    ///
+    /// This checks declarations only. A runtime must also handle a credential
+    /// reference whose secret cannot be retrieved without failing the session.
+    pub fn diagnostic(&self) -> Option<(&'static str, &'static str)> {
+        use crate::model::WebSearchBackend;
+
+        match self.backend.value {
+            WebSearchBackend::Brave | WebSearchBackend::Tavily if self.api_key.is_none() => Some((
+                "tools.web_search.api_key",
+                "missing credential reference; configured backend search is unavailable",
+            )),
+            WebSearchBackend::Searxng if self.searxng_url.is_none() => Some((
+                "tools.web_search.searxng_url",
+                "missing SearXNG URL; configured backend search is unavailable",
+            )),
+            _ => None,
+        }
     }
 }
 
@@ -732,6 +785,8 @@ pub struct ResolvedPersistence {
 /// Resolved agent profiles plus one-release legacy mode/preset adapters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedAgent {
+    /// Reviewed network modules read-only postures may keep, subject to approval.
+    pub read_only_network_modules: Sourced<Vec<String>>,
     /// Deprecated selected root mode retained by the compatibility adapter.
     pub active: Sourced<String>,
     /// Deprecated root-mode order retained by the compatibility adapter.
@@ -975,6 +1030,8 @@ pub struct AutoApprovalRule {
     pub revision: u32,
     /// Module-qualified tool identity.
     pub tool: String,
+    /// Optional exact web-fetch resource identity.
+    pub resource: Option<String>,
     /// Exact operations covered by this rule.
     pub operations: Vec<AutoApprovalOperation>,
     /// Maximum permission set the prepared call may request.

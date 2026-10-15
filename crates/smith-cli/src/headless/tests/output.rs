@@ -3,6 +3,16 @@
 use super::*;
 
 #[test]
+fn hosted_search_requests_are_omitted_from_text_usage() {
+    use agent_runtime_core::usage::CounterKind;
+
+    let search_only = UsageDelta::new().with(CounterKind::WebSearchRequests, 3);
+    assert_eq!(render_usage_delta(&search_only), "none");
+    let mixed = search_only.with(CounterKind::Output, 7);
+    assert_eq!(render_usage_delta(&mixed), "output 7");
+}
+
+#[test]
 fn budget_and_rate_limit_events_have_typed_stream_payloads() {
     use agent_runtime_core::provider::{RateLimitSnapshot, RateLimitWindow};
     use smith_runtime::client::{BudgetCategory, SmithEvent, SmithEventKind};

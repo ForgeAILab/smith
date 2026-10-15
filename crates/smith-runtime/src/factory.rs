@@ -179,6 +179,9 @@ pub(crate) mod modules;
 mod persistence;
 mod provider;
 mod resolve;
+mod web;
+
+pub use web::WebSearchSession;
 
 /// The reply the deterministic development provider gives.
 ///
@@ -325,6 +328,8 @@ impl HostSurface {
 pub struct RuntimeRequest {
     /// The resolved, provenance-carrying run configuration.
     pub config: ResolvedConfig,
+    /// Session-owned hosted-search fallback, retained across safe rebuilds.
+    pub web_search_session: Arc<WebSearchSession>,
     /// Which presentation is composing this runtime.
     pub surface: HostSurface,
     /// Host-supplied Smith binary implementing the hidden relay and supervisor.
@@ -452,6 +457,7 @@ impl RuntimeRequest {
     pub fn new(config: ResolvedConfig, surface: HostSurface) -> Self {
         Self {
             config,
+            web_search_session: Arc::new(WebSearchSession::default()),
             surface,
             smith_executable: None,
             system_prompt: None,

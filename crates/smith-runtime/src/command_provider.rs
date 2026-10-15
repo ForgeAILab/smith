@@ -132,6 +132,7 @@ impl CommandAdapter for CommandJsonlAdapter {
             capabilities: Capabilities {
                 streaming: true,
                 tools: true,
+                hosted_web_search: false,
                 reasoning: ReasoningSupport::Unsupported,
                 structured_output: false,
                 usage: true,

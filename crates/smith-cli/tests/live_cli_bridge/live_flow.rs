@@ -241,6 +241,7 @@ fn live_request(project: &Path, model: &str) -> smith_config::resolve::ResolveRe
 
     // The same first-party module ids accepted by the CLI's build catalog.
     let modules = [
+        ("web", cfg!(feature = "module-web")),
         ("vision", cfg!(feature = "module-vision")),
         (
             "image-generation",

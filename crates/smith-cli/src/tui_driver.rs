@@ -41,6 +41,9 @@ use crate::submission::{
 use crate::{FRAME, SPINNER_TICK, interaction, local_command, terminal};
 
 pub(super) enum InteractiveExit {
+    /// A classified root rejection requires the same-session search route to
+    /// be recomposed before another prompt reaches the provider.
+    HostedSearchUnavailable,
     /// A declared MCP server finished connecting, so the composed tool set is
     /// stale. The session is rebuilt around the same identity at the next idle
     /// boundary; the connections themselves survive it.
@@ -139,6 +142,15 @@ pub(super) fn restore_transcript(
     app: &mut App,
     history: &[agent_runtime_core::content::Message],
 ) {
+    restore_transcript_with_activity(host, app, history, &[]);
+}
+
+pub(super) fn restore_transcript_with_activity(
+    host: &HostSession,
+    app: &mut App,
+    history: &[agent_runtime_core::content::Message],
+    hosted: &[smith_tui::transcript::RestoredHostedSearch],
+) {
     let shortcuts = host
         .saved_shell_shortcuts()
         .into_iter()
@@ -151,7 +163,7 @@ pub(super) fn restore_transcript(
         })
         .collect::<Vec<_>>();
     app.transcript
-        .replace_from_history_with_shell_shortcuts(history, &shortcuts);
+        .replace_from_history_with_activity(history, &shortcuts, hosted);
     for (call, display) in host.tool_call_displays() {
         app.set_tool_display(call.as_str(), display);
     }
@@ -397,6 +409,7 @@ struct TuiLoop<'a> {
     composed_remote_tools: usize,
     remote_tools_pending: bool,
     trusted_skill_pending: bool,
+    hosted_search_rebuild_pending: bool,
     pending_module_switch: Option<smith_client::commands::ModuleSwitchRequest>,
     pending_plugin_switch: Option<smith_client::commands::PluginSwitchRequest>,
     last_change_turn: Option<u64>,
@@ -579,6 +592,7 @@ impl<'a> TuiLoop<'a> {
             composed_remote_tools,
             remote_tools_pending,
             trusted_skill_pending,
+            hosted_search_rebuild_pending: false,
             pending_module_switch: None,
             pending_plugin_switch: None,
             last_change_turn,

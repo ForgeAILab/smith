@@ -102,6 +102,12 @@ impl ToolCallDisplay {
                     "{child} started · its result arrives when it completes"
                 ))
             }
+            "Web Fetch" => web_fetch_result_summary(output),
+            "Web Search" => {
+                let count = output.lines().next()?.strip_suffix(" results")?;
+                let count = count.parse::<usize>().ok().filter(|count| *count <= 10)?;
+                Some(format!("{count} results"))
+            }
             _ => None,
         }
     }
@@ -174,6 +180,8 @@ pub fn project_tool_call_display(name: &str, arguments: &Value) -> Option<ToolCa
         "task_stop" => project_task_stop(arguments),
         "generate_image" => project_generate_image(arguments),
         "view_image" => project_view_image(arguments),
+        "web_fetch" => project_web_fetch(arguments),
+        "web_search" => project_web_search(arguments),
         "registry.search" => project_registry_search(arguments),
         "registry.activate" => project_registry_activate(arguments),
         "agent" => project_agent(arguments),
@@ -196,6 +204,8 @@ pub fn tool_display_label(name: &str) -> Option<&'static str> {
         "task_stop" => Some("Task Stop"),
         "generate_image" => Some("Generate Image"),
         "view_image" => Some("View Image"),
+        "web_fetch" => Some("Web Fetch"),
+        "web_search" => Some("Web Search"),
         "registry.search" => Some("Registry Search"),
         "registry.activate" => Some("Activate"),
         _ => None,
@@ -215,6 +225,8 @@ pub fn has_tool_call_display_schema(name: &str) -> bool {
             | "task_stop"
             | "generate_image"
             | "view_image"
+            | "web_fetch"
+            | "web_search"
             | "registry.search"
             | "registry.activate"
             | "agent"
@@ -428,6 +440,71 @@ fn project_view_image(arguments: &Map<String, Value>) -> Option<ToolCallDisplay>
     let question = require_string_field(arguments, "question")?;
     let question = normalize_value(question.lines().next()?)?;
     Some(display("View Image", target, vec![question]))
+}
+
+fn project_web_fetch(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
+    let url = require_string_field(arguments, "url")?;
+    let target = web_url_target(url)?;
+    Some(display("Web Fetch", target, Vec::new()))
+}
+
+// URL validation belongs to the web module. Display only its destination,
+// never userinfo, the scheme, or a fragment; bound the entire detail to keep
+// long query strings (and paths) from overwhelming a transcript row.
+fn web_url_target(url: &str) -> Option<String> {
+    if url.len() > 2_048
+        || url
+            .chars()
+            .any(|ch| ch.is_whitespace() || is_unsafe_control(ch))
+    {
+        return None;
+    }
+    let (scheme, rest) = url.split_once("://")?;
+    if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
+        return None;
+    }
+    let rest = rest.split('#').next()?;
+    let authority = rest.split(['/', '?']).next()?;
+    if authority.is_empty() || authority.contains(['@', '\\']) {
+        return None;
+    }
+    normalize_value_with_limit(rest, 119)
+}
+
+fn project_web_search(arguments: &Map<String, Value>) -> Option<ToolCallDisplay> {
+    let query = required_value(arguments, "query")?;
+    if optional_positive_integer(arguments, "max_results")?.is_some_and(|count| count > 10) {
+        return None;
+    }
+    Some(display(
+        "Web Search",
+        serde_json::to_string(&query).ok()?,
+        Vec::new(),
+    ))
+}
+
+// The reviewed fetch header is final URL | status | content type | title.
+// The module labels each field; body text never supplies metadata.
+fn web_fetch_result_summary(output: &str) -> Option<String> {
+    let mut fields = output.lines().next()?.split(" | ");
+    web_url_target(fields.next()?.strip_prefix("URL: ")?)?;
+    let status = fields.next()?.strip_prefix("Status: ")?;
+    if status.len() != 3 || !(100..=599).contains(&status.parse::<u16>().ok()?) {
+        return None;
+    }
+    let content_type = fields.next()?.strip_prefix("Content-Type: ")?;
+    let mime = content_type.split(';').next()?;
+    let (kind, subtype) = mime.split_once('/')?;
+    if kind.is_empty()
+        || subtype.is_empty()
+        || !mime
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'+' | b'.'))
+    {
+        return None;
+    }
+    fields.next()?.strip_prefix("Title: ")?; // A possibly empty title completes the header.
+    Some(format!("{status} {}", normalize_value(mime)?))
 }
 
 /// The delegation tool (`agent`) is dispatched on its own tagged `action`

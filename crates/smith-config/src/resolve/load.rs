@@ -29,6 +29,7 @@ pub fn resolve(request: &ResolveRequest) -> Result<Resolution, ConfigError> {
     let mut built_in = contributions_of(&defaults, Layer::BuiltIn, None)?;
     super::modules::normalize_aliases(&mut built_in, &request.known_modules)?;
     built_in.extend(super::modules::defaults(&request.known_modules));
+    built_in.extend(super::web::defaults());
     built_in.extend(super::plugins::defaults(&request.known_plugins));
     file_layers.push(built_in);
     for file in &layout.files {
@@ -969,6 +970,7 @@ pub(super) fn flatten(
 ) -> Result<(), ConfigError> {
     for (name, value) in table {
         prefix.push(name.clone());
+        super::web::validate_file_setting(&join_owned(prefix), layer, path)?;
         let result = match value {
             toml::Value::Table(_)
                 if prefix.len() >= 3
@@ -1010,6 +1012,21 @@ pub(super) fn flatten(
                     })
             }
             toml::Value::Table(inner) => flatten(inner, prefix, layer, path, out),
+            other if join_owned(prefix).ends_with("tools.web_search.api_key") => {
+                let key = join_owned(prefix);
+                let source = source_for(layer, path, &key);
+                let reference = other.as_str().ok_or_else(|| ConfigError::InvalidValue {
+                    source: source.clone(),
+                    message: "web search api_key must be a credential reference".to_owned(),
+                })?;
+                let reference = super::web::credential(reference, &source)?;
+                out.push(Contribution {
+                    key,
+                    value: SettingValue::Text(reference.to_string()),
+                    source,
+                });
+                Ok(())
+            }
             other
                 if prefix.last().is_some_and(|segment| {
                     matches!(segment.as_str(), "api_key" | "checkpoint_key")
@@ -1247,7 +1264,11 @@ pub(super) fn env_contributions(
         } else {
             kind_of(&key)
         };
-        let value = parse_text(raw, kind, &source)?;
+        let value = if key == "tools.web_search.api_key" {
+            SettingValue::Text(super::web::credential(raw, &source)?.to_string())
+        } else {
+            parse_text(raw, kind, &source)?
+        };
         out.push(Contribution {
             key: key.to_owned(),
             value,

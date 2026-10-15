@@ -49,6 +49,7 @@ impl Module for Fixture {
 fn context() -> ModuleContext {
     ModuleContext {
         is_child_session: false,
+        web: None,
         http: None,
         settings: ModuleSettings::new(),
         workspace_root: None,

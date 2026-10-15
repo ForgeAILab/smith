@@ -704,3 +704,23 @@ async fn registry_search_finds_view_image_by_image_vision_screenshot_and_view_im
         host.shutdown().await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn plan_posture_keeps_vision_by_default_and_empty_network_list_restores_strictness() {
+    let fixture = Fixture::new(&CONFIG.replace(
+        "delegation = false",
+        "delegation = false\nposture = \"plan\"",
+    ));
+    for allowed in [true, false] {
+        let mut request =
+            fixture.request("worker", provider("worker", Vec::new()), vision_provider());
+        if !allowed {
+            request.config.agent.read_only_network_modules.value.clear();
+        }
+        let smith = factory::build(resolve_harness(HarnessSpec::trusted(request)).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(smith.abilities().names().contains(&"view_image"), allowed);
+        assert!(!smith.abilities().names().contains(&"edit"));
+    }
+}

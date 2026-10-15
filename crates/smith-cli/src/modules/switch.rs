@@ -54,6 +54,7 @@ pub(crate) fn prepare_switch(
                 enabled: Some(enabled),
                 ..ImageGenerationSection::default()
             }),
+            ..ToolsSection::default()
         });
     }
     // When both spellings already exist, keep them aligned in this layer.

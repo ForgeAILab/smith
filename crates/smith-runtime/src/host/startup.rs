@@ -211,6 +211,22 @@ pub async fn start_with_modules(
         .observers
         .push(Arc::new(ChangeTurnObserver(changes.clone())));
 
+    // A resumed composition remembers the classified rejection without adding
+    // provider-opaque state to canonical history or changing checkpoint schema.
+    if request.session_id.is_some()
+        && let Some(paths) = &paths
+        && let Ok(recovery) = read_journal(paths.journal(&session_id)?).await
+    {
+        for event in recovery.events() {
+            if let agent_runtime_core::event::RuntimeEvent::ProviderAttemptFinished {
+                error: Some(error),
+                ..
+            } = &event.payload
+            {
+                request.runtime.web_search_session.record_error(error);
+            }
+        }
+    }
     let spec = modules.into_iter().fold(
         crate::harness::HarnessSpec::trusted(request.runtime),
         crate::harness::HarnessSpec::with_module,

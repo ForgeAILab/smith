@@ -62,6 +62,10 @@ only-agents · active · Smith configuration r
 eference, section "Vision model for text-onl
 y agents". A vision model answers questions
 about images for a text-only main model.
+  smith.configuration.web-tools · active · S
+mith configuration reference, section "Web t
+ools". Web tools let Smith read public pages
+ and search for current information.
   smith.headless · active · Outline of the S
 mith headless protocol reference for smith -
 p: input modes, text, json, and stream-json
@@ -189,10 +193,6 @@ not loaded
   broken · it does not start with a --- fr
 ontmatter block declaring a description ·
 <HOME>/.smith/skills/broken/SKILL.md
-
-
-
-
 
 
 

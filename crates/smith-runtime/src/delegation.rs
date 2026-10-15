@@ -201,6 +201,10 @@ pub struct SmithChildFactory {
 /// One fully preflighted provider/model/profile route available to children.
 #[derive(Debug, Clone)]
 pub struct SmithChildRoute {
+    pub(crate) hosted_tools: Vec<agent_runtime_core::provider::HostedTool>,
+    pub(crate) web_diagnostic: Option<String>,
+    pub(crate) read_only_network_modules: Vec<String>,
+    pub(crate) web_search_session: Arc<crate::factory::WebSearchSession>,
     pub(crate) modules: smith_module::ModuleComposition,
     pub(crate) module_context: smith_module::ModuleContext,
     pub(crate) plugins: Option<crate::factory::PluginProfile>,
@@ -309,6 +313,20 @@ impl ChildRuntimeFactory for SmithChildFactory {
             "skill_names": skill_names,
             "workspace_root": self.workspace.root(),
             "read_only": route.read_only,
+            "read_only_network_modules": route.read_only_network_modules,
+            "hosted_tools": route.hosted_tools,
+            "web_allow_private_networks": route.module_context.web.as_ref().map(|web| web.allow_private_networks),
+            "web_searxng_url": route.module_context.web.as_ref().and_then(|web| match web.search.as_ref() {
+                Some(smith_module::SearchBackendConfig::SearXng { url }) => url.as_ref(),
+                _ => None,
+            }),
+            "web_search_backend": route.module_context.web.as_ref().and_then(|web| web.search.as_ref()).map(|backend| match backend {
+                smith_module::SearchBackendConfig::Disabled => "disabled",
+                smith_module::SearchBackendConfig::DuckDuckGo => "duckduckgo",
+                smith_module::SearchBackendConfig::Brave { .. } => "brave",
+                smith_module::SearchBackendConfig::Tavily { .. } => "tavily",
+                smith_module::SearchBackendConfig::SearXng { .. } => "searxng",
+            }),
             "execution": route.execution.label(),
             "modules": route.modules.enabled,
             "module_revisions": route.modules.compiled.iter()
@@ -383,8 +401,16 @@ impl ChildRuntimeFactory for SmithChildFactory {
             modules.enabled.extend(plugins.wasm_modules.enabled.clone());
         }
         let mut module_plan = smith_module::mount_modules(&modules, &module_context);
+        crate::factory::modules::report_web_diagnostic(
+            &mut module_plan,
+            route.web_diagnostic.as_deref(),
+        );
         crate::factory::modules::apply_sandbox_authority(&mut module_plan);
-        crate::factory::modules::enforce_posture(&mut module_plan, module_context.posture);
+        crate::factory::modules::enforce_posture(
+            &mut module_plan,
+            module_context.posture,
+            &route.read_only_network_modules,
+        );
         crate::factory::modules::reject_sandbox_pipeline_ordering(&mut module_plan);
         let mut tools = if write_capable {
             smith_tools::all()
@@ -501,9 +527,17 @@ impl ChildRuntimeFactory for SmithChildFactory {
 
         let mut builder = RuntimeBuilder::new(route.model.clone())
             .provider(route.provider.clone())
+            .observer(route.web_search_session.clone())
             .provider_name(route.provider_name.clone())
             .model_profile(route.model_profile.clone())
             .loop_config(loop_config)
+            .hosted_tools(
+                if write_capable || route.read_only_network_modules.iter().any(|id| id == "web") {
+                    route.hosted_tools.clone()
+                } else {
+                    Vec::new()
+                },
+            )
             .context_policy(route.context_policy.clone())
             .cache_capability(
                 agent_runtime::context::ProviderCacheCapability::from_control(

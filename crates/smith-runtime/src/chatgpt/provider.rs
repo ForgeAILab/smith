@@ -38,6 +38,7 @@ impl ChatGptProviderConfig {
         capabilities.auth = AuthKind::Bearer;
         capabilities.streaming = true;
         capabilities.tools = true;
+        capabilities.hosted_web_search = true;
         capabilities.reasoning = ReasoningSupport::Controllable;
         capabilities.usage = true;
         // A model-scoped explicit unsupported declaration remains
@@ -142,7 +143,7 @@ impl<T: HttpTransport> ChatGptProvider<T> {
     /// the hit — keeping the prefix stable is. That is
     /// `smith_runtime::prompt`'s job, and the reason its stable sections are
     /// ordered ahead of everything that varies.
-    fn build_payload(
+    pub(super) fn build_payload(
         &self,
         request: &ProviderRequest,
         session: &agent_runtime_core::ids::SessionId,
@@ -178,7 +179,7 @@ impl<T: HttpTransport> ChatGptProvider<T> {
                 input.extend(response_items(message, &tool_names)?);
             }
         }
-        let tools = request
+        let mut tools = request
             .tools
             .iter()
             .map(|tool| {
@@ -195,6 +196,17 @@ impl<T: HttpTransport> ChatGptProvider<T> {
                 })
             })
             .collect::<Vec<_>>();
+        for tool in &request.hosted_tools {
+            match tool {
+                HostedTool::WebSearch { .. } => tools.push(json!({"type": "web_search"})),
+                _ => {
+                    return Err(ProviderError::new(
+                        ProviderErrorKind::Unsupported,
+                        "unsupported hosted tool",
+                    ));
+                }
+            }
+        }
         let cache_key = request
             .cache_identity
             .as_ref()
@@ -212,6 +224,12 @@ impl<T: HttpTransport> ChatGptProvider<T> {
             "include": ["reasoning.encrypted_content"],
             "prompt_cache_key": cache_key,
         });
+        if !request.hosted_tools.is_empty() {
+            payload["include"] = json!([
+                "reasoning.encrypted_content",
+                "web_search_call.action.sources"
+            ]);
+        }
         let object = payload
             .as_object_mut()
             .expect("Responses payload is an object");
@@ -428,6 +446,7 @@ impl<T: HttpTransport> Provider for ChatGptProvider<T> {
             let mut parser = SseFrameParser::new();
             let mut pending_utf8 = Vec::new();
             let mut state = StreamState {
+                buffer_text: !request.hosted_tools.is_empty(),
                 tool_names,
                 ..StreamState::default()
             };

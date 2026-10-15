@@ -23,6 +23,7 @@ smith-host = { workspace = true }
 smith-runtime = { workspace = true }
 smith-tools = { workspace = true }
 unicode-width = "0.2"
+url = { workspace = true }
 
 [dev-dependencies]
 agent-runtime = { workspace = true }

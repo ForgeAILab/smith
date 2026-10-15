@@ -32,6 +32,8 @@ nce, section "Smith's tools on installed coding agents". [harness.<kind>] allow_
   smith.configuration.vision-model-for-text-only-agents · active · Smith configuration reference, se
 ction "Vision model for text-only agents". A vision model answers questions about images for a text-
 only main model.
+  smith.configuration.web-tools · active · Smith configuration reference, section "Web tools". Web t
+ools let Smith read public pages and search for current information.
   smith.headless · active · Outline of the Smith headless protocol reference for smith -p: input mod
 es, text, json, and stream-json output formats, event framing, exit behavior, and resuming sessions
 non-interactively. Activate before scripting or integrating smith -p, then activate the section it n
@@ -101,8 +103,6 @@ aries
 not loaded
   broken · it does not start with a --- frontmatter block declaring a description · <HOME>/.smit
 h/skills/broken/SKILL.md
-
-
 
 
 

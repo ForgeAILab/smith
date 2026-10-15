@@ -176,18 +176,18 @@ impl SessionUsage {
     /// explicit combined figure for callers that want the sum this
     /// method's own doc used to imply before delegation existed.
     pub fn total_tokens(&self) -> u64 {
-        self.totals.values().copied().sum()
+        token_total(&self.totals)
     }
 
-    /// Every counter's total across root, delegated, and synthetic provider
+    /// Token totals across root, delegated, and synthetic provider
     /// usage. Synthetic counters remain separately inspectable even though
     /// they participate in this provider/session total.
     pub fn merged_total_tokens(&self) -> u64 {
         self.total_tokens()
-            + self.delegated_totals.values().copied().sum::<u64>()
-            + self.synthetic_totals.values().copied().sum::<u64>()
-            + self.advisor_totals.values().copied().sum::<u64>()
-            + self.vision_totals.values().copied().sum::<u64>()
+            + token_total(&self.delegated_totals)
+            + token_total(&self.synthetic_totals)
+            + token_total(&self.advisor_totals)
+            + token_total(&self.vision_totals)
     }
 
     /// Replaces the synthetic bucket from Runtime's final canonical usage
@@ -347,10 +347,20 @@ fn append_cache_diagnostics(line: String, miss_count: u32, rebilled_tokens: u64)
     )
 }
 
-/// Renders one counter/value pair per entry, e.g. `input ~12.4k`.
+/// Sums token counters, excluding provider-hosted search requests.
+fn token_total(totals: &BTreeMap<CounterKind, u64>) -> u64 {
+    totals
+        .iter()
+        .filter(|(kind, _)| **kind != CounterKind::WebSearchRequests)
+        .map(|(_, value)| *value)
+        .sum()
+}
+
+/// Renders one token counter/value pair per entry, e.g. `input ~12.4k`.
 fn render_counter_parts(totals: &BTreeMap<CounterKind, u64>, mark: &str) -> Vec<String> {
     totals
         .iter()
+        .filter(|(kind, _)| **kind != CounterKind::WebSearchRequests)
         .map(|(kind, value)| format!("{} {mark}{}", counter_label(*kind), compact_tokens(*value)))
         .collect()
 }
@@ -403,6 +413,7 @@ pub fn counter_label(kind: CounterKind) -> &'static str {
         CounterKind::CacheWrite => "cache-write",
         CounterKind::Output => "output",
         CounterKind::Reasoning => "reasoning",
+        CounterKind::WebSearchRequests => "web-search-requests",
     }
 }
 
@@ -432,7 +443,7 @@ fn price_for(table: &PriceTable, kind: CounterKind) -> Option<u64> {
         CounterKind::InputCached => table.cache_read,
         CounterKind::CacheWrite => table.cache_write,
         CounterKind::Output => table.output,
-        CounterKind::Reasoning => None,
+        CounterKind::Reasoning | CounterKind::WebSearchRequests => None,
     }
 }
 

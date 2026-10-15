@@ -1,6 +1,40 @@
 use super::*;
 
 #[test]
+fn hosted_search_requests_are_retained_but_excluded_from_token_totals_and_display() {
+    let totals = BTreeMap::from([
+        (CounterKind::InputUncached, 100),
+        (CounterKind::WebSearchRequests, 3),
+    ]);
+    let usage = SessionUsage {
+        turns: 1,
+        reported: true,
+        totals: totals.clone(),
+        delegated_totals: totals.clone(),
+        synthetic_totals: totals.clone(),
+        synthetic_by_purpose: BTreeMap::from([(
+            ProviderAttemptPurpose::CacheKeepalive,
+            totals.clone(),
+        )]),
+        advisor_totals: totals.clone(),
+        advisor_price: Some(priced(1_000_000, 0, 0, 0)),
+        vision_totals: totals,
+        vision_price: Some(priced(1_000_000, 0, 0, 0)),
+        ..SessionUsage::default()
+    };
+    assert_eq!(usage.totals[&CounterKind::WebSearchRequests], 3);
+    assert_eq!(usage.total_tokens(), 100);
+    assert_eq!(usage.merged_total_tokens(), 500);
+    let rendered = usage.render().unwrap();
+    assert!(rendered.contains("total · input 500"));
+    assert!(!rendered.contains("web-search"));
+    // Search counts have no catalog token rate; they must not be priced as tokens.
+    let cost = SessionCost::compute(&usage, &priced(1_000_000, 0, 0, 0));
+    assert_eq!(cost.micro_usd, 500);
+    assert_eq!(cost.label, CostLabel::Estimated);
+}
+
+#[test]
 fn turn_output_flow_counts_attempts_without_inventing_or_double_counting_usage() {
     use agent_runtime_core::usage::Provenance;
 
