@@ -125,18 +125,19 @@ impl SecurityCheck for SmithToolAuthority {
         if host_filesystem_permission {
             if !matches!(
                 &request.resource,
-                SecurityResource::Other { kind, .. }
+                SecurityResource::Other { kind, id }
                     if kind == HOST_SHELL_RESOURCE_KIND
                         || (kind == "smith:image-files"
-                            && !request.requested.contains(&Permission::HostFsWrite))
+                            && (!request.requested.contains(&Permission::HostFsWrite)
+                                || id == "smith:generated-images"))
             ) {
                 return SecurityCheckOutcome::Deny {
                     code: DecisionCode::other("smith.host_resource_mismatch"),
                 };
             }
-            // The shell is intentionally host-wide, and image references may
-            // include Smith's generated-image directory. Neither is an exact
-            // workspace read, so both reach the configured approval policy.
+            // The shell is intentionally host-wide. Image reads may include
+            // Smith's generated-image directory; image writes are bound to
+            // that directory's exact resource id. All require approval.
             return SecurityCheckOutcome::RequireApproval {
                 constraints: GrantConstraints::unconstrained(),
             };
@@ -213,11 +214,19 @@ impl SecurityCheck for SmithToolAuthority {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
     use agent_runtime::registry::{Fingerprint, TrustClass};
-    use agent_runtime_core::clock::Deadline;
-    use agent_runtime_core::ids::{SessionId, TenantId};
+    use agent_runtime_core::clock::{Deadline, SystemClock};
+    use agent_runtime_core::error::RuntimeError;
+    use agent_runtime_core::ids::{RequestId, SessionId, TenantId, ToolCallId};
     use agent_runtime_core::security::{
         CheckSetRevision, SecurityAction, SecurityContext, SecurityEvidence, SecuritySubject,
+    };
+    use agent_runtime_core::tool::{InvocationContext, PreparationContext, Tool};
+    use serde_json::json;
+    use smith_tools::{
+        GenerateImageTool, ImageGenerationBackend, ImageGenerationRequest, RecentImageSource,
     };
 
     fn request(
@@ -237,6 +246,103 @@ mod tests {
             Deadline::never(),
             SecurityEvidence::new(TrustClass::ExternalContent, Fingerprint::of("arguments")),
         )
+    }
+
+    #[derive(Debug)]
+    struct UnusedImageBackend;
+
+    #[async_trait]
+    impl ImageGenerationBackend for UnusedImageBackend {
+        async fn generate(
+            &self,
+            _: ImageGenerationRequest,
+            _: &InvocationContext,
+        ) -> Result<Vec<u8>, RuntimeError> {
+            panic!("preparation must not call the image backend")
+        }
+
+        fn endpoint(&self) -> &str {
+            "https://images.example/v1"
+        }
+    }
+
+    #[derive(Debug)]
+    struct NoRecentImages;
+
+    impl RecentImageSource for NoRecentImages {
+        fn recent_images(&self, _: &SessionId, _: usize) -> Result<Vec<String>, RuntimeError> {
+            panic!("preparation must not read recent images")
+        }
+    }
+
+    #[tokio::test]
+    async fn prepared_generate_image_requires_approval_with_and_without_references() {
+        let temporary = tempfile::tempdir().unwrap();
+        let workspace = Arc::new(smith_host::ProjectWorkspace::new(temporary.path()).unwrap());
+        let tool = GenerateImageTool::new(
+            Arc::new(UnusedImageBackend),
+            Arc::new(NoRecentImages),
+            temporary.path().join("generated_images"),
+            "gpt-image-2",
+            "auto",
+            "auto",
+        );
+        let context = PreparationContext {
+            session: SessionId::new("session"),
+            turn: None,
+            call_id: ToolCallId::new("image"),
+            request: RequestId::new("request"),
+            workspace,
+            clock: Arc::new(SystemClock),
+            cancel: Cancellation::new(),
+            deadline: Deadline::never(),
+        };
+        let authority = SmithToolAuthority::new(context.workspace.root());
+        for arguments in [
+            json!({"prompt":"A small blue bird"}),
+            json!({"prompt":"A small blue bird", "reference_paths":["reference.png"]}),
+        ] {
+            let has_references = arguments.get("reference_paths").is_some();
+            let prepared = tool.prepare(arguments, &context).await.unwrap();
+            assert_eq!(
+                prepared.resource(),
+                &SecurityResource::other("smith:image-files", "smith:generated-images"),
+            );
+            assert_eq!(
+                prepared
+                    .effects()
+                    .host_writes()
+                    .map(|(kind, scope)| (kind, scope.as_str()))
+                    .collect::<Vec<_>>(),
+                [("smith:image-files", "smith:generated-images")],
+            );
+            for permission in [
+                Permission::HostFsWrite,
+                Permission::NetHttp,
+                Permission::DataEgress,
+            ] {
+                assert!(prepared.required_permissions().contains(&permission));
+            }
+            assert_eq!(
+                prepared
+                    .required_permissions()
+                    .contains(&Permission::HostFsRead),
+                has_references,
+            );
+            let outcome = authority
+                .evaluate(
+                    &request(
+                        prepared.required_permissions().iter().cloned(),
+                        prepared.resource().clone(),
+                    ),
+                    &Cancellation::new(),
+                )
+                .await;
+            assert!(
+                matches!(outcome, SecurityCheckOutcome::RequireApproval { .. }),
+                "generate_image must reach approval: {outcome:?}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -280,6 +386,66 @@ mod tests {
                 )
                 .await;
             assert!(matches!(outcome, SecurityCheckOutcome::Deny { .. }));
+        }
+    }
+
+    #[tokio::test]
+    async fn image_host_writes_require_approval_only_for_generated_images() {
+        let authority = SmithToolAuthority::new("/repo");
+        for permissions in [
+            vec![Permission::HostFsWrite],
+            vec![Permission::HostFsRead, Permission::HostFsWrite],
+            vec![
+                Permission::HostFsWrite,
+                Permission::NetHttp,
+                Permission::DataEgress,
+            ],
+            vec![
+                Permission::HostFsRead,
+                Permission::HostFsWrite,
+                Permission::NetHttp,
+                Permission::DataEgress,
+            ],
+        ] {
+            let outcome = authority
+                .evaluate(
+                    &request(
+                        permissions,
+                        SecurityResource::other("smith:image-files", "smith:generated-images"),
+                    ),
+                    &Cancellation::new(),
+                )
+                .await;
+            assert!(matches!(
+                outcome,
+                SecurityCheckOutcome::RequireApproval { .. }
+            ));
+        }
+
+        for (kind, target) in [
+            ("unknown-host-resource", "smith:generated-images"),
+            ("smith:image-files", "generate_image"),
+            ("smith:image-files", "view_image"),
+            ("smith:image-files", "/etc/arbitrary.png"),
+            ("smith:image-files", "smith:generated-images/../other"),
+            ("smith:image-files", "smith:generated-images-other"),
+        ] {
+            for permissions in [
+                vec![Permission::HostFsWrite],
+                vec![Permission::HostFsRead, Permission::HostFsWrite],
+            ] {
+                let outcome = authority
+                    .evaluate(
+                        &request(permissions, SecurityResource::other(kind, target)),
+                        &Cancellation::new(),
+                    )
+                    .await;
+                assert!(
+                    matches!(outcome, SecurityCheckOutcome::Deny { code }
+                        if code == DecisionCode::other("smith.host_resource_mismatch")),
+                    "host write must be denied for {kind}:{target}"
+                );
+            }
         }
     }
 

@@ -13,6 +13,7 @@ use std::sync::Arc;
 use agent_runtime_core::content::ContentPart;
 use agent_runtime_core::error::{ErrorKind, RuntimeError};
 use agent_runtime_core::ids::SessionId;
+use agent_runtime_core::security::SecurityResource;
 use agent_runtime_core::tool::{
     InvocationContext, PreparationContext, PreparedToolCall, Tool, ToolCallDisplay, ToolEffects,
     ToolOutcome, ToolSpec,
@@ -240,8 +241,12 @@ impl Tool for GenerateImageTool {
 
         let has_reference_paths = reference_paths.is_some();
         let effects = image_effects(self.backend.endpoint(), has_reference_paths);
-        let (permissions, resource) =
+        let (permissions, _) =
             effects.authorization_request("generate_image", ctx.workspace.root());
+        // Host-effect conversion retains the kind but uses the tool name as
+        // its resource id. Bind the fixed write target explicitly so Smith's
+        // authority can distinguish generated-image storage from other writes.
+        let resource = SecurityResource::other("smith:image-files", "smith:generated-images");
         let display = ToolCallDisplay::new("Generate Image")
             .with_detail(prompt.chars().take(120).collect::<String>());
         Ok(PreparedToolCall::new(
