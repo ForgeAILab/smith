@@ -603,6 +603,29 @@ async fn module_command_previews_before_writing_and_refuses_unknown_ids() {
 }
 
 #[cfg(feature = "module-vision")]
+#[test]
+fn vision_preflight_ignores_unrelated_smith_environment_variables() {
+    // Exercise preflight's process boundary without changing the environment
+    // shared by the other tests. The fixture injects its own resolution basis.
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "tests::modules::model_palette_rebuild_mounts_vision_and_module_listing_uses_the_same_binding",
+        ])
+        .env("SMITH_AGENT_RUNTIME_REVISION", "ci")
+        .env("SMITH_UNRELATED_TEST_VARIABLE", "unrelated")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "vision preflight failed with unrelated environment variables:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed;"));
+}
+
+#[cfg(feature = "module-vision")]
 #[tokio::test]
 async fn model_palette_rebuild_mounts_vision_and_module_listing_uses_the_same_binding() {
     let fixture = Fixture::new();

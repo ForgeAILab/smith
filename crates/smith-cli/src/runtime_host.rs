@@ -110,9 +110,10 @@ fn preflight_with_modules(
         modules: crate::modules::composition_from_resolved_config(&resolution.config),
         ..RuntimeRequest::new(resolution.config.clone(), surface)
     };
+    // Preflight may receive a resolution with an injected environment. Do not
+    // introduce the process environment when resolving its secondary binding.
     let mut vision_request = smith_config::resolve::ResolveRequest::new(project)
-        .with_known_modules(crate::modules::known_modules())
-        .with_env(std::env::vars());
+        .with_known_modules(crate::modules::known_modules());
     if let Some(home) = resolution.layout.user_dir.parent() {
         vision_request = vision_request.with_home_dir(home);
     }
