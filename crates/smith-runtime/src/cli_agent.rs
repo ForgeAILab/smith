@@ -105,6 +105,8 @@ pub(crate) struct CliAgentBackend {
     /// Repeated turns on an embedding host need only one missing-path warning.
     warned_missing_executable: std::sync::atomic::AtomicBool,
     #[cfg(test)]
+    missing_executable_warning_count: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
     spawn_override: Option<SpawnOverride>,
     #[cfg(test)]
     endpoint_base_override: Option<PathBuf>,

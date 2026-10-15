@@ -448,45 +448,13 @@ async fn run_turn_wraps_unchanged_argv_and_retains_stdin_until_stream_drop() {
     .expect("supervised spawn checks finish before deadline");
 }
 
-#[derive(Clone)]
-struct Warnings(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
-
-impl tracing::Subscriber for Warnings {
-    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
-        *metadata.level() == tracing::Level::WARN
-    }
-    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-        tracing::span::Id::from_u64(1)
-    }
-    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
-    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
-    fn event(&self, event: &tracing::Event<'_>) {
-        struct Message(String);
-        impl tracing::field::Visit for Message {
-            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-                if field.name() == "message" {
-                    self.0 = format!("{value:?}");
-                }
-            }
-        }
-        let mut message = Message(String::new());
-        event.record(&mut message);
-        self.0.lock().unwrap().push(message.0);
-    }
-    fn enter(&self, _: &tracing::span::Id) {}
-    fn exit(&self, _: &tracing::span::Id) {}
-}
-
 #[tokio::test]
 async fn missing_smith_path_spawns_directly_and_warns_once() {
-    use tracing::instrument::WithSubscriber as _;
-
-    let warnings = Warnings(Default::default());
+    let launcher = Launcher::with_script(
+        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"result\",\"is_error\":false}'\n",
+    );
+    let backend = launcher.backend();
     let events = tokio::time::timeout(Duration::from_secs(10), async {
-        let launcher = Launcher::with_script(
-            "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"result\",\"is_error\":false}'\n",
-        );
-        let backend = launcher.backend();
         let mut events = Vec::new();
         for turn in ["first", "second"] {
             let stream = backend
@@ -503,19 +471,19 @@ async fn missing_smith_path_spawns_directly_and_warns_once() {
         }
         events
     })
-    .with_subscriber(warnings.clone())
     .await
     .expect("direct turns finish before deadline");
     assert!(matches!(
         events.as_slice(),
         [ExternalAgentEvent::Completed, ExternalAgentEvent::Completed]
     ));
-    let messages = warnings.0.lock().unwrap();
-    assert_eq!(messages.len(), 1, "{messages:?}");
-    assert!(
-        messages[0].contains("CLI may outlive Smith"),
-        "{messages:?}"
+    assert_eq!(
+        backend
+            .missing_executable_warning_count
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1
     );
+    assert!(super::invocation::MISSING_EXECUTABLE_WARNING.contains("CLI may outlive Smith"));
 }
 
 #[derive(Debug)]

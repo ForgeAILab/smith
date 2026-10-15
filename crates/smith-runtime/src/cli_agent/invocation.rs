@@ -23,6 +23,9 @@ use super::{
     BridgeInvocation, CliAgentBackend, CliAgentKind, CliAgentSettings, TurnState, normalize,
 };
 
+pub(crate) const MISSING_EXECUTABLE_WARNING: &str =
+    "Smith executable path is unknown; CLI capability bridge is unavailable; CLI may outlive Smith";
+
 impl CliAgentBackend {
     /// Builds a backend for a resolved harness.
     pub(crate) fn new(kind: CliAgentKind, settings: CliAgentSettings) -> Self {
@@ -31,6 +34,8 @@ impl CliAgentBackend {
             settings,
             reported_omissions: Default::default(),
             warned_missing_executable: Default::default(),
+            #[cfg(test)]
+            missing_executable_warning_count: Default::default(),
             #[cfg(test)]
             spawn_override: None,
             #[cfg(test)]
@@ -270,9 +275,10 @@ impl ExternalAgentBackend for CliAgentBackend {
                 .warned_missing_executable
                 .swap(true, std::sync::atomic::Ordering::Relaxed)
         {
-            tracing::warn!(
-                "Smith executable path is unknown; CLI capability bridge is unavailable; CLI may outlive Smith"
-            );
+            #[cfg(test)]
+            self.missing_executable_warning_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            tracing::warn!("{MISSING_EXECUTABLE_WARNING}");
         }
         let mut command = invocation.turn_command(&args);
 
