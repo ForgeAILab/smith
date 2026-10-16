@@ -177,6 +177,8 @@ pub(crate) struct RunArgs {
     pub selection: Selection,
     /// A prompt makes the run headless; absence opens the TUI.
     pub prompt: Option<Prompt>,
+    /// Caller-authorized image paths for a headless prompt.
+    pub images: Vec<PathBuf>,
     /// An existing identity to resume.
     pub resume: Option<String>,
     /// Whether `--resume`/`--session` was supplied, including picker form.
@@ -194,6 +196,7 @@ impl Default for RunArgs {
         Self {
             selection: Selection::default(),
             prompt: None,
+            images: Vec::new(),
             resume: None,
             resume_requested: false,
             output: OutputFormat::Text,
@@ -483,6 +486,9 @@ fn parse_run(mut args: VecDeque<OsString>) -> Result<Command, ParseError> {
                 let prompt = required_text(Some(value), "a UTF-8 prompt after `-p`")?;
                 set_once(&mut run.prompt, prompt_source(prompt), "--prompt")?;
             }
+            "--image" => run
+                .images
+                .push(PathBuf::from(value(&flag, inline, &mut args)?)),
             "--resume" | "--session" => {
                 if run.resume_requested {
                     return Err(ParseError::new("`--resume/--session` was supplied twice"));
@@ -522,6 +528,11 @@ fn parse_run(mut args: VecDeque<OsString>) -> Result<Command, ParseError> {
         }
     }
 
+    if run.prompt.is_none() && !run.images.is_empty() {
+        return Err(ParseError::new(
+            "`--image` requires non-interactive `-p <prompt>`",
+        ));
+    }
     if run.prompt.is_none() && run.output != OutputFormat::Text {
         return Err(ParseError::new(
             "`--output-format` requires non-interactive `-p <prompt>`",
@@ -737,6 +748,7 @@ USAGE:
 
 RUN OPTIONS:
   -p, --prompt <PROMPT|->       Run once; `-` reads the prompt from stdin
+      --image <PATH>            Attach an image to `-p` (repeatable; paths relative to cwd)
       --project <PATH>          Start project discovery at PATH
       --resume [SESSION_ID]     Resume by ID, or choose from project sessions
       --session [SESSION_ID]    Alias for --resume
@@ -1244,6 +1256,22 @@ mod tests {
         let missing = parse(["setup", "credential"].map(OsString::from))
             .expect_err("credential migration requires a provider");
         assert!(missing.to_string().contains("--provider"), "{missing}");
+    }
+
+    #[test]
+    fn headless_images_are_repeatable_and_require_a_prompt() {
+        let Command::Run(run) =
+            command(&["-p", "describe", "--image", "one.png", "--image=two.jpg"])
+        else {
+            panic!("expected a headless run");
+        };
+        assert_eq!(
+            run.images,
+            vec![PathBuf::from("one.png"), PathBuf::from("two.jpg")]
+        );
+        let error = parse(["--image", "one.png"].map(OsString::from)).unwrap_err();
+        assert!(error.to_string().contains("requires non-interactive `-p"));
+        assert!(parse(["-p", "describe", "--image"].map(OsString::from)).is_err());
     }
 
     #[test]

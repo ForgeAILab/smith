@@ -412,10 +412,14 @@ impl ChildRuntimeFactory for SmithChildFactory {
             &route.read_only_network_modules,
         );
         crate::factory::modules::reject_sandbox_pipeline_ordering(&mut module_plan);
+        let image_limits = crate::factory::image_limits_for_provider_kind(&route.provider_kind);
         let mut tools = if write_capable {
-            smith_tools::all()
+            smith_tools::all_with_background_and_image_limits(
+                smith_tools::background::unavailable(),
+                image_limits,
+            )
         } else {
-            smith_tools::read_only()
+            smith_tools::read_only_with_image_limits(image_limits)
         };
         let plugin_tools = route
             .plugins

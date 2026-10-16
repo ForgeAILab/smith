@@ -45,7 +45,7 @@ mode = "deny"
         Duration::from_millis(30),
         Box::pin(run_with_io(
             &host,
-            "hello".into(),
+            UserInput::text("hello"),
             OutputFormat::Json,
             HeadlessBrokers::default(),
             BackgroundExit::Error,

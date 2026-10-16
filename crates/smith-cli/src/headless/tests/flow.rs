@@ -102,7 +102,7 @@ mode = "deny"
         HEADLESS_TEST_WATCHDOG,
         run_with_io(
             &host,
-            "Review this work.".into(),
+            UserInput::text("Review this work."),
             OutputFormat::StreamJson,
             HeadlessBrokers::default(),
             BackgroundExit::Error,
@@ -271,7 +271,7 @@ max_output_tokens = 4096
         HEADLESS_TEST_WATCHDOG,
         run_with_io(
             &host,
-            PONG_PARENT_PROMPT.into(),
+            UserInput::text(PONG_PARENT_PROMPT),
             OutputFormat::StreamJson,
             HeadlessBrokers::default(),
             BackgroundExit::Error,
@@ -366,7 +366,7 @@ max_output_tokens = 4096
 
     let outcome = run_with_io(
         &host,
-        "must be rejected".into(),
+        UserInput::text("must be rejected"),
         OutputFormat::StreamJson,
         HeadlessBrokers::default(),
         BackgroundExit::Error,
@@ -480,7 +480,7 @@ max_output_tokens = 4096
 
     let outcome = run_with_io(
         &host,
-        "current turn".into(),
+        UserInput::text("current turn"),
         OutputFormat::Json,
         HeadlessBrokers::default(),
         BackgroundExit::Error,
@@ -600,7 +600,7 @@ max_output_tokens = 4096
             HEADLESS_TEST_WATCHDOG,
             run_with_io(
                 &host,
-                "Use create_goal to create an explicit persistent multi-turn goal, then continue it until complete".into(),
+                UserInput::text("Use create_goal to create an explicit persistent multi-turn goal, then continue it until complete"),
                 OutputFormat::Json,
                 HeadlessBrokers::default(),
                 BackgroundExit::Error,
@@ -751,7 +751,7 @@ turn_time_limit_ms = 600000
         HEADLESS_TEST_WATCHDOG,
         run_with_io(
             &host,
-            "edit the file".into(),
+            UserInput::text("edit the file"),
             OutputFormat::Json,
             HeadlessBrokers {
                 approval: Some(approval.as_ref()),
@@ -927,7 +927,7 @@ max_output_tokens = 4096
 
     let outcome = run_with_io(
         &host,
-        "Use write_todos, then shell, for this multi-step diagnostic.".into(),
+        UserInput::text("Use write_todos, then shell, for this multi-step diagnostic."),
         OutputFormat::StreamJson,
         HeadlessBrokers::default(),
         BackgroundExit::Error,
@@ -1087,7 +1087,7 @@ max_output_tokens = 4096
         HEADLESS_TEST_WATCHDOG,
         run_with_io(
             &host,
-            "ask me for the codename".into(),
+            UserInput::text("ask me for the codename"),
             OutputFormat::Json,
             HeadlessBrokers {
                 interaction: Some(interaction.as_ref()),
@@ -1267,7 +1267,7 @@ max_output_tokens = 4096
         HEADLESS_TEST_WATCHDOG,
         run_with_io(
             &recovered,
-            NEW_PROMPT.into(),
+            UserInput::text(NEW_PROMPT),
             OutputFormat::StreamJson,
             HeadlessBrokers {
                 interaction: Some(headless_interaction.as_ref()),

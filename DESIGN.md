@@ -445,6 +445,14 @@ bounded future whole turn entirely in Smith. Slash commands, `!` shell
 shortcuts, child-agent forms, approvals, questionnaires, confirmations, and
 reconfiguration never enter this queue implicitly.
 
+Image files enter through `read`, TUI `@FILE` attachments, or repeatable
+headless `--image` paths. One preparation step detects PNG, JPEG, GIF and WebP
+by signature, fits them to the active model provider's limits, and returns an
+image plus a one-line size/format description; images that fit retain their
+bytes. TUI image files appear like clipboard attachments. `read` retains its
+workspace and approval rules; headless image paths use caller authority.
+Text-only models receive the runtime's image placeholder.
+
 Pending input is divided into accepted-but-uncommitted steers,
 runtime-rejected steer follow-ups, and explicit future turns. Each entry keeps
 its exact display text, already-expanded paste material, image parts, and
@@ -518,7 +526,7 @@ the visible `@identity` mention into the composer. Files are canonical
 workspace-relative entries that honor ignore policy. On submit, Smith performs
 an exact prepared `read` through the runtime
 executor and contributes bounded content (or an artifact reference) with
-`prepared_read` provenance. Unresolved, ambiguous, oversized, binary, or
+`prepared_read` provenance. Unresolved, ambiguous, oversized, unsupported binary, or
 outside-workspace references fail locally and preserve the draft before any
 provider request. `@@` escapes one literal `@`; typed `@file:name` and
 `@agent:name` disambiguate collisions.

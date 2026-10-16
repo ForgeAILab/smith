@@ -236,6 +236,33 @@ impl ProjectWorkspace {
         self.read_bounded_relative(&relative, max_bytes)
     }
 
+    /// Reads only a bounded signature prefix through the project capability.
+    pub fn read_prefix(
+        &self,
+        path: impl AsRef<Path>,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, RuntimeError> {
+        let relative = self.relative_path(path)?;
+        let file = self
+            .directory
+            .open(&relative)
+            .map_err(|err| workspace_io("open", &self.display_path(&relative), err))?;
+        let metadata = file
+            .metadata()
+            .map_err(|err| workspace_io("inspect", &self.display_path(&relative), err))?;
+        if !metadata.is_file() {
+            return Err(RuntimeError::tool(format!(
+                "`{}` is not a regular file; use the `list` tool for directories",
+                self.display_path(&relative).display()
+            )));
+        }
+        let mut bytes = Vec::new();
+        file.take(max_bytes as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|err| workspace_io("read", &self.display_path(&relative), err))?;
+        Ok(bytes)
+    }
+
     /// Reads a file when present, distinguishing an absent leaf from other
     /// capability or I/O failures.
     pub fn read_optional_bounded(

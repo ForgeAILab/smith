@@ -71,7 +71,7 @@ args = {args}
             HEADLESS_TEST_WATCHDOG,
             Box::pin(run_with_io(
                 &host,
-                "Continue without the untrusted server.".into(),
+                UserInput::text("Continue without the untrusted server."),
                 format,
                 HeadlessBrokers {
                     approval: Some(&approval),

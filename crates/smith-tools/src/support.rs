@@ -195,6 +195,48 @@ pub struct BoundedText {
     pub version: FileVersion,
 }
 
+/// Tries image preparation without weakening workspace capability confinement.
+/// Non-images retain the existing bounded text path, including its size limit.
+pub async fn prepare_workspace_image(
+    workspace: ProjectWorkspace,
+    path: &Path,
+    limits: &crate::ImageLimits,
+) -> Result<Option<crate::PreparedImage>, RuntimeError> {
+    let path = path.to_owned();
+    let limits = limits.clone();
+    tokio::task::spawn_blocking(move || {
+        let prefix = workspace.read_prefix(&path, 32)?;
+        if !matches!(
+            image::guess_format(&prefix),
+            Ok(image::ImageFormat::Png
+                | image::ImageFormat::Jpeg
+                | image::ImageFormat::Gif
+                | image::ImageFormat::WebP)
+        ) {
+            return Ok(None);
+        }
+        let read = workspace
+            .read_bounded(
+                &path,
+                crate::image_preparation::MAX_IMAGE_FILE_BYTES as usize,
+            )
+            .map_err(|error| {
+                if error.kind == ErrorKind::Workspace {
+                    error
+                } else {
+                    invalid(format!("image preparation (64 MiB file limit): {error}"))
+                }
+            })?;
+        match crate::prepare_image(&read.bytes, &limits) {
+            Ok(image) => Ok(Some(image)),
+            Err(crate::ImageInputError::NotAnImage) => Ok(None),
+            Err(error) => Err(invalid(error.to_string())),
+        }
+    })
+    .await
+    .map_err(|_| RuntimeError::internal("image preparation task failed"))?
+}
+
 /// Reads a file as UTF-8 text through the project capability.
 pub async fn read_bounded(
     ctx: &InvocationContext,

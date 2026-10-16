@@ -67,7 +67,7 @@ max_output_tokens = 4096
         HEADLESS_TEST_WATCHDOG,
         run_with_io(
             &host,
-            "research".into(),
+            UserInput::text("research"),
             OutputFormat::Json,
             HeadlessBrokers::default(),
             BackgroundExit::Error,
@@ -117,7 +117,7 @@ max_output_tokens = 4096
         HEADLESS_TEST_WATCHDOG,
         run_with_io(
             &host,
-            "research again".into(),
+            UserInput::text("research again"),
             OutputFormat::Json,
             HeadlessBrokers::default(),
             BackgroundExit::Error,

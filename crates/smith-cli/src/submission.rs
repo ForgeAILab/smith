@@ -292,10 +292,11 @@ pub(super) async fn dispatch_prepared_with_materialization(
     app: &mut App,
     session: &smith_runtime::SessionHandle,
     project: &std::path::Path,
+    image_limits: &smith_tools::ImageLimits,
     submission: PreparedSubmission,
     target: SubmissionTarget,
 ) {
-    match materialize_prepared_submission(project, &submission).await {
+    match materialize_prepared_submission(project, &submission, image_limits).await {
         Ok(input) => dispatch_prepared_submission(app, session, submission, target, input),
         Err(error) => app.restore_submission(submission, error),
     }
@@ -304,6 +305,7 @@ pub(super) async fn dispatch_prepared_with_materialization(
 pub(super) async fn materialize_prepared_submission(
     project: &std::path::Path,
     submission: &PreparedSubmission,
+    image_limits: &smith_tools::ImageLimits,
 ) -> Result<UserInput, String> {
     const MAX_ATTACHMENT_CHARS: usize = 512 * 1024;
     const MAX_ATTACHMENT_LINES: usize = 2_000;
@@ -316,6 +318,22 @@ pub(super) async fn materialize_prepared_submission(
         let canonical = workspace
             .resolve(path)
             .map_err(|error| format!("attachment `@{path}` was not sent: {error}"))?;
+        if let Some(image) = smith_tools::support::prepare_workspace_image(
+            workspace.clone(),
+            std::path::Path::new(&canonical),
+            image_limits,
+        )
+        .await
+        .map_err(|error| format!("attachment `@{path}` was not sent: {error}"))?
+        {
+            let description = image.describe(path);
+            input.parts.push(ContentPart::Image {
+                url: image.data_url,
+                detail: None,
+            });
+            input.parts.push(ContentPart::text(description));
+            continue;
+        }
         let contents = smith_tools::support::read_bounded_from_workspace(
             workspace.clone(),
             std::path::Path::new(&canonical),

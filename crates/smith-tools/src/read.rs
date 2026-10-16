@@ -1,6 +1,6 @@
 //! The `read` tool.
 //!
-//! Reads a file as text, optionally a line range. Output is line-numbered
+//! Reads prepared images or text, optionally a line range. Text is line-numbered
 //! because the `edit` tool and the model's own references are both easier to
 //! ground when every line has a visible address, and because a model asked to
 //! "fix line 40" needs to have seen line 40 labelled as such.
@@ -23,17 +23,34 @@ use crate::support::{
 /// How many lines a read returns when the caller does not say.
 const DEFAULT_LINE_LIMIT: usize = 2000;
 
-/// Reads a text file from the project.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct ReadTool;
+/// Reads text or prepared images from the project.
+#[derive(Debug, Clone)]
+pub struct ReadTool {
+    image_limits: crate::ImageLimits,
+}
+
+impl Default for ReadTool {
+    fn default() -> Self {
+        Self::new(crate::ImageLimits::for_provider(
+            crate::ImageProvider::Other,
+        ))
+    }
+}
+
+impl ReadTool {
+    /// Constructs a reader with the serving model provider's image limits.
+    pub fn new(image_limits: crate::ImageLimits) -> Self {
+        Self { image_limits }
+    }
+}
 
 #[async_trait]
 impl Tool for ReadTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec::new(
             "read",
-            "Read a text file from the project. Returns line-numbered content. \
-             Use `offset` and `limit` to read part of a large file.",
+            "Read a project file: line-numbered text or the image itself. \
+             Use `offset`/`limit` for part of a large text file.",
             json!({
                 "type": "object",
                 "properties": {
@@ -96,6 +113,27 @@ impl Tool for ReadTool {
             return Err(invalid("`limit` must be at least 1"));
         }
 
+        if let Some(image) = crate::support::prepare_workspace_image(
+            crate::support::project_workspace(ctx)?.clone(),
+            &path,
+            &self.image_limits,
+        )
+        .await?
+        {
+            let description = image.describe(&display_path(ctx, &path));
+            return Ok(ToolOutcome {
+                value: json!({"path": display_path(ctx, &path)}),
+                content: vec![
+                    agent_runtime_core::content::ContentPart::Image {
+                        url: image.data_url,
+                        detail: Some("high".to_owned()),
+                    },
+                    agent_runtime_core::content::ContentPart::text(description),
+                ]
+                .into(),
+                is_error: false,
+            });
+        }
         let contents = read_bounded(ctx, &path, MAX_READ_BYTES).await?;
         let all: Vec<&str> = contents.text.lines().collect();
         let total = all.len();
@@ -147,11 +185,90 @@ mod tests {
     use crate::testing::project;
 
     #[tokio::test]
+    async fn an_image_returns_image_then_description_without_edit_read_state() {
+        use agent_runtime_core::content::ContentPart;
+        let (dir, ctx) = project();
+        let path = dir.path().join("picture.dat");
+        ::image::RgbImage::new(2, 3)
+            .save_with_format(&path, ::image::ImageFormat::Png)
+            .unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let expected = crate::prepare_image(
+            &bytes,
+            &crate::ImageLimits::for_provider(crate::ImageProvider::Other),
+        )
+        .unwrap();
+        let outcome = ReadTool::default()
+            .invoke(json!({"path": "picture.dat"}), &ctx)
+            .await
+            .unwrap();
+        assert!(!outcome.is_error);
+        let parts = outcome.content.as_inline().unwrap();
+        assert!(
+            matches!(&parts[0], ContentPart::Image { url, detail } if url == &expected.data_url && detail.as_deref() == Some("high"))
+        );
+        assert_eq!(parts[1], ContentPart::text("picture.dat · 2×3 PNG · 1 KiB"));
+        assert!(outcome.value.get("_smith_file_version").is_none());
+    }
+
+    #[tokio::test]
+    async fn an_observed_image_read_does_not_authorize_overwriting_the_file() {
+        let (dir, ctx) = project();
+        ::image::RgbImage::new(2, 3)
+            .save(dir.path().join("picture.png"))
+            .unwrap();
+        let tools = crate::all();
+        crate::testing::call(&tools, "read", json!({"path": "picture.png"}), &ctx)
+            .await
+            .unwrap();
+        let error = crate::testing::call(
+            &tools,
+            "edit",
+            json!({
+                "path": "picture.png", "operation": "overwrite", "new_string": "replacement"
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.message.contains("has not been read"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn fake_image_names_keep_text_and_binary_behavior_and_corrupt_images_report_reason() {
+        let (dir, ctx) = project();
+        std::fs::write(dir.path().join("text.png"), "still text\n").unwrap();
+        let outcome = ReadTool::default()
+            .invoke(json!({"path": "text.png"}), &ctx)
+            .await
+            .unwrap();
+        assert_eq!(crate::testing::text_of(&outcome), "1  still text\n");
+        std::fs::write(dir.path().join("binary.png"), b"other\0binary").unwrap();
+        let error = ReadTool::default()
+            .invoke(json!({"path": "binary.png"}), &ctx)
+            .await
+            .unwrap_err();
+        assert!(
+            error.message.contains("looks like binary content"),
+            "{error}"
+        );
+        std::fs::write(dir.path().join("broken.png"), b"\x89PNG\r\n\x1a\ninvalid").unwrap();
+        let error = ReadTool::default()
+            .invoke(json!({"path": "broken.png"}), &ctx)
+            .await
+            .unwrap_err();
+        assert!(
+            error.message.contains("unsupported or corrupt image"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
     async fn a_file_is_returned_line_numbered() {
         let (dir, ctx) = project();
         std::fs::write(dir.path().join("a.rs"), "fn main() {\n    ok();\n}\n").unwrap();
 
-        let outcome = ReadTool
+        let outcome = ReadTool::default()
             .invoke(json!({"path": "a.rs"}), &ctx)
             .await
             .unwrap();
@@ -169,7 +286,7 @@ mod tests {
         let body: String = (1..=100).map(|n| format!("line {n}\n")).collect();
         std::fs::write(dir.path().join("long.txt"), body).unwrap();
 
-        let outcome = ReadTool
+        let outcome = ReadTool::default()
             .invoke(json!({"path": "long.txt", "offset": 10, "limit": 5}), &ctx)
             .await
             .unwrap();
@@ -189,7 +306,7 @@ mod tests {
         let (dir, ctx) = project();
         std::fs::write(dir.path().join("short.txt"), "one\ntwo\n").unwrap();
 
-        let outcome = ReadTool
+        let outcome = ReadTool::default()
             .invoke(json!({"path": "short.txt", "offset": 50}), &ctx)
             .await
             .unwrap();
@@ -214,7 +331,7 @@ mod tests {
             cancel: ctx.cancel.clone(),
             deadline: ctx.deadline,
         };
-        let err = ReadTool
+        let err = ReadTool::default()
             .prepare(json!({"path": "../../etc/passwd"}), &preparation)
             .await
             .expect_err("ordinary reads cannot request host paths");
@@ -228,7 +345,7 @@ mod tests {
         let path = outside.path().join("outside.txt");
         std::fs::write(&path, "beyond the boundary\n").unwrap();
 
-        let err = ReadTool
+        let err = ReadTool::default()
             .invoke(json!({"path": path.to_str().unwrap()}), &ctx)
             .await
             .expect_err("ordinary reads are capability-contained");
@@ -240,7 +357,7 @@ mod tests {
         let (dir, ctx) = project();
         std::fs::write(dir.path().join("a.txt"), "x\n").unwrap();
         assert!(
-            ReadTool
+            ReadTool::default()
                 .invoke(json!({"path": "a.txt", "offset": 0}), &ctx)
                 .await
                 .is_err()
@@ -250,7 +367,7 @@ mod tests {
     #[tokio::test]
     async fn a_missing_file_reports_the_path() {
         let (_dir, ctx) = project();
-        let err = ReadTool
+        let err = ReadTool::default()
             .invoke(json!({"path": "absent.rs"}), &ctx)
             .await
             .unwrap_err();

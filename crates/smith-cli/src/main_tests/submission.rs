@@ -101,9 +101,13 @@ async fn prepared_file_attachment_reads_exactly_without_provider_spend() {
         "pub fn answer() -> u8 { 42 }\n",
     )
     .expect("updated source file");
-    let input = materialize_prepared_submission(project.path(), &submission)
-        .await
-        .expect("prepared attachment");
+    let input = materialize_prepared_submission(
+        project.path(),
+        &submission,
+        &smith_tools::ImageLimits::for_provider(smith_tools::ImageProvider::Other),
+    )
+    .await
+    .expect("prepared attachment");
     assert_eq!(input.parts.len(), 2);
     let wire = serde_json::to_string(&input).expect("input wire");
     assert!(wire.contains("source=\\\"prepared_read\\\""), "{wire}");
@@ -128,9 +132,13 @@ async fn prepared_file_attachment_reads_exactly_without_provider_spend() {
     else {
         panic!("expected a prepared symlink submission");
     };
-    let error = materialize_prepared_submission(project.path(), &submission)
-        .await
-        .expect_err("workspace escape must fail locally");
+    let error = materialize_prepared_submission(
+        project.path(),
+        &submission,
+        &smith_tools::ImageLimits::for_provider(smith_tools::ImageProvider::Other),
+    )
+    .await
+    .expect_err("workspace escape must fail locally");
     assert!(error.contains("was not sent"), "{error}");
 }
 
@@ -184,4 +192,54 @@ fn clipboard_no_ops_are_hint_feedback_and_a_successful_keypress_clears_it() {
     assert!(app.transcript.is_empty());
     app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(app.feedback_notice().is_none());
+}
+
+#[tokio::test]
+async fn prepared_image_attachment_uses_signature_and_provider_limits() {
+    use agent_runtime_core::content::ContentPart;
+    let project = tempfile::tempdir().unwrap();
+    let png = encode_png(2, 3, &[255; 24]).unwrap();
+    std::fs::write(project.path().join("diagram.dat"), &png).unwrap();
+    let mut app = App::new("example-model", project.path().display().to_string());
+    app.set_resources(RuntimeResources {
+        files: vec![ResourceEntry::new(
+            "file:diagram.dat",
+            "diagram.dat",
+            "workspace file",
+        )],
+        ..RuntimeResources::default()
+    });
+    app.composer.replace("explain @diagram.dat");
+    let Some(Action::Submit { submission, .. }) =
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+    else {
+        panic!("expected an attachment submission");
+    };
+    let mut limits = smith_tools::ImageLimits::for_provider(smith_tools::ImageProvider::Xai);
+    limits.max_long_edge = 1;
+    let input = materialize_prepared_submission(project.path(), &submission, &limits)
+        .await
+        .unwrap();
+    assert_eq!(input.parts.len(), 3);
+    assert!(
+        matches!(&input.parts[1], ContentPart::Image { url, detail: None } if url.starts_with("data:image/png;base64,"))
+    );
+    assert_eq!(
+        input.parts[2],
+        ContentPart::text("diagram.dat · 2×3 → 1×1 PNG · 1 KiB")
+    );
+
+    std::fs::write(
+        project.path().join("diagram.dat"),
+        b"\x89PNG\r\n\x1a\ncorrupt",
+    )
+    .unwrap();
+    let error = materialize_prepared_submission(project.path(), &submission, &limits)
+        .await
+        .unwrap_err();
+    assert!(
+        error.contains("attachment `@diagram.dat` was not sent:"),
+        "{error}"
+    );
+    assert!(error.contains("unsupported or corrupt image"), "{error}");
 }

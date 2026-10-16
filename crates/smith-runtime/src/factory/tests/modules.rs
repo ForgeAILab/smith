@@ -148,7 +148,7 @@ impl Module for FixtureModule {
         }
         let hooks = &self.hooks;
         Ok(Mounted::Contributions(vec![
-            ModuleContribution::Tool(Arc::new(smith_tools::ReadTool)),
+            ModuleContribution::Tool(Arc::new(smith_tools::ReadTool::default())),
             ModuleContribution::Pipeline(PipelineComponent::HistoryProjector(hooks.clone())),
             ModuleContribution::Pipeline(PipelineComponent::ContextContributor(hooks.clone())),
             ModuleContribution::Pipeline(PipelineComponent::ToolViewResolver(hooks.clone())),

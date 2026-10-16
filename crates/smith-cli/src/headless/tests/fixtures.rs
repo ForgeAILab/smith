@@ -87,7 +87,7 @@ async fn record_flow(
         Duration::from_secs(60),
         Box::pin(run_with_io(
             host,
-            prompt.into(),
+            UserInput::text(prompt),
             format,
             brokers,
             BackgroundExit::Error,

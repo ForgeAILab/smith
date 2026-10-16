@@ -10,15 +10,34 @@ pub fn observed_tools_with_background(
     recorder: Arc<ChangeRecorder>,
     background: Arc<dyn crate::background::BackgroundTaskHost>,
 ) -> Vec<Arc<dyn Tool>> {
-    observe_with_background(Some(recorder), ReadRecorder::new(), background)
+    observed_tools_with_background_and_image_limits(
+        recorder,
+        background,
+        crate::ImageLimits::for_provider(crate::ImageProvider::Other),
+    )
+}
+
+/// Observed tools with the active model provider's image limits.
+pub fn observed_tools_with_background_and_image_limits(
+    recorder: Arc<ChangeRecorder>,
+    background: Arc<dyn crate::background::BackgroundTaskHost>,
+    image_limits: crate::ImageLimits,
+) -> Vec<Arc<dyn Tool>> {
+    observe_with_background(
+        Some(recorder),
+        ReadRecorder::new(),
+        background,
+        image_limits,
+    )
 }
 
 pub(crate) fn observe_with_background(
     recorder: Option<Arc<ChangeRecorder>>,
     reads: Arc<ReadRecorder>,
     background: Arc<dyn crate::background::BackgroundTaskHost>,
+    image_limits: crate::ImageLimits,
 ) -> Vec<Arc<dyn Tool>> {
-    crate::built_in(background)
+    crate::built_in(background, image_limits)
         .into_iter()
         .map(|inner| {
             Arc::new(ObservedTool {

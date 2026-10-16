@@ -54,7 +54,7 @@ mod testing;
 
 pub use change::{
     ChangeRecorder, EditMutation, ToolMutation, TurnChangeSet, observed_tools,
-    observed_tools_with_background,
+    observed_tools_with_background, observed_tools_with_background_and_image_limits,
 };
 pub use display::{
     ToolCallDisplay, external_tool_result_text, has_tool_call_display_schema,
@@ -87,9 +87,12 @@ use agent_runtime_core::tool::Tool;
 ///
 /// Ordering is stable so the model sees the same tool list across runs — a
 /// changing order needlessly invalidates a provider's prompt cache.
-pub(crate) fn built_in(background: Arc<dyn background::BackgroundTaskHost>) -> Vec<Arc<dyn Tool>> {
+pub(crate) fn built_in(
+    background: Arc<dyn background::BackgroundTaskHost>,
+    image_limits: ImageLimits,
+) -> Vec<Arc<dyn Tool>> {
     vec![
-        Arc::new(ReadTool),
+        Arc::new(ReadTool::new(image_limits)),
         Arc::new(ListTool),
         Arc::new(SearchTool),
         Arc::new(EditTool),
@@ -113,7 +116,18 @@ pub fn all() -> Vec<Arc<dyn Tool>> {
 pub fn all_with_background(
     background: Arc<dyn background::BackgroundTaskHost>,
 ) -> Vec<Arc<dyn Tool>> {
-    change::observe_with_background(None, ReadRecorder::new(), background)
+    all_with_background_and_image_limits(
+        background,
+        ImageLimits::for_provider(ImageProvider::Other),
+    )
+}
+
+/// Built-in tools with the active model provider's image limits.
+pub fn all_with_background_and_image_limits(
+    background: Arc<dyn background::BackgroundTaskHost>,
+    image_limits: ImageLimits,
+) -> Vec<Arc<dyn Tool>> {
+    change::observe_with_background(None, ReadRecorder::new(), background, image_limits)
 }
 
 /// Only the tools that cannot change anything.
@@ -121,7 +135,16 @@ pub fn all_with_background(
 /// Useful for a read-only child agent or an exploratory session, where the
 /// approval gate should have nothing to be asked about.
 pub fn read_only() -> Vec<Arc<dyn Tool>> {
-    vec![Arc::new(ReadTool), Arc::new(ListTool), Arc::new(SearchTool)]
+    read_only_with_image_limits(ImageLimits::for_provider(ImageProvider::Other))
+}
+
+/// Read-only tools with the active model provider's image limits.
+pub fn read_only_with_image_limits(image_limits: ImageLimits) -> Vec<Arc<dyn Tool>> {
+    vec![
+        Arc::new(ReadTool::new(image_limits)),
+        Arc::new(ListTool),
+        Arc::new(SearchTool),
+    ]
 }
 
 #[cfg(test)]

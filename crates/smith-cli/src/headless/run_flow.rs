@@ -31,7 +31,7 @@ use crate::cli::OutputFormat;
 
 pub(super) async fn run_with_io(
     host: &HostSession,
-    prompt: String,
+    prompt: UserInput,
     format: OutputFormat,
     brokers: HeadlessBrokers<'_>,
     background_exit: BackgroundExit,
@@ -62,7 +62,7 @@ pub(super) async fn run_with_io(
 #[allow(clippy::too_many_arguments)]
 async fn run_inner(
     host: &HostSession,
-    prompt: String,
+    prompt: UserInput,
     format: OutputFormat,
     brokers: HeadlessBrokers<'_>,
     background_exit: BackgroundExit,
@@ -108,7 +108,7 @@ async fn run_inner(
     }
     let initial_activation = activation_output(session);
     let history_start = session.history().len();
-    let turn = match session.send(UserInput::text(prompt)) {
+    let turn = match session.send(prompt) {
         Ok(turn) => turn,
         Err(error) => {
             return write_submission_failure(

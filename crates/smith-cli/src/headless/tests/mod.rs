@@ -104,3 +104,5 @@ mod hosted_search;
 #[cfg(unix)]
 mod mcp;
 mod output;
+
+mod image_input;

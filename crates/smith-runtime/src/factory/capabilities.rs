@@ -120,11 +120,21 @@ pub(super) fn tools(request: &RuntimeRequest) -> Vec<Arc<dyn Tool>> {
         .as_ref()
         .map(BackgroundServices::host)
         .unwrap_or_else(smith_tools::background::unavailable);
+    let image_limits = super::image_limits_for_provider_kind(&request.config.provider.kind.value);
     let mut tools = if request.built_in_tools {
         request.change_recorder.as_ref().map_or_else(
-            || smith_tools::all_with_background(background.clone()),
+            || {
+                smith_tools::all_with_background_and_image_limits(
+                    background.clone(),
+                    image_limits.clone(),
+                )
+            },
             |recorder| {
-                smith_tools::observed_tools_with_background(recorder.clone(), background.clone())
+                smith_tools::observed_tools_with_background_and_image_limits(
+                    recorder.clone(),
+                    background.clone(),
+                    image_limits.clone(),
+                )
             },
         )
     } else {

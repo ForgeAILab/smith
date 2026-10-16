@@ -440,9 +440,13 @@ async fn file_commands_user_edits_apply_without_reload_and_references_materializ
     assert_eq!(submission.display_text(), "/audit @src/lib.rs");
     assert_eq!(submission.committed_text(), "Inspect @src/lib.rs");
     assert_eq!(submission.files(), &["src/lib.rs"]);
-    let input = materialize_prepared_submission(fixture.project.path(), &submission)
-        .await
-        .expect("ordinary materialization");
+    let input = materialize_prepared_submission(
+        fixture.project.path(),
+        &submission,
+        &smith_tools::ImageLimits::for_provider(smith_tools::ImageProvider::Other),
+    )
+    .await
+    .expect("ordinary materialization");
     assert_eq!(input.parts.len(), 2);
 }
 

@@ -618,7 +618,12 @@ pub(crate) fn observe(
     recorder: Option<Arc<ChangeRecorder>>,
     reads: Arc<ReadRecorder>,
 ) -> Vec<Arc<dyn Tool>> {
-    observe_with_background(recorder, reads, crate::background::unavailable())
+    observe_with_background(
+        recorder,
+        reads,
+        crate::background::unavailable(),
+        crate::ImageLimits::for_provider(crate::ImageProvider::Other),
+    )
 }
 
 fn bounded_image(path: &Path) -> Result<Option<Vec<u8>>, RuntimeError> {
@@ -807,5 +812,7 @@ mod observation;
 mod recovery;
 
 pub(crate) use observation::observe_with_background;
-pub use observation::{observed_tools, observed_tools_with_background};
+pub use observation::{
+    observed_tools, observed_tools_with_background, observed_tools_with_background_and_image_limits,
+};
 use recovery::{redo_direction, redo_preview_text, undo_preview_text};

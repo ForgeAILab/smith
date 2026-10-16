@@ -1471,3 +1471,5 @@ fn web() -> smith_config::resolve::ResolvedWeb {
 }
 
 mod web_policy;
+
+mod image_input;

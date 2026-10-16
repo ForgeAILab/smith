@@ -90,7 +90,7 @@ impl Fixture {
         .await?;
         Box::pin(run_with_io(
             &host,
-            prompt,
+            UserInput::text(prompt),
             format,
             HeadlessBrokers::default(),
             BackgroundExit::Error,

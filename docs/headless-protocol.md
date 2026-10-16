@@ -10,6 +10,7 @@ stops.
 
 ```sh
 smith -p "inspect this repository"
+smith -p "compare these pictures" --image ./before.png --image ./after.jpg
 printf '%s' "run the focused tests" | smith -p -
 smith -p "summarize" --output-format json
 smith -p "inspect" --output-format stream-json
@@ -18,6 +19,17 @@ smith -p "continue" --resume session-...
 
 Prompt stdin is read once, as bounded UTF-8, before the turn. It is never used
 as an asynchronous approval or questionnaire channel.
+
+`--image <PATH>` attaches a PNG, JPEG, GIF or WebP image and may be repeated.
+Paths resolve against the process working directory, independently of `--project`.
+These caller-authorized files need no approval and may be outside the project.
+Images are detected by signature, fitted to the active provider's limits, and
+sent with a short size/format description. Invalid or unreadable images fail
+before session startup, naming the path. `--image` requires `-p`; installed
+coding-agent (`cli/*`) profiles fail with
+`--image is not supported for installed coding agents yet`. Text-only models
+receive the runtime's image placeholder, which `view_image` can inspect when
+configured.
 
 Both argument and stdin prompts expand discovered
 [file commands](skills.md#file-commands) before host startup.

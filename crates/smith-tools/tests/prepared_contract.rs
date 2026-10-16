@@ -70,7 +70,7 @@ async fn read_shaped_tools_prepare_canonical_exact_read_resources() {
     let project = Project::new();
     let cases: Vec<(Box<dyn Tool>, serde_json::Value, String, SecurityResource)> = vec![
         (
-            Box::new(ReadTool),
+            Box::new(ReadTool::default()),
             json!({"path": "src/lib.rs"}),
             project.path("src/lib.rs"),
             project.resource(&["src", "lib.rs"]),

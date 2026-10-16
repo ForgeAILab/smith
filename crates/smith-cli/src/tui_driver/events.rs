@@ -87,6 +87,9 @@ impl TuiLoop<'_> {
                             &mut self.app,
                             self.session,
                             self.project,
+                            &smith_runtime::factory::image_limits_for_provider_kind(
+                                &self.host.runtime().policy().provider_kind,
+                            ),
                             submission,
                             SubmissionTarget::WholeTurn,
                         )

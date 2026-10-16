@@ -389,7 +389,7 @@ async fn default_error_policy_fails_a_headless_run_with_a_running_background_tas
 
     let outcome = run_with_io(
         &host,
-        "hello".into(),
+        UserInput::text("hello"),
         OutputFormat::Json,
         HeadlessBrokers::default(),
         BackgroundExit::Error,
@@ -491,7 +491,7 @@ async fn configured_wait_policy_lets_a_headless_run_finish_after_its_background_
         tokio::join!(
             run_with_io(
                 &host,
-                "hello".into(),
+                UserInput::text("hello"),
                 OutputFormat::StreamJson,
                 HeadlessBrokers::default(),
                 policy,

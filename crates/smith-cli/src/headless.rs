@@ -3,6 +3,7 @@
 use std::io;
 use std::time::Duration;
 
+use agent_runtime_core::content::{ContentPart, UserInput};
 use anyhow::Result;
 use smith_client::cache::CachePrice;
 use smith_config::model::BackgroundExit;
@@ -74,10 +75,40 @@ pub(crate) fn background_exit_policy(
     flag.or(configured).unwrap_or_default()
 }
 
+/// Materializes caller-authorized image input before a session is started.
+pub(crate) fn prepare_image_input(
+    prompt: String,
+    paths: &[std::path::PathBuf],
+    config: &smith_config::resolve::ResolvedConfig,
+) -> Result<UserInput> {
+    if !paths.is_empty()
+        && config
+            .model
+            .value
+            .starts_with(smith_config::cli_agents::CLI_MODEL_PREFIX)
+    {
+        anyhow::bail!("--image is not supported for installed coding agents yet");
+    }
+    let limits =
+        smith_runtime::factory::image_limits_for_provider_kind(&config.provider.kind.value);
+    let mut input = UserInput::text(prompt);
+    for path in paths {
+        let image = smith_tools::prepare_image_path(path, &limits)
+            .map_err(|error| anyhow::anyhow!("image `{}` was not sent: {error}", path.display()))?;
+        let description = image.describe(&path.display().to_string());
+        input.parts.push(ContentPart::Image {
+            url: image.data_url,
+            detail: None,
+        });
+        input.parts.push(ContentPart::text(description));
+    }
+    Ok(input)
+}
+
 /// Runs one turn, preserving canonical event order for stream JSON.
 pub(crate) async fn run(
     host: &HostSession,
-    prompt: String,
+    prompt: UserInput,
     format: OutputFormat,
     brokers: HeadlessBrokers<'_>,
     background_exit: BackgroundExit,

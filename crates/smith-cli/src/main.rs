@@ -206,12 +206,13 @@ async fn run_command(mut args: RunArgs) -> Result<u8> {
         Some(prompt) => {
             let prompt = {
                 let prepared = config_command::prepare(&args.selection)?;
-                headless::prepare_prompt_with_config(
+                let prompt = headless::prepare_prompt_with_config(
                     &prompt,
                     &prepared.resolution.layout.user_dir,
                     &prepared.project,
                     &prepared.resolution.config,
-                )?
+                )?;
+                headless::prepare_image_input(prompt, &args.images, &prepared.resolution.config)?
             };
             let started = start_host(
                 &args.selection,
