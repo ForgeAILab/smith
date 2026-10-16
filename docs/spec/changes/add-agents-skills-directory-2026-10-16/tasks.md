@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-16T20:40:00Z
-updated_at: 2026-10-16T20:40:00Z
+updated_at: 2026-10-16T23:30:00Z
 completed_at:
 ---
 
@@ -18,6 +18,17 @@ completed_at:
 - [x] 1.3 `docs/skills.md`: "Where skills live" lists all four locations,
       the `.smith`-wins rule, and that `npx skills add` installs work.
 
+- [ ] 1.4 `parse_front_matter`: a line indented deeper than column 0
+      continues the previous key. For `description`, a `>`/`>-`/`>+` block
+      folds the lines with single spaces, a `|`/`|-`/`|+` block keeps the
+      newlines, and an indented continuation of a plain value folds. Trim
+      the result before the empty and length checks. Indented lines under
+      other keys are skipped. A value in matching `"…"` or `'…'` is
+      unquoted. A non-indented line without `:` is still refused.
+- [ ] 1.5 `docs/skills.md`: describe the accepted grammar, and keep the
+      `npx skills add` claim true. Note that `name` must still match the
+      directory.
+
 ## 2. Tests
 - [x] 2.1 Discovery: a user `.agents` skill lands in the user layer; a
       project `.agents` skill lands in the workspace layer with trust status;
@@ -30,7 +41,12 @@ completed_at:
 - [x] 2.3 `/skills trust NAME` for a project `.agents` skill records a
       decision for `.agents/skills/NAME/SKILL.md`.
 
+- [ ] 2.4 Parser: folded and literal block descriptions (with and without
+      chomping), an indented plain continuation, a quoted value, a nested
+      `metadata:` map whose child is `description:` (which must not set the
+      description), and the description-length bound applied after folding.
+
 ## 3. Verification
-- [x] 3.1 Full gate.
-- [x] 3.2 Live: `npx skills add` (or a hand-made `~/.agents/skills/x/SKILL.md`)
+- [ ] 3.1 Full gate.
+- [ ] 3.2 Live: `npx skills add` (or a hand-made `~/.agents/skills/x/SKILL.md`)
       shows up in `/skills`.

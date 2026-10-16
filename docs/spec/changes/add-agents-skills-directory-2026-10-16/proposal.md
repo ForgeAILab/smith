@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-16T20:40:00Z
-updated_at: 2026-10-16T20:40:00Z
+updated_at: 2026-10-16T23:30:00Z
 ---
 
 ## Why
@@ -26,6 +26,17 @@ standard location.
 - Both locations stay fixed, not configurable, and are never created. Layer
   precedence (built-in < plugin < user < workspace < session) is unchanged.
 - `docs/skills.md` documents the four locations.
+- Amended after the live check: discovery read the owner's 81 skills in
+  `~/.agents/skills`, but the frontmatter grammar refused at least 21 of
+  them. 26 use a YAML block scalar for `description` (`description: >` or
+  `|`). The grammar gains that one YAML form:
+  - A `description` value may be a block scalar (`>`, `|`, optionally with
+    `-` or `+`) or a plain value continued on indented lines.
+  - Indented lines under any other key are skipped instead of refused.
+  - A value wrapped in matching quotes is unquoted.
+  - An indented line never sets a top-level key.
+  - Nothing else from YAML is accepted, and the directory-name rule is
+    unchanged.
 
 ## Impact
 
@@ -35,5 +46,6 @@ standard location.
     per-layer merging
   - `crates/smith-cli/src/skills.rs`: the `SkillContext` workspace path map
     used by `/skills trust`
+  - `crates/smith-runtime/src/skills/discovery.rs`: `parse_front_matter`
   - `docs/skills.md`
 - No configuration keys, no migration.

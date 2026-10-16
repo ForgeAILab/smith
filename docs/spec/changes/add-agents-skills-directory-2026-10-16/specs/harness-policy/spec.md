@@ -65,3 +65,45 @@ separately.
 - **WHEN** a session is composed
 - **THEN** the catalog contains exactly the built-in harness reference set
 - **AND** no directory is created
+
+## ADDED Requirements
+
+### Requirement: Skill frontmatter accepts block-scalar descriptions
+
+Smith SHALL accept the skill frontmatter forms common in installed skills
+without adopting general YAML. A `description` value MAY be a block scalar:
+`>` folds its indented lines with single spaces, `|` keeps their newlines,
+and either may carry a `-` or `+` chomping indicator. A plain value MAY also
+continue on indented lines, which fold. A value wrapped in matching single or
+double quotes SHALL be unquoted. An indented line SHALL belong to the
+preceding key and SHALL never set a top-level field. Indented lines under
+keys Smith does not interpret SHALL be skipped. The empty and length checks
+SHALL apply to the folded, trimmed description. Any other line that is not
+`key: value` SHALL still be refused, and the directory-name rule SHALL be
+unchanged.
+
+#### Scenario: Folded description
+
+- **GIVEN** a `SKILL.md` whose frontmatter has `description: >` followed by
+  two indented lines
+- **WHEN** discovery runs
+- **THEN** the skill registers with the two lines joined by one space
+
+#### Scenario: Literal description
+
+- **GIVEN** `description: |` followed by two indented lines
+- **WHEN** discovery runs
+- **THEN** the skill registers with the two lines separated by a newline
+
+#### Scenario: Nested map cannot set the description
+
+- **GIVEN** a frontmatter with `description: Real` and a `metadata:` key
+  whose indented child is `description: Fake`
+- **WHEN** discovery runs
+- **THEN** the skill's description is `Real`
+
+#### Scenario: Quoted value
+
+- **GIVEN** `description: "Review Rust code"`
+- **WHEN** discovery runs
+- **THEN** the description is `Review Rust code` without quotes
