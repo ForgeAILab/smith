@@ -1,6 +1,6 @@
 ---
 created_at: 2026-10-16T00:10:07Z
-updated_at: 2026-10-16T01:10:00Z
+updated_at: 2026-10-16T01:30:00Z
 completed_at:
 ---
 
@@ -49,9 +49,20 @@ completed_at:
 
 ## 5. Verification
 
-- [ ] 5.1 Gate: `smith-config`, `smith-runtime`, `smith-cli` tests with
-  `--no-fail-fast`, clippy, fmt.
-- [ ] 5.2 Live (owner config, installed binary): an orchestrator turn on
+- [x] 5.1 Gate: `smith-config`, `smith-runtime`, `smith-cli` tests with
+  `--no-fail-fast`, clippy, fmt. (Full gate: fmt, clippy stable and 1.88,
+  no-default-features build and tests, smoke, deny all clean; workspace
+  tests 2895 passed, 1 failed: the built-in skill budget, because the new
+  docs paragraph pushed "Providers, credentials, and models" to ~3142
+  tokens. The paragraph moved to "Smith's tools on installed coding
+  agents"; `smith-runtime --lib` and `smith-cli --bin smith`, including the
+  regenerated skill fixtures, then passed.)
+- [x] 5.2 Live (owner config, installed binary): an orchestrator turn on
   `cli/claude-code/opus` runs WebFetch and `python3 -c` without a denial;
-  with `allow_own_tools = false` both are denied again.
-- [ ] 5.3 Live: `codex_live_flow` passes with the new Codex flag.
+  with `allow_own_tools = false` both are denied again. (Release build of
+  `e86bccf`, not installed: `--profile orchestrator` with the owner's config
+  ran `python3` (42) and WebFetch, which reached DNS. A scratch home with
+  `allow_own_tools = false` on `cli/claude-code/haiku` got "This command
+  requires approval" and "Claude requested permissions to use WebFetch".)
+- [x] 5.3 Live: `codex_live_flow` passes with the new Codex flag. (Claude
+  2.1.301 and Codex 0.162.1: both drift canaries and both live flows pass.)
