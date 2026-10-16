@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-export TMPDIR=/tmp/smith-symlink-tmp
+export TMPDIR="${TMPDIR:-/tmp/smith-symlink-tmp}"
 mkdir -p "$TMPDIR"
 export CARGO_HOME="${CARGO_HOME:-$PWD/target/wasm-gate/cargo-home}"
 export CARGO_TARGET_DIR="$PWD/target/wasm-fixtures"
 manifest=crates/smith-wasm-host/tests/guests/Cargo.toml
 fixtures=crates/smith-wasm-host/tests/fixtures
 cargo +stable build --manifest-path "$manifest" -p smith-fixture-componentize --locked
-for mode in tools context processor inactive mount-error malformed collision mount-http quiet; do
+for mode in tools context context-tools processor inactive mount-error malformed collision mount-http quiet; do
     if [[ "$mode" == tools ]]; then
         cargo +stable build --manifest-path "$manifest" -p smith-conformance-guest --target wasm32-unknown-unknown --release --locked
     else

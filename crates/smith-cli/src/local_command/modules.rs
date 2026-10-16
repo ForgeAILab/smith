@@ -23,7 +23,7 @@ pub(super) fn command(host: &HostSession, action: ModulesAction) -> CommandRepor
             ) {
                 Ok(prepared) => CommandReport::ModuleSwitch {
                     request: smith_client::commands::ModuleSwitchRequest {
-                        id,
+                        id: prepared.id,
                         enabled,
                         fingerprint: prepared.fingerprint,
                     },

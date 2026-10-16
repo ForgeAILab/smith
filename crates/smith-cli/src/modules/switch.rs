@@ -10,6 +10,7 @@ use smith_config::user_config::{PreparedConfigEdit, prepare_user_config_edit};
 use smith_module::ModuleReport;
 
 pub(crate) struct PreparedModuleSwitch {
+    pub(crate) id: String,
     pub(crate) edit: PreparedConfigEdit,
     pub(crate) fingerprint: String,
 }
@@ -20,7 +21,10 @@ pub(crate) fn prepare_switch(
     id: &str,
     enabled: bool,
 ) -> Result<PreparedModuleSwitch> {
-    let Some(report) = reports.iter().find(|report| report.descriptor.id == id) else {
+    let Some(report) = reports
+        .iter()
+        .find(|report| smith_plugin::module_id_matches(&report.descriptor.id, id))
+    else {
         let mut ids = reports
             .iter()
             .map(|report| report.descriptor.id.as_str())
@@ -28,6 +32,7 @@ pub(crate) fn prepare_switch(
         ids.sort_unstable();
         anyhow::bail!("unknown module `{id}`; known ids: {}", ids.join(", "));
     };
+    let id = report.descriptor.id.as_str();
     if enabled && !report.descriptor.compiled_in {
         anyhow::bail!("module `{id}` is not in this build");
     }
@@ -71,11 +76,22 @@ pub(crate) fn prepare_switch(
             },
         );
     }
+    if let Some(alias) = smith_plugin::module_id_alias(id)
+        && existing.modules.contains_key(&alias)
+    {
+        patch.modules.insert(
+            alias,
+            ModuleSection {
+                enabled: Some(enabled),
+            },
+        );
+    }
     let edit = prepare_user_config_edit(user_dir, &patch)?;
     let mut digest = Sha256::new();
     digest.update(prior.as_bytes());
     digest.update(edit.preview().as_bytes());
     Ok(PreparedModuleSwitch {
+        id: id.into(),
         edit,
         fingerprint: format!("{:x}", digest.finalize()),
     })

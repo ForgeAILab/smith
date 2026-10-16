@@ -14,6 +14,10 @@ pub(super) fn enabled_key(id: &str) -> String {
     join_key(&["modules", id, "enabled"])
 }
 
+fn matches_id(module: &KnownModule, id: &str) -> bool {
+    module.id == id || module.legacy_enabled_key.as_deref() == Some(enabled_key(id).as_str())
+}
+
 pub(super) fn unknown_module(id: &str, source: Source, known: &[KnownModule]) -> ConfigError {
     let mut known_ids: Vec<String> = known.iter().map(|module| module.id.clone()).collect();
     known_ids.sort();
@@ -33,7 +37,7 @@ pub(super) fn validate_file_modules(
 ) -> Result<(), ConfigError> {
     let validate = |modules: &BTreeMap<String, ModuleSection>, prefix: &[&str]| {
         for id in modules.keys() {
-            if !known.iter().any(|module| module.id == *id) {
+            if !known.iter().any(|module| matches_id(module, id)) {
                 let mut parts = prefix.to_vec();
                 parts.extend(["modules", id.as_str()]);
                 return Err(unknown_module(
@@ -58,7 +62,7 @@ pub(super) fn validate_overrides(
     known: &[KnownModule],
 ) -> Result<(), ConfigError> {
     for id in overrides.modules.keys() {
-        if !known.iter().any(|module| module.id == *id) {
+        if !known.iter().any(|module| matches_id(module, id)) {
             let key = enabled_key(id);
             let source = if layer == Layer::SessionOverride {
                 Source::session(key)
@@ -122,6 +126,17 @@ pub(super) fn normalize_aliases(
     out: &mut [Contribution],
     known: &[KnownModule],
 ) -> Result<(), ConfigError> {
+    for contribution in out.iter_mut() {
+        if contribution.key == "agent.read_only_network_modules"
+            && let SettingValue::List(ids) = &mut contribution.value
+        {
+            for id in ids {
+                if let Some(module) = known.iter().find(|module| matches_id(module, id)) {
+                    *id = module.id.clone();
+                }
+            }
+        }
+    }
     let mut seen: BTreeMap<(Layer, Option<PathBuf>, String), (&SettingValue, Source)> =
         BTreeMap::new();
     for contribution in out.iter() {
@@ -172,8 +187,14 @@ fn canonical_key(key: &str, known: &[KnownModule]) -> Option<String> {
 pub(super) fn setting_for_module_env(name: &str, known: &[KnownModule]) -> Option<String> {
     known
         .iter()
+        .find(|module| {
+            env_name(&enabled_key(&module.id)) == name
+                || module
+                    .legacy_enabled_key
+                    .as_ref()
+                    .is_some_and(|key| env_name(key) == name)
+        })
         .map(|module| enabled_key(&module.id))
-        .find(|key| env_name(key) == name)
 }
 
 /// Both lookups expose the same history, not merely the same final boolean.

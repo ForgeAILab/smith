@@ -717,24 +717,36 @@ impl ContextContributor for GuestPipeline {
         Ok(tokio::task::spawn_blocking(move || {
             let mut session = session.lock().unwrap_or_else(|e| e.into_inner());
             session.bind_session(view.session.clone());
-            let result = (|| {
-                if !session
+            // A contributor without history authority still runs on an empty
+            // history. Host-side view limits must not disable healthy guests.
+            let input = (|| {
+                let history = if session
                     .store
                     .data()
                     .granted(ModuleCapability::HostRead, "session-history")
                 {
-                    return Err(WasmError::CapabilityDenied(
-                        "HostRead/session-history".into(),
-                    ));
-                }
+                    crate::projection::messages(&view.history)?
+                } else {
+                    Vec::new()
+                };
                 let input = w::ContextView {
                     session: view.session.to_string(),
                     turn: view.turn.to_string(),
-                    history: crate::projection::messages(&view.history)?,
+                    history,
                     activation: view.activation.as_str().into(),
                     state: crate::projection::state(&view.state)?,
                 };
                 bounded(&input, &session.store.data().limits)?;
+                Ok::<_, WasmError>(input)
+            })();
+            let input = match input {
+                Ok(input) => input,
+                Err(error) => {
+                    tracing::warn!(error = %error, "context view withheld from sandboxed module");
+                    return ContextPatch::default();
+                }
+            };
+            let result = (|| {
                 let deadline = session.store.data().limits.component_deadline;
                 let patch = session
                     .call(deadline, |guest, store| {

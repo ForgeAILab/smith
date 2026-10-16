@@ -9,6 +9,7 @@ crate-type = ["cdylib"]
 smith-module-sdk = { path = "../../../../smith-module-sdk", version = "0.6.0" }
 [features]
 context = []
+context-tools = []
 processor = []
 inactive = []
 mount-error = []

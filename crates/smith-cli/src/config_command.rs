@@ -88,6 +88,11 @@ pub(super) fn resolution_request_with_catalog(
 pub(super) fn explain_config(key: &str, selection: &Selection) -> Result<()> {
     let prepared = prepare(selection)?;
     let provenance = &prepared.resolution.provenance;
+    let canonical_key = prepared.resolution.config.modules.keys().find_map(|id| {
+        let alias = smith_plugin::module_id_alias(id)?;
+        (key == format!("modules.\"{alias}\".enabled")).then(|| format!("modules.\"{id}\".enabled"))
+    });
+    let key = canonical_key.as_deref().unwrap_or(key);
     let keys: Vec<&str> = if matches!(key, "tools.web_search" | "tools.web_fetch") {
         let prefix = format!("{key}.");
         provenance

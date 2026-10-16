@@ -218,14 +218,11 @@ impl ActivePlugins {
                         .iter()
                         .find(|module| module.id == component.name)
                         .expect("module inventory");
-                    let restriction = switches
-                        .get(&entry.installed.name)
-                        .and_then(|plugin| plugin.modules.get(&module.id));
+                    let restriction = switches.get(&entry.installed.name).and_then(|plugin| {
+                        smith_plugin::lookup_module(&plugin.modules, &module.id)
+                    });
                     let grant = super::wasm::narrow(
-                        entry
-                            .installed
-                            .module_grants
-                            .get(&module.id)
+                        smith_plugin::lookup_module(&entry.installed.module_grants, &module.id)
                             .cloned()
                             .unwrap_or_default(),
                         restriction,

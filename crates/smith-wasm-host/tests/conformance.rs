@@ -400,6 +400,101 @@ async fn context_only_and_malformed_context_contributes_nothing() {
             .is_empty()
     );
 }
+fn contributor(
+    contributions: &[ModuleContribution],
+) -> &Arc<dyn agent_runtime::harness::ContextContributor> {
+    contributions
+        .iter()
+        .find_map(|contribution| match contribution {
+            ModuleContribution::Pipeline(PipelineComponent::ContextContributor(component)) => {
+                Some(component)
+            }
+            _ => None,
+        })
+        .unwrap()
+}
+
+#[tokio::test]
+async fn contributor_without_history_receives_empty_history_and_keeps_tools() {
+    let root = tempfile::tempdir().unwrap();
+    let ctx = context(root.path(), Arc::new(ReplayTransport::single(Vec::new())));
+    let (_, contributions, health) = mount("context-tools", config(root.path()), &ctx);
+    let view = ContextView {
+        session: SessionId::new("session"),
+        turn: TurnId::new("turn"),
+        // This causes a malformed patch if it leaks into the guest.
+        history: Arc::from([Message::user("malformed")]),
+        activation: Fingerprint::of("activation"),
+        state: None,
+    };
+    for _ in 0..5 {
+        let patch = contributor(&contributions).contribute(&view).await.unwrap();
+        assert_eq!(patch.fragments.len(), 1);
+        assert!(format!("{:?}", patch.fragments[0].content).contains("history: 0"));
+    }
+    assert!(health.failure().is_none());
+    assert!(
+        !invoke(tool(&contributions).as_ref(), "ok")
+            .await
+            .unwrap()
+            .is_error
+    );
+}
+
+#[tokio::test]
+async fn oversized_history_skips_contribution_without_resetting_or_incrementing_failures() {
+    let root = tempfile::tempdir().unwrap();
+    let ctx = context(root.path(), Arc::new(ReplayTransport::single(Vec::new())));
+    let mut cfg = config(root.path());
+    cfg.granted_capabilities = vec![grant(C::HostRead, &["session-history"], &[])];
+    cfg.requested_capabilities = cfg.granted_capabilities.clone();
+    let payload_bytes = cfg.limits.payload_bytes;
+    let (_, contributions, health) = mount("context-tools", cfg, &ctx);
+    let mut view = ContextView {
+        session: SessionId::new("session"),
+        turn: TurnId::new("turn"),
+        history: Arc::from([Message::user("x".repeat(payload_bytes + 1))]),
+        activation: Fingerprint::of("activation"),
+        state: None,
+    };
+    assert!(!health.record_failure("previous failure".into()));
+    for _ in 0..5 {
+        assert!(
+            contributor(&contributions)
+                .contribute(&view)
+                .await
+                .unwrap()
+                .fragments
+                .is_empty()
+        );
+    }
+    assert!(health.failure().is_none());
+    // A skip also does not masquerade as a successful guest call.
+    assert!(!health.record_failure("second failure".into()));
+    assert!(
+        !invoke(tool(&contributions).as_ref(), "ok")
+            .await
+            .unwrap()
+            .is_error
+    );
+    view.history = Arc::from([Message::user("representable")]);
+    let patch = contributor(&contributions).contribute(&view).await.unwrap();
+    assert_eq!(patch.fragments.len(), 1);
+    assert!(format!("{:?}", patch.fragments[0].content).contains("history: 1"));
+    assert!(!health.record_failure("first failure".into()));
+    view.history = Arc::from([Message::user("x".repeat(payload_bytes + 1))]);
+    assert!(
+        contributor(&contributions)
+            .contribute(&view)
+            .await
+            .unwrap()
+            .fragments
+            .is_empty()
+    );
+    assert!(!health.record_failure("second failure".into()));
+    assert!(health.record_failure("third failure".into()));
+}
+
 #[tokio::test]
 async fn output_processor_replaces_outcome_and_failure_passes_original() {
     let root = tempfile::tempdir().unwrap();

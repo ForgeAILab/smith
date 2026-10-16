@@ -67,6 +67,8 @@ impl Fixture {
         command
             .current_dir(self.project.path())
             .env_clear()
+            // Keep child temporary files within the test runner's selected root.
+            .env("TMPDIR", std::env::temp_dir())
             .env("HOME", self.home.path());
         command
     }
@@ -1140,4 +1142,63 @@ fn config_explain_web_fetch_reports_the_safe_default() {
         "{explanation}"
     );
     assert!(explanation.contains("built-in default"), "{explanation}");
+}
+
+#[test]
+fn module_hashed_install_alias_is_readable_in_listing_and_config_explain() {
+    let fixture = Fixture::new();
+    let source = fixture.project.path().join("module-source");
+    std::fs::create_dir_all(source.join(".smith-plugin")).unwrap();
+    std::fs::write(source.join(".smith-plugin/plugin.json"),
+        r#"{"name":"alias-test","modules":[{"wasm":"./module.wasm","capabilities":{"workspace_read":true}}]}"#).unwrap();
+    std::fs::write(
+        source.join("module.wasm"),
+        include_bytes!("../../smith-wasm-host/tests/fixtures/tools.wasm"),
+    )
+    .unwrap();
+    let installed = fixture.run(&["plugin", "add", source.to_str().unwrap(), "--yes"]);
+    assert!(installed.status.success(), "{installed:?}");
+    let id = "alias-test/module";
+    let alias = smith_plugin::module_id_alias(id).unwrap();
+    let user = fixture.home.path().join(".smith");
+    let record = user.join("plugins/installed.toml");
+    let before = std::fs::read_to_string(&record).unwrap();
+    std::fs::write(&record, before.replace(id, &alias)).unwrap();
+    std::fs::write(
+        user.join("config.toml"),
+        format!("[modules.\"{alias}\"]\nenabled = false\n"),
+    )
+    .unwrap();
+    let output = fixture.run(&["config", "explain", &format!("modules.\"{alias}\".enabled")]);
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.starts_with(&format!("modules.\"{id}\".enabled = false")),
+        "{text}"
+    );
+    assert!(
+        text.contains(&alias),
+        "original source key is retained: {text}"
+    );
+    let output = fixture.run(&["config", "modules"]);
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains(id), "{text}");
+    assert!(
+        text.lines()
+            .any(|line| line.starts_with(&format!("{id} · off"))),
+        "{text}"
+    );
+    std::fs::write(
+        fixture.project.path().join(".smith/config.local.toml"),
+        format!("[modules.\"{alias}\"]\nenabled = true\n"),
+    )
+    .unwrap();
+    let output = fixture.run(&["config", "explain", &format!("modules.\"{id}\".enabled")]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .starts_with(&format!("modules.\"{id}\".enabled = true"))
+    );
 }

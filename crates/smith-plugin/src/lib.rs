@@ -10,7 +10,10 @@ mod manifest;
 mod marketplace;
 mod mcp;
 mod modules;
-pub use modules::{ModuleCapabilities, WasmModuleComponent, endpoint_parts};
+pub use modules::{
+    ModuleCapabilities, WasmModuleComponent, endpoint_parts, lookup_module, module_id_alias,
+    module_id_matches,
+};
 mod scan;
 mod source;
 mod store;

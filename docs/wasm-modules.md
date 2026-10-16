@@ -38,8 +38,16 @@ Declare components only in `.smith-plugin/plugin.json`:
 
 Paths must start with `./`, exist, and remain inside the plugin directory after
 canonicalization, like other plugin components. A module id is stable across
-updates and installation locations: `wasm.<plugin-name hash>.<relative-path hash>`.
-The actual id is shown in listings; use that exact id for switches and restrictions.
+updates and installation locations: the plugin name, `/`, and the component path
+without `.wasm`, such as `relay/modules/mailbox`. An id outside lowercase ASCII
+letters, digits, `-`, `_`, `.` and `/`, or over 96 bytes, falls back to
+`wasm.<plugin-name hash>.<relative-path hash>`. Case is never folded.
+The old hashed id remains an alias: existing installs retain their confirmed
+grants without reinstalling, and switches and capability restrictions using the
+hashed id still apply. Listings and diagnostics show the readable id when one is
+available. If capability restrictions or stored grants contain both spellings,
+the readable entry takes precedence. Conflicting switch spellings in one
+configuration layer are rejected; across layers, ordinary precedence applies.
 WASM plugin names must use ASCII letters, digits, `.`, `_` or `-`, at most
 128 bytes, so generated tool names stay within the host interface bounds.
 Unknown capability or declaration keys refuse that module with a reason;
@@ -51,7 +59,7 @@ other valid content in the bundle remains available.
 | `workspace_write` | `fs-write` with root `workspace` |
 | `plugin_data_read` | `fs-read` with root `plugin-data`, and `kv-get` |
 | `plugin_data_write` | `fs-write` with root `plugin-data`, and `kv-set` |
-| `session_history` | `session-history` for the current session, and history supplied to context contributors |
+| `session_history` | `session-history` for the current session, and history supplied to context contributors (empty without it) |
 | `network` | `http` to exact named hosts over HTTPS, or an explicitly named HTTP origin |
 | `data_egress` | Additional destination grant required by `http`, including requests without a body |
 
@@ -85,7 +93,7 @@ requested capabilities; replacement content cannot run before confirmation.
 Only the user file may narrow capabilities, by the id shown in `/modules`:
 
 ```toml
-[plugins.my-plugin.modules."wasm.PLUGIN_HASH.PATH_HASH"]
+[plugins.my-plugin.modules."my-plugin/module"]
 network = false
 workspace_write = false
 ```
@@ -114,8 +122,12 @@ values. User-config limit overrides are not offered in this version.
 
 A trap, timeout, resource exhaustion or invalid result fails that invocation,
 records a diagnostic, and leaves the session running. A failed context contributor
-adds no patch; a failed output processor preserves the original output. Three
-consecutive invocation failures disable the module for the session. Successful
+adds no patch. A context contributor without the session-history grant still
+runs with empty history and keeps its tools available. If the host cannot fit a
+contributor view within the payload limits, it skips that contribution for the
+request without counting a module failure. A failed output processor preserves
+the original output. Three consecutive invocation failures disable the module
+for the session. Successful
 calls reset the consecutive counter but do not reenable a disabled module.
 Interactive rebuilds retain session failure counters. Guest instances are fresh
 on each mount. Calls into one instance are serialized. The host refreshes status

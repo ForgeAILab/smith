@@ -172,15 +172,13 @@ pub(crate) fn plugin_composition(
         for component in &inventory.modules {
             let restriction = switches
                 .get(&entry.installed.name)
-                .and_then(|plugin| plugin.modules.get(&component.id));
+                .and_then(|plugin| smith_plugin::lookup_module(&plugin.modules, &component.id));
             // Only the digest-verified install record supplies grants. User
             // settings intersect that authority; no other layer can add to it.
-            let confirmed = entry
-                .installed
-                .module_grants
-                .get(&component.id)
-                .cloned()
-                .unwrap_or_default();
+            let confirmed =
+                smith_plugin::lookup_module(&entry.installed.module_grants, &component.id)
+                    .cloned()
+                    .unwrap_or_default();
             let granted = crate::plugins::wasm::narrow(confirmed, restriction);
             let requested_labels = component.capabilities.labels();
             let labels = granted.labels();
@@ -194,8 +192,7 @@ pub(crate) fn plugin_composition(
                     .filter(|label| !labels.contains(label))
                     .collect(),
             };
-            let selected = module_switches
-                .get(&component.id)
+            let selected = smith_plugin::lookup_module(module_switches, &component.id)
                 .is_none_or(|module| module.enabled.value);
             if selected {
                 composition.enabled.insert(component.id.clone());
@@ -295,9 +292,10 @@ pub(crate) fn plugin_composition(
                 let declared_default = inner
                     .as_ref()
                     .is_none_or(|module| smith_module::Module::default_enabled(module.as_ref()));
-                let uses_default = module_switches.get(&component.id).is_none_or(|module| {
-                    module.enabled.source.layer == smith_config::resolve::Layer::BuiltIn
-                });
+                let uses_default = smith_plugin::lookup_module(module_switches, &component.id)
+                    .is_none_or(|module| {
+                        module.enabled.source.layer == smith_config::resolve::Layer::BuiltIn
+                    });
                 if uses_default && !declared_default {
                     composition.enabled.remove(&component.id);
                 }

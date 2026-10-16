@@ -109,7 +109,8 @@ pub(crate) fn with_known_plugins(request: ResolveRequest) -> Result<ResolveReque
                 id: module.id.clone(),
                 default_enabled: true,
                 compiled_in: cfg!(feature = "wasm-modules"),
-                legacy_enabled_key: None,
+                legacy_enabled_key: smith_plugin::module_id_alias(&module.id)
+                    .map(|id| format!("modules.\"{id}\".enabled")),
             }),
     );
     Ok(request.with_known_plugins(catalog.known_plugins()))

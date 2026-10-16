@@ -596,3 +596,78 @@ fn module_session_overrides_use_the_existing_typed_host_path() {
         Layer::SessionOverride,
     );
 }
+
+#[test]
+fn hashed_module_ids_are_aliases_in_all_selection_layers() {
+    let id = "relay/modules/mailbox";
+    let alias = "wasm.0123456789abcdef.0123456789abcdef";
+    let canonical = format!("modules.\"{id}\".enabled");
+    let legacy = format!("modules.\"{alias}\".enabled");
+    for &layer in LAYERS {
+        let fixture = Fixture::new();
+        let mut request = fixture.request();
+        request.known_modules = vec![KnownModule {
+            id: id.into(),
+            default_enabled: false,
+            compiled_in: true,
+            legacy_enabled_key: Some(legacy.clone()),
+        }];
+        let text = format!("{legacy} = false\n");
+        match layer {
+            Layer::BuiltIn => {}
+            Layer::UserFile => fixture.write_user(&text),
+            Layer::ProjectFile => fixture.write_project(&format!("{text}{BASE}")),
+            Layer::ProjectLocalFile => fs::write(
+                fixture.project.path().join(".smith/config.local.toml"),
+                text,
+            )
+            .unwrap(),
+            Layer::Profile => fixture.write_project(&format!(
+                "{BASE}\n{}",
+                profile_switch("work", &legacy, false)
+            )),
+            Layer::Environment => {
+                request.env.insert(env_name(&legacy), "false".into());
+            }
+            Layer::CommandLine => {
+                request.cli.modules.insert(alias.into(), false);
+            }
+            Layer::SessionOverride => {
+                request.session.modules.insert(alias.into(), false);
+            }
+        }
+        let resolution = resolve(&request).unwrap();
+        assert_eq!(resolution.config.modules.len(), 1);
+        assert!(!resolution.config.modules[id].enabled.value);
+        assert_eq!(resolution.config.modules[id].enabled.source.layer, layer);
+        let explanation = resolution.provenance.explain(&canonical).unwrap();
+        let old_explanation = resolution.provenance.explain(&legacy).unwrap();
+        assert_eq!(explanation.value, old_explanation.value);
+        assert_eq!(explanation.source, old_explanation.source);
+        assert_eq!(explanation.overridden, old_explanation.overridden);
+    }
+    let fixture = Fixture::new();
+    let mut request = fixture.request();
+    request.known_modules = vec![KnownModule {
+        id: id.into(),
+        default_enabled: true,
+        compiled_in: true,
+        legacy_enabled_key: Some(legacy.clone()),
+    }];
+    fixture.write_user(&format!("{legacy} = false\n"));
+    fixture.write_project(&format!("{canonical} = true\n{BASE}"));
+    assert!(resolve(&request).unwrap().config.modules[id].enabled.value);
+    fixture.write_user(&format!("{legacy} = false\n{canonical} = true\n"));
+    assert!(matches!(
+        resolve(&request),
+        Err(ConfigError::Ambiguous { .. })
+    ));
+    fixture.write_user(&format!(
+        "agent.read_only_network_modules = [\"{alias}\"]\n"
+    ));
+    let resolution = resolve(&request).unwrap();
+    assert_eq!(
+        resolution.config.agent.read_only_network_modules.value,
+        [id]
+    );
+}

@@ -1,6 +1,7 @@
 //! WASM inventory only: this crate never instantiates executable components.
 use crate::{NotLoadedComponent, PluginError, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// Manifest capability requests, persisted with the confirmed bundle digest.
@@ -62,9 +63,9 @@ impl ModuleCapabilities {
 /// One valid declaration, with a stable local id derived from its relative path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WasmModuleComponent {
-    /// Namespaced configuration id: wasm.<plugin hash>.<path hash>.
+    /// Readable configuration id when representable, otherwise the hashed id.
     pub id: String,
-    /// Plugin-relative path, also the user configuration narrowing key.
+    /// Normalized plugin-relative component path.
     pub wasm: String,
     /// Confined canonical component path.
     pub path: PathBuf,
@@ -126,9 +127,7 @@ pub(crate) fn scan(
                 }
             }
             let wasm = crate::manifest::relative(root, &path)?;
-            let plugin = smith_config::trust::ContentDigest::of(manifest.name.as_bytes());
-            let file = smith_config::trust::ContentDigest::of(wasm.as_bytes());
-            let id = format!("wasm.{}.{}", &plugin.as_hex()[..16], &file.as_hex()[..16]);
+            let id = module_id(&manifest.name, &wasm);
             if modules.iter().any(|m: &WasmModuleComponent| m.id == id) {
                 return Err(PluginError::Invalid("duplicate module path".into()));
             }
@@ -194,4 +193,93 @@ pub fn endpoint_parts(endpoint: &str) -> Result<(String, bool)> {
         ));
     }
     Ok((endpoint.into(), false))
+}
+
+/// Stable across updates and install locations; case is never folded.
+fn module_id(plugin: &str, wasm: &str) -> String {
+    let readable = format!("{plugin}/{}", wasm.strip_suffix(".wasm").unwrap_or(wasm));
+    if readable.len() <= 96
+        && readable
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"-_./".contains(&b))
+    {
+        readable
+    } else {
+        hashed_module_id(plugin, wasm)
+    }
+}
+
+fn hashed_module_id(plugin: &str, wasm: &str) -> String {
+    let plugin = smith_config::trust::ContentDigest::of(plugin.as_bytes());
+    let file = smith_config::trust::ContentDigest::of(wasm.as_bytes());
+    format!("wasm.{}.{}", &plugin.as_hex()[..16], &file.as_hex()[..16])
+}
+
+/// Previous install/configuration id for a readable installed module id.
+/// The readable path is the same normalized relative path used by old installs.
+pub fn module_id_alias(id: &str) -> Option<String> {
+    let (plugin, path) = id.split_once('/')?;
+    Some(hashed_module_id(plugin, &format!("{path}.wasm")))
+}
+
+/// Match either the displayed installed id or its previous hashed spelling.
+pub fn module_id_matches(canonical: &str, id: &str) -> bool {
+    canonical == id || module_id_alias(canonical).as_deref() == Some(id)
+}
+
+/// Look up module settings/grants by displayed id, then its previous spelling.
+/// An explicit readable entry takes precedence when both entries are present.
+pub fn lookup_module<'a, T>(entries: &'a BTreeMap<String, T>, id: &str) -> Option<&'a T> {
+    entries
+        .get(id)
+        .or_else(|| entries.get(&module_id_alias(id)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ids_are_readable_when_representable_and_hashed_otherwise() {
+        assert_eq!(
+            module_id("relay", "modules/mailbox.wasm"),
+            "relay/modules/mailbox"
+        );
+        assert_eq!(
+            module_id("deploy-tools", "mods/a_b.wasm"),
+            "deploy-tools/mods/a_b"
+        );
+        for (plugin, path) in [
+            ("Relay", "module.wasm"),
+            ("relay", "Module.wasm"),
+            ("relay", "mod space.wasm"),
+            ("relay", "mód.wasm"),
+        ] {
+            assert_eq!(module_id(plugin, path), hashed_module_id(plugin, path));
+        }
+        assert_ne!(
+            module_id("Relay", "module.wasm"),
+            module_id("relay", "Module.wasm")
+        );
+        assert_eq!(module_id(&"p".repeat(89), "m.wasm").len(), 91);
+        assert_eq!(module_id(&"p".repeat(94), "m.wasm").len(), 96);
+        assert!(module_id(&"p".repeat(95), "m.wasm").starts_with("wasm."));
+    }
+
+    #[test]
+    fn hashed_alias_uses_the_original_path_and_readable_entries_take_precedence() {
+        let id = module_id("relay", "modules/mailbox.wasm");
+        let alias = "wasm.ba2ab7b5cfb707e8.511dfa01176b47c2".to_owned();
+        assert_eq!(module_id_alias(&id), Some(alias.clone()));
+        assert!(module_id_matches(&id, &alias));
+        assert!(!module_id_matches(
+            &id,
+            &hashed_module_id("relay", "other.wasm")
+        ));
+        assert_eq!(module_id_alias(&alias), None);
+        let mut entries = BTreeMap::from([(alias, 1)]);
+        assert_eq!(lookup_module(&entries, &id), Some(&1));
+        entries.insert(id.clone(), 2);
+        assert_eq!(lookup_module(&entries, &id), Some(&2));
+    }
 }

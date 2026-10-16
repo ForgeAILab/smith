@@ -241,7 +241,7 @@ fn project_cannot_grant_and_user_only_narrows_confirmed_authority() {
     let id = config
         .modules
         .keys()
-        .find(|id| id.starts_with("wasm."))
+        .find(|id| id.starts_with("deploy-tools/"))
         .unwrap()
         .clone();
     let project_text = std::fs::read_to_string(fixture.project.join(".smith/config.toml")).unwrap();
@@ -369,7 +369,7 @@ async fn user_withheld_network_fails_host_function_through_runtime() {
     let id = config
         .modules
         .keys()
-        .find(|id| id.starts_with("wasm."))
+        .find(|id| id.starts_with("deploy-tools/"))
         .unwrap();
     write(
         &fixture.user,
@@ -481,4 +481,117 @@ fn a_user_endpoint_list_intersects_without_widening_the_grant() {
     };
     let narrowed = crate::plugins::wasm::narrow(confirmed, Some(&restriction));
     assert_eq!(narrowed.network, ["api.example.com"]);
+}
+
+#[tokio::test]
+async fn hashed_module_install_grants_and_configuration_survive_upgrade() {
+    let fixture = Fixture::new(true);
+    bundle(
+        &fixture,
+        "deploy-tools",
+        serde_json::json!({
+            "workspace_read": true, "network": ["api.example.com"],
+            "data_egress": ["api.example.com"]
+        }),
+        &std::fs::read(example().join("module.wasm")).unwrap(),
+    );
+    install(&fixture, &fixture.source);
+    let id = "deploy-tools/module";
+    let alias = "wasm.28e97dd683bfc96f.a93923545d211ea8".to_owned();
+    let record = fixture.user.join("plugins/installed.toml");
+    let prior = std::fs::read_to_string(&record).unwrap();
+    assert!(prior.contains(id));
+    std::fs::write(&record, prior.replace(id, &alias)).unwrap();
+    let before = std::fs::read(&record).unwrap();
+    let stored = crate::plugins::open_store(&fixture.user).list().unwrap();
+    let installed = stored
+        .iter()
+        .find(|plugin| plugin.name == "deploy-tools")
+        .unwrap();
+    assert!(installed.module_grants[&alias].workspace_read);
+    assert!(matches!(
+        crate::plugins::open_store(&fixture.user)
+            .load("deploy-tools")
+            .unwrap(),
+        smith_plugin::InstalledState::Unchanged(_)
+    ));
+
+    write(
+        &fixture.user,
+        "config.toml",
+        format!(
+            "[persistence]\nenabled = false\n[modules.\"{alias}\"]\nenabled = true\n[plugins.deploy-tools.modules.\"{alias}\"]\nnetwork = false\n"
+        ),
+    );
+    let request = crate::plugins::with_known_plugins(
+        ResolveRequest::new(&fixture.project)
+            .with_home_dir(&fixture.home)
+            .with_known_modules(crate::modules::known_modules()),
+    )
+    .unwrap();
+    let resolution = smith_config::resolve::resolve(&request).unwrap();
+    assert!(resolution.config.modules[id].enabled.value);
+    assert!(!resolution.config.modules.contains_key(&alias));
+    let canonical = format!("modules.\"{id}\".enabled");
+    let legacy = format!("modules.\"{alias}\".enabled");
+    let explanation = resolution.provenance.explain(&canonical).unwrap();
+    let old_explanation = resolution.provenance.explain(&legacy).unwrap();
+    assert_eq!(explanation.value, old_explanation.value);
+    assert_eq!(explanation.source, old_explanation.source);
+    assert_eq!(explanation.source.key, legacy);
+    let modules = composition(&fixture, &resolution.config);
+    assert!(modules.enabled.contains(id));
+    #[cfg(feature = "wasm-modules")]
+    {
+        let mut runtime_request = fixture.request(resolution.config.clone());
+        runtime_request
+            .plugin_profiles
+            .get_mut(&resolution.config.agent.profile.name)
+            .unwrap()
+            .wasm_modules = modules.clone();
+        let report = smith_runtime::factory::module_report(&runtime_request)
+            .await
+            .unwrap();
+        let module = report
+            .iter()
+            .find(|module| module.descriptor.id == id)
+            .unwrap();
+        assert_eq!(module.state, smith_module::ModuleState::Mounted);
+    }
+    let descriptor = modules
+        .compiled
+        .iter()
+        .map(smith_module::CompiledModule::descriptor)
+        .chain(modules.known)
+        .find(|module| module.id == id)
+        .unwrap();
+    let smith_module::ModuleOrigin::Sandboxed {
+        granted_capabilities,
+        ..
+    } = &descriptor.origin
+    else {
+        panic!("sandbox origin")
+    };
+    assert!(granted_capabilities.contains(&smith_module::ModuleCapability::WorkspaceRead));
+    assert!(!granted_capabilities.contains(&smith_module::ModuleCapability::Network));
+    #[cfg(feature = "wasm-modules")]
+    assert!(!modules.compiled.is_empty());
+    let reports = vec![smith_module::ModuleReport {
+        descriptor,
+        state: smith_module::ModuleState::Off,
+        health: None,
+    }];
+    let switch = crate::modules::prepare_switch(&fixture.user, &reports, &alias, false).unwrap();
+    assert_eq!(switch.id, id);
+    switch.edit.commit(true).unwrap().accept();
+    let switched = smith_config::model::ConfigFile::parse(
+        &std::fs::read_to_string(fixture.user.join("config.toml")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(switched.modules[id].enabled, Some(false));
+    assert_eq!(switched.modules[&alias].enabled, Some(false));
+    let off = fixture.config(None);
+    assert!(!off.modules[id].enabled.value);
+    assert!(!composition(&fixture, &off).enabled.contains(id));
+    assert_eq!(std::fs::read(&record).unwrap(), before);
 }

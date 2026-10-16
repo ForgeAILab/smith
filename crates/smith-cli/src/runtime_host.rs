@@ -843,9 +843,10 @@ async fn run_interactive_hosts(
                 .runtime()
                 .policy()
                 .modules
-                .get(&request.id)
-                .map(|resolved| {
-                    crate::modules::switch_outcome(&request.id, request.enabled, resolved)
+                .iter()
+                .find(|(id, _)| smith_plugin::module_id_matches(id, &request.id))
+                .map(|(id, resolved)| {
+                    crate::modules::switch_outcome(id, request.enabled, resolved)
                 });
             committed.accept();
         }

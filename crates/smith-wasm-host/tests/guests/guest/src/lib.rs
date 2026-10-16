@@ -66,6 +66,12 @@ impl Module for Fixture {
                     .build(),
             )
         };
+        if cfg!(feature = "context-tools") {
+            return Ok(Mounted::Contributions(vec![
+                tool("probe"),
+                Contribution::ContextContributor(component),
+            ]));
+        }
         if cfg!(feature = "malformed") {
             return Ok(Mounted::Contributions(vec![tool("probe"), tool("probe")]));
         }
@@ -194,7 +200,11 @@ impl Module for Fixture {
                 revision: "1".into(),
                 requirement: Requirement::Optional,
                 priority: 0,
-                content: FragmentContent::Text("guest context".into()),
+                content: FragmentContent::Text(if cfg!(feature = "context-tools") {
+                    format!("history: {}", view.history.len())
+                } else {
+                    "guest context".into()
+                }),
                 pairing: None,
                 pairings: vec![],
                 conversation_group: None,
