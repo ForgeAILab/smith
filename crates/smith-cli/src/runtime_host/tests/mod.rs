@@ -239,3 +239,23 @@ fn cost_lines_show_each_binding_even_when_the_last_root_price_is_unknown() {
         "unknown · no price reference for custom/model"
     );
 }
+
+#[test]
+fn advisor_palette_target_parses_installed_agents_and_preserves_the_session() {
+    let mut selection = Selection::default();
+    let mut resume = None;
+    apply_palette_command(
+        &mut selection,
+        &mut resume,
+        "current-session".to_owned(),
+        SelectionCommand::Advisor(AdvisorChoice::Target("cli/claude-code/opus".to_owned())),
+    );
+    assert_eq!(
+        selection.advisor,
+        Some(AdvisorOverride::Target(AdvisorTarget::InstalledAgent {
+            kind: "claude-code".to_owned(),
+            model: "opus".to_owned(),
+        }))
+    );
+    assert_eq!(resume.as_deref(), Some("current-session"));
+}

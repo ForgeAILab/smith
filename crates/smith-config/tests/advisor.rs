@@ -925,3 +925,133 @@ fn an_invalid_capability_pattern_fails_resolution_with_its_source() {
         assert!(error.to_string().contains(reason), "{pattern}: {error}");
     }
 }
+
+#[test]
+fn advisor_installed_agent_targets_round_trip_before_the_provider_split() {
+    for (kind, model) in [
+        ("claude-code", "opus"),
+        ("codex", "gpt-6-sol"),
+        ("codex", "vendor/model"),
+    ] {
+        let id = format!("cli/{kind}/{model}");
+        let target = AdvisorTarget::parse(&id).expect("installed agent");
+        assert_eq!(
+            target,
+            AdvisorTarget::InstalledAgent {
+                kind: kind.to_owned(),
+                model: model.to_owned()
+            }
+        );
+        assert_eq!(target.to_string(), id);
+    }
+    assert_eq!(
+        AdvisorTarget::parse("cli/emacs/sonnet"),
+        Some(model("cli", "emacs/sonnet"))
+    );
+}
+
+#[test]
+fn advisor_installed_agent_resolves_with_main_provider_and_top_level_settings() {
+    for (global, profile) in [
+        ("advisor = \"cli/claude-code/opus\"", ""),
+        ("", "advisor = \"cli/claude-code/opus\""),
+    ] {
+        let fixture = Fixture::new(&config(
+            &format!("{global}\n[context]\nreasoning_reserve = 512\n"),
+            &format!("{profile}\nmax_output_tokens = 8192\ninstructions = \"MAIN_ONLY\""),
+            SOL,
+        ));
+        fixture.write_user("[harness.claude-code]\nargs = [\"--fixture\"]\n");
+        let main = fixture.resolve().expect("installed advisor selection");
+        let mut request = fixture.request();
+        request.session.provider = Some(main.config.provider.name.value.clone());
+        let advisor = resolve(
+            &request.with_advisor_route(main.config.agent.profile.advisor.clone().unwrap()),
+        )
+        .expect("installed advisor route");
+        assert_eq!(advisor.config.provider.name.value, "acme");
+        assert_eq!(advisor.config.model.value, "cli/claude-code/opus");
+        assert_ne!(
+            advisor
+                .config
+                .max_output_tokens
+                .as_ref()
+                .map(|value| value.value),
+            Some(8192)
+        );
+        assert_eq!(advisor.config.context.reasoning_reserve.value, 512);
+        assert!(advisor.config.agent.profile.instructions.is_none());
+        let harness = advisor.config.harness.unwrap();
+        assert_eq!(harness.kind.value, "claude-code");
+        assert_eq!(harness.model.value, "opus");
+        assert_eq!(harness.args, ["--fixture"]);
+    }
+}
+
+#[test]
+fn advisor_installed_agent_profile_resolves_its_own_instructions_and_provider() {
+    let fixture = Fixture::new(
+        &config(
+            "advisor = \"sol\"",
+            "",
+            "model = \"cli/codex/gpt-6-sol\"\ninstructions = \"REVIEWER\"",
+        )
+        .replace("model = \"advisor-model\"\n", ""),
+    );
+    let main = fixture.resolve().expect("profile advisor selection");
+    let advisor = fixture
+        .resolve_route(&main)
+        .expect("profile installed advisor route");
+    assert_eq!(advisor.config.provider.name.value, "acme");
+    assert_eq!(advisor.config.model.value, "cli/codex/gpt-6-sol");
+    assert_eq!(
+        advisor.config.agent.profile.instructions.unwrap().value,
+        "REVIEWER"
+    );
+    assert_eq!(advisor.config.harness.unwrap().kind.value, "codex");
+}
+
+#[test]
+fn advisor_installed_agent_skips_the_main_model_including_session_overrides() {
+    let fixture = Fixture::new(
+        &config("advisor = \"cli/claude-code/opus\"", "", SOL)
+            .replace("working-model", "cli/claude-code/opus"),
+    );
+    for request in [
+        fixture.request(),
+        fixture
+            .request()
+            .with_advisor_override(AdvisorOverride::Target(
+                AdvisorTarget::parse("cli/claude-code/opus").unwrap(),
+            )),
+    ] {
+        let main = resolve(&request).expect("self advice is skipped");
+        assert!(main.config.agent.profile.advisor.is_none());
+    }
+}
+
+#[test]
+fn advisor_unknown_installed_kind_is_an_unknown_provider_before_credentials() {
+    let fixture = Fixture::new(&config("advisor = \"cli/emacs/sonnet\"", "", SOL));
+    let error = fixture.resolve().unwrap_err();
+    assert!(
+        matches!(error, ConfigError::UnusableReference { what: ReferenceKind::Provider, ref name, .. } if name == "cli")
+    );
+    assert!(error.to_string().contains("advisor"));
+}
+
+#[test]
+fn advisor_installed_agent_is_rejected_for_vision_directly_or_through_a_profile() {
+    for vision in ["cli/claude-code/opus", "sol"] {
+        let fixture = Fixture::new(
+            &config(&format!("vision = \"{vision}\""), "", SOL)
+                .replace("advisor-model", "cli/claude-code/opus"),
+        );
+        let error = fixture.resolve().unwrap_err().to_string();
+        assert!(error.contains("vision"), "{error}");
+        assert!(
+            error.contains("installed agent cannot serve image requests"),
+            "{error}"
+        );
+    }
+}

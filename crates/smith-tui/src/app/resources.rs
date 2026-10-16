@@ -514,7 +514,7 @@ impl App {
             }
             None => {
                 self.transcript.push_error(format!(
-                    "advisor `{value}` is not a configured profile or provider/model; \
+                    "advisor `{value}` is not a configured profile or provider/model (including cli/<kind>/<model>); \
                      use `/advisor` to choose"
                 ));
                 None

@@ -378,7 +378,10 @@ async fn start_host_with_modules(
         // uses its own reasoning and context limits.
         let mut advisor_selection = selection.clone();
         advisor_selection.profile = None;
-        advisor_selection.provider = None;
+        // A CLI target carries only a model. Preserve the resolved provider
+        // even when it came solely from the main profile we just cleared.
+        advisor_selection.provider = matches!(advisor.value, AdvisorTarget::InstalledAgent { .. })
+            .then(|| resolution.config.provider.name.value.clone());
         advisor_selection.model = None;
         advisor_selection.reasoning_enabled = None;
         advisor_selection.reasoning_effort = None;

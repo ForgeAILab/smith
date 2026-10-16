@@ -16,10 +16,19 @@ impl CliAgentPlan {
         cwd: PathBuf,
         allow_own_tools: bool,
     ) -> std::sync::Arc<dyn ExternalAgentBackend> {
-        std::sync::Arc::new(CliAgentBackend::new(
-            self.kind,
-            self.settings(cwd, allow_own_tools),
-        ))
+        self.backend_with_instructions(cwd, allow_own_tools, None)
+    }
+
+    /// Carries reviewer instructions through the same harness as ordinary turns.
+    pub(crate) fn backend_with_instructions(
+        &self,
+        cwd: PathBuf,
+        allow_own_tools: bool,
+        instructions: Option<String>,
+    ) -> std::sync::Arc<dyn ExternalAgentBackend> {
+        let mut settings = self.settings(cwd, allow_own_tools);
+        settings.instructions = instructions;
+        std::sync::Arc::new(CliAgentBackend::new(self.kind, settings))
     }
 
     fn settings(&self, cwd: PathBuf, allow_own_tools: bool) -> CliAgentSettings {

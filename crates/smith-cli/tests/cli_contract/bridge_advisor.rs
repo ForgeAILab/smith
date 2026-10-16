@@ -216,3 +216,27 @@ fn removing_advisor_on_resume_preserves_recorded_cli_instructions() {
             .all(|arg| !arg.contains("system-prompt"))
     );
 }
+
+#[test]
+fn installed_advisor_host_inherits_the_profile_only_main_provider_without_a_program() {
+    for config in [
+        super::CONFIG.replace(
+            "default_profile = \"dev\"",
+            "default_profile = \"dev\"\nadvisor = \"cli/claude-code/opus\"",
+        ),
+        super::CONFIG.replace(
+            "[profiles.dev]",
+            "[profiles.dev]\nadvisor = \"cli/claude-code/opus\"",
+        ),
+    ] {
+        let fixture = super::Fixture::with_config(&config);
+        // The isolated process has no PATH or installed agent. Startup must
+        // still compose the advisor against `local`, selected only by dev.
+        let output = fixture.run(&["-p", "hello", "--output-format", "json"]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}

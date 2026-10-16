@@ -29,6 +29,10 @@ pub(in crate::factory) async fn prepare_advisor_route(
                 ),
             })?;
     let matches_selection = match &selected.value {
+        AdvisorTarget::InstalledAgent { .. } => {
+            advisor.config.model.value == selected.value.to_string()
+                && advisor.config.provider.name.value == request.config.provider.name.value
+        }
         AdvisorTarget::Profile(name) => advisor.config.agent.profile.name == *name,
         AdvisorTarget::Model { provider, model } => {
             advisor.config.provider.name.value == *provider && advisor.config.model.value == *model
@@ -72,7 +76,12 @@ pub(in crate::factory) async fn prepare_advisor_route(
         prepared.command.map(|command| command.provider),
     )?
     .provider;
+    let execution = crate::advisor::AdvisorExecution::from_turn(
+        crate::cli_agent::turn_execution(&advisor.config, request.smith_executable.as_deref()),
+        provider.clone(),
+    );
     Ok(Some(Arc::new(AdvisorRoute {
+        execution,
         provider,
         provider_name: prepared.provider_name,
         model: prepared.model,
@@ -85,7 +94,13 @@ pub(in crate::factory) async fn prepare_advisor_route(
             .then(|| advisor.config.agent.profile.instructions.as_ref())
             .flatten()
             .map(|instructions| instructions.value.clone()),
-        price,
+        price: if smith_config::cli_agents::parse_cli_model_id(&advisor.config.model.value)
+            .is_some()
+        {
+            None
+        } else {
+            price
+        },
         plugins: request
             .plugin_profiles
             .get(&advisor.config.agent.profile.name)
@@ -132,6 +147,7 @@ pub(in crate::factory) async fn prepare_vision_route(
                 ),
             })?;
     let matches_selection = match &selected.value {
+        AdvisorTarget::InstalledAgent { .. } => false,
         AdvisorTarget::Profile(name) => vision.config.agent.profile.name == *name,
         AdvisorTarget::Model { provider, model } => {
             vision.config.provider.name.value == *provider && vision.config.model.value == *model

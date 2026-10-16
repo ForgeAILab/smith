@@ -42,8 +42,11 @@ pub(super) fn runtime_resources(
     let disconnections = disconnection_entries(&inventory.providers);
     append_connectable_connections(&mut connections);
     let providers = provider_entries(inventory.providers);
-    let advisors = advisor_entries(agents, &inventory.models);
-    let models = model_entries(inventory.models, context_window);
+    let models = append_cli_agent_models(
+        model_entries(inventory.models.clone(), context_window),
+        harness,
+    );
+    let advisors = advisor_entries(agents, &inventory.models, &models);
     let session_entries = session_resource_entries(sessions, Some(current_session));
     let files = workspace_file_entries(project, 4_096);
     let child_agents = child_agent_entries(&profile_inventory, agents, &model_limits);
@@ -51,7 +54,6 @@ pub(super) fn runtime_resources(
 
     let thinking = thinking_entries(reasoning);
     let efforts = effort_entries(reasoning);
-    let models = append_cli_agent_models(models, harness);
 
     RuntimeResources {
         models,
@@ -494,7 +496,11 @@ pub(crate) fn advisor_status(agents: &ResolvedAgent) -> String {
 
 /// Choices for `/advisor`: the keywords, then every profile and model the
 /// resolver would accept as this session's advisor.
-fn advisor_entries(agents: &ResolvedAgent, models: &[ModelInventoryEntry]) -> Vec<ResourceEntry> {
+fn advisor_entries(
+    agents: &ResolvedAgent,
+    models: &[ModelInventoryEntry],
+    model_rows: &[ResourceEntry],
+) -> Vec<ResourceEntry> {
     let overridden = agents.advisor_overridden;
     let effective = agents
         .profile
@@ -543,18 +549,20 @@ fn advisor_entries(agents: &ResolvedAgent, models: &[ModelInventoryEntry]) -> Ve
                     .active(active(&profile.name))
             }),
     );
-    // The session's own binding would only consult itself, and a model with
-    // no limits cannot be planned against.
-    entries.extend(
-        models
-            .iter()
-            .filter(|model| !model.active && model.context_tokens.is_some())
-            .filter(|model| smith_config::cli_agents::parse_cli_model_id(&model.model).is_none())
-            .map(|model| {
-                let id = model.id();
-                ResourceEntry::new(id.clone(), id.clone(), model.label.clone()).active(active(&id))
-            }),
-    );
+    // Reuse model labels and availability, then apply reviewer-specific limits
+    // and selection. The active model row names the session's own binding.
+    entries.extend(model_rows.iter().filter(|row| !row.active).map(|row| {
+        let mut row = row.clone();
+        row.active = active(&row.id);
+        if row.disabled_reason.is_none()
+            && models
+                .iter()
+                .any(|model| model.id() == row.id && model.context_tokens.is_none())
+        {
+            row = row.disabled("advisor requires usable context limits");
+        }
+        row
+    }));
     entries
 }
 
@@ -653,12 +661,20 @@ fn append_cli_agent_models(
     models: Vec<ResourceEntry>,
     harness: Option<&smith_config::resolve::ResolvedHarness>,
 ) -> Vec<ResourceEntry> {
+    append_cli_agent_models_with_availability(models, harness, program_on_path)
+}
+
+fn append_cli_agent_models_with_availability(
+    models: Vec<ResourceEntry>,
+    harness: Option<&smith_config::resolve::ResolvedHarness>,
+    available: impl Fn(&str) -> bool,
+) -> Vec<ResourceEntry> {
     let mut models = models;
     let active_cli_model = harness.map(|harness| {
         smith_config::cli_agents::cli_model_id(&harness.kind.value, &harness.model.value)
     });
     for entry in smith_config::cli_agents::CLI_AGENTS {
-        let installed = program_on_path(entry.program);
+        let installed = available(entry.program);
         for model in entry.models {
             let id = smith_config::cli_agents::cli_model_id(entry.kind, model);
             let active = active_cli_model.as_deref() == Some(id.as_str());
@@ -1191,6 +1207,83 @@ mod tests {
         InventoryLimit, ModelInventoryEntry, ModelLimitOrigin, ProviderInventoryEntry,
     };
 
+    fn advisor_test_agent() -> smith_config::resolve::ResolvedAgent {
+        let home = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        std::fs::create_dir(project.path().join(".smith")).unwrap();
+        std::fs::write(
+            project.path().join(".smith/config.toml"),
+            r#"
+default_profile = "main"
+[profiles.main]
+provider = "local"
+model = "main"
+[providers.local]
+kind = "fake"
+"#,
+        )
+        .unwrap();
+        smith_config::resolve::resolve(
+            &smith_config::resolve::ResolveRequest::new(project.path()).with_home_dir(home.path()),
+        )
+        .unwrap()
+        .config
+        .agent
+    }
+
+    #[test]
+    fn advisor_model_rows_share_labels_path_checks_and_override_selection() {
+        use smith_config::resolve::{AdvisorTarget, Source, Sourced};
+        let mut agent = advisor_test_agent();
+        agent.advisor_overridden = true;
+        agent.profile.advisor = Some(Sourced::new(
+            AdvisorTarget::parse("cli/claude-code/opus").unwrap(),
+            Source::session("advisor"),
+        ));
+        let mut models =
+            super::append_cli_agent_models_with_availability(Vec::new(), None, |program| {
+                program == "claude"
+            });
+        models
+            .push(smith_tui::ResourceEntry::new("acme/main", "Main", "main binding").active(true));
+        let advisors = super::advisor_entries(&agent, &[], &models);
+        assert!(!advisors.iter().any(|entry| entry.id == "acme/main"));
+        for model in models.iter().filter(|entry| entry.id.starts_with("cli/")) {
+            let advisor = advisors.iter().find(|entry| entry.id == model.id).unwrap();
+            assert_eq!(advisor.label, model.label);
+            assert_eq!(advisor.description, model.description);
+            assert_eq!(advisor.detail, model.detail);
+            assert_eq!(advisor.disabled_reason, model.disabled_reason);
+            assert_eq!(advisor.active, advisor.id == "cli/claude-code/opus");
+            if model.id.starts_with("cli/codex/") {
+                assert_eq!(
+                    advisor.disabled_reason.as_deref(),
+                    Some("`codex` is not on PATH")
+                );
+            } else {
+                assert!(advisor.disabled_reason.is_none());
+            }
+        }
+        // The active CLI binding is dropped even when another model of that
+        // same kind is the current advisor override.
+        models
+            .iter_mut()
+            .find(|row| row.id == "cli/claude-code/sonnet")
+            .unwrap()
+            .active = true;
+        let advisors = super::advisor_entries(&agent, &[], &models);
+        assert!(
+            !advisors
+                .iter()
+                .any(|row| row.id == "cli/claude-code/sonnet")
+        );
+        assert!(
+            advisors
+                .iter()
+                .any(|row| row.id == "cli/claude-code/opus" && row.active)
+        );
+    }
+
     #[test]
     fn model_detail_compacts_every_limit_and_keeps_provenance_off_the_row() {
         let limit = |value| {
@@ -1248,6 +1341,20 @@ mod tests {
         }
         assert!(!entries[0].description.contains("trusted catalog"));
         assert!(entries[0].active);
+        let agent = advisor_test_agent();
+        let mut unusable = model.clone();
+        unusable.active = false;
+        unusable.context_tokens = None;
+        let rows = model_entries(vec![unusable.clone()], None);
+        let advisors = super::advisor_entries(&agent, &[unusable], &rows);
+        let disabled = advisors
+            .iter()
+            .find(|entry| entry.id == model.id())
+            .unwrap();
+        assert_eq!(
+            disabled.disabled_reason.as_deref(),
+            Some("advisor requires usable context limits")
+        );
         model.max_input_tokens.as_mut().expect("input").origin = ModelLimitOrigin::BuiltIn;
         let mixed = model_entries(vec![model], None);
         assert!(mixed[0].detail.contains("255.6k [built-in] input"));

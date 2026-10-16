@@ -246,6 +246,9 @@
             ResourceEntry::new("off", "off", "consult no advisor in this session"),
             ResourceEntry::new("sol", "sol", "acme/advisor-model"),
             ResourceEntry::new("acme/big", "acme/big", "Big"),
+            ResourceEntry::new("cli/claude-code/opus", "opus", "Claude Code"),
+            ResourceEntry::new("cli/codex/gpt-6-sol", "gpt-6-sol", "Codex")
+                .disabled("`codex` is not on PATH"),
         ];
         app
     }
@@ -257,6 +260,7 @@
             ("/advisor OFF", AdvisorChoice::Off),
             ("/advisor default", AdvisorChoice::Default),
             ("/advisor sol", AdvisorChoice::Target("sol".to_owned())),
+            ("/advisor cli/claude-code/opus", AdvisorChoice::Target("cli/claude-code/opus".to_owned())),
             (
                 "/advisor acme/big",
                 AdvisorChoice::Target("acme/big".to_owned()),
@@ -292,6 +296,7 @@
     fn an_unresolvable_or_unconfigured_advisor_is_refused_before_any_rebuild() {
         for (input, reason) in [
             ("/advisor on", "no advisor is configured"),
+            ("/advisor cli/codex/gpt-6-sol", "`codex` is not on PATH"),
             ("/advisor nobody", "not a configured profile or provider/model"),
         ] {
             let mut app = advisor_app();

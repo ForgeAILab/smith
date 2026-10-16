@@ -535,7 +535,7 @@ fn model_selection(
     }
 }
 
-/// Checks that an advisor names a configured profile or a declared provider.
+/// Checks profile and provider references; catalog agents need no declaration.
 fn validate_advisor(
     advisor: Option<&Sourced<AdvisorTarget>>,
     profiles: &BTreeMap<String, ResolvedAgentProfile>,
@@ -545,6 +545,7 @@ fn validate_advisor(
         return Ok(());
     };
     match &advisor.value {
+        AdvisorTarget::InstalledAgent { .. } => Ok(()),
         AdvisorTarget::Profile(name) => {
             if profiles.get(name).is_some_and(|profile| !profile.legacy) {
                 return Ok(());
@@ -588,7 +589,12 @@ fn validate_vision(
     let Some(vision) = vision else {
         return Ok(());
     };
+    let installed_agent_error = || ConfigError::InvalidValue {
+        source: vision.source.clone(),
+        message: "an installed agent cannot serve image requests".to_owned(),
+    };
     let (provider, model) = match &vision.value {
+        VisionTarget::InstalledAgent { .. } => return Err(installed_agent_error()),
         VisionTarget::Model { provider, model } => (provider.clone(), model.clone()),
         VisionTarget::Profile(name) => {
             let profile = &profiles[name];
@@ -607,6 +613,9 @@ fn validate_vision(
             }
         }
     };
+    if crate::cli_agents::parse_cli_model_id(&model).is_some() {
+        return Err(installed_agent_error());
+    }
     let binding = Sourced::new(
         AdvisorTarget::Model {
             provider: provider.clone(),
@@ -646,6 +655,14 @@ pub(super) fn advisor_route_selection(
     declared: &Declarations,
 ) -> Result<(Option<Sourced<String>>, Vec<Contribution>), ConfigError> {
     match &target.value {
+        AdvisorTarget::InstalledAgent { .. } => Ok((
+            None,
+            vec![Contribution {
+                key: "model".to_owned(),
+                value: SettingValue::Text(target.value.to_string()),
+                source: target.source.clone(),
+            }],
+        )),
         AdvisorTarget::Profile(name) => {
             if !declared.profiles.contains_key(name) {
                 return Err(ConfigError::UnusableReference {
@@ -1201,19 +1218,22 @@ pub(super) fn resolve_agent(
     })
 }
 
-/// Whether a model advisor names the provider and model this run resolved.
+/// Whether a model advisor names this run's binding. Installed agents own
+/// execution independently of the provider retained for identity and limits.
 fn advises_own_binding(
     provenance: &Provenance,
     advisor: Option<&Sourced<AdvisorTarget>>,
 ) -> Result<bool, ConfigError> {
-    let Some(AdvisorTarget::Model { provider, model }) = advisor.map(|advisor| &advisor.value)
-    else {
-        return Ok(false);
-    };
-    Ok(
-        text(provenance, "provider")?.is_some_and(|selected| selected.value == *provider)
-            && text(provenance, "model")?.is_some_and(|selected| selected.value == *model),
-    )
+    match advisor.map(|advisor| &advisor.value) {
+        Some(target @ AdvisorTarget::InstalledAgent { .. }) => {
+            Ok(text(provenance, "model")?
+                .is_some_and(|selected| selected.value == target.to_string()))
+        }
+        Some(AdvisorTarget::Model { provider, model }) => Ok(text(provenance, "provider")?
+            .is_some_and(|selected| selected.value == *provider)
+            && text(provenance, "model")?.is_some_and(|selected| selected.value == *model)),
+        _ => Ok(false),
+    }
 }
 
 pub(super) fn validate_agent_name(

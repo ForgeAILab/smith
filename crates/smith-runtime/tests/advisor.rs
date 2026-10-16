@@ -114,6 +114,18 @@ impl Fixture {
         resolve(
             &ResolveRequest::new(self.project.path())
                 .with_home_dir(self.home.path())
+                .with_cli(Overrides {
+                    provider: matches!(
+                        main.agent
+                            .profile
+                            .advisor
+                            .as_ref()
+                            .map(|target| &target.value),
+                        Some(smith_config::resolve::AdvisorTarget::InstalledAgent { .. })
+                    )
+                    .then(|| main.provider.name.value.clone()),
+                    ..Overrides::default()
+                })
                 .with_advisor_route(
                     main.agent
                         .profile
@@ -742,3 +754,7 @@ async fn missing_or_broken_advisor_route_fails_startup() {
         "startup failure performs no advisor request"
     );
 }
+
+#[cfg(unix)]
+#[path = "advisor/installed_agent.rs"]
+mod installed_agent;

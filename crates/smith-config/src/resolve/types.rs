@@ -850,6 +850,13 @@ pub type VisionTarget = AdvisorTarget;
 pub enum AdvisorTarget {
     /// A configured profile, consulted with its own provider, model, and settings.
     Profile(String),
+    /// An installed agent, using the main provider only for identity and limits.
+    InstalledAgent {
+        /// Catalog kind used to select the harness.
+        kind: String,
+        /// Model passed to the installed agent.
+        model: String,
+    },
     /// A provider-qualified model, consulted with no profile's settings.
     Model {
         /// The declared provider name.
@@ -860,9 +867,16 @@ pub enum AdvisorTarget {
 }
 
 impl AdvisorTarget {
-    /// Parses a configured value. Profile names never contain `/`, so the first
-    /// `/` separates a provider from its model, as in `[models."<provider>/<model>"]`.
+    /// Catalog agent ids take precedence over a provider literally named `cli`.
+    /// Otherwise profile names never contain `/`, so the first `/` separates
+    /// a provider from its model, as in `[models."<provider>/<model>"]`.
     pub fn parse(value: &str) -> Option<Self> {
+        if let Some((entry, model)) = crate::cli_agents::parse_cli_model_id(value) {
+            return Some(Self::InstalledAgent {
+                kind: entry.kind.to_owned(),
+                model,
+            });
+        }
         match value.split_once('/') {
             Some((provider, model)) if !provider.is_empty() && !model.is_empty() => {
                 Some(Self::Model {
@@ -882,6 +896,9 @@ impl fmt::Display for AdvisorTarget {
         match self {
             Self::Profile(name) => formatter.write_str(name),
             Self::Model { provider, model } => write!(formatter, "{provider}/{model}"),
+            Self::InstalledAgent { kind, model } => {
+                formatter.write_str(&crate::cli_agents::cli_model_id(kind, model))
+            }
         }
     }
 }

@@ -160,7 +160,12 @@ impl CliAgentBackend {
                     args.push("resume".to_owned());
                     args.push(session.to_owned());
                 }
-                args.push(prompt.to_owned());
+                // Codex has no append-system-prompt flag. Keep instructions
+                // ahead of the turn input rather than silently dropping them.
+                args.push(match &self.settings.instructions {
+                    Some(instructions) => format!("{instructions}\n\n{prompt}"),
+                    None => prompt.to_owned(),
+                });
             }
         }
         Ok(args)
