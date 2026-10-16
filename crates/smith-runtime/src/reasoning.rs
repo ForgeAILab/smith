@@ -22,7 +22,7 @@ use smith_config::catalog::{
 };
 use smith_config::model::ReasoningDialect;
 use smith_config::resolve::{Layer, ResolvedConfig, ResolvedModelReasoning, Source, Sourced};
-use smith_config::setup::trusted_model;
+use smith_config::setup::{CHATGPT_ENDPOINT, CHATGPT_PROVIDER, trusted_model};
 
 const INTERCEPTOR_REVISION: &str = "smith-reasoning-selection-1";
 /// Stable redaction-safe session-state namespace.
@@ -335,7 +335,42 @@ pub fn resolve_reasoning_policy(
         default_effort,
         dialect,
         capability_source,
-    } = if explicit_controls {
+    } = if endpoint == Some(CHATGPT_ENDPOINT)
+        && trusted_model(&config.provider.name.value, &config.model.value)
+            .is_some_and(|record| record.provider == CHATGPT_PROVIDER)
+    {
+        // Fill only omitted fields so even a default-effort-only model block
+        // overrides the trusted defaults without losing the exact dialect.
+        let source = Source::built_in("Smith trusted ChatGPT model binding");
+        let controls = ResolvedModelReasoning {
+            toggle: metadata.toggle.clone(),
+            mandatory: metadata
+                .mandatory
+                .clone()
+                .or_else(|| Some(Sourced::new(true, source.clone()))),
+            efforts: metadata.efforts.clone().or_else(|| {
+                Some(Sourced::new(
+                    ["low", "medium", "high", "xhigh", "max", "ultra"]
+                        .map(str::to_owned)
+                        .to_vec(),
+                    source.clone(),
+                ))
+            }),
+            default_enabled: metadata
+                .default_enabled
+                .clone()
+                .or_else(|| Some(Sourced::new(true, source.clone()))),
+            default_effort: metadata
+                .default_effort
+                .clone()
+                .or_else(|| Some(Sourced::new("medium".to_owned(), source.clone()))),
+            dialect: metadata
+                .dialect
+                .clone()
+                .or_else(|| Some(Sourced::new(ReasoningDialect::OpenaiEffort, source))),
+        };
+        resolve_explicit(&controls)?
+    } else if explicit_controls {
         resolve_explicit(metadata)?
     } else if endpoint == Some(ZAI_CODING_PLAN_ENDPOINT)
         && trusted_model("zai", &config.model.value).is_some()

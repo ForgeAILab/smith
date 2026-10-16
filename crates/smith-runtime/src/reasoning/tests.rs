@@ -54,6 +54,222 @@ fn model_profile(reasoning: ReasoningSupport) -> ResolvedModelProfile {
     profile
 }
 
+fn chatgpt_config(model: &str, model_settings: &str) -> ResolvedConfig {
+    let home = tempfile::tempdir().expect("home");
+    let project = tempfile::tempdir().expect("project");
+    std::fs::create_dir_all(project.path().join(".smith")).expect("config directory");
+    std::fs::write(
+        project.path().join(".smith/config.toml"),
+        format!(
+            r#"
+default_profile = "chatgpt"
+
+[profiles.chatgpt]
+provider = "chatgpt"
+model = "{model}"
+
+[providers.chatgpt]
+kind = "chatgpt-responses"
+base_url = "{CHATGPT_ENDPOINT}"
+credential = "authfile:chatgpt"
+
+{model_settings}
+"#,
+        ),
+    )
+    .expect("config");
+    resolve(&ResolveRequest::new(project.path()).with_home_dir(home.path()))
+        .expect("resolved ChatGPT config")
+        .config
+}
+
+#[test]
+fn trusted_chatgpt_reasoning_defaults_need_no_model_block() {
+    for record in
+        smith_config::setup::trusted_models().filter(|record| record.provider == CHATGPT_PROVIDER)
+    {
+        let config = chatgpt_config(record.model, "");
+        assert_eq!(config.model_reasoning, ResolvedModelReasoning::default());
+        let policy = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Unsupported),
+            Some(CHATGPT_ENDPOINT),
+            None,
+        )
+        .expect("trusted ChatGPT records supply reasoning controls");
+        assert_eq!(policy.support, ReasoningSupport::Controllable);
+        assert_eq!(policy.switch, ReasoningSwitch::MandatoryOn);
+        assert_eq!(
+            policy.efforts,
+            ["low", "medium", "high", "xhigh", "max", "ultra"]
+        );
+        assert_eq!(policy.default_enabled, Some(true));
+        assert_eq!(policy.default_effort.as_deref(), Some("medium"));
+        assert_eq!(policy.effective_state(), "on");
+        assert_eq!(policy.effective_effort(), "medium");
+        assert_eq!(policy.dialect, Some(ReasoningDialect::OpenaiEffort));
+        assert!(
+            policy
+                .capability_source
+                .contains("Smith trusted ChatGPT model binding")
+        );
+    }
+}
+
+#[test]
+fn trusted_chatgpt_reasoning_emits_xhigh_and_refuses_off() {
+    for model in ["gpt-5.6-sol", "gpt-6-astra"] {
+        let mut config = chatgpt_config(model, "");
+        config.reasoning.effort = Some(Sourced::new(
+            "xhigh".to_owned(),
+            Source::session("reasoning.effort"),
+        ));
+        let policy = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Fixed),
+            Some(CHATGPT_ENDPOINT),
+            None,
+        )
+        .expect("xhigh is advertised for trusted ChatGPT models");
+        let mut request = request("high");
+        request.reasoning = policy.request_config();
+        adapt_request(&mut request, policy.dialect.expect("exact dialect"))
+            .expect("adapted ChatGPT request");
+        assert_eq!(
+            request.reasoning.and_then(|reasoning| reasoning.effort),
+            Some("xhigh".to_owned())
+        );
+        assert!(request.vendor_extensions.is_null());
+
+        config.reasoning.effort = None;
+        config.reasoning.enabled = Some(Sourced::new(false, Source::session("reasoning.enabled")));
+        let error = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Fixed),
+            Some(CHATGPT_ENDPOINT),
+            None,
+        )
+        .expect_err("trusted ChatGPT reasoning is mandatory-on");
+        assert!(error.contains("mandatory-on"), "{error}");
+    }
+}
+
+#[test]
+fn explicit_chatgpt_reasoning_default_effort_overrides_only_that_field() {
+    let mut config = chatgpt_config(
+        "gpt-5.6-sol",
+        r#"
+[models."chatgpt/gpt-5.6-sol".reasoning]
+default_effort = "high"
+"#,
+    );
+    config.reasoning.enabled = Some(Sourced::new(true, Source::session("reasoning.enabled")));
+    let policy = resolve_reasoning_policy(
+        &config,
+        &model_profile(ReasoningSupport::Fixed),
+        Some(CHATGPT_ENDPOINT),
+        None,
+    )
+    .expect("a partial explicit block inherits trusted controls");
+    assert_eq!(policy.default_effort.as_deref(), Some("high"));
+    assert_eq!(policy.default_enabled, Some(true));
+    assert_eq!(policy.switch, ReasoningSwitch::MandatoryOn);
+    assert_eq!(
+        policy.efforts,
+        ["low", "medium", "high", "xhigh", "max", "ultra"]
+    );
+    assert_eq!(policy.dialect, Some(ReasoningDialect::OpenaiEffort));
+    assert_eq!(
+        policy
+            .request_config()
+            .and_then(|reasoning| reasoning.effort),
+        Some("high".to_owned())
+    );
+}
+
+#[test]
+fn explicit_chatgpt_reasoning_controls_override_trusted_fields() {
+    let config = chatgpt_config(
+        "gpt-5.6-sol",
+        r#"
+[models."chatgpt/gpt-5.6-sol".reasoning]
+toggle = true
+mandatory = false
+efforts = ["none", "high"]
+default_enabled = false
+default_effort = "high"
+dialect = "openrouter"
+"#,
+    );
+    let policy = resolve_reasoning_policy(
+        &config,
+        &model_profile(ReasoningSupport::Fixed),
+        Some(CHATGPT_ENDPOINT),
+        None,
+    )
+    .expect("explicit model controls retain precedence over trusted defaults");
+    assert_eq!(policy.support, ReasoningSupport::Controllable);
+    assert_eq!(policy.switch, ReasoningSwitch::Optional);
+    assert_eq!(policy.efforts, ["none", "high"]);
+    assert_eq!(policy.default_enabled, Some(false));
+    assert_eq!(policy.default_effort.as_deref(), Some("high"));
+    assert_eq!(policy.dialect, Some(ReasoningDialect::Openrouter));
+    assert!(
+        policy
+            .capability_source
+            .contains("configured model metadata")
+    );
+}
+
+#[test]
+fn chatgpt_reasoning_defaults_require_the_exact_endpoint_and_trusted_identity() {
+    for (provider, model, endpoint) in [
+        (CHATGPT_PROVIDER, "unknown-model", CHATGPT_ENDPOINT),
+        ("other", "gpt-5.6-sol", CHATGPT_ENDPOINT),
+        (CHATGPT_PROVIDER, "glm-5.3", CHATGPT_ENDPOINT),
+        (
+            CHATGPT_PROVIDER,
+            "gpt-5.6-sol",
+            "https://proxy.example/codex",
+        ),
+        (
+            CHATGPT_PROVIDER,
+            "gpt-5.6-sol",
+            "https://chatgpt.com/backend-api/codex/",
+        ),
+    ] {
+        let mut config = chatgpt_config("gpt-5.6-sol", "");
+        config.provider.name.value = provider.to_owned();
+        config.model.value = model.to_owned();
+        let policy = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Fixed),
+            Some(endpoint),
+            None,
+        )
+        .expect("untrusted bindings preserve presence-only reasoning");
+        assert_eq!(policy.support, ReasoningSupport::Fixed);
+        assert_eq!(policy.switch, ReasoningSwitch::Unavailable);
+        assert!(policy.efforts.is_empty());
+        assert_eq!(policy.default_enabled, None);
+        assert_eq!(policy.default_effort, None);
+        assert_eq!(policy.dialect, None);
+
+        config.reasoning.effort = Some(Sourced::new(
+            "xhigh".to_owned(),
+            Source::session("reasoning.effort"),
+        ));
+        let error = resolve_reasoning_policy(
+            &config,
+            &model_profile(ReasoningSupport::Fixed),
+            Some(endpoint),
+            None,
+        )
+        .expect_err("untrusted bindings reject controls before provider I/O");
+        assert!(error.contains("not adjustable"), "{error}");
+    }
+}
+
 #[test]
 fn openai_effort_stays_normalized_for_the_openai_adapter() {
     let mut request = request("high");
