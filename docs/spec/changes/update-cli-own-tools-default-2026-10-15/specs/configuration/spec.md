@@ -32,9 +32,10 @@ sets `harness.<name>.allow_own_tools = false`. A harness CLI runs
 non-interactively and cannot ask for permission. So when its own tools are
 on, Smith MUST invoke the CLI in its no-prompt mode: Claude Code with
 `--permission-mode bypassPermissions`, Codex with
-`--dangerously-bypass-approvals-and-sandbox`. When they are off, Smith MUST
-pass the CLI's read-only or no-tool mode rather than relying on the CLI's
-default.
+`--dangerously-bypass-approvals-and-sandbox`. When they are off, Claude Code
+runs in its default mode with only the `smith` server pre-allowed, so `-p`
+denies anything it would ask about and only its read-only tools run. Codex
+runs with `--sandbox read-only`.
 
 With its own tools on, the CLI executes reads, writes, commands, and network
 requests that Smith did not approve, did not scope to the workspace, and

@@ -40,7 +40,11 @@ of the box and wants limits to be opt-in.
 - **Owner `args` stay last for Claude Code.** Commander keeps the last value
   of a single-value flag. Checked on 2.1.301: a later
   `--permission-mode default` overrides an earlier `bypassPermissions`. That
-  ordering is the documented way to narrow.
+  ordering is the documented way to narrow. Deny rules also survive bypass:
+  `--disallowedTools WebFetch` removes WebFetch under `bypassPermissions`.
+- Verified on Claude Code 2.1.301: with `--permission-mode bypassPermissions
+  --allowedTools mcp__smith` and nothing else, `python3 -c` and WebFetch
+  both run.
 
 ## Risks / Trade-offs
 
@@ -62,3 +66,10 @@ No config migration. Owners who want today's behavior set
 
 - None blocking. Whether project layers may *disable* (narrow) the setting
   is left for later; it stays owner-only here.
+- The shipped spec said "off" MUST pass an explicit read-only mode rather
+  than rely on the CLI's default. For Claude Code it never did: it relies on
+  default mode plus `-p` denials, and session `3ef40514` shows Read, `ls`,
+  and `cat` running. This change rewrites the requirement to describe that.
+  Passing `--permission-mode dontAsk` when off would make it explicit, at
+  the cost of re-recording the off-mode fixtures. Owner's call; not in this
+  change's tasks.
