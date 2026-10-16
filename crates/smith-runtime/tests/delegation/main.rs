@@ -40,7 +40,7 @@ use agent_runtime_core::provider::{
 };
 use agent_runtime_core::store::SessionStore;
 use agent_runtime_core::tool::{InvocationContext, PreparationContext, Tool, ToolOutcome};
-use agent_runtime_testkit::{InMemoryCheckpointStore, InMemorySessionStore, MemoryWorkspace};
+use agent_runtime_testkit::{InMemoryCheckpointStore, InMemorySessionStore};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use smith_config::model::ProfileUse;
@@ -53,6 +53,11 @@ use smith_runtime::delegation::{
 };
 use smith_runtime::factory::{self, ChildProfileRequest, HostSurface, RuntimeRequest};
 use smith_runtime::project_instructions::ProjectInstructionsSnapshot;
+
+#[path = "../support/workspace.rs"]
+mod workspace;
+
+use workspace::LexicalWorkspace;
 
 mod agent_tool;
 mod artifacts;
@@ -233,7 +238,7 @@ fn questionnaire_script(
 
 fn request(fixture: &Fixture, provider: Arc<dyn Provider>) -> RuntimeRequest {
     RuntimeRequest {
-        workspace: Some(Arc::new(MemoryWorkspace::new("/repo"))),
+        workspace: Some(Arc::new(LexicalWorkspace::new("/repo"))),
         provider: Some(provider),
         ..RuntimeRequest::new(fixture.config(), HostSurface::Terminal)
     }

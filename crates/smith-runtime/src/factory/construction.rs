@@ -493,9 +493,7 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
         builder = builder.context_contributor(Arc::new(contributor));
     }
     if let Some((coordinator, _)) = &semantic_summary {
-        builder = builder
-            .history_projector(coordinator.clone())
-            .turn_commit_hook(coordinator.clone());
+        builder = builder.semantic_summary(coordinator.clone());
     }
     for descriptor in capabilities.abilities.descriptors() {
         builder = builder.tool_ability_descriptor(descriptor);

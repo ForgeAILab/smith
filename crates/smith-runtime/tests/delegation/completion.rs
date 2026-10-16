@@ -13,7 +13,8 @@ async fn a_spawned_child_completes_and_its_result_reaches_the_parent_model() {
             .expect("bounded project instructions");
     runtime_request.project_instructions = Some(project_instructions.clone());
     runtime_request.event_buffer = 1;
-    let smith = factory::build_request(runtime_request)
+    // Keep the large factory future off the test thread's stack.
+    let smith = Box::pin(factory::build_request(runtime_request))
         .await
         .expect("a runtime with a one-event presentation buffer");
     assert_eq!(
@@ -227,7 +228,7 @@ const CHILD_TASK_MARKER: &str = "inspect-the-repository-for-the-parent";
 async fn a_child_spawned_inside_a_parent_turn_is_delivered_without_another_user_turn() {
     let fixture = Fixture::new();
     let provider = Arc::new(SpawnThenFinishProvider::new());
-    let smith = factory::build_request(request(&fixture, provider.clone()))
+    let smith = Box::pin(factory::build_request(request(&fixture, provider.clone())))
         .await
         .expect("a root runtime");
     let session = smith
@@ -363,7 +364,7 @@ impl Provider for SpawnReadAnswerProvider {
 async fn assert_a_read_child_result_is_answered_once(read: &'static str, parent_calls: u32) {
     let fixture = Fixture::new();
     let provider = Arc::new(SpawnReadAnswerProvider::new(read));
-    let smith = factory::build_request(request(&fixture, provider.clone()))
+    let smith = Box::pin(factory::build_request(request(&fixture, provider.clone())))
         .await
         .expect("a root runtime");
     let session = smith

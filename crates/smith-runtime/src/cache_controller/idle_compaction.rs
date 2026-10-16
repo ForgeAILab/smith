@@ -114,7 +114,7 @@ pub(super) async fn run_idle_compaction(
         return;
     }
 
-    let admission = match session.try_idle_compaction().await {
+    let admission = match session.try_idle_semantic_compaction().await {
         Ok(admission) => admission,
         Err(_) => {
             let reason = "runtime_error";
@@ -172,13 +172,13 @@ pub(super) async fn run_idle_compaction(
     // shutdown prevents a new optional projection, while a projection that
     // won first is drained before Runtime's final session save.
     let _projection_admission = match &admission {
-        IdleCompactionAdmission::Accepted { .. } => {
+        SemanticIdleCompactionAdmission::Accepted { .. } => {
             match OptionalProjectionAdmission::try_begin(state) {
                 Some(admission) => Some(admission),
                 None => {
                     let empty = UsageDelta::new();
                     let (usage, model, revision) = match &admission {
-                        IdleCompactionAdmission::Accepted {
+                        SemanticIdleCompactionAdmission::Accepted {
                             summary: Some(summary),
                             ..
                         } => (
@@ -186,14 +186,13 @@ pub(super) async fn run_idle_compaction(
                             Some(summary.model_id.clone()),
                             Some(summary.summary_revision.clone()),
                         ),
-                        IdleCompactionAdmission::Accepted {
+                        SemanticIdleCompactionAdmission::Accepted {
                             summary: None,
                             usage,
                             ..
                         } => (usage, None, None),
-                        IdleCompactionAdmission::Busy | IdleCompactionAdmission::Shutdown => {
-                            (&empty, None, None)
-                        }
+                        SemanticIdleCompactionAdmission::Busy
+                        | SemanticIdleCompactionAdmission::Shutdown => (&empty, None, None),
                     };
                     record_idle_outcome(
                         state,
@@ -211,11 +210,11 @@ pub(super) async fn run_idle_compaction(
                 }
             }
         }
-        IdleCompactionAdmission::Busy | IdleCompactionAdmission::Shutdown => None,
+        SemanticIdleCompactionAdmission::Busy | SemanticIdleCompactionAdmission::Shutdown => None,
     };
 
     match admission {
-        IdleCompactionAdmission::Accepted {
+        SemanticIdleCompactionAdmission::Accepted {
             summary: Some(summary),
             ..
         } => {
@@ -232,7 +231,7 @@ pub(super) async fn run_idle_compaction(
             )
             .await;
         }
-        IdleCompactionAdmission::Accepted {
+        SemanticIdleCompactionAdmission::Accepted {
             summary: None,
             fallback_reason,
             usage,
@@ -269,7 +268,7 @@ pub(super) async fn run_idle_compaction(
                 },
             );
         }
-        IdleCompactionAdmission::Busy => {
+        SemanticIdleCompactionAdmission::Busy => {
             record_idle_outcome(
                 state,
                 IdleOutcomeRecord {
@@ -283,7 +282,7 @@ pub(super) async fn run_idle_compaction(
                 },
             );
         }
-        IdleCompactionAdmission::Shutdown => {
+        SemanticIdleCompactionAdmission::Shutdown => {
             record_idle_outcome(
                 state,
                 IdleOutcomeRecord {

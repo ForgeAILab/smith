@@ -85,7 +85,7 @@ pub(super) fn render_transcript_with_observations(
     let mut before_call = BTreeMap::new();
     let mut pending = String::new();
     for entry in &observations.entries {
-        if entry.kind == BackendToolObservationKind::BridgedCall {
+        if entry.kind == BackendToolObservationKind::DispatchedCall {
             before_call.insert(entry.id.as_str(), std::mem::take(&mut pending));
         } else {
             render_observation(entry, &mut pending);
@@ -152,7 +152,7 @@ fn render_observation(entry: &BackendToolObservation, text: &mut String) {
             let outcome = if ok { "succeeded" } else { "failed" };
             let _ = writeln!(text, "{CLI_TOOL_LABEL} {name} {outcome} output: {detail}");
         }
-        BackendToolObservationKind::BridgedCall => {}
+        BackendToolObservationKind::DispatchedCall => {}
     }
 }
 

@@ -238,15 +238,17 @@ async fn session_snapshot_v1_compatibility_fixture_is_stable() {
     let actual: serde_json::Value =
         serde_json::from_slice(&tokio::fs::read(path).await.expect("snapshot fixture bytes"))
             .expect("serialized snapshot JSON");
-    let expected: serde_json::Value =
-        serde_json::from_str(include_str!("fixtures/session-snapshot-v1.json"))
-            .expect("valid compatibility fixture");
+    // Smith's snapshot/listing schema is still v1; newly written manifests are v2.
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "fixtures/session-snapshot-v1-manifest-v2.json"
+    ))
+    .expect("valid compatibility fixture");
 
     assert_eq!(actual, expected);
 }
 
-// The pinned runtime keeps the existing manifest vocabulary. Reading an old
-// file must preserve its complete history and audit fingerprints on re-save.
+// Reading a legacy manifest must preserve its schema version, complete history,
+// and audit fingerprints on re-save, even when new manifests use a newer schema.
 #[tokio::test]
 async fn legacy_snapshot_loads_and_resaves_without_rewriting_history() {
     let (_directory, store) = store();
@@ -257,8 +259,16 @@ async fn legacy_snapshot_loads_and_resaves_without_rewriting_history() {
     tokio::fs::write(&path, fixture).await.unwrap();
 
     let loaded = store.load(&id).await.unwrap().unwrap();
-    assert_eq!(loaded, populated_snapshot(&id));
-    let fingerprint = loaded.manifests[0].manifest.fingerprint();
+    let mut expected = populated_snapshot(&id);
+    for recorded in &mut expected.manifests {
+        recorded.manifest.schema_version = 1;
+    }
+    assert_eq!(loaded, expected);
+    let fingerprints: Vec<_> = loaded
+        .manifests
+        .iter()
+        .map(|recorded| recorded.manifest.fingerprint())
+        .collect();
     store.save(&loaded).await.unwrap();
     let actual: serde_json::Value =
         serde_json::from_slice(&tokio::fs::read(&path).await.unwrap()).unwrap();
@@ -267,7 +277,11 @@ async fn legacy_snapshot_loads_and_resaves_without_rewriting_history() {
         serde_json::from_str::<serde_json::Value>(fixture).unwrap()
     );
     let reloaded = store.load(&id).await.unwrap().unwrap();
-    assert_eq!(reloaded.manifests[0].manifest.fingerprint(), fingerprint);
+    assert_eq!(reloaded, expected);
+    for (recorded, fingerprint) in reloaded.manifests.iter().zip(fingerprints) {
+        assert_eq!(recorded.manifest.schema_version, 1);
+        assert_eq!(recorded.manifest.fingerprint(), fingerprint);
+    }
 }
 
 #[tokio::test]

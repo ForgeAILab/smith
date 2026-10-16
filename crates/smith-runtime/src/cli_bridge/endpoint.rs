@@ -35,7 +35,7 @@ pub(crate) trait BridgeDispatch: Send + Sync + 'static {
 
 /// Keeps abandonment attached to the runtime future rather than a spawned task.
 pub(crate) struct RuntimeBridgeDispatch(
-    pub(crate) agent_runtime::agent::external::ExternalToolBridge,
+    pub(crate) agent_runtime::agent::external::ExternalToolDispatch,
 );
 
 #[async_trait]

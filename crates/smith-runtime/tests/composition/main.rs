@@ -34,7 +34,7 @@ use agent_runtime_core::provider::{
 };
 use agent_runtime_core::store::Secret;
 use agent_runtime_core::tool::{InvocationContext, PreparedToolCall, Tool, ToolOutcome, ToolSpec};
-use agent_runtime_testkit::{MemoryWorkspace, RecordingObserver};
+use agent_runtime_testkit::RecordingObserver;
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use smith_config::catalog::CatalogSnapshot;
@@ -50,6 +50,11 @@ use smith_runtime::memory::{SmithMemoryRecord, SmithMemorySource};
 use smith_runtime::model_catalog::{EMBEDDED_MODELS_DEV_SEED, runtime_catalog_source};
 use smith_runtime::project_instructions::ProjectInstructionsSnapshot;
 use smith_runtime::skills::SmithSkillSources;
+
+#[path = "../support/workspace.rs"]
+mod workspace;
+
+use workspace::LexicalWorkspace;
 
 mod compaction;
 mod credentials;
@@ -144,7 +149,7 @@ impl Fixture {
 /// A request with the one host adapter every composition requires.
 fn request(fixture: &Fixture, surface: HostSurface) -> RuntimeRequest {
     RuntimeRequest {
-        workspace: Some(Arc::new(MemoryWorkspace::new("/repo"))),
+        workspace: Some(Arc::new(LexicalWorkspace::new("/repo"))),
         ..RuntimeRequest::new(fixture.config(), surface)
     }
 }

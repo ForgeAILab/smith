@@ -13,7 +13,7 @@ use agent_runtime::cache::{CacheHandoffSuffix, CacheOperationResult};
 use agent_runtime::context::Sensitivity;
 use agent_runtime::harness::ProtectedSemanticSummary;
 use agent_runtime::registry::{Fingerprint, RegistryRevision};
-use agent_runtime::runtime::{IdleCompactionAdmission, SessionHandle};
+use agent_runtime::runtime::{SemanticIdleCompactionAdmission, SessionHandle};
 use agent_runtime_core::artifact::{
     ArtifactProvenance, ArtifactRetention, ArtifactSensitivity, ArtifactStore, ArtifactWrite,
 };

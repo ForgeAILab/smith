@@ -208,6 +208,7 @@ impl CacheLifecycleReducer {
                 preserved_prefix_tokens,
                 invalidated_prefix_tokens,
                 provider_cache_supported,
+                ..
             } => {
                 self.structural.cache_plan = Some(cache_plan.to_string());
                 self.structural.preserved_prefix_tokens = *preserved_prefix_tokens;

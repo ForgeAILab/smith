@@ -84,7 +84,7 @@ fn root_request_with_review_profile(
     provider: Arc<dyn Provider>,
 ) -> RuntimeRequest {
     let mut request = RuntimeRequest {
-        workspace: Some(Arc::new(MemoryWorkspace::new("/repo"))),
+        workspace: Some(Arc::new(LexicalWorkspace::new("/repo"))),
         provider: Some(provider),
         ..RuntimeRequest::new(pf.root_config.clone(), HostSurface::Terminal)
     };
@@ -102,7 +102,7 @@ fn invocation_context(session_id: agent_runtime_core::ids::SessionId) -> Invocat
         turn: None,
         call_id: ToolCallId::new("call-1"),
         request: RequestId::new("req-1"),
-        workspace: Arc::new(MemoryWorkspace::new("/repo")),
+        workspace: Arc::new(LexicalWorkspace::new("/repo")),
         clock: Arc::new(SystemClock),
         cancel: Cancellation::new(),
         deadline: Deadline::never(),

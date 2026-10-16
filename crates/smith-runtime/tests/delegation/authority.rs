@@ -109,7 +109,7 @@ async fn an_unknown_agent_action_is_returned_to_the_model_as_a_tool_error() {
 async fn a_child_surface_gets_no_delegation_tool() {
     let fixture = Fixture::new();
     let smith = factory::build_request(RuntimeRequest {
-        workspace: Some(Arc::new(MemoryWorkspace::new("/repo"))),
+        workspace: Some(Arc::new(LexicalWorkspace::new("/repo"))),
         provider: Some(scripted(1, "child reply")),
         ..RuntimeRequest::new(fixture.config(), HostSurface::Child)
     })

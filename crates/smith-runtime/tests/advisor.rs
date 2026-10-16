@@ -16,8 +16,8 @@ use agent_runtime_core::provider::{
 use agent_runtime_core::tool::{
     InvocationContext, PreparedToolCall, Tool, ToolEffects, ToolOutcome, ToolSpec,
 };
+use agent_runtime_testkit::RecordingObserver;
 use agent_runtime_testkit::scenarios::stop_events;
-use agent_runtime_testkit::{MemoryWorkspace, RecordingObserver};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde_json::json;
@@ -28,6 +28,11 @@ use smith_runtime::factory::{
 };
 use smith_runtime::harness::{HarnessSpec, resolve as resolve_harness};
 use smith_runtime::host::{HostSessionRequest, start};
+
+#[path = "support/workspace.rs"]
+mod workspace;
+
+use workspace::LexicalWorkspace;
 
 const CONFIG: &str = r#"
 default_profile = "work"
@@ -133,7 +138,7 @@ impl Fixture {
             ProfileUse::Main
         };
         let mut request = RuntimeRequest::new(self.config("work", placement), surface);
-        request.workspace = Some(Arc::new(MemoryWorkspace::new("/repo")));
+        request.workspace = Some(Arc::new(LexicalWorkspace::new("/repo")));
         request.provider = Some(main);
         request.built_in_tools = false;
         if request.config.agent.profile.advisor.is_some() {

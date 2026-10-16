@@ -598,7 +598,7 @@ mod tests {
 
     fn harness_observations() -> BackendToolObservations {
         use agent_runtime::agent::external::BackendToolObservationKind::{
-            BridgedCall, Invocation, Outcome,
+            DispatchedCall, Invocation, Outcome,
         };
         BackendToolObservations {
             entries: vec![
@@ -617,7 +617,7 @@ mod tests {
                 observation(
                     "bridge-agent",
                     "agent",
-                    BridgedCall,
+                    DispatchedCall,
                     serde_json::Value::Null,
                 ),
                 observation(
@@ -635,7 +635,7 @@ mod tests {
                 observation(
                     "review-call",
                     "advisor",
-                    BridgedCall,
+                    DispatchedCall,
                     serde_json::Value::Null,
                 ),
             ],
@@ -698,7 +698,7 @@ mod tests {
         let history = harness_history();
         for observations in [
             BackendToolObservations::default(),
-            BackendToolObservations { entries: harness_observations().entries.into_iter().filter(|entry| entry.kind == agent_runtime::agent::external::BackendToolObservationKind::BridgedCall).collect(), dropped: 0 },
+            BackendToolObservations { entries: harness_observations().entries.into_iter().filter(|entry| entry.kind == agent_runtime::agent::external::BackendToolObservationKind::DispatchedCall).collect(), dropped: 0 },
         ] {
             let request = captured_harness_request(&history, &observations).await;
             let provider = Arc::new(FakeProvider::text_reply("Check cancellation."));

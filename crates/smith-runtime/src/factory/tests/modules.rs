@@ -1180,7 +1180,7 @@ async fn a_child_rebuild_omits_disabled_wasm_schemas_without_disabling_siblings(
             .build()
             .unwrap();
         let child = child_runtime
-            .start_session(StartSession::new().with_id(id))
+            .start_session(StartSession::create(id, Vec::new()))
             .await
             .unwrap();
         child.send(spec.task.clone()).unwrap().completed().await;

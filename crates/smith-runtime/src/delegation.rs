@@ -589,9 +589,7 @@ impl ChildRuntimeFactory for SmithChildFactory {
             builder = builder.context_contributor(Arc::new(contributor));
         }
         if let Some(coordinator) = self.semantic_summary.clone() {
-            builder = builder
-                .history_projector(coordinator.clone())
-                .turn_commit_hook(coordinator);
+            builder = builder.semantic_summary(coordinator);
         }
         if let Some(store) = self.artifact_store.clone() {
             builder = builder

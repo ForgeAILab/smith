@@ -57,7 +57,7 @@ mode = "allow-all"
     );
     let parent_provider = scripted(1, "root fallback must not run");
     let mut request = RuntimeRequest {
-        workspace: Some(Arc::new(MemoryWorkspace::new("/repo"))),
+        workspace: Some(Arc::new(LexicalWorkspace::new("/repo"))),
         provider: Some(parent_provider.clone()),
         ..RuntimeRequest::new(root.config, HostSurface::Terminal)
     };

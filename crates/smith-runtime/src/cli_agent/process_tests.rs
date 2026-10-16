@@ -4,7 +4,7 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::time::Duration;
 
 use agent_runtime::agent::external::{
-    ExternalAgentBackend, ExternalAgentEvent, ExternalToolBridge, ExternalTurnRequest,
+    ExternalAgentBackend, ExternalAgentEvent, ExternalToolDispatch, ExternalTurnRequest,
 };
 use agent_runtime_core::cancel::{CancelReason, Cancellation};
 use agent_runtime_core::content::UserInput;
@@ -119,7 +119,9 @@ async fn stop_launcher(drop_stream: bool) {
             resume: None,
             turn: TurnId::new("launcher-turn"),
             cancel: cancel.clone(),
-            tools: ExternalToolBridge::disabled(),
+            capabilities: Default::default(),
+            bridge: None,
+            tools: ExternalToolDispatch::disabled(),
         })
         .await
         .expect("a running launcher");
@@ -177,7 +179,9 @@ async fn launcher_events(script: &str, kind: CliAgentKind) -> Vec<ExternalAgentE
                 resume: None,
                 turn: TurnId::new("stderr-turn"),
                 cancel: Cancellation::new(),
-                tools: ExternalToolBridge::disabled(),
+                capabilities: Default::default(),
+                bridge: None,
+                tools: ExternalToolDispatch::disabled(),
             })
             .await
             .expect("a running stderr launcher");
@@ -316,7 +320,9 @@ printf '%s\n' "$TERMINAL"
                 resume: None,
                 turn: TurnId::new("disabled-bridge-turn"),
                 cancel: Cancellation::new(),
-                tools: ExternalToolBridge::disabled(),
+                capabilities: Default::default(),
+                bridge: None,
+                tools: ExternalToolDispatch::disabled(),
             })
             .await
             .expect("recording launcher");
@@ -426,7 +432,9 @@ async fn run_turn_wraps_unchanged_argv_and_retains_stdin_until_stream_drop() {
                     resume: None,
                     turn: TurnId::new("supervised-turn"),
                     cancel: Cancellation::new(),
-                    tools: ExternalToolBridge::disabled(),
+                    capabilities: Default::default(),
+                    bridge: None,
+                    tools: ExternalToolDispatch::disabled(),
                 })
                 .await
                 .expect("supervised stream");
@@ -463,7 +471,9 @@ async fn missing_smith_path_spawns_directly_and_warns_once() {
                     resume: None,
                     turn: TurnId::new(turn),
                     cancel: Cancellation::new(),
-                    tools: ExternalToolBridge::disabled(),
+                    capabilities: Default::default(),
+                    bridge: None,
+                    tools: ExternalToolDispatch::disabled(),
                 })
                 .await
                 .unwrap();

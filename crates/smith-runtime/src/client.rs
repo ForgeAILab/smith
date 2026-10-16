@@ -217,7 +217,7 @@ impl SmithEvent {
 
 /// Smith-owned presentation vocabulary.
 ///
-/// Every pinned canonical variant is mirrored. Future payloads read from a
+/// Every canonical variant used by Smith is mirrored. Future payloads read from a
 /// newer journal deserialize as `Unknown` without losing their causal slot.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -670,9 +670,11 @@ mod tests {
                 let samples = [$(RuntimeEvent::$variant $({ $($field: $value),* })?),*];
                 for payload in samples {
                     // The same list constructs samples and exhaustively matches
-                    // the runtime enum, so a new variant requires a new sample.
+                    // the runtime enum except disabled LCM, so a new variant
+                    // requires a new sample.
                     match &payload {
-                        $(RuntimeEvent::$variant $({ $($field: _),* })? => {}),*
+                        $(RuntimeEvent::$variant $({ $($field: _),* })? => {}),*,
+                        RuntimeEvent::LcmLifecycle { .. } => panic!("Smith does not enable LCM"),
                     }
                     let canonical = CanonicalEvent::new(
                         1,
@@ -807,6 +809,7 @@ mod tests {
                 preserved_prefix_tokens: 100,
                 invalidated_prefix_tokens: 0,
                 provider_cache_supported: true,
+                first_changed_fragment: None,
             },
             BudgetFailure {
                 category: BudgetCategory::Context,

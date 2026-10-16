@@ -20,7 +20,7 @@ async fn a_durable_child_accepts_a_follow_up_after_parent_restart_with_prior_his
         .expect("the first Smith runtime");
     let first_session = first
         .runtime()
-        .start_session(StartSession::new().with_id(parent_id.clone()))
+        .start_session(StartSession::create(parent_id.clone(), Vec::new()))
         .await
         .expect("the first parent session");
     let first_delegation = first.delegation().expect("a root delegation surface");
@@ -68,7 +68,7 @@ async fn a_durable_child_accepts_a_follow_up_after_parent_restart_with_prior_his
         .expect("the resumed Smith runtime");
     let second_session = second
         .runtime()
-        .start_session(StartSession::new().with_id(parent_id))
+        .start_session(StartSession::resume(parent_id))
         .await
         .expect("the parent snapshot resumes");
     let second_delegation = second.delegation().expect("a resumed delegation surface");
@@ -159,7 +159,7 @@ async fn a_returned_child_question_survives_smith_restart_without_provider_work(
         .expect("the first Smith runtime");
     let first_session = first
         .runtime()
-        .start_session(StartSession::new().with_id(parent_id.clone()))
+        .start_session(StartSession::create(parent_id.clone(), Vec::new()))
         .await
         .expect("the first parent session");
     let first_delegation = first.delegation().expect("a root delegation surface");
@@ -197,7 +197,7 @@ async fn a_returned_child_question_survives_smith_restart_without_provider_work(
         .expect("the resumed Smith runtime");
     let second_session = second
         .runtime()
-        .start_session(StartSession::new().with_id(parent_id))
+        .start_session(StartSession::resume(parent_id))
         .await
         .expect("the parent resumes");
     let second_delegation = second.delegation().expect("a resumed delegation surface");
@@ -287,7 +287,7 @@ async fn an_interrupted_smith_child_resumes_exactly_once_and_never_on_startup() 
         .expect("the first Smith runtime");
     let first_session = first
         .runtime()
-        .start_session(StartSession::new().with_id(parent_id.clone()))
+        .start_session(StartSession::create(parent_id.clone(), Vec::new()))
         .await
         .expect("the first parent");
     let first_delegation = first.delegation().expect("the first delegation surface");
@@ -373,7 +373,7 @@ async fn an_interrupted_smith_child_resumes_exactly_once_and_never_on_startup() 
         .expect("the replacement Smith runtime");
     let second_session = second
         .runtime()
-        .start_session(StartSession::new().with_id(parent_id))
+        .start_session(StartSession::resume(parent_id))
         .await
         .expect("the replacement parent");
     let second_delegation = second.delegation().expect("replacement delegation surface");
@@ -407,7 +407,7 @@ async fn an_interrupted_smith_child_resumes_exactly_once_and_never_on_startup() 
         turn: None,
         call_id: ToolCallId::new("resume-call"),
         request: RequestId::new("resume-request"),
-        workspace: Arc::new(MemoryWorkspace::new("/repo")),
+        workspace: Arc::new(LexicalWorkspace::new("/repo")),
         clock: Arc::new(SystemClock),
         cancel: Cancellation::new(),
         deadline: Deadline::never(),

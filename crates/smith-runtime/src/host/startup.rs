@@ -382,9 +382,12 @@ pub async fn start_with_modules(
         }
     };
 
-    let mut start = StartSession::new()
-        .with_id(session_id.clone())
-        .with_checkpoint_recovery(CheckpointRecoveryPolicy::ResumeOrInterrupt);
+    let mut start = if request.session_id.is_some() {
+        StartSession::resume(session_id.clone())
+    } else {
+        StartSession::create(session_id.clone(), Vec::new())
+    }
+    .with_checkpoint_recovery(CheckpointRecoveryPolicy::ResumeOrInterrupt);
     if let Some(floor) = resume_identity_floor {
         start = start.with_resume_identity_floor(floor);
     }
