@@ -62,10 +62,17 @@ Read the unsafe blocks first, then the trait boundaries they cross.
 ```
 
 The frontmatter grammar is deliberately narrower than YAML: an opening `---`,
-then `key: value` lines, then a closing `---`. Only `name` and `description`
-are interpreted; a `description` is required. Keys another tool writes —
-`license`, `allowed-tools`, and so on — are ignored and not retained, so no
-file-authored key reaches a descriptor.
+column-0 `key: value` lines, and a closing `---`. Only `name` and `description`
+are interpreted; `name`, if present, must equal the directory name or the skill
+is refused. The required `description` accepts a plain value with indented
+continuations folded with spaces, folded blocks (`>`, `>-`, `>+`), or literal
+blocks (`|`, `|-`, `|+`) that preserve newlines after removing common indentation.
+A blank block line becomes one newline when folded and an empty line when
+literal. Matching single or double quotes around `name` and `description` are
+removed without interpreting escapes; descriptions are trimmed before empty
+and length checks. Other keys and their indented lines are ignored and not
+retained. Every frontmatter line, including continuations and blanks, counts
+toward the line bound.
 
 Retrieval keywords are derived from the name and the description, so the
 description is what decides when a skill is offered. Write it as the task it

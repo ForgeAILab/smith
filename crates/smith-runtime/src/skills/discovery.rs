@@ -329,60 +329,127 @@ struct FrontMatter<'a> {
 
 /// Parses the leading `---` block.
 ///
-/// The grammar is narrower than YAML on purpose: `---`, then `key: value`
-/// lines, then `---`. A file that parses here parses the same way anywhere, and
-/// a skill cannot reach Smith's policy through a YAML feature nobody meant to
-/// support. Keys other than `name` and `description` are ignored rather than
-/// rejected, so a skill authored for another tool loads without importing that
-/// tool's schema — and are not retained, so no file-authored key reaches a
-/// descriptor.
+/// The grammar is narrower than YAML on purpose: `---`, column-0 `key: value`
+/// lines, then `---`. Only `name` and `description` are interpreted, with matching
+/// surrounding single or double quotes removed and no escape interpretation.
+/// Descriptions accept plain values with space-folded indented continuations,
+/// `>`/`>-`/`>+` blocks folded with spaces, and `|`/`|-`/`|+` blocks preserving
+/// newlines after common indentation is removed. Each blank block line becomes
+/// one newline (an empty line in a literal block). Results are trimmed, making
+/// chomping indicators moot. Other keys and their indented lines are ignored
+/// and not retained, so no file-authored key reaches a descriptor or imports
+/// another tool's schema. No other YAML features are interpreted.
 fn parse_front_matter(text: &str) -> Result<FrontMatter<'_>, String> {
     let mut rest = strip_line(text, "---").ok_or_else(|| {
         "it does not start with a `---` frontmatter block declaring a `description`".to_owned()
     })?;
 
     let mut name = None;
-    let mut description = None;
+    let mut description: Option<(&str, Vec<&str>)> = None;
+    let mut continues_description = false;
     for number in 1..=MAX_FRONT_MATTER_LINES {
         let Some((line, tail)) = next_line(rest) else {
             break;
         };
         rest = tail;
         if line.trim_end() == "---" {
-            let description = description
+            let (value, continuation) = description
                 .ok_or_else(|| "its frontmatter declares no `description`".to_owned())?;
+            let description = parse_description(value, &continuation)?;
             return Ok(FrontMatter {
                 name,
                 description,
                 body: rest,
             });
         }
-        if line.trim().is_empty() {
+        if line.starts_with([' ', '\t']) || line.trim().is_empty() {
+            if continues_description && let Some((_, continuation)) = &mut description {
+                continuation.push(line);
+            }
             continue;
         }
         let Some((key, value)) = line.split_once(':') else {
             return Err(format!("its frontmatter line {number} is not `key: value`"));
         };
         let value = value.trim();
+        continues_description = key.trim() == "description";
         match key.trim() {
-            "name" => name = Some(value.to_owned()),
-            "description" => {
-                if value.is_empty() {
-                    return Err("its `description` is empty".to_owned());
-                }
-                if value.chars().count() > MAX_DESCRIPTION_CHARS {
-                    return Err(format!(
-                        "its `description` is longer than {MAX_DESCRIPTION_CHARS} characters"
-                    ));
-                }
-                description = Some(value.to_owned());
-            }
+            "name" => name = Some(unquote(value).to_owned()),
+            "description" => description = Some((value, Vec::new())),
             _ => {}
         }
     }
     Err(format!(
         "its frontmatter is not closed with `---` within {MAX_FRONT_MATTER_LINES} lines"
     ))
+}
+
+/// Builds the final description before enforcing the index bounds.
+fn parse_description(value: &str, continuation: &[&str]) -> Result<String, String> {
+    let literal = matches!(value, "|" | "|-" | "|+");
+    let folded = matches!(value, ">" | ">-" | ">+");
+    let description = if literal {
+        let indentation = continuation
+            .iter()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| line.len() - line.trim_start_matches([' ', '\t']).len())
+            .min()
+            .unwrap_or(0);
+        continuation
+            .iter()
+            .map(|line| {
+                if line.trim().is_empty() {
+                    ""
+                } else {
+                    &line[indentation..]
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        let mut description = String::new();
+        for line in (!folded)
+            .then_some(value)
+            .into_iter()
+            .chain(continuation.iter().copied())
+        {
+            let line = line.trim();
+            if line.is_empty() {
+                if folded {
+                    description.push('\n');
+                }
+            } else {
+                if !description.is_empty() && !description.ends_with('\n') {
+                    description.push(' ');
+                }
+                description.push_str(line);
+            }
+        }
+        description
+    };
+    let description = unquote(description.trim()).trim();
+    if description.is_empty() {
+        return Err("its `description` is empty".to_owned());
+    }
+    if description.chars().count() > MAX_DESCRIPTION_CHARS {
+        return Err(format!(
+            "its `description` is longer than {MAX_DESCRIPTION_CHARS} characters"
+        ));
+    }
+    Ok(description.to_owned())
+}
+
+/// Removes only matching surrounding quotes; escapes remain authored text.
+fn unquote(value: &str) -> &str {
+    for quote in ['"', '\''] {
+        if let Some(inner) = value
+            .strip_prefix(quote)
+            .and_then(|rest| rest.strip_suffix(quote))
+        {
+            return inner;
+        }
+    }
+    value
 }
 
 /// `text` past a leading `line` and its terminator, if it starts with one.
@@ -506,6 +573,177 @@ mod tests {
             !found.skills[0].skill.metadata.contains_key("license"),
             "a file-authored key reached the declaration"
         );
+    }
+
+    #[test]
+    fn folded_block_descriptions_accept_all_chomping_indicators() {
+        for indicator in [">", ">-", ">+"] {
+            let text = format!(
+                "---\nname: review\ndescription: {indicator}\n  Review Rust\n\tboundaries\n\n---\n\nBody.\n"
+            );
+            let parsed = parse_front_matter(&text).expect("a folded block");
+            assert_eq!(parsed.description, "Review Rust boundaries", "{indicator}");
+            assert_eq!(parsed.body, "\nBody.\n");
+        }
+    }
+
+    #[test]
+    fn literal_block_descriptions_remove_only_common_indentation() {
+        for indicator in ["|", "|-", "|+"] {
+            let text = format!(
+                "---\ndescription: {indicator}\n    Review Rust\n      nested detail\n    boundaries\n\n---\nBody.\n"
+            );
+            let parsed = parse_front_matter(&text).expect("a literal block");
+            assert_eq!(
+                parsed.description, "Review Rust\n  nested detail\nboundaries",
+                "{indicator}"
+            );
+        }
+        let parsed =
+            parse_front_matter("---\ndescription: |\n\tReview Rust\n\t\tboundaries\n---\nBody.\n")
+                .expect("tab indentation");
+        assert_eq!(parsed.description, "Review Rust\n\tboundaries");
+    }
+
+    #[test]
+    fn blank_block_lines_use_simple_folded_and_literal_newlines() {
+        for (indicator, expected) in [
+            (">", "Review Rust\nboundaries\n\ncarefully"),
+            ("|", "Review Rust\n\nboundaries\n\n\ncarefully"),
+        ] {
+            let text = format!(
+                "---\ndescription: {indicator}\n\n  Review Rust\n\n  boundaries\n  \n\t\n  carefully\n\n---\nBody.\n"
+            );
+            assert_eq!(
+                parse_front_matter(&text)
+                    .expect("blank block lines")
+                    .description,
+                expected,
+                "{indicator}"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_description_continuations_fold_with_spaces() {
+        let parsed = parse_front_matter(
+            "---\ndescription: Review Rust\n  boundaries\n\tbefore edits\nuser-invocable: true\n  ignored continuation\n---\nBody.\n",
+        )
+        .expect("plain continuations");
+        assert_eq!(parsed.description, "Review Rust boundaries before edits");
+    }
+
+    #[test]
+    fn matching_quotes_are_removed_without_interpreting_escapes() {
+        for quote in ['"', '\''] {
+            let text = format!(
+                "---\nname: {quote}rust-review{quote}\ndescription: {quote}Review \\n Rust{quote}\n---\nBody.\n"
+            );
+            let root = root_with(&[("rust-review", &text)]);
+            let found = discover(root.path());
+            assert!(found.problems.is_empty(), "{:?}", found.problems);
+            assert_eq!(found.skills.len(), 1);
+            assert_eq!(found.skills[0].skill.description, "Review \\n Rust");
+        }
+        let parsed = parse_front_matter("---\ndescription: \"Review'\n---\nBody.\n")
+            .expect("unmatched quotes are plain text");
+        assert_eq!(parsed.description, "\"Review'");
+    }
+
+    #[test]
+    fn indented_keys_never_set_top_level_fields() {
+        let parsed = parse_front_matter(
+            "---\nname: review\ndescription: Real\nmetadata:\n  description: Fake\n\tname: fake\n  a line without a colon\n---\nBody.\n",
+        )
+        .expect("nested metadata is ignored");
+        assert_eq!(parsed.name.as_deref(), Some("review"));
+        assert_eq!(parsed.description, "Real");
+
+        let error = parse_front_matter("---\nmetadata:\n  description: Fake\n---\nBody.\n")
+            .err()
+            .expect("a nested description cannot supply the required field");
+        assert!(error.contains("no `description`"), "{error}");
+    }
+
+    #[test]
+    fn nonindented_lines_still_require_a_colon() {
+        for preceding in ["description: >", "description: |", "metadata:"] {
+            let text = format!("---\n{preceding}\nnot a key-value line\n---\nBody.\n");
+            let error = parse_front_matter(&text).err().expect("a malformed line");
+            assert_eq!(error, "its frontmatter line 2 is not `key: value`");
+        }
+    }
+
+    #[test]
+    fn description_must_be_nonempty_after_rendering_and_unquoting() {
+        for value in ["", "\"\"", "'  '", ">", ">-", ">+", "|", "|-", "|+"] {
+            let text = format!("---\ndescription: {value}\n  \n\t\n---\nBody.\n");
+            let error = parse_front_matter(&text)
+                .err()
+                .expect("an empty description");
+            assert_eq!(error, "its `description` is empty", "{value}");
+        }
+    }
+
+    #[test]
+    fn description_length_bound_applies_after_folding_and_trimming() {
+        for value in [">", ">-", ">+", "|", "|-", "|+", ""] {
+            // Each line fits, but the separator takes the final value over the bound.
+            let text = format!(
+                "---\ndescription: {value}\n  {}\n  {}\n---\nBody.\n",
+                "é".repeat(MAX_DESCRIPTION_CHARS / 2),
+                "é".repeat(MAX_DESCRIPTION_CHARS / 2),
+            );
+            let error = parse_front_matter(&text).err().expect("a long final value");
+            assert!(error.contains("longer than"), "{value}: {error}");
+
+            let text = format!(
+                "---\ndescription: {value}\n  {}\n  {}\n\n---\nBody.\n",
+                "é".repeat(MAX_DESCRIPTION_CHARS / 2),
+                "é".repeat(MAX_DESCRIPTION_CHARS / 2 - 1),
+            );
+            assert_eq!(
+                parse_front_matter(&text)
+                    .expect("exactly the character bound")
+                    .description
+                    .chars()
+                    .count(),
+                MAX_DESCRIPTION_CHARS,
+                "{value}"
+            );
+        }
+        let text = format!(
+            "---\ndescription: \" {} \"\n---\nBody.\n",
+            "é".repeat(MAX_DESCRIPTION_CHARS)
+        );
+        assert_eq!(
+            parse_front_matter(&text)
+                .expect("trimmed and unquoted")
+                .description
+                .chars()
+                .count(),
+            MAX_DESCRIPTION_CHARS
+        );
+    }
+
+    #[test]
+    fn frontmatter_line_bound_counts_continuations_and_blanks() {
+        for header in [
+            "description: >",
+            "description: |",
+            "description: Plain",
+            "metadata:",
+        ] {
+            let prefix = format!("---\ndescription: Real\n{header}\n");
+            let continuation = "  continued\n\n".repeat((MAX_FRONT_MATTER_LINES - 4) / 2);
+            let text = format!("{prefix}{continuation}  last\n---\nBody.\n");
+            assert!(parse_front_matter(&text).is_ok(), "{header}");
+            let text = format!("{prefix}{continuation}  last\n\n---\nBody.\n");
+            let error = parse_front_matter(&text)
+                .err()
+                .expect("the closing line is beyond the bound");
+            assert!(error.contains("not closed"), "{header}: {error}");
+        }
     }
 
     #[test]
