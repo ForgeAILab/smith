@@ -32,5 +32,5 @@ completed_at:
 
 ## 3. Verification
 - [x] 3.1 Full gate.
-- [ ] 3.2 Live: `npx skills add` (or a hand-made `~/.agents/skills/x/SKILL.md`)
+- [x] 3.2 Live: `npx skills add` (or a hand-made `~/.agents/skills/x/SKILL.md`)
       shows up in `/skills`.
