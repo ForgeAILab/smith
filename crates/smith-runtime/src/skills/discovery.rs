@@ -1,12 +1,12 @@
 //! Finding skills on disk, and refusing the ones Smith cannot vouch for.
 //!
 //! A skill lives at `<root>/skills/<name>/SKILL.md`. The *directory* names the
-//! skill; frontmatter never does. Two reasons, both structural. A name that can
-//! only be read by opening the body cannot appear in an index whose whole
-//! purpose is to be built without opening bodies. And a project skill that
-//! could name itself could aim its shadowing at a user skill whose name the
-//! reader never sees anywhere in the path — the directory listing would say
-//! `helper` while the catalog entry it displaced said `deploy`.
+//! skill; a differing frontmatter `name` is ignored. Two reasons, both structural.
+//! A name that can only be read by opening the body cannot appear in an index
+//! whose whole purpose is to be built without opening bodies. And a project
+//! skill that could name itself could aim its shadowing at a user skill whose
+//! name the reader never sees anywhere in the path — the directory listing
+//! would say `helper` while the catalog entry it displaced said `deploy`.
 //!
 //! Everything here reads; nothing here decides. A workspace body arrives with
 //! the project's recorded trust status attached and is admitted, withheld, or
@@ -286,14 +286,6 @@ fn read_skill(name: &str, path: &Path) -> Result<DiscoveredSkill, String> {
         .map_err(|_| "it is not UTF-8, so its instructions cannot be read".to_owned())?;
 
     let front_matter = parse_front_matter(text)?;
-    if let Some(declared) = &front_matter.name
-        && declared != name
-    {
-        return Err(format!(
-            "its frontmatter calls it `{declared}`, but a skill is named by its \
-             directory; rename the directory or the field so they agree"
-        ));
-    }
     if front_matter.body.trim().is_empty() {
         return Err("it has no instructions after its frontmatter".to_owned());
     }
@@ -322,7 +314,6 @@ fn read_skill(name: &str, path: &Path) -> Result<DiscoveredSkill, String> {
 
 /// The interpreted frontmatter fields, and the instructions after them.
 struct FrontMatter<'a> {
-    name: Option<String>,
     description: String,
     body: &'a str,
 }
@@ -330,8 +321,9 @@ struct FrontMatter<'a> {
 /// Parses the leading `---` block.
 ///
 /// The grammar is narrower than YAML on purpose: `---`, column-0 `key: value`
-/// lines, then `---`. Only `name` and `description` are interpreted, with matching
+/// lines, then `---`. Only `description` is interpreted, with matching
 /// surrounding single or double quotes removed and no escape interpretation.
+/// A differing `name` is ignored; the directory always names the skill.
 /// Descriptions accept plain values with space-folded indented continuations,
 /// `>`/`>-`/`>+` blocks folded with spaces, and `|`/`|-`/`|+` blocks preserving
 /// newlines after common indentation is removed. Each blank block line becomes
@@ -344,7 +336,6 @@ fn parse_front_matter(text: &str) -> Result<FrontMatter<'_>, String> {
         "it does not start with a `---` frontmatter block declaring a `description`".to_owned()
     })?;
 
-    let mut name = None;
     let mut description: Option<(&str, Vec<&str>)> = None;
     let mut continues_description = false;
     for number in 1..=MAX_FRONT_MATTER_LINES {
@@ -357,7 +348,6 @@ fn parse_front_matter(text: &str) -> Result<FrontMatter<'_>, String> {
                 .ok_or_else(|| "its frontmatter declares no `description`".to_owned())?;
             let description = parse_description(value, &continuation)?;
             return Ok(FrontMatter {
-                name,
                 description,
                 body: rest,
             });
@@ -373,10 +363,8 @@ fn parse_front_matter(text: &str) -> Result<FrontMatter<'_>, String> {
         };
         let value = value.trim();
         continues_description = key.trim() == "description";
-        match key.trim() {
-            "name" => name = Some(unquote(value).to_owned()),
-            "description" => description = Some((value, Vec::new())),
-            _ => {}
+        if continues_description {
+            description = Some((value, Vec::new()));
         }
     }
     Err(format!(
@@ -512,16 +500,16 @@ mod tests {
     }
 
     #[test]
-    fn frontmatter_name_mismatch_is_a_problem_and_registers_nothing() {
+    fn frontmatter_name_mismatch_is_ignored_and_registers_under_directory_name() {
         let root = root_with(&[(
-            "rust-review",
-            "---\nname: deploy\ndescription: Review Rust boundaries\n---\n\nBody.\n",
+            "chatcut-voice",
+            "---\nname: voice\ndescription: Generate speech\n---\n\nBody.\n",
         )]);
         let found = discover(root.path());
-        assert!(found.skills.is_empty());
-        assert_eq!(found.problems.len(), 1);
-        assert_eq!(found.problems[0].name, "rust-review");
-        assert!(found.problems[0].reason.contains("`deploy`"));
+        assert_eq!(found.skills.len(), 1);
+        assert_eq!(found.skills[0].name(), "chatcut-voice");
+        assert!(!found.skills.iter().any(|skill| skill.name() == "voice"));
+        assert!(found.problems.is_empty(), "{:?}", found.problems);
     }
 
     #[test]
@@ -656,7 +644,6 @@ mod tests {
             "---\nname: review\ndescription: Real\nmetadata:\n  description: Fake\n\tname: fake\n  a line without a colon\n---\nBody.\n",
         )
         .expect("nested metadata is ignored");
-        assert_eq!(parsed.name.as_deref(), Some("review"));
         assert_eq!(parsed.description, "Real");
 
         let error = parse_front_matter("---\nmetadata:\n  description: Fake\n---\nBody.\n")

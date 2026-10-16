@@ -28,7 +28,7 @@ completed_at:
 - [x] 1.5 `docs/skills.md`: describe the accepted grammar, and keep the
       `npx skills add` claim true. Note that `name` must still match the
       directory.
-- [ ] 1.6 `read_skill`: a frontmatter `name` that differs from the
+- [x] 1.6 `read_skill`: a frontmatter `name` that differs from the
       directory is ignored. The skill registers under the directory name,
       and no problem is reported. `docs/skills.md` says so.
 
@@ -48,7 +48,7 @@ completed_at:
       chomping), an indented plain continuation, a quoted value, a nested
       `metadata:` map whose child is `description:` (which must not set the
       description), and the description-length bound applied after folding.
-- [ ] 2.5 The existing name-mismatch test becomes: the skill registers under
+- [x] 2.5 The existing name-mismatch test becomes: the skill registers under
       the directory name, nothing registers under the frontmatter name, and
       there is no problem.
 

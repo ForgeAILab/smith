@@ -43,10 +43,10 @@ the same content-bound trust.
 The **directory name is the skill's name**. Frontmatter cannot choose it: a
 name that can only be read by opening the body cannot appear in an index built
 without opening bodies, and a project skill able to name itself could aim its
-shadowing at a user skill the reader never sees named in the path. A `name`
-field is accepted when it matches the directory exactly and is reported as a
-problem when it does not, so a skill authored for another tool loads without
-being able to redirect.
+shadowing at a user skill the reader never sees named in the path. A differing
+frontmatter `name` is ignored without reporting a problem: installers often
+prefix directories, such as `chatcut-voice` declaring `name: voice`. The skill
+still registers as `chatcut-voice`; frontmatter cannot choose its name.
 
 None of these directories is created by Smith, and no location is configurable.
 
@@ -62,13 +62,13 @@ Read the unsafe blocks first, then the trait boundaries they cross.
 ```
 
 The frontmatter grammar is deliberately narrower than YAML: an opening `---`,
-column-0 `key: value` lines, and a closing `---`. Only `name` and `description`
-are interpreted; `name`, if present, must equal the directory name or the skill
-is refused. The required `description` accepts a plain value with indented
+column-0 `key: value` lines, and a closing `---`. Only `description` is
+interpreted; `name` is accepted and ignored, even when it differs from the
+directory name. The required `description` accepts a plain value with indented
 continuations folded with spaces, folded blocks (`>`, `>-`, `>+`), or literal
 blocks (`|`, `|-`, `|+`) that preserve newlines after removing common indentation.
 A blank block line becomes one newline when folded and an empty line when
-literal. Matching single or double quotes around `name` and `description` are
+literal. Matching single or double quotes around `description` are
 removed without interpreting escapes; descriptions are trimmed before empty
 and length checks. Other keys and their indented lines are ignored and not
 retained. Every frontmatter line, including continuations and blanks, counts
