@@ -39,6 +39,7 @@ pub mod display;
 pub mod edit;
 pub mod image;
 pub mod image_header;
+pub mod image_preparation;
 pub mod list;
 pub mod read;
 pub mod read_state;
@@ -66,6 +67,10 @@ pub use image::{
     RecentImageSource,
 };
 pub use image_header::{ImageHeader, describe_image_url};
+pub use image_preparation::{
+    EncodedSizeLimit, ImageInfo, ImageInputError, ImageLimits, ImageProvider, PreparedImage,
+    prepare_image, prepare_image_path,
+};
 pub use list::ListTool;
 pub use read::ReadTool;
 pub use read_state::{ReadDefect, ReadObservation, ReadRecorder};

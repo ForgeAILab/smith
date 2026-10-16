@@ -66,7 +66,7 @@ fn decode_prefix(data: &str, max_bytes: usize) -> Option<Vec<u8>> {
         .ok()
 }
 
-fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+pub(crate) fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     let dimensions = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         if bytes.get(8..16)? != b"\0\0\0\rIHDR" {
             return None;

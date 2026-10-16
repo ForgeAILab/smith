@@ -2,9 +2,11 @@
   "change_id": "add-image-file-input",
   "change_ref": "add-image-file-input-2026-10-15",
   "created_at": "2026-10-16T02:27:02Z",
-  "updated_at": "2026-10-16T02:27:02Z",
+  "updated_at": "2026-10-16T02:43:53Z",
   "completed_at": null,
-  "status": "proposed",
+  "status": "implementing",
   "depends_on": [],
-  "external_dependencies": []
+  "external_dependencies": [],
+  "implementation_started_at": "2026-10-16T02:43:53Z",
+  "approved_at": "2026-10-16T02:43:53Z"
 }

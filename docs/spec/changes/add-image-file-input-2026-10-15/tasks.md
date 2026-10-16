@@ -5,9 +5,9 @@ completed_at:
 ---
 
 ## 1. Preparation
-- [ ] 1.1 Enable the `image` crate's `jpeg`, `gif` and `webp` features and
+- [x] 1.1 Enable the `image` crate's `jpeg`, `gif` and `webp` features and
       check `cargo deny`.
-- [ ] 1.2 Add the image preparation module in `crates/smith-tools`. It has
+- [x] 1.2 Add the image preparation module in `crates/smith-tools`. It has
       the provider limits table (D2) and the stages of D4: guards, signature
       detection, fit, convert, size shrink, and passthrough of unchanged
       bytes. Its result describes the original and the prepared image.
@@ -23,7 +23,7 @@ completed_at:
       prompt; `--image` with a `cli/*` profile fails before the run starts.
 
 ## 3. Tests and docs
-- [ ] 3.1 Preparation tests, using generated images:
+- [x] 3.1 Preparation tests, using generated images:
       - passthrough of a small PNG, byte for byte;
       - downscale of a large JPEG to each provider's longest side;
       - the tile budget;

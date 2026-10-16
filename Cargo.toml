@@ -76,8 +76,8 @@ agent-runtime-testkit = { git = "https://github.com/ForgeAILab/agent-runtime.git
 
 anyhow = "1"
 # Clipboard image capture for composer attachments. `arboard` reads the
-# platform clipboard; `image` encodes the RGBA pixels as PNG (the only codec
-# compiled in); `base64` builds the provider-facing data URI.
+# platform clipboard; `image` encodes the RGBA pixels as PNG and prepares image
+# files; `base64` builds the provider-facing data URI.
 arboard = "3"
 async-trait = "0.1"
 async-stream = "0.3"
@@ -92,7 +92,7 @@ futures-core = "0.3"
 futures-util = "0.3"
 globset = "0.4"
 ignore = "0.4"
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 keyring = { version = "3", default-features = false, features = ["apple-native", "sync-secret-service", "vendored"] }
 # `unstable-rendered-line-info` provides `Paragraph::line_count`, the only way
 # to size scroll offsets and modal heights with the renderer's own word-wrap
