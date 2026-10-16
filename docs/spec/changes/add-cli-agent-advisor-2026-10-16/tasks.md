@@ -52,6 +52,6 @@ completed_at:
 
 ## 5. Verification
 - [x] 5.1 Full gate (`/Volumes/Data/smith-test-tmp/gate.sh`).
-- [ ] 5.2 Live check: in the TUI, `/advisor` shows `cli/claude-code/*`;
+- [x] 5.2 Live check: in the TUI, `/advisor` shows `cli/claude-code/*`;
       choose `cli/claude-code/sonnet`, then ask the main model to call
       `advisor` and see the CLI's advice and the usage in `/status`.
