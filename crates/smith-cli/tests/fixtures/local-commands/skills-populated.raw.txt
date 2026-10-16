@@ -13,7 +13,7 @@ built-in
   smith.configuration.prompt-cache-miss-notices · active · Smith configuration reference, section "Prompt-cache miss notices". `cache.miss_notices`.
   smith.configuration.providers-credentials-and-models · active · Smith configuration reference, section "Providers, credentials, and models". `[models]` declaration.
   smith.configuration.runtime-connections · active · Smith configuration reference, section "Runtime connections". actions.
-  smith.configuration.smith-s-tools-on-installed-coding-agents · active · Smith configuration reference, section "Smith's tools on installed coding agents". `[harness.<kind>] allow_own_tools`.
+  smith.configuration.smith-s-tools-on-installed-coding-agents · active · Smith configuration reference, section "Smith's tools on installed coding agents". By default an installed agent runs its own tools without asking.
   smith.configuration.vision-model-for-text-only-agents · active · Smith configuration reference, section "Vision model for text-only agents". A vision model answers questions about images for a text-only main model.
   smith.configuration.web-tools · active · Smith configuration reference, section "Web tools". Web tools let Smith read public pages and search for current information.
   smith.headless · active · Outline of the Smith headless protocol reference for smith -p: input modes, text, json, and stream-json output formats, event framing, exit behavior, and resuming sessions non-interactively. Activate before scripting or integrating smith -p, then activate the section it names.

@@ -633,9 +633,9 @@ pub struct HarnessSection {
     pub args: Option<Vec<String>>,
     /// Whether the CLI may run its own tools.
     ///
-    /// Absent means off. Enabling it lets the CLI execute reads, writes, and
-    /// commands that Smith never approved, never scoped to the workspace, and
-    /// cannot record as tool history.
+    /// Absent means on: the CLI executes reads, writes, commands, and network
+    /// requests that Smith never approved, never scoped to the workspace, and
+    /// cannot record as tool history. `false` withholds them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_own_tools: Option<bool>,
     /// Environment overlaid on the inherited ambient environment.

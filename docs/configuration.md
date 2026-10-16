@@ -518,8 +518,8 @@ rolling aliases—`cli/claude-code/opus`, `sonnet`, `fable`, and `haiku`—so an
 updated Claude executable resolves the alias to the current Claude release
 without requiring a new Smith release for every dated model.
 
-An installed agent can also use Smith's own capabilities, such as child
-agents and the advisor; see
+An installed agent runs its own tools without asking by default, and can
+also use Smith's own capabilities, such as child agents and the advisor; see
 [Smith's tools on installed coding agents](#smiths-tools-on-installed-coding-agents).
 
 ### Local command model providers
@@ -721,8 +721,28 @@ before choosing another key.
 
 ## Smith's tools on installed coding agents
 
-An installed agent keeps its own file and shell tools, governed by
-`[harness.<kind>] allow_own_tools`. Smith offers it what it does not have:
+By default an installed agent runs its own tools without asking.
+That covers reads, edits, shell commands, and web fetch and search. Nothing can
+answer a prompt in a non-interactive run, so Claude Code is started with
+`--permission-mode bypassPermissions` and Codex with
+`--dangerously-bypass-approvals-and-sandbox`. Smith does not approve or record
+those calls. To withhold them, set this in
+`~/.smith/config.toml`:
+
+```toml
+[harness.claude-code]   # or [harness.codex]
+allow_own_tools = false
+```
+
+With it off, Claude Code runs only what it allows without asking (reads), and
+Codex runs with `--sandbox read-only`. A profile with a `plan` or `review`
+posture, and a child agent spawned without write tools, always run the CLI
+this way. For Claude Code, owner `args` come after Smith's flags, so they can
+narrow the default instead: `args = ["--permission-mode", "acceptEdits"]`, or
+`args = ["--disallowedTools", "WebFetch"]`. Only the owner's configuration may
+set `allow_own_tools`, `args`, `executable`, or `env`.
+
+Smith offers an installed agent what it does not have:
 the `agent` tool for child agents, the advisor, tools of the MCP servers
 Smith declares, plugin and module tools, skills, and, in an interactive
 session, the questionnaire. For

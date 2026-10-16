@@ -277,7 +277,12 @@ kinds of tool activity, and Smith vouches for only one.
 Tools the CLI runs itself are outside Smith's authority. Smith did not
 dispatch them, did not approve them, did not scope them to the workspace,
 and records them only as observations. `allow_own_tools` decides whether
-the CLI may write; it is owner-only configuration.
+the CLI runs them, and it is on by default: the CLI runs its own reads,
+writes, commands, and network requests in its no-prompt mode, with no
+approval from Smith or from the CLI. Setting it to `false` in owner
+configuration withholds them. A read-only posture and a child spawned
+without write tools always run the CLI with them withheld. Only the owner
+may set it.
 
 Tools the CLI calls through the bridge are Smith tool calls. For each turn
 Smith binds a Unix socket in a fresh mode-`0700` directory under the

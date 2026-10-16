@@ -465,7 +465,12 @@ pub async fn build(harness: ResolvedHarness) -> Result<SmithRuntime, FactoryErro
     // the composition above in place.
     if let crate::cli_agent::TurnExecution::InstalledAgent(plan) = &execution {
         builder = builder
-            .external_agent(plan.backend(PathBuf::from(workspace.root()), true))
+            // A read-only posture does not get write and command authority
+            // back through the CLI's own tools.
+            .external_agent(plan.backend(
+                PathBuf::from(workspace.root()),
+                !agent_posture.is_read_only(),
+            ))
             .external_excluded_tools(crate::cli_bridge::excluded_tool_names());
     }
     if let Some(identity) = cache_endpoint_identity.as_ref() {

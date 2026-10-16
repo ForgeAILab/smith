@@ -69,7 +69,11 @@ impl Invocation {
                 "--verbose" if dialect == Dialect::ClaudeCode => {
                     invocation.flags[arg] = json!(true);
                 }
-                "--json" | "--skip-git-repo-check" if dialect == Dialect::Codex => {
+                "--json"
+                | "--skip-git-repo-check"
+                | "--dangerously-bypass-approvals-and-sandbox"
+                    if dialect == Dialect::Codex =>
+                {
                     invocation.flags[arg] = json!(true);
                 }
                 "resume" if dialect == Dialect::Codex => {

@@ -55,8 +55,9 @@ ion "Runtime connections". actions.
   smith.configuration.smith-s-tools-on-insta
 lled-coding-agents · active · Smith configur
 ation reference, section "Smith's tools on i
-nstalled coding agents". `[harness.<kind>] a
-llow_own_tools`.
+nstalled coding agents". By default an insta
+lled agent runs its own tools without asking
+.
   smith.configuration.vision-model-for-text-
 only-agents · active · Smith configuration r
 eference, section "Vision model for text-onl
@@ -193,7 +194,6 @@ not loaded
   broken · it does not start with a --- fr
 ontmatter block declaring a description ·
 <HOME>/.smith/skills/broken/SKILL.md
-
 
 
 

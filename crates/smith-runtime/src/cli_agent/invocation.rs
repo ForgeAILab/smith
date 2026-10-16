@@ -74,10 +74,11 @@ impl CliAgentBackend {
                 // stream-json requires --verbose in non-interactive mode.
                 args.push("--verbose".to_owned());
                 if self.settings.allow_own_tools {
-                    // The CLI still prompts by default, which would deadlock a
-                    // non-interactive run, so name a non-prompting mode.
+                    // Nobody can answer a prompt in a non-interactive run, so
+                    // every prompt would be a denial. Owner arguments follow
+                    // and may name a narrower mode; the last one wins.
                     args.push("--permission-mode".to_owned());
-                    args.push("acceptEdits".to_owned());
+                    args.push("bypassPermissions".to_owned());
                 }
                 if let Some((server, executable, socket)) = bridge {
                     args.push("--allowedTools".to_owned());
@@ -119,12 +120,14 @@ impl CliAgentBackend {
                 args.push("--skip-git-repo-check".to_owned());
                 args.push("-C".to_owned());
                 args.push(self.settings.cwd.display().to_string());
-                args.push("--sandbox".to_owned());
-                args.push(if self.settings.allow_own_tools {
-                    "workspace-write".to_owned()
+                // `exec` cannot ask for approval, and the workspace-write
+                // sandbox has no network, so own tools mean no sandbox.
+                if self.settings.allow_own_tools {
+                    args.push("--dangerously-bypass-approvals-and-sandbox".to_owned());
                 } else {
-                    "read-only".to_owned()
-                });
+                    args.push("--sandbox".to_owned());
+                    args.push("read-only".to_owned());
+                }
                 if let Some(model) = &self.settings.model {
                     args.push("-m".to_owned());
                     args.push(model.clone());
@@ -827,7 +830,7 @@ mod tests {
     }
 
     #[test]
-    fn claude_runs_without_its_own_tools_by_default() {
+    fn claude_without_its_own_tools_pre_allows_nothing() {
         let backend = CliAgentBackend::new(CliAgentKind::ClaudeCode, settings(false));
         let args = backend.argv("hello", None).expect("valid invocation paths");
         let allow = args.iter().position(|arg| arg == "--allowedTools");
@@ -836,23 +839,40 @@ mod tests {
     }
 
     #[test]
-    fn codex_runs_read_only_by_default_and_writes_only_when_permitted() {
+    fn codex_runs_read_only_without_its_own_tools_and_unsandboxed_with_them() {
         let read_only = CliAgentBackend::new(CliAgentKind::Codex, settings(false));
         let args = read_only
             .argv("hello", None)
             .expect("valid invocation paths");
         let sandbox = args.iter().position(|arg| arg == "--sandbox");
         assert_eq!(args[sandbox.expect("a sandbox mode") + 1], "read-only");
+        assert!(!args.iter().any(|arg| arg.starts_with("--dangerously")));
 
-        let writable = CliAgentBackend::new(CliAgentKind::Codex, settings(true));
-        let args = writable
+        let own_tools = CliAgentBackend::new(CliAgentKind::Codex, settings(true));
+        let args = own_tools
             .argv("hello", None)
             .expect("valid invocation paths");
-        let sandbox = args.iter().position(|arg| arg == "--sandbox");
-        assert_eq!(
-            args[sandbox.expect("a sandbox mode") + 1],
-            "workspace-write"
+        assert!(
+            args.iter()
+                .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox")
         );
+        assert!(!args.iter().any(|arg| arg == "--sandbox"));
+    }
+
+    #[test]
+    fn owner_arguments_follow_the_claude_permission_mode() {
+        let mut settings = settings(true);
+        settings.args = vec!["--permission-mode".into(), "acceptEdits".into()];
+        let backend = CliAgentBackend::new(CliAgentKind::ClaudeCode, settings);
+        let args = backend.argv("hello", None).expect("valid invocation paths");
+        let modes = args
+            .iter()
+            .enumerate()
+            .filter(|(_, arg)| *arg == "--permission-mode")
+            .map(|(index, _)| args[index + 1].as_str())
+            .collect::<Vec<_>>();
+        // The CLI keeps the last value of a repeated single-value flag.
+        assert_eq!(modes, ["bypassPermissions", "acceptEdits"]);
     }
 
     #[test]
@@ -959,7 +979,7 @@ mod tests {
                 "stream-json",
                 "--verbose",
                 "--permission-mode",
-                "acceptEdits",
+                "bypassPermissions",
                 "--model",
                 "a-model",
             ],
@@ -983,7 +1003,7 @@ mod tests {
                 "stream-json",
                 "--verbose",
                 "--permission-mode",
-                "acceptEdits",
+                "bypassPermissions",
                 "--allowedTools",
                 "mcp__smith",
                 "--mcp-config",
@@ -1051,8 +1071,7 @@ mod tests {
                 "--skip-git-repo-check",
                 "-C",
                 "/repo",
-                "--sandbox",
-                "workspace-write",
+                "--dangerously-bypass-approvals-and-sandbox",
                 "-m",
                 "a-model",
                 "-c",

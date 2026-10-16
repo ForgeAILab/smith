@@ -340,7 +340,12 @@ fn declaration(fixture: &BridgeFixture, run: &StandInRun) {
                 "mcp_servers.smith.startup_timeout_sec=60",
             ]
         );
-        assert_eq!(run.record["flags"]["--sandbox"], "read-only");
+        // The fixture leaves `allow_own_tools` at its default: on.
+        assert_eq!(
+            run.record["flags"]["--dangerously-bypass-approvals-and-sandbox"],
+            true
+        );
+        assert_eq!(run.record["flags"]["--sandbox"], Value::Null);
         if let Some(index) = args.iter().position(|arg| *arg == "resume") {
             assert!(args.iter().take(index).any(|arg| *arg == "-c"));
             assert!(!args[index..].contains(&"-c"));
@@ -359,6 +364,10 @@ fn declaration(fixture: &BridgeFixture, run: &StandInRun) {
             })
         );
         assert_eq!(run.record["flags"]["--allowedTools"], "mcp__smith");
+        assert_eq!(
+            run.record["flags"]["--permission-mode"],
+            "bypassPermissions"
+        );
         assert_eq!(run.record["environment"]["MCP_TOOL_TIMEOUT"], "604800000");
         assert_eq!(run.record["environment"]["MCP_TIMEOUT"], "60000");
     }
@@ -690,8 +699,7 @@ fn denied_set(codex: bool) {
             "--skip-git-repo-check",
             "-C",
             project.to_str().expect("project path"),
-            "--sandbox",
-            "read-only",
+            "--dangerously-bypass-approvals-and-sandbox",
             "-m",
             "gpt-6-sol",
             "bridge contract",
@@ -703,8 +711,8 @@ fn denied_set(codex: bool) {
             "--output-format",
             "stream-json",
             "--verbose",
-            "--allowedTools",
-            "",
+            "--permission-mode",
+            "bypassPermissions",
             "--model",
             "sonnet",
         ]

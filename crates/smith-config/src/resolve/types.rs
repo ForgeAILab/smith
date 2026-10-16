@@ -543,7 +543,7 @@ pub struct ResolvedHarness {
     pub executable: Option<Sourced<String>>,
     /// Fixed, non-secret arguments appended to the built invocation.
     pub args: Vec<String>,
-    /// Whether the CLI may run its own tools. Off unless explicitly enabled.
+    /// Whether the CLI may run its own tools. On unless the owner disables it.
     pub allow_own_tools: Sourced<bool>,
     /// Environment overlaid on the inherited ambient environment.
     pub env: std::collections::BTreeMap<String, String>,

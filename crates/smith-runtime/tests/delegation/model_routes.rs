@@ -261,6 +261,86 @@ mode = "allow-all"
     session.shutdown().await.expect("clean shutdown");
 }
 
+#[tokio::test]
+async fn a_root_installed_agent_runs_its_own_tools_unless_its_posture_is_read_only() {
+    for (posture, own_tools) in [("build", true), ("plan", false)] {
+        let fixture = Fixture::new();
+        let argv = fixture.project.path().join("argv.txt");
+        let cli = fake_claude_cli(fixture.home.path(), &argv);
+        let user = fixture.home.path().join(".smith");
+        std::fs::create_dir_all(&user).expect("a user `.smith`");
+        // No `allow_own_tools`: the default is what is under test.
+        std::fs::write(
+            user.join("config.toml"),
+            format!(
+                "[harness.claude-code]\nexecutable = \"{}\"\n",
+                cli.display()
+            ),
+        )
+        .expect("a user config");
+        let config = format!(
+            r#"
+default_profile = "dev"
+profile_order = ["dev"]
+
+[profiles.dev]
+provider = "local"
+model = "cli/claude-code/sonnet"
+posture = "{posture}"
+use = ["main"]
+
+[providers.local]
+kind = "fake"
+
+# Smith's approval policy governs its own tools, not the CLI's.
+[approval]
+mode = "deny"
+"#
+        );
+        std::fs::write(fixture.project.path().join(".smith/config.toml"), config)
+            .expect("profile config");
+        let root = resolve(
+            &ResolveRequest::new(fixture.project.path()).with_home_dir(fixture.home.path()),
+        )
+        .expect("root profile");
+        let provider = scripted(1, "the provider must not run an installed-agent turn");
+        let request = RuntimeRequest {
+            workspace: Some(Arc::new(
+                ProjectWorkspace::new(fixture.project.path()).expect("a project workspace"),
+            )),
+            provider: Some(provider.clone()),
+            ..RuntimeRequest::new(root.config, HostSurface::Terminal)
+        };
+        let smith = factory::build_request(request)
+            .await
+            .expect("an installed-agent root");
+        let session = smith
+            .runtime()
+            .start_session(StartSession::new())
+            .await
+            .expect("root session");
+        session
+            .send(UserInput::text("hello"))
+            .expect("a turn")
+            .completed()
+            .await;
+        session.shutdown().await.expect("clean shutdown");
+
+        let recorded = std::fs::read_to_string(&argv).expect("the CLI recorded its arguments");
+        let recorded: Vec<&str> = recorded.lines().collect();
+        let mode = recorded
+            .iter()
+            .position(|arg| *arg == "--permission-mode")
+            .map(|index| recorded[index + 1]);
+        assert_eq!(
+            mode,
+            own_tools.then_some("bypassPermissions"),
+            "{posture}: {recorded:?}"
+        );
+        assert!(provider.requests().is_empty(), "{posture}");
+    }
+}
+
 /// Writes a stand-in for the Claude CLI that records its arguments and emits
 /// one turn in the stream-json dialect the adapter reads.
 fn fake_claude_cli(dir: &std::path::Path, argv: &std::path::Path) -> std::path::PathBuf {

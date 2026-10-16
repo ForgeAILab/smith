@@ -28,7 +28,8 @@ tion "Providers, credentials, and models". [models] declaration.
   smith.configuration.runtime-connections · active · Smith configuration reference, section "Runtime
  connections". actions.
   smith.configuration.smith-s-tools-on-installed-coding-agents · active · Smith configuration refere
-nce, section "Smith's tools on installed coding agents". [harness.<kind>] allow_own_tools.
+nce, section "Smith's tools on installed coding agents". By default an installed agent runs its own
+tools without asking.
   smith.configuration.vision-model-for-text-only-agents · active · Smith configuration reference, se
 ction "Vision model for text-only agents". A vision model answers questions about images for a text-
 only main model.
@@ -103,7 +104,6 @@ aries
 not loaded
   broken · it does not start with a --- frontmatter block declaring a description · <HOME>/.smit
 h/skills/broken/SKILL.md
-
 
 
 

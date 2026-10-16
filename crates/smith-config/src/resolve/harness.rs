@@ -30,7 +30,7 @@ pub(super) fn resolve_harness(
     };
 
     // Optional per-machine overrides. Absent is the ordinary case: the
-    // executable is found on PATH and the CLI runs without its own tools.
+    // executable is found on PATH and the CLI runs with its own tools.
     let scope = join_key(&["harness", entry.kind]);
 
     let executable = match text(provenance, &format!("{scope}.executable"))? {
@@ -57,16 +57,17 @@ pub(super) fn resolve_harness(
         None => Vec::new(),
     };
 
-    // Absent means off. A CLI running its own tools executes reads, writes,
-    // and commands Smith never approved, never scoped to the workspace, and
-    // cannot record as tool history, so it is never on by default and never
-    // enabled by a project.
+    // Absent means on: someone who picks an installed agent expects it to
+    // work as it does on its own. A CLI running its own tools executes reads,
+    // writes, and commands Smith never approved, never scoped to the
+    // workspace, and cannot record as tool history, so only the owner may
+    // set this, in either direction.
     let allow_own_tools = match flag(provenance, &format!("{scope}.allow_own_tools"))? {
         Some(flag) => {
             owner_only(&flag.source, &format!("{scope}.allow_own_tools"))?;
             flag
         }
-        None => Sourced::new(false, Source::built_in(format!("{scope}.allow_own_tools"))),
+        None => Sourced::new(true, Source::built_in(format!("{scope}.allow_own_tools"))),
     };
 
     let env = resolve_env(provenance, &scope)?;
