@@ -24,6 +24,6 @@ completed_at:
       inferred control.
 
 ## 3. Verification
-- [ ] 3.1 Full gate.
-- [ ] 3.2 Live: with a scratch config that has no ChatGPT `[models]` blocks,
+- [x] 3.1 Full gate.
+- [x] 3.2 Live: with a scratch config that has no ChatGPT `[models]` blocks,
       `/status` for a Sol or Astra profile shows the effort ladder.

@@ -28,4 +28,4 @@ completed_at:
       module.
 
 ## 3. Verification
-- [ ] 3.1 Full gate.
+- [x] 3.1 Full gate.
