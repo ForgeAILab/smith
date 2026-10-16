@@ -58,12 +58,7 @@ impl SkillContext {
         project: &Path,
     ) -> anyhow::Result<(SmithSkillSources, Self)> {
         let trust = TrustStore::open(user_dir).map_err(|error| anyhow::anyhow!("{error}"))?;
-        let workspace = smith_runtime::skills::discover(&project.join(".smith"))
-            .skills
-            .into_iter()
-            .map(|found| (found.skill.name.clone(), found.path))
-            .collect();
-        let (sources, problems) =
+        let (sources, problems, workspace) =
             smith_runtime::skills::discover_into(base, user_dir, project, &trust);
         Ok((
             sources,

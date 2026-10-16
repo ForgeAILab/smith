@@ -418,7 +418,7 @@ async fn informational_commands_append_inline_without_provider_history() {
 
     let (_, skills) = crate::skills::SkillContext::compose(
         smith_runtime::skills::SmithSkillSources::new(),
-        home.path(),
+        &home.path().join(".smith"),
         project.path(),
     )
     .expect("a skill context");

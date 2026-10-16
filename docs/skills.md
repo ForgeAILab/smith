@@ -28,8 +28,17 @@ Smith reads skills from a fixed layout:
 
 ```
 ~/.smith/skills/<name>/SKILL.md              # user layer
+~/.agents/skills/<name>/SKILL.md             # user layer
 <project>/.smith/skills/<name>/SKILL.md      # workspace layer
+<project>/.agents/skills/<name>/SKILL.md     # workspace layer
 ```
+
+Skills installed by `npx skills add` in either `.agents` location work in
+Smith. Within each layer, a skill in `.smith` wins over one with the same
+name in `.agents`. The `.agents` copy is reported in `/skills` as shadowed,
+with both paths, rather than causing a duplicate-name error. Precedence
+between layers is unchanged, and project skills from either location need
+the same content-bound trust.
 
 The **directory name is the skill's name**. Frontmatter cannot choose it: a
 name that can only be read by opening the body cannot appear in an index built
@@ -39,7 +48,7 @@ field is accepted when it matches the directory exactly and is reported as a
 problem when it does not, so a skill authored for another tool loads without
 being able to redirect.
 
-Neither directory is created by Smith, and neither location is configurable.
+None of these directories is created by Smith, and no location is configurable.
 
 ### The file
 
@@ -66,7 +75,7 @@ answers, not as a title.
 
 | Bound | Value |
 | --- | --- |
-| Skills per layer | 256 |
+| Skills per location within a layer | 256 |
 | `SKILL.md` size | 1 MiB |
 | Frontmatter lines | 64 |
 | `description` length | 1024 characters |

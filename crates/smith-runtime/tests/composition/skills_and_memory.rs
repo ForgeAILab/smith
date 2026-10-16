@@ -181,7 +181,7 @@ async fn tui_and_headless_discover_the_same_catalog() {
     for surface in [HostSurface::Terminal, HostSurface::Headless] {
         let mut runtime = request(&fixture, surface);
         runtime.provider = Some(Arc::new(FakeProvider::text_reply("unused")));
-        let (skills, problems) = smith_runtime::skills::discover_into(
+        let (skills, problems, _) = smith_runtime::skills::discover_into(
             std::mem::take(&mut runtime.skills),
             &user_root,
             fixture.project.path(),
@@ -211,6 +211,95 @@ async fn tui_and_headless_discover_the_same_catalog() {
 }
 
 #[tokio::test]
+async fn agents_skills_compose_with_smith_copies_without_duplicate_names() {
+    let fixture = Fixture::new(FAKE_CONFIG);
+    let user_root = fixture.home.path().join(".smith");
+    let smith_body = "---\ndescription: Smith winner\n---\n\nSMITH_WINNER_MARKER\n";
+    for (root, name) in [
+        (fixture.home.path(), "rust-review"),
+        (fixture.project.path(), "deploy"),
+    ] {
+        write_discovered_skill(&root.join(".smith"), name, smith_body);
+        write_discovered_skill(&root.join(".agents"), name, DISCOVERED_SKILL);
+    }
+    write_discovered_skill(
+        &fixture.home.path().join(".agents"),
+        "shared-user",
+        DISCOVERED_SKILL,
+    );
+    write_discovered_skill(
+        &fixture.project.path().join(".agents"),
+        "shared-project",
+        DISCOVERED_SKILL,
+    );
+    let trust = smith_config::trust::TrustStore::open(&user_root).expect("a trust store");
+    let mut runtime = request(&fixture, HostSurface::Headless);
+    runtime.provider = Some(Arc::new(FakeProvider::text_reply("done")));
+    let (skills, problems, _) = smith_runtime::skills::discover_into(
+        std::mem::take(&mut runtime.skills),
+        &user_root,
+        fixture.project.path(),
+        &trust,
+    );
+    assert_eq!(problems.len(), 2);
+    assert!(
+        problems
+            .iter()
+            .all(|problem| problem.reason.contains("shadowed"))
+    );
+    runtime.skills = skills;
+    let smith = factory::build_request(runtime)
+        .await
+        .expect("overlapping locations compose without a duplicate-name error");
+    for (name, layer, activatable, description) in [
+        (
+            "rust-review",
+            smith_runtime::skills::SmithSkillLayer::User,
+            true,
+            "Smith winner",
+        ),
+        (
+            "deploy",
+            smith_runtime::skills::SmithSkillLayer::Workspace,
+            false,
+            "Smith winner",
+        ),
+        (
+            "shared-user",
+            smith_runtime::skills::SmithSkillLayer::User,
+            true,
+            "Review Rust implementation boundaries",
+        ),
+        (
+            "shared-project",
+            smith_runtime::skills::SmithSkillLayer::Workspace,
+            false,
+            "Review Rust implementation boundaries",
+        ),
+    ] {
+        let entries = smith
+            .skill_index()
+            .iter()
+            .filter(|entry| entry.name() == name)
+            .collect::<Vec<_>>();
+        assert_eq!(entries.len(), 1, "{name}");
+        assert_eq!(entries[0].layer, layer);
+        assert_eq!(entries[0].activatable, activatable);
+        assert_eq!(entries[0].description(), description);
+    }
+    let session = smith
+        .runtime()
+        .start_session(StartSession::new())
+        .await
+        .expect("a session");
+    session
+        .run(UserInput::text("Hello."))
+        .await
+        .expect("the composed session runs");
+    session.shutdown().await.expect("clean shutdown");
+}
+
+#[tokio::test]
 async fn a_malformed_skill_does_not_stop_a_session_starting() {
     let fixture = Fixture::new(FAKE_CONFIG);
     let user_root = fixture.home.path().join(".smith");
@@ -220,7 +309,7 @@ async fn a_malformed_skill_does_not_stop_a_session_starting() {
 
     let mut runtime = request(&fixture, HostSurface::Terminal);
     runtime.provider = Some(Arc::new(FakeProvider::text_reply("unused")));
-    let (skills, problems) = smith_runtime::skills::discover_into(
+    let (skills, problems, _) = smith_runtime::skills::discover_into(
         std::mem::take(&mut runtime.skills),
         &user_root,
         fixture.project.path(),
@@ -265,7 +354,7 @@ async fn headless_indexes_an_untrusted_project_skill_without_asking_anything() {
     runtime.provider = Some(provider.clone());
     // No approval broker: an unattended run has no surface that could answer,
     // so a discovery path that asked would deadlock or fail the run.
-    let (skills, problems) = smith_runtime::skills::discover_into(
+    let (skills, problems, _) = smith_runtime::skills::discover_into(
         std::mem::take(&mut runtime.skills),
         &user_root,
         fixture.project.path(),

@@ -551,7 +551,7 @@ async fn file_commands_production_loop_sends_expansion_and_never_sends_withheld_
         let agents = resolution.config.agent.clone();
         let (sources, skills) = crate::skills::SkillContext::compose(
             smith_runtime::skills::SmithSkillSources::new(),
-            fixture.user.path(),
+            &fixture.user.path().join(".smith"),
             fixture.project.path(),
         )
         .expect("skills");

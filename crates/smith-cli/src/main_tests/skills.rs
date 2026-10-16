@@ -184,6 +184,76 @@ async fn skills_trust_shows_path_and_digest_before_recording() {
 }
 
 #[tokio::test]
+async fn skills_trust_agents_records_the_shared_project_path() {
+    use smith_config::trust::{Executable, ExecutableKind, TrustStatus, TrustStore};
+
+    let (home, project) = skill_roots();
+    let user_dir = home.path().join(".smith");
+    let path = write_skill_body(&project.path().join(".agents"), "deploy", SKILL_BODY);
+    let (_, context) = skill_context(&user_dir, project.path());
+    let confirmation = context.confirmation("deploy").expect("a confirmation");
+    assert!(
+        confirmation.contains(".agents/skills/deploy/SKILL.md"),
+        "{confirmation}"
+    );
+    assert_eq!(context.status("deploy"), Some(TrustStatus::Untrusted));
+    let outcome = local_command::skills::trust(&context, "deploy");
+    assert!(matches!(
+        outcome,
+        smith_client::skills_report::SkillsReport::Trusted { .. }
+    ));
+
+    let executable = Executable::from_file(project.path(), ExecutableKind::Skill, &path)
+        .expect("the shared skill is project content");
+    assert_eq!(executable.label(), ".agents/skills/deploy/SKILL.md");
+    let store = TrustStore::open(&user_dir).expect("the persisted decision");
+    assert_eq!(
+        store.status(project.path(), &executable).unwrap(),
+        TrustStatus::Trusted
+    );
+    let (resolved, _) = skill_context(&user_dir, project.path());
+    assert!(resolved.index().iter().any(|entry| {
+        entry.name() == "deploy"
+            && entry.layer == smith_runtime::skills::SmithSkillLayer::Workspace
+            && entry.activatable
+    }));
+
+    // A newly discovered Smith copy wins even when the shared copy is trusted.
+    let smith_path = write_skill_body(&project.path().join(".smith"), "deploy", SKILL_BODY);
+    let (resolved, context) = skill_context(&user_dir, project.path());
+    let confirmation = context
+        .confirmation("deploy")
+        .expect("the winning declaration");
+    assert!(
+        confirmation.contains(".smith/skills/deploy/SKILL.md"),
+        "{confirmation}"
+    );
+    assert_eq!(context.status("deploy"), Some(TrustStatus::Untrusted));
+    let listed = smith_client::skills_report::render_plain(&local_command::skills::report(
+        &context,
+        resolved.index(),
+    ));
+    assert!(listed.contains("shadowed"), "{listed}");
+    assert!(listed.contains(&path.display().to_string()), "{listed}");
+    assert!(
+        listed.contains(&smith_path.display().to_string()),
+        "{listed}"
+    );
+    let outcome = local_command::skills::trust(&context, "deploy");
+    assert!(matches!(
+        outcome,
+        smith_client::skills_report::SkillsReport::Trusted { .. }
+    ));
+    let executable = Executable::from_file(project.path(), ExecutableKind::Skill, &smith_path)
+        .expect("the winning skill is project content");
+    let store = TrustStore::open(&user_dir).expect("the persisted winner's decision");
+    assert_eq!(
+        store.status(project.path(), &executable).unwrap(),
+        TrustStatus::Trusted
+    );
+}
+
+#[tokio::test]
 async fn skills_trust_unknown_name_lists_known_names() {
     let (home, project) = skill_roots();
     write_skill_body(&project.path().join(".smith"), "deploy", SKILL_BODY);
